@@ -54,7 +54,7 @@ type TxnService interface {
 	GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 	// CommitDNShard handle commit txn data in current DNShard request from coordinator DN. For reuse, the
 	// response is provided by the caller.
-	CommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
+	CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 	// RollbackDNShard handle rollback txn data in current DNShard request from coordinator DN. For reuse,
 	// the response is provided by the caller.
 	RollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error

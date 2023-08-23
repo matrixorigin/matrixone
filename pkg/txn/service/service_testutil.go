@@ -184,7 +184,7 @@ func (s *TestSender) AddTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_Rollback, ts.Shard())] = ts.Rollback
 	s.router[s.getRouteKey(txn.TxnMethod_Prepare, ts.Shard())] = ts.Prepare
 	s.router[s.getRouteKey(txn.TxnMethod_GetStatus, ts.Shard())] = ts.GetStatus
-	s.router[s.getRouteKey(txn.TxnMethod_CommitDNShard, ts.Shard())] = ts.CommitDNShard
+	s.router[s.getRouteKey(txn.TxnMethod_CommitDNShard, ts.Shard())] = ts.CommitTNShard
 	s.router[s.getRouteKey(txn.TxnMethod_RollbackTNShard, ts.Shard())] = ts.RollbackDNShard
 	s.router[s.getRouteKey(txn.TxnMethod_DEBUG, ts.Shard())] = ts.Debug
 }

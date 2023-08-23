@@ -145,7 +145,7 @@ func (s *store) handleCommitTNShard(ctx context.Context, request *txn.TxnRequest
 	}
 	r.waitStarted()
 	prepareResponse(request, response)
-	return r.service.CommitDNShard(ctx, request, response)
+	return r.service.CommitTNShard(ctx, request, response)
 }
 
 func (s *store) handleRollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {

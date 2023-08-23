@@ -83,7 +83,7 @@ func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnReques
 	case txn.TxnMethod_Prepare:
 		return r.service.Prepare(ctx, request, response)
 	case txn.TxnMethod_CommitDNShard:
-		return r.service.CommitDNShard(ctx, request, response)
+		return r.service.CommitTNShard(ctx, request, response)
 	case txn.TxnMethod_RollbackTNShard:
 		return r.service.RollbackDNShard(ctx, request, response)
 	default:

@@ -103,7 +103,7 @@ func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, respon
 	return nil
 }
 
-func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+func (s *service) CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
 	util.LogTxnHandleRequest(request)
