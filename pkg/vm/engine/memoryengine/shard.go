@@ -78,7 +78,7 @@ func (e *Engine) allShards() (shards []Shard, err error) {
 	for _, store := range getTNServices(e.cluster) {
 		for _, shard := range store.Shards {
 			shards = append(shards, Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: shard.ShardID,
 				},
 				ReplicaID: shard.ReplicaID,
@@ -93,7 +93,7 @@ func (e *Engine) anyShard() (shards []Shard, err error) {
 	for _, store := range getTNServices(e.cluster) {
 		for _, shard := range store.Shards {
 			shards = append(shards, Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: shard.ShardID,
 				},
 				ReplicaID: shard.ReplicaID,
@@ -147,7 +147,7 @@ func (s *NoShard) setShard(stores []metadata.TNService) {
 		})
 		info := infos[0]
 		s.shard = Shard{
-			DNShardRecord: metadata.DNShardRecord{
+			TNShardRecord: metadata.TNShardRecord{
 				ShardID: info.Shard.ShardID,
 			},
 			ReplicaID: info.Shard.ReplicaID,

@@ -55,7 +55,7 @@ func NewRSMState() HAKeeperRSMState {
 
 func newClusterInfo() ClusterInfo {
 	return ClusterInfo{
-		DNShards:  make([]metadata.DNShardRecord, 0),
+		DNShards:  make([]metadata.TNShardRecord, 0),
 		LogShards: make([]metadata.LogShardRecord, 0),
 	}
 }

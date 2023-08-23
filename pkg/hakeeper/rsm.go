@@ -528,7 +528,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		panic("DN:Log 1:1 mode is the only supported mode")
 	}
 
-	dnShards := make([]metadata.DNShardRecord, 0)
+	dnShards := make([]metadata.TNShardRecord, 0)
 	logShards := make([]metadata.LogShardRecord, 0)
 	// HAKeeper shard is assigned ShardID 0
 	rec := metadata.LogShardRecord{
@@ -546,7 +546,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		s.state.NextID++
 		logShards = append(logShards, rec)
 
-		drec := metadata.DNShardRecord{
+		drec := metadata.TNShardRecord{
 			ShardID:    s.state.NextID,
 			LogShardID: rec.ShardID,
 		}

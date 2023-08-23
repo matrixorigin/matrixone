@@ -693,7 +693,7 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.TNService, er
 	shards := []metadata.DNShard{
 		{
 			ReplicaID:     0xbeef,
-			DNShardRecord: metadata.DNShardRecord{ShardID: 0xbeef},
+			TNShardRecord: metadata.TNShardRecord{ShardID: 0xbeef},
 		},
 	}
 	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go

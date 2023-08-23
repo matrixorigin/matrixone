@@ -49,10 +49,10 @@ func TestInitMetadataWithExistData(t *testing.T) {
 		UUID: "dn1",
 		Shards: []metadata.DNShard{
 			{
-				DNShardRecord: metadata.DNShardRecord{ShardID: 1},
+				TNShardRecord: metadata.TNShardRecord{ShardID: 1},
 			},
 			{
-				DNShardRecord: metadata.DNShardRecord{ShardID: 2},
+				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
 			},
 		},
 	}

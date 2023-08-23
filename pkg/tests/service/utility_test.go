@@ -196,10 +196,10 @@ func TestParseDNShardReportedSize(t *testing.T) {
 	require.Equal(t, 2, ParseDNShardReportedSize(11, dnState, hkcfg, currTick))
 }
 
-func mockDNShardRecords(ids ...uint64) []metadata.DNShardRecord {
-	records := make([]metadata.DNShardRecord, 0, len(ids))
+func mockDNShardRecords(ids ...uint64) []metadata.TNShardRecord {
+	records := make([]metadata.TNShardRecord, 0, len(ids))
 	for _, id := range ids {
-		records = append(records, metadata.DNShardRecord{
+		records = append(records, metadata.TNShardRecord{
 			ShardID:    id,
 			LogShardID: id,
 		})

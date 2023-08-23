@@ -625,7 +625,7 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 				NumberOfReplicas: 3,
 			},
 		},
-		DNShards: []metadata.DNShardRecord{
+		DNShards: []metadata.TNShardRecord{
 			{
 				ShardID:    2,
 				LogShardID: 1,

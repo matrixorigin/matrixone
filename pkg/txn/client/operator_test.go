@@ -72,7 +72,7 @@ func TestWriteWithCacheWriteEnabled(t *testing.T) {
 
 func TestRollback(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
 
@@ -88,7 +88,7 @@ func TestRollbackWithClosedTxn(t *testing.T) {
 			return nil, moerr.NewTxnClosed(ctx, tc.txnID)
 		})
 
-		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
 	})
@@ -112,7 +112,7 @@ func TestRollbackReadOnly(t *testing.T) {
 
 func TestCommit(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 		assert.Equal(t, tc.mu.txn.SnapshotTS.Next(), tc.mu.txn.CommitTS)
@@ -156,7 +156,7 @@ func TestCommitWithLockTables(t *testing.T) {
 		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
 		tc.option.lockService = s
 		tc.AddLockTable(lock.LockTable{Table: 1})
-		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
 
@@ -385,11 +385,11 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
 		assert.Equal(t, 0, len(tc.mu.txn.DNShards))
 
-		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
 		assert.Equal(t, 1, len(tc.mu.txn.DNShards))
 
-		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 2}})
+		snapshot.Txn.DNShards = append(snapshot.Txn.DNShards, metadata.DNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 2}})
 		assert.NoError(t, tc.ApplySnapshot(protoc.MustMarshal(snapshot)))
 		assert.Equal(t, 2, len(tc.mu.txn.DNShards))
 
@@ -472,7 +472,7 @@ func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
 					_, err := l.Lock(ctx, 1, [][]byte{[]byte("k1")}, tc.mu.txn.ID, lock.LockOptions{})
 					require.NoError(t, err)
 
-					tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{DNShardRecord: metadata.DNShardRecord{ShardID: 1}})
+					tc.mu.txn.DNShards = append(tc.mu.txn.DNShards, metadata.DNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 
 					ctx2, cancel := context.WithTimeout(context.Background(), time.Second*10)
 					defer cancel()
@@ -527,7 +527,7 @@ func newDNRequest(op uint32, dn uint64) txn.TxnRequest {
 	return txn.NewTxnRequest(&txn.CNOpRequest{
 		OpCode: op,
 		Target: metadata.DNShard{
-			DNShardRecord: metadata.DNShardRecord{ShardID: dn},
+			TNShardRecord: metadata.TNShardRecord{ShardID: dn},
 		},
 	})
 }

@@ -159,7 +159,7 @@ func TestSendWithMultiDN(t *testing.T) {
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
 				Target: metadata.DNShard{
-					DNShardRecord: metadata.DNShardRecord{
+					TNShardRecord: metadata.TNShardRecord{
 						ShardID: uint64(i % len(addrs)),
 					},
 					Address: addrs[i%len(addrs)],
@@ -236,7 +236,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
 				Target: metadata.DNShard{
-					DNShardRecord: metadata.DNShardRecord{
+					TNShardRecord: metadata.TNShardRecord{
 						ShardID: uint64(i % len(addrs)),
 					},
 					Address: addrs[i%len(addrs)],

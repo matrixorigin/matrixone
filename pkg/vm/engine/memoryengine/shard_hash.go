@@ -96,7 +96,7 @@ func (*HashShard) Batch(
 	for _, store := range nodes {
 		for _, info := range store.Shards {
 			shards = append(shards, &Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,
@@ -195,7 +195,7 @@ func (h *HashShard) Vector(
 	for _, store := range nodes {
 		for _, info := range store.Shards {
 			shards = append(shards, &Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,

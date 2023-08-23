@@ -117,7 +117,7 @@ func initTestRuntime(shardIDs ...uint64) {
 	var shards = make([]metadata.DNShard, 0, len(shardIDs))
 	for _, id := range shardIDs {
 		shards = append(shards, metadata.DNShard{
-			DNShardRecord: metadata.DNShardRecord{ShardID: id},
+			TNShardRecord: metadata.TNShardRecord{ShardID: id},
 		})
 	}
 

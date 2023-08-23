@@ -386,9 +386,9 @@ func (idAlloc *mockIDAllocator) Next() (uint64, bool) {
 func mockClusterInfo(ids ...uint64) pb.ClusterInfo {
 	var c pb.ClusterInfo
 
-	records := make([]metadata.DNShardRecord, 0, len(ids))
+	records := make([]metadata.TNShardRecord, 0, len(ids))
 	for _, id := range ids {
-		records = append(records, metadata.DNShardRecord{
+		records = append(records, metadata.TNShardRecord{
 			ShardID:    id,
 			LogShardID: id,
 		})

@@ -3136,7 +3136,7 @@ func (m *ClusterDetails) GetLogStores() []LogStore {
 // describes the logical sharding of the system, rather than physical
 // distribution of all replicas that belong to those shards.
 type ClusterInfo struct {
-	DNShards             []metadata.DNShardRecord  `protobuf:"bytes,1,rep,name=DNShards,proto3" json:"DNShards"`
+	DNShards             []metadata.TNShardRecord  `protobuf:"bytes,1,rep,name=DNShards,proto3" json:"DNShards"`
 	LogShards            []metadata.LogShardRecord `protobuf:"bytes,2,rep,name=LogShards,proto3" json:"LogShards"`
 	XXX_NoUnkeyedLiteral struct{}                  `json:"-"`
 	XXX_unrecognized     []byte                    `json:"-"`
@@ -3176,7 +3176,7 @@ func (m *ClusterInfo) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_ClusterInfo proto.InternalMessageInfo
 
-func (m *ClusterInfo) GetDNShards() []metadata.DNShardRecord {
+func (m *ClusterInfo) GetDNShards() []metadata.TNShardRecord {
 	if m != nil {
 		return m.DNShards
 	}
@@ -15525,7 +15525,7 @@ func (m *ClusterInfo) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.DNShards = append(m.DNShards, metadata.DNShardRecord{})
+			m.DNShards = append(m.DNShards, metadata.TNShardRecord{})
 			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}

@@ -120,10 +120,10 @@ func (WorkState) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_56d9f74966f40d04, []int{2}
 }
 
-// DNShardRecord is DN shard metadata describing what is a DN shard. It
+// TNShardRecord is DN shard metadata describing what is a DN shard. It
 // is internally used by HAKeeper to maintain how many DNs available in
 // the system.
-type DNShardRecord struct {
+type TNShardRecord struct {
 	// ShardID the id of the DN shard.
 	ShardID uint64 `protobuf:"varint,1,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
 	// LogShardID a DN corresponds to a unique Shard of LogService.
@@ -133,16 +133,16 @@ type DNShardRecord struct {
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *DNShardRecord) Reset()         { *m = DNShardRecord{} }
-func (m *DNShardRecord) String() string { return proto.CompactTextString(m) }
-func (*DNShardRecord) ProtoMessage()    {}
-func (*DNShardRecord) Descriptor() ([]byte, []int) {
+func (m *TNShardRecord) Reset()         { *m = TNShardRecord{} }
+func (m *TNShardRecord) String() string { return proto.CompactTextString(m) }
+func (*TNShardRecord) ProtoMessage()    {}
+func (*TNShardRecord) Descriptor() ([]byte, []int) {
 	return fileDescriptor_56d9f74966f40d04, []int{0}
 }
-func (m *DNShardRecord) XXX_Unmarshal(b []byte) error {
+func (m *TNShardRecord) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *DNShardRecord) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TNShardRecord) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_DNShardRecord.Marshal(b, m, deterministic)
 	} else {
@@ -154,26 +154,26 @@ func (m *DNShardRecord) XXX_Marshal(b []byte, deterministic bool) ([]byte, error
 		return b[:n], nil
 	}
 }
-func (m *DNShardRecord) XXX_Merge(src proto.Message) {
+func (m *TNShardRecord) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_DNShardRecord.Merge(m, src)
 }
-func (m *DNShardRecord) XXX_Size() int {
+func (m *TNShardRecord) XXX_Size() int {
 	return m.Size()
 }
-func (m *DNShardRecord) XXX_DiscardUnknown() {
+func (m *TNShardRecord) XXX_DiscardUnknown() {
 	xxx_messageInfo_DNShardRecord.DiscardUnknown(m)
 }
 
 var xxx_messageInfo_DNShardRecord proto.InternalMessageInfo
 
-func (m *DNShardRecord) GetShardID() uint64 {
+func (m *TNShardRecord) GetShardID() uint64 {
 	if m != nil {
 		return m.ShardID
 	}
 	return 0
 }
 
-func (m *DNShardRecord) GetLogShardID() uint64 {
+func (m *TNShardRecord) GetLogShardID() uint64 {
 	if m != nil {
 		return m.LogShardID
 	}
@@ -182,8 +182,8 @@ func (m *DNShardRecord) GetLogShardID() uint64 {
 
 // DNShard
 type DNShard struct {
-	// DNShard extends DNShardRecord
-	DNShardRecord `protobuf:"bytes,1,opt,name=DNShardRecord,proto3,embedded=DNShardRecord" json:"DNShardRecord"`
+	// DNShard extends TNShardRecord
+	TNShardRecord `protobuf:"bytes,1,opt,name=DNShardRecord,proto3,embedded=DNShardRecord" json:"DNShardRecord"`
 	// ReplicaID only one replica for one DN. The ReplicaID is specified at
 	// the time the DN is created. DN restart ReplicaID will not change, when
 	// a DN is migrated to another node, the ReplicaID will be reset.
@@ -794,7 +794,7 @@ func init() {
 	proto.RegisterEnum("metadata.ServiceType", ServiceType_name, ServiceType_value)
 	proto.RegisterEnum("metadata.CNRole", CNRole_name, CNRole_value)
 	proto.RegisterEnum("metadata.WorkState", WorkState_name, WorkState_value)
-	proto.RegisterType((*DNShardRecord)(nil), "metadata.DNShardRecord")
+	proto.RegisterType((*TNShardRecord)(nil), "metadata.DNShardRecord")
 	proto.RegisterType((*DNShard)(nil), "metadata.DNShard")
 	proto.RegisterType((*LogShardRecord)(nil), "metadata.LogShardRecord")
 	proto.RegisterType((*LogShard)(nil), "metadata.LogShard")
@@ -860,7 +860,7 @@ var fileDescriptor_56d9f74966f40d04 = []byte{
 	0x00,
 }
 
-func (m *DNShardRecord) Marshal() (dAtA []byte, err error) {
+func (m *TNShardRecord) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -870,12 +870,12 @@ func (m *DNShardRecord) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *DNShardRecord) MarshalTo(dAtA []byte) (int, error) {
+func (m *TNShardRecord) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *DNShardRecord) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TNShardRecord) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -934,7 +934,7 @@ func (m *DNShard) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x10
 	}
 	{
-		size, err := m.DNShardRecord.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TNShardRecord.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -1405,7 +1405,7 @@ func encodeVarintMetadata(dAtA []byte, offset int, v uint64) int {
 	dAtA[offset] = uint8(v)
 	return base
 }
-func (m *DNShardRecord) Size() (n int) {
+func (m *TNShardRecord) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -1429,7 +1429,7 @@ func (m *DNShard) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = m.DNShardRecord.Size()
+	l = m.TNShardRecord.Size()
 	n += 1 + l + sovMetadata(uint64(l))
 	if m.ReplicaID != 0 {
 		n += 1 + sovMetadata(uint64(m.ReplicaID))
@@ -1661,7 +1661,7 @@ func sovMetadata(x uint64) (n int) {
 func sozMetadata(x uint64) (n int) {
 	return sovMetadata(uint64((x << 1) ^ uint64((int64(x) >> 63))))
 }
-func (m *DNShardRecord) Unmarshal(dAtA []byte) error {
+func (m *TNShardRecord) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -1808,7 +1808,7 @@ func (m *DNShard) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DNShardRecord.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TNShardRecord.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

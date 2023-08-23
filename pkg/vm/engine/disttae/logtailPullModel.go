@@ -155,7 +155,7 @@ func genLogTailReq(dn DNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error)
 				OpCode:  uint32(api.OpCode_OpGetLogTail),
 				Payload: payload,
 				Target: metadata.DNShard{
-					DNShardRecord: metadata.DNShardRecord{
+					TNShardRecord: metadata.TNShardRecord{
 						ShardID: info.ShardID,
 					},
 					ReplicaID: info.ReplicaID,

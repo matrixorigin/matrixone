@@ -783,7 +783,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 					OpCode:  uint32(api.OpCode_OpPreCommit),
 					Payload: payload,
 					Target: metadata.DNShard{
-						DNShardRecord: metadata.DNShardRecord{
+						TNShardRecord: metadata.TNShardRecord{
 							ShardID: info.ShardID,
 						},
 						ReplicaID: info.ReplicaID,

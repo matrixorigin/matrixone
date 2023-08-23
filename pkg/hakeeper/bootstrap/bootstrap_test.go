@@ -49,7 +49,7 @@ func TestNewBootstrapManager(t *testing.T) {
 		},
 		{
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{{
+				DNShards: []metadata.TNShardRecord{{
 					ShardID:    1,
 					LogShardID: 1,
 				}},
@@ -57,7 +57,7 @@ func TestNewBootstrapManager(t *testing.T) {
 			},
 			expected: &Manager{
 				cluster: pb.ClusterInfo{
-					DNShards: []metadata.DNShardRecord{{
+					DNShards: []metadata.TNShardRecord{{
 						ShardID:    1,
 						LogShardID: 1,
 					}},
@@ -112,7 +112,7 @@ func TestBootstrap(t *testing.T) {
 			desc: "1 log shard with 3 replicas and 1 dn shard",
 
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{{ShardID: 1, LogShardID: 1}},
+				DNShards: []metadata.TNShardRecord{{ShardID: 1, LogShardID: 1}},
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
@@ -142,7 +142,7 @@ func TestBootstrap(t *testing.T) {
 			desc: "ignore shard 0",
 
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{},
+				DNShards: []metadata.TNShardRecord{},
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          0,
 					NumberOfReplicas: 3,
@@ -165,7 +165,7 @@ func TestBootstrap(t *testing.T) {
 			desc: "1 log shard with 3 replicas and 1 dn shard",
 
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{{ShardID: 1, LogShardID: 1}},
+				DNShards: []metadata.TNShardRecord{{ShardID: 1, LogShardID: 1}},
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
@@ -376,7 +376,7 @@ func TestIssue3814(t *testing.T) {
 		{
 			desc: "case not enough dn stores",
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{{
+				DNShards: []metadata.TNShardRecord{{
 					ShardID:    1,
 					LogShardID: 1,
 				}},

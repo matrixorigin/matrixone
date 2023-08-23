@@ -137,7 +137,7 @@ type ClusterAwareness interface {
 // ClusterState provides cluster running state.
 type ClusterState interface {
 	// ListDNShards lists all dn shards within the cluster.
-	ListDNShards(ctx context.Context) ([]metadata.DNShardRecord, error)
+	ListDNShards(ctx context.Context) ([]metadata.TNShardRecord, error)
 	// ListLogShards lists all log shards within the cluster.
 	ListLogShards(ctx context.Context) ([]metadata.LogShardRecord, error)
 
@@ -393,7 +393,7 @@ func (c *testCluster) Close() error {
 // ----------------------------------------------------------
 func (c *testCluster) ListDNShards(
 	ctx context.Context,
-) ([]metadata.DNShardRecord, error) {
+) ([]metadata.TNShardRecord, error) {
 	state, err := c.GetClusterState(ctx)
 	if err != nil {
 		return nil, err

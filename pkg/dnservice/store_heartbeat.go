@@ -99,7 +99,7 @@ func (s *store) handleAddReplica(cmd logservicepb.ScheduleCommand) {
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	address := s.cfg.ServiceAddress
 	if err := s.createReplica(metadata.DNShard{
-		DNShardRecord: metadata.DNShardRecord{
+		TNShardRecord: metadata.TNShardRecord{
 			ShardID:    shardID,
 			LogShardID: logShardID,
 		},

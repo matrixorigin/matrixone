@@ -67,7 +67,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 						requests = append(requests, txn.CNOpRequest{
 							OpCode: uint32(method),
 							Target: metadata.DNShard{
-								DNShardRecord: metadata.DNShardRecord{
+								TNShardRecord: metadata.TNShardRecord{
 									ShardID: shard.ShardID,
 								},
 								ReplicaID: shard.ReplicaID,

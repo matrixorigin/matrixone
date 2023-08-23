@@ -45,7 +45,7 @@ func New(
 		TxnServiceAddress: "1",
 		Shards: []metadata.DNShard{
 			{
-				DNShardRecord: metadata.DNShardRecord{ShardID: 2},
+				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
 				ReplicaID:     2,
 			},
 		},

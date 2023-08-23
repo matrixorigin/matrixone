@@ -88,7 +88,7 @@ func (t *Table) NewReader(
 					continue
 				}
 				shards = append(shards, Shard{
-					DNShardRecord: metadata.DNShardRecord{
+					TNShardRecord: metadata.TNShardRecord{
 						ShardID: shard.ShardID,
 					},
 					ReplicaID: shard.ReplicaID,
