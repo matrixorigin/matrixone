@@ -125,7 +125,7 @@ func TestHAKeeperClientConnectByReverseProxy(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DNService,
+			ServiceType: pb.TNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},
@@ -228,7 +228,7 @@ func TestHAKeeperClientSendDNHeartbeat(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DNService,
+			ServiceType: pb.TNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},
@@ -267,7 +267,7 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 
 		sc := pb.ScheduleCommand{
 			UUID:        s.ID(),
-			ServiceType: pb.DNService,
+			ServiceType: pb.TNService,
 			ShutdownStore: &pb.ShutdownStore{
 				StoreID: "hello world",
 			},

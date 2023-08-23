@@ -411,7 +411,7 @@ message ShutdownStore {
 // ServiceType specifies type of service
 enum ServiceType {
   LogService = 0;
-  DNService  = 1;
+  TNService  = 1;
   CNService  = 2;
 }
 

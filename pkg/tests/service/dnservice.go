@@ -37,7 +37,7 @@ import (
 )
 
 // DNService describes expected behavior for dn service.
-type DNService interface {
+type TNService interface {
 	// Start sends heartbeat and start to handle command.
 	Start() error
 	// Close stops store
@@ -144,7 +144,7 @@ func newDNService(
 	rt runtime.Runtime,
 	fs fileservice.FileService,
 	opts dnOptions,
-) (DNService, error) {
+) (TNService, error) {
 	CounterSet := new(perfcounter.CounterSet)
 	svc, err := dnservice.NewService(CounterSet, cfg, rt, fs, nil, opts...)
 	if err != nil {

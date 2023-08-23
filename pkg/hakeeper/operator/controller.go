@@ -234,7 +234,7 @@ func addDnReplica(st AddDnReplica) pb.ScheduleCommand {
 			},
 			ChangeType: pb.StartReplica,
 		},
-		ServiceType: pb.DNService,
+		ServiceType: pb.TNService,
 	}
 }
 
@@ -250,7 +250,7 @@ func removeDnReplica(st RemoveDnReplica) pb.ScheduleCommand {
 			},
 			ChangeType: pb.StopReplica,
 		},
-		ServiceType: pb.DNService,
+		ServiceType: pb.TNService,
 	}
 }
 
@@ -260,7 +260,7 @@ func stopDnStore(st StopDnStore) pb.ScheduleCommand {
 		ShutdownStore: &pb.ShutdownStore{
 			StoreID: st.StoreID,
 		},
-		ServiceType: pb.DNService,
+		ServiceType: pb.TNService,
 	}
 }
 

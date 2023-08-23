@@ -126,8 +126,8 @@ message CNService {
   string QueryAddress           = 8;
 }
 
-// DNService dn service metadata
-message DNService {
+// TNService dn service metadata
+message TNService {
   // ServiceID service ID
   string ServiceID              = 1;
   // TxnServiceAddress is used to provide txn service

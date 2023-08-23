@@ -86,7 +86,7 @@ func Check(
 		for _, store := range stores.WorkingStores() {
 			if !tnState.Stores[store.ID].TaskServiceCreated {
 				operators = append(operators, operator.CreateTaskServiceOp("",
-					store.ID, pb.DNService, user))
+					store.ID, pb.TNService, user))
 			}
 		}
 	}

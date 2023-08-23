@@ -131,7 +131,7 @@ func (bm *Manager) bootstrapDN(alloc util.IDAllocator, tn pb.TNStore) (commands 
 				},
 				ChangeType: pb.StartReplica,
 			},
-			ServiceType: pb.DNService,
+			ServiceType: pb.TNService,
 		})
 	}
 

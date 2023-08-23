@@ -387,7 +387,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		require.Equal(t, 1, len(cb.Commands))
 		cmd := cb.Commands[0]
 		assert.True(t, cmd.Bootstrapping)
-		assert.Equal(t, pb.DNService, cmd.ServiceType)
+		assert.Equal(t, pb.TNService, cmd.ServiceType)
 		dnShardInfo := pb.TNShardInfo{
 			ShardID:   cmd.ConfigChange.Replica.ShardID,
 			ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
@@ -451,7 +451,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 					}
 					if len(cb.Commands) > 0 {
 						cmd := cb.Commands[0]
-						if cmd.ServiceType == pb.DNService {
+						if cmd.ServiceType == pb.TNService {
 							if cmd.ConfigChange != nil && cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
 								cmd.ConfigChange.Replica.ReplicaID > dnShardInfo.ReplicaID {
 								dnRepaired = true
@@ -610,7 +610,7 @@ func testBootstrap(t *testing.T, fail bool) {
 			require.NoError(t, err)
 			require.Equal(t, 1, len(cb.Commands))
 			assert.True(t, cb.Commands[0].Bootstrapping)
-			assert.Equal(t, pb.DNService, cb.Commands[0].ServiceType)
+			assert.Equal(t, pb.TNService, cb.Commands[0].ServiceType)
 			assert.True(t, cb.Commands[0].ConfigChange.Replica.ReplicaID > 0)
 
 			cb, err = store.getCommandBatch(ctx, store.id())

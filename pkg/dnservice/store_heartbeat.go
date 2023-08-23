@@ -73,7 +73,7 @@ func (s *store) heartbeat(ctx context.Context) {
 
 func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
 	for _, cmd := range cmds {
-		if cmd.ServiceType != logservicepb.DNService {
+		if cmd.ServiceType != logservicepb.TNService {
 			s.rt.Logger().Fatal("received invalid command", zap.String("command", cmd.LogString()))
 		}
 		s.rt.Logger().Debug("applying schedule command:", zap.String("command", cmd.LogString()))

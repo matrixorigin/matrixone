@@ -67,7 +67,7 @@ func TestHandleShutdown(t *testing.T) {
 			ShutdownStore: &logservicepb.ShutdownStore{
 				StoreID: s.cfg.UUID,
 			},
-			ServiceType: logservicepb.DNService,
+			ServiceType: logservicepb.TNService,
 		}
 
 		shutdownC := make(chan struct{})
@@ -142,7 +142,7 @@ func TestRemoveReplica(t *testing.T) {
 		thc.setCommandBatch(logservicepb.CommandBatch{
 			Commands: []logservicepb.ScheduleCommand{
 				{
-					ServiceType: logservicepb.DNService,
+					ServiceType: logservicepb.TNService,
 					ConfigChange: &logservicepb.ConfigChange{
 						ChangeType: logservicepb.RemoveReplica,
 						Replica: logservicepb.Replica{
@@ -249,7 +249,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 	thc.setCommandBatch(logservicepb.CommandBatch{
 		Commands: []logservicepb.ScheduleCommand{
 			{
-				ServiceType: logservicepb.DNService,
+				ServiceType: logservicepb.TNService,
 				ConfigChange: &logservicepb.ConfigChange{
 					ChangeType: logservicepb.AddReplica,
 					Replica: logservicepb.Replica{

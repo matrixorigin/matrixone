@@ -230,7 +230,7 @@ func (m *ScheduleCommand) LogString() string {
 
 	serviceType := map[ServiceType]string{
 		LogService: "L",
-		DNService:  "D",
+		TNService:  "D",
 		CNService:  "C",
 	}[m.ServiceType]
 

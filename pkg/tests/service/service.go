@@ -118,11 +118,11 @@ type ClusterAwareness interface {
 	ListHAKeeperServices() []LogService
 
 	// GetDNService fetches dn service instance by uuid.
-	GetTNService(uuid string) (DNService, error)
+	GetTNService(uuid string) (TNService, error)
 	// GetLogService fetches log service instance by index.
 	GetLogService(uuid string) (LogService, error)
 	// GetDNServiceIndexed fetches dn service instance by uuid.
-	GetDNServiceIndexed(index int) (DNService, error)
+	GetDNServiceIndexed(index int) (TNService, error)
 	// GetLogServiceIndexed fetches log service instance by index.
 	GetLogServiceIndexed(index int) (LogService, error)
 	// GetCNService fetches cn service instance by index.
@@ -246,7 +246,7 @@ type testCluster struct {
 		sync.Mutex
 		cfgs []*dnservice.Config
 		opts []dnOptions
-		svcs []DNService
+		svcs []TNService
 	}
 
 	log struct {
@@ -1047,7 +1047,7 @@ func (c *testCluster) ListHAKeeperServices() []LogService {
 	return c.selectHAkeeperServices()
 }
 
-func (c *testCluster) GetTNService(uuid string) (DNService, error) {
+func (c *testCluster) GetTNService(uuid string) (TNService, error) {
 	c.tn.Lock()
 	defer c.tn.Unlock()
 
@@ -1083,7 +1083,7 @@ func (c *testCluster) GetCNService(uuid string) (CNService, error) {
 	return nil, moerr.NewNoServiceNoCtx(uuid)
 }
 
-func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
+func (c *testCluster) GetDNServiceIndexed(index int) (TNService, error) {
 	c.tn.Lock()
 	defer c.tn.Unlock()
 
@@ -1321,12 +1321,12 @@ func (c *testCluster) buildCNConfigs(
 // initTNServices builds all dn services.
 //
 // Before initializing dn service, log service must be started already.
-func (c *testCluster) initTNServices(fileservices *fileServices) []DNService {
+func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 	batch := c.opt.initial.dnServiceNum
 
 	c.logger.Info("initialize dn services", zap.Int("batch", batch))
 
-	svcs := make([]DNService, 0, batch)
+	svcs := make([]TNService, 0, batch)
 	for i := 0; i < batch; i++ {
 		cfg := c.tn.cfgs[i]
 		opt := c.tn.opts[i]

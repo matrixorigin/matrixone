@@ -405,7 +405,7 @@ type ServiceType int32
 
 const (
 	LogService ServiceType = 0
-	DNService  ServiceType = 1
+	TNService  ServiceType = 1
 	CNService  ServiceType = 2
 )
 
