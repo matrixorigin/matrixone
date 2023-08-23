@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package function
+package functionAgg
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,9 +28,13 @@ type compare interface {
 	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp
 }
 
+type maxScaleNumeric interface {
+	int64 | uint64 | float64
+}
+
 var (
 	// max() supported input type and output type.
-	aggMaxSupportedParameters = []types.T{
+	AggMaxSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
@@ -42,12 +46,12 @@ var (
 		types.T_uuid,
 		types.T_binary, types.T_varbinary,
 	}
-	aggMaxReturnType = func(typs []types.Type) types.Type {
+	AggMaxReturnType = func(typs []types.Type) types.Type {
 		return typs[0]
 	}
 
 	// min() supported input type and output type.
-	aggMinSupportedParameters = []types.T{
+	AggMinSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
@@ -59,18 +63,18 @@ var (
 		types.T_uuid,
 		types.T_binary, types.T_varbinary,
 	}
-	aggMinxReturnType = func(typs []types.Type) types.Type {
+	AggMinxReturnType = func(typs []types.Type) types.Type {
 		return typs[0]
 	}
 
 	// sum() supported input type and output type.
-	aggSumSupportedParameters = []types.T{
+	AggSumSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 	}
-	aggSumReturnType = func(typs []types.Type) types.Type {
+	AggSumReturnType = func(typs []types.Type) types.Type {
 		switch typs[0].Oid {
 		case types.T_float32, types.T_float64:
 			return types.T_float64.ToType()
@@ -87,13 +91,13 @@ var (
 	}
 
 	// avg() supported input type and output type.
-	aggAvgSupportedParameters = []types.T{
+	AggAvgSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 	}
-	aggAvgReturnType = func(typs []types.Type) types.Type {
+	AggAvgReturnType = func(typs []types.Type) types.Type {
 		switch typs[0].Oid {
 		case types.T_decimal64:
 			s := int32(12)
@@ -124,19 +128,19 @@ var (
 	}
 
 	// count() supported input type and output type.
-	aggCountReturnType = func(typs []types.Type) types.Type {
+	AggCountReturnType = func(typs []types.Type) types.Type {
 		return types.T_int64.ToType()
 	}
 
 	// bit_and() supported input type and output type.
-	aggBitAndSupportedParameters = []types.T{
+	AggBitAndSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
 	}
-	aggBitAndReturnType = func(typs []types.Type) types.Type {
+	AggBitAndReturnType = func(typs []types.Type) types.Type {
 		if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
 			return typs[0]
 		}
@@ -144,33 +148,33 @@ var (
 	}
 
 	// bit_or() supported input type and output type.
-	aggBitOrSupportedParameters = []types.T{
+	AggBitOrSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
 	}
-	aggBitOrReturnType = aggBitAndReturnType
+	AggBitOrReturnType = AggBitAndReturnType
 
 	// bit_xor() supported input type and output type.
-	aggBitXorSupportedParameters = []types.T{
+	AggBitXorSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
 	}
-	aggBitXorReturnType = aggBitAndReturnType
+	AggBitXorReturnType = AggBitAndReturnType
 
 	// variance() supported input type and output type.
-	aggVarianceSupportedParameters = []types.T{
+	AggVarianceSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 	}
-	aggVarianceReturnType = func(typs []types.Type) types.Type {
+	AggVarianceReturnType = func(typs []types.Type) types.Type {
 		if typs[0].IsDecimal() {
 			s := int32(12)
 			if typs[0].Scale > s {
@@ -182,16 +186,16 @@ var (
 	}
 
 	// stddev_pop() supported input type and output type.
-	aggStdDevSupportedParameters = []types.T{
+	AggStdDevSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 	}
-	aggStdDevReturnType = aggVarianceReturnType
+	AggStdDevReturnType = AggVarianceReturnType
 
 	// any_value() supported input type and output type.
-	aggAnyValueSupportedParameters = []types.T{
+	AggAnyValueSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
@@ -203,18 +207,18 @@ var (
 		types.T_uuid,
 		types.T_binary, types.T_varbinary,
 	}
-	aggAnyValueReturnType = func(typs []types.Type) types.Type {
+	AggAnyValueReturnType = func(typs []types.Type) types.Type {
 		return typs[0]
 	}
 
 	// median() supported input type and output type.
-	aggMedianSupportedParameters = []types.T{
+	AggMedianSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_decimal64, types.T_decimal128,
 	}
-	aggMedianReturnType = func(typs []types.Type) types.Type {
+	AggMedianReturnType = func(typs []types.Type) types.Type {
 		switch typs[0].Oid {
 		case types.T_decimal64:
 			return types.New(types.T_decimal128, 38, typs[0].Scale+1)
@@ -231,7 +235,7 @@ var (
 	}
 
 	// group_concat() supported input type and output type.
-	aggGroupConcatReturnType = func(typs []types.Type) types.Type {
+	AggGroupConcatReturnType = func(typs []types.Type) types.Type {
 		for _, p := range typs {
 			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
 				return types.T_blob.ToType()
