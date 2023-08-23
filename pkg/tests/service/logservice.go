@@ -54,7 +54,7 @@ type LogService interface {
 	GetClusterState() (*logpb.CheckerState, error)
 
 	// SetInitialClusterInfo sets cluster initialize state.
-	SetInitialClusterInfo(numOfLogShards, numOfDNShards, numOfLogReplicas uint64) error
+	SetInitialClusterInfo(numOfLogShards, numOfTNShards, numOfLogReplicas uint64) error
 
 	// StartHAKeeperReplica starts hakeeper replicas.
 	StartHAKeeperReplica(replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool) error
@@ -121,10 +121,10 @@ func (ls *logService) GetClusterState() (*logpb.CheckerState, error) {
 }
 
 func (ls *logService) SetInitialClusterInfo(
-	numOfLogShards, numOfDNShards, numOfLogReplicas uint64,
+	numOfLogShards, numOfTNShards, numOfLogReplicas uint64,
 ) error {
 	return ls.svc.SetInitialClusterInfo(
-		numOfLogShards, numOfDNShards, numOfLogReplicas,
+		numOfLogShards, numOfTNShards, numOfLogReplicas,
 	)
 }
 

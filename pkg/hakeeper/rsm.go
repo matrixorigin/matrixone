@@ -72,10 +72,10 @@ func parseCmdTag(cmd []byte) pb.HAKeeperUpdateType {
 }
 
 func GetInitialClusterRequestCmd(numOfLogShards uint64,
-	numOfDNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) []byte {
+	numOfTNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) []byte {
 	req := pb.InitialClusterRequest{
 		NumOfLogShards:   numOfLogShards,
-		NumOfTNShards:    numOfDNShards,
+		NumOfTNShards:    numOfTNShards,
 		NumOfLogReplicas: numOfLogReplicas,
 		NextID:           nextID,
 		NextIDByKey:      nextIDByKey,
