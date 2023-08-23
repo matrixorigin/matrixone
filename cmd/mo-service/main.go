@@ -116,7 +116,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 	case sig := <-sigchan:
 		detail += "signal: " + sig.String()
 	case <-shutdownC:
-		// waiting, give a chance let all log stores and dn stores to get
+		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper
 		time.Sleep(time.Second * 5)
 		detail += "ha keeper issues shutdown command"
@@ -240,7 +240,7 @@ func startTNService(
 		return err
 	}
 	serviceWG.Add(1)
-	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
+	return stopper.RunNamedTask("tn-service", func(ctx context.Context) {
 		defer serviceWG.Done()
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
