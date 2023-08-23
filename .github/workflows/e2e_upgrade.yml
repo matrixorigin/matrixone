@@ -51,6 +51,15 @@ jobs:
           mv $GITHUB_WORKSPACE/upstream/etc .
           mv $GITHUB_WORKSPACE/upstream/mo-service .
           mv $GITHUB_WORKSPACE/upstream/optools .
+
+          # Explicitly declare pessimistic mode
+          echo ""  >> ./etc/launch/cn.toml
+          echo '[cn.txn]' >> ./etc/launch/cn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch/cn.toml
+          echo ""  >> ./etc/launch/dn.toml
+          echo '[dn.txn]' >> ./etc/launch/dn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch/dn.toml
+          
           echo "==============cn configuration of upstram=============="
           cat ./etc/launch/cn.toml
           echo "==============dn configuration of upstram=============="
