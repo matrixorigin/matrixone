@@ -153,7 +153,7 @@ func TestParseTNState(t *testing.T) {
 
 	// 1. no working dn stores
 	{
-		dnState := pb.TNStore{
+		tnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
@@ -170,7 +170,7 @@ func TestParseTNState(t *testing.T) {
 			},
 		}
 
-		stores, shards := parseDnState(cfg, dnState, currTick)
+		stores, shards := parseDnState(cfg, tnState, currTick)
 
 		// check stores
 		require.Equal(t, len(stores.WorkingStores()), 0)
@@ -192,7 +192,7 @@ func TestParseTNState(t *testing.T) {
 
 	// 2. verbose running shard replica
 	{
-		dnState := pb.TNStore{
+		tnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
@@ -217,7 +217,7 @@ func TestParseTNState(t *testing.T) {
 			},
 		}
 
-		stores, shards := parseDnState(cfg, dnState, currTick)
+		stores, shards := parseDnState(cfg, tnState, currTick)
 
 		// check stores
 		require.Equal(t, len(stores.WorkingStores()), 2)

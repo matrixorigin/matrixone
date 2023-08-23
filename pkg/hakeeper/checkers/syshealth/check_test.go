@@ -106,7 +106,7 @@ func TestParseDnStores(t *testing.T) {
 	cfg.Fill()
 	currTick := cfg.ExpiredTick(expiredTick, cfg.DNStoreTimeout) + 1
 
-	dnState := pb.TNStore{
+	tnState := pb.TNStore{
 		Stores: map[string]pb.DNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
@@ -130,8 +130,8 @@ func TestParseDnStores(t *testing.T) {
 		},
 	}
 
-	dnStores := parseDnState(cfg, dnState, currTick)
-	require.Equal(t, len(dnState.Stores), dnStores.length())
+	dnStores := parseDnState(cfg, tnState, currTick)
+	require.Equal(t, len(tnState.Stores), dnStores.length())
 	require.Equal(t, pb.DNService, dnStores.serviceType)
 	require.Equal(t, 1, len(dnStores.expired))
 	require.Equal(t, 1, len(dnStores.shutdownExpiredStores()))
@@ -270,7 +270,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		dnState := pb.TNStore{
+		tnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
@@ -294,7 +294,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops, healthy := Check(cfg, pb.ClusterInfo{}, dnState, logState, currTick)
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick)
 		require.True(t, healthy)
 		require.Equal(t, 0, len(ops))
 	}
@@ -321,7 +321,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		dnState := pb.TNStore{
+		tnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
@@ -345,7 +345,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops, healthy := Check(cfg, pb.ClusterInfo{}, dnState, logState, currTick)
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick)
 		require.False(t, healthy)
 		require.Equal(t, 6, len(ops))
 	}

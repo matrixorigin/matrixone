@@ -93,10 +93,10 @@ func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 	return executing
 }
 
-func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.TNStore, cnState pb.CNState) {
+func (c *Controller) RemoveFinishedOperator(logState pb.LogState, tnState pb.TNStore, cnState pb.CNState) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
-			op.Check(logState, dnState, cnState)
+			op.Check(logState, tnState, cnState)
 			switch op.Status() {
 			case SUCCESS, EXPIRED:
 				c.RemoveOperator(op)
@@ -106,10 +106,10 @@ func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.TNS
 }
 
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
-	dnState pb.TNStore, cnState pb.CNState) (commands []pb.ScheduleCommand) {
+	tnState pb.TNStore, cnState pb.CNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
-		if step := op.Check(logState, dnState, cnState); step != nil {
+		if step := op.Check(logState, tnState, cnState); step != nil {
 			commands = append(commands, generateScheduleCommand(step))
 		}
 	}

@@ -58,12 +58,12 @@ func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
 
 // parseDnState parses cluster dn state.
 func parseDnState(cfg hakeeper.Config,
-	dnState pb.TNStore, currTick uint64,
+	tnState pb.TNStore, currTick uint64,
 ) (*util.ClusterStores, *reportedShards) {
 	stores := util.NewClusterStores()
 	shards := newReportedShards()
 
-	for storeID, storeInfo := range dnState.Stores {
+	for storeID, storeInfo := range tnState.Stores {
 		expired := false
 		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			expired = true

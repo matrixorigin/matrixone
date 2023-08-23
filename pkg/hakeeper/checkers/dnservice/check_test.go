@@ -214,7 +214,7 @@ func TestCheck(t *testing.T) {
 
 	// 1. no working dn stores
 	{
-		dnState := pb.TNStore{
+		tnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: staleTick,
@@ -233,13 +233,13 @@ func TestCheck(t *testing.T) {
 
 		clusterInfo := mockClusterInfo(10, 11)
 
-		steps := Check(idAlloc, config, clusterInfo, dnState, pb.TaskTableUser{}, currTick)
+		steps := Check(idAlloc, config, clusterInfo, tnState, pb.TaskTableUser{}, currTick)
 		require.Equal(t, len(steps), 0)
 	}
 
 	// 2. running cluster
 	{
-		dnState := pb.TNStore{
+		tnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: staleTick,
@@ -277,7 +277,7 @@ func TestCheck(t *testing.T) {
 		//  10 - add replica
 		//  12 - remove two extra replica (16, 13)
 		//  14 - no command
-		operators := Check(idAlloc, config, clusterInfo, dnState, pb.TaskTableUser{}, currTick)
+		operators := Check(idAlloc, config, clusterInfo, tnState, pb.TaskTableUser{}, currTick)
 		require.Equal(t, 2, len(operators))
 
 		// shard 10 - single operator step
@@ -307,7 +307,7 @@ func TestCheck(t *testing.T) {
 	// 3. cluster running with initial shard
 	{
 
-		dnState := pb.TNStore{
+		tnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: staleTick,
@@ -332,13 +332,13 @@ func TestCheck(t *testing.T) {
 		//  14 - no command
 		//  20 - add replica after a while
 		bootstrapping = false
-		operators := Check(idAlloc, config, cluster, dnState, pb.TaskTableUser{}, staleTick)
+		operators := Check(idAlloc, config, cluster, tnState, pb.TaskTableUser{}, staleTick)
 		require.Equal(t, 0, len(operators))
 
 		// at the tick of `currTick`, shard 14, 20:
 		//  14 - add replica
 		//  20 - add replica
-		operators = Check(idAlloc, config, cluster, dnState, pb.TaskTableUser{}, currTick)
+		operators = Check(idAlloc, config, cluster, tnState, pb.TaskTableUser{}, currTick)
 		require.Equal(t, 2, len(operators))
 
 		// shard 14 - single operator step

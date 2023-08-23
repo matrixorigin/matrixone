@@ -51,11 +51,11 @@ func Check(
 	idAlloc util.IDAllocator,
 	cfg hakeeper.Config,
 	cluster pb.ClusterInfo,
-	dnState pb.TNStore,
+	tnState pb.TNStore,
 	user pb.TaskTableUser,
 	currTick uint64,
 ) []*operator.Operator {
-	stores, reportedShards := parseDnState(cfg, dnState, currTick)
+	stores, reportedShards := parseDnState(cfg, tnState, currTick)
 	runtime.ProcessLevelRuntime().Logger().Debug("reported dn shards in cluster",
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
 		zap.Any("dn shards", reportedShards.shards),
@@ -84,7 +84,7 @@ func Check(
 
 	if user.Username != "" {
 		for _, store := range stores.WorkingStores() {
-			if !dnState.Stores[store.ID].TaskServiceCreated {
+			if !tnState.Stores[store.ID].TaskServiceCreated {
 				operators = append(operators, operator.CreateTaskServiceOp("",
 					store.ID, pb.DNService, user))
 			}

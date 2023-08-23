@@ -38,13 +38,13 @@ func TestIsFinish(t *testing.T) {
 		Stores: nil,
 	}
 
-	dnState := pb.TNStore{}
+	tnState := pb.TNStore{}
 	cnState := pb.CNState{}
 
-	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState, cnState))
-	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState, cnState))
-	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, dnState, cnState))
-	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState, cnState))
+	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, tnState, cnState))
+	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, tnState, cnState))
+	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, tnState, cnState))
+	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, tnState, cnState))
 }
 
 func TestAddLogService(t *testing.T) {

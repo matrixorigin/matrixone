@@ -29,7 +29,7 @@ import (
 type OpStep interface {
 	fmt.Stringer
 
-	IsFinish(state pb.LogState, dnState pb.TNStore, cnState pb.CNState) bool
+	IsFinish(state pb.LogState, tnState pb.TNStore, cnState pb.CNState) bool
 }
 
 type Replica struct {
@@ -223,12 +223,12 @@ func (a CreateTaskService) String() string {
 	return fmt.Sprintf("create task service on %s(%s)", a.StoreID, a.StoreType)
 }
 
-func (a CreateTaskService) IsFinish(logState pb.LogState, dnState pb.TNStore, cnState pb.CNState) bool {
+func (a CreateTaskService) IsFinish(logState pb.LogState, tnState pb.TNStore, cnState pb.CNState) bool {
 	if state, ok := logState.Stores[a.StoreID]; ok {
 		return state.GetTaskServiceCreated()
 	}
 
-	if state, ok := dnState.Stores[a.StoreID]; ok {
+	if state, ok := tnState.Stores[a.StoreID]; ok {
 		return state.GetTaskServiceCreated()
 	}
 

@@ -33,7 +33,7 @@ const (
 func Check(
 	cfg hakeeper.Config,
 	cluster pb.ClusterInfo,
-	dnState pb.TNStore,
+	tnState pb.TNStore,
 	logState pb.LogState,
 	currTick uint64,
 ) ([]*operator.Operator, bool) {
@@ -71,7 +71,7 @@ func Check(
 	logutil.GetGlobalLogger().Info(detail)
 
 	// parse all dn stores
-	dnStores := parseDnState(cfg, dnState, currTick)
+	dnStores := parseDnState(cfg, tnState, currTick)
 
 	// generate operators to shut down all stores
 	operators := make([]*operator.Operator, 0, logStores.length()+dnStores.length())
@@ -233,9 +233,9 @@ func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *
 }
 
 // parseDnState separates dn stores as expired and working.
-func parseDnState(cfg hakeeper.Config, dnState pb.TNStore, currTick uint64) *storeSet {
+func parseDnState(cfg hakeeper.Config, tnState pb.TNStore, currTick uint64) *storeSet {
 	set := newStoreSet(pb.DNService)
-	for id, storeInfo := range dnState.Stores {
+	for id, storeInfo := range tnState.Stores {
 		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[id] = struct{}{}
 		} else {
