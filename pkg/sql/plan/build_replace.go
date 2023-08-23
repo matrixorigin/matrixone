@@ -106,9 +106,11 @@ func getAllKeys(tableDef *plan.TableDef) []map[string]struct{} {
 	}
 
 	keys := make([]map[string]struct{}, 0, n)
-	keys = append(keys, make(map[string]struct{}))
-	for _, part := range tableDef.Pkey.Names {
-		keys[0][part] = struct{}{}
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		keys = append(keys, make(map[string]struct{}))
+		for _, part := range tableDef.Pkey.Names {
+			keys[0][part] = struct{}{}
+		}
 	}
 	for _, index := range tableDef.Indexes {
 		if index.Unique {

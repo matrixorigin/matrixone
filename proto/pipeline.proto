@@ -317,6 +317,12 @@ message ExternalScan {
   plan.Expr    filter = 9;
 }
 
+message StreamScan {
+  plan.TableDef tbl_def = 1;
+  int64 offset = 2;
+  int64 limit = 3;
+}
+
 message Instruction{
   // Op specified the operator code of an instruction.
   int32 op = 1;
@@ -357,6 +363,7 @@ message Instruction{
   LockOp lock_op = 32;
   Shuffle shuffle = 33;
   Merge merge = 34;
+  StreamScan stream_scan = 35;
 }
 
 message AnalysisList {

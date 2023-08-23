@@ -110,6 +110,8 @@ type testCNServer struct {
 	globalVars map[string]string
 	tlsCfg     tlsConfig
 	tlsConfig  *tls.Config
+
+	beforeHandle func()
 }
 
 type testHandler struct {
@@ -123,13 +125,24 @@ type testHandler struct {
 	status      uint16
 }
 
-func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsConfig) func() error {
+type option func(s *testCNServer)
+
+func withBeforeHandle(f func()) option {
+	return func(s *testCNServer) {
+		s.beforeHandle = f
+	}
+}
+
+func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsConfig, opts ...option) func() error {
 	b := &testCNServer{
 		ctx:        ctx,
 		scheme:     "tcp",
 		addr:       addr,
 		quit:       make(chan interface{}),
 		globalVars: make(map[string]string),
+	}
+	for _, opt := range opts {
+		opt(b)
 	}
 	if cfg != nil {
 		b.tlsCfg = *cfg
@@ -225,6 +238,9 @@ func (s *testCNServer) Start() error {
 					prepareStmt: make(map[string]struct{}),
 					labels:      make(map[string]string),
 					server:      s,
+				}
+				if s.beforeHandle != nil {
+					s.beforeHandle()
 				}
 				go func(h *testHandler) {
 					testHandle(h)

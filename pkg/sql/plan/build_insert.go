@@ -32,6 +32,20 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
 
+	tbl := stmt.Table.(*tree.TableName)
+	dbName := string(tbl.SchemaName)
+	tblName := string(tbl.ObjectName)
+	if len(dbName) == 0 {
+		dbName = ctx.DefaultDatabase()
+	}
+	_, t := ctx.Resolve(dbName, tblName)
+	if t == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if t.TableType == catalog.SystemStreamRel {
+		return nil, moerr.NewNYI(ctx.GetContext(), "insert stream %s", tblName)
+	}
+
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err

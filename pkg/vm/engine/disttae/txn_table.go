@@ -58,7 +58,7 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 		for _, partitionTable := range partitionTables {
 			if ptable, ok2 := partitionTable.(*txnTable); ok2 {
 				if len(ptable.blockInfos) == 0 || !ptable.blockInfosUpdated {
-					err := ptable.updateBlockInfos(ctx)
+					err := ptable.UpdateBlockInfos(ctx)
 					if err != nil {
 						return false
 					}
@@ -80,7 +80,7 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 		}
 	} else {
 		if len(tbl.blockInfos) == 0 || !tbl.blockInfosUpdated {
-			err := tbl.updateBlockInfos(ctx)
+			err := tbl.UpdateBlockInfos(ctx)
 			if err != nil {
 				return false
 			}
@@ -334,6 +334,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			return 0, err
 		}
 		meta = objMeta.MustDataMeta()
+		ret += int64(meta.BlockHeader().ZoneMapArea().Length())
+		ret += int64(meta.BlockHeader().BFExtent().Length())
 		for _, col := range neededCols {
 			colmata := meta.MustGetColumn(uint16(col.Seqnum))
 			ret += int64(colmata.Location().Length())
@@ -554,7 +556,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 
 	// make sure we have the block infos snapshot
-	if err = tbl.updateBlockInfos(ctx); err != nil {
+	if err = tbl.UpdateBlockInfos(ctx); err != nil {
 		return
 	}
 
@@ -1591,7 +1593,7 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 	return tbl._partState, nil
 }
 
-func (tbl *txnTable) updateBlockInfos(ctx context.Context) (err error) {
+func (tbl *txnTable) UpdateBlockInfos(ctx context.Context) (err error) {
 	tbl.dnList = []int{0}
 
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
