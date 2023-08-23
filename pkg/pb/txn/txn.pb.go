@@ -608,7 +608,7 @@ type TxnRequest struct {
 	// TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
 	CommitDNShardRequest *TxnCommitDNShardRequest `protobuf:"bytes,10,opt,name=CommitDNShardRequest,proto3" json:"CommitDNShardRequest,omitempty"`
 	// TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
-	RollbackDNShardRequest *TxnRollbackDNShardRequest `protobuf:"bytes,11,opt,name=RollbackDNShardRequest,proto3" json:"RollbackDNShardRequest,omitempty"`
+	RollbackDNShardRequest *TxnRollbackTNShardRequest `protobuf:"bytes,11,opt,name=RollbackDNShardRequest,proto3" json:"RollbackDNShardRequest,omitempty"`
 	// TxnRemoveMetadataRequest  corresponds to TxnMethod.RemoveMetadata
 	RemoveMetadata *TxnRemoveMetadataRequest `protobuf:"bytes,12,opt,name=RemoveMetadata,proto3" json:"RemoveMetadata,omitempty"`
 	// TxnRequestOptions request options
@@ -721,7 +721,7 @@ func (m *TxnRequest) GetCommitDNShardRequest() *TxnCommitDNShardRequest {
 	return nil
 }
 
-func (m *TxnRequest) GetRollbackDNShardRequest() *TxnRollbackDNShardRequest {
+func (m *TxnRequest) GetRollbackDNShardRequest() *TxnRollbackTNShardRequest {
 	if m != nil {
 		return m.RollbackDNShardRequest
 	}
@@ -1408,7 +1408,7 @@ func (m *TxnCommitTNShardResponse) XXX_DiscardUnknown() {
 var xxx_messageInfo_TxnCommitDNShardResponse proto.InternalMessageInfo
 
 // TxnRollbackDNShardRequest rollback txn on DNShard
-type TxnRollbackDNShardRequest struct {
+type TxnRollbackTNShardRequest struct {
 	// DNShard target DN
 	TNShard              metadata.TNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
@@ -1416,16 +1416,16 @@ type TxnRollbackDNShardRequest struct {
 	XXX_sizecache        int32            `json:"-"`
 }
 
-func (m *TxnRollbackDNShardRequest) Reset()         { *m = TxnRollbackDNShardRequest{} }
-func (m *TxnRollbackDNShardRequest) String() string { return proto.CompactTextString(m) }
-func (*TxnRollbackDNShardRequest) ProtoMessage()    {}
-func (*TxnRollbackDNShardRequest) Descriptor() ([]byte, []int) {
+func (m *TxnRollbackTNShardRequest) Reset()         { *m = TxnRollbackTNShardRequest{} }
+func (m *TxnRollbackTNShardRequest) String() string { return proto.CompactTextString(m) }
+func (*TxnRollbackTNShardRequest) ProtoMessage()    {}
+func (*TxnRollbackTNShardRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_4f782e76b37adb9a, []int{17}
 }
-func (m *TxnRollbackDNShardRequest) XXX_Unmarshal(b []byte) error {
+func (m *TxnRollbackTNShardRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *TxnRollbackDNShardRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TxnRollbackTNShardRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_TxnRollbackDNShardRequest.Marshal(b, m, deterministic)
 	} else {
@@ -1437,19 +1437,19 @@ func (m *TxnRollbackDNShardRequest) XXX_Marshal(b []byte, deterministic bool) ([
 		return b[:n], nil
 	}
 }
-func (m *TxnRollbackDNShardRequest) XXX_Merge(src proto.Message) {
+func (m *TxnRollbackTNShardRequest) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_TxnRollbackDNShardRequest.Merge(m, src)
 }
-func (m *TxnRollbackDNShardRequest) XXX_Size() int {
+func (m *TxnRollbackTNShardRequest) XXX_Size() int {
 	return m.Size()
 }
-func (m *TxnRollbackDNShardRequest) XXX_DiscardUnknown() {
+func (m *TxnRollbackTNShardRequest) XXX_DiscardUnknown() {
 	xxx_messageInfo_TxnRollbackDNShardRequest.DiscardUnknown(m)
 }
 
 var xxx_messageInfo_TxnRollbackDNShardRequest proto.InternalMessageInfo
 
-func (m *TxnRollbackDNShardRequest) GetDNShard() metadata.TNShard {
+func (m *TxnRollbackTNShardRequest) GetDNShard() metadata.TNShard {
 	if m != nil {
 		return m.TNShard
 	}
@@ -1681,7 +1681,7 @@ func init() {
 	proto.RegisterType((*TxnGetStatusResponse)(nil), "txn.TxnGetStatusResponse")
 	proto.RegisterType((*TxnCommitDNShardRequest)(nil), "txn.TxnCommitDNShardRequest")
 	proto.RegisterType((*TxnCommitTNShardResponse)(nil), "txn.TxnCommitDNShardResponse")
-	proto.RegisterType((*TxnRollbackDNShardRequest)(nil), "txn.TxnRollbackDNShardRequest")
+	proto.RegisterType((*TxnRollbackTNShardRequest)(nil), "txn.TxnRollbackDNShardRequest")
 	proto.RegisterType((*TxnRollbackDNShardResponse)(nil), "txn.TxnRollbackDNShardResponse")
 	proto.RegisterType((*TxnRemoveMetadataRequest)(nil), "txn.TxnRemoveMetadataRequest")
 	proto.RegisterType((*TxnRemoveMetadataResponse)(nil), "txn.TxnRemoveMetadataResponse")
@@ -2761,7 +2761,7 @@ func (m *TxnCommitTNShardResponse) MarshalToSizedBuffer(dAtA []byte) (int, error
 	return len(dAtA) - i, nil
 }
 
-func (m *TxnRollbackDNShardRequest) Marshal() (dAtA []byte, err error) {
+func (m *TxnRollbackTNShardRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -2771,12 +2771,12 @@ func (m *TxnRollbackDNShardRequest) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *TxnRollbackDNShardRequest) MarshalTo(dAtA []byte) (int, error) {
+func (m *TxnRollbackTNShardRequest) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *TxnRollbackDNShardRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TxnRollbackTNShardRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -3337,7 +3337,7 @@ func (m *TxnCommitTNShardResponse) Size() (n int) {
 	return n
 }
 
-func (m *TxnRollbackDNShardRequest) Size() (n int) {
+func (m *TxnRollbackTNShardRequest) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -4543,7 +4543,7 @@ func (m *TxnRequest) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.RollbackDNShardRequest == nil {
-				m.RollbackDNShardRequest = &TxnRollbackDNShardRequest{}
+				m.RollbackDNShardRequest = &TxnRollbackTNShardRequest{}
 			}
 			if err := m.RollbackDNShardRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -5920,7 +5920,7 @@ func (m *TxnCommitTNShardResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *TxnRollbackDNShardRequest) Unmarshal(dAtA []byte) error {
+func (m *TxnRollbackTNShardRequest) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {

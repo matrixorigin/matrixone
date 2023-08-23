@@ -294,7 +294,7 @@ func NewTestRollbackShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method: txn.TxnMethod_RollbackTNShard,
 		Txn:    wTxn,
-		RollbackDNShardRequest: &txn.TxnRollbackDNShardRequest{
+		RollbackDNShardRequest: &txn.TxnRollbackTNShardRequest{
 			TNShard: wTxn.TNShards[0],
 		},
 	}
