@@ -8,7 +8,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"golang.org/x/exp/rand"
 	"os"
 	"path"
 	"strings"
@@ -115,26 +114,6 @@ func backupHakeeper(ctx context.Context, config *Config) error {
 		return err
 	}
 	return writeFile(ctx, fs, HakeeperFile, haData)
-}
-
-func saveDumpFiles(ctx context.Context, fs fileservice.FileService, size, count int) error {
-	var err error
-	data := make([]byte, size*mb)
-	for i := 0; i < count; i++ {
-		_, _ = rand.Read(data)
-		uid, _ := uuid.NewUUID()
-		err = writeFile(ctx, fs, uid.String(), data)
-		if err != nil {
-			return err
-		}
-	}
-	return err
-}
-
-func saveDumpHakeeper(ctx context.Context, fs fileservice.FileService, size int) error {
-	data := make([]byte, size*mb)
-	_, _ = rand.Read(data)
-	return writeFile(ctx, fs, HakeeperFile, data)
 }
 
 func backupConfigFile(ctx context.Context, typ, configPath string, cfg *Config) error {

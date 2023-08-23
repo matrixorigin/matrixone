@@ -50,6 +50,10 @@ func startCluster(
 		return err
 	}
 
+	/*
+		When the mo started in local cluster, we save all config files.
+		Because we can get all config files conveniently.
+	*/
 	backup.SaveLaunchConfigPath(backup.LaunchConfig, []string{*launchFile})
 	backup.SaveLaunchConfigPath(backup.LogConfig, cfg.LogServiceConfigFiles)
 	backup.SaveLaunchConfigPath(backup.DnConfig, cfg.DNServiceConfigsFiles)
