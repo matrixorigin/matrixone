@@ -82,7 +82,8 @@ type Config struct {
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
 	// TN tn service config
-	TN tnservice.Config `toml:"tn"`
+	TN           *tnservice.Config `toml:"tn"`
+	TNCompatible *tnservice.Config `toml:"dn"` // for old config files compatibility
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
@@ -344,7 +345,13 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 }
 
 func (c *Config) getTNServiceConfig() tnservice.Config {
-	cfg := c.TN
+	if c.TN == nil && c.TNCompatible != nil {
+		c.TN = c.TNCompatible
+	}
+	var cfg tnservice.Config
+	if c.TN != nil {
+		cfg = *c.TN
+	}
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "dn-data", cfg.UUID)
 	return cfg
