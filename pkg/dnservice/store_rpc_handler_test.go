@@ -41,7 +41,7 @@ func TestHandleReadWithRetry(t *testing.T) {
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
 		req.Options = &txn.TxnRequestOptions{
-			RetryCodes: []int32{int32(moerr.ErrDNShardNotFound)},
+			RetryCodes: []int32{int32(moerr.ErrTNShardNotFound)},
 		}
 		go func() {
 			time.Sleep(time.Second)
@@ -57,13 +57,13 @@ func TestHandleReadWithRetryWithTimeout(t *testing.T) {
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
 		req.Options = &txn.TxnRequestOptions{
-			RetryCodes: []int32{int32(moerr.ErrDNShardNotFound)},
+			RetryCodes: []int32{int32(moerr.ErrTNShardNotFound)},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		resp := &txn.TxnResponse{}
 		assert.NoError(t, s.handleRead(ctx, &req, resp))
-		assert.Equal(t, uint32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
+		assert.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.Code)
 	})
 }
 
@@ -169,7 +169,7 @@ func TestHandleDNShardNotFound(t *testing.T) {
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		resp := &txn.TxnResponse{}
 		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, resp))
-		assert.Equal(t, uint32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
+		assert.Equal(t, uint32(moerr.ErrTNShardNotFound), resp.TxnError.Code)
 	})
 }
 

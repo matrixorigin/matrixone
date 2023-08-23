@@ -175,7 +175,7 @@ const (
 	// ErrTxnError TxnError wrapper
 	ErrTxnError uint16 = 20604
 	// ErrDNShardNotFound DNShard not found, need to get the latest DN list from HAKeeper
-	ErrDNShardNotFound  uint16 = 20605
+	ErrTNShardNotFound  uint16 = 20605
 	ErrShardNotReported uint16 = 20606
 	// Generic TAE error
 	ErrTAEError                   uint16 = 20607
@@ -370,7 +370,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrMissingTxn:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "missing txn"},
 	ErrUnresolvedConflict:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unresolved conflict"},
 	ErrTxnError:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "transaction error: %s"},
-	ErrDNShardNotFound:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not found"},
+	ErrTNShardNotFound:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not found"},
 	ErrShardNotReported:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "dn shard uuid %s, id %d not reported"},
 	ErrTAEError:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae error %s"},
 	ErrTAERead:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae read error"},
@@ -860,7 +860,7 @@ func NewTAEError(ctx context.Context, msg string, args ...any) *Error {
 }
 
 func NewDNShardNotFound(ctx context.Context, uuid string, id uint64) *Error {
-	return newError(ctx, ErrDNShardNotFound, uuid, id)
+	return newError(ctx, ErrTNShardNotFound, uuid, id)
 }
 
 func NewShardNotReported(ctx context.Context, uuid string, id uint64) *Error {

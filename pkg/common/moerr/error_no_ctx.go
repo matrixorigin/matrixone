@@ -205,7 +205,7 @@ func NewTAEErrorNoCtx(msg string, args ...any) *Error {
 }
 
 func NewDNShardNotFoundNoCtx(uuid string, id uint64) *Error {
-	return newError(Context(), ErrDNShardNotFound, uuid, id)
+	return newError(Context(), ErrTNShardNotFound, uuid, id)
 }
 
 func NewShardNotReportedNoCtx(uuid string, id uint64) *Error {

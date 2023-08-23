@@ -830,7 +830,7 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 
 	// use txn internal error code to check error
 	txnCode := uint16(txnError.TxnErrCode)
-	if txnCode == moerr.ErrDNShardNotFound {
+	if txnCode == moerr.ErrTNShardNotFound {
 		// do we still have the uuid and shard id?
 		return moerr.NewDNShardNotFoundNoCtx("", 0xDEADBEAF)
 	}

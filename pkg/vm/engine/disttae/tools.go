@@ -793,7 +793,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 				Options: &txn.TxnRequestOptions{
 					RetryCodes: []int32{
 						// dn shard not found
-						int32(moerr.ErrDNShardNotFound),
+						int32(moerr.ErrTNShardNotFound),
 					},
 					RetryInterval: int64(time.Second),
 				},
