@@ -26,7 +26,7 @@ import (
 )
 
 func TestHandleRead(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 
@@ -37,7 +37,7 @@ func TestHandleRead(t *testing.T) {
 }
 
 func TestHandleReadWithRetry(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
 		req.Options = &txn.TxnRequestOptions{
@@ -53,7 +53,7 @@ func TestHandleReadWithRetry(t *testing.T) {
 }
 
 func TestHandleReadWithRetryWithTimeout(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
 		req.Options = &txn.TxnRequestOptions{
@@ -68,7 +68,7 @@ func TestHandleReadWithRetryWithTimeout(t *testing.T) {
 }
 
 func TestHandleWrite(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 
@@ -79,7 +79,7 @@ func TestHandleWrite(t *testing.T) {
 }
 
 func TestHandleCommit(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 
@@ -90,7 +90,7 @@ func TestHandleCommit(t *testing.T) {
 }
 
 func TestHandleRollback(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 
@@ -101,7 +101,7 @@ func TestHandleRollback(t *testing.T) {
 }
 
 func TestHandlePrepare(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 
@@ -117,7 +117,7 @@ func TestHandlePrepare(t *testing.T) {
 }
 
 func TestHandleGetStatus(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 
@@ -133,7 +133,7 @@ func TestHandleGetStatus(t *testing.T) {
 }
 
 func TestHandleCommitDNShard(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 
@@ -149,7 +149,7 @@ func TestHandleCommitDNShard(t *testing.T) {
 }
 
 func TestHandleRollbackDNShard(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 
@@ -165,7 +165,7 @@ func TestHandleRollbackDNShard(t *testing.T) {
 }
 
 func TestHandleDNShardNotFound(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		resp := &txn.TxnResponse{}
 		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, resp))
@@ -174,7 +174,7 @@ func TestHandleDNShardNotFound(t *testing.T) {
 }
 
 func TestHandleDebug(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 

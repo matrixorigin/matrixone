@@ -44,7 +44,7 @@ var (
 )
 
 func TestNewAndStartAndCloseService(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		thc := s.hakeeperClient.(*testHAKeeperClient)
 		for {
 			if v := thc.getCount(); v > 0 {
@@ -55,7 +55,7 @@ func TestNewAndStartAndCloseService(t *testing.T) {
 }
 
 func TestAddReplica(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		addTestReplica(t, s, 1, 2, 3)
 	})
 }
@@ -95,7 +95,7 @@ func TestHandleShutdown(t *testing.T) {
 		}
 
 	}
-	runDNStoreTest(t, fn)
+	runTNStoreTest(t, fn)
 }
 
 func TestStartWithReplicas(t *testing.T) {
@@ -124,7 +124,7 @@ func TestStartWithReplicas(t *testing.T) {
 }
 
 func TestStartReplica(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		assert.NoError(t, s.StartDNReplica(newTestDNShard(1, 2, 3)))
 		r := s.getReplica(1)
 		r.waitStarted()
@@ -133,7 +133,7 @@ func TestStartReplica(t *testing.T) {
 }
 
 func TestRemoveReplica(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		assert.NoError(t, s.StartDNReplica(newTestDNShard(1, 2, 3)))
 		r := s.getReplica(1)
 		r.waitStarted()
@@ -166,7 +166,7 @@ func TestRemoveReplica(t *testing.T) {
 }
 
 func TestCloseReplica(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 		r := s.getReplica(1)
@@ -178,7 +178,7 @@ func TestCloseReplica(t *testing.T) {
 	})
 }
 
-func runDNStoreTest(
+func runTNStoreTest(
 	t *testing.T,
 	testFn func(*store),
 	opts ...Option) {
