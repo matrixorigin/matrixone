@@ -28,8 +28,18 @@ jobs:
       - name: docker compose launch-multi-cn
         timeout-minutes: 10
         run: |
+          echo ""  >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo 'mode = "Optimistic"' >> ./etc/launch-tae-compose/config/cn-0.toml
+          echo ""  >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo 'mode = "Optimistic"' >> ./etc/launch-tae-compose/config/cn-1.toml
+          echo ""  >> ./etc/launch-tae-compose/config/dn.toml
+          echo '[dn.txn]' >> ./etc/launch-tae-compose/config/dn.toml
+          echo 'mode = "Optimistic"' >> ./etc/launch-tae-compose/config/dn.toml    
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
+          cat ./etc/launch-tae-compose/config/dn.toml
 
           mkdir -p ${{ github.workspace }}/docker-compose-log
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
@@ -72,7 +82,7 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e pessimistic_transaction 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e optimistic 2>&1
 
       - name: export log
         if: ${{ failure() }}
@@ -122,18 +132,9 @@ jobs:
       - name: docker compose launch-multi-cn
         timeout-minutes: 10
         run: |
-          echo ""  >> ./etc/launch-tae-compose/config/cn-0.toml
-          echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-0.toml
-          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-0.toml
-          echo ""  >> ./etc/launch-tae-compose/config/cn-1.toml
-          echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-1.toml
-          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-1.toml
-          echo ""  >> ./etc/launch-tae-compose/config/dn.toml
-          echo '[dn.txn]' >> ./etc/launch-tae-compose/config/dn.toml
-          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/dn.toml    
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
-          cat ./etc/launch-tae-compose/config/dn.toml
+
           mkdir -p ${{ github.workspace }}/docker-compose-log
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
           
@@ -170,7 +171,7 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e optimistic 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e pessimistic_transaction 2>&1
       - name: export log
         if: ${{ failure() }}
         run: |
