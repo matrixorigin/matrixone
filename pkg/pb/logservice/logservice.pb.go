@@ -1518,7 +1518,7 @@ func (m *LogRequest) GetMaxSize() uint64 {
 	return 0
 }
 
-func (m *LogRequest) GetDNShardID() uint64 {
+func (m *LogRequest) GetTNShardID() uint64 {
 	if m != nil {
 		return m.TNShardID
 	}
