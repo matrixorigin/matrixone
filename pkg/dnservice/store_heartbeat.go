@@ -57,7 +57,7 @@ func (s *store) heartbeat(ctx context.Context) {
 	hb := logservicepb.TNStoreHeartbeat{
 		UUID:                 s.cfg.UUID,
 		ServiceAddress:       s.txnServiceServiceAddr(),
-		Shards:               s.getDNShardInfo(),
+		Shards:               s.getTNShardInfo(),
 		TaskServiceCreated:   s.taskServiceCreated(),
 		LogtailServerAddress: s.logtailServiceServiceAddr(),
 		LockServiceAddress:   s.lockServiceServiceAddr(),

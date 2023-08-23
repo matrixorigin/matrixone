@@ -253,7 +253,7 @@ func (s *store) startTNShards() error {
 	return nil
 }
 
-func (s *store) getDNShardInfo() []logservicepb.TNShardInfo {
+func (s *store) getTNShardInfo() []logservicepb.TNShardInfo {
 	var shards []logservicepb.TNShardInfo
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
