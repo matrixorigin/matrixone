@@ -42,7 +42,7 @@ func TestBackupData(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	opts := config.WithLongScanAndCKPOpts(nil)
+	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
 
@@ -86,7 +86,7 @@ func TestBackupData(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	//db.ForceCheckpoint()
+	db.ForceCheckpoint()
 	for _, data := range bats {
 		txn, rel := db.GetRelation()
 		v := testutil.GetSingleSortKeyValue(data, schema, 2)

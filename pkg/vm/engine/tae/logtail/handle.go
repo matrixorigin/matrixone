@@ -847,21 +847,21 @@ func LoadCheckpointEntries(
 	return entries, closeCBs, nil
 }
 
-func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32) ([]objectio.Location, error) {
+func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32) ([]objectio.Location, *CheckpointData,error) {
 	locations := make([]objectio.Location, 0)
 	locations = append(locations, location)
 	data := NewCheckpointData()
 	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	err = data.readMetaBatch(ctx, version, reader, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	err = data.readAll(ctx, version, fs)
 	if err != nil {
-		return nil, err
+		return nil,nil, err
 	}
 
 	for _, location = range data.locations {
@@ -887,5 +887,5 @@ func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileServic
 			locations = append(locations, deltaLoc)
 		}
 	}
-	return locations, nil
+	return locations,data, nil
 }
