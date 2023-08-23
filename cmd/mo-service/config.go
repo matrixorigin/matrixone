@@ -82,7 +82,7 @@ type Config struct {
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
 	// DN dn service config
-	DN dnservice.Config `toml:"dn"`
+	TN dnservice.Config `toml:"dn"`
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
@@ -344,7 +344,7 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 }
 
 func (c *Config) getDNServiceConfig() dnservice.Config {
-	cfg := c.DN
+	cfg := c.TN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "dn-data", cfg.UUID)
 	return cfg
@@ -411,7 +411,7 @@ func (c *Config) hashNodeID() uint16 {
 	case metadata.ServiceType_CN:
 		uuid = c.CN.UUID
 	case metadata.ServiceType_DN:
-		uuid = c.DN.UUID
+		uuid = c.TN.UUID
 	case metadata.ServiceType_LOG:
 		uuid = c.LogService.UUID
 	}
@@ -447,7 +447,7 @@ func (c *Config) mustGetServiceUUID() string {
 	case metadata.ServiceType_CN:
 		return c.CN.UUID
 	case metadata.ServiceType_DN:
-		return c.DN.UUID
+		return c.TN.UUID
 	case metadata.ServiceType_LOG:
 		return c.LogService.UUID
 	case metadata.ServiceType_PROXY:

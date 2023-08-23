@@ -341,7 +341,7 @@ func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUI
 		}
 		UUID = nodeUUID.String()
 	case metadata.ServiceType_DN:
-		UUID = cfg.DN.UUID
+		UUID = cfg.TN.UUID
 	case metadata.ServiceType_LOG:
 		UUID = cfg.LogService.UUID
 	}
