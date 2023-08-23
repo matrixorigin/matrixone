@@ -193,7 +193,7 @@ func TestParseDNShardReportedSize(t *testing.T) {
 		},
 	}
 
-	require.Equal(t, 2, ParseDNShardReportedSize(11, dnState, hkcfg, currTick))
+	require.Equal(t, 2, ParseTNShardReportedSize(11, dnState, hkcfg, currTick))
 }
 
 func mockDNShardRecords(ids ...uint64) []metadata.TNShardRecord {

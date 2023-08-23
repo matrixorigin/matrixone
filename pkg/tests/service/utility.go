@@ -112,7 +112,7 @@ func ParseLogShardReportedSize(
 }
 
 // ParseDNShardReportedSize returns the reported count of dn replicas.
-func ParseDNShardReportedSize(
+func ParseTNShardReportedSize(
 	shardID uint64, state pb.TNStore, hkcfg hakeeper.Config, currTick uint64,
 ) int {
 	set := make(map[uint64]struct{})

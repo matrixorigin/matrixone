@@ -719,7 +719,7 @@ func (c *testCluster) WaitDNReplicaReported(ctx context.Context, shardID uint64)
 				continue
 			}
 
-			reported := ParseDNShardReportedSize(
+			reported := ParseTNShardReportedSize(
 				shardID, state.TNState, c.GetHAKeeperConfig(), state.Tick,
 			)
 			if reported >= DNShardExpectedSize {
