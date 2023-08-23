@@ -304,7 +304,7 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 		return err
 	}
 
-	s.addDNShardLocked(shard)
+	s.addTNShardLocked(shard)
 	return nil
 }
 

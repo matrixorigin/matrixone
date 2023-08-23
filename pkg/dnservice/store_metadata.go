@@ -55,7 +55,7 @@ func (s *store) initMetadata() error {
 	return nil
 }
 
-func (s *store) addDNShardLocked(shard metadata.TNShard) {
+func (s *store) addTNShardLocked(shard metadata.TNShard) {
 	for _, tn := range s.mu.metadata.Shards {
 		if tn.ShardID == shard.ShardID {
 			return
