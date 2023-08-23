@@ -28,8 +28,8 @@ import (
 
 func TestParseTNConfig(t *testing.T) {
 	data := `
-	# service node type, [DN|CN|LOG]
-	service-type = "DN"
+	# service node type, [TN|CN|LOG]
+	service-type = "TN"
 	
 	[log]
 	level = "debug"
@@ -43,7 +43,7 @@ func TestParseTNConfig(t *testing.T) {
 	]
 	
 	[[fileservice]]
-	# local fileservice instance, used to store TAE Data and DNStore metadata.
+	# local fileservice instance, used to store TAE Data and TNStore metadata.
 	name = "local"
 	# use disk as fileservice backend
 	backend = "DISK"
@@ -60,7 +60,7 @@ func TestParseTNConfig(t *testing.T) {
 	# in the data dir
 	data-dir = "data dir"
 	
-	[dn.Txn.Storage]
+	[tn.Txn.Storage]
 	# txn storage backend implementation. [TAE|MEM]
 	backend = "MEM"
 	`

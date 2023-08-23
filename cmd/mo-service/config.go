@@ -75,13 +75,13 @@ type Config struct {
 	// Log log config
 	Log logutil.LogConfig `toml:"log"`
 	// ServiceType service type, select the corresponding configuration to start the
-	// service according to the service type. [CN|DN|LOG|PROXY]
+	// service according to the service type. [CN|TN|LOG|PROXY]
 	ServiceType string `toml:"service-type"`
 	// FileServices the config for file services
 	FileServices []fileservice.Config `toml:"fileservice"`
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
-	// TN dn service config
+	// TN tn service config
 	TN dnservice.Config `toml:"tn"`
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
