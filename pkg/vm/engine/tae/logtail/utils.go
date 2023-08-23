@@ -602,6 +602,7 @@ func (data *CNCheckpointData) InitMetaIdx(ctx context.Context, version uint32, r
 		metaIdx := checkpointDataReferVersions[version][MetaIDX]
 		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
 		if err != nil {
+			logutil.Infof("lalala err is %v", err)
 			return err
 		}
 		data.bats[MetaIDX] = metaBats[0]
@@ -989,7 +990,7 @@ func (data *CNCheckpointData) ReadFromData(
 					}
 				} else if tableID == pkgcatalog.MO_TABLES_ID {
 					bat := dataBats[BlockDelete]
-					if bat == nil {
+					if bat != nil {
 						rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
 						length := len(rowIDVec)
 						pkVec2 := vector.NewVec(types.T_uint64.ToType())
@@ -1002,13 +1003,27 @@ func (data *CNCheckpointData) ReadFromData(
 						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
 						bat.Vecs = append(bat.Vecs, pkVec2)
 					}
+				} else if tableID == pkgcatalog.MO_COLUMNS_ID {
+					bat := dataBats[BlockDelete]
+					if bat != nil {
+						rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+						length := len(rowIDVec)
+						pkVec2 := vector.NewVec(types.T_varchar.ToType())
+						for i := 0; i < length; i++ {
+							err = vector.AppendAny(pkVec2, nil, true, m)
+							if err != nil {
+								return
+							}
+						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_UniqName)
+						bat.Vecs = append(bat.Vecs, pkVec2)
+					}
 				}
-
 			}
 			if version <= CheckpointVersion3 {
 				if tableID == pkgcatalog.MO_COLUMNS_ID {
 					bat := dataBats[BlockInsert]
-					if bat == nil {
+					if bat != nil {
 						rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
 						length := len(rowIDVec)
 						enumVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
@@ -1146,6 +1161,7 @@ func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() 
 		if version <= CheckpointVersion2 {
 			data.closeVector(DBDeleteIDX, 2, m)
 			data.closeVector(TBLDeleteIDX, 2, m)
+			data.closeVector(TBLColDeleteIDX, 2, m)
 		}
 		if version <= CheckpointVersion3 {
 			data.closeVector(TBLColInsertIDX, 25, m)

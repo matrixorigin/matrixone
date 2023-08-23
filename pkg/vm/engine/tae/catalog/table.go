@@ -304,7 +304,7 @@ func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
 			entry.ID, name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("TBL%s[name=%s]", entry.BaseEntryImpl.StringLocked(), name)
+	return fmt.Sprintf("TBL%s[name=%s, id=%d]", entry.BaseEntryImpl.StringLocked(), name, entry.ID)
 }
 
 func (entry *TableEntry) StringLocked() string {

@@ -465,13 +465,16 @@ func isBatchEqual(t *testing.T, bat1, bat2 *containers.Batch) {
 	for i := 0; i < getBatchLength(bat1); i++ {
 		for j, vec1 := range bat1.Vecs {
 			vec2 := bat2.Vecs[j]
-			// for commitTS and rowid in checkpoint
 			if vec1.Length() == 0 || vec2.Length() == 0 {
+				// for commitTS and rowid in checkpoint
 				// logutil.Warnf("empty vec attr %v", bat1.Attrs[j])
 				continue
 			}
-			// t.Logf("attr %v, row %d", bat1.Attrs[j], i)
-			assert.Equal(t, vec1.Get(i), vec2.Get(i))
+			if bat1.Attrs[j] == pkgcatalog.SystemColAttr_UniqName {
+				// pk in delete batch of MO_Columns is nil
+				continue
+			}
+			assert.Equal(t, vec1.Get(i), vec2.Get(i), "name is \"%v\"", bat1.Attrs[j])
 		}
 	}
 }

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -484,7 +483,6 @@ func (bat *Batch) Split(cnt int) []*Batch {
 
 func (bat *Batch) Append(src *Batch) (err error) {
 	for i, vec := range bat.Vecs {
-		logutil.Infof("src %v, bat %v",src.Attrs[i],bat.Attrs[i])
 		vec.Extend(src.Vecs[i])
 	}
 	return
