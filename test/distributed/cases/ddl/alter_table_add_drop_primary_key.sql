@@ -14,7 +14,7 @@ alter table pri01 add constraint primary key(col1);
 insert into pri01 values (23423, 32432543.3242);
 insert into pri01 values (234, -3923.2342342);
 show columns from pri01;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri01;
@@ -30,7 +30,7 @@ select * from pri02;
 alter table pri02 add constraint primary key (col1);
 show create table pri02;
 show columns from pri02;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri02;
@@ -45,7 +45,7 @@ select * from pri03;
 alter table pri03 add constraint primary key (col1);
 show create table pri03;
 show columns from pri03;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri03;
@@ -61,7 +61,7 @@ select * from pri04;
 alter table pri04 add constraint primary key (col1);
 show create table pri04;
 show columns from pri04;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri04;
@@ -76,7 +76,7 @@ select * from pri05;
 alter table pri05 add constraint primary key (col1);
 show create table pri05;
 show columns from pri05;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri05' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri05;
@@ -92,7 +92,7 @@ alter table pri06 add constraint primary key (col1);
 -- @bvt:issue#11289
 show create table pri06;
 -- @bvt:issue
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri06' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 show columns from pri06;
@@ -112,7 +112,7 @@ update pri07 set col1 = 1000000 where col2 = 3289323423;
 update pri07 set col1 = 12.213231000021312 where col2 = 3289323423;
 delete from pri07 where col1 = 12.213231000021312;
 select * from pri07;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri07' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri07;
@@ -130,7 +130,7 @@ show columns from pri08;
 alter table pri08 add constraint primary key (col2);
 show create table pri08;
 show columns from pri08;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri08' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri08;
@@ -145,7 +145,7 @@ select * from pri09;
 alter table pri09 add constraint primary key (col1, col2);
 show create table pri09;
 show columns from pri09;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri09' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri09;
@@ -165,7 +165,7 @@ insert into pri10 values (-2, 'p');
 -- @pattern
 insert into pri10 (col1, col2) values (1, 'a');
 select * from pri10;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri10' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri10;
@@ -180,7 +180,7 @@ alter table pri11 add constraint primary key (col1, col2);
 show create table pri11;
 show columns from pri11;
 select * from pri11;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri11' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri11;
@@ -196,7 +196,7 @@ alter table temp01 add constraint primary key (col2);
 select * from temp01;
 show create table temp01;
 show columns from temp01;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temp01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table temp01;
@@ -226,7 +226,7 @@ alter table droppri01 drop primary key;
 show create table droppri01;
 show columns from droppri01;
 select * from droppri01;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'droppri01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table droppri01;
@@ -244,7 +244,7 @@ alter table pri01 add constraint primary key(col2);
 show create table pri01;
 -- @bvt:issue
 show columns from pri01;
--- @bvt:issue#11249
+-- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri01' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
 drop table pri01;
