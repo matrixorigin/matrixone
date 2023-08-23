@@ -188,3 +188,22 @@ func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.Ctx = context.Background()
 	return opts
 }
+
+func WithLongScanAndCKPOptsAndQuickGC(in *options.Options) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScanInterval = time.Hour
+	opts.CheckpointCfg.MinCount = 100000000
+	opts.CheckpointCfg.IncrementalInterval = time.Hour
+	opts.CheckpointCfg.GlobalMinCount = 10000000
+	opts.CheckpointCfg.BlockRows = 10
+	opts.GCCfg = new(options.GCCfg)
+	opts.GCCfg.ScanGCInterval = time.Second * 1
+	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.Ctx = context.Background()
+	return opts
+}

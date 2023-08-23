@@ -935,6 +935,35 @@ func (data *CNCheckpointData) fillInMetaBatchWithLocation(location objectio.Loca
 	return
 }
 
+func (data *CNCheckpointData) ReadFromDataWithKey(
+	ctx context.Context,
+	location objectio.Location,
+	fs fileservice.FileService,
+	m *mpool.MPool,
+) (cnBatch *batch.Batch, err error) {
+	var bat *batch.Batch
+	var reader *blockio.BlockReader
+	schema := checkpointDataReferVersions[5][uint32(BLKMetaInsertIDX)]
+	reader, err = blockio.NewObjectReader(fs, location)
+	if err != nil {
+		return
+	}
+	bat, err = LoadCNSubBlkColumnsByMetaWithId(ctx, schema.types, schema.attrs, BLKMetaInsertIDX, BLKMetaInsertIDX, 5, reader, m)
+	if err != nil {
+		return
+	}
+	cnBatch = batch.NewWithSize(len(bat.Vecs))
+	cnBatch.Attrs = make([]string, len(bat.Attrs))
+	copy(cnBatch.Attrs, bat.Attrs)
+	for n := range cnBatch.Vecs {
+		cnBatch.Vecs[n] = vector.NewVec(*bat.Vecs[n].GetType())
+		if err = cnBatch.Vecs[n].UnionBatch(bat.Vecs[n], 0, bat.Vecs[n].Length(), nil, m); err != nil {
+			return
+		}
+	}
+	return
+}
+
 func (data *CNCheckpointData) ReadFromData(
 	ctx context.Context,
 	tableID uint64,
@@ -987,75 +1016,85 @@ func (data *CNCheckpointData) ReadFromData(
 			if version == CheckpointVersion1 {
 				if tableID == pkgcatalog.MO_TABLES_ID {
 					bat := dataBats[BlockInsert]
-					if bat == nil {
-						return
-					}
-					versionVec := vector.MustFixedCol[uint32](bat.Vecs[pkgcatalog.MO_TABLES_VERSION_IDX+2]) // 2 for rowid and committs
-					length := len(versionVec)
-					vec := vector.NewVec(types.T_uint32.ToType())
-					for i := 0; i < length; i++ {
-						err = vector.AppendFixed[uint32](vec, pkgcatalog.CatalogVersion_V1, false, m)
-						if err != nil {
-							return
+					if bat != nil {
+						versionVec := vector.MustFixedCol[uint32](bat.Vecs[pkgcatalog.MO_TABLES_VERSION_IDX+2]) // 2 for rowid and committs
+						length := len(versionVec)
+						vec := vector.NewVec(types.T_uint32.ToType())
+						for i := 0; i < length; i++ {
+							err = vector.AppendFixed[uint32](vec, pkgcatalog.CatalogVersion_V1, false, m)
+							if err != nil {
+								return
+							}
 						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_CatalogVersion)
+						bat.Vecs = append(bat.Vecs, vec)
 					}
-					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_CatalogVersion)
-					bat.Vecs = append(bat.Vecs, vec)
 				}
 			}
 			if version <= CheckpointVersion2 {
 				if tableID == pkgcatalog.MO_DATABASE_ID {
 					bat := dataBats[BlockDelete]
-					if bat == nil {
-						return
-					}
-					rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-					length := len(rowIDVec)
-					pkVec := vector.NewVec(types.T_uint64.ToType())
-					for i := 0; i < length; i++ {
-						err = vector.AppendFixed[uint64](pkVec, objectio.HackRowidToU64(rowIDVec[i]), false, m)
-						if err != nil {
-							return
+					if bat != nil {
+						rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+						length := len(rowIDVec)
+						pkVec := vector.NewVec(types.T_uint64.ToType())
+						for i := 0; i < length; i++ {
+							err = vector.AppendFixed[uint64](pkVec, objectio.HackRowidToU64(rowIDVec[i]), false, m)
+							if err != nil {
+								return
+							}
 						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
+						bat.Vecs = append(bat.Vecs, pkVec)
 					}
-					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
-					bat.Vecs = append(bat.Vecs, pkVec)
 				} else if tableID == pkgcatalog.MO_TABLES_ID {
 					bat := dataBats[BlockDelete]
-					if bat == nil {
-						return
-					}
-					rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-					length := len(rowIDVec)
-					pkVec2 := vector.NewVec(types.T_uint64.ToType())
-					for i := 0; i < length; i++ {
-						err = vector.AppendFixed[uint64](pkVec2, objectio.HackRowidToU64(rowIDVec[i]), false, m)
-						if err != nil {
-							return
+					if bat != nil {
+						rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+						length := len(rowIDVec)
+						pkVec2 := vector.NewVec(types.T_uint64.ToType())
+						for i := 0; i < length; i++ {
+							err = vector.AppendFixed[uint64](pkVec2, objectio.HackRowidToU64(rowIDVec[i]), false, m)
+							if err != nil {
+								return
+							}
 						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
+						bat.Vecs = append(bat.Vecs, pkVec2)
 					}
-					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemRelAttr_ID)
-					bat.Vecs = append(bat.Vecs, pkVec2)
+				} else if tableID == pkgcatalog.MO_COLUMNS_ID {
+					bat := dataBats[BlockDelete]
+					if bat != nil {
+						rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+						length := len(rowIDVec)
+						pkVec2 := vector.NewVec(types.T_varchar.ToType())
+						for i := 0; i < length; i++ {
+							err = vector.AppendAny(pkVec2, nil, true, m)
+							if err != nil {
+								return
+							}
+						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_UniqName)
+						bat.Vecs = append(bat.Vecs, pkVec2)
+					}
 				}
-
 			}
 			if version <= CheckpointVersion3 {
 				if tableID == pkgcatalog.MO_COLUMNS_ID {
 					bat := dataBats[BlockInsert]
-					if bat == nil {
-						return
-					}
-					rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-					length := len(rowIDVec)
-					enumVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
-					for i := 0; i < length; i++ {
-						err = vector.AppendAny(enumVec, []byte(""), false, m)
-						if err != nil {
-							return
+					if bat != nil {
+						rowIDVec := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
+						length := len(rowIDVec)
+						enumVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+						for i := 0; i < length; i++ {
+							err = vector.AppendAny(enumVec, []byte(""), false, m)
+							if err != nil {
+								return
+							}
 						}
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_EnumValues)
+						bat.Vecs = append(bat.Vecs, enumVec)
 					}
-					bat.Attrs = append(bat.Attrs, pkgcatalog.SystemColAttr_EnumValues)
-					bat.Vecs = append(bat.Vecs, enumVec)
 				}
 			}
 			return
@@ -1190,6 +1229,7 @@ func (data *CNCheckpointData) GetCloseCB(version uint32, m *mpool.MPool) func() 
 		if version <= CheckpointVersion2 {
 			data.closeVector(DBDeleteIDX, 2, m)
 			data.closeVector(TBLDeleteIDX, 2, m)
+			data.closeVector(TBLColDeleteIDX, 2, m)
 		}
 		if version <= CheckpointVersion3 {
 			data.closeVector(TBLColInsertIDX, 25, m)
@@ -1798,7 +1838,6 @@ func (data *CheckpointData) readMetaBatch(
 		if err != nil {
 			return
 		}
-		// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
 		data.bats[MetaIDX] = bats[0]
 	}
 	return
@@ -1877,6 +1916,8 @@ func (data *CheckpointData) readAll(
 						}
 						//Fixme: add vector to batch
 						//bat.AddVector(pkgcatalog.SystemRelAttr_CatalogVersion, vec)
+						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
+						bat.Vecs = append(bat.Vecs, vec)
 					}
 				}
 			}
@@ -1890,6 +1931,7 @@ func (data *CheckpointData) readAll(
 							pkVec.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
 						}
 						bat.Attrs = append(bat.Attrs, pkgcatalog.SystemDBAttr_ID)
+						bat.Vecs = append(bat.Vecs, pkVec)
 					}
 				}
 
@@ -1913,7 +1955,7 @@ func (data *CheckpointData) readAll(
 					for _, bat := range bats {
 						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
 						length := rowIDVec.Length()
-						pkVec2 := containers.MakeVector(types.T_uint64.ToType())
+						pkVec2 := containers.MakeVector(types.T_varchar.ToType())
 						for i := 0; i < length; i++ {
 							pkVec2.Append(nil, true)
 							if err != nil {

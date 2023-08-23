@@ -70,7 +70,8 @@ type JoinMap struct {
 	sels   [][]int32
 	// push-down filter expression, possibly a bloomfilter
 	expr    *plan.Expr
-	mp      *StrHashMap
+	shm     *StrHashMap
+	ihm     *IntHashMap
 	hasNull bool
 
 	isDup bool
