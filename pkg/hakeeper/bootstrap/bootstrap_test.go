@@ -334,10 +334,10 @@ func TestSortLogStores(t *testing.T) {
 
 func TestSortDNStores(t *testing.T) {
 	cases := []struct {
-		dnStores map[string]pb.DNStoreInfo
+		tnStores map[string]pb.DNStoreInfo
 		expected []string
 	}{{
-		dnStores: map[string]pb.DNStoreInfo{
+		tnStores: map[string]pb.DNStoreInfo{
 			"a": {Tick: 100},
 			"b": {Tick: 120},
 			"c": {Tick: 90},
@@ -347,7 +347,7 @@ func TestSortDNStores(t *testing.T) {
 	}}
 
 	for _, c := range cases {
-		output := dnStoresSortedByTick(c.dnStores)
+		output := dnStoresSortedByTick(c.tnStores)
 		assert.Equal(t, c.expected, output)
 	}
 }

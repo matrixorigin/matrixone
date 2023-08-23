@@ -71,14 +71,14 @@ func Check(
 	logutil.GetGlobalLogger().Info(detail)
 
 	// parse all dn stores
-	dnStores := parseTnState(cfg, tnState, currTick)
+	tnStores := parseTnState(cfg, tnState, currTick)
 
 	// generate operators to shut down all stores
-	operators := make([]*operator.Operator, 0, logStores.length()+dnStores.length())
+	operators := make([]*operator.Operator, 0, logStores.length()+tnStores.length())
 	operators = append(operators, logStores.shutdownExpiredStores()...)
 	operators = append(operators, logStores.shutdownWorkingStores()...)
-	operators = append(operators, dnStores.shutdownExpiredStores()...)
-	operators = append(operators, dnStores.shutdownWorkingStores()...)
+	operators = append(operators, tnStores.shutdownExpiredStores()...)
+	operators = append(operators, tnStores.shutdownWorkingStores()...)
 
 	return operators, sysHealthy
 }

@@ -130,13 +130,13 @@ func TestParseDnStores(t *testing.T) {
 		},
 	}
 
-	dnStores := parseTnState(cfg, tnState, currTick)
-	require.Equal(t, len(tnState.Stores), dnStores.length())
-	require.Equal(t, pb.DNService, dnStores.serviceType)
-	require.Equal(t, 1, len(dnStores.expired))
-	require.Equal(t, 1, len(dnStores.shutdownExpiredStores()))
-	require.Equal(t, 2, len(dnStores.working))
-	require.Equal(t, 2, len(dnStores.shutdownWorkingStores()))
+	tnStores := parseTnState(cfg, tnState, currTick)
+	require.Equal(t, len(tnState.Stores), tnStores.length())
+	require.Equal(t, pb.DNService, tnStores.serviceType)
+	require.Equal(t, 1, len(tnStores.expired))
+	require.Equal(t, 1, len(tnStores.shutdownExpiredStores()))
+	require.Equal(t, 2, len(tnStores.working))
+	require.Equal(t, 2, len(tnStores.shutdownWorkingStores()))
 }
 
 func TestLogShard(t *testing.T) {
