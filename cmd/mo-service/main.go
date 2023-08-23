@@ -172,7 +172,7 @@ func startService(
 	switch st {
 	case metadata.ServiceType_CN:
 		return startCNService(cfg, stopper, fs, globalCounterSet)
-	case metadata.ServiceType_DN:
+	case metadata.ServiceType_TN:
 		return startTNService(cfg, stopper, fs, globalCounterSet, shutdownC)
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, globalCounterSet, shutdownC)
@@ -235,7 +235,7 @@ func startTNService(
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
-	r, err := getRuntime(metadata.ServiceType_DN, cfg, stopper)
+	r, err := getRuntime(metadata.ServiceType_TN, cfg, stopper)
 	if err != nil {
 		return err
 	}
@@ -340,7 +340,7 @@ func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUI
 			return "", moerr.ConvertPanicError(ctx, err)
 		}
 		UUID = nodeUUID.String()
-	case metadata.ServiceType_DN:
+	case metadata.ServiceType_TN:
 		UUID = cfg.TN.UUID
 	case metadata.ServiceType_LOG:
 		UUID = cfg.LogService.UUID

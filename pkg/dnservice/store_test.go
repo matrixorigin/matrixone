@@ -289,7 +289,7 @@ func newTestStore(
 	assert.Nil(t, err)
 
 	rt := runtime.NewRuntime(
-		metadata.ServiceType_DN,
+		metadata.ServiceType_TN,
 		"",
 		logutil.Adjust(nil),
 		runtime.WithClock(

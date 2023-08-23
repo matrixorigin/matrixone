@@ -50,7 +50,7 @@ var (
 
 	supportServiceTypes = map[string]metadata.ServiceType{
 		metadata.ServiceType_CN.String():    metadata.ServiceType_CN,
-		metadata.ServiceType_DN.String():    metadata.ServiceType_DN,
+		metadata.ServiceType_TN.String():    metadata.ServiceType_TN,
 		metadata.ServiceType_LOG.String():   metadata.ServiceType_LOG,
 		metadata.ServiceType_PROXY.String(): metadata.ServiceType_PROXY,
 	}
@@ -410,7 +410,7 @@ func (c *Config) hashNodeID() uint16 {
 	switch st {
 	case metadata.ServiceType_CN:
 		uuid = c.CN.UUID
-	case metadata.ServiceType_DN:
+	case metadata.ServiceType_TN:
 		uuid = c.TN.UUID
 	case metadata.ServiceType_LOG:
 		uuid = c.LogService.UUID
@@ -446,7 +446,7 @@ func (c *Config) mustGetServiceUUID() string {
 	switch c.mustGetServiceType() {
 	case metadata.ServiceType_CN:
 		return c.CN.UUID
-	case metadata.ServiceType_DN:
+	case metadata.ServiceType_TN:
 		return c.TN.UUID
 	case metadata.ServiceType_LOG:
 		return c.LogService.UUID

@@ -31,7 +31,7 @@ const (
 	// CN cn service
 	ServiceType_CN ServiceType = 0
 	// DN dn service
-	ServiceType_DN ServiceType = 1
+	ServiceType_TN ServiceType = 1
 	// LOG log service
 	ServiceType_LOG ServiceType = 2
 	// Proxy proxy service

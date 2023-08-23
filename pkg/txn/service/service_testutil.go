@@ -109,7 +109,7 @@ func NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
 	zombie time.Duration,
 	allocator lockservice.LockTableAllocator) TxnService {
 	rt := runtime.NewRuntime(
-		metadata.ServiceType_DN,
+		metadata.ServiceType_TN,
 		"dn-uuid",
 		logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
 		runtime.WithClock(clock))

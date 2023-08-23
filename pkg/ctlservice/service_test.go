@@ -37,7 +37,7 @@ func TestCtlRequest(t *testing.T) {
 		t,
 		[]serviceMeta{
 			{serviceType: metadata.ServiceType_CN, serviceID: "s1"},
-			{serviceType: metadata.ServiceType_DN, serviceID: "s2"},
+			{serviceType: metadata.ServiceType_TN, serviceID: "s2"},
 		},
 		func(services []*service) {
 			s1 := services[0]
@@ -81,7 +81,7 @@ func TestCtlRequest(t *testing.T) {
 
 			resp, err = s1.SendCtlMessage(
 				ctx,
-				metadata.ServiceType_DN,
+				metadata.ServiceType_TN,
 				"s2",
 				s1.NewRequest(ctl.CmdMethod_GetCommit))
 			require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestCtlRequest(t *testing.T) {
 
 			_, err = s1.SendCtlMessage(
 				ctx,
-				metadata.ServiceType_DN,
+				metadata.ServiceType_TN,
 				"s3",
 				s1.NewRequest(ctl.CmdMethod_GetCommit))
 			require.Error(t, err)
@@ -122,7 +122,7 @@ func runCtlServiceTest(
 				CtlAddress: address,
 				WorkState:  metadata.WorkState_Working,
 			})
-		} else if v.serviceType == metadata.ServiceType_DN {
+		} else if v.serviceType == metadata.ServiceType_TN {
 			dns = append(dns, metadata.TNService{
 				ServiceID:  v.serviceID,
 				CtlAddress: address,

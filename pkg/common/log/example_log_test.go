@@ -141,7 +141,7 @@ func processStep1InCNWithoutID() {
 }
 
 func processStep2InDNWithoutID() {
-	logger := getServiceLogger(metadata.ServiceType_DN, "dn0").WithProcess(log.Txn)
+	logger := getServiceLogger(metadata.ServiceType_TN, "dn0").WithProcess(log.Txn)
 	logger.Log("step 2", log.DefaultLogOptions())
 }
 
@@ -156,7 +156,7 @@ func processStep1InCN(id string) {
 }
 
 func processStep2InDN(id string) {
-	logger := getServiceLogger(metadata.ServiceType_DN, "dn0")
+	logger := getServiceLogger(metadata.ServiceType_TN, "dn0")
 	logger.Log("step 2", log.DefaultLogOptions().WithProcess(log.Txn, id))
 }
 
