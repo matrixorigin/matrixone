@@ -77,7 +77,7 @@ func TestDNStateUpdate(t *testing.T) {
 	hb1 := TNStoreHeartbeat{
 		UUID:           "dn-a",
 		ServiceAddress: "addr-a",
-		Shards: []DNShardInfo{{
+		Shards: []TNShardInfo{{
 			ShardID:   1,
 			ReplicaID: 1,
 		}},
@@ -96,7 +96,7 @@ func TestDNStateUpdate(t *testing.T) {
 	hb2 := TNStoreHeartbeat{
 		UUID:           "dn-a",
 		ServiceAddress: "addr-a",
-		Shards: []DNShardInfo{
+		Shards: []TNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1}},
 		LogtailServerAddress: "addr-0",

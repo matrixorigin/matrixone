@@ -56,13 +56,13 @@ func TestParseReportedDNShardCount(t *testing.T) {
 		Stores: map[string]pb.DNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
-				Shards: []pb.DNShardInfo{
+				Shards: []pb.TNShardInfo{
 					mockDnShardInfo(10, 100),
 				},
 			},
 			"working1": {
 				Tick: currTick,
-				Shards: []pb.DNShardInfo{
+				Shards: []pb.TNShardInfo{
 					mockDnShardInfo(11, 101),
 					mockDnShardInfo(11, 102),
 					mockDnShardInfo(12, 103),
@@ -178,13 +178,13 @@ func TestParseDNShardReportedSize(t *testing.T) {
 		Stores: map[string]pb.DNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
-				Shards: []pb.DNShardInfo{
+				Shards: []pb.TNShardInfo{
 					mockDnShardInfo(10, 100),
 				},
 			},
 			"working1": {
 				Tick: currTick,
-				Shards: []pb.DNShardInfo{
+				Shards: []pb.TNShardInfo{
 					mockDnShardInfo(11, 101),
 					mockDnShardInfo(11, 102),
 					mockDnShardInfo(12, 103),
@@ -218,8 +218,8 @@ func mockLogShardRecords(ids ...uint64) []metadata.LogShardRecord {
 	return records
 }
 
-func mockDnShardInfo(shardID, replicaID uint64) pb.DNShardInfo {
-	return pb.DNShardInfo{
+func mockDnShardInfo(shardID, replicaID uint64) pb.TNShardInfo {
+	return pb.TNShardInfo{
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}

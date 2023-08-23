@@ -110,21 +110,21 @@ func TestParseDnStores(t *testing.T) {
 		Stores: map[string]pb.DNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(10, 100),
+				Shards: []pb.TNShardInfo{
+					mockTNShardInfo(10, 100),
 				},
 			},
 			"working1": {
 				Tick: currTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(11, 101),
+				Shards: []pb.TNShardInfo{
+					mockTNShardInfo(11, 101),
 				},
 			},
 			"working2": {
 				Tick: currTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(12, 102),
-					mockDnShardInfo(13, 103),
+				Shards: []pb.TNShardInfo{
+					mockTNShardInfo(12, 102),
+					mockTNShardInfo(13, 103),
 				},
 			},
 		},
@@ -274,21 +274,21 @@ func TestCheck(t *testing.T) {
 			Stores: map[string]pb.DNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(10, 100),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(10, 100),
 					},
 				},
 				"working11": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(11, 101),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(11, 101),
 					},
 				},
 				"working12": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(12, 102),
-						mockDnShardInfo(13, 103),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(12, 102),
+						mockTNShardInfo(13, 103),
 					},
 				},
 			},
@@ -325,21 +325,21 @@ func TestCheck(t *testing.T) {
 			Stores: map[string]pb.DNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(10, 100),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(10, 100),
 					},
 				},
 				"working11": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(11, 101),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(11, 101),
 					},
 				},
 				"working12": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(12, 102),
-						mockDnShardInfo(13, 103),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(12, 102),
+						mockTNShardInfo(13, 103),
 					},
 				},
 			},
@@ -366,8 +366,8 @@ func mockLogStoreInfo(tick uint64, replicas ...pb.LogReplicaInfo) pb.LogStoreInf
 	}
 }
 
-func mockDnShardInfo(shardID, replicaID uint64) pb.DNShardInfo {
-	return pb.DNShardInfo{
+func mockTNShardInfo(shardID, replicaID uint64) pb.TNShardInfo {
+	return pb.TNShardInfo{
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}

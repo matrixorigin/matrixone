@@ -561,7 +561,7 @@ type DNStore struct {
 	ServiceAddress string        `protobuf:"bytes,2,opt,name=ServiceAddress,proto3" json:"ServiceAddress,omitempty"`
 	Tick           uint64        `protobuf:"varint,3,opt,name=Tick,proto3" json:"Tick,omitempty"`
 	State          NodeState     `protobuf:"varint,4,opt,name=State,proto3,enum=logservice.NodeState" json:"State,omitempty"`
-	Shards         []DNShardInfo `protobuf:"bytes,5,rep,name=Shards,proto3" json:"Shards"`
+	Shards         []TNShardInfo `protobuf:"bytes,5,rep,name=Shards,proto3" json:"Shards"`
 	// Server address for logtail push model
 	LogtailServerAddress string `protobuf:"bytes,6,opt,name=LogtailServerAddress,proto3" json:"LogtailServerAddress,omitempty"`
 	// LockServiceAddress lock service address for lock table allocator
@@ -633,7 +633,7 @@ func (m *DNStore) GetState() NodeState {
 	return NormalState
 }
 
-func (m *DNStore) GetShards() []DNShardInfo {
+func (m *DNStore) GetShards() []TNShardInfo {
 	if m != nil {
 		return m.Shards
 	}
@@ -1140,8 +1140,8 @@ func (m *LogStoreHeartbeat) GetTaskServiceCreated() bool {
 	return false
 }
 
-// DNShardInfo contains information of a launched DN shard.
-type DNShardInfo struct {
+// TNShardInfo contains information of a launched DN shard.
+type TNShardInfo struct {
 	// ShardID uniquely identifies a DN shard. Each DN shard manages a Primary
 	// Key range or hashed Primary Key value range.
 	ShardID uint64 `protobuf:"varint,1,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
@@ -1154,16 +1154,16 @@ type DNShardInfo struct {
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *DNShardInfo) Reset()         { *m = DNShardInfo{} }
-func (m *DNShardInfo) String() string { return proto.CompactTextString(m) }
-func (*DNShardInfo) ProtoMessage()    {}
-func (*DNShardInfo) Descriptor() ([]byte, []int) {
+func (m *TNShardInfo) Reset()         { *m = TNShardInfo{} }
+func (m *TNShardInfo) String() string { return proto.CompactTextString(m) }
+func (*TNShardInfo) ProtoMessage()    {}
+func (*TNShardInfo) Descriptor() ([]byte, []int) {
 	return fileDescriptor_fd1040c5381ab5a7, []int{8}
 }
-func (m *DNShardInfo) XXX_Unmarshal(b []byte) error {
+func (m *TNShardInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *DNShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TNShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_DNShardInfo.Marshal(b, m, deterministic)
 	} else {
@@ -1175,26 +1175,26 @@ func (m *DNShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) 
 		return b[:n], nil
 	}
 }
-func (m *DNShardInfo) XXX_Merge(src proto.Message) {
+func (m *TNShardInfo) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_DNShardInfo.Merge(m, src)
 }
-func (m *DNShardInfo) XXX_Size() int {
+func (m *TNShardInfo) XXX_Size() int {
 	return m.Size()
 }
-func (m *DNShardInfo) XXX_DiscardUnknown() {
+func (m *TNShardInfo) XXX_DiscardUnknown() {
 	xxx_messageInfo_DNShardInfo.DiscardUnknown(m)
 }
 
 var xxx_messageInfo_DNShardInfo proto.InternalMessageInfo
 
-func (m *DNShardInfo) GetShardID() uint64 {
+func (m *TNShardInfo) GetShardID() uint64 {
 	if m != nil {
 		return m.ShardID
 	}
 	return 0
 }
 
-func (m *DNShardInfo) GetReplicaID() uint64 {
+func (m *TNShardInfo) GetReplicaID() uint64 {
 	if m != nil {
 		return m.ReplicaID
 	}
@@ -1208,7 +1208,7 @@ type TNStoreHeartbeat struct {
 	ServiceAddress string `protobuf:"bytes,2,opt,name=ServiceAddress,proto3" json:"ServiceAddress,omitempty"`
 	// Shards is a list of DNShardInfo instances collected on the specified
 	// DN store.
-	Shards             []DNShardInfo `protobuf:"bytes,3,rep,name=Shards,proto3" json:"Shards"`
+	Shards             []TNShardInfo `protobuf:"bytes,3,rep,name=Shards,proto3" json:"Shards"`
 	TaskServiceCreated bool          `protobuf:"varint,4,opt,name=TaskServiceCreated,proto3" json:"TaskServiceCreated,omitempty"`
 	// Server address for logtail push model
 	LogtailServerAddress string `protobuf:"bytes,5,opt,name=LogtailServerAddress,proto3" json:"LogtailServerAddress,omitempty"`
@@ -1267,7 +1267,7 @@ func (m *TNStoreHeartbeat) GetServiceAddress() string {
 	return ""
 }
 
-func (m *TNStoreHeartbeat) GetShards() []DNShardInfo {
+func (m *TNStoreHeartbeat) GetShards() []TNShardInfo {
 	if m != nil {
 		return m.Shards
 	}
@@ -2926,7 +2926,7 @@ func (m *CNState) GetStores() map[string]CNStoreInfo {
 type DNStoreInfo struct {
 	Tick               uint64        `protobuf:"varint,1,opt,name=Tick,proto3" json:"Tick,omitempty"`
 	ServiceAddress     string        `protobuf:"bytes,2,opt,name=ServiceAddress,proto3" json:"ServiceAddress,omitempty"`
-	Shards             []DNShardInfo `protobuf:"bytes,3,rep,name=Shards,proto3" json:"Shards"`
+	Shards             []TNShardInfo `protobuf:"bytes,3,rep,name=Shards,proto3" json:"Shards"`
 	TaskServiceCreated bool          `protobuf:"varint,4,opt,name=TaskServiceCreated,proto3" json:"TaskServiceCreated,omitempty"`
 	// Server address for logtail push model
 	LogtailServerAddress string `protobuf:"bytes,5,opt,name=LogtailServerAddress,proto3" json:"LogtailServerAddress,omitempty"`
@@ -2985,7 +2985,7 @@ func (m *DNStoreInfo) GetServiceAddress() string {
 	return ""
 }
 
-func (m *DNStoreInfo) GetShards() []DNShardInfo {
+func (m *DNStoreInfo) GetShards() []TNShardInfo {
 	if m != nil {
 		return m.Shards
 	}
@@ -3910,7 +3910,7 @@ func init() {
 	proto.RegisterType((*CNStoreHeartbeat)(nil), "logservice.CNStoreHeartbeat")
 	proto.RegisterType((*CNAllocateID)(nil), "logservice.CNAllocateID")
 	proto.RegisterType((*LogStoreHeartbeat)(nil), "logservice.LogStoreHeartbeat")
-	proto.RegisterType((*DNShardInfo)(nil), "logservice.DNShardInfo")
+	proto.RegisterType((*TNShardInfo)(nil), "logservice.DNShardInfo")
 	proto.RegisterType((*TNStoreHeartbeat)(nil), "logservice.DNStoreHeartbeat")
 	proto.RegisterType((*RSMState)(nil), "logservice.RSMState")
 	proto.RegisterMapType((map[uint64]uint64)(nil), "logservice.RSMState.LeaseHistoryEntry")
@@ -4754,7 +4754,7 @@ func (m *LogStoreHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *DNShardInfo) Marshal() (dAtA []byte, err error) {
+func (m *TNShardInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -4764,12 +4764,12 @@ func (m *DNShardInfo) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *DNShardInfo) MarshalTo(dAtA []byte) (int, error) {
+func (m *TNShardInfo) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *DNShardInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TNShardInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -7459,7 +7459,7 @@ func (m *LogStoreHeartbeat) Size() (n int) {
 	return n
 }
 
-func (m *DNShardInfo) Size() (n int) {
+func (m *TNShardInfo) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -9138,7 +9138,7 @@ func (m *DNStore) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Shards = append(m.Shards, DNShardInfo{})
+			m.Shards = append(m.Shards, TNShardInfo{})
 			if err := m.Shards[len(m.Shards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
@@ -10440,7 +10440,7 @@ func (m *LogStoreHeartbeat) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *DNShardInfo) Unmarshal(dAtA []byte) error {
+func (m *TNShardInfo) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -10651,7 +10651,7 @@ func (m *TNStoreHeartbeat) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Shards = append(m.Shards, DNShardInfo{})
+			m.Shards = append(m.Shards, TNShardInfo{})
 			if err := m.Shards[len(m.Shards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
@@ -14991,7 +14991,7 @@ func (m *DNStoreInfo) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Shards = append(m.Shards, DNShardInfo{})
+			m.Shards = append(m.Shards, TNShardInfo{})
 			if err := m.Shards[len(m.Shards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}

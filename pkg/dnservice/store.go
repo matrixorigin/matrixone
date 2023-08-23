@@ -253,11 +253,11 @@ func (s *store) startDNShards() error {
 	return nil
 }
 
-func (s *store) getDNShardInfo() []logservicepb.DNShardInfo {
-	var shards []logservicepb.DNShardInfo
+func (s *store) getDNShardInfo() []logservicepb.TNShardInfo {
+	var shards []logservicepb.TNShardInfo
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
-		shards = append(shards, logservicepb.DNShardInfo{
+		shards = append(shards, logservicepb.TNShardInfo{
 			ShardID:   r.shard.ShardID,
 			ReplicaID: r.shard.ReplicaID,
 		})

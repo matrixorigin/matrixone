@@ -157,14 +157,14 @@ func TestParseTNState(t *testing.T) {
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(10, 12),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(10, 12),
 					},
 				},
 				"expired2": {
 					Tick: expiredTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(11, 13),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(11, 13),
 					},
 				},
 			},
@@ -196,22 +196,22 @@ func TestParseTNState(t *testing.T) {
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(10, 11),
-						mockDnShardInfo(14, 17),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(10, 11),
+						mockTNShardInfo(14, 17),
 					},
 				},
 				"working1": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(12, 13),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(12, 13),
 					},
 				},
 				"working2": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(14, 15),
-						mockDnShardInfo(12, 16),
+					Shards: []pb.TNShardInfo{
+						mockTNShardInfo(14, 15),
+						mockTNShardInfo(12, 16),
 					},
 				},
 			},
@@ -247,8 +247,8 @@ func TestParseTNState(t *testing.T) {
 	}
 }
 
-func mockDnShardInfo(shardID, replicaID uint64) pb.DNShardInfo {
-	return pb.DNShardInfo{
+func mockTNShardInfo(shardID, replicaID uint64) pb.TNShardInfo {
+	return pb.TNShardInfo{
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}

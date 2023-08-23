@@ -483,9 +483,9 @@ func TestAddHeartbeat(t *testing.T) {
 
 		dnMsg := pb.TNStoreHeartbeat{
 			UUID:   store.id(),
-			Shards: make([]pb.DNShardInfo, 0),
+			Shards: make([]pb.TNShardInfo, 0),
 		}
-		dnMsg.Shards = append(dnMsg.Shards, pb.DNShardInfo{ShardID: 2, ReplicaID: 3})
+		dnMsg.Shards = append(dnMsg.Shards, pb.TNShardInfo{ShardID: 2, ReplicaID: 3})
 		_, err = store.addDNStoreHeartbeat(ctx, dnMsg)
 		assert.NoError(t, err)
 	}

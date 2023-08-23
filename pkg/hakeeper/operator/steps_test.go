@@ -259,7 +259,7 @@ func TestAddDnReplica(t *testing.T) {
 			state: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick: 0,
-					Shards: []pb.DNShardInfo{{
+					Shards: []pb.TNShardInfo{{
 						ShardID:   1,
 						ReplicaID: 1,
 					}},
@@ -277,7 +277,7 @@ func TestAddDnReplica(t *testing.T) {
 			state: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick:   0,
-					Shards: []pb.DNShardInfo{},
+					Shards: []pb.TNShardInfo{},
 				}},
 			},
 			expected: false,
@@ -307,7 +307,7 @@ func TestRemoveDnReplica(t *testing.T) {
 			state: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick: 0,
-					Shards: []pb.DNShardInfo{{
+					Shards: []pb.TNShardInfo{{
 						ShardID:   1,
 						ReplicaID: 1,
 					}},
@@ -325,7 +325,7 @@ func TestRemoveDnReplica(t *testing.T) {
 			state: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick:   0,
-					Shards: []pb.DNShardInfo{},
+					Shards: []pb.TNShardInfo{},
 				}},
 			},
 			expected: true,

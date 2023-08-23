@@ -55,7 +55,7 @@ message TNStore {
   uint64    Tick           = 3;
   NodeState State          = 4;
 
-  repeated DNShardInfo Shards = 5 [(gogoproto.nullable) = false];
+  repeated TNShardInfo Shards = 5 [(gogoproto.nullable) = false];
 
   // Server address for logtail push model
   string LogtailServerAddress = 6;
@@ -137,8 +137,8 @@ message LogStoreHeartbeat {
   bool            TaskServiceCreated    = 6;
 };
 
-// DNShardInfo contains information of a launched DN shard.
-message DNShardInfo {
+// TNShardInfo contains information of a launched DN shard.
+message TNShardInfo {
   // ShardID uniquely identifies a DN shard. Each DN shard manages a Primary
   // Key range or hashed Primary Key value range.
   uint64 ShardID                 = 1;
@@ -155,9 +155,9 @@ message TNStoreHeartbeat {
   // UUID is the uuid of the DN Store.
   string UUID                 = 1;
   string ServiceAddress       = 2;
-  // Shards is a list of DNShardInfo instances collected on the specified
+  // Shards is a list of TNShardInfo instances collected on the specified
   // DN store.
-  repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
+  repeated TNShardInfo Shards = 3 [(gogoproto.nullable) = false];
   bool            TaskServiceCreated = 4;
 
   // Server address for logtail push model
@@ -470,7 +470,7 @@ message CNState {
 message DNStoreInfo {
   uint64 Tick                 = 1;
   string ServiceAddress       = 2;
-  repeated DNShardInfo Shards = 3 [(gogoproto.nullable) = false];
+  repeated TNShardInfo Shards = 3 [(gogoproto.nullable) = false];
 
   bool TaskServiceCreated = 4;
 

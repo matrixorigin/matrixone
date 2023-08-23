@@ -147,7 +147,7 @@ func TestHandleDNHeartbeat(t *testing.T) {
 
 	hb := pb.TNStoreHeartbeat{
 		UUID: "uuid1",
-		Shards: []pb.DNShardInfo{
+		Shards: []pb.TNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1},
 			{ShardID: 3, ReplicaID: 1},
@@ -372,7 +372,7 @@ func TestClusterDetailsQuery(t *testing.T) {
 	tsm.state.TNState.Stores["uuid3"] = pb.DNStoreInfo{
 		Tick:           3,
 		ServiceAddress: "addr3",
-		Shards: []pb.DNShardInfo{
+		Shards: []pb.TNShardInfo{
 			{
 				ShardID:   2,
 				ReplicaID: 1,
@@ -430,7 +430,7 @@ func TestClusterDetailsQuery(t *testing.T) {
 				UUID:           "uuid3",
 				Tick:           3,
 				ServiceAddress: "addr3",
-				Shards: []pb.DNShardInfo{
+				Shards: []pb.TNShardInfo{
 					{
 						ShardID:   2,
 						ReplicaID: 1,

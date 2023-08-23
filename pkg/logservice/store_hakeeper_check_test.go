@@ -318,7 +318,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		// fake a DN store
 		dnMsg := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
-			Shards: make([]pb.DNShardInfo, 0),
+			Shards: make([]pb.TNShardInfo, 0),
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -388,7 +388,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		cmd := cb.Commands[0]
 		assert.True(t, cmd.Bootstrapping)
 		assert.Equal(t, pb.DNService, cmd.ServiceType)
-		dnShardInfo := pb.DNShardInfo{
+		dnShardInfo := pb.TNShardInfo{
 			ShardID:   cmd.ConfigChange.Replica.ShardID,
 			ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
 		}
@@ -399,7 +399,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		// fake a free DN store
 		dnMsg2 := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
-			Shards: make([]pb.DNShardInfo, 0),
+			Shards: make([]pb.TNShardInfo, 0),
 		}
 		_, err = services[0].store.addDNStoreHeartbeat(ctx, dnMsg2)
 		require.NoError(t, err)
@@ -577,7 +577,7 @@ func testBootstrap(t *testing.T, fail bool) {
 
 		dnMsg := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
-			Shards: make([]pb.DNShardInfo, 0),
+			Shards: make([]pb.TNShardInfo, 0),
 		}
 		_, err = store.addDNStoreHeartbeat(ctx, dnMsg)
 		assert.NoError(t, err)
