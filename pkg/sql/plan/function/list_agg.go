@@ -124,6 +124,10 @@ var supportedAggregateFunctions = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    functionAgg.AggCountReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "count",
+					aggNew: functionAgg.NewAggCount,
+				},
 			},
 		},
 	},
@@ -147,6 +151,10 @@ var supportedAggregateFunctions = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    functionAgg.AggCountReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "count(*)",
+					aggNew: functionAgg.NewAggStarCount,
+				},
 			},
 		},
 	},

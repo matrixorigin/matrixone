@@ -145,45 +145,7 @@ func InitAggFramework(
 //	}
 //	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for any_value", typ))
 //}
-//
-//func newSum(ityp types.Type, otyp types.Type, dist bool) Agg[any] {
-//	switch ityp.Oid {
-//	case types.T_int8:
-//		return newGenericSum[int8, int64](ityp, otyp, dist)
-//	case types.T_int16:
-//		return newGenericSum[int16, int64](ityp, otyp, dist)
-//	case types.T_int32:
-//		return newGenericSum[int32, int64](ityp, otyp, dist)
-//	case types.T_int64:
-//		return newGenericSum[int64, int64](ityp, otyp, dist)
-//	case types.T_uint8:
-//		return newGenericSum[uint8, uint64](ityp, otyp, dist)
-//	case types.T_uint16:
-//		return newGenericSum[uint16, uint64](ityp, otyp, dist)
-//	case types.T_uint32:
-//		return newGenericSum[uint32, uint64](ityp, otyp, dist)
-//	case types.T_uint64:
-//		return newGenericSum[uint64, uint64](ityp, otyp, dist)
-//	case types.T_float32:
-//		return newGenericSum[float32, float64](ityp, otyp, dist)
-//	case types.T_float64:
-//		return newGenericSum[float64, float64](ityp, otyp, dist)
-//	case types.T_decimal64:
-//		aggPriv := NewD64Sum()
-//		if dist {
-//			return NewUnaryDistAgg(function.SUM, aggPriv, false, ityp, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
-//		}
-//		return NewUnaryAgg(function.SUM, aggPriv, false, ityp, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
-//	case types.T_decimal128:
-//		aggPriv := NewD128Sum()
-//		if dist {
-//			return NewUnaryDistAgg(function.SUM, aggPriv, false, ityp, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
-//		}
-//		return NewUnaryAgg(function.SUM, aggPriv, false, ityp, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
-//	}
-//	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for sum", ityp))
-//}
-//
+
 //func newApprox(typ types.Type, otyp types.Type, dist bool) Agg[any] {
 //	switch typ.Oid {
 //	case types.T_bool:
@@ -467,14 +429,6 @@ func InitAggFramework(
 //		return NewUnaryDistAgg(function.ANY_VALUE, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 //	}
 //	return NewUnaryAgg(function.ANY_VALUE, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
-//}
-
-//func newGenericCount[T types.OrderedT | Decimal128AndString](typ types.Type, otyp types.Type, dist bool, isStar bool) Agg[any] {
-//	aggPriv := NewCount[T](isStar)
-//	if dist {
-//		return NewUnaryDistAgg(function.COUNT, aggPriv, true, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
-//	}
-//	return NewUnaryAgg(function.COUNT, aggPriv, true, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 //}
 //
 //func newGenericApproxcd[T any](typ types.Type, otyp types.Type, dist bool) Agg[any] {
