@@ -174,7 +174,7 @@ const (
 	ErrUnresolvedConflict uint16 = 20603
 	// ErrTxnError TxnError wrapper
 	ErrTxnError uint16 = 20604
-	// ErrTNShardNotFound DNShard not found, need to get the latest DN list from HAKeeper
+	// ErrTNShardNotFound TNShard not found, need to get the latest DN list from HAKeeper
 	ErrTNShardNotFound  uint16 = 20605
 	ErrShardNotReported uint16 = 20606
 	// Generic TAE error

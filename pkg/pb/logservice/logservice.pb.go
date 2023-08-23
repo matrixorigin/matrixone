@@ -1450,7 +1450,7 @@ type LogRequest struct {
 	ShardID              uint64   `protobuf:"varint,2,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
 	Lsn                  uint64   `protobuf:"varint,3,opt,name=Lsn,proto3" json:"Lsn,omitempty"`
 	MaxSize              uint64   `protobuf:"varint,4,opt,name=MaxSize,proto3" json:"MaxSize,omitempty"`
-	DNShardID            uint64   `protobuf:"varint,5,opt,name=DNShardID,proto3" json:"DNShardID,omitempty"`
+	TNShardID            uint64   `protobuf:"varint,5,opt,name=DNShardID,proto3" json:"DNShardID,omitempty"`
 	DNID                 uint64   `protobuf:"varint,6,opt,name=DNID,proto3" json:"DNID,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -1520,7 +1520,7 @@ func (m *LogRequest) GetMaxSize() uint64 {
 
 func (m *LogRequest) GetDNShardID() uint64 {
 	if m != nil {
-		return m.DNShardID
+		return m.TNShardID
 	}
 	return 0
 }
@@ -5012,8 +5012,8 @@ func (m *LogRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x30
 	}
-	if m.DNShardID != 0 {
-		i = encodeVarintLogservice(dAtA, i, uint64(m.DNShardID))
+	if m.TNShardID != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.TNShardID))
 		i--
 		dAtA[i] = 0x28
 	}
@@ -7591,8 +7591,8 @@ func (m *LogRequest) Size() (n int) {
 	if m.MaxSize != 0 {
 		n += 1 + sovLogservice(uint64(m.MaxSize))
 	}
-	if m.DNShardID != 0 {
-		n += 1 + sovLogservice(uint64(m.DNShardID))
+	if m.TNShardID != 0 {
+		n += 1 + sovLogservice(uint64(m.TNShardID))
 	}
 	if m.DNID != 0 {
 		n += 1 + sovLogservice(uint64(m.DNID))
@@ -11265,7 +11265,7 @@ func (m *LogRequest) Unmarshal(dAtA []byte) error {
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field DNShardID", wireType)
 			}
-			m.DNShardID = 0
+			m.TNShardID = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowLogservice
@@ -11275,7 +11275,7 @@ func (m *LogRequest) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.DNShardID |= uint64(b&0x7F) << shift
+				m.TNShardID |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
