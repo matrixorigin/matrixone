@@ -109,7 +109,7 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 	util.LogTxnHandleRequest(request)
 	defer util.LogTxnHandleResult(response)
 
-	response.CommitDNShardResponse = &txn.TxnCommitDNShardResponse{}
+	response.CommitDNShardResponse = &txn.TxnCommitTNShardResponse{}
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)

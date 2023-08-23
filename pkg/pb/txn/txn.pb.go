@@ -827,7 +827,7 @@ type TxnResponse struct {
 	// TxnGetStatusResponse corresponds to TxnMethod.GetStatus response
 	GetStatusResponse *TxnGetStatusResponse `protobuf:"bytes,10,opt,name=GetStatusResponse,proto3" json:"GetStatusResponse,omitempty"`
 	// TxnCommitDNShardResponse corresponds to TxnMethod.CommitDNShard response
-	CommitDNShardResponse *TxnCommitDNShardResponse `protobuf:"bytes,11,opt,name=CommitDNShardResponse,proto3" json:"CommitDNShardResponse,omitempty"`
+	CommitDNShardResponse *TxnCommitTNShardResponse `protobuf:"bytes,11,opt,name=CommitDNShardResponse,proto3" json:"CommitDNShardResponse,omitempty"`
 	// TxnRollbackDNShardResponse corresponds to TxnMethod.RollbackDNShard response
 	RollbackDNShardResponse *TxnRollbackDNShardResponse `protobuf:"bytes,12,opt,name=RollbackDNShardResponse,proto3" json:"RollbackDNShardResponse,omitempty"`
 	// TxnRemoveMetadataResponse  corresponds to TxnMethod.RemoveMetadata
@@ -940,7 +940,7 @@ func (m *TxnResponse) GetGetStatusResponse() *TxnGetStatusResponse {
 	return nil
 }
 
-func (m *TxnResponse) GetCommitDNShardResponse() *TxnCommitDNShardResponse {
+func (m *TxnResponse) GetCommitDNShardResponse() *TxnCommitTNShardResponse {
 	if m != nil {
 		return m.CommitDNShardResponse
 	}
@@ -1368,22 +1368,22 @@ func (m *TxnCommitDNShardRequest) GetDNShard() metadata.TNShard {
 }
 
 // TxnCommitDNShardResponse response of TxnCommitDNShardRequest
-type TxnCommitDNShardResponse struct {
+type TxnCommitTNShardResponse struct {
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *TxnCommitDNShardResponse) Reset()         { *m = TxnCommitDNShardResponse{} }
-func (m *TxnCommitDNShardResponse) String() string { return proto.CompactTextString(m) }
-func (*TxnCommitDNShardResponse) ProtoMessage()    {}
-func (*TxnCommitDNShardResponse) Descriptor() ([]byte, []int) {
+func (m *TxnCommitTNShardResponse) Reset()         { *m = TxnCommitTNShardResponse{} }
+func (m *TxnCommitTNShardResponse) String() string { return proto.CompactTextString(m) }
+func (*TxnCommitTNShardResponse) ProtoMessage()    {}
+func (*TxnCommitTNShardResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_4f782e76b37adb9a, []int{16}
 }
-func (m *TxnCommitDNShardResponse) XXX_Unmarshal(b []byte) error {
+func (m *TxnCommitTNShardResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *TxnCommitDNShardResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TxnCommitTNShardResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_TxnCommitDNShardResponse.Marshal(b, m, deterministic)
 	} else {
@@ -1395,13 +1395,13 @@ func (m *TxnCommitDNShardResponse) XXX_Marshal(b []byte, deterministic bool) ([]
 		return b[:n], nil
 	}
 }
-func (m *TxnCommitDNShardResponse) XXX_Merge(src proto.Message) {
+func (m *TxnCommitTNShardResponse) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_TxnCommitDNShardResponse.Merge(m, src)
 }
-func (m *TxnCommitDNShardResponse) XXX_Size() int {
+func (m *TxnCommitTNShardResponse) XXX_Size() int {
 	return m.Size()
 }
-func (m *TxnCommitDNShardResponse) XXX_DiscardUnknown() {
+func (m *TxnCommitTNShardResponse) XXX_DiscardUnknown() {
 	xxx_messageInfo_TxnCommitDNShardResponse.DiscardUnknown(m)
 }
 
@@ -1680,7 +1680,7 @@ func init() {
 	proto.RegisterType((*TxnGetStatusRequest)(nil), "txn.TxnGetStatusRequest")
 	proto.RegisterType((*TxnGetStatusResponse)(nil), "txn.TxnGetStatusResponse")
 	proto.RegisterType((*TxnCommitDNShardRequest)(nil), "txn.TxnCommitDNShardRequest")
-	proto.RegisterType((*TxnCommitDNShardResponse)(nil), "txn.TxnCommitDNShardResponse")
+	proto.RegisterType((*TxnCommitTNShardResponse)(nil), "txn.TxnCommitDNShardResponse")
 	proto.RegisterType((*TxnRollbackDNShardRequest)(nil), "txn.TxnRollbackDNShardRequest")
 	proto.RegisterType((*TxnRollbackDNShardResponse)(nil), "txn.TxnRollbackDNShardResponse")
 	proto.RegisterType((*TxnRemoveMetadataRequest)(nil), "txn.TxnRemoveMetadataRequest")
@@ -2734,7 +2734,7 @@ func (m *TxnCommitDNShardRequest) MarshalToSizedBuffer(dAtA []byte) (int, error)
 	return len(dAtA) - i, nil
 }
 
-func (m *TxnCommitDNShardResponse) Marshal() (dAtA []byte, err error) {
+func (m *TxnCommitTNShardResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -2744,12 +2744,12 @@ func (m *TxnCommitDNShardResponse) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *TxnCommitDNShardResponse) MarshalTo(dAtA []byte) (int, error) {
+func (m *TxnCommitTNShardResponse) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *TxnCommitDNShardResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TxnCommitTNShardResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -3325,7 +3325,7 @@ func (m *TxnCommitDNShardRequest) Size() (n int) {
 	return n
 }
 
-func (m *TxnCommitDNShardResponse) Size() (n int) {
+func (m *TxnCommitTNShardResponse) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -5157,7 +5157,7 @@ func (m *TxnResponse) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.CommitDNShardResponse == nil {
-				m.CommitDNShardResponse = &TxnCommitDNShardResponse{}
+				m.CommitDNShardResponse = &TxnCommitTNShardResponse{}
 			}
 			if err := m.CommitDNShardResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
@@ -5869,7 +5869,7 @@ func (m *TxnCommitDNShardRequest) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *TxnCommitDNShardResponse) Unmarshal(dAtA []byte) error {
+func (m *TxnCommitTNShardResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
