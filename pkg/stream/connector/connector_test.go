@@ -95,8 +95,7 @@ func TestKafkaMoConnector(t *testing.T) {
 	}
 	// Start the connector in a goroutine
 	go func() {
-		if err := connector.Start(context.Background()); err != nil {
-		}
+		connector.Start(context.Background())
 	}()
 
 	// Create a channel to signal when all messages are processed

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"time"
 
@@ -436,7 +437,7 @@ func populateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []
 		for i, msg := range msgs {
 			err := populateOneRowData(ctx, b, attrKeys, &JsonDataGetter{Key: msg.Key, Value: msg.Value}, i, typs, mp)
 			if err != nil {
-				// return nil, err
+				logutil.Error("populate row failed")
 			}
 		}
 	case PROTOBUF:
@@ -616,6 +617,9 @@ func convertProtobufSchemaToMD(schema string, msgTypeName string) (*desc.Message
 func deserializeProtobuf(md *desc.MessageDescriptor, in []byte, isKafkSR bool) (*dynamic.Message, error) {
 	dm := dynamic.NewMessage(md)
 	bytesRead, _, err := readMessageIndexes(in[5:])
+	if err != nil {
+		return nil, err
+	}
 	if isKafkSR {
 		err = proto.Unmarshal(in[5+bytesRead:], dm)
 	} else {

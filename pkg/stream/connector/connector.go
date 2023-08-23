@@ -61,6 +61,7 @@ type ConnectorManager struct {
 func NewConnectorManager(ctx context.Context) *ConnectorManager {
 	return &ConnectorManager{
 		connectors: make(map[string]Connector),
+		ctx:        ctx,
 	}
 }
 
@@ -301,6 +302,7 @@ func (k *KafkaMoConnector) createOrFindTable(options map[string]interface{}) err
 	// Check if the table exists
 	if !k.doesTableExist(context.Background(), database, tableName) {
 		// Todo: enable create table
+		k.createTable(context.Background(), database, tableName)
 		return moerr.NewInternalError(context.Background(), "Table does not exist")
 	}
 

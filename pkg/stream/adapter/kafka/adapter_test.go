@@ -91,7 +91,7 @@ func TestNewKafkaAdapter(t *testing.T) {
 
 	topic := "Test"
 	value := "Hello Go!"
-	err = p.Produce(&kafka.Message{
+	p.Produce(&kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
 		Value:          []byte(value),
 		Headers:        []kafka.Header{{Key: "myTestHeader", Value: []byte("header values are binary")}},
@@ -213,7 +213,7 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 		Name: "test_name",
 		Age:  100,
 	}
-	value, err := json.Marshal(payload)
+	value, _ := json.Marshal(payload)
 
 	// produce 100 messages
 	for i := 0; i < 100; i++ {
