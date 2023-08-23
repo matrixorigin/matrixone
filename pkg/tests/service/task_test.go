@@ -88,7 +88,7 @@ func TestTaskServiceCanCreate(t *testing.T) {
 		WithCNServiceNum(1).
 		WithCNShardNum(1).
 		WithDNServiceNum(1).
-		WithDNShardNum(1).
+		WithTNShardNum(1).
 		WithLogServiceNum(3).
 		WithLogShardNum(1))
 	require.NoError(t, err)

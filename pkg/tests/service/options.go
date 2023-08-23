@@ -234,7 +234,7 @@ func (opt Options) WithLogShardNum(num uint64) Options {
 }
 
 // WithDNShardNum sets dn shard number in the cluster.
-func (opt Options) WithDNShardNum(num uint64) Options {
+func (opt Options) WithTNShardNum(num uint64) Options {
 	opt.initial.dnShardNum = num
 	return opt
 }

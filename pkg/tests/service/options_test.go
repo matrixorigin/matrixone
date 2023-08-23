@@ -47,7 +47,7 @@ func TestWithLogShardNum(t *testing.T) {
 
 func TestWithDnShardNum(t *testing.T) {
 	num := uint64(5)
-	opt := Options{}.WithDNShardNum(num)
+	opt := Options{}.WithTNShardNum(num)
 	require.Equal(t, num, opt.initial.dnShardNum)
 }
 

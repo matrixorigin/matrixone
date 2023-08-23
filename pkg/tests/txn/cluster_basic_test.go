@@ -357,7 +357,7 @@ func checkWrite(t *testing.T, txn Txn, key, value string, expectError error, com
 
 func getBasicClusterOptions(opts ...func(opts service.Options) service.Options) service.Options {
 	basic := service.DefaultOptions().
-		WithDNShardNum(1).
+		WithTNShardNum(1).
 		WithLogShardNum(1).
 		WithDNServiceNum(1).
 		WithLogServiceNum(3).
