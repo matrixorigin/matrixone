@@ -336,8 +336,8 @@ func (h *Handle) HandlePrepare(
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	participants := make([]uint64, 0, len(meta.GetDNShards()))
-	for _, shard := range meta.GetDNShards() {
+	participants := make([]uint64, 0, len(meta.GetTNShards()))
+	for _, shard := range meta.GetTNShards() {
 		participants = append(participants, shard.GetShardID())
 	}
 	txn.SetParticipants(participants)

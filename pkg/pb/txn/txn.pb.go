@@ -334,7 +334,7 @@ func (m *TxnMeta) GetCommitTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
-func (m *TxnMeta) GetDNShards() []metadata.TNShard {
+func (m *TxnMeta) GetTNShards() []metadata.TNShard {
 	if m != nil {
 		return m.TNShards
 	}

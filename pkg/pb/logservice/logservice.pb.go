@@ -3176,7 +3176,7 @@ func (m *ClusterInfo) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_ClusterInfo proto.InternalMessageInfo
 
-func (m *ClusterInfo) GetDNShards() []metadata.TNShardRecord {
+func (m *ClusterInfo) GetTNShards() []metadata.TNShardRecord {
 	if m != nil {
 		return m.TNShards
 	}
