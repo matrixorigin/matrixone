@@ -114,7 +114,7 @@ func NewTestTxnServiceWithLogAndZombieAndLockTabkeAllocator(
 		logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
 		runtime.WithClock(clock))
 	runtime.SetupProcessLevelRuntime(rt)
-	return NewTxnService(NewTestDNShard(shard),
+	return NewTxnService(NewTestTNShard(shard),
 		NewTestTxnStorage(log, clock),
 		sender,
 		zombie,
@@ -130,7 +130,7 @@ func NewTestTxnStorage(log logservice.Client, clock clock.Clock) storage.TxnStor
 }
 
 // NewTestDNShard create a test DNShard
-func NewTestDNShard(id uint64) metadata.TNShard {
+func NewTestTNShard(id uint64) metadata.TNShard {
 	return metadata.TNShard{
 		TNShardRecord: metadata.TNShardRecord{
 			ShardID:    id,
@@ -239,7 +239,7 @@ func NewTestTxn(txnID byte, ts int64, shards ...uint64) txn.TxnMeta {
 		SnapshotTS: NewTestTimestamp(ts),
 	}
 	for _, shard := range shards {
-		txnMeta.DNShards = append(txnMeta.DNShards, NewTestDNShard(shard))
+		txnMeta.DNShards = append(txnMeta.DNShards, NewTestTNShard(shard))
 	}
 	return txnMeta
 }
@@ -256,7 +256,7 @@ func NewTestWriteRequest(k byte, wTxn txn.TxnMeta, toShard uint64) txn.TxnReques
 	value := GetTestValue(k, wTxn)
 	req := mem.NewSetTxnRequest([][]byte{key}, [][]byte{value})
 	req.Txn = wTxn
-	req.CNRequest.Target = NewTestDNShard(toShard)
+	req.CNRequest.Target = NewTestTNShard(toShard)
 	return req
 }
 
@@ -265,7 +265,7 @@ func NewTestReadRequest(k byte, rTxn txn.TxnMeta, toShard uint64) txn.TxnRequest
 	key := GetTestKey(k)
 	req := mem.NewGetTxnRequest([][]byte{key})
 	req.Txn = rTxn
-	req.CNRequest.Target = NewTestDNShard(toShard)
+	req.CNRequest.Target = NewTestTNShard(toShard)
 	return req
 }
 
@@ -315,7 +315,7 @@ func NewTestPrepareRequest(wTxn txn.TxnMeta, shard uint64) txn.TxnRequest {
 		Method: txn.TxnMethod_Prepare,
 		Txn:    wTxn,
 		PrepareRequest: &txn.TxnPrepareRequest{
-			TNShard: NewTestDNShard(shard),
+			TNShard: NewTestTNShard(shard),
 		},
 	}
 }
@@ -326,7 +326,7 @@ func NewTestGetStatusRequest(wTxn txn.TxnMeta, shard uint64) txn.TxnRequest {
 		Method: txn.TxnMethod_GetStatus,
 		Txn:    wTxn,
 		GetStatusRequest: &txn.TxnGetStatusRequest{
-			TNShard: NewTestDNShard(shard),
+			TNShard: NewTestTNShard(shard),
 		},
 	}
 }

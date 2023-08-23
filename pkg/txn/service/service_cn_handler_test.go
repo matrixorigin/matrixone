@@ -718,7 +718,7 @@ func TestRollback(t *testing.T) {
 
 	wTxn := NewTestTxn(1, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
-	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
+	wTxn.DNShards = append(wTxn.DNShards, NewTestTNShard(2))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
 	w1 := addTestWaiter(t, s1, wTxn, txn.TxnStatus_Aborted)
@@ -768,7 +768,7 @@ func TestRollbackWithDNShardNotFound(t *testing.T) {
 
 	wTxn := NewTestTxn(1, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
-	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
+	wTxn.DNShards = append(wTxn.DNShards, NewTestTNShard(2))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
 	checkResponses(t, rollbackWriteData(t, sender, wTxn),
@@ -810,7 +810,7 @@ func TestDebug(t *testing.T) {
 			Method: txn.TxnMethod_DEBUG,
 			CNRequest: &txn.CNOpRequest{
 				Payload: data,
-				Target:  NewTestDNShard(1),
+				Target:  NewTestTNShard(1),
 			},
 		},
 	})

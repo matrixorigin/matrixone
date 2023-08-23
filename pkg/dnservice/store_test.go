@@ -309,7 +309,7 @@ func newTestStore(
 }
 
 func newTestDNShard(shardID, replicaID, logShardID uint64) metadata.TNShard {
-	dnShard := service.NewTestDNShard(shardID)
+	dnShard := service.NewTestTNShard(shardID)
 	dnShard.ReplicaID = replicaID
 	dnShard.LogShardID = logShardID
 	dnShard.Address = testTNStoreAddr
