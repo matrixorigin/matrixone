@@ -16,6 +16,7 @@ package cache
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -23,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -301,6 +301,17 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				Ts:         timestamps[i].ToTimestamp(),
 			}
 			cc.tables.addTableItem(newItem)
+
+			key := TableKey{
+				AccountId:  item.AccountId,
+				DatabaseId: item.DatabaseId,
+				TableId:    item.Id,
+				Name:       item.Name,
+			}
+			cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+				Version: math.MaxUint32,
+				Ts:      &item.Ts,
+			})
 		}
 	}
 }
@@ -363,26 +374,29 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		copy(item.Rowid[:], rowids[i][:])
 		// invalid old name table
 		exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]})
-		if ok {
-			if exist.Name != item.Name {
-				logutil.Infof("rename invalidate %d-%s,v%d@%s", exist.Id, exist.Name, exist.Version, item.Ts.String())
-				newItem := &TableItem{
-					deleted:    true,
-					Id:         exist.Id,
-					Name:       exist.Name,
-					Rowid:      exist.Rowid,
-					AccountId:  exist.AccountId,
-					DatabaseId: exist.DatabaseId,
-					Version:    exist.Version,
-					Ts:         item.Ts,
-				}
-				cc.tables.addTableItem(newItem)
+		if ok && exist.Name != item.Name {
+			key := TableKey{
+				AccountId:  account,
+				DatabaseId: item.DatabaseId,
+				TableId:    exist.Id,
+				Name:       exist.Name,
 			}
-			if exist.Version != item.Version {
-				logutil.Infof("tbl %s old_ver=%d, new_ver=%d", exist.Name, exist.Version, item.Version)
-				cc.tables.tableGuard.setSchemaChange(exist.Name, timestamps[i].Physical())
-			}
+			cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+				Version: math.MaxUint32,
+				Ts:      &item.Ts,
+			})
 		}
+
+		key := TableKey{
+			AccountId:  account,
+			DatabaseId: item.DatabaseId,
+			TableId:    item.Id,
+			Name:       item.Name,
+		}
+		cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+			Version: item.Version,
+			Ts:      &item.Ts,
+		})
 		cc.tables.addTableItem(item)
 		cc.tables.rowidIndex.Set(item)
 	}
@@ -592,26 +606,26 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 	}
 }
 
-// GetDeletedTableIndex returns the max index of deleted tables slice.
-func (cc *CatalogCache) GetDeletedTableIndex() int {
-	return cc.tables.tableGuard.getDeletedTableIndex()
+// // GetDeletedTableIndex returns the max index of deleted tables slice.
+// func (cc *CatalogCache) GetDeletedTableIndex() int {
+// 	return cc.tables.tableGuard.getDeletedTableIndex()
+// }
+
+// GetSchemaVersion returns the version of table
+func (cc *CatalogCache) GetSchemaVersion(name TableKey) *TableVersion {
+	return cc.tables.tableGuard.getSchemaVersion(name)
 }
 
-// GetDeletedTableIndex returns the max index of deleted tables slice.
-func (cc *CatalogCache) GetSchemaChange(name string) int64 {
-	return cc.tables.tableGuard.getSchemaChange(name)
-}
-
-// GetDeletedTables returns the deleted tables in [cachedIndex+1:] whose timestamp is less than ts.
-func (cc *CatalogCache) GetDeletedTables(cachedIndex int, ts timestamp.Timestamp) []*TableItem {
-	return cc.tables.tableGuard.getDeletedTables(cachedIndex, ts)
-}
+// // GetDeletedTables returns the deleted tables in [cachedIndex+1:] whose timestamp is less than ts.
+// func (cc *CatalogCache) GetDeletedTables(cachedIndex int, ts timestamp.Timestamp) []*TableItem {
+// 	return cc.tables.tableGuard.getDeletedTables(cachedIndex, ts)
+// }
 
 // addTableItem inserts a new table item. If it is a deleted one, also push the
 // item into tableCache.tableGuard.mu.deletedTables.
 func (c *tableCache) addTableItem(item *TableItem) {
 	c.data.Set(item)
-	if item != nil && item.deleted {
-		c.tableGuard.pushDeletedTable(item)
-	}
+	// if item != nil && item.deleted {
+	// 	c.tableGuard.pushDeletedTable(item)
+	// }
 }
