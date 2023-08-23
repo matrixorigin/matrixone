@@ -428,6 +428,9 @@ func (c *Config) hashNodeID() uint16 {
 }
 
 func (c *Config) getServiceType() (metadata.ServiceType, error) {
+	if c.ServiceType == "DN" { // for old config files compatibility
+		c.ServiceType = metadata.ServiceType_TN.String()
+	}
 	if v, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; ok {
 		return v, nil
 	}
