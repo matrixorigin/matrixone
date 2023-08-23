@@ -312,7 +312,7 @@ func (s *store) removeReplica(dnShardID uint64) error {
 	if r := s.getReplica(dnShardID); r != nil {
 		err := r.close(true)
 		s.replicas.Delete(dnShardID)
-		s.removeDNShard(dnShardID)
+		s.removeTNShard(dnShardID)
 		return err
 	}
 	return nil

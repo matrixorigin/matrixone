@@ -65,7 +65,7 @@ func (s *store) addDNShardLocked(shard metadata.TNShard) {
 	s.mustUpdateMetadataLocked()
 }
 
-func (s *store) removeDNShard(id uint64) {
+func (s *store) removeTNShard(id uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
