@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/shirou/gopsutil/v3/mem"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
@@ -69,8 +71,33 @@ var onceInit sync.Once
 var metaCacheStats hitStats
 var metaCacheHitStats hitStats
 
+const (
+	kb = 1024
+	mb = 1024 * kb
+	gb = 1024 * mb
+)
+
+func metaCacheSize() int64 {
+	v, err := mem.VirtualMemory()
+	if err != nil {
+		panic(err)
+	}
+
+	total := v.Total
+	if total < 2*gb {
+		return int64(total / 4)
+	}
+	if total < 16*gb {
+		return 512 * mb
+	}
+	if total < 32*gb {
+		return 1 * gb
+	}
+	return 2 * gb
+}
+
 func init() {
-	metaCache = lrucache.New[mataCacheKey, fileservice.Bytes](512*1024*1024, nil, nil, nil)
+	metaCache = lrucache.New[mataCacheKey, fileservice.Bytes](metaCacheSize(), nil, nil, nil)
 }
 
 func InitMetaCache(size int64) {
