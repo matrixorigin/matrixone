@@ -161,7 +161,7 @@ type Config struct {
 		NumOfLogShards uint64 `toml:"num-of-log-shards"`
 		// NumOfTNShards defines the number of DN shards in the initial deployment.
 		// The count must be the same as NumOfLogShards in the current implementation.
-		NumOfTNShards uint64 `toml:"num-of-dn-shards"`
+		NumOfTNShards uint64 `toml:"num-of-tn-shards"`
 		// NumOfLogShardReplicas is the number of replicas for each shard managed by
 		// Log Stores, including Log Service shards and the HAKeeper.
 		NumOfLogShardReplicas uint64 `toml:"num-of-log-shard-replicas"`
@@ -203,7 +203,7 @@ type Config struct {
 		// TNStoreTimeout is the actual time limit between a dn store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within TNStoreTimeout,
 		// it regards the dn store as down.
-		TNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		TNStoreTimeout toml.Duration `toml:"tn-store-timeout"`
 		// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
 		// it regards the dn store as down.
@@ -400,7 +400,7 @@ func DefaultConfig() Config {
 		BootstrapConfig: struct {
 			BootstrapCluster      bool     `toml:"bootstrap-cluster"`
 			NumOfLogShards        uint64   `toml:"num-of-log-shards"`
-			NumOfTNShards         uint64   `toml:"num-of-dn-shards"`
+			NumOfTNShards         uint64   `toml:"num-of-tn-shards"`
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
 			InitHAKeeperMembers   []string `toml:"init-hakeeper-members"`
 			Restore               struct {
@@ -426,7 +426,7 @@ func DefaultConfig() Config {
 		HAKeeperConfig: struct {
 			TickPerSecond   int           `toml:"tick-per-second"`
 			LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-			TNStoreTimeout  toml.Duration `toml:"dn-store-timeout"`
+			TNStoreTimeout  toml.Duration `toml:"tn-store-timeout"`
 			CNStoreTimeout  toml.Duration `toml:"cn-store-timeout"`
 		}(struct {
 			TickPerSecond   int

@@ -163,7 +163,7 @@ gossip-seed-addresses = [
 [logservice.BootstrapConfig]
 bootstrap-cluster = true
 num-of-log-shards = 1
-num-of-dn-shards = 1
+num-of-tn-shards = 1
 num-of-log-shard-replicas = 1
 init-hakeeper-members = [
   "131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",

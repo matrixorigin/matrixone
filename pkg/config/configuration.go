@@ -228,7 +228,7 @@ type FrontendParameters struct {
 	LogShardID uint64 `toml:"logshardid"`
 
 	//default is 1
-	TNReplicaID uint64 `toml:"dnreplicalid"`
+	TNReplicaID uint64 `toml:"tnreplicalid"`
 
 	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
 

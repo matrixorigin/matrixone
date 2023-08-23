@@ -61,7 +61,7 @@ type LaunchConfig struct {
 	// LogServiceConfigFiles log service config files
 	LogServiceConfigFiles []string `toml:"logservices"`
 	// TNServiceConfigsFiles log service config files
-	TNServiceConfigsFiles []string `toml:"dnservices"`
+	TNServiceConfigsFiles []string `toml:"tnservices"`
 	// CNServiceConfigsFiles log service config files
 	CNServiceConfigsFiles []string `toml:"cnservices"`
 	// CNServiceConfigsFiles log service config files
@@ -82,7 +82,7 @@ type Config struct {
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
 	// TN dn service config
-	TN dnservice.Config `toml:"dn"`
+	TN dnservice.Config `toml:"tn"`
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
