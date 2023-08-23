@@ -173,7 +173,7 @@ func startService(
 	case metadata.ServiceType_CN:
 		return startCNService(cfg, stopper, fs, globalCounterSet)
 	case metadata.ServiceType_DN:
-		return startDNService(cfg, stopper, fs, globalCounterSet, shutdownC)
+		return startTNService(cfg, stopper, fs, globalCounterSet, shutdownC)
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, globalCounterSet, shutdownC)
 	case metadata.ServiceType_PROXY:
@@ -225,7 +225,7 @@ func startCNService(
 	})
 }
 
-func startDNService(
+func startTNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
