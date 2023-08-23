@@ -64,7 +64,7 @@ services:
   dn:
     container_name: dn
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/dn.toml | tee /log/dn.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/tn.toml | tee /log/dn.log"]
     profiles:
       - launch
       - launch-multi-cn

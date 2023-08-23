@@ -3,7 +3,7 @@ logservices = [
 ]
 
 tnservices = [
-    "./etc/launch-with-proxy/dn.toml"
+    "./etc/launch-with-proxy/tn.toml"
 ]
 
 cnservices = [
