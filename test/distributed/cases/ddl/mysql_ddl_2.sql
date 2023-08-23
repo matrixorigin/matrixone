@@ -61,3 +61,5 @@ show create table mmysql_ddl_test_t215;
 
 create table if not exists mmysql_ddl_test_t216(id int AUTO_INCREMENT, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_general_ci,primary key (id)  USING BTREE) AUTO_INCREMENT=123 engine = 'InnoDB' DEFAULT CHARSET=utf8 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
 show create table mmysql_ddl_test_t216;
+
+drop database if exists mysql_ddl_test_db;

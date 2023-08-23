@@ -270,3 +270,4 @@ Insert into mysql_ddl_test_t40 values(1, '55.34', '11.32', '1.22');
 Insert into mysql_ddl_test_t40 values(1, '33.34', '22.32', 'abc');
 select * from mysql_ddl_test_t40;
 
+drop database if exists mysql_ddl_test_db;

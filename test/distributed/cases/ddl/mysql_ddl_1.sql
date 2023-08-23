@@ -14,6 +14,8 @@ create database /*!40000 if not exists */ mysql_ddl_test_db_1;
 use mysql_ddl_test_db_1;
 select database();
 
+
+
 drop database if exists mysql_ddl_test_db_2;
 create database if not exists mysql_ddl_test_db_2;
 use mysql_ddl_test_db_2;
@@ -50,4 +52,9 @@ SET @saved_cs_client = xxx;
 select @saved_cs_client;
 SET character_set_client  = xxx;
 select @@character_set_client;
+
+drop database if exists mysql_ddl_test_db_1;
+drop database if exists mysql_ddl_test_db_2;
+drop database if exists mysql_ddl_test_db_3;
+drop database if exists mysql_ddl_test_db_4;
 

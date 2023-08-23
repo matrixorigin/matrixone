@@ -67,3 +67,4 @@ create table if not exists mmysql_ddl_test_t216(id int AUTO_INCREMENT, name varc
 show create table mmysql_ddl_test_t216;
 Table    Create Table
 mmysql_ddl_test_t216    CREATE TABLE `mmysql_ddl_test_t216` (\n`id` INT NOT NULL AUTO_INCREMENT,\n`name` VARCHAR(255) DEFAULT NULL,\nPRIMARY KEY (`id`)\n)
+drop database if exists mysql_ddl_test_db;
