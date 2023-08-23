@@ -3,7 +3,4 @@ service-type = "LOG"
 data-dir = "./mo-data"
 
 [log]
-level = "fatal"
-
-#[logservice.BootstrapConfig.restore]
-#file-path = "hk_data"
+level = "info"
