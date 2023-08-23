@@ -3192,7 +3192,7 @@ func (m *ClusterInfo) GetLogShards() []metadata.LogShardRecord {
 
 type InitialClusterRequest struct {
 	NumOfLogShards       uint64            `protobuf:"varint,1,opt,name=NumOfLogShards,proto3" json:"NumOfLogShards,omitempty"`
-	NumOfDNShards        uint64            `protobuf:"varint,2,opt,name=NumOfDNShards,proto3" json:"NumOfDNShards,omitempty"`
+	NumOfTNShards        uint64            `protobuf:"varint,2,opt,name=NumOfDNShards,proto3" json:"NumOfDNShards,omitempty"`
 	NumOfLogReplicas     uint64            `protobuf:"varint,3,opt,name=NumOfLogReplicas,proto3" json:"NumOfLogReplicas,omitempty"`
 	NextID               uint64            `protobuf:"varint,4,opt,name=NextID,proto3" json:"NextID,omitempty"`
 	NextIDByKey          map[string]uint64 `protobuf:"bytes,5,rep,name=NextIDByKey,proto3" json:"NextIDByKey,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
@@ -3243,7 +3243,7 @@ func (m *InitialClusterRequest) GetNumOfLogShards() uint64 {
 
 func (m *InitialClusterRequest) GetNumOfDNShards() uint64 {
 	if m != nil {
-		return m.NumOfDNShards
+		return m.NumOfTNShards
 	}
 	return 0
 }
@@ -6563,8 +6563,8 @@ func (m *InitialClusterRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x18
 	}
-	if m.NumOfDNShards != 0 {
-		i = encodeVarintLogservice(dAtA, i, uint64(m.NumOfDNShards))
+	if m.NumOfTNShards != 0 {
+		i = encodeVarintLogservice(dAtA, i, uint64(m.NumOfTNShards))
 		i--
 		dAtA[i] = 0x10
 	}
@@ -8252,8 +8252,8 @@ func (m *InitialClusterRequest) Size() (n int) {
 	if m.NumOfLogShards != 0 {
 		n += 1 + sovLogservice(uint64(m.NumOfLogShards))
 	}
-	if m.NumOfDNShards != 0 {
-		n += 1 + sovLogservice(uint64(m.NumOfDNShards))
+	if m.NumOfTNShards != 0 {
+		n += 1 + sovLogservice(uint64(m.NumOfTNShards))
 	}
 	if m.NumOfLogReplicas != 0 {
 		n += 1 + sovLogservice(uint64(m.NumOfLogReplicas))
@@ -15638,7 +15638,7 @@ func (m *InitialClusterRequest) Unmarshal(dAtA []byte) error {
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field NumOfDNShards", wireType)
 			}
-			m.NumOfDNShards = 0
+			m.NumOfTNShards = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowLogservice
@@ -15648,7 +15648,7 @@ func (m *InitialClusterRequest) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.NumOfDNShards |= uint64(b&0x7F) << shift
+				m.NumOfTNShards |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

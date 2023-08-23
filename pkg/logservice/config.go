@@ -161,7 +161,7 @@ type Config struct {
 		NumOfLogShards uint64 `toml:"num-of-log-shards"`
 		// NumOfDNShards defines the number of DN shards in the initial deployment.
 		// The count must be the same as NumOfLogShards in the current implementation.
-		NumOfDNShards uint64 `toml:"num-of-dn-shards"`
+		NumOfTNShards uint64 `toml:"num-of-dn-shards"`
 		// NumOfLogShardReplicas is the number of replicas for each shard managed by
 		// Log Stores, including Log Service shards and the HAKeeper.
 		NumOfLogShardReplicas uint64 `toml:"num-of-log-shard-replicas"`
@@ -339,13 +339,13 @@ func (c *Config) Validate() error {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfLogShards not set")
 		}
-		if c.BootstrapConfig.NumOfDNShards == 0 {
+		if c.BootstrapConfig.NumOfTNShards == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfDNShards not set")
 		}
 		if c.BootstrapConfig.NumOfLogShardReplicas == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfLogShardReplica not set")
 		}
-		if c.BootstrapConfig.NumOfDNShards != c.BootstrapConfig.NumOfLogShards {
+		if c.BootstrapConfig.NumOfTNShards != c.BootstrapConfig.NumOfLogShards {
 			return moerr.NewBadConfigNoCtx("NumOfDNShards does not match NumOfLogShards")
 		}
 		members, err := c.GetInitHAKeeperMembers()
@@ -400,7 +400,7 @@ func DefaultConfig() Config {
 		BootstrapConfig: struct {
 			BootstrapCluster      bool     `toml:"bootstrap-cluster"`
 			NumOfLogShards        uint64   `toml:"num-of-log-shards"`
-			NumOfDNShards         uint64   `toml:"num-of-dn-shards"`
+			NumOfTNShards         uint64   `toml:"num-of-dn-shards"`
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
 			InitHAKeeperMembers   []string `toml:"init-hakeeper-members"`
 			Restore               struct {
@@ -409,7 +409,7 @@ func DefaultConfig() Config {
 		}(struct {
 			BootstrapCluster      bool
 			NumOfLogShards        uint64
-			NumOfDNShards         uint64
+			NumOfTNShards         uint64
 			NumOfLogShardReplicas uint64
 			InitHAKeeperMembers   []string
 			Restore               struct {
@@ -418,7 +418,7 @@ func DefaultConfig() Config {
 		}{
 			BootstrapCluster:      true,
 			NumOfLogShards:        1,
-			NumOfDNShards:         1,
+			NumOfTNShards:         1,
 			NumOfLogShardReplicas: 1,
 			InitHAKeeperMembers:   []string{"131072:" + uid},
 			Restore:               struct{ FilePath string }{FilePath: ""},

@@ -596,7 +596,7 @@ func TestInitialClusterRequestCmd(t *testing.T) {
 	cmd := GetInitialClusterRequestCmd(2, 2, 3, 10, nextIDByKey)
 	req := parseInitialClusterRequestCmd(cmd)
 	assert.Equal(t, uint64(2), req.NumOfLogShards)
-	assert.Equal(t, uint64(2), req.NumOfDNShards)
+	assert.Equal(t, uint64(2), req.NumOfTNShards)
 	assert.Equal(t, uint64(3), req.NumOfLogReplicas)
 	assert.Equal(t, uint64(10), req.NextID)
 	assert.Equal(t, nextIDByKey, req.NextIDByKey)

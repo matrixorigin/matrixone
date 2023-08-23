@@ -75,7 +75,7 @@ func GetInitialClusterRequestCmd(numOfLogShards uint64,
 	numOfDNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) []byte {
 	req := pb.InitialClusterRequest{
 		NumOfLogShards:   numOfLogShards,
-		NumOfDNShards:    numOfDNShards,
+		NumOfTNShards:    numOfDNShards,
 		NumOfLogReplicas: numOfLogReplicas,
 		NextID:           nextID,
 		NextIDByKey:      nextIDByKey,
@@ -524,7 +524,7 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		return result
 	}
 	req := parseInitialClusterRequestCmd(cmd)
-	if req.NumOfLogShards != req.NumOfDNShards {
+	if req.NumOfLogShards != req.NumOfTNShards {
 		panic("DN:Log 1:1 mode is the only supported mode")
 	}
 

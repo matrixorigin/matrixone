@@ -44,7 +44,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		}
 	}
 	numOfLogShards := cfg.BootstrapConfig.NumOfLogShards
-	numOfDNShards := cfg.BootstrapConfig.NumOfDNShards
+	numOfDNShards := cfg.BootstrapConfig.NumOfTNShards
 	numOfLogReplicas := cfg.BootstrapConfig.NumOfLogShardReplicas
 
 	var nextID uint64

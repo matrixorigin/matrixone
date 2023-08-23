@@ -140,7 +140,7 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 
 	c.BootstrapConfig.BootstrapCluster = true
 	c.BootstrapConfig.NumOfLogShards = 3
-	c.BootstrapConfig.NumOfDNShards = 3
+	c.BootstrapConfig.NumOfTNShards = 3
 	c.BootstrapConfig.NumOfLogShardReplicas = 1
 	c.BootstrapConfig.InitHAKeeperMembers = []string{"131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"}
 	assert.NoError(t, c.Validate())
@@ -151,12 +151,12 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c2 := c
-	c2.BootstrapConfig.NumOfDNShards = 0
+	c2.BootstrapConfig.NumOfTNShards = 0
 	err = c2.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c3 := c
-	c3.BootstrapConfig.NumOfDNShards = 2
+	c3.BootstrapConfig.NumOfTNShards = 2
 	err = c3.Validate()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
