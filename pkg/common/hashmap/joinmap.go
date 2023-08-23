@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int32, expr *plan.Expr, mp *StrHashMap, hasNull bool, isDup bool) *JoinMap {
+func NewJoinMap(sels [][]int32, expr *plan.Expr, mp any, hasNull bool, isDup bool) *JoinMap {
 	cnt := int64(1)
 	return &JoinMap{
 		cnt:     &cnt,
@@ -37,7 +37,7 @@ func (jm *JoinMap) Sels() [][]int32 {
 	return jm.sels
 }
 
-func (jm *JoinMap) Map() *StrHashMap {
+func (jm *JoinMap) Map() any {
 	return jm.mp
 }
 
@@ -53,30 +53,82 @@ func (jm *JoinMap) IsDup() bool {
 	return jm.isDup
 }
 
+func (jm *JoinMap) NewIterator() Iterator {
+	switch m := jm.mp.(type) {
+	case *IntHashMap:
+		return &intHashMapIterator{
+			mp:      m,
+			m:       m.m,
+			ibucket: m.ibucket,
+			nbucket: m.nbucket,
+		}
+	case *StrHashMap:
+		return &strHashmapIterator{
+			mp:      m,
+			m:       m.m,
+			ibucket: m.ibucket,
+			nbucket: m.nbucket,
+		}
+	default:
+		panic("wrong join map!")
+	}
+}
+
 func (jm *JoinMap) Dup() *JoinMap {
-	m0 := &StrHashMap{
-		m:             jm.mp.m,
-		hashMap:       jm.mp.hashMap,
-		hasNull:       jm.mp.hasNull,
-		ibucket:       jm.mp.ibucket,
-		nbucket:       jm.mp.nbucket,
-		values:        make([]uint64, UnitLimit),
-		zValues:       make([]int64, UnitLimit),
-		keys:          make([][]byte, UnitLimit),
-		strHashStates: make([][3]uint64, UnitLimit),
+	switch m := jm.mp.(type) {
+	case *IntHashMap:
+		m0 := &IntHashMap{
+			m:       m.m,
+			hashMap: m.hashMap,
+			hasNull: m.hasNull,
+			ibucket: m.ibucket,
+			nbucket: m.nbucket,
+			keys:    make([]uint64, UnitLimit),
+			keyOffs: make([]uint32, UnitLimit),
+			values:  make([]uint64, UnitLimit),
+			zValues: make([]int64, UnitLimit),
+			hashes:  make([]uint64, UnitLimit),
+		}
+		jm0 := &JoinMap{
+			mp:      m0,
+			expr:    jm.expr,
+			sels:    jm.sels,
+			hasNull: jm.hasNull,
+			cnt:     jm.cnt,
+		}
+		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
+			jm.mp = nil
+			jm.sels = nil
+		}
+		return jm0
+	case *StrHashMap:
+		m0 := &StrHashMap{
+			m:             m.m,
+			hashMap:       m.hashMap,
+			hasNull:       m.hasNull,
+			ibucket:       m.ibucket,
+			nbucket:       m.nbucket,
+			values:        make([]uint64, UnitLimit),
+			zValues:       make([]int64, UnitLimit),
+			keys:          make([][]byte, UnitLimit),
+			strHashStates: make([][3]uint64, UnitLimit),
+		}
+		jm0 := &JoinMap{
+			mp:      m0,
+			expr:    jm.expr,
+			sels:    jm.sels,
+			hasNull: jm.hasNull,
+			cnt:     jm.cnt,
+		}
+		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
+			jm.mp = nil
+			jm.sels = nil
+		}
+		return jm0
+	default:
+		panic("wrong join map!")
 	}
-	jm0 := &JoinMap{
-		mp:      m0,
-		expr:    jm.expr,
-		sels:    jm.sels,
-		hasNull: jm.hasNull,
-		cnt:     jm.cnt,
-	}
-	if atomic.AddInt64(jm.dupCnt, -1) == 0 {
-		jm.mp = nil
-		jm.sels = nil
-	}
-	return jm0
+
 }
 
 func (jm *JoinMap) IncRef(ref int64) {
@@ -95,7 +147,14 @@ func (jm *JoinMap) Free() {
 		jm.sels[i] = nil
 	}
 	jm.sels = nil
-	jm.mp.Free()
+	switch m := jm.mp.(type) {
+	case *IntHashMap:
+		m.Free()
+	case *StrHashMap:
+		m.Free()
+	default:
+		panic("wrong join map!")
+	}
 }
 
 func (jm *JoinMap) Size() int64 {
@@ -103,5 +162,12 @@ func (jm *JoinMap) Size() int64 {
 	if jm.mp == nil {
 		return 0
 	}
-	return jm.mp.Size()
+	switch m := jm.mp.(type) {
+	case *IntHashMap:
+		return m.Size()
+	case *StrHashMap:
+		return m.Size()
+	default:
+		panic("wrong join map!")
+	}
 }
