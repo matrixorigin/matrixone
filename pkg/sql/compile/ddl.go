@@ -1394,6 +1394,9 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
 			})
+			c.Cts = append(c.Cts, &engine.StreamConfigsDef{
+				Configs: defVal.Properties.GetProperties(),
+			})
 		}
 	}
 

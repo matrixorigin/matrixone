@@ -275,7 +275,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (m *MemoryFS) Preload(ctx context.Context, filePath string) error {
+func (m *MemoryFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 

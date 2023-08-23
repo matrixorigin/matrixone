@@ -45,6 +45,11 @@ const (
 	ALL_IN_ONE_MODE  = "monolithic"
 )
 
+type CtxServiceType string
+
+const ServiceTypeKey CtxServiceType = "ServiceTypeKey"
+const LaunchMode = "ALL"
+
 type statusServer struct {
 	*http.Server
 	sync.WaitGroup
@@ -99,7 +104,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 
 	// start the data flow
 	if !SV.DisableMetric {
-		serviceCtx := context.Background()
+		serviceCtx := context.WithValue(context.Background(), ServiceTypeKey, role)
 		moCollector.Start(serviceCtx)
 		moExporter.Start(serviceCtx)
 		internalExporter.Start(serviceCtx)

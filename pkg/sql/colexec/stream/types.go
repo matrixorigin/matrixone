@@ -12,42 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package shuffle
+package stream
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const shuffleBatchSize = 8192
-
-const (
-	input = iota
-	outPutNotEnding
-	outPutEnding
-)
-
 type Argument struct {
-	ctr           *container
-	ShuffleColIdx int32
-	ShuffleType   int32
-	ShuffleColMin int64
-	ShuffleColMax int64
-	AliveRegCnt   int32
+	TblDef *plan.TableDef
+	Offset int64
+	Limit  int64
+
+	//end     bool
+	attrs   []string
+	types   []types.Type
+	configs map[string]interface{}
 }
 
-type container struct {
-	state        int
-	sels         [][]int32
-	shuffledBats []*batch.Batch
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	for i := range arg.ctr.shuffledBats {
-		if arg.ctr.shuffledBats[i] != nil {
-			arg.ctr.shuffledBats[i].Clean(proc.Mp())
-			arg.ctr.shuffledBats[i] = nil
-		}
-	}
-	arg.ctr.sels = nil
-}
+func (arg *Argument) Free(*process.Process, bool) {}
