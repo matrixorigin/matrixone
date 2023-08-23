@@ -67,7 +67,7 @@ func TestSendWithSingleRequest(t *testing.T) {
 	req := txn.TxnRequest{
 		Method: txn.TxnMethod_Write,
 		CNRequest: &txn.CNOpRequest{
-			Target: metadata.DNShard{
+			Target: metadata.TNShard{
 				Address: testDN1Addr,
 			},
 		},
@@ -110,7 +110,7 @@ func TestSendEnableCompressWithSingleRequest(t *testing.T) {
 	req := txn.TxnRequest{
 		Method: txn.TxnMethod_Write,
 		CNRequest: &txn.CNOpRequest{
-			Target: metadata.DNShard{
+			Target: metadata.TNShard{
 				Address: testDN1Addr,
 			},
 		},
@@ -158,7 +158,7 @@ func TestSendWithMultiDN(t *testing.T) {
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
-				Target: metadata.DNShard{
+				Target: metadata.TNShard{
 					TNShardRecord: metadata.TNShardRecord{
 						ShardID: uint64(i % len(addrs)),
 					},
@@ -209,7 +209,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 	sd, err := NewSender(
 		Config{},
 		newTestRuntime(newTestClock(), nil),
-		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
+		WithSenderLocalDispatch(func(d metadata.TNShard) TxnRequestHandleFunc {
 			if d.Address != testDN1Addr {
 				return nil
 			}
@@ -235,7 +235,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
-				Target: metadata.DNShard{
+				Target: metadata.TNShard{
 					TNShardRecord: metadata.TNShardRecord{
 						ShardID: uint64(i % len(addrs)),
 					},
@@ -275,7 +275,7 @@ func BenchmarkLocalSend(b *testing.B) {
 	sd, err := NewSender(
 		Config{},
 		newTestRuntime(newTestClock(), nil),
-		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
+		WithSenderLocalDispatch(func(d metadata.TNShard) TxnRequestHandleFunc {
 			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
 				resp.RequestID = req.RequestID
 				return nil
@@ -295,7 +295,7 @@ func BenchmarkLocalSend(b *testing.B) {
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
-				Target: metadata.DNShard{},
+				Target: metadata.TNShard{},
 			},
 		})
 	}
@@ -344,7 +344,7 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 	req := txn.TxnRequest{
 		Method: txn.TxnMethod_Write,
 		CNRequest: &txn.CNOpRequest{
-			Target: metadata.DNShard{
+			Target: metadata.TNShard{
 				Address: testDN1Addr,
 			},
 			Payload: make([]byte, size),

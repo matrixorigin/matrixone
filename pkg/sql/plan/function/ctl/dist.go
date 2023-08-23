@@ -66,7 +66,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 						}
 						requests = append(requests, txn.CNOpRequest{
 							OpCode: uint32(method),
-							Target: metadata.DNShard{
+							Target: metadata.TNShard{
 								TNShardRecord: metadata.TNShardRecord{
 									ShardID: shard.ShardID,
 								},

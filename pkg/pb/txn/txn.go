@@ -154,7 +154,7 @@ func (m TxnMeta) DebugString() string {
 }
 
 // GetTargetDN return dn shard ID that message need send to.
-func (m TxnRequest) GetTargetDN() metadata.DNShard {
+func (m TxnRequest) GetTargetDN() metadata.TNShard {
 	switch m.Method {
 	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:
 		return m.CNRequest.Target
@@ -163,13 +163,13 @@ func (m TxnRequest) GetTargetDN() metadata.DNShard {
 	case TxnMethod_Rollback:
 		return m.Txn.DNShards[0]
 	case TxnMethod_Prepare:
-		return m.PrepareRequest.DNShard
+		return m.PrepareRequest.TNShard
 	case TxnMethod_GetStatus:
-		return m.GetStatusRequest.DNShard
+		return m.GetStatusRequest.TNShard
 	case TxnMethod_CommitDNShard:
-		return m.CommitDNShardRequest.DNShard
+		return m.CommitDNShardRequest.TNShard
 	case TxnMethod_RollbackDNShard:
-		return m.RollbackDNShardRequest.DNShard
+		return m.RollbackDNShardRequest.TNShard
 	default:
 		panic(fmt.Sprintf("unknown txn request method: %v", m.Method))
 	}

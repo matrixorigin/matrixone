@@ -114,9 +114,9 @@ func TestCmdPingDNWithParameter(t *testing.T) {
 
 func initTestRuntime(shardIDs ...uint64) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	var shards = make([]metadata.DNShard, 0, len(shardIDs))
+	var shards = make([]metadata.TNShard, 0, len(shardIDs))
 	for _, id := range shardIDs {
-		shards = append(shards, metadata.DNShard{
+		shards = append(shards, metadata.TNShard{
 			TNShardRecord: metadata.TNShardRecord{ShardID: id},
 		})
 	}

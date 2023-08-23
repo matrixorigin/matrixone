@@ -47,7 +47,7 @@ func TestHandleMessageWithSender(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 
-		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.DNShard{Address: testDN1Addr}}}})
+		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.TNShard{Address: testDN1Addr}}}})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(v.Responses))
 	}, WithServerEnableCompress(true))
@@ -68,7 +68,7 @@ func TestHandleMessageEnableCompressWithSender(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 
-		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.DNShard{Address: testDN1Addr}}}})
+		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.TNShard{Address: testDN1Addr}}}})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(v.Responses))
 	})
@@ -94,7 +94,7 @@ func TestHandleLargeMessageWithSender(t *testing.T) {
 
 		v, err := cli.Send(ctx, []txn.TxnRequest{{
 			CNRequest: &txn.CNOpRequest{
-				Target:  metadata.DNShard{Address: testDN1Addr},
+				Target:  metadata.TNShard{Address: testDN1Addr},
 				Payload: make([]byte, size),
 			},
 		}})

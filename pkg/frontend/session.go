@@ -690,7 +690,7 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.TNService, er
 
 	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
 	// suggested by @reusee
-	shards := []metadata.DNShard{
+	shards := []metadata.TNShard{
 		{
 			ReplicaID:     0xbeef,
 			TNShardRecord: metadata.TNShardRecord{ShardID: 0xbeef},

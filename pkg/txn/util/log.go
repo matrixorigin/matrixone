@@ -187,7 +187,7 @@ func LogTxnReceivedResponses(responses []txn.TxnResponse) {
 
 // LogTxnCreateOn log Txn create on dn shard.
 func LogTxnCreateOn(txnMeta txn.TxnMeta,
-	tn metadata.DNShard) {
+	tn metadata.TNShard) {
 	logger := getSkipLogger()
 
 	if logger.Enabled(zap.DebugLevel) {
@@ -224,7 +224,7 @@ func LogTxnWaitUncommittedTxnsFailed(txnMeta txn.TxnMeta,
 
 // LogTxnReadFailed log Txn read failed.
 func LogTxnNotFoundOn(txnMeta txn.TxnMeta,
-	tn metadata.DNShard) {
+	tn metadata.TNShard) {
 	logger := getSkipLogger()
 
 	if logger.Enabled(zap.DebugLevel) {
@@ -300,7 +300,7 @@ func LogTxnParallelPrepareCompleted(txnMeta txn.TxnMeta) {
 // LogTxnPrepareFailedOn log Tx prepare failed on DNShard
 func LogTxnPrepareFailedOn(
 	txnMeta txn.TxnMeta,
-	tn metadata.DNShard,
+	tn metadata.TNShard,
 	err *txn.TxnError) {
 	logger := getSkipLogger()
 
@@ -313,7 +313,7 @@ func LogTxnPrepareFailedOn(
 // LogTxnPrepareCompletedOn log Tx prepare completed on DNShard
 func LogTxnPrepareCompletedOn(
 	txnMeta txn.TxnMeta,
-	tn metadata.DNShard,
+	tn metadata.TNShard,
 	preparedTS timestamp.Timestamp) {
 	logger := getSkipLogger()
 
@@ -443,7 +443,7 @@ func TxnIDFieldWithID(id []byte) zap.Field {
 }
 
 // TxnDNShardField returns a dn shard zap field
-func TxnDNShardField(tn metadata.DNShard) zap.Field {
+func TxnDNShardField(tn metadata.TNShard) zap.Field {
 	return zap.String("dn-shard", tn.DebugString())
 }
 

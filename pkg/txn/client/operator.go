@@ -606,7 +606,7 @@ func (tc *txnOperator) updateWritePartitions(requests []txn.TxnRequest, locked b
 	}
 }
 
-func (tc *txnOperator) addPartitionLocked(tn metadata.DNShard) {
+func (tc *txnOperator) addPartitionLocked(tn metadata.TNShard) {
 	for idx := range tc.mu.txn.DNShards {
 		if tc.mu.txn.DNShards[idx].ShardID == tn.ShardID {
 			return

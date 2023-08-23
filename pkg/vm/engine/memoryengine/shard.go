@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-type Shard = metadata.DNShard
+type Shard = metadata.TNShard
 
 type shardsFunc = func() ([]Shard, error)
 
@@ -128,7 +128,7 @@ func (s *NoShard) setShard(stores []metadata.TNService) {
 	s.setOnce.Do(func() {
 		type ShardInfo struct {
 			Store metadata.TNService
-			Shard metadata.DNShard
+			Shard metadata.TNShard
 		}
 		infos := make([]ShardInfo, 0, len(stores))
 		for _, store := range stores {

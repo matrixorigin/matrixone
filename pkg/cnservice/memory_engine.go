@@ -70,10 +70,10 @@ func (s *service) initMemoryEngineNonDist(
 		return err
 	}
 
-	shard := metadata.DNShard{}
+	shard := metadata.TNShard{}
 	shard.ShardID = 2
 	shard.ReplicaID = 2
-	shards := []metadata.DNShard{
+	shards := []metadata.TNShard{
 		shard,
 	}
 	dnAddr := "1"

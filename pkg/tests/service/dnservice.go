@@ -49,9 +49,9 @@ type DNService interface {
 	ID() string
 
 	// StartDNReplica start the DNShard replica
-	StartDNReplica(shard metadata.DNShard) error
+	StartDNReplica(shard metadata.TNShard) error
 	// CloseDNReplica close the DNShard replica.
-	CloseDNReplica(shard metadata.DNShard) error
+	CloseDNReplica(shard metadata.TNShard) error
 
 	// GetTaskService returns the taskservice
 	GetTaskService() (taskservice.TaskService, bool)
@@ -109,7 +109,7 @@ func (ds *dnService) ID() string {
 	return ds.uuid
 }
 
-func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
+func (ds *dnService) StartDNReplica(shard metadata.TNShard) error {
 	ds.Lock()
 	defer ds.Unlock()
 
@@ -120,7 +120,7 @@ func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
 	return ds.svc.StartDNReplica(shard)
 }
 
-func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
+func (ds *dnService) CloseDNReplica(shard metadata.TNShard) error {
 	ds.Lock()
 	defer ds.Unlock()
 
@@ -217,7 +217,7 @@ func buildDNOptions(cfg *dnservice.Config, filter FilterFunc) dnOptions {
 	}
 
 	// factory to construct client for log service
-	logServiceClientFactory := func(shard metadata.DNShard) (logservice.Client, error) {
+	logServiceClientFactory := func(shard metadata.TNShard) (logservice.Client, error) {
 		ctx, cancel := context.WithTimeout(
 			context.Background(), cfg.LogService.ConnectTimeout.Duration,
 		)

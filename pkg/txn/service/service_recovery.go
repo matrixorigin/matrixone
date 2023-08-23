@@ -126,7 +126,7 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 			requests = append(requests, txn.TxnRequest{
 				Txn:              txnMeta,
 				Method:           txn.TxnMethod_GetStatus,
-				GetStatusRequest: &txn.TxnGetStatusRequest{DNShard: tn},
+				GetStatusRequest: &txn.TxnGetStatusRequest{TNShard: tn},
 			})
 		}
 

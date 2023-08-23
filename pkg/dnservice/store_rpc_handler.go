@@ -45,7 +45,7 @@ func (s *store) registerRPCHandlers() {
 	s.server.RegisterMethodHandler(txn.TxnMethod_DEBUG, s.handleDebug)
 }
 
-func (s *store) dispatchLocalRequest(shard metadata.DNShard) rpc.TxnRequestHandleFunc {
+func (s *store) dispatchLocalRequest(shard metadata.TNShard) rpc.TxnRequestHandleFunc {
 	// DNShard not found, TxnSender will RPC call
 	r := s.getReplica(shard.ShardID)
 	if r == nil {

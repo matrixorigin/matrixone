@@ -69,7 +69,7 @@ func WithHAKeeperClientFactory(factory func() (logservice.DNHAKeeperClient, erro
 }
 
 // WithLogServiceClientFactory set log service client factory
-func WithLogServiceClientFactory(factory func(metadata.DNShard) (logservice.Client, error)) Option {
+func WithLogServiceClientFactory(factory func(metadata.TNShard) (logservice.Client, error)) Option {
 	return func(s *store) {
 		s.options.logServiceClientFactory = factory
 	}
@@ -99,7 +99,7 @@ type store struct {
 	shutdownC           chan struct{}
 
 	options struct {
-		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
+		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
 		hakeekerClientFactory   func() (logservice.DNHAKeeperClient, error)
 		backendFilter           func(msg morpc.Message, backendAddr string) bool
 		adjustConfigFunc        func(c *Config)
@@ -233,11 +233,11 @@ func (s *store) Close() error {
 	return err
 }
 
-func (s *store) StartDNReplica(shard metadata.DNShard) error {
+func (s *store) StartDNReplica(shard metadata.TNShard) error {
 	return s.createReplica(shard)
 }
 
-func (s *store) CloseDNReplica(shard metadata.DNShard) error {
+func (s *store) CloseDNReplica(shard metadata.TNShard) error {
 	return s.removeReplica(shard.ShardID)
 }
 
@@ -266,7 +266,7 @@ func (s *store) getDNShardInfo() []logservicepb.TNShardInfo {
 	return shards
 }
 
-func (s *store) createReplica(shard metadata.DNShard) error {
+func (s *store) createReplica(shard metadata.TNShard) error {
 	r := newReplica(shard, s.rt)
 	v, ok := s.replicas.LoadOrStore(shard.ShardID, r)
 	if ok {

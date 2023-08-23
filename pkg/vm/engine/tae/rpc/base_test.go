@@ -170,8 +170,8 @@ func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	return txnMeta
 }
 
-func mockDNShard(id uint64) metadata.DNShard {
-	return metadata.DNShard{
+func mockDNShard(id uint64) metadata.TNShard {
+	return metadata.TNShard{
 		TNShardRecord: metadata.TNShardRecord{
 			ShardID:    id,
 			LogShardID: id,

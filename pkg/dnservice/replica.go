@@ -30,7 +30,7 @@ import (
 type replica struct {
 	rt       runtime.Runtime
 	logger   *log.MOLogger
-	shard    metadata.DNShard
+	shard    metadata.TNShard
 	service  service.TxnService
 	startedC chan struct{}
 
@@ -40,7 +40,7 @@ type replica struct {
 	}
 }
 
-func newReplica(shard metadata.DNShard, rt runtime.Runtime) *replica {
+func newReplica(shard metadata.TNShard, rt runtime.Runtime) *replica {
 	return &replica{
 		rt:       rt,
 		shard:    shard,

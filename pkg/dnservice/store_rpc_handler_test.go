@@ -106,7 +106,7 @@ func TestHandlePrepare(t *testing.T) {
 		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestPrepareRequest(service.NewTestTxn(1, 1, 1), 1)
-		req.PrepareRequest.DNShard.ReplicaID = 2
+		req.PrepareRequest.TNShard.ReplicaID = 2
 		assert.NoError(t, s.handlePrepare(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -122,7 +122,7 @@ func TestHandleGetStatus(t *testing.T) {
 		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestGetStatusRequest(service.NewTestTxn(1, 1, 1), 1)
-		req.GetStatusRequest.DNShard.ReplicaID = 2
+		req.GetStatusRequest.TNShard.ReplicaID = 2
 		assert.NoError(t, s.handleGetStatus(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -138,7 +138,7 @@ func TestHandleCommitDNShard(t *testing.T) {
 		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestCommitShardRequest(service.NewTestTxn(1, 1, 1))
-		req.CommitDNShardRequest.DNShard.ReplicaID = 2
+		req.CommitDNShardRequest.TNShard.ReplicaID = 2
 		assert.NoError(t, s.handleCommitDNShard(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -154,7 +154,7 @@ func TestHandleRollbackDNShard(t *testing.T) {
 		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
-		req.RollbackDNShardRequest.DNShard.ReplicaID = 2
+		req.RollbackDNShardRequest.TNShard.ReplicaID = 2
 		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

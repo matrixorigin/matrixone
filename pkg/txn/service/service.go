@@ -38,7 +38,7 @@ var _ TxnService = (*service)(nil)
 
 type service struct {
 	logger    *log.MOLogger
-	shard     metadata.DNShard
+	shard     metadata.TNShard
 	storage   storage.TxnStorage
 	sender    rpc.TxnSender
 	stopper   *stopper.Stopper
@@ -66,7 +66,7 @@ type service struct {
 
 // NewTxnService create TxnService
 func NewTxnService(
-	shard metadata.DNShard,
+	shard metadata.TNShard,
 	storage storage.TxnStorage,
 	sender rpc.TxnSender,
 	zombieTimeout time.Duration,
@@ -96,7 +96,7 @@ func NewTxnService(
 	return s
 }
 
-func (s *service) Shard() metadata.DNShard {
+func (s *service) Shard() metadata.TNShard {
 	return s.shard
 }
 
@@ -203,7 +203,7 @@ func (s *service) getTxnContext(txnID []byte) *txnContext {
 	return v.(*txnContext)
 }
 
-func (s *service) validDNShard(tn metadata.DNShard) bool {
+func (s *service) validDNShard(tn metadata.TNShard) bool {
 	if !s.shard.Equal(tn) {
 		// DNShard not match, so cn need to fetch latest DNShards from hakeeper.
 		s.logger.Error("DN metadata not match",

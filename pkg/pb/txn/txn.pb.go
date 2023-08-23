@@ -247,7 +247,7 @@ type TxnMeta struct {
 	CommitTS timestamp.Timestamp `protobuf:"bytes,5,opt,name=CommitTS,proto3" json:"CommitTS"`
 	// DNShards all DNShards that have written data. The first DN is the coordinator of the
 	// transaction
-	DNShards []metadata.DNShard `protobuf:"bytes,6,rep,name=DNShards,proto3" json:"DNShards"`
+	DNShards []metadata.TNShard `protobuf:"bytes,6,rep,name=DNShards,proto3" json:"DNShards"`
 	// LockTables For pessimistic transactions, LockTables record the bind metadata of the
 	// LockTable corresponding to the successful locking of the current transaction. This data
 	// is committed to the DN at Commit time, and the DN will check once if these bindings have
@@ -334,7 +334,7 @@ func (m *TxnMeta) GetCommitTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
-func (m *TxnMeta) GetDNShards() []metadata.DNShard {
+func (m *TxnMeta) GetDNShards() []metadata.TNShard {
 	if m != nil {
 		return m.DNShards
 	}
@@ -469,7 +469,7 @@ type CNOpRequest struct {
 	// format and content
 	Payload []byte `protobuf:"bytes,2,opt,name=Payload,proto3" json:"Payload,omitempty"`
 	// Target target to which the request was sent
-	Target               metadata.DNShard `protobuf:"bytes,3,opt,name=Target,proto3" json:"Target"`
+	Target               metadata.TNShard `protobuf:"bytes,3,opt,name=Target,proto3" json:"Target"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
 	XXX_unrecognized     []byte           `json:"-"`
 	XXX_sizecache        int32            `json:"-"`
@@ -522,11 +522,11 @@ func (m *CNOpRequest) GetPayload() []byte {
 	return nil
 }
 
-func (m *CNOpRequest) GetTarget() metadata.DNShard {
+func (m *CNOpRequest) GetTarget() metadata.TNShard {
 	if m != nil {
 		return m.Target
 	}
-	return metadata.DNShard{}
+	return metadata.TNShard{}
 }
 
 // CNOpResponse cn read/write response, DN -> CN. A request corresponds to a response.
@@ -1142,7 +1142,7 @@ var xxx_messageInfo_TxnRollbackResponse proto.InternalMessageInfo
 // is to send prepare requests to all DNs.
 type TxnPrepareRequest struct {
 	// DNShard prepare DN
-	DNShard              metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
+	TNShard              metadata.TNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
 	XXX_unrecognized     []byte           `json:"-"`
 	XXX_sizecache        int32            `json:"-"`
@@ -1181,11 +1181,11 @@ func (m *TxnPrepareRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnPrepareRequest proto.InternalMessageInfo
 
-func (m *TxnPrepareRequest) GetDNShard() metadata.DNShard {
+func (m *TxnPrepareRequest) GetDNShard() metadata.TNShard {
 	if m != nil {
-		return m.DNShard
+		return m.TNShard
 	}
-	return metadata.DNShard{}
+	return metadata.TNShard{}
 }
 
 // TxnPrepareResponse response of TxnPrepareRequest
@@ -1231,7 +1231,7 @@ var xxx_messageInfo_TxnPrepareResponse proto.InternalMessageInfo
 // TxnGetStatusRequest query the status of a transaction on DN
 type TxnGetStatusRequest struct {
 	// DNShard target DN
-	DNShard              metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
+	TNShard              metadata.TNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
 	XXX_unrecognized     []byte           `json:"-"`
 	XXX_sizecache        int32            `json:"-"`
@@ -1270,11 +1270,11 @@ func (m *TxnGetStatusRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnGetStatusRequest proto.InternalMessageInfo
 
-func (m *TxnGetStatusRequest) GetDNShard() metadata.DNShard {
+func (m *TxnGetStatusRequest) GetDNShard() metadata.TNShard {
 	if m != nil {
-		return m.DNShard
+		return m.TNShard
 	}
-	return metadata.DNShard{}
+	return metadata.TNShard{}
 }
 
 // TxnGetStatusResponse response of TxnGetStatusRequest
@@ -1321,7 +1321,7 @@ var xxx_messageInfo_TxnGetStatusResponse proto.InternalMessageInfo
 // LogService.
 type TxnCommitDNShardRequest struct {
 	// DNShard target DN
-	DNShard              metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
+	TNShard              metadata.TNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
 	XXX_unrecognized     []byte           `json:"-"`
 	XXX_sizecache        int32            `json:"-"`
@@ -1360,11 +1360,11 @@ func (m *TxnCommitDNShardRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnCommitDNShardRequest proto.InternalMessageInfo
 
-func (m *TxnCommitDNShardRequest) GetDNShard() metadata.DNShard {
+func (m *TxnCommitDNShardRequest) GetDNShard() metadata.TNShard {
 	if m != nil {
-		return m.DNShard
+		return m.TNShard
 	}
-	return metadata.DNShard{}
+	return metadata.TNShard{}
 }
 
 // TxnCommitDNShardResponse response of TxnCommitDNShardRequest
@@ -1410,7 +1410,7 @@ var xxx_messageInfo_TxnCommitDNShardResponse proto.InternalMessageInfo
 // TxnRollbackDNShardRequest rollback txn on DNShard
 type TxnRollbackDNShardRequest struct {
 	// DNShard target DN
-	DNShard              metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
+	TNShard              metadata.TNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
 	XXX_unrecognized     []byte           `json:"-"`
 	XXX_sizecache        int32            `json:"-"`
@@ -1449,11 +1449,11 @@ func (m *TxnRollbackDNShardRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnRollbackDNShardRequest proto.InternalMessageInfo
 
-func (m *TxnRollbackDNShardRequest) GetDNShard() metadata.DNShard {
+func (m *TxnRollbackDNShardRequest) GetDNShard() metadata.TNShard {
 	if m != nil {
-		return m.DNShard
+		return m.TNShard
 	}
-	return metadata.DNShard{}
+	return metadata.TNShard{}
 }
 
 // TxnRollbackDNShardResponse response of TxnRollbackDNShardRequest
@@ -1499,7 +1499,7 @@ var xxx_messageInfo_TxnRollbackDNShardResponse proto.InternalMessageInfo
 // TxnRemoveMetadataRequest remove txn metadata on DNShard
 type TxnRemoveMetadataRequest struct {
 	// DNShard target DN
-	DNShard              metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
+	TNShard              metadata.TNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
 	XXX_unrecognized     []byte           `json:"-"`
 	XXX_sizecache        int32            `json:"-"`
@@ -1538,11 +1538,11 @@ func (m *TxnRemoveMetadataRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnRemoveMetadataRequest proto.InternalMessageInfo
 
-func (m *TxnRemoveMetadataRequest) GetDNShard() metadata.DNShard {
+func (m *TxnRemoveMetadataRequest) GetDNShard() metadata.TNShard {
 	if m != nil {
-		return m.DNShard
+		return m.TNShard
 	}
-	return metadata.DNShard{}
+	return metadata.TNShard{}
 }
 
 // TxnRemoveMetadataResponse response of TxnRemoveMetadataRequest
@@ -2594,7 +2594,7 @@ func (m *TxnPrepareRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	{
-		size, err := m.DNShard.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TNShard.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -2658,7 +2658,7 @@ func (m *TxnGetStatusRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	{
-		size, err := m.DNShard.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TNShard.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -2722,7 +2722,7 @@ func (m *TxnCommitDNShardRequest) MarshalToSizedBuffer(dAtA []byte) (int, error)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	{
-		size, err := m.DNShard.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TNShard.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -2786,7 +2786,7 @@ func (m *TxnRollbackDNShardRequest) MarshalToSizedBuffer(dAtA []byte) (int, erro
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	{
-		size, err := m.DNShard.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TNShard.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -2850,7 +2850,7 @@ func (m *TxnRemoveMetadataRequest) MarshalToSizedBuffer(dAtA []byte) (int, error
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	{
-		size, err := m.DNShard.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TNShard.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -3265,7 +3265,7 @@ func (m *TxnPrepareRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = m.DNShard.Size()
+	l = m.TNShard.Size()
 	n += 1 + l + sovTxn(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3291,7 +3291,7 @@ func (m *TxnGetStatusRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = m.DNShard.Size()
+	l = m.TNShard.Size()
 	n += 1 + l + sovTxn(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3317,7 +3317,7 @@ func (m *TxnCommitDNShardRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = m.DNShard.Size()
+	l = m.TNShard.Size()
 	n += 1 + l + sovTxn(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3343,7 +3343,7 @@ func (m *TxnRollbackDNShardRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = m.DNShard.Size()
+	l = m.TNShard.Size()
 	n += 1 + l + sovTxn(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3369,7 +3369,7 @@ func (m *TxnRemoveMetadataRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	l = m.DNShard.Size()
+	l = m.TNShard.Size()
 	n += 1 + l + sovTxn(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3627,7 +3627,7 @@ func (m *TxnMeta) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.DNShards = append(m.DNShards, metadata.DNShard{})
+			m.DNShards = append(m.DNShards, metadata.TNShard{})
 			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
@@ -5573,7 +5573,7 @@ func (m *TxnPrepareRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -5708,7 +5708,7 @@ func (m *TxnGetStatusRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -5843,7 +5843,7 @@ func (m *TxnCommitDNShardRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -5978,7 +5978,7 @@ func (m *TxnRollbackDNShardRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -6113,7 +6113,7 @@ func (m *TxnRemoveMetadataRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

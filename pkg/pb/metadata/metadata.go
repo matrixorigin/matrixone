@@ -21,17 +21,17 @@ import (
 )
 
 // IsEmpty return true if is a empty DNShard
-func (m DNShard) IsEmpty() bool {
+func (m TNShard) IsEmpty() bool {
 	return m.ShardID == 0
 }
 
 // Equal returns true if DNShard is same
-func (m DNShard) Equal(tn DNShard) bool {
+func (m TNShard) Equal(tn TNShard) bool {
 	return m.ShardID == tn.ShardID && m.ReplicaID == tn.ReplicaID
 }
 
 // DebugString returns debug string
-func (m DNShard) DebugString() string {
+func (m TNShard) DebugString() string {
 	return fmt.Sprintf("%d-%d-%d-%s", m.ShardID, m.ReplicaID, m.LogShardID, m.Address)
 }
 

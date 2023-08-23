@@ -43,7 +43,7 @@ func New(
 	services := []metadata.TNService{{
 		ServiceID:         uuid.NewString(),
 		TxnServiceAddress: "1",
-		Shards: []metadata.DNShard{
+		Shards: []metadata.TNShard{
 			{
 				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
 				ReplicaID:     2,

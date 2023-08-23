@@ -272,9 +272,9 @@ func newDNService(tn logpb.DNStore) metadata.TNService {
 		LockServiceAddress:    tn.LockServiceAddress,
 		CtlAddress:            tn.CtlAddress,
 	}
-	v.Shards = make([]metadata.DNShard, 0, len(tn.Shards))
+	v.Shards = make([]metadata.TNShard, 0, len(tn.Shards))
 	for _, s := range tn.Shards {
-		v.Shards = append(v.Shards, metadata.DNShard{
+		v.Shards = append(v.Shards, metadata.TNShard{
 			TNShardRecord: metadata.TNShardRecord{ShardID: s.ShardID},
 			ReplicaID:     s.ReplicaID,
 		})

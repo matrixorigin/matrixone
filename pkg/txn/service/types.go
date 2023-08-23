@@ -30,7 +30,7 @@ import (
 // The txn service use Clock-SI to implement distributed transaction.
 type TxnService interface {
 	// Shard returns the metadata of DNShard
-	Shard() metadata.DNShard
+	Shard() metadata.TNShard
 	// Start start the txn service
 	Start() error
 	// Close close the txn service. Destroy TxnStorage if destroy is true.

@@ -219,7 +219,7 @@ func runDNStoreTestWithFileServiceFactory(
 		WithHAKeeperClientFactory(func() (logservice.DNHAKeeperClient, error) {
 			return thc, nil
 		}),
-		WithLogServiceClientFactory(func(d metadata.DNShard) (logservice.Client, error) {
+		WithLogServiceClientFactory(func(d metadata.TNShard) (logservice.Client, error) {
 			return mem.NewMemLog(), nil
 		}),
 		WithConfigAdjust(func(c *Config) {
@@ -308,7 +308,7 @@ func newTestStore(
 	return s.(*store)
 }
 
-func newTestDNShard(shardID, replicaID, logShardID uint64) metadata.DNShard {
+func newTestDNShard(shardID, replicaID, logShardID uint64) metadata.TNShard {
 	dnShard := service.NewTestDNShard(shardID)
 	dnShard.ReplicaID = replicaID
 	dnShard.LogShardID = logShardID

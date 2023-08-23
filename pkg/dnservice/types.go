@@ -43,9 +43,9 @@ type Service interface {
 	Close() error
 
 	// StartDNReplica start the DNShard replica
-	StartDNReplica(metadata.DNShard) error
+	StartDNReplica(metadata.TNShard) error
 	// CloseDNReplica close the DNShard replica.
-	CloseDNReplica(shard metadata.DNShard) error
+	CloseDNReplica(shard metadata.TNShard) error
 
 	// GetTaskService returns taskservice
 	GetTaskService() (taskservice.TaskService, bool)

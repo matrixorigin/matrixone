@@ -179,7 +179,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	return *(v.(*txn.TxnResponse)), nil
 }
 
-func (s *sender) createStream(ctx context.Context, tn metadata.DNShard, size int) (morpc.Stream, error) {
+func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int) (morpc.Stream, error) {
 	if s.options.localDispatch != nil {
 		if h := s.options.localDispatch(tn); h != nil {
 			ls := s.acquireLocalStream()
