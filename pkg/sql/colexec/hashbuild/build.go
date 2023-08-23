@@ -112,9 +112,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 			if ctr.bat != nil && ctr.bat.RowCount() != 0 {
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
-						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.intHashMap, ctr.hasNull, ap.IsDup)
+						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
 					} else {
-						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
 					}
 				}
 
