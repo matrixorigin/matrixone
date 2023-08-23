@@ -130,15 +130,12 @@ func (m *MemCache) Read(
 		if entry.done {
 			continue
 		}
-		if entry.ToCacheData == nil {
-			continue
-		}
 		key := CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		bs, ok := m.cache.Get(ctx, key, vector.Preloading)
+		bs, ok := m.cache.Get(ctx, key)
 		numRead++
 		if ok {
 			vector.Entries[i].CachedData = bs
@@ -185,8 +182,7 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		m.cache.Set(ctx, key, entry.CachedData, vector.Preloading)
-
+		m.cache.Set(ctx, key, entry.CachedData)
 	}
 	return nil
 }

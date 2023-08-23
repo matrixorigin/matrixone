@@ -59,24 +59,33 @@ func InitPrepareEnv() error {
 	return err
 }
 
-func EnsurePrepareEnvOK() error {
+func ReadPrepareVersion() (int, error) {
 	versionFileName := GetPrepareVersionName()
 	if _, err := os.Stat(versionFileName); err != nil {
-		return err
+		return 0, err
 	}
 	file, err := os.OpenFile(
 		versionFileName,
 		os.O_RDONLY,
 		os.ModePerm)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer file.Close()
 	buf := make([]byte, 8)
 	if _, err = file.Read(buf); err != nil {
-		return err
+		return 0, err
 	}
 	ver := int(types.DecodeInt64(buf))
+	return ver, nil
+}
+
+func EnsurePrepareEnvOK() error {
+	ver, err := ReadPrepareVersion()
+	if err != nil {
+		return err
+	}
+
 	if ver > version {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("prepare env version is %d, but current version is %d", ver, version))
 	}

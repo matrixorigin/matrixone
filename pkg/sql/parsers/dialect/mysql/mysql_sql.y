@@ -468,6 +468,7 @@ import (
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
+%type <statement> backup_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -725,6 +726,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
+%token <str> BACKUP FILESYSTEM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %start start_command
@@ -846,6 +848,25 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
+|   backup_stmt
+
+backup_stmt:
+    BACKUP STRING FILESYSTEM STRING
+	{
+		$$ = &tree.BackupStart{
+		    Timestamp: $2,
+		    IsS3 : false,
+		    Dir: $4,
+		}
+	}
+    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
+    {
+    	$$ = &tree.BackupStart{
+        	    Timestamp: $2,
+        	    IsS3 : true,
+        	    Option : $5,
+        	}
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -3665,6 +3686,11 @@ drop_table_stmt:
     {
         $$ = &tree.DropTable{IfExists: $4, Names: $5}
     }
+|   DROP STREAM exists_opt table_name_list
+    {
+        $$ = &tree.DropTable{IfExists: $3, Names: $4}
+    }
+
 
 drop_view_stmt:
     DROP VIEW exists_opt table_name_list
@@ -6086,7 +6112,7 @@ create_stream_stmt:
             Replace: $2,
             Source: false,
             IfNotExists: $4,
-            StreamName: *$5,
+            StreamName: $5,
             Defs: $7,
             Options: $9,
         }
@@ -6097,7 +6123,7 @@ create_stream_stmt:
             Replace: $2,
             Source: true,
             IfNotExists: $5,
-            StreamName: *$6,
+            StreamName: $6,
             Defs: $8,
             Options: $10,
         }
@@ -6107,7 +6133,7 @@ create_stream_stmt:
         $$ = &tree.CreateStream {
             Replace: $2,
             IfNotExists: $4,
-            StreamName: *$5,
+            StreamName: $5,
             AsSource: $8,
             Options: $6,
         }
@@ -6669,7 +6695,11 @@ stream_option_list:
 stream_option:
 	ident equal_opt literal
     {
-        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()) , Val: $3}
+        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
+    }
+|   STRING equal_opt literal
+    {
+         $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1), Val: $3}
     }
 
 table_option_list_opt:
@@ -10222,6 +10252,8 @@ non_reserved_keyword:
 |   SQL
 |   STAGE
 |   STAGES
+|   BACKUP
+| FILESYSTEM
 
 func_not_keyword:
     DATE_ADD

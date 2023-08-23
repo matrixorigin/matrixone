@@ -16,6 +16,7 @@ package dispatch
 
 import (
 	"context"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"sync/atomic"
 
@@ -109,8 +110,12 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 		if regIndex == batIndex {
 			if bat != nil && bat.RowCount() != 0 {
 				select {
+				case <-proc.Ctx.Done():
+					logutil.Warnf("proc's ctx done during shuffle dispatch a bat to local reg")
+					return nil
 				case <-reg.Ctx.Done():
-					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
+					logutil.Warnf("reg's ctx done during shuffle dispatch a bat to local reg")
+					return nil
 				case reg.Ch <- bat:
 				}
 			}
@@ -135,6 +140,64 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 	return nil
 }
 
+func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+	localRegsCnt := uint32(ap.ctr.localRegsCnt)
+	for i, reg := range ap.LocalRegs {
+		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
+		if regIndex%localRegsCnt == batIndex%localRegsCnt {
+			if bat != nil && bat.RowCount() != 0 {
+				select {
+				case <-proc.Ctx.Done():
+					logutil.Warnf("proc's ctx done during shuffle dispatch a bat to local reg")
+					return nil
+				case <-reg.Ctx.Done():
+					logutil.Warnf("reg's ctx done during shuffle dispatch a bat to local reg")
+					return nil
+				case reg.Ch <- bat:
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
+	localRegsCnt := uint32(ap.ctr.localRegsCnt)
+	atomic.AddInt64(&bat.Cnt, 1)
+	defer atomic.AddInt64(&bat.Cnt, -1)
+	for i, reg := range ap.LocalRegs {
+		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
+		if regIndex%localRegsCnt == batIndex%localRegsCnt {
+			if bat != nil && bat.RowCount() != 0 {
+				select {
+				case <-proc.Ctx.Done():
+					logutil.Warnf("proc's ctx done during shuffle dispatch a bat to local reg")
+					return nil
+				case <-reg.Ctx.Done():
+					logutil.Warnf("reg's ctx done during shuffle dispatch a bat to local reg")
+					return nil
+				case reg.Ch <- bat:
+				}
+			}
+		}
+	}
+	for _, r := range ap.ctr.remoteReceivers {
+		batIndex := uint32(ap.ctr.remoteToIdx[r.uuid])
+		if regIndex%localRegsCnt == batIndex%localRegsCnt {
+			if bat != nil && bat.RowCount() != 0 {
+				encodeData, errEncode := types.Encode(bat)
+				if errEncode != nil {
+					return errEncode
+				}
+				if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
 func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
@@ -146,7 +209,13 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 			return true, nil
 		}
 	}
-	return false, sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
+	if ap.ShuffleType == plan2.ShuffleToRegIndex {
+		return false, sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
+	} else if ap.ShuffleType == plan2.ShuffleToLocalMatchedReg {
+		return false, sendBatToLocalMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
+	} else {
+		return false, sendBatToMultiMatchedReg(ap, proc, bat, uint32(bat.ShuffleIDX))
+	}
 }
 
 // send to all receiver (include LocalReceiver and RemoteReceiver)

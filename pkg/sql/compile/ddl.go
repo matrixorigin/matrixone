@@ -201,12 +201,28 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		return err
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
+	if c.proc.TxnOperator.Txn().IsPessimistic() {
+		var retryErr error
+		// 1. lock origin table metadata in catalog
+		if err = lockMoTable(c, dbName, tblName); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = err
+		}
 
-	if err := lockTable(c.e, c.proc, rel); err != nil {
-		return err
+		// 2. lock origin table
+		if err = lockTable(c.e, c.proc, rel, true); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = err
+		}
+		if retryErr != nil {
+			return retryErr
+		}
 	}
 
 	tblId := rel.GetTableID(c.ctx)
@@ -1072,14 +1088,16 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
 			}
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.e, c.proc, rel); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+		if e := lockTable(c.e, c.proc, rel, false); e != nil {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
 			}
 			err = e
@@ -1263,14 +1281,16 @@ func (s *Scope) DropTable(c *Compile) error {
 	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
 			}
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.e, c.proc, rel); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+		if e := lockTable(c.e, c.proc, rel, false); e != nil {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
 			}
 			err = e
@@ -1373,6 +1393,9 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			}
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
+			})
+			c.Cts = append(c.Cts, &engine.StreamConfigsDef{
+				Configs: defVal.Properties.GetProperties(),
 			})
 		}
 	}
@@ -1818,7 +1841,8 @@ func getValue[T constraints.Integer](minus bool, num any) T {
 func lockTable(
 	eng engine.Engine,
 	proc *process.Process,
-	rel engine.Relation) error {
+	rel engine.Relation,
+	defChanged bool) error {
 	id := rel.GetTableID(proc.Ctx)
 	defs, err := rel.GetPrimaryKeys(proc.Ctx)
 	if err != nil {
@@ -1832,7 +1856,8 @@ func lockTable(
 		eng,
 		proc,
 		id,
-		defs[0].Type)
+		defs[0].Type,
+		defChanged)
 	return err
 }
 

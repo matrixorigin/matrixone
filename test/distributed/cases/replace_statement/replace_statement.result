@@ -1,0 +1,123 @@
+create table t1(
+id int,
+data varchar(64)
+);
+replace into t1 values (1, 'new_1');
+select * from t1;
+id    data
+1    new_1
+replace into t1 values (1, 'new_2');
+select * from t1;
+id    data
+1    new_1
+1    new_2
+replace into t1 values (1, 'new_1');
+select * from t1;
+id    data
+1    new_1
+1    new_2
+1    new_1
+create table t2(
+id int,
+data varchar(64),
+primary key (id)
+);
+replace into t2 values (1, 'test_1');
+select * from t2;
+id    data
+1    test_1
+replace into t2 values (2, 'test_1');
+select * from t2;
+id    data
+1    test_1
+2    test_1
+replace into t2 values (1, 'old_1');
+select * from t2;
+id    data
+2    test_1
+1    old_1
+replace into t2 values (2, 'old_2');
+select * from t2;
+id    data
+1    old_1
+2    old_2
+create table t3(
+id int,
+data varchar(64),
+name varchar(64) default null,
+primary key (id, data)
+);
+replace into t3 values (1, 'test_3', '');
+select * from t3;
+id    data    name
+1    test_3    
+replace into t3 values (1, 'old_3', 'name1');
+select * from t3;
+id    data    name
+1    test_3    
+1    old_3    name1
+replace into t3 values (2, 'test_3', 'name2');
+select * from t3;
+id    data    name
+1    test_3    
+1    old_3    name1
+2    test_3    name2
+replace into t3 values (1, 'test_3', 'replace_name_1');
+select * from t3;
+id    data    name
+1    old_3    name1
+2    test_3    name2
+1    test_3    replace_name_1
+replace into t3 values (2, 'test_3', 'replace_name_2');
+select * from t3;
+id    data    name
+1    old_3    name1
+1    test_3    replace_name_1
+2    test_3    replace_name_2
+create table t4 (
+a int unique key,
+b varchar(64)
+);
+replace into t4 values (1, 'a');
+select * from t4;
+a    b
+1    a
+replace into t4 values (2, 'a');
+select * from t4;
+a    b
+1    a
+2    a
+replace into t4 values (1, 'replace_name_1');
+select * from t4;
+a    b
+2    a
+1    replace_name_1
+replace into t4 values (2, 'replace_name_2');
+select * from t4;
+a    b
+1    replace_name_1
+2    replace_name_2
+create table t5(
+a int,
+b int,
+c varchar(64),
+unique key(a, b)
+);
+replace into t5 values (1, 1, '');
+select * from t5;
+a    b    c
+1    1
+replace into t5 values (1, 1, 'replace');
+select * from t5;
+a    b    c
+1    1    replace
+replace into t5 values (1, 2, '');
+select * from t5;
+a    b    c
+1    1    replace
+1    2
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+drop table if exists t5;
