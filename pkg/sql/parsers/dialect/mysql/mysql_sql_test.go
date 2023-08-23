@@ -2452,7 +2452,7 @@ var (
 			output: "set global GTID_PURGED = 65c4c218-d343-11eb-8106-525400f4f901:1-769275",
 		}, {
 			input:  " /*!40103 SET TIME_ZONE='+00:00' */",
-			output: "set time_zone = 0:00",
+			output: "set time_zone = +00:00",
 		}, {
 			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
 			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
