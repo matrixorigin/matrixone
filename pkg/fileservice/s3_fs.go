@@ -469,6 +469,35 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
+func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	if len(vector.Entries) == 0 {
+		return moerr.NewEmptyVectorNoCtx()
+	}
+
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: vector.FilePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
+	}
+
+	if s.memCache != nil {
+		if err := s.memCache.Read(ctx, vector); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	if vector.allDone() {
 		return nil
