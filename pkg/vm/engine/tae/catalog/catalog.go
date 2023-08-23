@@ -404,6 +404,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema.SegmentMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Get(i).(uint16)
 		extra := insTxn.GetVectorByName(SnapshotAttr_SchemaExtra).Get(i).([]byte)
 		schema.MustRestoreExtra(extra)
+		schema.Finalize(true)
 		txnNode := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataFactory)
 	}

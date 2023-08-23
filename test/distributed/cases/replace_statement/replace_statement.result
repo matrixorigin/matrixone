@@ -79,21 +79,24 @@ a int unique key,
 b varchar(64)
 );
 replace into t4 values (1, 'a');
-[unknown result because it is related to issue#11324]
 select * from t4;
-[unknown result because it is related to issue#11324]
+a    b
+1    a
 replace into t4 values (2, 'a');
-[unknown result because it is related to issue#11324]
 select * from t4;
-[unknown result because it is related to issue#11324]
+a    b
+1    a
+2    a
 replace into t4 values (1, 'replace_name_1');
-[unknown result because it is related to issue#11324]
 select * from t4;
-[unknown result because it is related to issue#11324]
+a    b
+2    a
+1    replace_name_1
 replace into t4 values (2, 'replace_name_2');
-[unknown result because it is related to issue#11324]
 select * from t4;
-[unknown result because it is related to issue#11324]
+a    b
+1    replace_name_1
+2    replace_name_2
 create table t5(
 a int,
 b int,
@@ -101,17 +104,18 @@ c varchar(64),
 unique key(a, b)
 );
 replace into t5 values (1, 1, '');
-[unknown result because it is related to issue#11324]
 select * from t5;
-[unknown result because it is related to issue#11324]
+a    b    c
+1    1
 replace into t5 values (1, 1, 'replace');
-[unknown result because it is related to issue#11324]
 select * from t5;
-[unknown result because it is related to issue#11324]
+a    b    c
+1    1    replace
 replace into t5 values (1, 2, '');
-[unknown result because it is related to issue#11324]
 select * from t5;
-[unknown result because it is related to issue#11324]
+a    b    c
+1    1    replace
+1    2
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

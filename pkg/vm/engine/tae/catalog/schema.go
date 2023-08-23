@@ -586,7 +586,6 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		}
 		offset++
 	}
-	s.Finalize(true)
 	return offset
 }
 
