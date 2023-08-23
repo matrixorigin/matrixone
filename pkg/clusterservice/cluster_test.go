@@ -78,7 +78,7 @@ func TestClusterRefresh(t *testing.T) {
 			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			assert.Equal(t, 0, cnt)
 
-			hc.addDN("dn0")
+			hc.addTN("dn0")
 			time.Sleep(time.Millisecond * 100)
 			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			assert.Equal(t, 1, cnt)
@@ -96,7 +96,7 @@ func BenchmarkGetService(b *testing.B) {
 			}
 			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 
-			hc.addDN("dn0")
+			hc.addTN("dn0")
 			c.ForceRefresh()
 			time.Sleep(time.Millisecond * 100)
 
@@ -157,7 +157,7 @@ func (c *testHAKeeperClient) addCN(serviceIDs ...string) {
 	}
 }
 
-func (c *testHAKeeperClient) addDN(serviceIDs ...string) {
+func (c *testHAKeeperClient) addTN(serviceIDs ...string) {
 	c.Lock()
 	defer c.Unlock()
 	for _, id := range serviceIDs {
