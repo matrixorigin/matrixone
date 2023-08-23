@@ -158,7 +158,7 @@ func (s *service) CommitTNShard(ctx context.Context, request *txn.TxnRequest, re
 	return nil
 }
 
-func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+func (s *service) RollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
 	util.LogTxnHandleRequest(request)

@@ -167,9 +167,9 @@ func (m TxnRequest) GetTargetDN() metadata.TNShard {
 	case TxnMethod_GetStatus:
 		return m.GetStatusRequest.TNShard
 	case TxnMethod_CommitDNShard:
-		return m.CommitDNShardRequest.TNShard
+		return m.CommitTNShardRequest.TNShard
 	case TxnMethod_RollbackTNShard:
-		return m.RollbackDNShardRequest.TNShard
+		return m.RollbackTNShardRequest.TNShard
 	default:
 		panic(fmt.Sprintf("unknown txn request method: %v", m.Method))
 	}

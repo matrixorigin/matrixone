@@ -185,7 +185,7 @@ func (s *TestSender) AddTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_Prepare, ts.Shard())] = ts.Prepare
 	s.router[s.getRouteKey(txn.TxnMethod_GetStatus, ts.Shard())] = ts.GetStatus
 	s.router[s.getRouteKey(txn.TxnMethod_CommitDNShard, ts.Shard())] = ts.CommitTNShard
-	s.router[s.getRouteKey(txn.TxnMethod_RollbackTNShard, ts.Shard())] = ts.RollbackDNShard
+	s.router[s.getRouteKey(txn.TxnMethod_RollbackTNShard, ts.Shard())] = ts.RollbackTNShard
 	s.router[s.getRouteKey(txn.TxnMethod_DEBUG, ts.Shard())] = ts.Debug
 }
 
@@ -283,7 +283,7 @@ func NewTestCommitShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method: txn.TxnMethod_CommitDNShard,
 		Txn:    wTxn,
-		CommitDNShardRequest: &txn.TxnCommitTNShardRequest{
+		CommitTNShardRequest: &txn.TxnCommitTNShardRequest{
 			TNShard: wTxn.TNShards[0],
 		},
 	}
@@ -294,7 +294,7 @@ func NewTestRollbackShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method: txn.TxnMethod_RollbackTNShard,
 		Txn:    wTxn,
-		RollbackDNShardRequest: &txn.TxnRollbackTNShardRequest{
+		RollbackTNShardRequest: &txn.TxnRollbackTNShardRequest{
 			TNShard: wTxn.TNShards[0],
 		},
 	}

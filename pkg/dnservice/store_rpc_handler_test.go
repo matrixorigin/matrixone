@@ -138,7 +138,7 @@ func TestHandleCommitTNShard(t *testing.T) {
 		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestCommitShardRequest(service.NewTestTxn(1, 1, 1))
-		req.CommitDNShardRequest.TNShard.ReplicaID = 2
+		req.CommitTNShardRequest.TNShard.ReplicaID = 2
 		assert.NoError(t, s.handleCommitTNShard(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -154,7 +154,7 @@ func TestHandleRollbackTNShard(t *testing.T) {
 		assert.NoError(t, s.StartDNReplica(shard))
 
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
-		req.RollbackDNShardRequest.TNShard.ReplicaID = 2
+		req.RollbackTNShardRequest.TNShard.ReplicaID = 2
 		assert.NoError(t, s.handleRollbackTNShard(context.Background(), &req, &txn.TxnResponse{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

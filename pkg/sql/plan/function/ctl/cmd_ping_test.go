@@ -56,14 +56,14 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: shardID}),
+					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: shardID}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.DNPingResponse{ShardID: shardID}},
+		Data:   []interface{}{pb.TNPingResponse{ShardID: shardID}},
 	}, result)
 }
 
@@ -77,17 +77,17 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: 1}),
+					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 1}),
 				},
 				{
-					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: 2}),
+					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 2}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}, pb.DNPingResponse{ShardID: 2}},
+		Data:   []interface{}{pb.TNPingResponse{ShardID: 1}, pb.TNPingResponse{ShardID: 2}},
 	}, result)
 }
 
@@ -101,14 +101,14 @@ func TestCmdPingDNWithParameter(t *testing.T) {
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: 1}),
+					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 1}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}},
+		Data:   []interface{}{pb.TNPingResponse{ShardID: 1}},
 	}, result)
 }
 

@@ -93,10 +93,10 @@ func (s *taeStorage) Debug(ctx context.Context,
 }
 
 func (s *taeStorage) handlePing(data []byte) []byte {
-	req := ctl.DNPingRequest{}
+	req := ctl.TNPingRequest{}
 	protoc.MustUnmarshal(&req, data)
 
-	return protoc.MustMarshal(&ctl.DNPingResponse{
+	return protoc.MustMarshal(&ctl.TNPingResponse{
 		ShardID:        s.shard.ShardID,
 		ReplicaID:      s.shard.ReplicaID,
 		LogShardID:     s.shard.LogShardID,

@@ -41,7 +41,7 @@ enum CmdMethod {
     GetSnapshot     = 5;
     // ForceGC forcing a GC to free memory
     ForceGC         = 6;
-    // Inspect DN info
+    // Inspect TN info
     Inspect         = 7;
     // Label sets the CN label.
     Label           = 8;
@@ -55,13 +55,13 @@ enum CmdMethod {
     AddFaultPoint   = 11;
 }
 
-// DNPingRequest ping request
-message DNPingRequest {
+// TNPingRequest ping request
+message TNPingRequest {
     string parameter = 1;
 }
 
-// DNPingResponse ping response
-message DNPingResponse {
+// TNPingResponse ping response
+message TNPingResponse {
     string storeID        = 1;
     string serviceAddress = 2;
     uint64 shardID        = 3;

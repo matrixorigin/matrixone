@@ -155,7 +155,7 @@ func (s *store) handleRollbackTNShard(ctx context.Context, request *txn.TxnReque
 	}
 	r.waitStarted()
 	prepareResponse(request, response)
-	return r.service.RollbackDNShard(ctx, request, response)
+	return r.service.RollbackTNShard(ctx, request, response)
 }
 
 func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {

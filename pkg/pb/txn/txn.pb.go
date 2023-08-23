@@ -606,9 +606,9 @@ type TxnRequest struct {
 	// TxnGetStatusRequest corresponds to TxnMethod.GetStatus
 	GetStatusRequest *TxnGetStatusRequest `protobuf:"bytes,9,opt,name=GetStatusRequest,proto3" json:"GetStatusRequest,omitempty"`
 	// TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
-	CommitDNShardRequest *TxnCommitTNShardRequest `protobuf:"bytes,10,opt,name=CommitDNShardRequest,proto3" json:"CommitDNShardRequest,omitempty"`
+	CommitTNShardRequest *TxnCommitTNShardRequest `protobuf:"bytes,10,opt,name=CommitDNShardRequest,proto3" json:"CommitDNShardRequest,omitempty"`
 	// TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
-	RollbackDNShardRequest *TxnRollbackTNShardRequest `protobuf:"bytes,11,opt,name=RollbackDNShardRequest,proto3" json:"RollbackDNShardRequest,omitempty"`
+	RollbackTNShardRequest *TxnRollbackTNShardRequest `protobuf:"bytes,11,opt,name=RollbackDNShardRequest,proto3" json:"RollbackDNShardRequest,omitempty"`
 	// TxnRemoveMetadataRequest  corresponds to TxnMethod.RemoveMetadata
 	RemoveMetadata *TxnRemoveMetadataRequest `protobuf:"bytes,12,opt,name=RemoveMetadata,proto3" json:"RemoveMetadata,omitempty"`
 	// TxnRequestOptions request options
@@ -716,14 +716,14 @@ func (m *TxnRequest) GetGetStatusRequest() *TxnGetStatusRequest {
 
 func (m *TxnRequest) GetCommitDNShardRequest() *TxnCommitTNShardRequest {
 	if m != nil {
-		return m.CommitDNShardRequest
+		return m.CommitTNShardRequest
 	}
 	return nil
 }
 
 func (m *TxnRequest) GetRollbackDNShardRequest() *TxnRollbackTNShardRequest {
 	if m != nil {
-		return m.RollbackDNShardRequest
+		return m.RollbackTNShardRequest
 	}
 	return nil
 }
@@ -2112,9 +2112,9 @@ func (m *TxnRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x62
 	}
-	if m.RollbackDNShardRequest != nil {
+	if m.RollbackTNShardRequest != nil {
 		{
-			size, err := m.RollbackDNShardRequest.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.RollbackTNShardRequest.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -2124,9 +2124,9 @@ func (m *TxnRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x5a
 	}
-	if m.CommitDNShardRequest != nil {
+	if m.CommitTNShardRequest != nil {
 		{
-			size, err := m.CommitDNShardRequest.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.CommitTNShardRequest.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -3097,12 +3097,12 @@ func (m *TxnRequest) Size() (n int) {
 		l = m.GetStatusRequest.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
-	if m.CommitDNShardRequest != nil {
-		l = m.CommitDNShardRequest.Size()
+	if m.CommitTNShardRequest != nil {
+		l = m.CommitTNShardRequest.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
-	if m.RollbackDNShardRequest != nil {
-		l = m.RollbackDNShardRequest.Size()
+	if m.RollbackTNShardRequest != nil {
+		l = m.RollbackTNShardRequest.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
 	if m.RemoveMetadata != nil {
@@ -4506,10 +4506,10 @@ func (m *TxnRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.CommitDNShardRequest == nil {
-				m.CommitDNShardRequest = &TxnCommitTNShardRequest{}
+			if m.CommitTNShardRequest == nil {
+				m.CommitTNShardRequest = &TxnCommitTNShardRequest{}
 			}
-			if err := m.CommitDNShardRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.CommitTNShardRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -4542,10 +4542,10 @@ func (m *TxnRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.RollbackDNShardRequest == nil {
-				m.RollbackDNShardRequest = &TxnRollbackTNShardRequest{}
+			if m.RollbackTNShardRequest == nil {
+				m.RollbackTNShardRequest = &TxnRollbackTNShardRequest{}
 			}
-			if err := m.RollbackDNShardRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.RollbackTNShardRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

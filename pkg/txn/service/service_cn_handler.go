@@ -380,7 +380,7 @@ func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
 			requests = append(requests, txn.TxnRequest{
 				Txn:                    txnMeta,
 				Method:                 txn.TxnMethod_RollbackTNShard,
-				RollbackDNShardRequest: &txn.TxnRollbackTNShardRequest{TNShard: tn},
+				RollbackTNShardRequest: &txn.TxnRollbackTNShardRequest{TNShard: tn},
 			})
 		}
 
@@ -434,7 +434,7 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 			requests = append(requests, txn.TxnRequest{
 				Txn:                  txnMeta,
 				Method:               txn.TxnMethod_CommitDNShard,
-				CommitDNShardRequest: &txn.TxnCommitTNShardRequest{TNShard: tn},
+				CommitTNShardRequest: &txn.TxnCommitTNShardRequest{TNShard: tn},
 			})
 		}
 
