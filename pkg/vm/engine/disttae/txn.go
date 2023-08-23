@@ -626,40 +626,18 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 func (txn *Transaction) getCachedTable(
 	ctx context.Context, k tableKey, snapshotTS timestamp.Timestamp,
 ) *txnTable {
-	/*
-		if txn.meta.IsRCIsolation() {
-			oldIdx := txn.tableCache.cachedIndex
-			newIdx := txn.engine.catalog.GetDeletedTableIndex()
-			if oldIdx < newIdx {
-				deleteTables := txn.engine.catalog.GetDeletedTables(oldIdx, snapshotTS)
-				for _, item := range deleteTables {
-					txn.tableCache.tableMap.Delete(genTableKey(ctx, item.Name, item.DatabaseId))
-					txn.tableCache.cachedIndex++
-				}
-			}
-		}
-		if v, ok := txn.tableCache.tableMap.Load(k); ok {
-			txnTable := v.(*txnTable)
-			schemaChangeTs := txn.engine.catalog.GetSchemaChange(k.name)
-			if txnTable.lastTS.PhysicalTime < schemaChangeTs {
-				return nil
-			}
-			return txnTable
-		}
-	*/
 	var tbl *txnTable
 	if v, ok := txn.tableCache.tableMap.Load(k); ok {
-		txnTable := v.(*txnTable)
+		tbl = v.(*txnTable)
 
 		tblKey := cache.TableKey{
 			AccountId:  k.accountId,
 			DatabaseId: k.databaseId,
-			TableId:    k.tableId,
 			Name:       k.name,
 		}
 		val := txn.engine.catalog.GetSchemaVersion(tblKey)
 		if val != nil {
-			if val.Ts.Greater(txnTable.lastTS) && val.Version != txnTable.version {
+			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
 				txn.tableCache.tableMap.Delete(genTableKey(ctx, k.name, k.databaseId))
 				return nil
 			}

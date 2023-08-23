@@ -305,7 +305,6 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 			key := TableKey{
 				AccountId:  item.AccountId,
 				DatabaseId: item.DatabaseId,
-				TableId:    item.Id,
 				Name:       item.Name,
 			}
 			cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
@@ -378,7 +377,6 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 			key := TableKey{
 				AccountId:  account,
 				DatabaseId: item.DatabaseId,
-				TableId:    exist.Id,
 				Name:       exist.Name,
 			}
 			cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
@@ -390,7 +388,6 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		key := TableKey{
 			AccountId:  account,
 			DatabaseId: item.DatabaseId,
-			TableId:    item.Id,
 			Name:       item.Name,
 		}
 		cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
@@ -606,26 +603,12 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 	}
 }
 
-// // GetDeletedTableIndex returns the max index of deleted tables slice.
-// func (cc *CatalogCache) GetDeletedTableIndex() int {
-// 	return cc.tables.tableGuard.getDeletedTableIndex()
-// }
-
 // GetSchemaVersion returns the version of table
 func (cc *CatalogCache) GetSchemaVersion(name TableKey) *TableVersion {
 	return cc.tables.tableGuard.getSchemaVersion(name)
 }
 
-// // GetDeletedTables returns the deleted tables in [cachedIndex+1:] whose timestamp is less than ts.
-// func (cc *CatalogCache) GetDeletedTables(cachedIndex int, ts timestamp.Timestamp) []*TableItem {
-// 	return cc.tables.tableGuard.getDeletedTables(cachedIndex, ts)
-// }
-
-// addTableItem inserts a new table item. If it is a deleted one, also push the
-// item into tableCache.tableGuard.mu.deletedTables.
+// addTableItem inserts a new table item.
 func (c *tableCache) addTableItem(item *TableItem) {
 	c.data.Set(item)
-	// if item != nil && item.deleted {
-	// 	c.tableGuard.pushDeletedTable(item)
-	// }
 }

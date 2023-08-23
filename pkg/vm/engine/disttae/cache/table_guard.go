@@ -20,16 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-// const (
-// 	// defaultDeletedTableSize is the default size of deleted table slice.
-// 	defaultDeletedTableSize = 256
-// )
-
-// tableGuard helps to track the deleted tables. It is global unique and is
+// tableGuard helps to track the version of table. It is global unique and is
 // kept in CatalogCache, which is kept in disttae.Engine.
-// Every transaction keeps a table map internally and an index of deleteTables.
-// If a table is dropped by another transaction, the transaction should update
-// its table map.
 type tableGuard struct {
 	mu struct {
 		sync.RWMutex
@@ -58,12 +50,7 @@ func (g *tableGuard) getSchemaVersion(name TableKey) *TableVersion {
 	return g.mu.schema_version[name]
 }
 
-// GC do the garbage collection job for deletedTables slice.
-// It gets the first item whose timestamp is not less than ts,
-// then delete item from the first one to that item. This will
-// cause some items are not removed because the items in the
-// slice are not sorted by timestamp, but it is OK because it
-// is just GC. They will be removed the next time.
+// GC do the garbage collection job for tableGuard
 func (g *tableGuard) GC(ts timestamp.Timestamp) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

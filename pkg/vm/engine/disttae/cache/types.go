@@ -37,7 +37,6 @@ const (
 type TableKey struct {
 	AccountId  uint32
 	DatabaseId uint64
-	TableId    uint64
 	Name       string
 }
 
