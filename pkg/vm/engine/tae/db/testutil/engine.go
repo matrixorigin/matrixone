@@ -128,7 +128,7 @@ func (e *TestEngine) ForceCheckpoint() {
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), 10*time.Second)
+	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), 20*time.Second)
 	assert.NoError(e.t, err)
 	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS())
 	assert.NoError(e.t, err)

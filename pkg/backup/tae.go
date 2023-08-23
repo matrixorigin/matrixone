@@ -120,7 +120,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
 						isGC(gcFileMap, location.Name().String()) {
-						err = nil
 						continue
 					} else {
 						return err
@@ -138,7 +137,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
 				isGC(gcFileMap, dentry.Name) {
-				err = nil
+				continue
 			} else {
 				return err
 			}
