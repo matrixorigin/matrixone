@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	DimensionMismatchErrMsg = "dimension mismatch"
+	DimensionMismatchErrMsg = "dimension mismatch. %v != %v"
 )
 
 //TODO: Check on optimization.
@@ -31,7 +31,7 @@ const (
 
 func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -43,7 +43,7 @@ func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -55,7 +55,7 @@ func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -67,7 +67,7 @@ func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -84,7 +84,7 @@ func Compare[T types.RealNumbers](v1, v2 []T) int {
 	if len(v1) != len(v2) {
 		// NOTE: We will not compare Arrays with different dimension.
 		// panic is fine here as Compare is used in many places, which does not use err.
-		panic(moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg))
+		panic(moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2)))
 	}
 	for i := 0; i < len(v1); i++ {
 		if v1[i] == v2[i] {
@@ -145,7 +145,7 @@ func Summation[T types.RealNumbers](v []T) float64 {
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	if len(v1) != len(v2) {
-		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
 	}
 
 	n := len(v1)
@@ -195,7 +195,7 @@ func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float32, error) {
 
 	if len(v1) != len(v2) {
-		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg)
+		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
 	}
 
 	a, err := InnerProduct[T](v1, v2)

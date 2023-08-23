@@ -41,9 +41,9 @@ select b + "[1,2,3]" from vec_table;
 b + [1,2,3]
 [2, 4, 6]
 select b + "[1,2]" from vec_table;
-invalid input: dimension mismatch
+invalid input: dimension mismatch. 3 != 2
 select b + "[1,2,3,4]" from vec_table;
-invalid input: dimension mismatch
+invalid input: dimension mismatch. 3 != 4
 select cast("[1,2,3]" as vecf32(3));
 cast([1,2,3] as vecf32(3))
 [1, 2, 3]
