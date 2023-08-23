@@ -113,7 +113,7 @@ func (o *Operator) CheckExpired() bool {
 	return o.status.CheckExpired(ExpireTime)
 }
 
-func (o *Operator) Check(logState pb.LogState, dnState pb.DNState, cnState pb.CNState) OpStep {
+func (o *Operator) Check(logState pb.LogState, dnState pb.TNStore, cnState pb.CNState) OpStep {
 	if o.IsEnd() {
 		return nil
 	}

@@ -46,7 +46,7 @@ func ParseExpectedLogShardCount(cluster pb.ClusterInfo) int {
 
 // ParseReportedDNShardCount returns the reported count of dn shards.
 func ParseReportedDNShardCount(
-	state pb.DNState, hkcfg hakeeper.Config, currTick uint64,
+	state pb.TNStore, hkcfg hakeeper.Config, currTick uint64,
 ) int {
 	set := make(map[uint64]struct{})
 	for _, storeInfo := range state.Stores {
@@ -113,7 +113,7 @@ func ParseLogShardReportedSize(
 
 // ParseDNShardReportedSize returns the reported count of dn replicas.
 func ParseDNShardReportedSize(
-	shardID uint64, state pb.DNState, hkcfg hakeeper.Config, currTick uint64,
+	shardID uint64, state pb.TNStore, hkcfg hakeeper.Config, currTick uint64,
 ) int {
 	set := make(map[uint64]struct{})
 	for _, storeInfo := range state.Stores {

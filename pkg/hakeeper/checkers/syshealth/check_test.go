@@ -106,7 +106,7 @@ func TestParseDnStores(t *testing.T) {
 	cfg.Fill()
 	currTick := cfg.ExpiredTick(expiredTick, cfg.DNStoreTimeout) + 1
 
-	dnState := pb.DNState{
+	dnState := pb.TNStore{
 		Stores: map[string]pb.DNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
@@ -270,7 +270,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		dnState := pb.DNState{
+		dnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
@@ -321,7 +321,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		dnState := pb.DNState{
+		dnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,

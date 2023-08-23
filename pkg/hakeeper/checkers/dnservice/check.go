@@ -51,7 +51,7 @@ func Check(
 	idAlloc util.IDAllocator,
 	cfg hakeeper.Config,
 	cluster pb.ClusterInfo,
-	dnState pb.DNState,
+	dnState pb.TNStore,
 	user pb.TaskTableUser,
 	currTick uint64,
 ) []*operator.Operator {

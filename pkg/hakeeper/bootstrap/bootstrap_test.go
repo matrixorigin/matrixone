@@ -80,7 +80,7 @@ func TestBootstrap(t *testing.T) {
 		desc string
 
 		cluster pb.ClusterInfo
-		dn      pb.DNState
+		dn      pb.TNStore
 		log     pb.LogState
 
 		expectedNum            int
@@ -118,7 +118,7 @@ func TestBootstrap(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.DNState{
+			dn: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"dn-a": {}},
 			},
 			log: pb.LogState{
@@ -148,7 +148,7 @@ func TestBootstrap(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.DNState{
+			dn: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{},
 			},
 			log: pb.LogState{
@@ -171,7 +171,7 @@ func TestBootstrap(t *testing.T) {
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.DNState{
+			dn: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"dn-a": {}},
 			},
 			log: pb.LogState{
@@ -357,7 +357,7 @@ func TestIssue3814(t *testing.T) {
 		desc string
 
 		cluster pb.ClusterInfo
-		dn      pb.DNState
+		dn      pb.TNStore
 		log     pb.LogState
 
 		expected error
@@ -381,7 +381,7 @@ func TestIssue3814(t *testing.T) {
 					LogShardID: 1,
 				}},
 			},
-			dn: pb.DNState{
+			dn: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{},
 			},
 			expected: nil,

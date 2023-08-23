@@ -153,7 +153,7 @@ func TestParseDNState(t *testing.T) {
 
 	// 1. no working dn stores
 	{
-		dnState := pb.DNState{
+		dnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
@@ -192,7 +192,7 @@ func TestParseDNState(t *testing.T) {
 
 	// 2. verbose running shard replica
 	{
-		dnState := pb.DNState{
+		dnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,

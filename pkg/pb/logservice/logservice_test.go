@@ -72,7 +72,7 @@ func TestCNStateUpdate(t *testing.T) {
 }
 
 func TestDNStateUpdate(t *testing.T) {
-	state := DNState{Stores: map[string]DNStoreInfo{}}
+	state := TNStore{Stores: map[string]DNStoreInfo{}}
 
 	hb1 := TNStoreHeartbeat{
 		UUID:           "dn-a",

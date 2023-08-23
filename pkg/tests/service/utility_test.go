@@ -52,7 +52,7 @@ func TestParseReportedDNShardCount(t *testing.T) {
 	expiredTick := uint64(10)
 	currTick := hkcfg.ExpiredTick(expiredTick, hkcfg.DNStoreTimeout) + 1
 
-	dnState := pb.DNState{
+	dnState := pb.TNStore{
 		Stores: map[string]pb.DNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
@@ -174,7 +174,7 @@ func TestParseDNShardReportedSize(t *testing.T) {
 	expiredTick := uint64(10)
 	currTick := hkcfg.ExpiredTick(expiredTick, hkcfg.DNStoreTimeout) + 1
 
-	dnState := pb.DNState{
+	dnState := pb.TNStore{
 		Stores: map[string]pb.DNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,

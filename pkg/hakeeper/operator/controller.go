@@ -93,7 +93,7 @@ func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 	return executing
 }
 
-func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState, cnState pb.CNState) {
+func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.TNStore, cnState pb.CNState) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
 			op.Check(logState, dnState, cnState)
@@ -106,7 +106,7 @@ func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNS
 }
 
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
-	dnState pb.DNState, cnState pb.CNState) (commands []pb.ScheduleCommand) {
+	dnState pb.TNStore, cnState pb.CNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
 		if step := op.Check(logState, dnState, cnState); step != nil {

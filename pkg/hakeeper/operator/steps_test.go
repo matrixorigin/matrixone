@@ -38,7 +38,7 @@ func TestIsFinish(t *testing.T) {
 		Stores: nil,
 	}
 
-	dnState := pb.DNState{}
+	dnState := pb.TNStore{}
 	cnState := pb.CNState{}
 
 	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, dnState, cnState))
@@ -88,7 +88,7 @@ func TestAddLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.TNStore{}, pb.CNState{}))
 	}
 }
 
@@ -134,7 +134,7 @@ func TestRemoveLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.TNStore{}, pb.CNState{}))
 	}
 }
 
@@ -187,7 +187,7 @@ func TestStartLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.TNStore{}, pb.CNState{}))
 	}
 }
 
@@ -238,7 +238,7 @@ func TestStopLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.TNStore{}, pb.CNState{}))
 	}
 }
 
@@ -246,7 +246,7 @@ func TestAddDnReplica(t *testing.T) {
 	cases := []struct {
 		desc     string
 		command  AddDnReplica
-		state    pb.DNState
+		state    pb.TNStore
 		expected bool
 	}{
 		{
@@ -256,7 +256,7 @@ func TestAddDnReplica(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: pb.DNState{
+			state: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick: 0,
 					Shards: []pb.DNShardInfo{{
@@ -274,7 +274,7 @@ func TestAddDnReplica(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: pb.DNState{
+			state: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick:   0,
 					Shards: []pb.DNShardInfo{},
@@ -294,7 +294,7 @@ func TestRemoveDnReplica(t *testing.T) {
 	cases := []struct {
 		desc     string
 		command  RemoveDnReplica
-		state    pb.DNState
+		state    pb.TNStore
 		expected bool
 	}{
 		{
@@ -304,7 +304,7 @@ func TestRemoveDnReplica(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: pb.DNState{
+			state: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick: 0,
 					Shards: []pb.DNShardInfo{{
@@ -322,7 +322,7 @@ func TestRemoveDnReplica(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: pb.DNState{
+			state: pb.TNStore{
 				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick:   0,
 					Shards: []pb.DNShardInfo{},

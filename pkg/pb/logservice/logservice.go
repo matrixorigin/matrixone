@@ -140,15 +140,15 @@ func (s *CNState) PatchCNStore(stateLabel CNStateLabel) {
 }
 
 // NewDNState creates a new DNState.
-func NewDNState() DNState {
-	return DNState{
+func NewDNState() TNStore {
+	return TNStore{
 		Stores: make(map[string]DNStoreInfo),
 	}
 }
 
 // Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
 // current tick of the HAKeeper which is used as the timestamp of the heartbeat.
-func (s *DNState) Update(hb TNStoreHeartbeat, tick uint64) {
+func (s *TNStore) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
 		storeInfo = DNStoreInfo{}

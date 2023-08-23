@@ -214,7 +214,7 @@ func TestCheck(t *testing.T) {
 
 	// 1. no working dn stores
 	{
-		dnState := pb.DNState{
+		dnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: staleTick,
@@ -239,7 +239,7 @@ func TestCheck(t *testing.T) {
 
 	// 2. running cluster
 	{
-		dnState := pb.DNState{
+		dnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: staleTick,
@@ -307,7 +307,7 @@ func TestCheck(t *testing.T) {
 	// 3. cluster running with initial shard
 	{
 
-		dnState := pb.DNState{
+		dnState := pb.TNStore{
 			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: staleTick,

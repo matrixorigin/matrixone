@@ -49,7 +49,7 @@ message CNStore {
   string          QueryAddress       = 11;
 }
 
-message DNStore {
+message TNStore {
   string    UUID           = 1;
   string    ServiceAddress = 2;
   uint64    Tick           = 3;
@@ -488,7 +488,7 @@ message DNState {
 }
 
 message ClusterDetails {
-  repeated DNStore  DNStores    = 1 [(gogoproto.nullable) = false];
+  repeated TNStore  DNStores    = 1 [(gogoproto.nullable) = false];
   repeated CNStore  CNStores    = 2 [(gogoproto.nullable) = false];
   repeated LogStore LogStores   = 3 [(gogoproto.nullable) = false];
 }

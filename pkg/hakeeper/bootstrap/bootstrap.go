@@ -41,7 +41,7 @@ func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
 }
 
 func (bm *Manager) Bootstrap(alloc util.IDAllocator,
-	dn pb.DNState, log pb.LogState) ([]pb.ScheduleCommand, error) {
+	dn pb.TNStore, log pb.LogState) ([]pb.ScheduleCommand, error) {
 	logCommands, err := bm.bootstrapLogService(alloc, log)
 	dnCommands := bm.bootstrapDN(alloc, dn)
 	if err != nil {
@@ -104,7 +104,7 @@ func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
 	return
 }
 
-func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.DNState) (commands []pb.ScheduleCommand) {
+func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.TNStore) (commands []pb.ScheduleCommand) {
 	dnStores := dnStoresSortedByTick(dn.Stores)
 	if len(dnStores) < len(bm.cluster.DNShards) {
 		return nil

@@ -3020,8 +3020,8 @@ func (m *DNStoreInfo) GetCtlAddress() string {
 	return ""
 }
 
-// DNState contains all DN details known to the HAKeeper.
-type DNState struct {
+// TNStore contains all DN details known to the HAKeeper.
+type TNStore struct {
 	// Stores is keyed by DN store UUID.
 	Stores               map[string]DNStoreInfo `protobuf:"bytes,1,rep,name=Stores,proto3" json:"Stores" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	XXX_NoUnkeyedLiteral struct{}               `json:"-"`
@@ -3029,16 +3029,16 @@ type DNState struct {
 	XXX_sizecache        int32                  `json:"-"`
 }
 
-func (m *DNState) Reset()         { *m = DNState{} }
-func (m *DNState) String() string { return proto.CompactTextString(m) }
-func (*DNState) ProtoMessage()    {}
-func (*DNState) Descriptor() ([]byte, []int) {
+func (m *TNStore) Reset()         { *m = TNStore{} }
+func (m *TNStore) String() string { return proto.CompactTextString(m) }
+func (*TNStore) ProtoMessage()    {}
+func (*TNStore) Descriptor() ([]byte, []int) {
 	return fileDescriptor_fd1040c5381ab5a7, []int{34}
 }
-func (m *DNState) XXX_Unmarshal(b []byte) error {
+func (m *TNStore) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *DNState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TNStore) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_DNState.Marshal(b, m, deterministic)
 	} else {
@@ -3050,19 +3050,19 @@ func (m *DNState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return b[:n], nil
 	}
 }
-func (m *DNState) XXX_Merge(src proto.Message) {
+func (m *TNStore) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_DNState.Merge(m, src)
 }
-func (m *DNState) XXX_Size() int {
+func (m *TNStore) XXX_Size() int {
 	return m.Size()
 }
-func (m *DNState) XXX_DiscardUnknown() {
+func (m *TNStore) XXX_DiscardUnknown() {
 	xxx_messageInfo_DNState.DiscardUnknown(m)
 }
 
 var xxx_messageInfo_DNState proto.InternalMessageInfo
 
-func (m *DNState) GetStores() map[string]DNStoreInfo {
+func (m *TNStore) GetStores() map[string]DNStoreInfo {
 	if m != nil {
 		return m.Stores
 	}
@@ -3424,7 +3424,7 @@ func (m *LogState) GetStores() map[string]LogStoreInfo {
 type CheckerState struct {
 	Tick                 uint64             `protobuf:"varint,1,opt,name=Tick,proto3" json:"Tick,omitempty"`
 	ClusterInfo          ClusterInfo        `protobuf:"bytes,2,opt,name=ClusterInfo,proto3" json:"ClusterInfo"`
-	DNState              DNState            `protobuf:"bytes,3,opt,name=DNState,proto3" json:"DNState"`
+	DNState              TNStore            `protobuf:"bytes,3,opt,name=DNState,proto3" json:"DNState"`
 	LogState             LogState           `protobuf:"bytes,4,opt,name=LogState,proto3" json:"LogState"`
 	CNState              CNState            `protobuf:"bytes,5,opt,name=CNState,proto3" json:"CNState"`
 	State                HAKeeperState      `protobuf:"varint,6,opt,name=State,proto3,enum=logservice.HAKeeperState" json:"State,omitempty"`
@@ -3484,11 +3484,11 @@ func (m *CheckerState) GetClusterInfo() ClusterInfo {
 	return ClusterInfo{}
 }
 
-func (m *CheckerState) GetDNState() DNState {
+func (m *CheckerState) GetDNState() TNStore {
 	if m != nil {
 		return m.DNState
 	}
-	return DNState{}
+	return TNStore{}
 }
 
 func (m *CheckerState) GetLogState() LogState {
@@ -3554,7 +3554,7 @@ type HAKeeperRSMState struct {
 	ScheduleCommands     map[string]CommandBatch `protobuf:"bytes,8,rep,name=ScheduleCommands,proto3" json:"ScheduleCommands" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	LogShards            map[string]uint64       `protobuf:"bytes,9,rep,name=LogShards,proto3" json:"LogShards,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
 	CNState              CNState                 `protobuf:"bytes,10,opt,name=CNState,proto3" json:"CNState"`
-	DNState              DNState                 `protobuf:"bytes,11,opt,name=DNState,proto3" json:"DNState"`
+	DNState              TNStore                 `protobuf:"bytes,11,opt,name=DNState,proto3" json:"DNState"`
 	LogState             LogState                `protobuf:"bytes,12,opt,name=LogState,proto3" json:"LogState"`
 	ClusterInfo          ClusterInfo             `protobuf:"bytes,13,opt,name=ClusterInfo,proto3" json:"ClusterInfo"`
 	TaskTableUser        TaskTableUser           `protobuf:"bytes,14,opt,name=TaskTableUser,proto3" json:"TaskTableUser"`
@@ -3666,11 +3666,11 @@ func (m *HAKeeperRSMState) GetCNState() CNState {
 	return CNState{}
 }
 
-func (m *HAKeeperRSMState) GetDNState() DNState {
+func (m *HAKeeperRSMState) GetDNState() TNStore {
 	if m != nil {
 		return m.DNState
 	}
-	return DNState{}
+	return TNStore{}
 }
 
 func (m *HAKeeperRSMState) GetLogState() LogState {
@@ -3942,7 +3942,7 @@ func init() {
 	proto.RegisterType((*CNState)(nil), "logservice.CNState")
 	proto.RegisterMapType((map[string]CNStoreInfo)(nil), "logservice.CNState.StoresEntry")
 	proto.RegisterType((*DNStoreInfo)(nil), "logservice.DNStoreInfo")
-	proto.RegisterType((*DNState)(nil), "logservice.DNState")
+	proto.RegisterType((*TNStore)(nil), "logservice.DNState")
 	proto.RegisterMapType((map[string]DNStoreInfo)(nil), "logservice.DNState.StoresEntry")
 	proto.RegisterType((*ClusterDetails)(nil), "logservice.ClusterDetails")
 	proto.RegisterType((*ClusterInfo)(nil), "logservice.ClusterInfo")
@@ -6337,7 +6337,7 @@ func (m *DNStoreInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *DNState) Marshal() (dAtA []byte, err error) {
+func (m *TNStore) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -6347,12 +6347,12 @@ func (m *DNState) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *DNState) MarshalTo(dAtA []byte) (int, error) {
+func (m *TNStore) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *DNState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TNStore) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -8168,7 +8168,7 @@ func (m *DNStoreInfo) Size() (n int) {
 	return n
 }
 
-func (m *DNState) Size() (n int) {
+func (m *TNStore) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -15134,7 +15134,7 @@ func (m *DNStoreInfo) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *DNState) Unmarshal(dAtA []byte) error {
+func (m *TNStore) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {

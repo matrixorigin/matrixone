@@ -46,7 +46,7 @@ func TestFixExpiredStore(t *testing.T) {
 		desc        string
 		idAlloc     *util.TestIDAllocator
 		cluster     pb.ClusterInfo
-		dn          pb.DNState
+		dn          pb.TNStore
 		log         pb.LogState
 		currentTick uint64
 		expected    []pb.ScheduleCommand
@@ -304,7 +304,7 @@ func TestFixZombie(t *testing.T) {
 		desc     string
 		idAlloc  *util.TestIDAllocator
 		cluster  pb.ClusterInfo
-		dn       pb.DNState
+		dn       pb.TNStore
 		log      pb.LogState
 		tick     uint64
 		expected []pb.ScheduleCommand

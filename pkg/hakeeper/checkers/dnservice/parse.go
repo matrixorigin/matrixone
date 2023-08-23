@@ -58,7 +58,7 @@ func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
 
 // parseDnState parses cluster dn state.
 func parseDnState(cfg hakeeper.Config,
-	dnState pb.DNState, currTick uint64,
+	dnState pb.TNStore, currTick uint64,
 ) (*util.ClusterStores, *reportedShards) {
 	stores := util.NewClusterStores()
 	shards := newReportedShards()

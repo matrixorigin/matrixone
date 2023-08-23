@@ -366,7 +366,7 @@ func TestClusterDetailsQuery(t *testing.T) {
 		Tick:           2,
 		ServiceAddress: "addr2",
 	}
-	tsm.state.DNState = pb.DNState{
+	tsm.state.DNState = pb.TNStore{
 		Stores: make(map[string]pb.DNStoreInfo),
 	}
 	tsm.state.DNState.Stores["uuid3"] = pb.DNStoreInfo{
