@@ -22,6 +22,7 @@ import (
 
 	"github.com/shirou/gopsutil/v3/mem"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
@@ -71,12 +72,6 @@ var onceInit sync.Once
 var metaCacheStats hitStats
 var metaCacheHitStats hitStats
 
-const (
-	kb = 1024
-	mb = 1024 * kb
-	gb = 1024 * mb
-)
-
 func metaCacheSize() int64 {
 	v, err := mem.VirtualMemory()
 	if err != nil {
@@ -84,16 +79,16 @@ func metaCacheSize() int64 {
 	}
 
 	total := v.Total
-	if total < 2*gb {
+	if total < 2*mpool.GB {
 		return int64(total / 4)
 	}
-	if total < 16*gb {
-		return 512 * mb
+	if total < 16*mpool.GB {
+		return 512 * mpool.MB
 	}
-	if total < 32*gb {
-		return 1 * gb
+	if total < 32*mpool.GB {
+		return 1 * mpool.GB
 	}
-	return 2 * gb
+	return 2 * mpool.GB
 }
 
 func init() {
