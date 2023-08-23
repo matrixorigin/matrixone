@@ -30,7 +30,7 @@ const (
 	TnStoreCapacity = 32
 )
 
-// ShardMapper used to get log shard ID for dn shard
+// ShardMapper used to get log shard ID for tn shard
 type ShardMapper interface {
 	getLogShardID(tnShardID uint64) (uint64, error)
 }
@@ -42,7 +42,7 @@ type tnShardToLogShard map[uint64]uint64
 func parseClusterInfo(cluster pb.ClusterInfo) tnShardToLogShard {
 	m := make(map[uint64]uint64)
 	for _, r := range cluster.TNShards {
-		// warning with duplicated dn shard ID
+		// warning with duplicated tn shard ID
 		m[r.ShardID] = r.LogShardID
 	}
 	return m
@@ -56,7 +56,7 @@ func (d tnShardToLogShard) getLogShardID(tnShardID uint64) (uint64, error) {
 	return 0, moerr.NewInvalidStateNoCtx("shard %d not recorded", tnShardID)
 }
 
-// parseTnState parses cluster dn state.
+// parseTnState parses cluster tn state.
 func parseTnState(cfg hakeeper.Config,
 	tnState pb.TNState, currTick uint64,
 ) (*util.ClusterStores, *reportedShards) {
@@ -112,7 +112,7 @@ func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for reported dn shards", len(ops)))
+	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for reported tn shards", len(ops)))
 
 	return ops
 }
@@ -153,7 +153,7 @@ func checkInitiatingShards(
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
+	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for initiating tn shards", len(ops)))
 	if bootstrapping && len(ops) != 0 {
 		bootstrapping = false
 	}
@@ -165,7 +165,7 @@ type earliestTick struct {
 	tick uint64
 }
 
-// initialShards records all fresh dn shards.
+// initialShards records all fresh tn shards.
 type initialShards struct {
 	shards map[uint64]earliestTick
 }
@@ -214,7 +214,7 @@ func (w *initialShards) clear() {
 	w.shards = make(map[uint64]earliestTick)
 }
 
-// reportedShards collects all reported dn shards.
+// reportedShards collects all reported tn shards.
 type reportedShards struct {
 	shards   map[uint64]*tnShard
 	shardIDs []uint64
@@ -226,7 +226,7 @@ func newReportedShards() *reportedShards {
 	}
 }
 
-// registerReplica collects dn shard replicas by their status.
+// registerReplica collects tn shard replicas by their status.
 func (rs *reportedShards) registerReplica(replica *tnReplica, expired bool) {
 	shardID := replica.shardID
 	if _, ok := rs.shards[shardID]; !ok {
@@ -242,7 +242,7 @@ func (rs *reportedShards) listShards() []uint64 {
 	return rs.shardIDs
 }
 
-// getShard returns dn shard by shard ID.
+// getShard returns tn shard by shard ID.
 func (rs *reportedShards) getShard(shardID uint64) (*tnShard, error) {
 	if shard, ok := rs.shards[shardID]; ok {
 		return shard, nil
@@ -250,7 +250,7 @@ func (rs *reportedShards) getShard(shardID uint64) (*tnShard, error) {
 	return nil, moerr.NewShardNotReportedNoCtx("", shardID)
 }
 
-// tnShard records metadata for dn shard.
+// tnShard records metadata for tn shard.
 type tnShard struct {
 	shardID uint64
 	expired []*tnReplica
@@ -263,7 +263,7 @@ func newTnShard(shardID uint64) *tnShard {
 	}
 }
 
-// register collects dn shard replica.
+// register collects tn shard replica.
 func (s *tnShard) register(replica *tnReplica, expired bool) {
 	if expired {
 		s.expired = append(s.expired, replica)
@@ -284,7 +284,7 @@ func (s *tnShard) expiredReplicas() []*tnReplica {
 	return s.expired
 }
 
-// tnReplica records metadata for dn shard replica
+// tnReplica records metadata for tn shard replica
 type tnReplica struct {
 	replicaID uint64
 	shardID   uint64

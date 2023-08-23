@@ -153,7 +153,7 @@ func (m TxnMeta) DebugString() string {
 	return buffer.String()
 }
 
-// GetTargetTN return dn shard ID that message need send to.
+// GetTargetTN return tn shard ID that message need send to.
 func (m TxnRequest) GetTargetTN() metadata.TNShard {
 	switch m.Method {
 	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:

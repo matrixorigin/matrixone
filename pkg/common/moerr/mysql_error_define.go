@@ -10539,7 +10539,7 @@ var MysqlErrorMsgRefer = map[uint16]errorMsgItem{
 	//OBSOLETE_ER_FUNCTIONAL_INDEX_DATA_IS_TOO_LONG : {3907,[]string{"22001"},"DataSource too long for functional index '%-.64s'"},
 	//OBSOLETE_ER_INVALID_JSON_VALUE_FOR_FUNC_INDEX : {3903,[]string{"22018"},"Invalid JSON value for CAST for functional index '%-.64s'"},
 	//OBSOLETE_ER_JSON_VALUE_OUT_OF_RANGE_FOR_FUNC_INDEX : {3904,[]string{"22003"},"Out of range JSON value for CAST for functional index '%-.64s'"},
-	ER_LDAP_EMPTY_USERDN_PASSWORD:                           {13447, []string{"HY000"}, "Empty user dn or password is not allowed, not attempting LDAP bind."},
+	ER_LDAP_EMPTY_USERDN_PASSWORD:                           {13447, []string{"HY000"}, "Empty user tn or password is not allowed, not attempting LDAP bind."},
 	ER_ACL_WRONG_OR_MISSING_ACL_TABLES_LOG:                  {13449, []string{"HY000"}, "The current layout of the ACL tables does not conform to the server's expected layout. They're either altered, missing or not upgraded from a previous version. However a best effort attempt to read data from these tables will still be made."},
 	ER_LOCK_ORDER_FAILED_WRITE_FILE:                         {13450, []string{"HY000"}, "LOCK_ORDER: Failed to write to file <%s>."},
 	ER_LOCK_ORDER_FAILED_READ_FILE:                          {13451, []string{"HY000"}, "LOCK_ORDER: Failed to read from file <%s>."},

@@ -61,11 +61,11 @@ var (
 	defaultServiceHost = "127.0.0.1"
 )
 
-// Config dn store configuration
+// Config tn store configuration
 type Config struct {
 	// DataDir data dir
 	DataDir string `toml:"-"`
-	// UUID dn store uuid
+	// UUID tn store uuid
 	UUID string `toml:"uuid"`
 	// ListenAddress listening address for receiving external requests.
 	ListenAddress string `toml:"listen-address"`

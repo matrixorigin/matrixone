@@ -32,11 +32,11 @@ func TestServiceAddress(t *testing.T) {
 
 	for i := 0; i < tnServiceNum; i++ {
 		addrList := address.listTnServiceAddresses(i)
-		// 1 address for every dn service now
+		// 1 address for every tn service now
 		require.Equal(t, 2, len(addrList))
 	}
-	// valid dn index: 0, 1
-	// invalid dn index: 2
+	// valid tn index: 0, 1
+	// invalid tn index: 2
 	addrList := address.listTnServiceAddresses(2)
 	require.Equal(t, 0, len(addrList))
 
@@ -45,8 +45,8 @@ func TestServiceAddress(t *testing.T) {
 		// 3 addresses for every log service now
 		require.Equal(t, 3, len(addrList))
 	}
-	// valid dn index: 0, 1, 2
-	// invalid dn index: 3
+	// valid tn index: 0, 1, 2
+	// invalid tn index: 3
 	addrList = address.listLogServiceAddresses(3)
 	require.Equal(t, 0, len(addrList))
 
@@ -55,8 +55,8 @@ func TestServiceAddress(t *testing.T) {
 		// 1 address for every cn service now
 		require.Equal(t, 1, len(addrList))
 	}
-	// valid dn index: 0, 1
-	// invalid dn index: 2
+	// valid tn index: 0, 1
+	// invalid tn index: 2
 	addrList = address.listCnServiceAddresses(2)
 	require.Equal(t, 0, len(addrList))
 
@@ -77,9 +77,9 @@ func TestServiceAddress(t *testing.T) {
 	addrSets := address.buildPartitionAddressSets(partition1, partition2)
 	// there are 2 address sets corresponding with 2 partitions
 	require.Equal(t, 2, len(addrSets))
-	// in partition 1, there are 1 dn service, 1 log service and 1 cn service.
+	// in partition 1, there are 1 tn service, 1 log service and 1 cn service.
 	require.Equal(t, 3+2+1, len(addrSets[0]))
-	// in partition 2, there are 1 dn service, 1 cn service and 2 log service.
+	// in partition 2, there are 1 tn service, 1 cn service and 2 log service.
 	require.Equal(t, 3*2+2+1, len(addrSets[1]))
 
 	// the first address set should contain the following addresses.
@@ -224,8 +224,8 @@ func TestPartition(t *testing.T) {
 		require.True(t, remaining.logIndexSet.Contains(2))
 	}
 
-	// valid dn index should be: 0, 1
-	// invoker specifies invalid dn index: 2, 3
+	// valid tn index should be: 0, 1
+	// invoker specifies invalid tn index: 2, 3
 	{
 		partition := newNetworkPartition(
 			logServiceNum, nil,

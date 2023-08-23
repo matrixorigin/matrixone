@@ -58,7 +58,7 @@ func newServiceAddresses(t *testing.T, logServiceNum, tnServiceNum, cnServiceNum
 	}
 	address.logAddresses = logAddrs
 
-	// build dn service addresses
+	// build tn service addresses
 	tnBatch := address.tnServiceNum
 	tnAddrs := make([]tnServiceAddress, tnBatch)
 	for i := 0; i < tnBatch; i++ {
@@ -80,7 +80,7 @@ func newServiceAddresses(t *testing.T, logServiceNum, tnServiceNum, cnServiceNum
 	return address
 }
 
-// assertTNService asserts constructed address for dn service.
+// assertTNService asserts constructed address for tn service.
 func (a serviceAddresses) assertTNService() {
 	assert.Equal(a.t, a.tnServiceNum, len(a.tnAddresses))
 }
@@ -95,7 +95,7 @@ func (a serviceAddresses) assertCnService() {
 	assert.Equal(a.t, a.cnServiceNum, len(a.cnAddresses))
 }
 
-// getTnListenAddress gets dn listen address by its index.
+// getTnListenAddress gets tn listen address by its index.
 func (a serviceAddresses) getTnListenAddress(index int) string {
 	a.assertTNService()
 
@@ -213,7 +213,7 @@ func (a serviceAddresses) listPartitionAddresses(partition NetworkPartition) add
 	return addrSet
 }
 
-// listTnServiceAddresses lists all addresses of dn service by its index.
+// listTnServiceAddresses lists all addresses of tn service by its index.
 func (a serviceAddresses) listTnServiceAddresses(index int) []string {
 	a.assertTNService()
 
@@ -268,7 +268,7 @@ func (la logServiceAddress) listAddresses() []string {
 	return []string{la.listenAddr, la.raftAddr, la.gossipAddr}
 }
 
-// tnServiceAddress contains address for dn service.
+// tnServiceAddress contains address for tn service.
 type tnServiceAddress struct {
 	listenAddr  string
 	logtailAddr string
@@ -285,7 +285,7 @@ func newTNServiceAddress(host string) (tnServiceAddress, error) {
 	}, nil
 }
 
-// listAddresses returns all addresses for single dn service.
+// listAddresses returns all addresses for single tn service.
 func (da tnServiceAddress) listAddresses() []string {
 	return []string{da.listenAddr, da.logtailAddr}
 }
@@ -379,7 +379,7 @@ func remainingNetworkPartition(logServiceNum, tnServiceNum, cnServiceNum int,
 	}
 }
 
-// ListTNServiceIndex lists index of all dn services in the partition.
+// ListTNServiceIndex lists index of all tn services in the partition.
 func (p NetworkPartition) ListTNServiceIndex() []uint32 {
 	set := p.tnIndexSet
 

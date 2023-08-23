@@ -200,13 +200,13 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
 		// it regards the log store as down.
 		LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-		// TNStoreTimeout is the actual time limit between a dn store's heartbeat.
+		// TNStoreTimeout is the actual time limit between a tn store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within TNStoreTimeout,
-		// it regards the dn store as down.
+		// it regards the tn store as down.
 		TNStoreTimeout toml.Duration `toml:"tn-store-timeout"`
 		// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
-		// it regards the dn store as down.
+		// it regards the tn store as down.
 		CNStoreTimeout toml.Duration `toml:"cn-store-timeout"`
 	}
 

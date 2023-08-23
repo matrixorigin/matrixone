@@ -250,7 +250,7 @@ func TestAddTnReplica(t *testing.T) {
 		expected bool
 	}{
 		{
-			desc: "add dn replica completed",
+			desc: "add tn replica completed",
 			command: AddTnReplica{
 				StoreID:   "a",
 				ShardID:   1,
@@ -268,7 +268,7 @@ func TestAddTnReplica(t *testing.T) {
 			expected: true,
 		},
 		{
-			desc: "add dn replica not completed",
+			desc: "add tn replica not completed",
 			command: AddTnReplica{
 				StoreID:   "a",
 				ShardID:   1,
@@ -298,7 +298,7 @@ func TestRemoveTnReplica(t *testing.T) {
 		expected bool
 	}{
 		{
-			desc: "remove dn replica not completed",
+			desc: "remove tn replica not completed",
 			command: RemoveTnReplica{
 				StoreID:   "a",
 				ShardID:   1,
@@ -316,7 +316,7 @@ func TestRemoveTnReplica(t *testing.T) {
 			expected: false,
 		},
 		{
-			desc: "remove dn replica completed",
+			desc: "remove tn replica completed",
 			command: RemoveTnReplica{
 				StoreID:   "a",
 				ShardID:   1,

@@ -109,7 +109,7 @@ func TestBootstrap(t *testing.T) {
 			},
 		},
 		{
-			desc: "1 log shard with 3 replicas and 1 dn shard",
+			desc: "1 log shard with 3 replicas and 1 tn shard",
 
 			cluster: pb.ClusterInfo{
 				TNShards: []metadata.TNShardRecord{{ShardID: 1, LogShardID: 1}},
@@ -162,7 +162,7 @@ func TestBootstrap(t *testing.T) {
 			err:         nil,
 		},
 		{
-			desc: "1 log shard with 3 replicas and 1 dn shard",
+			desc: "1 log shard with 3 replicas and 1 tn shard",
 
 			cluster: pb.ClusterInfo{
 				TNShards: []metadata.TNShardRecord{{ShardID: 1, LogShardID: 1}},
@@ -374,7 +374,7 @@ func TestIssue3814(t *testing.T) {
 			expected: moerr.NewInternalError(context.TODO(), "not enough log stores"),
 		},
 		{
-			desc: "case not enough dn stores",
+			desc: "case not enough tn stores",
 			cluster: pb.ClusterInfo{
 				TNShards: []metadata.TNShardRecord{{
 					ShardID:    1,

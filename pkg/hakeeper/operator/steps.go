@@ -146,7 +146,7 @@ type AddTnReplica struct {
 }
 
 func (a AddTnReplica) String() string {
-	return fmt.Sprintf("adding %v:%v to dn store %s (log shard %d)",
+	return fmt.Sprintf("adding %v:%v to tn store %s (log shard %d)",
 		a.ShardID, a.ReplicaID, a.StoreID, a.LogShardID,
 	)
 }
@@ -167,7 +167,7 @@ type RemoveTnReplica struct {
 }
 
 func (a RemoveTnReplica) String() string {
-	return fmt.Sprintf("removing %v:%v to dn store %s (log shard %d)",
+	return fmt.Sprintf("removing %v:%v to tn store %s (log shard %d)",
 		a.ShardID, a.ReplicaID, a.StoreID, a.LogShardID,
 	)
 }
@@ -181,13 +181,13 @@ func (a RemoveTnReplica) IsFinish(_ pb.LogState, state pb.TNState, _ pb.CNState)
 	return true
 }
 
-// StopTnStore corresponds to dn store shutdown command.
+// StopTnStore corresponds to tn store shutdown command.
 type StopTnStore struct {
 	StoreID string
 }
 
 func (a StopTnStore) String() string {
-	return fmt.Sprintf("stopping dn store %s", a.StoreID)
+	return fmt.Sprintf("stopping tn store %s", a.StoreID)
 }
 
 func (a StopTnStore) IsFinish(_ pb.LogState, state pb.TNState, _ pb.CNState) bool {

@@ -39,7 +39,7 @@ import (
 const (
 	// reconnection related constants.
 	// maxTimeToWaitServerResponse : max time to wait for server response. if time exceed, do reconnection.
-	// retryReconnect : if reconnect dn failed. push client will retry after time retryReconnect.
+	// retryReconnect : if reconnect tn failed. push client will retry after time retryReconnect.
 	maxTimeToWaitServerResponse = 60 * time.Second
 	retryReconnect              = 20 * time.Millisecond
 
@@ -242,7 +242,7 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 	close(ch)
 
 	if err != nil {
-		logutil.Errorf("[log-tail-push-client] connect to dn log tail server failed")
+		logutil.Errorf("[log-tail-push-client] connect to tn log tail server failed")
 	}
 	return err
 }
@@ -323,7 +323,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					cancel()
 					hasReceivedConnectionMsg = true
 					if err != nil {
-						logutil.Errorf("[log-tail-push-client] connect to dn log tail service failed, reason: %s", err)
+						logutil.Errorf("[log-tail-push-client] connect to tn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
 					}
 
@@ -333,7 +333,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					}
 
 					e.setPushClientStatus(true)
-					logutil.Infof("[log-tail-push-client] connect to dn log tail service succeed.")
+					logutil.Infof("[log-tail-push-client] connect to tn log tail service succeed.")
 					continue
 
 				case <-ctx.Done():
@@ -354,7 +354,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 			e.setPushClientStatus(false)
 
-			logutil.Infof("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
+			logutil.Infof("[log-tail-push-client] clean finished, start to reconnect to tn log tail service")
 			for {
 				if ctx.Err() != nil {
 					logutil.Infof("[log-tail-push-client] mo context has done, exit log tail receive routine.")
@@ -608,7 +608,7 @@ func newRpcStreamToTnLogTailService(serviceAddr string) (morpc.Stream, error) {
 }
 
 func (s *logTailSubscriber) init(serviceAddr string) (err error) {
-	// XXX we assume that we have only 1 dn now.
+	// XXX we assume that we have only 1 tn now.
 	s.tnNodeID = 0
 
 	// clear the old status.

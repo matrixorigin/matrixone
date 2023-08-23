@@ -247,15 +247,15 @@ func TestClusterOperation(t *testing.T) {
 	// the following would test `ClusterOperation`
 	// -------------------------------------------
 
-	// 1. start/close dn services via different ways
+	// 1. start/close tn services via different ways
 	dsuuids := c.ListTNServices()
 	require.Equal(t, tnSvcNum, len(dsuuids))
-	// 1.a start/close dn service by uuid
+	// 1.a start/close tn service by uuid
 	{
 		index := 0
 		dsuuid := dsuuids[index]
 
-		// get the instance of dn service
+		// get the instance of tn service
 		ds, err := c.GetTNService(dsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
@@ -271,11 +271,11 @@ func TestClusterOperation(t *testing.T) {
 		require.Equal(t, ServiceClosed, ds.Status())
 	}
 
-	// 1.b start/close dn service by index
+	// 1.b start/close tn service by index
 	{
 		index := 1
 
-		// get the instance of dn service
+		// get the instance of tn service
 		ds, err := c.GetTNServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
@@ -291,11 +291,11 @@ func TestClusterOperation(t *testing.T) {
 		require.Equal(t, ServiceClosed, ds.Status())
 	}
 
-	// 1.c start/close dn service by instance
+	// 1.c start/close tn service by instance
 	{
 		index := 2
 
-		// get the instance of dn service
+		// get the instance of tn service
 		ds, err := c.GetTNServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
@@ -438,7 +438,7 @@ func TestClusterState(t *testing.T) {
 	require.Equal(t, tnSvcNum, len(state.TNState.Stores))
 	require.Equal(t, logSvcNum, len(state.LogState.Stores))
 
-	// FIXME: validate the result list of dn shards
+	// FIXME: validate the result list of tn shards
 	ctx4, cancel4 := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel4()
 	_, err = c.ListTNShards(ctx4)
@@ -630,9 +630,9 @@ func TestNetworkPartition(t *testing.T) {
 	// the following would test network partition
 	// --------------------------------------------
 
-	// dn service index: 0, 1
+	// tn service index: 0, 1
 	// log service index: 0, 1, 2, 3
-	// seperate dn service 1 from other services
+	// seperate tn service 1 from other services
 	partition1 := c.NewNetworkPartition([]uint32{1}, nil, nil)
 	require.Equal(t, []uint32{1}, partition1.ListTNServiceIndex())
 	require.Nil(t, partition1.ListLogServiceIndex())
@@ -653,7 +653,7 @@ func TestNetworkPartition(t *testing.T) {
 	defer cancel3()
 	c.WaitTNStoreReportedIndexed(ctx3, 1)
 
-	// dn service index: 0, 1
+	// tn service index: 0, 1
 	// log service index: 0, 1, 2, 3
 	// seperate log service 3 from other services
 	partition3 := c.NewNetworkPartition(nil, []uint32{3}, nil)

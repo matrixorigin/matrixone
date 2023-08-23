@@ -70,7 +70,7 @@ func Check(
 
 	logutil.GetGlobalLogger().Info(detail)
 
-	// parse all dn stores
+	// parse all tn stores
 	tnStores := parseTnState(cfg, tnState, currTick)
 
 	// generate operators to shut down all stores
@@ -232,7 +232,7 @@ func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *
 	return set
 }
 
-// parseTnState separates dn stores as expired and working.
+// parseTnState separates tn stores as expired and working.
 func parseTnState(cfg hakeeper.Config, tnState pb.TNState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.TNService)
 	for id, storeInfo := range tnState.Stores {

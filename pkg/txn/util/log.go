@@ -65,7 +65,7 @@ func LogTxnSnapshotTimestamp(
 	}
 }
 
-// LogTxnPushedTimestampUpdated log dn pushed timestamp updated
+// LogTxnPushedTimestampUpdated log tn pushed timestamp updated
 func LogTxnPushedTimestampUpdated(
 	value timestamp.Timestamp) {
 	logger := getSkipLogger()
@@ -185,7 +185,7 @@ func LogTxnReceivedResponses(responses []txn.TxnResponse) {
 	}
 }
 
-// LogTxnCreateOn log Txn create on dn shard.
+// LogTxnCreateOn log Txn create on tn shard.
 func LogTxnCreateOn(txnMeta txn.TxnMeta,
 	tn metadata.TNShard) {
 	logger := getSkipLogger()
@@ -442,7 +442,7 @@ func TxnIDFieldWithID(id []byte) zap.Field {
 	return zap.String("txn-id", hex.EncodeToString(id))
 }
 
-// TxnTNShardField returns a dn shard zap field
+// TxnTNShardField returns a tn shard zap field
 func TxnTNShardField(tn metadata.TNShard) zap.Field {
 	return zap.String("dn-shard", tn.DebugString())
 }

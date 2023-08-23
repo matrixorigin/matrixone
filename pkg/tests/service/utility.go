@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	// The expected number of dn replicas.
+	// The expected number of tn replicas.
 	TNShardExpectedSize = 1
 )
 
-// ParseExpectedTNShardCount returns the expected count of dn shards.
+// ParseExpectedTNShardCount returns the expected count of tn shards.
 func ParseExpectedTNShardCount(cluster pb.ClusterInfo) int {
 	set := make(map[uint64]struct{})
 	for _, record := range cluster.TNShards {
@@ -44,18 +44,18 @@ func ParseExpectedLogShardCount(cluster pb.ClusterInfo) int {
 	return len(set)
 }
 
-// ParseReportedTNShardCount returns the reported count of dn shards.
+// ParseReportedTNShardCount returns the reported count of tn shards.
 func ParseReportedTNShardCount(
 	state pb.TNState, hkcfg hakeeper.Config, currTick uint64,
 ) int {
 	set := make(map[uint64]struct{})
 	for _, storeInfo := range state.Stores {
-		// ignore expired dn stores
+		// ignore expired tn stores
 		if hkcfg.TNStoreExpired(storeInfo.Tick, currTick) {
 			continue
 		}
 
-		// record dn shard
+		// record tn shard
 		for _, shardInfo := range storeInfo.Shards {
 			set[shardInfo.ShardID] = struct{}{}
 		}
@@ -111,13 +111,13 @@ func ParseLogShardReportedSize(
 	return len(set)
 }
 
-// ParseTNShardReportedSize returns the reported count of dn replicas.
+// ParseTNShardReportedSize returns the reported count of tn replicas.
 func ParseTNShardReportedSize(
 	shardID uint64, state pb.TNState, hkcfg hakeeper.Config, currTick uint64,
 ) int {
 	set := make(map[uint64]struct{})
 	for _, storeInfo := range state.Stores {
-		// ignore expired dn stores
+		// ignore expired tn stores
 		if hkcfg.TNStoreExpired(storeInfo.Tick, currTick) {
 			continue
 		}

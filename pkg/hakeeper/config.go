@@ -36,14 +36,14 @@ type Config struct {
 	// it regards the log store as down.
 	LogStoreTimeout time.Duration
 
-	// TNStoreTimeout is the actual time limit between a dn store's heartbeat.
+	// TNStoreTimeout is the actual time limit between a tn store's heartbeat.
 	// If HAKeeper does not receive two heartbeat within TNStoreTimeout,
-	// it regards the dn store as down.
+	// it regards the tn store as down.
 	TNStoreTimeout time.Duration
 
 	// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
 	// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
-	// it regards the dn store as down.
+	// it regards the tn store as down.
 	CNStoreTimeout time.Duration
 }
 

@@ -113,7 +113,7 @@ type TxnOperator interface {
 	// AddLockTable for pessimistic transactions, if the current transaction is successfully
 	// locked, the metadata corresponding to the lockservice needs to be recorded to the txn, and
 	// at transaction commit time, the metadata of all lock services accessed by the transaction
-	// will be committed to dn to check. If the metadata of the lockservice changes in [lock, commit],
+	// will be committed to tn to check. If the metadata of the lockservice changes in [lock, commit],
 	// the transaction will be rolled back.
 	AddLockTable(locktable lock.LockTable) error
 
@@ -160,7 +160,7 @@ type TimestampWaiter interface {
 	// blocking if latest commit timestamp received from DN is less than the given value.
 	GetTimestamp(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
 	// NotifyLatestCommitTS notify the latest timestamp that received from DN. A applied logtail
-	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and dn is
+	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and tn is
 	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
 	NotifyLatestCommitTS(appliedTS timestamp.Timestamp)
 	// Close close the timestamp waiter

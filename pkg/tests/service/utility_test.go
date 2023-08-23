@@ -33,7 +33,7 @@ func TestParseExpectedTNShardCount(t *testing.T) {
 	cluster := pb.ClusterInfo{
 		TNShards: mockTNShardRecords(10, 11, 12, 12),
 	}
-	// expected dn shards: 10, 11, 12
+	// expected tn shards: 10, 11, 12
 	require.Equal(t, 3, ParseExpectedTNShardCount(cluster))
 }
 
@@ -71,7 +71,7 @@ func TestParseReportedTNShardCount(t *testing.T) {
 		},
 	}
 
-	// working dn shards: 11, 12
+	// working tn shards: 11, 12
 	require.Equal(t, 2, ParseReportedTNShardCount(tnState, hkcfg, currTick))
 }
 

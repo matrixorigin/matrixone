@@ -31,10 +31,10 @@ var (
 	// waitingShards makes check logic stateful.
 	waitingShards *initialShards
 
-	// bootstrapping indicates the dn is bootstrapping.
-	// When dn checker finds a new dn shard should be added,
+	// bootstrapping indicates the tn is bootstrapping.
+	// When tn checker finds a new tn shard should be added,
 	// it waits for a while if bootstrapping is false to avoid thrashing.
-	// If bootstrapping is true, dn checker will construct create dn shard command immediately.
+	// If bootstrapping is true, tn checker will construct create tn shard command immediately.
 	// This flag helps to accelarate cluster bootstrapping.
 	bootstrapping bool
 )
@@ -44,7 +44,7 @@ func init() {
 	bootstrapping = true
 }
 
-// Check checks dn state and generate operator for expired dn store.
+// Check checks tn state and generate operator for expired tn store.
 // The less shard ID, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(
@@ -56,7 +56,7 @@ func Check(
 	currTick uint64,
 ) []*operator.Operator {
 	stores, reportedShards := parseTnState(cfg, tnState, currTick)
-	runtime.ProcessLevelRuntime().Logger().Debug("reported dn shards in cluster",
+	runtime.ProcessLevelRuntime().Logger().Debug("reported tn shards in cluster",
 		zap.Any("dn shard IDs", reportedShards.shardIDs),
 		zap.Any("dn shards", reportedShards.shards),
 	)
@@ -64,7 +64,7 @@ func Check(
 		runtime.ProcessLevelRuntime().Logger().Info("node is expired", zap.String("uuid", node.ID))
 	}
 	if len(stores.WorkingStores()) < 1 {
-		runtime.ProcessLevelRuntime().Logger().Warn("no working dn stores")
+		runtime.ProcessLevelRuntime().Logger().Warn("no working tn stores")
 		return nil
 	}
 
@@ -72,12 +72,12 @@ func Check(
 
 	var operators []*operator.Operator
 
-	// 1. check reported dn state
+	// 1. check reported tn state
 	operators = append(operators,
 		checkReportedState(reportedShards, mapper, stores.WorkingStores(), idAlloc)...,
 	)
 
-	// 2. check expected dn state
+	// 2. check expected tn state
 	operators = append(operators,
 		checkInitiatingShards(reportedShards, mapper, stores.WorkingStores(), idAlloc, cluster, cfg, currTick)...,
 	)
@@ -107,7 +107,7 @@ func checkShard(shard *tnShard, mapper ShardMapper, workingStores []*util.Store,
 
 		target, err := consumeLeastSpareStore(workingStores)
 		if err != nil {
-			runtime.ProcessLevelRuntime().Logger().Warn("no working dn stores")
+			runtime.ProcessLevelRuntime().Logger().Warn("no working tn stores")
 			return nil
 		}
 
@@ -147,7 +147,7 @@ func checkShard(shard *tnShard, mapper ShardMapper, workingStores []*util.Store,
 	}
 }
 
-// newAddStep constructs operator to launch a dn shard replica
+// newAddStep constructs operator to launch a tn shard replica
 func newAddStep(target string, shardID, replicaID, logShardID uint64) operator.OpStep {
 	return operator.AddTnReplica{
 		StoreID:    target,
@@ -157,7 +157,7 @@ func newAddStep(target string, shardID, replicaID, logShardID uint64) operator.O
 	}
 }
 
-// newRemoveStep constructs operator to remove a dn shard replica
+// newRemoveStep constructs operator to remove a tn shard replica
 func newRemoveStep(target string, shardID, replicaID, logShardID uint64) operator.OpStep {
 	return operator.RemoveTnReplica{
 		StoreID:    target,
@@ -194,8 +194,8 @@ func extraWorkingReplicas(shard *tnShard) []*tnReplica {
 	return working[0 : len(working)-1]
 }
 
-// consumeLeastSpareStore consume a slot from the least spare dn store.
-// If there are multiple dn store with the same least slots,
+// consumeLeastSpareStore consume a slot from the least spare tn store.
+// If there are multiple tn store with the same least slots,
 // the store with less ID would be chosen.
 // NB: the returned result should be deterministic.
 func consumeLeastSpareStore(working []*util.Store) (string, error) {
@@ -223,7 +223,7 @@ func consumeLeastSpareStore(working []*util.Store) (string, error) {
 		return leastStores[i].ID < leastStores[j].ID
 	})
 
-	// consume a slot from this dn store
+	// consume a slot from this tn store
 	leastStores[0].Length += 1
 
 	return leastStores[0].ID, nil

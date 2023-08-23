@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 )
 
-// replica dn shard replica.
+// replica tn shard replica.
 type replica struct {
 	rt       runtime.Runtime
 	logger   *log.MOLogger

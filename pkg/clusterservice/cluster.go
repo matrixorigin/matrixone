@@ -39,7 +39,7 @@ func GetMOCluster() MOCluster {
 // Option options for create cluster
 type Option func(*cluster)
 
-// WithServices set init cn and dn services
+// WithServices set init cn and tn services
 func WithServices(
 	cnServices []metadata.CNService,
 	tnServices []metadata.TNService) Option {

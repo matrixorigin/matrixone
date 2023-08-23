@@ -188,7 +188,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	}
 
 	if len(request.Txn.TNShards) == 0 {
-		s.logger.Fatal("commit with empty dn shards")
+		s.logger.Fatal("commit with empty tn shards")
 	}
 
 	if len(request.Txn.LockTables) > 0 &&
@@ -342,7 +342,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	}
 
 	if len(request.Txn.TNShards) == 0 {
-		s.logger.Fatal("rollback with empty dn shards")
+		s.logger.Fatal("rollback with empty tn shards")
 	}
 
 	txnID := request.Txn.ID

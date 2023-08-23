@@ -46,7 +46,7 @@ func TestShutdownStores(t *testing.T) {
 		}
 	}
 
-	// operator for dn service
+	// operator for tn service
 	{
 		serviceType := pb.TNService
 		ops := shutdownStores(serviceType, stores)

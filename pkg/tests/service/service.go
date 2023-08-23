@@ -66,14 +66,14 @@ type Cluster interface {
 
 // ClusterOperation supports kinds of cluster operations.
 type ClusterOperation interface {
-	// CloseTNService closes dn service by uuid.
+	// CloseTNService closes tn service by uuid.
 	CloseTNService(uuid string) error
-	// StartTNService starts dn service by uuid.
+	// StartTNService starts tn service by uuid.
 	StartTNService(uuid string) error
 
-	// CloseTNServiceIndexed closes dn service by its index.
+	// CloseTNServiceIndexed closes tn service by its index.
 	CloseTNServiceIndexed(index int) error
-	// StartTNServiceIndexed starts dn service by its index.
+	// StartTNServiceIndexed starts tn service by its index.
 	StartTNServiceIndexed(index int) error
 
 	// CloseLogService closes log service by uuid.
@@ -108,7 +108,7 @@ type ClusterOperation interface {
 
 // ClusterAwareness provides cluster awareness information.
 type ClusterAwareness interface {
-	// ListTNServices lists uuid of all dn services.
+	// ListTNServices lists uuid of all tn services.
 	ListTNServices() []string
 	// ListLogServices lists uuid of all log services.
 	ListLogServices() []string
@@ -117,11 +117,11 @@ type ClusterAwareness interface {
 	// ListHAKeeperServices lists all hakeeper log services.
 	ListHAKeeperServices() []LogService
 
-	// GetTNService fetches dn service instance by uuid.
+	// GetTNService fetches tn service instance by uuid.
 	GetTNService(uuid string) (TNService, error)
 	// GetLogService fetches log service instance by index.
 	GetLogService(uuid string) (LogService, error)
-	// GetTNServiceIndexed fetches dn service instance by uuid.
+	// GetTNServiceIndexed fetches tn service instance by uuid.
 	GetTNServiceIndexed(index int) (TNService, error)
 	// GetLogServiceIndexed fetches log service instance by index.
 	GetLogServiceIndexed(index int) (LogService, error)
@@ -136,14 +136,14 @@ type ClusterAwareness interface {
 
 // ClusterState provides cluster running state.
 type ClusterState interface {
-	// ListTNShards lists all dn shards within the cluster.
+	// ListTNShards lists all tn shards within the cluster.
 	ListTNShards(ctx context.Context) ([]metadata.TNShardRecord, error)
 	// ListLogShards lists all log shards within the cluster.
 	ListLogShards(ctx context.Context) ([]metadata.LogShardRecord, error)
 
-	// GetTNStoreInfo gets dn store information by uuid.
+	// GetTNStoreInfo gets tn store information by uuid.
 	GetTNStoreInfo(ctx context.Context, uuid string) (logpb.TNStoreInfo, error)
-	// GetTNStoreInfoIndexed gets dn store information by index.
+	// GetTNStoreInfoIndexed gets tn store information by index.
 	GetTNStoreInfoIndexed(ctx context.Context, index int) (logpb.TNStoreInfo, error)
 
 	// GetLogStoreInfo gets log store information by uuid.
@@ -161,9 +161,9 @@ type ClusterState interface {
 	// GetHAKeeperConfig returns hakeeper configuration.
 	GetHAKeeperConfig() hakeeper.Config
 
-	// TNStoreExpired checks dn store expired or not by uuid.
+	// TNStoreExpired checks tn store expired or not by uuid.
 	TNStoreExpired(uuid string) (bool, error)
-	// TNStoreExpiredIndexed checks dn store expired or not by index.
+	// TNStoreExpiredIndexed checks tn store expired or not by index.
 	TNStoreExpiredIndexed(index int) (bool, error)
 	// LogStoreExpired checks log store expired or not by uuid.
 	LogStoreExpired(uuid string) (bool, error)
@@ -185,26 +185,26 @@ type ClusterWaitState interface {
 	// WaitHAKeeperState waits the specific hakeeper state.
 	WaitHAKeeperState(ctx context.Context, expected logpb.HAKeeperState)
 
-	// WaitTNShardsReported waits the expected count of dn shards reported.
+	// WaitTNShardsReported waits the expected count of tn shards reported.
 	WaitTNShardsReported(ctx context.Context)
 	// WaitLogShardsReported waits the expected count of log shards reported.
 	WaitLogShardsReported(ctx context.Context)
-	// WaitTNReplicaReported waits dn replica reported.
+	// WaitTNReplicaReported waits tn replica reported.
 	WaitTNReplicaReported(ctx context.Context, shardID uint64)
 	// WaitLogReplicaReported waits log replicas reported.
 	WaitLogReplicaReported(ctx context.Context, shardID uint64)
 
-	// WaitTNStoreTimeout waits dn store timeout by uuid.
+	// WaitTNStoreTimeout waits tn store timeout by uuid.
 	WaitTNStoreTimeout(ctx context.Context, uuid string)
-	// WaitTNStoreTimeoutIndexed waits dn store timeout by index.
+	// WaitTNStoreTimeoutIndexed waits tn store timeout by index.
 	WaitTNStoreTimeoutIndexed(ctx context.Context, index int)
-	// WaitTNStoreReported waits dn store reported by uuid.
+	// WaitTNStoreReported waits tn store reported by uuid.
 	WaitTNStoreReported(ctx context.Context, uuid string)
-	// WaitTNStoreReportedIndexed waits dn store reported by index.
+	// WaitTNStoreReportedIndexed waits tn store reported by index.
 	WaitTNStoreReportedIndexed(ctx context.Context, index int)
-	// WaitTNStoreTaskServiceCreated waits dn store task service started by uuid.
+	// WaitTNStoreTaskServiceCreated waits tn store task service started by uuid.
 	WaitTNStoreTaskServiceCreated(ctx context.Context, uuid string)
-	// WaitTNStoreTaskServiceCreatedIndexed waits dn store task service started by index.
+	// WaitTNStoreTaskServiceCreatedIndexed waits tn store task service started by index.
 	WaitTNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 	// WaitCNStoreReported waits cn store reported by uuid.
 	WaitCNStoreReported(ctx context.Context, uuid string)
@@ -233,7 +233,7 @@ type ClusterWaitState interface {
 // The following are implements for interface `Cluster`.
 // ----------------------------------------------------
 
-// testCluster simulates a cluster with dn and log service.
+// testCluster simulates a cluster with tn and log service.
 type testCluster struct {
 	t       *testing.T
 	testID  string
@@ -307,7 +307,7 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	c.network.addresses = c.buildServiceAddresses()
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
-	// build dn service configurations
+	// build tn service configurations
 	c.tn.cfgs, c.tn.opts = c.buildTNConfigs(c.network.addresses)
 	// build cn service configurations
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
@@ -334,7 +334,7 @@ func (c *testCluster) Start() error {
 		return err
 	}
 
-	// start dn services
+	// start tn services
 	if err := c.startTNServices(ctx); err != nil {
 		return err
 	}
@@ -367,7 +367,7 @@ func (c *testCluster) Close() error {
 		return err
 	}
 
-	// close all dn services
+	// close all tn services
 	if err := c.closeTNServices(); err != nil {
 		return err
 	}
@@ -502,7 +502,7 @@ func (c *testCluster) TNStoreExpired(uuid string) (bool, error) {
 	expired := hkcfg.TNStoreExpired(tnStore.Tick, state.Tick)
 
 	c.logger.Info(
-		"check dn store expired or not",
+		"check tn store expired or not",
 		zap.Any("hakeeper config", hkcfg),
 		zap.Uint64("dn store tick", tnStore.Tick),
 		zap.Uint64("current tick", state.Tick),
@@ -649,7 +649,7 @@ func (c *testCluster) WaitTNShardsReported(ctx context.Context) {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting for all dn shards reported",
+				"terminated when waiting for all tn shards reported",
 				"error: %s", ctx.Err(),
 			)
 		default:
@@ -708,7 +708,7 @@ func (c *testCluster) WaitTNReplicaReported(ctx context.Context, shardID uint64)
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting replica of dn shard reported",
+				"terminated when waiting replica of tn shard reported",
 				"shard %d, error: %s", shardID, ctx.Err(),
 			)
 		default:
@@ -763,7 +763,7 @@ func (c *testCluster) WaitTNStoreTimeout(ctx context.Context, uuid string) {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting dn store timeout",
+				"terminated when waiting tn store timeout",
 				"dn store %s, error: %s", uuid, ctx.Err(),
 			)
 		default:
@@ -771,7 +771,7 @@ func (c *testCluster) WaitTNStoreTimeout(ctx context.Context, uuid string) {
 
 			expired, err := c.TNStoreExpired(uuid)
 			if err != nil {
-				c.logger.Error("fail to check dn store expired or not",
+				c.logger.Error("fail to check tn store expired or not",
 					zap.Error(err),
 					zap.String("uuid", uuid),
 				)
@@ -798,7 +798,7 @@ func (c *testCluster) WaitTNStoreReported(ctx context.Context, uuid string) {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting dn store reported",
+				"terminated when waiting tn store reported",
 				"dn store %s, error: %s", uuid, ctx.Err(),
 			)
 		default:
@@ -806,7 +806,7 @@ func (c *testCluster) WaitTNStoreReported(ctx context.Context, uuid string) {
 
 			expired, err := c.TNStoreExpired(uuid)
 			if err != nil {
-				c.logger.Error("fail to check dn store expired or not",
+				c.logger.Error("fail to check tn store expired or not",
 					zap.Error(err),
 					zap.String("uuid", uuid),
 				)
@@ -899,7 +899,7 @@ func (c *testCluster) WaitTNStoreTaskServiceCreated(ctx context.Context, uuid st
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting task service created on dn store",
+				"terminated when waiting task service created on tn store",
 				"dn store %s, error: %s", uuid, ctx.Err(),
 			)
 		default:
@@ -1262,7 +1262,7 @@ func (c *testCluster) buildServiceAddresses() serviceAddresses {
 		c.opt.initial.tnServiceNum, c.opt.initial.cnServiceNum, c.opt.hostAddr)
 }
 
-// buildTNConfigs builds configurations for all dn services.
+// buildTNConfigs builds configurations for all tn services.
 func (c *testCluster) buildTNConfigs(
 	address serviceAddresses,
 ) ([]*tnservice.Config, []tnOptions) {
@@ -1318,13 +1318,13 @@ func (c *testCluster) buildCNConfigs(
 	return cfgs, opts
 }
 
-// initTNServices builds all dn services.
+// initTNServices builds all tn services.
 //
-// Before initializing dn service, log service must be started already.
+// Before initializing tn service, log service must be started already.
 func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 	batch := c.opt.initial.tnServiceNum
 
-	c.logger.Info("initialize dn services", zap.Int("batch", batch))
+	c.logger.Info("initialize tn services", zap.Int("batch", batch))
 
 	svcs := make([]TNService, 0, batch)
 	for i := 0; i < batch; i++ {
@@ -1417,12 +1417,12 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 	return svcs
 }
 
-// startTNServices initializes and starts all dn services.
+// startTNServices initializes and starts all tn services.
 func (c *testCluster) startTNServices(ctx context.Context) error {
-	// initialize all dn services
+	// initialize all tn services
 	c.tn.svcs = c.initTNServices(c.fileservices)
 
-	// start dn services
+	// start tn services
 	for _, ds := range c.tn.svcs {
 		if err := ds.Start(); err != nil {
 			return err
@@ -1474,12 +1474,12 @@ func (c *testCluster) startCNServices(ctx context.Context) error {
 	return nil
 }
 
-// closeTNServices closes all dn services.
+// closeTNServices closes all tn services.
 func (c *testCluster) closeTNServices() error {
-	c.logger.Info("start to close dn services")
+	c.logger.Info("start to close tn services")
 
 	for i, ds := range c.tn.svcs {
-		c.logger.Info("close dn service", zap.Int("index", i))
+		c.logger.Info("close tn service", zap.Int("index", i))
 		if err := ds.Close(); err != nil {
 			return err
 		}

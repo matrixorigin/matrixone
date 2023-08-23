@@ -40,7 +40,7 @@ const (
 	defaultHostAddr    = "127.0.0.1"
 	defaultRootDataDir = "/tmp/mo/tests"
 
-	// default configuration for dn service
+	// default configuration for tn service
 	defaultTNStorage = tnservice.StorageTAE
 	defaultCNEngine  = cnservice.EngineDistributedTAE
 
@@ -210,7 +210,7 @@ func (opt Options) BuildHAKeeperConfig() hakeeper.Config {
 	}
 }
 
-// WithTNServiceNum sets dn service number in the cluster.
+// WithTNServiceNum sets tn service number in the cluster.
 func (opt Options) WithTNServiceNum(num int) Options {
 	opt.initial.tnServiceNum = num
 	return opt
@@ -233,7 +233,7 @@ func (opt Options) WithLogShardNum(num uint64) Options {
 	return opt
 }
 
-// WithTNShartnum sets dn shard number in the cluster.
+// WithTNShartnum sets tn shard number in the cluster.
 func (opt Options) WithTNShartnum(num uint64) Options {
 	opt.initial.tnShartnum = num
 	return opt
@@ -256,13 +256,13 @@ func (opt Options) WithRootDataDir(root string) Options {
 	return opt
 }
 
-// WithTNUseTAEStorage sets dn transaction use tae storage.
+// WithTNUseTAEStorage sets tn transaction use tae storage.
 func (opt Options) WithTNUseTAEStorage() Options {
 	opt.storage.tnStorage = tnservice.StorageTAE
 	return opt
 }
 
-// WithTNUseMEMStorage sets dn transaction use mem storage.
+// WithTNUseMEMStorage sets tn transaction use mem storage.
 func (opt Options) WithTNUseMEMStorage() Options {
 	opt.storage.tnStorage = tnservice.StorageMEM
 	return opt
@@ -310,7 +310,7 @@ func (opt Options) WithHKLogStoreTimeout(timeout time.Duration) Options {
 	return opt
 }
 
-// WithHKTNStoreTimeout sets dn store timeout for hakeeper.
+// WithHKTNStoreTimeout sets tn store timeout for hakeeper.
 func (opt Options) WithHKTNStoreTimeout(timeout time.Duration) Options {
 	opt.hakeeper.tnStoreTimeout = timeout
 	return opt
@@ -327,7 +327,7 @@ func (opt Options) WithHKCheckInterval(interval time.Duration) Options {
 	return opt
 }
 
-// WithTNHeartbeatInterval sets heartbeat interval fo dn service.
+// WithTNHeartbeatInterval sets heartbeat interval fo tn service.
 func (opt Options) WithTNHeartbeatInterval(interval time.Duration) Options {
 	opt.heartbeat.tn = interval
 	return opt

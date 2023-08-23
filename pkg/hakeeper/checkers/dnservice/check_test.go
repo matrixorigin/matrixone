@@ -212,7 +212,7 @@ func TestCheck(t *testing.T) {
 	newReplicaID := uint64(100)
 	idAlloc := newMockIDAllocator(newReplicaID, enough)
 
-	// 1. no working dn stores
+	// 1. no working tn stores
 	{
 		tnState := pb.TNState{
 			Stores: map[string]pb.TNStoreInfo{

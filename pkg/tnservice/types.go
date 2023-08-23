@@ -36,10 +36,10 @@ type Option func(*store)
 
 // Service DN Service
 type Service interface {
-	// Start start dn store. Start all DNShards currently managed by the Store and listen
+	// Start start tn store. Start all DNShards currently managed by the Store and listen
 	// to and process requests from CN and other DNs.
 	Start() error
-	// Close close dn store
+	// Close close tn store
 	Close() error
 
 	// StartTNReplica start the DNShard replica

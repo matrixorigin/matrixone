@@ -151,7 +151,7 @@ func TestParseTNState(t *testing.T) {
 	cfg.Fill()
 	currTick := cfg.ExpiredTick(expiredTick, cfg.TNStoreTimeout) + 1
 
-	// 1. no working dn stores
+	// 1. no working tn stores
 	{
 		tnState := pb.TNState{
 			Stores: map[string]pb.TNStoreInfo{
