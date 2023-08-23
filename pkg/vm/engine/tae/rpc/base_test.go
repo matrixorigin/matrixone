@@ -170,7 +170,7 @@ func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	return txnMeta
 }
 
-func mockDNShard(id uint64) metadata.TNShard {
+func mockTNShard(id uint64) metadata.TNShard {
 	return metadata.TNShard{
 		TNShardRecord: metadata.TNShardRecord{
 			ShardID:    id,
@@ -185,8 +185,8 @@ func mock2PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
-	txnMeta.TNShards = append(txnMeta.TNShards, mockDNShard(1))
-	txnMeta.TNShards = append(txnMeta.TNShards, mockDNShard(2))
+	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(1))
+	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(2))
 	return txnMeta
 }
 
