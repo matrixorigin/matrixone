@@ -145,7 +145,7 @@ func TestHandleDNHeartbeat(t *testing.T) {
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 
-	hb := pb.DNStoreHeartbeat{
+	hb := pb.TNStoreHeartbeat{
 		UUID: "uuid1",
 		Shards: []pb.DNShardInfo{
 			{ShardID: 1, ReplicaID: 1},

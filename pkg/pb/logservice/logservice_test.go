@@ -74,7 +74,7 @@ func TestCNStateUpdate(t *testing.T) {
 func TestDNStateUpdate(t *testing.T) {
 	state := DNState{Stores: map[string]DNStoreInfo{}}
 
-	hb1 := DNStoreHeartbeat{
+	hb1 := TNStoreHeartbeat{
 		UUID:           "dn-a",
 		ServiceAddress: "addr-a",
 		Shards: []DNShardInfo{{
@@ -93,7 +93,7 @@ func TestDNStateUpdate(t *testing.T) {
 		LogtailServerAddress: hb1.LogtailServerAddress,
 	})
 
-	hb2 := DNStoreHeartbeat{
+	hb2 := TNStoreHeartbeat{
 		UUID:           "dn-a",
 		ServiceAddress: "addr-a",
 		Shards: []DNShardInfo{

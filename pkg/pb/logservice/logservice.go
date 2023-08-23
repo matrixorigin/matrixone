@@ -148,7 +148,7 @@ func NewDNState() DNState {
 
 // Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
 // current tick of the HAKeeper which is used as the timestamp of the heartbeat.
-func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
+func (s *DNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
 		storeInfo = DNStoreInfo{}

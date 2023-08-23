@@ -345,7 +345,7 @@ func (thc *testHAKeeperClient) Close() error {
 	return nil
 }
 
-func (thc *testHAKeeperClient) SendDNHeartbeat(ctx context.Context, hb logservicepb.DNStoreHeartbeat) (logservicepb.CommandBatch, error) {
+func (thc *testHAKeeperClient) SendDNHeartbeat(ctx context.Context, hb logservicepb.TNStoreHeartbeat) (logservicepb.CommandBatch, error) {
 	atomic.AddUint64(&thc.atomic.count, 1)
 	thc.mu.RLock()
 	defer thc.mu.RUnlock()

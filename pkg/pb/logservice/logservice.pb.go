@@ -1201,8 +1201,8 @@ func (m *DNShardInfo) GetReplicaID() uint64 {
 	return 0
 }
 
-// DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
-type DNStoreHeartbeat struct {
+// TNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
+type TNStoreHeartbeat struct {
 	// UUID is the uuid of the DN Store.
 	UUID           string `protobuf:"bytes,1,opt,name=UUID,proto3" json:"UUID,omitempty"`
 	ServiceAddress string `protobuf:"bytes,2,opt,name=ServiceAddress,proto3" json:"ServiceAddress,omitempty"`
@@ -1220,16 +1220,16 @@ type DNStoreHeartbeat struct {
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *DNStoreHeartbeat) Reset()         { *m = DNStoreHeartbeat{} }
-func (m *DNStoreHeartbeat) String() string { return proto.CompactTextString(m) }
-func (*DNStoreHeartbeat) ProtoMessage()    {}
-func (*DNStoreHeartbeat) Descriptor() ([]byte, []int) {
+func (m *TNStoreHeartbeat) Reset()         { *m = TNStoreHeartbeat{} }
+func (m *TNStoreHeartbeat) String() string { return proto.CompactTextString(m) }
+func (*TNStoreHeartbeat) ProtoMessage()    {}
+func (*TNStoreHeartbeat) Descriptor() ([]byte, []int) {
 	return fileDescriptor_fd1040c5381ab5a7, []int{9}
 }
-func (m *DNStoreHeartbeat) XXX_Unmarshal(b []byte) error {
+func (m *TNStoreHeartbeat) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *DNStoreHeartbeat) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TNStoreHeartbeat) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
 		return xxx_messageInfo_DNStoreHeartbeat.Marshal(b, m, deterministic)
 	} else {
@@ -1241,61 +1241,61 @@ func (m *DNStoreHeartbeat) XXX_Marshal(b []byte, deterministic bool) ([]byte, er
 		return b[:n], nil
 	}
 }
-func (m *DNStoreHeartbeat) XXX_Merge(src proto.Message) {
+func (m *TNStoreHeartbeat) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_DNStoreHeartbeat.Merge(m, src)
 }
-func (m *DNStoreHeartbeat) XXX_Size() int {
+func (m *TNStoreHeartbeat) XXX_Size() int {
 	return m.Size()
 }
-func (m *DNStoreHeartbeat) XXX_DiscardUnknown() {
+func (m *TNStoreHeartbeat) XXX_DiscardUnknown() {
 	xxx_messageInfo_DNStoreHeartbeat.DiscardUnknown(m)
 }
 
 var xxx_messageInfo_DNStoreHeartbeat proto.InternalMessageInfo
 
-func (m *DNStoreHeartbeat) GetUUID() string {
+func (m *TNStoreHeartbeat) GetUUID() string {
 	if m != nil {
 		return m.UUID
 	}
 	return ""
 }
 
-func (m *DNStoreHeartbeat) GetServiceAddress() string {
+func (m *TNStoreHeartbeat) GetServiceAddress() string {
 	if m != nil {
 		return m.ServiceAddress
 	}
 	return ""
 }
 
-func (m *DNStoreHeartbeat) GetShards() []DNShardInfo {
+func (m *TNStoreHeartbeat) GetShards() []DNShardInfo {
 	if m != nil {
 		return m.Shards
 	}
 	return nil
 }
 
-func (m *DNStoreHeartbeat) GetTaskServiceCreated() bool {
+func (m *TNStoreHeartbeat) GetTaskServiceCreated() bool {
 	if m != nil {
 		return m.TaskServiceCreated
 	}
 	return false
 }
 
-func (m *DNStoreHeartbeat) GetLogtailServerAddress() string {
+func (m *TNStoreHeartbeat) GetLogtailServerAddress() string {
 	if m != nil {
 		return m.LogtailServerAddress
 	}
 	return ""
 }
 
-func (m *DNStoreHeartbeat) GetLockServiceAddress() string {
+func (m *TNStoreHeartbeat) GetLockServiceAddress() string {
 	if m != nil {
 		return m.LockServiceAddress
 	}
 	return ""
 }
 
-func (m *DNStoreHeartbeat) GetCtlAddress() string {
+func (m *TNStoreHeartbeat) GetCtlAddress() string {
 	if m != nil {
 		return m.CtlAddress
 	}
@@ -1775,7 +1775,7 @@ type Request struct {
 	LogRequest           LogRequest         `protobuf:"bytes,3,opt,name=LogRequest,proto3" json:"LogRequest"`
 	LogHeartbeat         *LogStoreHeartbeat `protobuf:"bytes,4,opt,name=LogHeartbeat,proto3" json:"LogHeartbeat,omitempty"`
 	CNHeartbeat          *CNStoreHeartbeat  `protobuf:"bytes,5,opt,name=CNHeartbeat,proto3" json:"CNHeartbeat,omitempty"`
-	DNHeartbeat          *DNStoreHeartbeat  `protobuf:"bytes,6,opt,name=DNHeartbeat,proto3" json:"DNHeartbeat,omitempty"`
+	DNHeartbeat          *TNStoreHeartbeat  `protobuf:"bytes,6,opt,name=DNHeartbeat,proto3" json:"DNHeartbeat,omitempty"`
 	TsoRequest           *TsoRequest        `protobuf:"bytes,7,opt,name=TsoRequest,proto3" json:"TsoRequest,omitempty"`
 	CNAllocateID         *CNAllocateID      `protobuf:"bytes,8,opt,name=CNAllocateID,proto3" json:"CNAllocateID,omitempty"`
 	CNStoreLabel         *CNStoreLabel      `protobuf:"bytes,9,opt,name=CNStoreLabel,proto3" json:"CNStoreLabel,omitempty"`
@@ -1855,7 +1855,7 @@ func (m *Request) GetCNHeartbeat() *CNStoreHeartbeat {
 	return nil
 }
 
-func (m *Request) GetDNHeartbeat() *DNStoreHeartbeat {
+func (m *Request) GetDNHeartbeat() *TNStoreHeartbeat {
 	if m != nil {
 		return m.DNHeartbeat
 	}
@@ -3911,7 +3911,7 @@ func init() {
 	proto.RegisterType((*CNAllocateID)(nil), "logservice.CNAllocateID")
 	proto.RegisterType((*LogStoreHeartbeat)(nil), "logservice.LogStoreHeartbeat")
 	proto.RegisterType((*DNShardInfo)(nil), "logservice.DNShardInfo")
-	proto.RegisterType((*DNStoreHeartbeat)(nil), "logservice.DNStoreHeartbeat")
+	proto.RegisterType((*TNStoreHeartbeat)(nil), "logservice.DNStoreHeartbeat")
 	proto.RegisterType((*RSMState)(nil), "logservice.RSMState")
 	proto.RegisterMapType((map[uint64]uint64)(nil), "logservice.RSMState.LeaseHistoryEntry")
 	proto.RegisterType((*LogRecord)(nil), "logservice.LogRecord")
@@ -4791,7 +4791,7 @@ func (m *DNShardInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *DNStoreHeartbeat) Marshal() (dAtA []byte, err error) {
+func (m *TNStoreHeartbeat) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -4801,12 +4801,12 @@ func (m *DNStoreHeartbeat) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *DNStoreHeartbeat) MarshalTo(dAtA []byte) (int, error) {
+func (m *TNStoreHeartbeat) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *DNStoreHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TNStoreHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -7477,7 +7477,7 @@ func (m *DNShardInfo) Size() (n int) {
 	return n
 }
 
-func (m *DNStoreHeartbeat) Size() (n int) {
+func (m *TNStoreHeartbeat) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -10529,7 +10529,7 @@ func (m *DNShardInfo) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *DNStoreHeartbeat) Unmarshal(dAtA []byte) error {
+func (m *TNStoreHeartbeat) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -12157,7 +12157,7 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.DNHeartbeat == nil {
-				m.DNHeartbeat = &DNStoreHeartbeat{}
+				m.DNHeartbeat = &TNStoreHeartbeat{}
 			}
 			if err := m.DNHeartbeat.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err

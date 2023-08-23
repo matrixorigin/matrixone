@@ -467,7 +467,7 @@ func (l *store) cnAllocateID(ctx context.Context,
 }
 
 func (l *store) addDNStoreHeartbeat(ctx context.Context,
-	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
+	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
 	cmd := hakeeper.GetDNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)

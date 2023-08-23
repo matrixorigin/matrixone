@@ -175,7 +175,7 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		assert.NoError(t, cc.mu.client.close())
 		cc.mu.client = nil
 
-		hb2 := pb.DNStoreHeartbeat{
+		hb2 := pb.TNStoreHeartbeat{
 			UUID:                 s.ID(),
 			ServiceAddress:       "addr2",
 			LogtailServerAddress: "addr3",
@@ -219,7 +219,7 @@ func TestHAKeeperClientSendDNHeartbeat(t *testing.T) {
 		defer func() {
 			assert.NoError(t, c.Close())
 		}()
-		hb := pb.DNStoreHeartbeat{
+		hb := pb.TNStoreHeartbeat{
 			UUID: s.ID(),
 		}
 		cb, err := c.SendDNHeartbeat(ctx, hb)
@@ -391,7 +391,7 @@ func TestSendDNHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
 		oldc := c.mu.client
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_, err := c.SendDNHeartbeat(ctx, pb.DNStoreHeartbeat{})
+		_, err := c.SendDNHeartbeat(ctx, pb.TNStoreHeartbeat{})
 		require.NoError(t, err)
 		require.True(t, oldc != c.mu.client)
 	}

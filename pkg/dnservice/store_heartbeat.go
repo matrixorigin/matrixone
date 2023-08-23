@@ -54,7 +54,7 @@ func (s *store) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeout(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration)
 	defer cancel()
 
-	hb := logservicepb.DNStoreHeartbeat{
+	hb := logservicepb.TNStoreHeartbeat{
 		UUID:                 s.cfg.UUID,
 		ServiceAddress:       s.txnServiceServiceAddr(),
 		Shards:               s.getDNShardInfo(),

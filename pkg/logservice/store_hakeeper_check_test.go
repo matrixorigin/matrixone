@@ -316,7 +316,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		sendHeartbeat(services[:3])
 
 		// fake a DN store
-		dnMsg := pb.DNStoreHeartbeat{
+		dnMsg := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}
@@ -397,7 +397,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		_, err = services[0].store.addDNStoreHeartbeat(ctx, dnMsg)
 		require.NoError(t, err)
 		// fake a free DN store
-		dnMsg2 := pb.DNStoreHeartbeat{
+		dnMsg2 := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}
@@ -575,7 +575,7 @@ func testBootstrap(t *testing.T, fail bool) {
 		_, err = store.addLogStoreHeartbeat(ctx, m)
 		assert.NoError(t, err)
 
-		dnMsg := pb.DNStoreHeartbeat{
+		dnMsg := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
 			Shards: make([]pb.DNShardInfo, 0),
 		}

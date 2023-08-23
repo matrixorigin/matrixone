@@ -263,7 +263,7 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 
 		req := pb.Request{
 			Method: pb.DN_HEARTBEAT,
-			DNHeartbeat: &pb.DNStoreHeartbeat{
+			DNHeartbeat: &pb.TNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}

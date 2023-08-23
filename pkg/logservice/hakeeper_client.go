@@ -64,7 +64,7 @@ type DNHAKeeperClient interface {
 	// SendDNHeartbeat sends the specified heartbeat message to the HAKeeper. The
 	// returned CommandBatch contains Schedule Commands to be executed by the local
 	// DN store.
-	SendDNHeartbeat(ctx context.Context, hb pb.DNStoreHeartbeat) (pb.CommandBatch, error)
+	SendDNHeartbeat(ctx context.Context, hb pb.TNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
@@ -322,7 +322,7 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 }
 
 func (c *managedHAKeeperClient) SendDNHeartbeat(ctx context.Context,
-	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
+	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
@@ -649,7 +649,7 @@ func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, key string, batch
 }
 
 func (c *hakeeperClient) sendDNHeartbeat(ctx context.Context,
-	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
+	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:      pb.DN_HEARTBEAT,
 		DNHeartbeat: &hb,

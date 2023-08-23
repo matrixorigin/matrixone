@@ -150,8 +150,8 @@ message DNShardInfo {
   // TODO: per shard stats like CPU/memory/network usage can be added here
 };
 
-// DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
-message DNStoreHeartbeat {
+// TNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
+message TNStoreHeartbeat {
   // UUID is the uuid of the DN Store.
   string UUID                 = 1;
   string ServiceAddress       = 2;
@@ -261,7 +261,7 @@ message Request {
   LogRequest LogRequest          = 3 [(gogoproto.nullable) = false];
   LogStoreHeartbeat LogHeartbeat = 4;
   CNStoreHeartbeat CNHeartbeat   = 5;
-  DNStoreHeartbeat DNHeartbeat   = 6;
+  TNStoreHeartbeat DNHeartbeat   = 6;
   TsoRequest TsoRequest          = 7;
   CNAllocateID CNAllocateID      = 8;
   CNStoreLabel CNStoreLabel      = 9;

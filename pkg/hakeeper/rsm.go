@@ -387,7 +387,7 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 
 func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
 	data := parseHeartbeatCmd(cmd)
-	var hb pb.DNStoreHeartbeat
+	var hb pb.TNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
