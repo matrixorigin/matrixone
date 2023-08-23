@@ -53,8 +53,8 @@ jobs:
           mv $GITHUB_WORKSPACE/upstream/optools .
           echo "==============cn configuration of upstram=============="
           cat ./etc/launch/cn.toml
-          echo "==============dn configuration of upstram=============="
-          cat ./etc/launch/dn.toml     
+          echo "==============tn configuration of upstram=============="
+          cat ./etc/launch/tn.toml     
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Clone test-tool repository
@@ -110,8 +110,8 @@ jobs:
           mv $GITHUB_WORKSPACE/head/mo-service .
           echo "==============cn configuration of upstram=============="
           cat ./etc/launch/cn.toml
-          echo "==============dn configuration of upstram=============="
-          cat ./etc/launch/dn.toml   
+          echo "==============tn configuration of upstram=============="
+          cat ./etc/launch/tn.toml   
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Start BVT Test for MO with Version of Head
