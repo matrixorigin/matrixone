@@ -32,11 +32,27 @@ func WithCounterSet(ctx context.Context, sets ...*CounterSet) context.Context {
 		}
 		return context.WithValue(ctx, CtxKeyCounters, v)
 	}
+
 	counters := v.(CounterSets)
+
+	allExist := true
+	for _, s := range sets {
+		if _, ok := counters[s]; !ok {
+			allExist = false
+			break
+		}
+	}
+
+	// if all exist already, try not to nest context too depth
+	if allExist {
+		return ctx
+	}
+
 	newCounters := make(CounterSets, len(counters)+1)
 	for counter := range counters {
 		newCounters[counter] = struct{}{}
 	}
+
 	for _, s := range sets {
 		newCounters[s] = struct{}{}
 	}
