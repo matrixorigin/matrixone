@@ -776,8 +776,8 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 		if err != nil {
 			return nil, err
 		}
-		dn := mq[k]
-		for _, info := range dn.Shards {
+		tn := mq[k]
+		for _, info := range tn.Shards {
 			reqs = append(reqs, txn.TxnRequest{
 				CNRequest: &txn.CNOpRequest{
 					OpCode:  uint32(api.OpCode_OpPreCommit),
@@ -787,7 +787,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 							ShardID: info.ShardID,
 						},
 						ReplicaID: info.ReplicaID,
-						Address:   dn.TxnServiceAddress,
+						Address:   tn.TxnServiceAddress,
 					},
 				},
 				Options: &txn.TxnRequestOptions{

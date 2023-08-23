@@ -87,7 +87,7 @@ type Options struct {
 	}
 
 	heartbeat struct {
-		dn  time.Duration
+		tn  time.Duration
 		cn  time.Duration
 		log time.Duration
 	}
@@ -176,8 +176,8 @@ func (opt *Options) validate() {
 	if opt.heartbeat.log == 0 {
 		opt.heartbeat.log = defaultLogHeartbeatInterval
 	}
-	if opt.heartbeat.dn == 0 {
-		opt.heartbeat.dn = defaultDNHeartbeatInterval
+	if opt.heartbeat.tn == 0 {
+		opt.heartbeat.tn = defaultDNHeartbeatInterval
 	}
 	if opt.heartbeat.cn == 0 {
 		opt.heartbeat.cn = defaultCNHeartbeatInterval
@@ -329,7 +329,7 @@ func (opt Options) WithHKCheckInterval(interval time.Duration) Options {
 
 // WithDNHeartbeatInterval sets heartbeat interval fo dn service.
 func (opt Options) WithDNHeartbeatInterval(interval time.Duration) Options {
-	opt.heartbeat.dn = interval
+	opt.heartbeat.tn = interval
 	return opt
 }
 

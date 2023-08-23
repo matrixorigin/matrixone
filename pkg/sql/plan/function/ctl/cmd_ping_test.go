@@ -34,7 +34,7 @@ func TestCmdPingDNWithEmptyDN(t *testing.T) {
 	initTestRuntime()
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
-		dn,
+		tn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return nil, nil
@@ -51,7 +51,7 @@ func TestCmdPingDNWithSingleDN(t *testing.T) {
 	ctx := context.Background()
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
-		dn,
+		tn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
@@ -72,7 +72,7 @@ func TestCmdPingDNWithMultiDN(t *testing.T) {
 	initTestRuntime(1, 2)
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
-		dn,
+		tn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
@@ -96,7 +96,7 @@ func TestCmdPingDNWithParameter(t *testing.T) {
 	initTestRuntime(1, 2)
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
-		dn,
+		tn,
 		"1",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{

@@ -187,13 +187,13 @@ func LogTxnReceivedResponses(responses []txn.TxnResponse) {
 
 // LogTxnCreateOn log Txn create on dn shard.
 func LogTxnCreateOn(txnMeta txn.TxnMeta,
-	dn metadata.DNShard) {
+	tn metadata.DNShard) {
 	logger := getSkipLogger()
 
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("txn created on DNShard",
 			TxnField(txnMeta),
-			TxnDNShardField(dn))
+			TxnDNShardField(tn))
 	}
 }
 
@@ -224,13 +224,13 @@ func LogTxnWaitUncommittedTxnsFailed(txnMeta txn.TxnMeta,
 
 // LogTxnReadFailed log Txn read failed.
 func LogTxnNotFoundOn(txnMeta txn.TxnMeta,
-	dn metadata.DNShard) {
+	tn metadata.DNShard) {
 	logger := getSkipLogger()
 
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("txn not found on DNShard",
 			TxnField(txnMeta),
-			TxnDNShardField(dn))
+			TxnDNShardField(tn))
 	}
 }
 
@@ -300,27 +300,27 @@ func LogTxnParallelPrepareCompleted(txnMeta txn.TxnMeta) {
 // LogTxnPrepareFailedOn log Tx prepare failed on DNShard
 func LogTxnPrepareFailedOn(
 	txnMeta txn.TxnMeta,
-	dn metadata.DNShard,
+	tn metadata.DNShard,
 	err *txn.TxnError) {
 	logger := getSkipLogger()
 
 	logger.Error("txn prepare failed on DNShard",
 		TxnField(txnMeta),
-		TxnDNShardField(dn),
+		TxnDNShardField(tn),
 		zap.String("error", err.DebugString()))
 }
 
 // LogTxnPrepareCompletedOn log Tx prepare completed on DNShard
 func LogTxnPrepareCompletedOn(
 	txnMeta txn.TxnMeta,
-	dn metadata.DNShard,
+	tn metadata.DNShard,
 	preparedTS timestamp.Timestamp) {
 	logger := getSkipLogger()
 
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("txn prepare completed on DNShard",
 			TxnField(txnMeta),
-			TxnDNShardField(dn),
+			TxnDNShardField(tn),
 			zap.String("prepared-ts", preparedTS.DebugString()))
 	}
 }
@@ -443,8 +443,8 @@ func TxnIDFieldWithID(id []byte) zap.Field {
 }
 
 // TxnDNShardField returns a dn shard zap field
-func TxnDNShardField(dn metadata.DNShard) zap.Field {
-	return zap.String("dn-shard", dn.DebugString())
+func TxnDNShardField(tn metadata.DNShard) zap.Field {
+	return zap.String("dn-shard", tn.DebugString())
 }
 
 // TxnField returns a txn zap field

@@ -143,8 +143,8 @@ func (m TxnMeta) DebugString() string {
 	n := len(m.DNShards)
 	var buf bytes.Buffer
 	buf.WriteString("/<")
-	for idx, dn := range m.DNShards {
-		buf.WriteString(dn.DebugString())
+	for idx, tn := range m.DNShards {
+		buf.WriteString(tn.DebugString())
 		if idx < n-1 {
 			buf.WriteString(", ")
 		}

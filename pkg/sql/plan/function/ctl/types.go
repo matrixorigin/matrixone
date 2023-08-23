@@ -27,11 +27,11 @@ import (
 type serviceType string
 
 var (
-	dn serviceType = "DN"
+	tn serviceType = "DN"
 	cn serviceType = "CN"
 
 	supportedServiceTypes = map[serviceType]struct{}{
-		dn: {},
+		tn: {},
 		cn: {},
 	}
 )

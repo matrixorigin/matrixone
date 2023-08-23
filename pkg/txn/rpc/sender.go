@@ -117,16 +117,16 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 
 	sr.reset(requests)
 	for idx := range requests {
-		dn := requests[idx].GetTargetDN()
-		st := sr.getStream(dn.ShardID)
+		tn := requests[idx].GetTargetDN()
+		st := sr.getStream(tn.ShardID)
 		if st == nil {
-			v, err := s.createStream(ctx, dn, len(requests))
+			v, err := s.createStream(ctx, tn, len(requests))
 			if err != nil {
 				sr.Release()
 				return nil, err
 			}
 			st = v
-			sr.setStream(dn.ShardID, v)
+			sr.setStream(tn.ShardID, v)
 		}
 
 		requests[idx].RequestID = st.ID()
@@ -157,16 +157,16 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
 	ctx, span := trace.Debug(ctx, "sender.doSend")
 	defer span.End()
-	dn := request.GetTargetDN()
+	tn := request.GetTargetDN()
 	if s.options.localDispatch != nil {
-		if handle := s.options.localDispatch(dn); handle != nil {
+		if handle := s.options.localDispatch(tn); handle != nil {
 			response := txn.TxnResponse{}
 			err := handle(ctx, &request, &response)
 			return response, err
 		}
 	}
 
-	f, err := s.client.Send(ctx, dn.Address, &request)
+	f, err := s.client.Send(ctx, tn.Address, &request)
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
@@ -179,15 +179,15 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	return *(v.(*txn.TxnResponse)), nil
 }
 
-func (s *sender) createStream(ctx context.Context, dn metadata.DNShard, size int) (morpc.Stream, error) {
+func (s *sender) createStream(ctx context.Context, tn metadata.DNShard, size int) (morpc.Stream, error) {
 	if s.options.localDispatch != nil {
-		if h := s.options.localDispatch(dn); h != nil {
+		if h := s.options.localDispatch(tn); h != nil {
 			ls := s.acquireLocalStream()
 			ls.setup(ctx, h)
 			return ls, nil
 		}
 	}
-	return s.client.NewStream(dn.Address, false)
+	return s.client.NewStream(tn.Address, false)
 }
 
 func (s *sender) acquireLocalStream() *localStream {
@@ -328,12 +328,12 @@ func (sr *SendResult) reset(requests []txn.TxnRequest) {
 	}
 }
 
-func (sr *SendResult) setStream(dn uint64, st morpc.Stream) {
-	sr.streams[dn] = st
+func (sr *SendResult) setStream(tn uint64, st morpc.Stream) {
+	sr.streams[tn] = st
 }
 
-func (sr *SendResult) getStream(dn uint64) morpc.Stream {
-	return sr.streams[dn]
+func (sr *SendResult) getStream(tn uint64) morpc.Stream {
+	return sr.streams[tn]
 }
 
 func (sr *SendResult) setResponse(resp *txn.TxnResponse, index int) {

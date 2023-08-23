@@ -61,7 +61,7 @@ func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
 
 	dnLocals := make([]fileservice.FileService, 0, dnServiceNum)
 	for i := 0; i < dnServiceNum; i++ {
-		dnLocals = append(dnLocals, factory(c.dn.cfgs[i].DataDir, defines.LocalFileServiceName))
+		dnLocals = append(dnLocals, factory(c.tn.cfgs[i].DataDir, defines.LocalFileServiceName))
 	}
 
 	cnLocals := make([]fileservice.FileService, 0, cnServiceNum)

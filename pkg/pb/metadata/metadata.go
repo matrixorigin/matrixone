@@ -26,8 +26,8 @@ func (m DNShard) IsEmpty() bool {
 }
 
 // Equal returns true if DNShard is same
-func (m DNShard) Equal(dn DNShard) bool {
-	return m.ShardID == dn.ShardID && m.ReplicaID == dn.ReplicaID
+func (m DNShard) Equal(tn DNShard) bool {
+	return m.ShardID == tn.ShardID && m.ReplicaID == tn.ReplicaID
 }
 
 // DebugString returns debug string

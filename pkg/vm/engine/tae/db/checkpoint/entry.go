@@ -85,11 +85,11 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 func (e *CheckpointEntry) LessEq(ts types.TS) bool {
 	return e.end.LessEq(ts)
 }
-func (e *CheckpointEntry) SetLocation(cn, dn objectio.Location) {
+func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	e.Lock()
 	defer e.Unlock()
 	e.cnLocation = cn
-	e.dnLocation = dn
+	e.dnLocation = tn
 }
 
 func (e *CheckpointEntry) GetLocation() objectio.Location {

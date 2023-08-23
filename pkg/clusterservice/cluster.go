@@ -141,9 +141,9 @@ func (c *cluster) GetDNService(selector Selector, apply func(metadata.TNService)
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, dn := range c.mu.tnServices {
-		if selector.filterDN(dn) {
-			if !apply(dn) {
+	for _, tn := range c.mu.tnServices {
+		if selector.filterDN(tn) {
+			if !apply(tn) {
 				return
 			}
 		}
@@ -239,9 +239,9 @@ func (c *cluster) refresh() {
 			c.logger.Debug("cn service added", zap.String("cn", v.DebugString()))
 		}
 	}
-	for _, dn := range details.DNStores {
-		v := newDNService(dn)
-		c.mu.tnServices[dn.UUID] = v
+	for _, tn := range details.DNStores {
+		v := newDNService(tn)
+		c.mu.tnServices[tn.UUID] = v
 		if c.logger.Enabled(zap.DebugLevel) {
 			c.logger.Debug("dn service added", zap.String("dn", v.DebugString()))
 		}
@@ -264,16 +264,16 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 	}
 }
 
-func newDNService(dn logpb.DNStore) metadata.TNService {
+func newDNService(tn logpb.DNStore) metadata.TNService {
 	v := metadata.TNService{
-		ServiceID:             dn.UUID,
-		TxnServiceAddress:     dn.ServiceAddress,
-		LogTailServiceAddress: dn.LogtailServerAddress,
-		LockServiceAddress:    dn.LockServiceAddress,
-		CtlAddress:            dn.CtlAddress,
+		ServiceID:             tn.UUID,
+		TxnServiceAddress:     tn.ServiceAddress,
+		LogTailServiceAddress: tn.LogtailServerAddress,
+		LockServiceAddress:    tn.LockServiceAddress,
+		CtlAddress:            tn.CtlAddress,
 	}
-	v.Shards = make([]metadata.DNShard, 0, len(dn.Shards))
-	for _, s := range dn.Shards {
+	v.Shards = make([]metadata.DNShard, 0, len(tn.Shards))
+	for _, s := range tn.Shards {
 		v.Shards = append(v.Shards, metadata.DNShard{
 			TNShardRecord: metadata.TNShardRecord{ShardID: s.ShardID},
 			ReplicaID:     s.ReplicaID,

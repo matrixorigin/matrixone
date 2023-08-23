@@ -187,9 +187,9 @@ func TestClusterAwareness(t *testing.T) {
 	hksvcs := c.ListHAKeeperServices()
 	require.NotZero(t, len(hksvcs))
 
-	dn, err := c.GetDNService(dsuuids[0])
+	tn, err := c.GetDNService(dsuuids[0])
 	require.NoError(t, err)
-	require.Equal(t, ServiceStarted, dn.Status())
+	require.Equal(t, ServiceStarted, tn.Status())
 
 	log, err := c.GetLogService(lsuuids[0])
 	require.NoError(t, err)

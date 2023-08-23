@@ -196,13 +196,13 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 			ServiceAddress: "addr1",
 			WorkState:      metadata.WorkState_Working,
 		}
-		dn := pb.DNStore{
+		tn := pb.DNStore{
 			UUID:                 s.ID(),
 			ServiceAddress:       "addr2",
 			LogtailServerAddress: "addr3",
 		}
 		assert.Equal(t, []pb.CNStore{cn}, cd.CNStores)
-		assert.Equal(t, []pb.DNStore{dn}, cd.DNStores)
+		assert.Equal(t, []pb.DNStore{tn}, cd.DNStores)
 	}
 	runServiceTest(t, true, true, fn)
 }

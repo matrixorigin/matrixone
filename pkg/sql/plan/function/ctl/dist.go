@@ -36,7 +36,7 @@ func getDNHandlerFunc(method pb.CmdMethod,
 		service serviceType,
 		parameter string,
 		sender requestSender) (pb.CtlResult, error) {
-		if service != dn {
+		if service != tn {
 			return pb.CtlResult{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
 		}
 		targetDNs, err := whichDN(parameter)

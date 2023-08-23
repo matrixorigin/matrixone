@@ -112,11 +112,11 @@ func TestWithHKCNStoreTimeout(t *testing.T) {
 
 func TestWithDNHeartbeatInterval(t *testing.T) {
 	opt := DefaultOptions()
-	require.Equal(t, defaultDNHeartbeatInterval, opt.heartbeat.dn)
+	require.Equal(t, defaultDNHeartbeatInterval, opt.heartbeat.tn)
 
 	interval := 21 * time.Second
 	opt = opt.WithDNHeartbeatInterval(interval)
-	require.Equal(t, interval, opt.heartbeat.dn)
+	require.Equal(t, interval, opt.heartbeat.tn)
 }
 
 func TestWithLogHeartbeatInterval(t *testing.T) {

@@ -56,8 +56,8 @@ func (s *store) initMetadata() error {
 }
 
 func (s *store) addDNShardLocked(shard metadata.DNShard) {
-	for _, dn := range s.mu.metadata.Shards {
-		if dn.ShardID == shard.ShardID {
+	for _, tn := range s.mu.metadata.Shards {
+		if tn.ShardID == shard.ShardID {
 			return
 		}
 	}
@@ -70,9 +70,9 @@ func (s *store) removeDNShard(id uint64) {
 	defer s.mu.Unlock()
 
 	var newShards []metadata.DNShard
-	for _, dn := range s.mu.metadata.Shards {
-		if dn.ShardID != id {
-			newShards = append(newShards, dn)
+	for _, tn := range s.mu.metadata.Shards {
+		if tn.ShardID != id {
+			newShards = append(newShards, tn)
 		}
 	}
 	s.mu.metadata.Shards = newShards

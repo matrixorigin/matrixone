@@ -242,7 +242,7 @@ type testCluster struct {
 	stopper *stopper.Stopper
 	clock   clock.Clock
 
-	dn struct {
+	tn struct {
 		sync.Mutex
 		cfgs []*dnservice.Config
 		opts []dnOptions
@@ -308,7 +308,7 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
 	// build dn service configurations
-	c.dn.cfgs, c.dn.opts = c.buildDNConfigs(c.network.addresses)
+	c.tn.cfgs, c.tn.opts = c.buildDNConfigs(c.network.addresses)
 	// build cn service configurations
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
 	// build FileService instances
@@ -1020,8 +1020,8 @@ func (c *testCluster) WaitLogStoreReportedIndexed(ctx context.Context, index int
 // The following are implements for interface `ClusterAwareness`.
 // --------------------------------------------------------------
 func (c *testCluster) ListTNServices() []string {
-	ids := make([]string, 0, len(c.dn.svcs))
-	for _, cfg := range c.dn.cfgs {
+	ids := make([]string, 0, len(c.tn.svcs))
+	for _, cfg := range c.tn.cfgs {
 		ids = append(ids, cfg.UUID)
 	}
 	return ids
@@ -1048,12 +1048,12 @@ func (c *testCluster) ListHAKeeperServices() []LogService {
 }
 
 func (c *testCluster) GetDNService(uuid string) (DNService, error) {
-	c.dn.Lock()
-	defer c.dn.Unlock()
+	c.tn.Lock()
+	defer c.tn.Unlock()
 
-	for i, cfg := range c.dn.cfgs {
+	for i, cfg := range c.tn.cfgs {
 		if cfg.UUID == uuid {
-			return c.dn.svcs[i], nil
+			return c.tn.svcs[i], nil
 		}
 	}
 	return nil, moerr.NewNoServiceNoCtx(uuid)
@@ -1084,13 +1084,13 @@ func (c *testCluster) GetCNService(uuid string) (CNService, error) {
 }
 
 func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
-	c.dn.Lock()
-	defer c.dn.Unlock()
+	c.tn.Lock()
+	defer c.tn.Unlock()
 
-	if index >= len(c.dn.svcs) || index < 0 {
+	if index >= len(c.tn.svcs) || index < 0 {
 		return nil, moerr.NewInvalidServiceIndexNoCtx(index)
 	}
-	return c.dn.svcs[index], nil
+	return c.tn.svcs[index], nil
 }
 
 func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
@@ -1328,8 +1328,8 @@ func (c *testCluster) initTNServices(fileservices *fileServices) []DNService {
 
 	svcs := make([]DNService, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := c.dn.cfgs[i]
-		opt := c.dn.opts[i]
+		cfg := c.tn.cfgs[i]
+		opt := c.tn.opts[i]
 		fs, err := fileservice.NewFileServices(
 			defines.LocalFileServiceName,
 			fileservices.getDNLocalFileService(i),
@@ -1420,10 +1420,10 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 // startTNServices initializes and starts all dn services.
 func (c *testCluster) startTNServices(ctx context.Context) error {
 	// initialize all dn services
-	c.dn.svcs = c.initTNServices(c.fileservices)
+	c.tn.svcs = c.initTNServices(c.fileservices)
 
 	// start dn services
-	for _, ds := range c.dn.svcs {
+	for _, ds := range c.tn.svcs {
 		if err := ds.Start(); err != nil {
 			return err
 		}
@@ -1478,7 +1478,7 @@ func (c *testCluster) startCNServices(ctx context.Context) error {
 func (c *testCluster) closeTNServices() error {
 	c.logger.Info("start to close dn services")
 
-	for i, ds := range c.dn.svcs {
+	for i, ds := range c.tn.svcs {
 		c.logger.Info("close dn service", zap.Int("index", i))
 		if err := ds.Close(); err != nil {
 			return err

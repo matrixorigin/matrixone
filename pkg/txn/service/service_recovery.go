@@ -122,11 +122,11 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 		txnMeta := txnCtx.getTxn()
 
 		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
-		for _, dn := range txnMeta.DNShards[1:] {
+		for _, tn := range txnMeta.DNShards[1:] {
 			requests = append(requests, txn.TxnRequest{
 				Txn:              txnMeta,
 				Method:           txn.TxnMethod_GetStatus,
-				GetStatusRequest: &txn.TxnGetStatusRequest{DNShard: dn},
+				GetStatusRequest: &txn.TxnGetStatusRequest{DNShard: tn},
 			})
 		}
 

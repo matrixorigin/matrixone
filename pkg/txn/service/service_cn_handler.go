@@ -263,11 +263,11 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	// 1. send prepare request to all DNShards.
 	// 2. start async commit task if all prepare succeed.
 	// 3. response to client txn committed.
-	for _, dn := range newTxn.DNShards {
+	for _, tn := range newTxn.DNShards {
 		txnCtx.mu.requests = append(txnCtx.mu.requests, txn.TxnRequest{
 			Txn:            newTxn,
 			Method:         txn.TxnMethod_Prepare,
-			PrepareRequest: &txn.TxnPrepareRequest{DNShard: dn},
+			PrepareRequest: &txn.TxnPrepareRequest{DNShard: tn},
 		})
 	}
 
@@ -376,11 +376,11 @@ func (s *service) startAsyncRollbackTask(txnMeta txn.TxnMeta) {
 		util.LogTxnStartAsyncRollback(txnMeta)
 
 		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards))
-		for _, dn := range txnMeta.DNShards {
+		for _, tn := range txnMeta.DNShards {
 			requests = append(requests, txn.TxnRequest{
 				Txn:                    txnMeta,
 				Method:                 txn.TxnMethod_RollbackDNShard,
-				RollbackDNShardRequest: &txn.TxnRollbackDNShardRequest{DNShard: dn},
+				RollbackDNShardRequest: &txn.TxnRollbackDNShardRequest{DNShard: tn},
 			})
 		}
 
@@ -430,11 +430,11 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 		util.LogTxnCommittingCompleted(txnMeta)
 
 		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
-		for _, dn := range txnMeta.DNShards[1:] {
+		for _, tn := range txnMeta.DNShards[1:] {
 			requests = append(requests, txn.TxnRequest{
 				Txn:                  txnMeta,
 				Method:               txn.TxnMethod_CommitDNShard,
-				CommitDNShardRequest: &txn.TxnCommitDNShardRequest{DNShard: dn},
+				CommitDNShardRequest: &txn.TxnCommitDNShardRequest{DNShard: tn},
 			})
 		}
 

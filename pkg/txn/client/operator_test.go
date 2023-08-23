@@ -523,11 +523,11 @@ func runOperatorTestsWithOptions(
 		clientOptions...)
 }
 
-func newDNRequest(op uint32, dn uint64) txn.TxnRequest {
+func newDNRequest(op uint32, tn uint64) txn.TxnRequest {
 	return txn.NewTxnRequest(&txn.CNOpRequest{
 		OpCode: op,
 		Target: metadata.DNShard{
-			TNShardRecord: metadata.TNShardRecord{ShardID: dn},
+			TNShardRecord: metadata.TNShardRecord{ShardID: tn},
 		},
 	})
 }
