@@ -125,16 +125,16 @@ func TestStartWithReplicas(t *testing.T) {
 
 func TestStartReplica(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
-		assert.NoError(t, s.StartDNReplica(newTestDNShard(1, 2, 3)))
+		assert.NoError(t, s.StartDNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
 		r.waitStarted()
-		assert.Equal(t, newTestDNShard(1, 2, 3), r.shard)
+		assert.Equal(t, newTestTNShard(1, 2, 3), r.shard)
 	})
 }
 
 func TestRemoveReplica(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
-		assert.NoError(t, s.StartDNReplica(newTestDNShard(1, 2, 3)))
+		assert.NoError(t, s.StartDNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
 		r.waitStarted()
 
@@ -167,7 +167,7 @@ func TestRemoveReplica(t *testing.T) {
 
 func TestCloseReplica(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
+		shard := newTestTNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
 		r := s.getReplica(1)
 		r.waitStarted()
@@ -266,7 +266,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 		r := s.getReplica(1)
 		if r != nil {
 			r.waitStarted()
-			assert.Equal(t, newTestDNShard(shardID, replicaID, logShardID), r.shard)
+			assert.Equal(t, newTestTNShard(shardID, replicaID, logShardID), r.shard)
 			return
 		}
 		time.Sleep(time.Millisecond * 10)
@@ -308,7 +308,7 @@ func newTestStore(
 	return s.(*store)
 }
 
-func newTestDNShard(shardID, replicaID, logShardID uint64) metadata.TNShard {
+func newTestTNShard(shardID, replicaID, logShardID uint64) metadata.TNShard {
 	dnShard := service.NewTestTNShard(shardID)
 	dnShard.ReplicaID = replicaID
 	dnShard.LogShardID = logShardID
