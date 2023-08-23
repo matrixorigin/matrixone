@@ -83,14 +83,14 @@ func TestKafkaMoConnector(t *testing.T) {
 		Name: "test_name",
 		Age:  100,
 	}
-	value, err := json.Marshal(payload)
+	value, _ := json.Marshal(payload)
 
 	// produce 10 messages
 	for i := 0; i < 10; i++ {
 		wg.Add(1) // Increment the WaitGroup counter for each message
 		p.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-			Value:          []byte(value),
+			Value:          value,
 		}, nil)
 	}
 	// Start the connector in a goroutine
