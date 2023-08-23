@@ -148,7 +148,7 @@ func TestHandleCommitDNShard(t *testing.T) {
 	})
 }
 
-func TestHandleRollbackDNShard(t *testing.T) {
+func TestHandleRollbackTNShard(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		shard := newTestTNShard(1, 2, 3)
 		assert.NoError(t, s.StartDNReplica(shard))
