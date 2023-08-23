@@ -142,7 +142,7 @@ func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService)
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, tn := range c.mu.tnServices {
-		if selector.filterDN(tn) {
+		if selector.filterTN(tn) {
 			if !apply(tn) {
 				return
 			}
