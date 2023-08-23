@@ -338,8 +338,8 @@ func (gc *GroupConcat) GetInputTypes() []types.Type {
 
 // GetOperatorId get types of aggregate's aggregate id.
 // this is used to print log in group string();
-func (gc *GroupConcat) GetOperatorId() int {
-	return int(function.GroupConcatFunctionID)
+func (gc *GroupConcat) GetOperatorId() int64 {
+	return function.GroupConcatFunctionID
 }
 
 func (gc *GroupConcat) IsDistinct() bool {

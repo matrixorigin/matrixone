@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
-func newAggMax(dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+func newAggMax(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_uint8:
 		return newGenericMax[uint8](inputTypes[0], outputType, dist)
@@ -55,9 +55,9 @@ func newAggMax(dist bool, inputTypes []types.Type, outputType types.Type, _ any)
 	case types.T_decimal64:
 		aggPriv := agg.NewD64Max()
 		if dist {
-			return agg.NewUnaryDistAgg(MAX, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(MAX, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_decimal128:
 		aggPriv := agg.NewD128Max()
 		if dist {

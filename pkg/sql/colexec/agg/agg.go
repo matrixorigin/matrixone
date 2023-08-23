@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
+func NewUnaryAgg[T1, T2 any](op int64, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
 	eval func([]T2, error) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
 	batchFill func(any, any, int64, int64, []uint64, *nulls.Nulls) error) Agg[*UnaryAgg[T1, T2]] {
@@ -318,7 +318,7 @@ func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err erro
 
 	// TODO: it's a bad hack here. I will remove it later. and change it to a better way like `a.IsOrderedWindow()`
 	nullList := a.es
-	if IsWinOrderFun(int32(a.op)) {
+	if IsWinOrderFun(a.op) {
 		nullList = nil
 	}
 
@@ -357,7 +357,7 @@ func (a *UnaryAgg[T1, T2]) IsDistinct() bool {
 	return false
 }
 
-func (a *UnaryAgg[T1, T2]) GetOperatorId() int {
+func (a *UnaryAgg[T1, T2]) GetOperatorId() int64 {
 	return a.op
 }
 

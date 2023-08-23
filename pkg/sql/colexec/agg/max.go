@@ -174,8 +174,8 @@ func (m *BoolMax) Fill(_ int64, value bool, ov bool, _ int64, isEmpty bool, isNu
 		return value || ov, false, nil
 	}
 	return ov, isEmpty, nil
-
 }
+
 func (m *BoolMax) Merge(_ int64, _ int64, x bool, y bool, xEmpty bool, yEmpty bool, _ any) (bool, bool, error) {
 	if !yEmpty {
 		if !xEmpty {
@@ -252,8 +252,8 @@ func (m *UuidMax) Fill(_ int64, value types.Uuid, ov types.Uuid, _ int64, isEmpt
 		}
 	}
 	return ov, isEmpty, nil
-
 }
+
 func (m *UuidMax) Merge(_ int64, _ int64, x types.Uuid, y types.Uuid, xEmpty bool, yEmpty bool, _ any) (types.Uuid, bool, error) {
 	if !yEmpty {
 		if !xEmpty && x.Gt(y) {

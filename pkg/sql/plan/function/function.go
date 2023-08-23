@@ -85,8 +85,9 @@ func GetFunctionIsWinOrderFunByName(name string) bool {
 	return f.isWindowOrder()
 }
 
-func GetFunctionIsWinOrderFunById(functionID int32) bool {
-	return allSupportedFunctions[functionID].isWindowOrder()
+func GetFunctionIsWinOrderFunById(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return allSupportedFunctions[fid].isWindowOrder()
 }
 
 func GetFunctionIsMonotonicById(ctx context.Context, overloadID int64) (bool, error) {
@@ -227,7 +228,7 @@ func generateAggExecutor(
 	}
 
 	outputTyp := f.retType(inputTypes)
-	return f.aggFramework.aggNew(isDistinct, inputTypes, outputTyp, config)
+	return f.aggFramework.aggNew(overloadID, isDistinct, inputTypes, outputTyp, config)
 }
 
 func generateAggExecutorWithoutConfig(
@@ -346,7 +347,7 @@ type aggregationLogicOfOverload struct {
 	str string
 
 	// newAgg is used to create a new aggregation structure for agg framework.
-	aggNew func(dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error)
+	aggNew func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error)
 }
 
 // an overload of a function.

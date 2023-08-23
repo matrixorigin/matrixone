@@ -87,7 +87,7 @@ message VD128 {
 
 message EncodeAgg {
     option (gogoproto.typedecl) = false;
-    int32 Op                    = 1 [(gogoproto.casttype) = "int"];
+    int64 Op                    = 1 [(gogoproto.casttype) = "int64"];
     bytes Private               = 2;
     repeated bool Es            = 3;
     bytes Da                    = 4;
@@ -98,7 +98,7 @@ message EncodeAgg {
 
 message EncodeAggDistinctPB {
     option (gogoproto.typedecl) = true;
-    int32 Op                    = 1 [(gogoproto.casttype) = "int"];
+    int64 Op                    = 1 [(gogoproto.casttype) = "int64"];
     bytes Private               = 2;
     repeated bool Es            = 3;
     bytes Da                    = 4;

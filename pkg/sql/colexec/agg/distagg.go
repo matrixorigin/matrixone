@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
+func NewUnaryDistAgg[T1, T2 any](op int64, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
 	eval func([]T2, error) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
@@ -458,7 +458,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err 
 	}
 
 	nullList := a.es
-	if IsWinOrderFun(int32(a.op)) {
+	if IsWinOrderFun(a.op) {
 		nullList = nil
 	}
 
@@ -497,7 +497,7 @@ func (a *UnaryDistAgg[T1, T2]) IsDistinct() bool {
 	return true
 }
 
-func (a *UnaryDistAgg[T1, T2]) GetOperatorId() int {
+func (a *UnaryDistAgg[T1, T2]) GetOperatorId() int64 {
 	return a.op
 }
 

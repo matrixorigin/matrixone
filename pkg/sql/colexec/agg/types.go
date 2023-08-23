@@ -83,7 +83,7 @@ type Agg[T any] interface {
 	GetInputTypes() []types.Type
 
 	// GetOperatorId get types of aggregate's aggregate id.
-	GetOperatorId() int
+	GetOperatorId() int64
 
 	IsDistinct() bool
 
@@ -99,7 +99,7 @@ type AggStruct interface {
 // UnaryAgg generic aggregation function with one input vector and without distinct
 type UnaryAgg[T1, T2 any] struct {
 	// operation type of aggregate
-	op int
+	op int64
 
 	// aggregate struct
 	priv AggStruct
@@ -147,7 +147,7 @@ type UnaryAgg[T1, T2 any] struct {
 // UnaryDistAgg generic aggregation function with one input vector and with distinct
 type UnaryDistAgg[T1, T2 any] struct {
 	// operation type of aggregate
-	op int
+	op int64
 
 	// aggregate struct
 	priv AggStruct
@@ -196,7 +196,7 @@ type UnaryDistAgg[T1, T2 any] struct {
 }
 
 type EncodeAgg struct {
-	Op      int
+	Op      int64
 	Private []byte
 	Es      []bool
 	Da      []byte
@@ -207,7 +207,7 @@ type EncodeAgg struct {
 }
 
 type EncodeAggDistinct[T any] struct {
-	Op      int
+	Op      int64
 	Private []byte
 	Es      []bool
 	Da      []byte

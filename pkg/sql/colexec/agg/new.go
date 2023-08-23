@@ -20,12 +20,12 @@ import (
 
 var NewAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error)
 var NewAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error)
-var IsWinOrderFun func(functionID int32) bool
+var IsWinOrderFun func(overloadID int64) bool
 
 func InitAggFramework(
 	newAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error),
 	newAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error),
-	isWinOrderFun func(functionID int32) bool) {
+	isWinOrderFun func(overloadID int64) bool) {
 
 	NewAgg = newAgg
 	NewAggWithConfig = newAggWithConfig
