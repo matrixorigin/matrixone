@@ -2,6 +2,7 @@ name:  MO Checkin Regression On EKS
 
 on:
   pull_request_target:
+    branches: [ main,'[0-9]+.[0-9]+.[0-9]+*' ]
     types:
       - closed
     paths:
@@ -9,8 +10,6 @@ on:
       - '**.c'
       - '**.h'
       - '.github/workflows/merge-trigger.yaml'
-env:
-   branch: main
 
 jobs:
   docker_image_build:
@@ -106,7 +105,7 @@ jobs:
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} apply -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
           sleep 100s
           while true; do if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods --field-selector status.phase=Running|grep "mo-checkin-regression-*"|wc -l)" -eq 6 ]; then break; else sleep 15s; continue; fi; done
-          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -o wide
           if [ ! -d $GITHUB_WORKSPACE/mo-server-log ]; then mkdir $GITHUB_WORKSPACE/mo-server-log;fi;
       - name: Get MO Cluster Addr
         id: get_mo_addr
@@ -746,7 +745,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           export KUBECONFIG=$(pwd)/eks-ci
-          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -o wide
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get matrixonecluster        
           #delete matrixone cluster
           kubectl get matrixonecluster -n mo-checkin-regression-${{ github.event.pull_request.number }} | awk 'NR>1{system("kubectl delete matrixonecluster/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'

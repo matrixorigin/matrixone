@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -73,6 +74,7 @@ func (task *flushBlkTask) Execute(ctx context.Context) error {
 	if task.meta.GetSchema().HasPK() {
 		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
+
 	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
 	if err != nil {
 		return err

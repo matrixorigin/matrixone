@@ -239,3 +239,17 @@ select * from rename01;
 show create table rename01;
 
 drop table rename01;
+
+---------------------------------------------------------
+drop table if exists pri01;
+create table pri01(col1 int ,col2 int);
+begin;
+insert into pri01 values(1,1);
+insert into pri01 values(2,2);
+alter table pri01 add constraint primary key(col1);
+show create table pri01;
+rollback;
+select * from pri01;
+show create table pri01;
+
+drop table pri01;
