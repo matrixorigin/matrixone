@@ -164,7 +164,7 @@ func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, 
 	util.LogTxnHandleRequest(request)
 	defer util.LogTxnHandleResult(response)
 
-	response.RollbackDNShardResponse = &txn.TxnRollbackDNShardResponse{}
+	response.RollbackDNShardResponse = &txn.TxnRollbackTNShardResponse{}
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
