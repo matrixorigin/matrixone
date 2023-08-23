@@ -357,7 +357,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 
 	nodeRole := st.String()
 	if *launchFile != "" {
-		nodeRole = "ALL"
+		nodeRole = mometric.LaunchMode
 	}
 
 	if !SV.DisableTrace || !SV.DisableMetric {
