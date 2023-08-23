@@ -588,5 +588,7 @@ func init() {
 		"stage":                      STAGE,
 		"stages":                     STAGES,
 		"credentials":                CREDENTIALS,
+		"backup":                     BACKUP,
+		"filesystem":                 FILESYSTEM,
 	}
 }

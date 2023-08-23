@@ -16,6 +16,7 @@ package taestorage
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -87,6 +88,16 @@ func (s *taeStorage) Debug(ctx context.Context,
 			ReturnStr: "OK",
 		})
 		return resp, err
+	case uint32(ctl.CmdMethod_Backup):
+		resp, err := handleRead(
+			ctx, s, txnMeta, data, s.taeHandler.HandleBackup,
+		)
+		if err != nil {
+			return types.Encode(&api.SyncLogTailResp{
+				CkpLocation: "Failed",
+			})
+		}
+		return resp.Read()
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
 	}
