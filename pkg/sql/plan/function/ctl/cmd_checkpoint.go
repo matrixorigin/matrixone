@@ -45,7 +45,7 @@ func handleCheckpoint() handleFunc {
 			return payload, err
 		},
 		func(data []byte) (interface{}, error) {
-			resp := pb.DNStringResponse{}
+			resp := pb.TNStringResponse{}
 			protoc.MustUnmarshal(&resp, data)
 			return resp, nil
 		})

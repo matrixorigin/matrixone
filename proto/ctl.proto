@@ -69,8 +69,8 @@ message DNPingResponse {
     uint64 logShardID     = 5;
 }
 
-// DNStringResponse string type response
-message DNStringResponse {
+// TNStringResponse string type response
+message TNStringResponse {
     string returnStr = 1;
 }
 

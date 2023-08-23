@@ -39,12 +39,12 @@ func (s *taeStorage) Debug(ctx context.Context,
 			s.taeHandler.HandleFlushTable,
 		)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.DNStringResponse{
+			resp := protoc.MustMarshal(&ctl.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.DNStringResponse{
+		resp := protoc.MustMarshal(&ctl.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
@@ -53,12 +53,12 @@ func (s *taeStorage) Debug(ctx context.Context,
 			ctx, s, txnMeta, data, s.taeHandler.HandleForceCheckpoint,
 		)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.DNStringResponse{
+			resp := protoc.MustMarshal(&ctl.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.DNStringResponse{
+		resp := protoc.MustMarshal(&ctl.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
@@ -78,12 +78,12 @@ func (s *taeStorage) Debug(ctx context.Context,
 			ctx, s, txnMeta, data, s.taeHandler.HandleAddFaultPoint,
 		)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.DNStringResponse{
+			resp := protoc.MustMarshal(&ctl.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.DNStringResponse{
+		resp := protoc.MustMarshal(&ctl.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
