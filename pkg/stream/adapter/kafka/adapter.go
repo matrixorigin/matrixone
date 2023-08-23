@@ -622,7 +622,7 @@ func deserializeProtobuf(md *desc.MessageDescriptor, in []byte, isKafkSR bool) (
 		if err != nil {
 			return nil, err
 		}
-		err = proto.Unmarshal(in[5+bytesRead:], dm)
+		proto.Unmarshal(in[5+bytesRead:], dm)
 	} else {
 		err = dm.Unmarshal(in)
 	}
