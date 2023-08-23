@@ -192,7 +192,7 @@ func NewService(
 }
 
 func (s *store) Start() error {
-	if err := s.startDNShards(); err != nil {
+	if err := s.startTNShards(); err != nil {
 		return err
 	}
 	if err := s.server.Start(); err != nil {
@@ -241,7 +241,7 @@ func (s *store) CloseDNReplica(shard metadata.TNShard) error {
 	return s.removeReplica(shard.ShardID)
 }
 
-func (s *store) startDNShards() error {
+func (s *store) startTNShards() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
