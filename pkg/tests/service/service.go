@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
@@ -38,6 +37,7 @@ import (
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -244,7 +244,7 @@ type testCluster struct {
 
 	tn struct {
 		sync.Mutex
-		cfgs []*dnservice.Config
+		cfgs []*tnservice.Config
 		opts []tnOptions
 		svcs []TNService
 	}
@@ -1265,10 +1265,10 @@ func (c *testCluster) buildServiceAddresses() serviceAddresses {
 // buildTNConfigs builds configurations for all dn services.
 func (c *testCluster) buildTNConfigs(
 	address serviceAddresses,
-) ([]*dnservice.Config, []tnOptions) {
+) ([]*tnservice.Config, []tnOptions) {
 	batch := c.opt.initial.tnServiceNum
 
-	cfgs := make([]*dnservice.Config, 0, batch)
+	cfgs := make([]*tnservice.Config, 0, batch)
 	opts := make([]tnOptions, 0, batch)
 	for i := 0; i < batch; i++ {
 		cfg := buildTNConfig(i, c.opt, address)

@@ -19,9 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -41,7 +41,7 @@ const (
 	defaultRootDataDir = "/tmp/mo/tests"
 
 	// default configuration for dn service
-	defaultTNStorage = dnservice.StorageTAE
+	defaultTNStorage = tnservice.StorageTAE
 	defaultCNEngine  = cnservice.EngineDistributedTAE
 
 	// default configuration for log service
@@ -93,7 +93,7 @@ type Options struct {
 	}
 
 	storage struct {
-		tnStorage dnservice.StorageType
+		tnStorage tnservice.StorageType
 		cnEngine  cnservice.EngineType
 	}
 
@@ -258,13 +258,13 @@ func (opt Options) WithRootDataDir(root string) Options {
 
 // WithTNUseTAEStorage sets dn transaction use tae storage.
 func (opt Options) WithTNUseTAEStorage() Options {
-	opt.storage.tnStorage = dnservice.StorageTAE
+	opt.storage.tnStorage = tnservice.StorageTAE
 	return opt
 }
 
 // WithTNUseMEMStorage sets dn transaction use mem storage.
 func (opt Options) WithTNUseMEMStorage() Options {
-	opt.storage.tnStorage = dnservice.StorageMEM
+	opt.storage.tnStorage = tnservice.StorageMEM
 	return opt
 }
 
@@ -346,12 +346,12 @@ func (opt Options) WithCNHeartbeatInterval(interval time.Duration) Options {
 }
 
 // GetTNStorageType returns the storage type that the dnservice used
-func (opt Options) GetTNStorageType() dnservice.StorageType {
+func (opt Options) GetTNStorageType() tnservice.StorageType {
 	return opt.storage.tnStorage
 }
 
 // GetCNEngineType returns the engine type that the cnservice used
-func (opt Options) GetCNEngineType() dnservice.StorageType {
+func (opt Options) GetCNEngineType() tnservice.StorageType {
 	return opt.storage.tnStorage
 }
 

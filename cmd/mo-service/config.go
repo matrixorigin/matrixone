@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -39,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -82,7 +82,7 @@ type Config struct {
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
 	// TN tn service config
-	TN dnservice.Config `toml:"tn"`
+	TN tnservice.Config `toml:"tn"`
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
@@ -343,7 +343,7 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	return cfg
 }
 
-func (c *Config) getTNServiceConfig() dnservice.Config {
+func (c *Config) getTNServiceConfig() tnservice.Config {
 	cfg := c.TN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "dn-data", cfg.UUID)

@@ -28,15 +28,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
-// TNService describes expected behavior for dn service.
+// TNService describes expected behavior for tn service.
 type TNService interface {
 	// Start sends heartbeat and start to handle command.
 	Start() error
@@ -48,23 +48,23 @@ type TNService interface {
 	// ID returns uuid of store
 	ID() string
 
-	// StartTNReplica start the DNShard replica
+	// StartTNReplica start the TNShard replica
 	StartTNReplica(shard metadata.TNShard) error
-	// CloseTNReplica close the DNShard replica.
+	// CloseTNReplica close the TNShard replica.
 	CloseTNReplica(shard metadata.TNShard) error
 
 	// GetTaskService returns the taskservice
 	GetTaskService() (taskservice.TaskService, bool)
 }
 
-// tnService wraps dnservice.Service.
+// tnService wraps tnservice.Service.
 //
 // The main purpose of this structure is to maintain status.
 type tnService struct {
 	sync.Mutex
 	status ServiceStatus
 	uuid   string
-	svc    dnservice.Service
+	svc    tnservice.Service
 }
 
 func (ds *tnService) Start() error {
@@ -135,18 +135,18 @@ func (ds *tnService) GetTaskService() (taskservice.TaskService, bool) {
 	return ds.svc.GetTaskService()
 }
 
-// tnOptions is options for a dn service.
-type tnOptions []dnservice.Option
+// tnOptions is options for a tn service.
+type tnOptions []tnservice.Option
 
-// newTNService initializes an instance of `DNService`.
+// newTNService initializes an instance of `TNService`.
 func newTNService(
-	cfg *dnservice.Config,
+	cfg *tnservice.Config,
 	rt runtime.Runtime,
 	fs fileservice.FileService,
 	opts tnOptions,
 ) (TNService, error) {
 	CounterSet := new(perfcounter.CounterSet)
-	svc, err := dnservice.NewService(CounterSet, cfg, rt, fs, nil, opts...)
+	svc, err := tnservice.NewService(CounterSet, cfg, rt, fs, nil, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -157,11 +157,11 @@ func newTNService(
 	}, nil
 }
 
-// buildTNConfig builds configuration for a dn service.
+// buildTNConfig builds configuration for a tn service.
 func buildTNConfig(
 	index int, opt Options, address serviceAddresses,
-) *dnservice.Config {
-	cfg := &dnservice.Config{
+) *tnservice.Config {
+	cfg := &tnservice.Config{
 		UUID:          uuid.New().String(),
 		ListenAddress: address.getTnListenAddress(index),
 	}
@@ -185,18 +185,18 @@ func buildTNConfig(
 	cfg.LogtailServer.LogtailResponseSendTimeout.Duration = opt.logtailPushServer.logtailResponseSendTimeout
 
 	// We need the filled version of configuration.
-	// It's necessary when building dnservice.Option.
+	// It's necessary when building tnservice.Option.
 	if err := cfg.Validate(); err != nil {
-		panic(fmt.Sprintf("fatal when building dnservice.Config: %s", err))
+		panic(fmt.Sprintf("fatal when building tnservice.Config: %s", err))
 	}
 
 	return cfg
 }
 
-// buildTNOptions builds options for a dn service.
+// buildTNOptions builds options for a tn service.
 //
-// NB: We need the filled version of dnservice.Config.
-func buildTNOptions(cfg *dnservice.Config, filter FilterFunc) tnOptions {
+// NB: We need the filled version of tnservice.Config.
+func buildTNOptions(cfg *tnservice.Config, filter FilterFunc) tnOptions {
 	// factory to construct client for hakeeper
 	hakeeperClientFactory := func() (logservice.TNHAKeeperClient, error) {
 		ctx, cancel := context.WithTimeout(
@@ -227,7 +227,7 @@ func buildTNOptions(cfg *dnservice.Config, filter FilterFunc) tnOptions {
 		ctx = logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(filter))
 
 		return logservice.NewClient(ctx, logservice.ClientConfig{
-			Tag:              "Test-DN",
+			Tag:              "Test-TN",
 			ReadOnly:         false,
 			LogShardID:       shard.LogShardID,
 			TNReplicaID:      shard.ReplicaID,
@@ -235,9 +235,9 @@ func buildTNOptions(cfg *dnservice.Config, filter FilterFunc) tnOptions {
 		})
 	}
 
-	return []dnservice.Option{
-		dnservice.WithHAKeeperClientFactory(hakeeperClientFactory),
-		dnservice.WithLogServiceClientFactory(logServiceClientFactory),
-		dnservice.WithBackendFilter(filter),
+	return []tnservice.Option{
+		tnservice.WithHAKeeperClientFactory(hakeeperClientFactory),
+		tnservice.WithLogServiceClientFactory(logServiceClientFactory),
+		tnservice.WithBackendFilter(filter),
 	}
 }

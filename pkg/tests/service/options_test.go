@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,7 +65,7 @@ func TestWithRootDataDir(t *testing.T) {
 
 func TestWithStorage(t *testing.T) {
 	opt := Options{}.WithTNUseMEMStorage()
-	require.Equal(t, dnservice.StorageMEM, opt.storage.tnStorage)
+	require.Equal(t, tnservice.StorageMEM, opt.storage.tnStorage)
 }
 
 func TestWithHostAddress(t *testing.T) {
