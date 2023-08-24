@@ -85,7 +85,7 @@ type Session struct {
 	isInternal bool
 
 	data         [][]interface{}
-	ep           *ExportParam
+	ep           *ExportConfig
 	showStmtType ShowStatementType
 
 	txnHandler    *TxnHandler
@@ -392,16 +392,9 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient, txnCtx, txnOp)
 
 	ses := &Session{
-		protocol: proto,
-		mp:       mp,
-		pu:       pu,
-		ep: &ExportParam{
-			ExportParam: &tree.ExportParam{
-				Outfile: false,
-				Fields:  &tree.Fields{},
-				Lines:   &tree.Lines{},
-			},
-		},
+		protocol:   proto,
+		mp:         mp,
+		pu:         pu,
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
@@ -803,16 +796,22 @@ func (ses *Session) AppendData(row []interface{}) {
 	ses.data = append(ses.data, row)
 }
 
-func (ses *Session) SetExportParam(ep *tree.ExportParam) {
+func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep.ExportParam = ep
+	ses.ep = &ExportConfig{userConfig: ep}
 }
 
-func (ses *Session) GetExportParam() *ExportParam {
+func (ses *Session) GetExportConfig() *ExportConfig {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.ep
+}
+
+func (ses *Session) ClearExportParam() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.ep = nil
 }
 
 func (ses *Session) SetShowStmtType(sst ShowStatementType) {

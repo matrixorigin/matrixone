@@ -20,25 +20,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int32, expr *plan.Expr, mp *StrHashMap, hasNull bool, isDup bool) *JoinMap {
+func NewJoinMap(sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMap, hasNull bool, isDup bool) *JoinMap {
 	cnt := int64(1)
 	return &JoinMap{
-		cnt:     &cnt,
-		mp:      mp,
-		expr:    expr,
-		sels:    sels,
-		hasNull: hasNull,
-		dupCnt:  new(int64),
-		isDup:   isDup,
+		cnt:       &cnt,
+		shm:       shm,
+		ihm:       ihm,
+		expr:      expr,
+		multiSels: sels,
+		hasNull:   hasNull,
+		dupCnt:    new(int64),
+		isDup:     isDup,
 	}
 }
 
 func (jm *JoinMap) Sels() [][]int32 {
-	return jm.sels
-}
-
-func (jm *JoinMap) Map() *StrHashMap {
-	return jm.mp
+	return jm.multiSels
 }
 
 func (jm *JoinMap) Expr() *plan.Expr {
@@ -53,30 +50,75 @@ func (jm *JoinMap) IsDup() bool {
 	return jm.isDup
 }
 
+func (jm *JoinMap) NewIterator() Iterator {
+	if jm.shm == nil {
+		return &intHashMapIterator{
+			mp:      jm.ihm,
+			m:       jm.ihm.m,
+			ibucket: jm.ihm.ibucket,
+			nbucket: jm.ihm.nbucket,
+		}
+	} else {
+		return &strHashmapIterator{
+			mp:      jm.shm,
+			m:       jm.shm.m,
+			ibucket: jm.shm.ibucket,
+			nbucket: jm.shm.nbucket,
+		}
+	}
+}
+
 func (jm *JoinMap) Dup() *JoinMap {
-	m0 := &StrHashMap{
-		m:             jm.mp.m,
-		hashMap:       jm.mp.hashMap,
-		hasNull:       jm.mp.hasNull,
-		ibucket:       jm.mp.ibucket,
-		nbucket:       jm.mp.nbucket,
-		values:        make([]uint64, UnitLimit),
-		zValues:       make([]int64, UnitLimit),
-		keys:          make([][]byte, UnitLimit),
-		strHashStates: make([][3]uint64, UnitLimit),
+	if jm.shm == nil {
+		m0 := &IntHashMap{
+			m:       jm.ihm.m,
+			hashMap: jm.ihm.hashMap,
+			hasNull: jm.ihm.hasNull,
+			ibucket: jm.ihm.ibucket,
+			nbucket: jm.ihm.nbucket,
+			keys:    make([]uint64, UnitLimit),
+			keyOffs: make([]uint32, UnitLimit),
+			values:  make([]uint64, UnitLimit),
+			zValues: make([]int64, UnitLimit),
+			hashes:  make([]uint64, UnitLimit),
+		}
+		jm0 := &JoinMap{
+			ihm:       m0,
+			expr:      jm.expr,
+			multiSels: jm.multiSels,
+			hasNull:   jm.hasNull,
+			cnt:       jm.cnt,
+		}
+		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
+			jm.ihm = nil
+			jm.multiSels = nil
+		}
+		return jm0
+	} else {
+		m0 := &StrHashMap{
+			m:             jm.shm.m,
+			hashMap:       jm.shm.hashMap,
+			hasNull:       jm.shm.hasNull,
+			ibucket:       jm.shm.ibucket,
+			nbucket:       jm.shm.nbucket,
+			values:        make([]uint64, UnitLimit),
+			zValues:       make([]int64, UnitLimit),
+			keys:          make([][]byte, UnitLimit),
+			strHashStates: make([][3]uint64, UnitLimit),
+		}
+		jm0 := &JoinMap{
+			shm:       m0,
+			expr:      jm.expr,
+			multiSels: jm.multiSels,
+			hasNull:   jm.hasNull,
+			cnt:       jm.cnt,
+		}
+		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
+			jm.shm = nil
+			jm.multiSels = nil
+		}
+		return jm0
 	}
-	jm0 := &JoinMap{
-		mp:      m0,
-		expr:    jm.expr,
-		sels:    jm.sels,
-		hasNull: jm.hasNull,
-		cnt:     jm.cnt,
-	}
-	if atomic.AddInt64(jm.dupCnt, -1) == 0 {
-		jm.mp = nil
-		jm.sels = nil
-	}
-	return jm0
 }
 
 func (jm *JoinMap) IncRef(ref int64) {
@@ -91,17 +133,25 @@ func (jm *JoinMap) Free() {
 	if atomic.AddInt64(jm.cnt, -1) != 0 {
 		return
 	}
-	for i := range jm.sels {
-		jm.sels[i] = nil
+	for i := range jm.multiSels {
+		jm.multiSels[i] = nil
 	}
-	jm.sels = nil
-	jm.mp.Free()
+	jm.multiSels = nil
+	if jm.ihm != nil {
+		jm.ihm.Free()
+	} else {
+		jm.shm.Free()
+	}
 }
 
 func (jm *JoinMap) Size() int64 {
 	// TODO: add the size of the other JoinMap parts
-	if jm.mp == nil {
+	if jm.ihm == nil && jm.shm == nil {
 		return 0
 	}
-	return jm.mp.Size()
+	if jm.ihm != nil {
+		return jm.ihm.Size()
+	} else {
+		return jm.shm.Size()
+	}
 }

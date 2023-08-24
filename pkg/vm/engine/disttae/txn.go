@@ -112,7 +112,10 @@ func (txn *Transaction) WriteBatch(
 		if txn.blockId_raw_batch != nil {
 			txn.blockId_raw_batch[*txn.getCurrentBlockId()] = bat
 		}
-		txn.workspaceSize += uint64(bat.Size())
+		if tableId != catalog.MO_DATABASE_ID &&
+			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
+			txn.workspaceSize += uint64(bat.Size())
+		}
 	}
 	e := Entry{
 		typ:          typ,
@@ -144,7 +147,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	txn.hasS3Op.Store(true)
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
-		// TODO: after shrink, we should update workspace size
+		if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+			txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+			txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
 			continue
 		}
@@ -657,10 +664,10 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(0); err != nil {
+	if err := txn.mergeCompactionLocked(); err != nil {
 		return nil, err
 	}
-	if err := txn.mergeCompactionLocked(); err != nil {
+	if err := txn.dumpBatchLocked(0); err != nil {
 		return nil, err
 	}
 	reqs, err := genWriteReqs(ctx, txn.writes)
