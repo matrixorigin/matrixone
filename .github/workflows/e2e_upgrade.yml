@@ -51,9 +51,8 @@ jobs:
           mv $GITHUB_WORKSPACE/upstream/etc .
           mv $GITHUB_WORKSPACE/upstream/mo-service .
           mv $GITHUB_WORKSPACE/upstream/optools .
-          echo "==============cn configuration of upstram=============="
+          
           cat ./etc/launch/cn.toml
-          echo "==============dn configuration of upstram=============="
           cat ./etc/launch/dn.toml     
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
@@ -77,7 +76,7 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/upstream/test/distributed/cases -e pessimistic_transaction 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/upstream/test/distributed/cases -e optimistic 2>&1
 
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
@@ -120,7 +119,7 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases -e pessimistic_transaction 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1
 
       - name: Dump mo-service-new goroutines
         if: ${{ always() && !cancelled() }}
