@@ -179,3 +179,23 @@ commit;
 select num_col1 ,num_col2 from test_ex_table_1;
 select num_col1 ,num_col2 from test_16;
 
+
+-- @bvt:issue#11442
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+select count(*) from s3t;
+
+begin;
+CREATE TABLE `s3t_copy` (
+                            `a` INT NOT NULL,
+                            `b` INT NOT NULL,
+                            `d` INT DEFAULT null,
+                            `c` INT DEFAULT null,
+                            PRIMARY KEY (`a`,`b`)
+);
+insert into s3t_copy(a, b, c) select a, b, c from s3t;
+select count(*) from s3t_copy;
+commit;
+-- @bvt:issue
+
