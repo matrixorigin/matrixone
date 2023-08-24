@@ -3085,11 +3085,13 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	ctx.bindingByTag[binding.tag] = binding
 	ctx.bindingByTable[binding.table] = binding
 
-	for _, col := range binding.cols {
-		if _, ok := ctx.bindingByCol[col]; ok {
-			ctx.bindingByCol[col] = nil
-		} else {
-			ctx.bindingByCol[col] = binding
+	if node.NodeType != plan.Node_RECURSIVE_SCAN && node.NodeType != plan.Node_SINK_SCAN {
+		for _, col := range binding.cols {
+			if _, ok := ctx.bindingByCol[col]; ok {
+				ctx.bindingByCol[col] = nil
+			} else {
+				ctx.bindingByCol[col] = binding
+			}
 		}
 	}
 

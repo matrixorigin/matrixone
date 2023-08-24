@@ -3484,7 +3484,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	return err
 }
 
-func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) (bool, error) {
+func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 	var err error
 	var filePath string
 	var sql string
@@ -3492,9 +3492,8 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) (bool, 
 	var stageName string
 	var stageStatus string
 	var url string
-	var isPathChanged bool
 	if st.Ep == nil {
-		return isPathChanged, err
+		return err
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -3505,7 +3504,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) (bool, 
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
-		return isPathChanged, err
+		return err
 	}
 
 	// detect filepath contain stage or not
@@ -3516,20 +3515,20 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) (bool, 
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return isPathChanged, err
+			return err
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			return isPathChanged, err
+			return err
 		}
 
 		// if have stage enabled
 		if execResultArrayHasData(erArray) {
-			return isPathChanged, moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
+			return moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
 		} else {
 			// use the filepath
-			return isPathChanged, err
+			return err
 		}
 	} else {
 
@@ -3537,32 +3536,32 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) (bool, 
 		// check the stage status
 		sql, err = getSqlForCheckStageStatusWithStageName(ctx, stageName)
 		if err != nil {
-			return isPathChanged, err
+			return err
 		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return isPathChanged, err
+			return err
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			return isPathChanged, err
+			return err
 		}
 		if execResultArrayHasData(erArray) {
 			stageStatus, err = erArray[0].GetString(ctx, 0, 1)
 			if err != nil {
-				return isPathChanged, err
+				return err
 			}
 
 			// is the stage staus is disabled
 			if stageStatus == tree.StageStatusDisabled.String() {
-				return isPathChanged, moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
+				return moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
 			} else if stageStatus == tree.StageStatusEnabled.String() {
 				// replace the filepath using stage url
 				url, err = erArray[0].GetString(ctx, 0, 0)
 				if err != nil {
-					return isPathChanged, err
+					return err
 				}
 
 				filePath = strings.Replace(filePath, stageName+":", url, 1)
@@ -3570,10 +3569,10 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) (bool, 
 			}
 
 		} else {
-			return isPathChanged, moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
+			return moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
 		}
 	}
-	return isPathChanged, err
+	return err
 
 }
 
@@ -5717,6 +5716,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.BackupStart:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	default:
