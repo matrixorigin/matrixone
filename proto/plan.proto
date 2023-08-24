@@ -1115,9 +1115,11 @@ message AlterTable {
 	bool is_cluster_table	    = 4;
 	repeated Action actions   = 5;
 	AlgorithmType algorithm_type = 6;
-	string create_table_sql = 7;
-	string insert_data_sql = 8;
-	map<uint64, ColDef> change_tbl_colId_map = 9;
+	string create_tmp_table_sql = 7;
+	string insert_tmp_data_sql = 8;
+	string create_table_sql = 9;
+	string insert_data_sql = 10;
+	map<uint64, ColDef> change_tbl_colId_map = 11;
 }
 
 message DropTable {
