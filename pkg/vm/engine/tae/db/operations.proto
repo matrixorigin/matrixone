@@ -53,7 +53,7 @@ message Checkpoint {
     int64 FlushDuration         = 1 [(gogoproto.casttype) = "time.Duration"];
 }
 
-message InspectDN {
+message InspectTN {
     option (gogoproto.typedecl) = false;
     AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
     string Operation            = 2;

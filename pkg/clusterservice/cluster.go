@@ -39,15 +39,15 @@ func GetMOCluster() MOCluster {
 // Option options for create cluster
 type Option func(*cluster)
 
-// WithServices set init cn and dn services
+// WithServices set init cn and tn services
 func WithServices(
 	cnServices []metadata.CNService,
-	dnServices []metadata.DNService) Option {
+	tnServices []metadata.TNService) Option {
 	return func(c *cluster) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		for _, s := range dnServices {
-			c.mu.dnServices[s.ServiceID] = s
+		for _, s := range tnServices {
+			c.mu.tnServices[s.ServiceID] = s
 		}
 		for _, s := range cnServices {
 			c.mu.cnServices[s.ServiceID] = s
@@ -73,7 +73,7 @@ type cluster struct {
 	mu              struct {
 		sync.RWMutex
 		cnServices map[string]metadata.CNService
-		dnServices map[string]metadata.DNService
+		tnServices map[string]metadata.TNService
 	}
 	options struct {
 		disableRefresh bool
@@ -99,7 +99,7 @@ func NewMOCluster(
 		refreshInterval: refreshInterval,
 	}
 	c.mu.cnServices = make(map[string]metadata.CNService, 1024)
-	c.mu.dnServices = make(map[string]metadata.DNService, 1024)
+	c.mu.tnServices = make(map[string]metadata.TNService, 1024)
 
 	for _, opt := range opts {
 		opt(c)
@@ -136,14 +136,14 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 }
 
-func (c *cluster) GetDNService(selector Selector, apply func(metadata.DNService) bool) {
+func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, dn := range c.mu.dnServices {
-		if selector.filterDN(dn) {
-			if !apply(dn) {
+	for _, tn := range c.mu.tnServices {
+		if selector.filterTN(tn) {
+			if !apply(tn) {
 				return
 			}
 		}
@@ -222,15 +222,15 @@ func (c *cluster) refresh() {
 
 	c.logger.Debug("refresh cluster details from hakeeper",
 		zap.Int("cn-count", len(details.CNStores)),
-		zap.Int("dn-count", len(details.DNStores)))
+		zap.Int("dn-count", len(details.TNStores)))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for k := range c.mu.cnServices {
 		delete(c.mu.cnServices, k)
 	}
-	for k := range c.mu.dnServices {
-		delete(c.mu.dnServices, k)
+	for k := range c.mu.tnServices {
+		delete(c.mu.tnServices, k)
 	}
 	for _, cn := range details.CNStores {
 		v := newCNService(cn)
@@ -239,9 +239,9 @@ func (c *cluster) refresh() {
 			c.logger.Debug("cn service added", zap.String("cn", v.DebugString()))
 		}
 	}
-	for _, dn := range details.DNStores {
-		v := newDNService(dn)
-		c.mu.dnServices[dn.UUID] = v
+	for _, tn := range details.TNStores {
+		v := newTNService(tn)
+		c.mu.tnServices[tn.UUID] = v
 		if c.logger.Enabled(zap.DebugLevel) {
 			c.logger.Debug("dn service added", zap.String("dn", v.DebugString()))
 		}
@@ -264,18 +264,18 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 	}
 }
 
-func newDNService(dn logpb.DNStore) metadata.DNService {
-	v := metadata.DNService{
-		ServiceID:             dn.UUID,
-		TxnServiceAddress:     dn.ServiceAddress,
-		LogTailServiceAddress: dn.LogtailServerAddress,
-		LockServiceAddress:    dn.LockServiceAddress,
-		CtlAddress:            dn.CtlAddress,
+func newTNService(tn logpb.TNStore) metadata.TNService {
+	v := metadata.TNService{
+		ServiceID:             tn.UUID,
+		TxnServiceAddress:     tn.ServiceAddress,
+		LogTailServiceAddress: tn.LogtailServerAddress,
+		LockServiceAddress:    tn.LockServiceAddress,
+		CtlAddress:            tn.CtlAddress,
 	}
-	v.Shards = make([]metadata.DNShard, 0, len(dn.Shards))
-	for _, s := range dn.Shards {
-		v.Shards = append(v.Shards, metadata.DNShard{
-			DNShardRecord: metadata.DNShardRecord{ShardID: s.ShardID},
+	v.Shards = make([]metadata.TNShard, 0, len(tn.Shards))
+	for _, s := range tn.Shards {
+		v.Shards = append(v.Shards, metadata.TNShard{
+			TNShardRecord: metadata.TNShardRecord{ShardID: s.ShardID},
 			ReplicaID:     s.ReplicaID,
 		})
 	}

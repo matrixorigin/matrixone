@@ -72,8 +72,8 @@ func (s Selector) filterCN(cn metadata.CNService) bool {
 	return s.filter(cn.ServiceID, cn.Labels)
 }
 
-func (s Selector) filterDN(dn metadata.DNService) bool {
-	return s.filter(dn.ServiceID, dn.Labels)
+func (s Selector) filterTN(tn metadata.TNService) bool {
+	return s.filter(tn.ServiceID, tn.Labels)
 }
 
 func (s Selector) filter(serviceID string, labels map[string]metadata.LabelList) bool {
