@@ -2062,7 +2062,24 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		}
 	} else {
 		tlen := v.GetType().TypeSize()
-		copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+		switch tlen {
+		case 8:
+			p1 := unsafe.Pointer(&v.data[oldLen*8])
+			p2 := unsafe.Pointer(&w.data[sel*8])
+			*(*int64)(p1) = *(*int64)(p2)
+		case 4:
+			p1 := unsafe.Pointer(&v.data[oldLen*4])
+			p2 := unsafe.Pointer(&w.data[sel*4])
+			*(*int32)(p1) = *(*int32)(p2)
+		case 2:
+			p1 := unsafe.Pointer(&v.data[oldLen*2])
+			p2 := unsafe.Pointer(&w.data[sel*2])
+			*(*int16)(p1) = *(*int16)(p2)
+		case 1:
+			v.data[oldLen] = w.data[sel]
+		default:
+			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+		}
 	}
 
 	return nil
@@ -2105,7 +2122,24 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	} else {
 		tlen := v.GetType().TypeSize()
 		for i := oldLen; i < v.length; i++ {
-			copy(v.data[i*tlen:(i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+			switch tlen {
+			case 8:
+				p1 := unsafe.Pointer(&v.data[i*8])
+				p2 := unsafe.Pointer(&w.data[sel*8])
+				*(*int64)(p1) = *(*int64)(p2)
+			case 4:
+				p1 := unsafe.Pointer(&v.data[i*4])
+				p2 := unsafe.Pointer(&w.data[sel*4])
+				*(*int32)(p1) = *(*int32)(p2)
+			case 2:
+				p1 := unsafe.Pointer(&v.data[i*2])
+				p2 := unsafe.Pointer(&w.data[sel*2])
+				*(*int16)(p1) = *(*int16)(p2)
+			case 1:
+				v.data[i] = w.data[sel]
+			default:
+				copy(v.data[i*tlen:(i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+			}
 		}
 	}
 
