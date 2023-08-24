@@ -33,8 +33,8 @@ var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
 func Test_initExportFileParam(t *testing.T) {
 	var oq = &outputQueue{
 		mrs: &MysqlResultSet{},
-		ep: &ExportParam{
-			ExportParam: &tree.ExportParam{
+		ep: &ExportConfig{
+			userConfig: &tree.ExportParam{
 				Lines:  &tree.Lines{},
 				Fields: &tree.Fields{},
 			},
@@ -49,7 +49,7 @@ func Test_initExportFileParam(t *testing.T) {
 	oq.mrs.AddColumn(col1)
 	oq.mrs.AddColumn(col2)
 
-	oq.ep.ForceQuote = append(oq.ep.ForceQuote, colName1)
+	oq.ep.userConfig.ForceQuote = append(oq.ep.userConfig.ForceQuote, colName1)
 	oq.mrs.Name2Index[colName1] = 0
 	initExportFileParam(oq.ep, oq.mrs)
 }
@@ -58,8 +58,8 @@ func Test_openNewFile(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &ExportParam{
-				ExportParam: &tree.ExportParam{
+			ep: &ExportConfig{
+				userConfig: &tree.ExportParam{
 					Lines:    &tree.Lines{},
 					Fields:   &tree.Fields{},
 					Header:   true,
@@ -75,8 +75,8 @@ func Test_openNewFile(t *testing.T) {
 	convey.Convey("openNewFile succ", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &ExportParam{
-				ExportParam: &tree.ExportParam{
+			ep: &ExportConfig{
+				userConfig: &tree.ExportParam{
 					Lines:    &tree.Lines{},
 					Fields:   &tree.Fields{},
 					Header:   true,
@@ -107,8 +107,8 @@ func Test_formatOutputString(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &ExportParam{
-				ExportParam: &tree.ExportParam{
+			ep: &ExportConfig{
+				userConfig: &tree.ExportParam{
 					Lines:    &tree.Lines{},
 					Fields:   &tree.Fields{},
 					Header:   true,
@@ -131,8 +131,8 @@ func Test_writeToCSVFile(t *testing.T) {
 	convey.Convey("writeToCSVFile case", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &ExportParam{
-				ExportParam: &tree.ExportParam{
+			ep: &ExportConfig{
+				userConfig: &tree.ExportParam{
 					Lines:    &tree.Lines{},
 					Fields:   &tree.Fields{},
 					Header:   true,
@@ -143,7 +143,7 @@ func Test_writeToCSVFile(t *testing.T) {
 			},
 		}
 		var output = []byte{'1', '2'}
-		oq.ep.MaxFileSize = 1
+		oq.ep.userConfig.MaxFileSize = 1
 
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
@@ -201,8 +201,8 @@ func Test_writeDataToCSVFile(t *testing.T) {
 	convey.Convey("writeDataToCSVFile case", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &ExportParam{
-				ExportParam: &tree.ExportParam{
+			ep: &ExportConfig{
+				userConfig: &tree.ExportParam{
 					Lines:    &tree.Lines{},
 					Fields:   &tree.Fields{},
 					Header:   true,
@@ -229,8 +229,8 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataToCSVFile succ", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &ExportParam{
-				ExportParam: &tree.ExportParam{
+			ep: &ExportConfig{
+				userConfig: &tree.ExportParam{
 					Lines:    &tree.Lines{},
 					Fields:   &tree.Fields{},
 					Header:   true,
@@ -279,8 +279,8 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataToCSVFile fail", t, func() {
 		var oq = &outputQueue{
 			mrs: &MysqlResultSet{},
-			ep: &ExportParam{
-				ExportParam: &tree.ExportParam{
+			ep: &ExportConfig{
+				userConfig: &tree.ExportParam{
 					Lines:    &tree.Lines{},
 					Fields:   &tree.Fields{},
 					Header:   true,
