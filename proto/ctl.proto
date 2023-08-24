@@ -53,6 +53,8 @@ enum CmdMethod {
     GetCommit       = 10;
     // AddFaultPoint add a fault point
     AddFaultPoint   = 11;
+    // Backup backup data
+    Backup          = 12;
 }
 
 // DNPingRequest ping request

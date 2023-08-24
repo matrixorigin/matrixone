@@ -54,6 +54,7 @@ type ClusterHAKeeperClient interface {
 // CNHAKeeperClient is the HAKeeper client used by a CN store.
 type CNHAKeeperClient interface {
 	basicHAKeeperClient
+	BRHAKeeperClient
 	// SendCNHeartbeat sends the specified heartbeat message to the HAKeeper.
 	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error)
 }
