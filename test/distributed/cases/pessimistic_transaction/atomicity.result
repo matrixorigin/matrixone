@@ -315,8 +315,8 @@ insert into pri01 values(1,1);
 insert into pri01 values(2,2);
 alter table pri01 add constraint primary key(col1);
 show create table pri01;
-no such table atomicity.pri01
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+Table    Create Table
+pri01    CREATE TABLE `pri01` (\n`col1` INT NOT NULL,\n`col2` INT DEFAULT null,\nPRIMARY KEY (`col1`)\n)
 rollback;
 select * from pri01;
 col1    col2
