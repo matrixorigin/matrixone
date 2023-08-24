@@ -108,7 +108,7 @@ func TestStateMachineCanBeClosed(t *testing.T) {
 	assert.Nil(t, tsm.Close())
 }
 
-func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
+func TestTNLeaseHolderCanBeUpdated(t *testing.T) {
 	cmd := getSetLeaseHolderCmd(500)
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	assert.Equal(t, uint64(0), tsm.state.LeaseHolderID)

@@ -357,9 +357,9 @@ func checkWrite(t *testing.T, txn Txn, key, value string, expectError error, com
 
 func getBasicClusterOptions(opts ...func(opts service.Options) service.Options) service.Options {
 	basic := service.DefaultOptions().
-		WithDNShardNum(1).
+		WithTNShartnum(1).
 		WithLogShardNum(1).
-		WithDNServiceNum(1).
+		WithTNServiceNum(1).
 		WithLogServiceNum(3).
 		WithCNShardNum(1).
 		WithCNServiceNum(1)
@@ -370,7 +370,7 @@ func getBasicClusterOptions(opts ...func(opts service.Options) service.Options) 
 }
 
 func useTAEStorage(opts service.Options) service.Options {
-	return opts.WithDNUseTAEStorage()
+	return opts.WithTNUseTAEStorage()
 }
 
 func useDistributedTAEEngine(opts service.Options) service.Options {

@@ -36,7 +36,7 @@ jobs:
           echo '[tn.txn]' >> ./etc/launch/tn.toml
           echo 'mode = "Optimistic"' >> ./etc/launch/tn.toml
           cat ./etc/launch/cn.toml
-          cat ./etc/launch/dn.toml
+          cat ./etc/launch/tn.toml
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
@@ -138,12 +138,12 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD
-      - name: echo cn.toml dn.toml
+      - name: echo cn.toml tn.toml
         run: |
           cd $GITHUB_WORKSPACE/head
           cat ./etc/launch-with-proxy/cn1.toml
           cat ./etc/launch-with-proxy/cn2.toml
-          cat ./etc/launch-with-proxy/dn.toml
+          cat ./etc/launch-with-proxy/tn.toml
       - name: Start MO
         run: |
           cd $GITHUB_WORKSPACE/head
@@ -223,7 +223,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/head
           cat ./etc/launch/cn.toml
-          cat ./etc/launch/dn.toml
+          cat ./etc/launch/tn.toml
 
       - name: Start MO
         run: |

@@ -20,14 +20,14 @@ import (
 )
 
 const (
-	// The expected number of dn replicas.
-	DNShardExpectedSize = 1
+	// The expected number of tn replicas.
+	TNShardExpectedSize = 1
 )
 
-// ParseExpectedDNShardCount returns the expected count of dn shards.
-func ParseExpectedDNShardCount(cluster pb.ClusterInfo) int {
+// ParseExpectedTNShardCount returns the expected count of tn shards.
+func ParseExpectedTNShardCount(cluster pb.ClusterInfo) int {
 	set := make(map[uint64]struct{})
-	for _, record := range cluster.DNShards {
+	for _, record := range cluster.TNShards {
 		set[record.ShardID] = struct{}{}
 
 	}
@@ -44,18 +44,18 @@ func ParseExpectedLogShardCount(cluster pb.ClusterInfo) int {
 	return len(set)
 }
 
-// ParseReportedDNShardCount returns the reported count of dn shards.
-func ParseReportedDNShardCount(
-	state pb.DNState, hkcfg hakeeper.Config, currTick uint64,
+// ParseReportedTNShardCount returns the reported count of tn shards.
+func ParseReportedTNShardCount(
+	state pb.TNState, hkcfg hakeeper.Config, currTick uint64,
 ) int {
 	set := make(map[uint64]struct{})
 	for _, storeInfo := range state.Stores {
-		// ignore expired dn stores
-		if hkcfg.DNStoreExpired(storeInfo.Tick, currTick) {
+		// ignore expired tn stores
+		if hkcfg.TNStoreExpired(storeInfo.Tick, currTick) {
 			continue
 		}
 
-		// record dn shard
+		// record tn shard
 		for _, shardInfo := range storeInfo.Shards {
 			set[shardInfo.ShardID] = struct{}{}
 		}
@@ -111,14 +111,14 @@ func ParseLogShardReportedSize(
 	return len(set)
 }
 
-// ParseDNShardReportedSize returns the reported count of dn replicas.
-func ParseDNShardReportedSize(
-	shardID uint64, state pb.DNState, hkcfg hakeeper.Config, currTick uint64,
+// ParseTNShardReportedSize returns the reported count of tn replicas.
+func ParseTNShardReportedSize(
+	shardID uint64, state pb.TNState, hkcfg hakeeper.Config, currTick uint64,
 ) int {
 	set := make(map[uint64]struct{})
 	for _, storeInfo := range state.Stores {
-		// ignore expired dn stores
-		if hkcfg.DNStoreExpired(storeInfo.Tick, currTick) {
+		// ignore expired tn stores
+		if hkcfg.TNStoreExpired(storeInfo.Tick, currTick) {
 			continue
 		}
 

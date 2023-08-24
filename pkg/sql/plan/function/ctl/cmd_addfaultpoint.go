@@ -26,12 +26,12 @@ import (
 )
 
 func handleAddFaultPoint() handleFunc {
-	return getDNHandlerFunc(
+	return getTNHandlerFunc(
 		pb.CmdMethod_AddFaultPoint,
 		func(_ string) ([]uint64, error) {
 			return nil, nil
 		},
-		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			// parameter like "name.freq.action.iarg.sarg"
 			parameters := strings.Split(parameter, ".")
 			if len(parameters) == 1 {
@@ -70,7 +70,7 @@ func handleAddFaultPoint() handleFunc {
 			return payload, nil
 		},
 		func(data []byte) (interface{}, error) {
-			resp := pb.DNStringResponse{}
+			resp := pb.TNStringResponse{}
 			protoc.MustUnmarshal(&resp, data)
 			return resp, nil
 		})
