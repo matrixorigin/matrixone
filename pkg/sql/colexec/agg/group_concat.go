@@ -29,11 +29,12 @@ type GroupConcat struct {
 
 const group_concat_max_len = 1024
 
-func newGroupConcat(separator string) *GroupConcat {
+func NewGroupConcat(separator string) *GroupConcat {
 	return &GroupConcat{
 		separator: separator,
 	}
 }
+
 func GroupConcatReturnType(parameters []types.Type) types.Type {
 	for _, p := range parameters {
 		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
