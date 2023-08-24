@@ -23,29 +23,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// getDNHandlerFunc used to handle dn's debug command handle func.
+// getTNHandlerFunc used to handle dn's debug command handle func.
 // method: debug command type.
 // whichDN: used to decide which DNs to send the debug request to, nil returned means send all dns.
 // payload: used to get debug command request payload
 // repsonseUnmarshaler: used to unmarshal response
-func getDNHandlerFunc(method pb.CmdMethod,
-	whichDN func(parameter string) ([]uint64, error),
-	payload func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error),
+func getTNHandlerFunc(method pb.CmdMethod,
+	whichTN func(parameter string) ([]uint64, error),
+	payload func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error),
 	repsonseUnmarshaler func([]byte) (interface{}, error)) handleFunc {
 	return func(proc *process.Process,
 		service serviceType,
 		parameter string,
 		sender requestSender) (pb.CtlResult, error) {
-		if service != dn {
+		if service != tn {
 			return pb.CtlResult{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
 		}
-		targetDNs, err := whichDN(parameter)
+		targetTNs, err := whichTN(parameter)
 		if err != nil {
 			return pb.CtlResult{}, moerr.ConvertGoError(proc.Ctx, err)
 		}
 
-		containsDN := func(id uint64) bool {
-			for _, v := range targetDNs {
+		containsTN := func(id uint64) bool {
+			for _, v := range targetTNs {
 				if v == id {
 					return true
 				}
@@ -55,10 +55,10 @@ func getDNHandlerFunc(method pb.CmdMethod,
 
 		cluster := clusterservice.GetMOCluster()
 		var requests []txn.CNOpRequest
-		cluster.GetDNService(clusterservice.NewSelector(),
-			func(store metadata.DNService) bool {
+		cluster.GetTNService(clusterservice.NewSelector(),
+			func(store metadata.TNService) bool {
 				for _, shard := range store.Shards {
-					if len(targetDNs) == 0 || containsDN(shard.ShardID) {
+					if len(targetTNs) == 0 || containsTN(shard.ShardID) {
 						payLoad, e := payload(shard.ShardID, parameter, proc)
 						if e != nil {
 							err = e
@@ -66,8 +66,8 @@ func getDNHandlerFunc(method pb.CmdMethod,
 						}
 						requests = append(requests, txn.CNOpRequest{
 							OpCode: uint32(method),
-							Target: metadata.DNShard{
-								DNShardRecord: metadata.DNShardRecord{
+							Target: metadata.TNShard{
+								TNShardRecord: metadata.TNShardRecord{
 									ShardID: shard.ShardID,
 								},
 								ReplicaID: shard.ReplicaID,

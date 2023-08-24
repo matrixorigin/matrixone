@@ -52,7 +52,7 @@ func WithLockService(lockService lockservice.LockService) TxnClientCreateOption 
 // WithEnableSacrificingFreshness sacrifice freshness to reduce the waiting time for transaction start,
 // which will help to improve the latency of the transaction, but will sacrifice some data freshness.
 //
-// In Push mode, DN will bba to push Logtail to CN, if we need to guarantee the freshness of data, then
+// In Push mode, TN will bba to push Logtail to CN, if we need to guarantee the freshness of data, then
 // we need to use the current latest time as the start time of the transaction, this will ensure that
 // enough logtail is collected before the transaction read/write starts, but this will have some delayed
 // waiting time.
