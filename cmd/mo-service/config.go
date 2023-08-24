@@ -82,8 +82,8 @@ type Config struct {
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
 	// TN tn service config
-	TN           *tnservice.Config `toml:"tn"`
-	TNCompatible *tnservice.Config `toml:"dn"` // for old config files compatibility
+	TN_please_use_getTNServiceConfig *tnservice.Config `toml:"tn"`
+	TNCompatible                     *tnservice.Config `toml:"dn"` // for old config files compatibility
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
@@ -345,12 +345,12 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 }
 
 func (c *Config) getTNServiceConfig() tnservice.Config {
-	if c.TN == nil && c.TNCompatible != nil {
-		c.TN = c.TNCompatible
+	if c.TN_please_use_getTNServiceConfig == nil && c.TNCompatible != nil {
+		c.TN_please_use_getTNServiceConfig = c.TNCompatible
 	}
 	var cfg tnservice.Config
-	if c.TN != nil {
-		cfg = *c.TN
+	if c.TN_please_use_getTNServiceConfig != nil {
+		cfg = *c.TN_please_use_getTNServiceConfig
 	}
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "dn-data", cfg.UUID)
@@ -418,7 +418,7 @@ func (c *Config) hashNodeID() uint16 {
 	case metadata.ServiceType_CN:
 		uuid = c.CN.UUID
 	case metadata.ServiceType_TN:
-		uuid = c.TN.UUID
+		uuid = c.getTNServiceConfig().UUID
 	case metadata.ServiceType_LOG:
 		uuid = c.LogService.UUID
 	}
@@ -457,7 +457,7 @@ func (c *Config) mustGetServiceUUID() string {
 	case metadata.ServiceType_CN:
 		return c.CN.UUID
 	case metadata.ServiceType_TN:
-		return c.TN.UUID
+		return c.getTNServiceConfig().UUID
 	case metadata.ServiceType_LOG:
 		return c.LogService.UUID
 	case metadata.ServiceType_PROXY:

@@ -67,7 +67,7 @@ func TestParseTNConfig(t *testing.T) {
 	cfg := &Config{}
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, tnservice.StorageMEM, cfg.TN.Txn.Storage.Backend)
+	assert.Equal(t, tnservice.StorageMEM, cfg.getTNServiceConfig().Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
