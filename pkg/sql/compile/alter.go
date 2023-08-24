@@ -16,7 +16,6 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -63,44 +62,60 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
-	// 3. create a replica table of the original table
+	// 3. create temporary replica table which doesn't have foreign key constraints
+	err = c.runSql(qry.CreateTmpTableSql)
+	if err != nil {
+		return err
+	}
+
+	// 4. copy the original table data to the temporary replica table
+	err = c.runSql(qry.InsertTmpDataSql)
+	if err != nil {
+		return err
+	}
+
+	// 5. drop original table
+	if err = dbSource.Delete(c.ctx, tblName); err != nil {
+		return err
+	}
+
+	// 6. Recreate the original table
 	err = c.runSql(qry.CreateTableSql)
 	if err != nil {
 		return err
 	}
 
-	// 4. copy the original table data to the replica table
+	// 7. import data from the temporary replica table into the original table
 	err = c.runSql(qry.InsertDataSql)
 	if err != nil {
 		return err
 	}
 
-	// TODO 5. Migrate Foreign Key Dependencies
-	// 6. drop original table
-	if err = dbSource.Delete(c.ctx, tblName); err != nil {
+	// 8. Delete temporary replica table
+	if err = dbSource.Delete(c.ctx, qry.CopyTableDef.Name); err != nil {
 		return err
 	}
 
-	// 7. rename copy table name to original table name
-	copyRel, err := dbSource.Relation(c.ctx, qry.CopyTableDef.Name, nil)
+	// 9. obtain relation for new tables
+	newRel, err := dbSource.Relation(c.ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
 
 	// get and update the change mapping information of table colIds
-	if err = updateNewTableColId(c, copyRel, qry.ChangeTblColIdMap); err != nil {
+	if err = updateNewTableColId(c, newRel, qry.ChangeTblColIdMap); err != nil {
 		return err
 	}
 
 	if len(qry.CopyTableDef.RefChildTbls) > 0 {
 		// Restore the original table's foreign key child table ids to the copy table definition
-		if err = restoreNewTableRefChildTbls(c, copyRel, qry.CopyTableDef.RefChildTbls); err != nil {
+		if err = restoreNewTableRefChildTbls(c, newRel, qry.CopyTableDef.RefChildTbls); err != nil {
 			return err
 		}
 
 		// update foreign key child table references
 		for _, tblId := range qry.CopyTableDef.RefChildTbls {
-			if err = updateTableForeignKeyColId(c, qry.ChangeTblColIdMap, tblId, originRel.GetTableID(c.ctx), copyRel.GetTableID(c.ctx)); err != nil {
+			if err = updateTableForeignKeyColId(c, qry.ChangeTblColIdMap, tblId, originRel.GetTableID(c.ctx), newRel.GetTableID(c.ctx)); err != nil {
 				return err
 			}
 		}
@@ -108,39 +123,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	if len(qry.TableDef.Fkeys) > 0 {
 		for _, fkey := range qry.CopyTableDef.Fkeys {
-			if err = notifyParentTableFkTableIdChange(c, fkey, originRel.GetTableID(c.ctx), copyRel.GetTableID(c.ctx)); err != nil {
+			if err = notifyParentTableFkTableIdChange(c, fkey, originRel.GetTableID(c.ctx), newRel.GetTableID(c.ctx)); err != nil {
 				return err
 			}
 		}
-	}
-
-	var alterKind []api.AlterKind
-	alterKind = addAlterKind(alterKind, api.AlterKind_RenameTable)
-	oldName := copyRel.GetTableName()
-	newName := originRel.GetTableName()
-
-	// reset origin table's constraint
-	newCt := &engine.ConstraintDef{
-		Cts: []engine.Constraint{},
-	}
-
-	constraint := make([][]byte, 0)
-	for _, kind := range alterKind {
-		var req *api.AlterTableReq
-		switch kind {
-		case api.AlterKind_RenameTable:
-			req = api.NewRenameTableReq(copyRel.GetDBID(c.ctx), copyRel.GetTableID(c.ctx), oldName, newName)
-		default:
-		}
-		tmp, err := req.Marshal()
-		if err != nil {
-			return err
-		}
-		constraint = append(constraint, tmp)
-	}
-
-	if err = copyRel.AlterTable(c.ctx, newCt, constraint); err != nil {
-		return err
 	}
 	return nil
 }
