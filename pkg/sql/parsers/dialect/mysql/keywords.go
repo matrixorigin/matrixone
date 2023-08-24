@@ -90,6 +90,7 @@ func init() {
 		"connect":                    CONNECT,
 		"convert":                    CONVERT,
 		"config":                     CONFIG,
+		"connector":                  CONNECTOR,
 		"cipher":                     CIPHER,
 		"chain":                      CHAIN,
 		"client":                     CLIENT,
