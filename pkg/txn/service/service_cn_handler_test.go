@@ -57,7 +57,7 @@ func TestReadBasic(t *testing.T) {
 	checkReadResponses(t, resp, "")
 }
 
-func TestReadWithTNShartnotMatch(t *testing.T) {
+func TestReadWithDNShardNotMatch(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
@@ -78,7 +78,7 @@ func TestReadWithTNShartnotMatch(t *testing.T) {
 	rTxn := NewTestTxn(1, 1)
 	resp := readTestData(t, sender, 1, rTxn, 1)
 	checkResponses(t, resp,
-		txn.WrapError(moerr.NewTNShardNotFound(context.TODO(), "", 1), 0))
+		txn.WrapError(moerr.NewDNShardNotFound(context.TODO(), "", 1), 0))
 	// newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
 }
 
@@ -428,7 +428,7 @@ func TestWriteBasic(t *testing.T) {
 	assert.Equal(t, GetTestValue(1, wTxn), v)
 }
 
-func TestWriteWithTNShartnotMatch(t *testing.T) {
+func TestWriteWithDNShardNotMatch(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
@@ -448,7 +448,7 @@ func TestWriteWithTNShartnotMatch(t *testing.T) {
 
 	wTxn := NewTestTxn(1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1),
-		txn.WrapError(moerr.NewTNShardNotFound(context.TODO(), "", 1), 0))
+		txn.WrapError(moerr.NewDNShardNotFound(context.TODO(), "", 1), 0))
 }
 
 func TestWriteWithWWConflict(t *testing.T) {
@@ -474,7 +474,7 @@ func TestWriteWithWWConflict(t *testing.T) {
 	// newTxnError(moerr.ErrTAEWrite, "write conlict"))
 }
 
-func TestCommitWithSingleTNShard(t *testing.T) {
+func TestCommitWithSingleDNShard(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
@@ -509,14 +509,14 @@ func TestCommitWithSingleTNShard(t *testing.T) {
 	}
 }
 
-func TestCommitWithTNShartnotMatch(t *testing.T) {
+func TestCommitWithDNShardNotMatch(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
 	}()
 	sender.setFilter(func(req *txn.TxnRequest) bool {
 		if req.CommitRequest != nil {
-			req.Txn.TNShards[0].ReplicaID = 0
+			req.Txn.DNShards[0].ReplicaID = 0
 		}
 		return true
 	})
@@ -535,10 +535,10 @@ func TestCommitWithTNShartnotMatch(t *testing.T) {
 		checkResponses(t, writeTestData(t, sender, 1, wTxn, i))
 	}
 	checkResponses(t, commitWriteData(t, sender, wTxn),
-		txn.WrapError(moerr.NewTNShardNotFound(context.TODO(), "", 1), 0))
+		txn.WrapError(moerr.NewDNShardNotFound(context.TODO(), "", 1), 0))
 }
 
-func TestCommitWithMultiTNShards(t *testing.T) {
+func TestCommitWithMultiDNShards(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
@@ -718,7 +718,7 @@ func TestRollback(t *testing.T) {
 
 	wTxn := NewTestTxn(1, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
-	wTxn.TNShards = append(wTxn.TNShards, NewTestTNShard(2))
+	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
 	w1 := addTestWaiter(t, s1, wTxn, txn.TxnStatus_Aborted)
@@ -739,7 +739,7 @@ func TestRollback(t *testing.T) {
 	checkData(t, wTxn, s2, 2, 0, false)
 }
 
-func TestRollbackWithTNShartnotFound(t *testing.T) {
+func TestRollbackWithDNShardNotFound(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
 		assert.NoError(t, sender.Close())
@@ -747,7 +747,7 @@ func TestRollbackWithTNShartnotFound(t *testing.T) {
 
 	sender.setFilter(func(req *txn.TxnRequest) bool {
 		if req.RollbackRequest != nil {
-			req.Txn.TNShards[0].ReplicaID = 0
+			req.Txn.DNShards[0].ReplicaID = 0
 		}
 		return true
 	})
@@ -768,11 +768,11 @@ func TestRollbackWithTNShartnotFound(t *testing.T) {
 
 	wTxn := NewTestTxn(1, 1, 1)
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
-	wTxn.TNShards = append(wTxn.TNShards, NewTestTNShard(2))
+	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
 	checkResponses(t, rollbackWriteData(t, sender, wTxn),
-		txn.WrapError(moerr.NewTNShardNotFound(context.TODO(), "", 1), 0))
+		txn.WrapError(moerr.NewDNShardNotFound(context.TODO(), "", 1), 0))
 }
 
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
@@ -810,7 +810,7 @@ func TestDebug(t *testing.T) {
 			Method: txn.TxnMethod_DEBUG,
 			CNRequest: &txn.CNOpRequest{
 				Payload: data,
-				Target:  NewTestTNShard(1),
+				Target:  NewTestDNShard(1),
 			},
 		},
 	})
@@ -940,7 +940,7 @@ func newTestLockTablesAllocator(
 
 	runtime.SetupProcessLevelRuntime(
 		runtime.NewRuntime(
-			metadata.ServiceType_TN,
+			metadata.ServiceType_DN,
 			"dn-uuid",
 			logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).
 				With(zap.String("case", t.Name()))))

@@ -77,9 +77,9 @@ func (a *idAllocator) Capacity() uint64 {
 }
 
 func (l *store) setInitialClusterInfo(numOfLogShards uint64,
-	numOfTNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) error {
+	numOfDNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) error {
 	cmd := hakeeper.GetInitialClusterRequestCmd(numOfLogShards,
-		numOfTNShards, numOfLogReplicas, nextID, nextIDByKey)
+		numOfDNShards, numOfLogReplicas, nextID, nextIDByKey)
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
@@ -310,7 +310,7 @@ func (l *store) getScheduleCommand(check bool,
 		return l.checker.Check(l.alloc, *state), nil
 	}
 	m := bootstrap.NewBootstrapManager(state.ClusterInfo)
-	return m.Bootstrap(l.alloc, state.TNState, state.LogState)
+	return m.Bootstrap(l.alloc, state.DNState, state.LogState)
 }
 
 func (l *store) setTaskTableUser(user pb.TaskTableUser) error {

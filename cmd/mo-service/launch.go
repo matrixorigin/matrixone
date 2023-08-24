@@ -56,12 +56,12 @@ func startCluster(
 	*/
 	backup.SaveLaunchConfigPath(backup.LaunchConfig, []string{*launchFile})
 	backup.SaveLaunchConfigPath(backup.LogConfig, cfg.LogServiceConfigFiles)
-	backup.SaveLaunchConfigPath(backup.DnConfig, cfg.TNServiceConfigsFiles)
+	backup.SaveLaunchConfigPath(backup.DnConfig, cfg.DNServiceConfigsFiles)
 	backup.SaveLaunchConfigPath(backup.CnConfig, cfg.CNServiceConfigsFiles)
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
-	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startDNServiceCluster(ctx, cfg.DNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
 	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
@@ -100,7 +100,7 @@ func startLogServiceCluster(
 	return nil
 }
 
-func startTNServiceCluster(
+func startDNServiceCluster(
 	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
@@ -235,7 +235,7 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 			if err != nil {
 				return false, err
 			}
-			for _, store := range details.TNStores {
+			for _, store := range details.DNStores {
 				if len(store.Shards) > 0 {
 					return true, nil
 				}

@@ -24,7 +24,7 @@ import (
 )
 
 func handleBackup() handleFunc {
-	return getTNHandlerFunc(
+	return getDNHandlerFunc(
 		pb.CmdMethod_Backup,
 		func(_ string) ([]uint64, error) {
 			return nil, nil

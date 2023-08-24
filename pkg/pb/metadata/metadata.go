@@ -21,22 +21,22 @@ import (
 )
 
 // IsEmpty return true if is a empty DNShard
-func (m TNShard) IsEmpty() bool {
+func (m DNShard) IsEmpty() bool {
 	return m.ShardID == 0
 }
 
 // Equal returns true if DNShard is same
-func (m TNShard) Equal(tn TNShard) bool {
-	return m.ShardID == tn.ShardID && m.ReplicaID == tn.ReplicaID
+func (m DNShard) Equal(dn DNShard) bool {
+	return m.ShardID == dn.ShardID && m.ReplicaID == dn.ReplicaID
 }
 
 // DebugString returns debug string
-func (m TNShard) DebugString() string {
+func (m DNShard) DebugString() string {
 	return fmt.Sprintf("%d-%d-%d-%s", m.ShardID, m.ReplicaID, m.LogShardID, m.Address)
 }
 
 // DebugString returns debug string
-func (m TNStore) DebugString() string {
+func (m DNStore) DebugString() string {
 	n := len(m.Shards)
 	var buf bytes.Buffer
 	buf.WriteString(m.UUID)
@@ -88,7 +88,7 @@ func (m CNService) DebugString() string {
 	return buf.String()
 }
 
-func (m TNService) DebugString() string {
+func (m DNService) DebugString() string {
 	var buf bytes.Buffer
 	buf.WriteString(m.ServiceID)
 	buf.WriteString("/txn(")

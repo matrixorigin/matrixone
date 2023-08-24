@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests"
 )
 
-// CNService describes expected behavior for tn service.
+// CNService describes expected behavior for dn service.
 type CNService interface {
 	// Start sends heartbeat and start to handle command.
 	Start() error

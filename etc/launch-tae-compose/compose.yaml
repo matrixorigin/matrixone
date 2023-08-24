@@ -27,7 +27,7 @@ services:
       - launch
       - launch-multi-cn
     depends_on:
-      - tn
+      - dn
     ports:
       - "6001:6001"
       - "6002"
@@ -45,7 +45,7 @@ services:
     <<: *mo-common
     entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/cn-1.toml | tee /log/cn-1.log"]
     depends_on:
-      - tn
+      - dn
     ports:
       - "7001:6001"
       - "6002"
@@ -61,10 +61,10 @@ services:
         aliases:
           - "cn1"
 
-  tn:
-    container_name: tn
+  dn:
+    container_name: dn
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/tn.toml | tee /log/tn.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/dn.toml | tee /log/dn.log"]
     profiles:
       - launch
       - launch-multi-cn
@@ -79,7 +79,7 @@ services:
     networks:
       monet:
         aliases:
-          - "tn"
+          - "dn"
 
   logservice:
     container_name: logservice

@@ -174,7 +174,7 @@ func TestGetOrExtendLease(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 	}
 	runStoreTest(t, fn)
 }
@@ -183,7 +183,7 @@ func TestAppendLog(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := getTestUserEntry()
 		lsn, err := store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
@@ -196,7 +196,7 @@ func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := make([]byte, headerSize+8+8)
 		binaryEnc.PutUint32(cmd, uint32(pb.UserEntryUpdate))
 		binaryEnc.PutUint64(cmd[headerSize:], 101)
@@ -225,7 +225,7 @@ func TestTruncateLog(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := getTestUserEntry()
 		_, err := store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
@@ -243,7 +243,7 @@ func TestGetTruncatedIndex(t *testing.T) {
 		index, err := store.getTruncatedLsn(ctx, 1)
 		assert.Equal(t, uint64(0), index)
 		assert.NoError(t, err)
-		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := getTestUserEntry()
 		_, err = store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
@@ -259,7 +259,7 @@ func TestQueryLog(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
-		assert.NoError(t, store.getOrExtendTNLease(ctx, 1, 100))
+		assert.NoError(t, store.getOrExtendDNLease(ctx, 1, 100))
 		cmd := getTestUserEntry()
 		_, err := store.append(ctx, 1, cmd)
 		assert.NoError(t, err)
@@ -481,12 +481,12 @@ func TestAddHeartbeat(t *testing.T) {
 		_, err = store.addCNStoreHeartbeat(ctx, cnMsg)
 		assert.NoError(t, err)
 
-		tnMsg := pb.TNStoreHeartbeat{
+		dnMsg := pb.DNStoreHeartbeat{
 			UUID:   store.id(),
-			Shards: make([]pb.TNShardInfo, 0),
+			Shards: make([]pb.DNShardInfo, 0),
 		}
-		tnMsg.Shards = append(tnMsg.Shards, pb.TNShardInfo{ShardID: 2, ReplicaID: 3})
-		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
+		dnMsg.Shards = append(dnMsg.Shards, pb.DNShardInfo{ShardID: 2, ReplicaID: 3})
+		_, err = store.addDNStoreHeartbeat(ctx, dnMsg)
 		assert.NoError(t, err)
 	}
 	runStoreTest(t, fn)

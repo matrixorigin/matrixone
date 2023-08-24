@@ -37,7 +37,7 @@ func TestCtlRequest(t *testing.T) {
 		t,
 		[]serviceMeta{
 			{serviceType: metadata.ServiceType_CN, serviceID: "s1"},
-			{serviceType: metadata.ServiceType_TN, serviceID: "s2"},
+			{serviceType: metadata.ServiceType_DN, serviceID: "s2"},
 		},
 		func(services []*service) {
 			s1 := services[0]
@@ -81,7 +81,7 @@ func TestCtlRequest(t *testing.T) {
 
 			resp, err = s1.SendCtlMessage(
 				ctx,
-				metadata.ServiceType_TN,
+				metadata.ServiceType_DN,
 				"s2",
 				s1.NewRequest(ctl.CmdMethod_GetCommit))
 			require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestCtlRequest(t *testing.T) {
 
 			_, err = s1.SendCtlMessage(
 				ctx,
-				metadata.ServiceType_TN,
+				metadata.ServiceType_DN,
 				"s3",
 				s1.NewRequest(ctl.CmdMethod_GetCommit))
 			require.Error(t, err)
@@ -107,7 +107,7 @@ func runCtlServiceTest(
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 
 	cns := make([]metadata.CNService, 0, len(serviceMetadatas))
-	dns := make([]metadata.TNService, 0, len(serviceMetadatas))
+	dns := make([]metadata.DNService, 0, len(serviceMetadatas))
 	addresses := make([]string, 0, len(serviceMetadatas))
 	services := make([]*service, 0, len(serviceMetadatas))
 	for _, v := range serviceMetadatas {
@@ -122,8 +122,8 @@ func runCtlServiceTest(
 				CtlAddress: address,
 				WorkState:  metadata.WorkState_Working,
 			})
-		} else if v.serviceType == metadata.ServiceType_TN {
-			dns = append(dns, metadata.TNService{
+		} else if v.serviceType == metadata.ServiceType_DN {
+			dns = append(dns, metadata.DNService{
 				ServiceID:  v.serviceID,
 				CtlAddress: address,
 			})

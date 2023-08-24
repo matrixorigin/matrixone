@@ -33,7 +33,7 @@ const (
 func Check(
 	cfg hakeeper.Config,
 	cluster pb.ClusterInfo,
-	tnState pb.TNState,
+	dnState pb.DNState,
 	logState pb.LogState,
 	currTick uint64,
 ) ([]*operator.Operator, bool) {
@@ -70,15 +70,15 @@ func Check(
 
 	logutil.GetGlobalLogger().Info(detail)
 
-	// parse all tn stores
-	tnStores := parseTnState(cfg, tnState, currTick)
+	// parse all dn stores
+	dnStores := parseDnState(cfg, dnState, currTick)
 
 	// generate operators to shut down all stores
-	operators := make([]*operator.Operator, 0, logStores.length()+tnStores.length())
+	operators := make([]*operator.Operator, 0, logStores.length()+dnStores.length())
 	operators = append(operators, logStores.shutdownExpiredStores()...)
 	operators = append(operators, logStores.shutdownWorkingStores()...)
-	operators = append(operators, tnStores.shutdownExpiredStores()...)
-	operators = append(operators, tnStores.shutdownWorkingStores()...)
+	operators = append(operators, dnStores.shutdownExpiredStores()...)
+	operators = append(operators, dnStores.shutdownWorkingStores()...)
 
 	return operators, sysHealthy
 }
@@ -232,11 +232,11 @@ func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *
 	return set
 }
 
-// parseTnState separates tn stores as expired and working.
-func parseTnState(cfg hakeeper.Config, tnState pb.TNState, currTick uint64) *storeSet {
-	set := newStoreSet(pb.TNService)
-	for id, storeInfo := range tnState.Stores {
-		if cfg.TNStoreExpired(storeInfo.Tick, currTick) {
+// parseDnState separates dn stores as expired and working.
+func parseDnState(cfg hakeeper.Config, dnState pb.DNState, currTick uint64) *storeSet {
+	set := newStoreSet(pb.DNService)
+	for id, storeInfo := range dnState.Stores {
+		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[id] = struct{}{}
 		} else {
 			set.working[id] = struct{}{}
@@ -258,11 +258,11 @@ func shutdownStores(serviceType pb.ServiceType, stores map[string]struct{}) []*o
 			)
 			ops = append(ops, op)
 		}
-	case pb.TNService:
+	case pb.DNService:
 		for id := range stores {
 			op := operator.NewOperator(
 				"dnservice", operator.NoopShardID, operator.NoopEpoch,
-				operator.StopTnStore{StoreID: id},
+				operator.StopDnStore{StoreID: id},
 			)
 			ops = append(ops, op)
 		}

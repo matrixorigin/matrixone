@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tnservice
+package dnservice
 
 import (
 	"context"
@@ -40,7 +40,7 @@ var (
 	}
 )
 
-func (s *store) createTxnStorage(ctx context.Context, shard metadata.TNShard) (storage.TxnStorage, error) {
+func (s *store) createTxnStorage(ctx context.Context, shard metadata.DNShard) (storage.TxnStorage, error) {
 	factory := s.createLogServiceClientFactroy(shard)
 	closeLogClientFn := func(logClient logservice.Client) {
 		if err := logClient.Close(); err != nil {
@@ -80,35 +80,35 @@ func (s *store) createTxnStorage(ctx context.Context, shard metadata.TNShard) (s
 	}
 }
 
-func (s *store) createLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
+func (s *store) createLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
 	if s.options.logServiceClientFactory != nil {
 		return s.options.logServiceClientFactory(shard)
 	}
 	return s.newLogServiceClient(shard)
 }
 
-func (s *store) createLogServiceClientFactroy(shard metadata.TNShard) logservice.ClientFactory {
+func (s *store) createLogServiceClientFactroy(shard metadata.DNShard) logservice.ClientFactory {
 	return func() (logservice.Client, error) {
 		return s.createLogServiceClient(shard)
 	}
 }
 
-func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, error) {
+func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LogService.ConnectTimeout.Duration)
 	defer cancel()
 	return logservice.NewClient(ctx, logservice.ClientConfig{
 		ReadOnly:         false,
 		LogShardID:       shard.LogShardID,
-		TNReplicaID:      shard.ReplicaID,
+		DNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
 		MaxMessageSize:   int(s.cfg.RPC.MaxMessageSize),
 	})
 }
 
 func (s *store) newMemTxnStorage(
-	shard metadata.TNShard,
+	shard metadata.DNShard,
 	logClient logservice.Client,
-	hakeeper logservice.TNHAKeeperClient,
+	hakeeper logservice.DNHAKeeperClient,
 ) (storage.TxnStorage, error) {
 	// should it be no fixed or a certain size?
 	mp, err := mpool.NewMPool("mem_txn_storge", 0, mpool.NoFixed)
@@ -122,11 +122,11 @@ func (s *store) newMemTxnStorage(
 	)
 }
 
-func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Client) (storage.TxnStorage, error) {
+func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
 	return mem.NewKVTxnStorage(0, logClient, s.rt.Clock()), nil
 }
 
-func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
+func (s *store) newTAEStorage(ctx context.Context, shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
 	ckpcfg := &options.CheckpointCfg{
 		MinCount:            s.cfg.Ckp.MinCount,
 		ScanInterval:        s.cfg.Ckp.ScanInterval.Duration,

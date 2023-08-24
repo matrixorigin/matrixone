@@ -29,12 +29,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTnConst(t *testing.T) {
+func TestDnConst(t *testing.T) {
 	m := mpool.MustNewZero()
 	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
 	v.IsConstNull()
-	tnv := ToTNVector(v)
-	require.True(t, tnv.IsNull(2))
+	dnv := ToDNVector(v)
+	require.True(t, dnv.IsNull(2))
 }
 
 func withAllocator(opt Options) Options {

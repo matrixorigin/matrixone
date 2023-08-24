@@ -47,7 +47,7 @@ func (s *service) doRecovery(ctx context.Context) {
 }
 
 func (s *service) addLog(txnMeta txn.TxnMeta) {
-	if len(txnMeta.TNShards) <= 1 {
+	if len(txnMeta.DNShards) <= 1 {
 		return
 	}
 
@@ -94,7 +94,7 @@ func (s *service) end() {
 	s.transactions.Range(func(_, value any) bool {
 		txnCtx := value.(*txnContext)
 		txnMeta := txnCtx.getTxn()
-		if !s.shard.Equal(txnMeta.TNShards[0]) {
+		if !s.shard.Equal(txnMeta.DNShards[0]) {
 			return true
 		}
 
@@ -121,12 +121,12 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 	return s.stopper.RunTask(func(ctx context.Context) {
 		txnMeta := txnCtx.getTxn()
 
-		requests := make([]txn.TxnRequest, 0, len(txnMeta.TNShards)-1)
-		for _, tn := range txnMeta.TNShards[1:] {
+		requests := make([]txn.TxnRequest, 0, len(txnMeta.DNShards)-1)
+		for _, dn := range txnMeta.DNShards[1:] {
 			requests = append(requests, txn.TxnRequest{
 				Txn:              txnMeta,
 				Method:           txn.TxnMethod_GetStatus,
-				GetStatusRequest: &txn.TxnGetStatusRequest{TNShard: tn},
+				GetStatusRequest: &txn.TxnGetStatusRequest{DNShard: dn},
 			})
 		}
 
@@ -147,7 +147,7 @@ func (s *service) startAsyncCheckCommitTask(txnCtx *txnContext) error {
 			}
 		}
 
-		if prepared == len(txnMeta.TNShards) {
+		if prepared == len(txnMeta.DNShards) {
 			txnCtx.updateTxnLocked(txnMeta)
 			s.removeTxn(txnMeta.ID)
 			if err := s.startAsyncCommitTask(txnCtx); err != nil {
@@ -170,6 +170,6 @@ func (s *service) checkRecoveryStatus(txnMeta txn.TxnMeta) {
 	}
 
 	if txnMeta.Status == txn.TxnStatus_Committing {
-		s.validTNShard(txnMeta.TNShards[0])
+		s.validDNShard(txnMeta.DNShards[0])
 	}
 }

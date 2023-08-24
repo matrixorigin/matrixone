@@ -72,10 +72,10 @@ func parseCmdTag(cmd []byte) pb.HAKeeperUpdateType {
 }
 
 func GetInitialClusterRequestCmd(numOfLogShards uint64,
-	numOfTNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) []byte {
+	numOfDNShards uint64, numOfLogReplicas uint64, nextID uint64, nextIDByKey map[string]uint64) []byte {
 	req := pb.InitialClusterRequest{
 		NumOfLogShards:   numOfLogShards,
-		NumOfTNShards:    numOfTNShards,
+		NumOfDNShards:    numOfDNShards,
 		NumOfLogReplicas: numOfLogReplicas,
 		NextID:           nextID,
 		NextIDByKey:      nextIDByKey,
@@ -236,8 +236,8 @@ func GetCNStoreHeartbeatCmd(data []byte) []byte {
 	return getHeartbeatCmd(data, pb.CNHeartbeatUpdate)
 }
 
-func GetTNStoreHeartbeatCmd(data []byte) []byte {
-	return getHeartbeatCmd(data, pb.TNHeartbeatUpdate)
+func GetDNStoreHeartbeatCmd(data []byte) []byte {
+	return getHeartbeatCmd(data, pb.DNHeartbeatUpdate)
 }
 
 func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
@@ -385,13 +385,13 @@ func (s *stateMachine) handleCNHeartbeat(cmd []byte) sm.Result {
 	return s.getCommandBatch(hb.UUID)
 }
 
-func (s *stateMachine) handleTNHeartbeat(cmd []byte) sm.Result {
+func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
 	data := parseHeartbeatCmd(cmd)
-	var hb pb.TNStoreHeartbeat
+	var hb pb.DNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	s.state.TNState.Update(hb, s.state.Tick)
+	s.state.DNState.Update(hb, s.state.Tick)
 	return s.getCommandBatch(hb.UUID)
 }
 
@@ -524,11 +524,11 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		return result
 	}
 	req := parseInitialClusterRequestCmd(cmd)
-	if req.NumOfLogShards != req.NumOfTNShards {
+	if req.NumOfLogShards != req.NumOfDNShards {
 		panic("DN:Log 1:1 mode is the only supported mode")
 	}
 
-	tnShards := make([]metadata.TNShardRecord, 0)
+	dnShards := make([]metadata.DNShardRecord, 0)
 	logShards := make([]metadata.LogShardRecord, 0)
 	// HAKeeper shard is assigned ShardID 0
 	rec := metadata.LogShardRecord{
@@ -546,15 +546,15 @@ func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
 		s.state.NextID++
 		logShards = append(logShards, rec)
 
-		drec := metadata.TNShardRecord{
+		drec := metadata.DNShardRecord{
 			ShardID:    s.state.NextID,
 			LogShardID: rec.ShardID,
 		}
 		s.state.NextID++
-		tnShards = append(tnShards, drec)
+		dnShards = append(dnShards, drec)
 	}
 	s.state.ClusterInfo = pb.ClusterInfo{
-		TNShards:  tnShards,
+		DNShards:  dnShards,
 		LogShards: logShards,
 	}
 
@@ -588,8 +588,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
 	s.state.Index = e.Index
 	switch parseCmdTag(cmd) {
-	case pb.TNHeartbeatUpdate:
-		return s.handleTNHeartbeat(cmd), nil
+	case pb.DNHeartbeatUpdate:
+		return s.handleDNHeartbeat(cmd), nil
 	case pb.CNHeartbeatUpdate:
 		return s.handleCNHeartbeat(cmd), nil
 	case pb.LogHeartbeatUpdate:
@@ -628,7 +628,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 	internal := &pb.CheckerState{
 		Tick:               s.state.Tick,
 		ClusterInfo:        s.state.ClusterInfo,
-		TNState:            s.state.TNState,
+		DNState:            s.state.DNState,
 		LogState:           s.state.LogState,
 		CNState:            s.state.CNState,
 		State:              s.state.State,
@@ -656,7 +656,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 	cfg.Fill()
 	cd := &pb.ClusterDetails{
 		CNStores:  make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
-		TNStores:  make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
+		DNStores:  make([]pb.DNStore, 0, len(s.state.DNState.Stores)),
 		LogStores: make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
@@ -678,12 +678,12 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
-	for uuid, info := range s.state.TNState.Stores {
+	for uuid, info := range s.state.DNState.Stores {
 		state := pb.NormalState
-		if cfg.TNStoreExpired(info.Tick, s.state.Tick) {
+		if cfg.DNStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
-		n := pb.TNStore{
+		n := pb.DNStore{
 			UUID:                 uuid,
 			Tick:                 info.Tick,
 			State:                state,
@@ -693,7 +693,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			LockServiceAddress:   info.LockServiceAddress,
 			CtlAddress:           info.CtlAddress,
 		}
-		cd.TNStores = append(cd.TNStores, n)
+		cd.DNStores = append(cd.DNStores, n)
 	}
 	for uuid, info := range s.state.LogState.Stores {
 		state := pb.NormalState

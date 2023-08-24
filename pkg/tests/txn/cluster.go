@@ -72,7 +72,7 @@ func (c *cluster) Start() {
 	defer cancel()
 	c.env.WaitHAKeeperState(ctx, logservice.HAKeeperRunning)
 	c.env.WaitHAKeeperLeader(ctx)
-	c.env.WaitTNShardsReported(ctx)
+	c.env.WaitDNShardsReported(ctx)
 }
 
 func (c *cluster) Stop() {

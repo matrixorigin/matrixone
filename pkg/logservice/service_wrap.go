@@ -60,10 +60,10 @@ func (w *WrappedService) GetClusterState() (*pb.CheckerState, error) {
 }
 
 func (w *WrappedService) SetInitialClusterInfo(
-	logShardNum, tnShartnum, logReplicaNum uint64,
+	logShardNum, dnShardNum, logReplicaNum uint64,
 ) error {
 	return w.svc.store.setInitialClusterInfo(
-		logShardNum, tnShartnum, logReplicaNum, 0, nil,
+		logShardNum, dnShardNum, logReplicaNum, 0, nil,
 	)
 }
 

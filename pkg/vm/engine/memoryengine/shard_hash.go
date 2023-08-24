@@ -45,7 +45,7 @@ func (*HashShard) Batch(
 	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
-	nodes []metadata.TNService,
+	nodes []metadata.DNService,
 ) (
 	sharded []*ShardedBatch,
 	err error,
@@ -96,7 +96,7 @@ func (*HashShard) Batch(
 	for _, store := range nodes {
 		for _, info := range store.Shards {
 			shards = append(shards, &Shard{
-				TNShardRecord: metadata.TNShardRecord{
+				DNShardRecord: metadata.DNShardRecord{
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,
@@ -157,7 +157,7 @@ func (h *HashShard) Vector(
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
-	nodes []metadata.TNService,
+	nodes []metadata.DNService,
 ) (
 	sharded []*ShardedVector,
 	err error,
@@ -195,7 +195,7 @@ func (h *HashShard) Vector(
 	for _, store := range nodes {
 		for _, info := range store.Shards {
 			shards = append(shards, &Shard{
-				TNShardRecord: metadata.TNShardRecord{
+				DNShardRecord: metadata.DNShardRecord{
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,

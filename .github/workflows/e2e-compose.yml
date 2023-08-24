@@ -128,12 +128,12 @@ jobs:
           echo ""  >> ./etc/launch-tae-compose/config/cn-1.toml
           echo '[cn.txn]' >> ./etc/launch-tae-compose/config/cn-1.toml
           echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/cn-1.toml
-          echo ""  >> ./etc/launch-tae-compose/config/tn.toml
-          echo '[tn.txn]' >> ./etc/launch-tae-compose/config/tn.toml
-          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/tn.toml    
+          echo ""  >> ./etc/launch-tae-compose/config/dn.toml
+          echo '[dn.txn]' >> ./etc/launch-tae-compose/config/dn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-compose/config/dn.toml    
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
-          cat ./etc/launch-tae-compose/config/tn.toml
+          cat ./etc/launch-tae-compose/config/dn.toml
           mkdir -p ${{ github.workspace }}/docker-compose-log
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
           

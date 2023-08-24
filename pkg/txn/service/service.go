@@ -38,7 +38,7 @@ var _ TxnService = (*service)(nil)
 
 type service struct {
 	logger    *log.MOLogger
-	shard     metadata.TNShard
+	shard     metadata.DNShard
 	storage   storage.TxnStorage
 	sender    rpc.TxnSender
 	stopper   *stopper.Stopper
@@ -66,7 +66,7 @@ type service struct {
 
 // NewTxnService create TxnService
 func NewTxnService(
-	shard metadata.TNShard,
+	shard metadata.DNShard,
 	storage storage.TxnStorage,
 	sender rpc.TxnSender,
 	zombieTimeout time.Duration,
@@ -96,7 +96,7 @@ func NewTxnService(
 	return s
 }
 
-func (s *service) Shard() metadata.TNShard {
+func (s *service) Shard() metadata.DNShard {
 	return s.shard
 }
 
@@ -136,8 +136,8 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 				txnCtx := value.(*txnContext)
 				txnMeta := txnCtx.getTxn()
 				// if a txn is not a distributed txn coordinator, wait coordinator dnshard.
-				if len(txnMeta.TNShards) == 0 ||
-					(len(txnMeta.TNShards) > 0 && s.shard.ShardID != txnMeta.TNShards[0].ShardID) {
+				if len(txnMeta.DNShards) == 0 ||
+					(len(txnMeta.DNShards) > 0 && s.shard.ShardID != txnMeta.DNShards[0].ShardID) {
 					return true
 				}
 
@@ -203,11 +203,11 @@ func (s *service) getTxnContext(txnID []byte) *txnContext {
 	return v.(*txnContext)
 }
 
-func (s *service) validTNShard(tn metadata.TNShard) bool {
-	if !s.shard.Equal(tn) {
+func (s *service) validDNShard(dn metadata.DNShard) bool {
+	if !s.shard.Equal(dn) {
 		// DNShard not match, so cn need to fetch latest DNShards from hakeeper.
 		s.logger.Error("DN metadata not match",
-			zap.String("request-dn", tn.DebugString()),
+			zap.String("request-dn", dn.DebugString()),
 			zap.String("local-dn", s.shard.DebugString()))
 		return false
 	}

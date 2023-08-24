@@ -101,16 +101,16 @@ func (m *Checkpoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
-type InspectTN struct {
+type InspectDN struct {
 	AccessInfo AccessInfo
 	Operation  string
 }
 
-func (m *InspectTN) MarshalBinary() ([]byte, error) {
+func (m *InspectDN) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
 
-func (m *InspectTN) UnmarshalBinary(data []byte) error {
+func (m *InspectDN) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 

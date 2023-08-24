@@ -166,7 +166,7 @@ func runRPCTests(
 					LockServiceAddress: testSockets,
 				},
 			},
-			[]metadata.TNService{
+			[]metadata.DNService{
 				{
 					LockServiceAddress: testSockets,
 				},

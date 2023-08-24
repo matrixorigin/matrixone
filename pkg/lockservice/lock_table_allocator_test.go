@@ -257,7 +257,7 @@ func runLockTableAllocatorTest(
 					LockServiceAddress: testSockets,
 				},
 			},
-			[]metadata.TNService{
+			[]metadata.DNService{
 				{
 					LockServiceAddress: testSockets,
 				},

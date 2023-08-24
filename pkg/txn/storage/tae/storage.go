@@ -34,7 +34,7 @@ import (
 )
 
 type taeStorage struct {
-	shard         metadata.TNShard
+	shard         metadata.DNShard
 	taeHandler    rpchandle.Handler
 	logtailServer *service.LogtailServer
 }
@@ -44,7 +44,7 @@ var _ storage.TxnStorage = (*taeStorage)(nil)
 func NewTAEStorage(
 	ctx context.Context,
 	dataDir string,
-	shard metadata.TNShard,
+	shard metadata.DNShard,
 	factory logservice.ClientFactory,
 	fs fileservice.FileService,
 	rt runtime.Runtime,
