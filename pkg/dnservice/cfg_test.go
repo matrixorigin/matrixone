@@ -33,5 +33,5 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, defaultHeatbeatInterval, c.HAKeeper.HeatbeatInterval.Duration)
 	assert.Equal(t, defaultHeatbeatTimeout, c.HAKeeper.HeatbeatTimeout.Duration)
 	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
-	assert.Equal(t, "false", c.Txn.IncrementalDedup)
+	assert.Equal(t, "true", c.Txn.IncrementalDedup)
 }
