@@ -640,11 +640,6 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.lastTS = tbl.db.txn.meta.SnapshotTS
 	}
 
-	//blks contains all visible blocks to this txn, namely
-	//includes committed blocks and uncommitted blocks by CN writing S3.
-	blks := make([]catalog.BlockInfo, 0, len(committedblocks))
-	blks = append(blks, committedblocks...)
-
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
 		iter := state.NewDirtyBlocksIter()
@@ -666,8 +661,12 @@ func (tbl *txnTable) rangesOnePart(
 	if err != nil {
 		return err
 	}
+	//blks contains all visible blocks to this txn, namely
+	//includes committed blocks and uncommitted blocks by CN writing S3.
+	blks := make([]catalog.BlockInfo, 0, len(committedblocks)+len(insertedS3Blks))
+	blks = append(blks, committedblocks...)
+	blks = append(blks, insertedS3Blks...)
 	for _, blk := range insertedS3Blks {
-		blks = append(blks, blk)
 		if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
 			dirtyBlks[blk.BlockID] = struct{}{}
 		}
@@ -709,6 +708,19 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+
+	if done, err := tbl.tryFastRanges(
+		exprs, blks, dirtyBlks, ranges, fs,
+	); err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	for _, expr := range exprs {
 		auxIdCnt += plan2.AssignAuxIdForExpr(expr, auxIdCnt)
@@ -723,10 +735,6 @@ func (tbl *txnTable) rangesOnePart(
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return err
-	}
 	hasDeletes := len(dirtyBlks) > 0
 	for _, blk := range blks {
 		// if expr is monotonic, we need evaluating expr for each block
@@ -793,6 +801,118 @@ func (tbl *txnTable) rangesOnePart(
 		blk.PartitionNum = -1
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
+	blockio.RecordBlockSelectivity(len(*ranges)-1, len(blks))
+	return
+}
+
+func (tbl *txnTable) tryFastRanges(
+	exprs []*plan.Expr,
+	blks []catalog.BlockInfo,
+	dirtyBlks map[types.Blockid]struct{},
+	ranges *[][]byte,
+	fs fileservice.FileService,
+) (done bool, err error) {
+	if tbl.primaryIdx == -1 {
+		done = false
+		return
+	}
+	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+	pkName := pkColumn.Name
+	pkType := types.T(pkColumn.Typ.Id)
+	var pkVal any
+	for _, expr := range exprs {
+		ok, _, v := getPkValueByExpr(expr, pkName, pkType, tbl.proc)
+		if ok {
+			pkVal = v
+			break
+		}
+	}
+	if pkVal == nil {
+		done = false
+		return
+	}
+	val := types.EncodeValue(pkVal, pkType)
+	hasDeletes := len(dirtyBlks) > 0
+
+	var (
+		meta objectio.ObjectDataMeta
+		bf   objectio.BloomFilter
+		// bfIdx   index.StaticFilter
+		skipObj bool
+	)
+	for _, blk := range blks {
+		location := blk.MetaLocation()
+		if !objectio.IsSameObjectLocVsMeta(location, meta) {
+			var objMeta objectio.ObjectMeta
+			if objMeta, err = objectio.FastLoadObjectMeta(
+				tbl.proc.Ctx, &location, false, tbl.db.txn.engine.fs,
+			); err != nil {
+				return
+			}
+
+			// reset bloom filter to nil for each object
+			bf = nil
+			// bfIdx = index.NewEmptyBinaryFuseFilter()
+
+			// check whether the object is skipped by zone map
+			// If object zone map doesn't contains the pk value, we need to check bloom filter
+			meta = objMeta.MustDataMeta()
+			pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+			if skipObj = !pkZM.ContainsKey(val); skipObj {
+				continue
+			}
+
+			// check whether the object is skipped by bloom filter
+			if bf, err = objectio.LoadBFWithMeta(
+				tbl.proc.Ctx, meta, location, fs,
+			); err != nil {
+				return
+			}
+
+			// TODO: use object bf first
+			// if err = index.DecodeBloomFilter(bfIdx, bf.GetObjectBloomFilter()); err != nil {
+			// 	return
+			// }
+			// var exist bool
+			// if exist, err = bfIdx.MayContainsKey(val); err != nil {
+			// 	return
+			// } else {
+			// 	skipObj = !exist
+			// }
+		}
+
+		if skipObj {
+			continue
+		}
+
+		blkBf := bf.GetBloomFilter(uint32(location.ID()))
+		blkBfIdx := index.NewEmptyBinaryFuseFilter()
+		if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+			return
+		}
+		var exist bool
+		if exist, err = blkBfIdx.MayContainsKey(val); err != nil {
+			return
+		} else {
+			if !exist {
+				continue
+			}
+		}
+
+		if hasDeletes {
+			if _, ok := dirtyBlks[blk.BlockID]; !ok {
+				blk.CanRemote = true
+			}
+			blk.PartitionNum = -1
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+			continue
+		}
+
+		blk.CanRemote = true
+		blk.PartitionNum = -1
+		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+	}
+	done = true
 	blockio.RecordBlockSelectivity(len(*ranges)-1, len(blks))
 	return
 }
