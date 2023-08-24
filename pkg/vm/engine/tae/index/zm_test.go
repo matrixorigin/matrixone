@@ -374,9 +374,9 @@ func BenchmarkZM(b *testing.B) {
 
 func BenchmarkUpdateZMVector(b *testing.B) {
 	zm := NewZM(types.T_int64, 0)
-	dnVec := containers.MockVector(types.T_int64.ToType(), 10000, false, nil)
-	defer dnVec.Close()
-	vec := dnVec.GetDownstreamVector()
+	tnVec := containers.MockVector(types.T_int64.ToType(), 10000, false, nil)
+	defer tnVec.Close()
+	vec := tnVec.GetDownstreamVector()
 
 	b.Run("update-vector", func(b *testing.B) {
 		b.ResetTimer()
