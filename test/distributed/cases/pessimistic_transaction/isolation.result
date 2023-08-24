@@ -549,33 +549,35 @@ a    b
 commit;
 drop table if exists t1;
 drop table if exists rename01;
-[unknown result because it is related to issue#11279]
 create table rename01 (c int primary key,d int);
-[unknown result because it is related to issue#11279]
 insert into rename01 values(1,1);
-[unknown result because it is related to issue#11279]
 insert into rename01 values(2,2);
-[unknown result because it is related to issue#11279]
 begin;
-[unknown result because it is related to issue#11279]
 insert into rename01 values(3,1);
-[unknown result because it is related to issue#11279]
 insert into rename01 values(4,2);
-[unknown result because it is related to issue#11279]
 alter table rename01 rename column c to `newCCCC`;
-[unknown result because it is related to issue#11279]
 select * from rename01;
-[unknown result because it is related to issue#11279]
+newcccc    d
+3    1
+4    2
+1    1
+2    2
 use isolation;
-[unknown result because it is related to issue#11279]
 insert into rename01 (c, d) values (5,7);
-[unknown result because it is related to issue#11279]
+Unknown column 'c' in 'rename01'
 insert into rename01 (newCCCC, d) values (5,7);
-[unknown result because it is related to issue#11279]
 select * from rename01;
-[unknown result because it is related to issue#11279]
+newcccc    d
+3    1
+4    2
+1    1
+2    2
+5    7
 select * from rename01;
-[unknown result because it is related to issue#11279]
+newcccc    d
+3    1
+4    2
+1    1
+2    2
+5    7
 drop table rename01;
-[unknown result because it is related to issue#11279]
-
