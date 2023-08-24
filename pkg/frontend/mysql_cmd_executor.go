@@ -269,6 +269,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
+	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
+		// fix original issue #8165
+		stm.User = ""
+	}
 	if sqlType != constant.InternalSql {
 		ses.tStmt = stm
 	}
