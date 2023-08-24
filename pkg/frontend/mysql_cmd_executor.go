@@ -1172,6 +1172,16 @@ func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deal
 	return doDeallocate(ctx, mce.GetSession(), st)
 }
 
+func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree.CreateConnector) error {
+	//todo: handle Create connector
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.DropConnector) error {
+	//todo: handle Create connector
+	return nil
+}
+
 // handleReset
 func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) error {
 	return doReset(ctx, mce.GetSession(), st)
@@ -2642,7 +2652,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
 				}
-
+			case *tree.CreateConnector:
+				// todo : Create and run Connector
+			case *tree.DropConnector:
+				// todo : Drop Connector
 			case *tree.Deallocate:
 				//we will not send response in COM_STMT_CLOSE command
 				if ses.GetCmd() != COM_STMT_CLOSE {
@@ -2843,6 +2856,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 		if err != nil {
 			mce.GetSession().RemovePrepareStmt(prepareStmt.Name)
+			return err
+		}
+	case *tree.CreateConnector:
+		selfHandle = true
+		err = mce.handleCreateConnector(requestCtx, st)
+		if err != nil {
+			return err
+		}
+	case *tree.DropConnector:
+		selfHandle = true
+		err = mce.handleDropConnector(requestCtx, st)
+		if err != nil {
 			return err
 		}
 	case *tree.Deallocate:
