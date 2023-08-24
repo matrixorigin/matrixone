@@ -5544,6 +5544,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.StreamName != nil {
 			dbName = string(st.StreamName.SchemaName)
 		}
+	case *tree.CreateConnector:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.ConnectorName != nil {
+			dbName = string(st.ConnectorName.SchemaName)
+		}
 	case *tree.CreateSequence:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -5723,6 +5730,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.BackupStart:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	default:

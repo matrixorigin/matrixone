@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/backup"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -49,6 +50,14 @@ func startCluster(
 		return err
 	}
 
+	/*
+		When the mo started in local cluster, we save all config files.
+		Because we can get all config files conveniently.
+	*/
+	backup.SaveLaunchConfigPath(backup.LaunchConfig, []string{*launchFile})
+	backup.SaveLaunchConfigPath(backup.LogConfig, cfg.LogServiceConfigFiles)
+	backup.SaveLaunchConfigPath(backup.DnConfig, cfg.DNServiceConfigsFiles)
+	backup.SaveLaunchConfigPath(backup.CnConfig, cfg.CNServiceConfigsFiles)
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
@@ -59,6 +68,7 @@ func startCluster(
 		return err
 	}
 	if *withProxy {
+		backup.SaveLaunchConfigPath(backup.ProxyConfig, cfg.ProxyServiceConfigsFiles)
 		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
 			return err
 		}

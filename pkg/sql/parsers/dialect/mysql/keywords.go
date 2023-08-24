@@ -90,6 +90,7 @@ func init() {
 		"connect":                    CONNECT,
 		"convert":                    CONVERT,
 		"config":                     CONFIG,
+		"connector":                  CONNECTOR,
 		"cipher":                     CIPHER,
 		"chain":                      CHAIN,
 		"client":                     CLIENT,
@@ -587,5 +588,7 @@ func init() {
 		"stage":                      STAGE,
 		"stages":                     STAGES,
 		"credentials":                CREDENTIALS,
+		"backup":                     BACKUP,
+		"filesystem":                 FILESYSTEM,
 	}
 }
