@@ -174,6 +174,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							}
 						}
 					}
+					rowCount++
 				} else {
 					sels := mSels[idx]
 					for j, rp := range ap.Result {
@@ -203,8 +204,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(i+k), int64(sel)); err != nil {
 							return err
 						}
-						rowCount++
 					}
+					rowCount += len(sels)
 				}
 			}
 		}
