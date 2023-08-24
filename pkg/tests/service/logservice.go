@@ -54,7 +54,7 @@ type LogService interface {
 	GetClusterState() (*logpb.CheckerState, error)
 
 	// SetInitialClusterInfo sets cluster initialize state.
-	SetInitialClusterInfo(numOfLogShards, numOfDNShards, numOfLogReplicas uint64) error
+	SetInitialClusterInfo(numOfLogShards, numOfTNShards, numOfLogReplicas uint64) error
 
 	// StartHAKeeperReplica starts hakeeper replicas.
 	StartHAKeeperReplica(replicaID uint64, initialReplicas map[uint64]dragonboat.Target, join bool) error
@@ -121,10 +121,10 @@ func (ls *logService) GetClusterState() (*logpb.CheckerState, error) {
 }
 
 func (ls *logService) SetInitialClusterInfo(
-	numOfLogShards, numOfDNShards, numOfLogReplicas uint64,
+	numOfLogShards, numOfTNShards, numOfLogReplicas uint64,
 ) error {
 	return ls.svc.SetInitialClusterInfo(
-		numOfLogShards, numOfDNShards, numOfLogReplicas,
+		numOfLogShards, numOfTNShards, numOfLogReplicas,
 	)
 }
 
@@ -175,7 +175,7 @@ func buildLogConfig(
 	// setting hakeeper configuration
 	cfg.HAKeeperConfig.TickPerSecond = opt.hakeeper.tickPerSecond
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
-	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
+	cfg.HAKeeperConfig.TNStoreTimeout.Duration = opt.hakeeper.tnStoreTimeout
 	cfg.HAKeeperConfig.CNStoreTimeout.Duration = opt.hakeeper.cnStoreTimeout
 
 	return cfg
@@ -239,7 +239,7 @@ func (c *testCluster) setInitialClusterInfo() error {
 
 		err = selected[0].SetInitialClusterInfo(
 			c.opt.initial.logShardNum,
-			c.opt.initial.dnShardNum,
+			c.opt.initial.tnShartnum,
 			c.opt.initial.logReplicaNum,
 		)
 		if err != nil {

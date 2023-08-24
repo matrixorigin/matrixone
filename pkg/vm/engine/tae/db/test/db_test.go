@@ -6489,23 +6489,23 @@ func TestAlterFakePk(t *testing.T) {
 
 	insBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	require.NoError(t, err)
-	dnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat)
-	t.Log(dnInsBat.Attrs)
-	require.Equal(t, 6, len(dnInsBat.Vecs)) // 3 col + 1 fake pk + 1 rowid + 1 committs
-	for _, v := range dnInsBat.Vecs {
+	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat)
+	t.Log(tnInsBat.Attrs)
+	require.Equal(t, 6, len(tnInsBat.Vecs)) // 3 col + 1 fake pk + 1 rowid + 1 committs
+	for _, v := range tnInsBat.Vecs {
 		require.Equal(t, 4, v.Length())
 	}
-	t.Log(dnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+	t.Log(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
 	delBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat)
 	require.NoError(t, err)
-	dnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat)
-	t.Log(dnDelBat.Attrs)
-	require.Equal(t, 3, len(dnDelBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
-	for _, v := range dnDelBat.Vecs {
+	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat)
+	t.Log(tnDelBat.Attrs)
+	require.Equal(t, 3, len(tnDelBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
+	for _, v := range tnDelBat.Vecs {
 		require.Equal(t, 2, v.Length())
 	}
-	t.Log(dnDelBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+	t.Log(tnDelBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
 }
 

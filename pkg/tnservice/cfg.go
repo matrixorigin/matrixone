@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package tnservice
 
 import (
 	"context"
@@ -61,11 +61,11 @@ var (
 	defaultServiceHost = "127.0.0.1"
 )
 
-// Config dn store configuration
+// Config tn store configuration
 type Config struct {
 	// DataDir data dir
 	DataDir string `toml:"-"`
-	// UUID dn store uuid
+	// UUID tn store uuid
 	UUID string `toml:"uuid"`
 	// ListenAddress listening address for receiving external requests.
 	ListenAddress string `toml:"listen-address"`

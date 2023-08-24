@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package tnservice
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -34,18 +34,18 @@ const (
 // Option store option
 type Option func(*store)
 
-// Service DN Service
+// Service TN Service
 type Service interface {
-	// Start start dn store. Start all DNShards currently managed by the Store and listen
+	// Start start tn store. Start all DNShards currently managed by the Store and listen
 	// to and process requests from CN and other DNs.
 	Start() error
-	// Close close dn store
+	// Close close tn store
 	Close() error
 
-	// StartDNReplica start the DNShard replica
-	StartDNReplica(metadata.DNShard) error
-	// CloseDNReplica close the DNShard replica.
-	CloseDNReplica(shard metadata.DNShard) error
+	// StartTNReplica start the DNShard replica
+	StartTNReplica(metadata.TNShard) error
+	// CloseTNReplica close the DNShard replica.
+	CloseTNReplica(shard metadata.TNShard) error
 
 	// GetTaskService returns taskservice
 	GetTaskService() (taskservice.TaskService, bool)
