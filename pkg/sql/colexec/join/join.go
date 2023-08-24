@@ -140,6 +140,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 
 	mSels := ctr.mp.Sels()
+	singleSel := ctr.mp.SingleSel()
 
 	count := bat.RowCount()
 	itr := ctr.mp.NewIterator()
@@ -156,29 +157,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
-			sels := mSels[vals[k]-1]
-			if ap.Cond != nil {
-				for _, sel := range sels {
-					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
-						1, ctr.cfs1); err != nil {
-						return err
-					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
-						1, ctr.cfs2); err != nil {
-						return err
-					}
-					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
-					if err != nil {
-						rbat.Clean(proc.Mp())
-						return err
-					}
-					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
-						continue
-					}
-					bs := vector.MustFixedCol[bool](vec)
-					if !bs[0] {
-						continue
-					}
+			idx := vals[k] - 1
+
+			if ap.Cond == nil {
+				if ap.HashOnPK {
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
@@ -186,29 +168,44 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 								return err
 							}
 						} else {
-							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
+							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(singleSel[idx]), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						}
 					}
-					rowCount++
-				}
-			} else {
-				for j, rp := range ap.Result {
-					if rp.Rel == 0 {
-						if err := rbat.Vecs[j].UnionMulti(bat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
-							return err
-						}
-					} else {
-						if err := rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
-							rbat.Clean(proc.Mp())
-							return err
+				} else {
+					sels := mSels[idx]
+					for j, rp := range ap.Result {
+						if rp.Rel == 0 {
+							if err := rbat.Vecs[j].UnionMulti(bat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
+						} else {
+							if err := rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
 						}
 					}
+					rowCount += len(sels)
 				}
-				rowCount += len(sels)
+			} else {
+				if ap.HashOnPK {
+					if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(i+k), int64(singleSel[idx])); err != nil {
+						return err
+					}
+					rowCount++
+				} else {
+					sels := mSels[idx]
+					for _, sel := range sels {
+						if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(i+k), int64(sel)); err != nil {
+							return err
+						}
+						rowCount++
+					}
+				}
 			}
 		}
 	}
@@ -216,6 +213,43 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.AddRowCount(rowCount)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
+	return nil
+}
+
+func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *Argument, proc *process.Process, row, sel int64) error {
+	if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, row,
+		1, ctr.cfs1); err != nil {
+		return err
+	}
+	if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, sel,
+		1, ctr.cfs2); err != nil {
+		return err
+	}
+	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+	if err != nil {
+		rbat.Clean(proc.Mp())
+		return err
+	}
+	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+		return nil
+	}
+	bs := vector.MustFixedCol[bool](vec)
+	if !bs[0] {
+		return nil
+	}
+	for j, rp := range ap.Result {
+		if rp.Rel == 0 {
+			if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], row, proc.Mp()); err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+		} else {
+			if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+		}
+	}
 	return nil
 }
 

@@ -45,7 +45,8 @@ type container struct {
 	hasNull bool
 	isMerge bool
 
-	sels [][]int32
+	singleSel []int32
+	multiSels [][]int32
 
 	bat *batch.Batch
 
