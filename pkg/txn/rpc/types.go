@@ -26,9 +26,9 @@ import (
 // Config config
 type Config = morpc.Config
 
-// TxnSender is used to send transaction requests to the DN nodes.
+// TxnSender is used to send transaction requests to the TN nodes.
 type TxnSender interface {
-	// Send send request to the specified DN node, and wait for response synchronously.
+	// Send send request to the specified TN node, and wait for response synchronously.
 	// For any reason, if no response is received, the internal will keep retrying until
 	// the Context times out.
 	Send(context.Context, []txn.TxnRequest) (*SendResult, error)
@@ -56,7 +56,7 @@ type SenderOption func(*sender)
 type ServerOption func(*server)
 
 // LocalDispatch used to returns request handler on local, avoid rpc
-type LocalDispatch func(metadata.DNShard) TxnRequestHandleFunc
+type LocalDispatch func(metadata.TNShard) TxnRequestHandleFunc
 
 // SendResult wrapping []txn.TxnResponse for reuse
 type SendResult struct {

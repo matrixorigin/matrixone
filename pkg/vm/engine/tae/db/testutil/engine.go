@@ -384,12 +384,12 @@ func writeIncrementalCheckpoint(
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
-	cnLocation, dnLocation, err := data.WriteTo(fs, checkpointBlockRows)
+	cnLocation, tnLocation, err := data.WriteTo(fs, checkpointBlockRows)
 	assert.NoError(t, err)
-	return cnLocation, dnLocation
+	return cnLocation, tnLocation
 }
 
-func dnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.FileService) *logtail.CheckpointData {
+func tnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.FileService) *logtail.CheckpointData {
 	reader, err := blockio.NewObjectReader(fs, location)
 	assert.NoError(t, err)
 	data := logtail.NewCheckpointData()
@@ -441,7 +441,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	return
 }
 
-func checkDNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData, start, end types.TS, c *catalog.Catalog) {
+func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData, start, end types.TS, c *catalog.Catalog) {
 	factory := logtail.IncrementalCheckpointDataFactory(start, end)
 	data2, err := factory(c)
 	assert.NoError(t, err)
@@ -500,7 +500,7 @@ func isBatchEqual(ctx context.Context, t *testing.T, bat1, bat2 *containers.Batc
 	}
 }
 
-func isProtoDNBatchEqual(ctx context.Context, t *testing.T, bat1 *api.Batch, bat2 *containers.Batch) {
+func isProtoTNBatchEqual(ctx context.Context, t *testing.T, bat1 *api.Batch, bat2 *containers.Batch) {
 	if bat1 == nil {
 		if bat2 == nil {
 			return
@@ -509,8 +509,8 @@ func isProtoDNBatchEqual(ctx context.Context, t *testing.T, bat1 *api.Batch, bat
 	} else {
 		moIns, err := batch.ProtoBatchToBatch(bat1)
 		assert.NoError(t, err)
-		dnIns := containers.ToDNBatch(moIns)
-		isBatchEqual(ctx, t, dnIns, bat2)
+		tnIns := containers.ToTNBatch(moIns)
+		isBatchEqual(ctx, t, tnIns, bat2)
 	}
 }
 
@@ -536,8 +536,8 @@ func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel 
 	defer data2.Close()
 	ins2, _, del2, _ := data2.GetDBBatchs()
 
-	isProtoDNBatchEqual(ctx, t, ins, ins2)
-	isProtoDNBatchEqual(ctx, t, del, del2)
+	isProtoTNBatchEqual(ctx, t, ins, ins2)
+	isProtoTNBatchEqual(ctx, t, del, del2)
 	assert.Nil(t, cnIns)
 	assert.Nil(t, segDel)
 }
@@ -552,8 +552,8 @@ func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *a
 	defer data2.Close()
 	ins2, _, _, del2, _ := data2.GetTblBatchs()
 
-	isProtoDNBatchEqual(ctx, t, ins, ins2)
-	isProtoDNBatchEqual(ctx, t, del, del2)
+	isProtoTNBatchEqual(ctx, t, ins, ins2)
+	isProtoTNBatchEqual(ctx, t, del, del2)
 	assert.Nil(t, cnIns)
 	assert.Nil(t, segDel)
 }
@@ -569,8 +569,8 @@ func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *
 	ins2 := bats[logtail.TBLColInsertIDX]
 	del2 := bats[logtail.TBLColDeleteIDX]
 
-	isProtoDNBatchEqual(ctx, t, ins, ins2)
-	isProtoDNBatchEqual(ctx, t, del, del2)
+	isProtoTNBatchEqual(ctx, t, ins, ins2)
+	isProtoTNBatchEqual(ctx, t, del, del2)
 	assert.Nil(t, cnIns)
 	assert.Nil(t, segDel)
 }
@@ -599,10 +599,10 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
 	segDel2 := bats[logtail.SEGDeleteIDX]
 
-	isProtoDNBatchEqual(ctx, t, ins, ins2)
-	isProtoDNBatchEqual(ctx, t, del, del2)
-	isProtoDNBatchEqual(ctx, t, cnIns, cnIns2)
-	isProtoDNBatchEqual(ctx, t, segDel, segDel2)
+	isProtoTNBatchEqual(ctx, t, ins, ins2)
+	isProtoTNBatchEqual(ctx, t, del, del2)
+	isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
+	isProtoTNBatchEqual(ctx, t, segDel, segDel2)
 }
 
 func CheckCheckpointReadWrite(
@@ -613,9 +613,9 @@ func CheckCheckpointReadWrite(
 	fs fileservice.FileService,
 ) {
 	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, fs)
-	dnData := dnReadCheckpoint(t, location, fs)
+	tnData := tnReadCheckpoint(t, location, fs)
 
-	checkDNCheckpointData(context.Background(), t, dnData, start, end, c)
+	checkTNCheckpointData(context.Background(), t, tnData, start, end, c)
 	p := &catalog.LoopProcessor{}
 
 	ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, pkgcatalog.MO_DATABASE_ID, location, fs)

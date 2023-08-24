@@ -116,7 +116,7 @@ func (t *Table) Delete(ctx context.Context, bat *batch.Batch, colName string) er
 		t.TableDefs,
 		colName,
 		vec,
-		getDNServices(t.engine.cluster),
+		getTNServices(t.engine.cluster),
 	)
 	if err != nil {
 		return err
@@ -277,7 +277,7 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 		t.id,
 		t.TableDefs,
 		data,
-		getDNServices(t.engine.cluster),
+		getTNServices(t.engine.cluster),
 	)
 	if err != nil {
 		return err
@@ -312,7 +312,7 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 		t.id,
 		t.TableDefs,
 		data,
-		getDNServices(t.engine.cluster),
+		getTNServices(t.engine.cluster),
 	)
 	if err != nil {
 		return err
