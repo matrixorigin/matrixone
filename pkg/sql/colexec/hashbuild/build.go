@@ -305,17 +305,8 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	}
 
-	var runtimeFilter *pipeline.RuntimeFilter
-
-	sels := make([]int32, 0, len(ctr.multiSels))
-	for _, sel := range ctr.multiSels {
-		if len(sel) > 0 {
-			sels = append(sels, sel[0])
-		}
-	}
-
 	vec := ctr.vecs[0]
-	if len(sels) == 0 || vec == nil || vec.Length() == 0 {
+	if ctr.bat.RowCount() == 0 || vec == nil || vec.Length() == 0 {
 		select {
 		case <-proc.Ctx.Done():
 			ctr.state = End
@@ -327,8 +318,26 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	}
 
+	var runtimeFilter *pipeline.RuntimeFilter
+	var hashmapCount uint64
+	if ctr.keyWidth <= 8 {
+		hashmapCount = ctr.intHashMap.GroupCount()
+	} else {
+		hashmapCount = ctr.strHashMap.GroupCount()
+	}
+
+	var sels []int32
+	if !ap.HashOnPK {
+		sels = make([]int32, 0, hashmapCount)
+		for _, sel := range ctr.multiSels {
+			if len(sel) > 0 {
+				sels = append(sels, sel[0])
+			}
+		}
+	}
+
 	// Composite primary key
-	if len(ctr.vecs) > 1 && len(ctr.multiSels) <= plan.BloomFilterCardLimit {
+	if len(ctr.vecs) > 1 && hashmapCount <= plan.BloomFilterCardLimit {
 		bat := batch.NewWithSize(len(ctr.vecs))
 		bat.SetRowCount(ctr.vecs[0].Length())
 		copy(bat.Vecs, ctr.vecs)
@@ -348,14 +357,20 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		}
 	}()
 
-	if len(ctr.multiSels) <= plan.InFilterCardLimit {
-		inList := vector.NewVec(*vec.GetType())
-		if err := inList.Union(vec, sels, proc.Mp()); err != nil {
-			return err
+	var err error
+	if hashmapCount <= plan.InFilterCardLimit {
+		var inList *vector.Vector
+		if ap.HashOnPK {
+			if inList, err = vec.Dup(proc.Mp()); err != nil {
+				return err
+			}
+		} else {
+			inList = vector.NewVec(*vec.GetType())
+			if err = inList.Union(vec, sels, proc.Mp()); err != nil {
+				return err
+			}
 		}
-
 		defer inList.Free(proc.Mp())
-
 		colexec.SortInFilter(inList)
 		data, err := inList.MarshalBinary()
 		if err != nil {
@@ -366,11 +381,19 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			Typ:  pipeline.RuntimeFilter_IN,
 			Data: data,
 		}
-	} else if len(ctr.multiSels) <= plan.BloomFilterCardLimit {
+	} else if hashmapCount <= plan.BloomFilterCardLimit {
 		zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
-		for i := range sels {
-			bs := vec.GetRawBytesAt(int(sels[i]))
-			index.UpdateZM(zm, bs)
+		if ap.HashOnPK {
+			length := vec.Length()
+			for i := 0; i < length; i++ {
+				bs := vec.GetRawBytesAt(i)
+				index.UpdateZM(zm, bs)
+			}
+		} else {
+			for i := range sels {
+				bs := vec.GetRawBytesAt(int(sels[i]))
+				index.UpdateZM(zm, bs)
+			}
 		}
 
 		runtimeFilter = &pipeline.RuntimeFilter{
