@@ -1,4 +1,4 @@
-service-type = "DN"
+service-type = "TN"
 
 [log]
 level = "info"
@@ -38,26 +38,26 @@ key-prefix = "server/etl"
 [hakeeper-client]
 service-addresses = ["logservice:32001"]
 
-[dn]
+[tn]
 uuid = "713F97B0-1E28-4F80-849D-FE0979AE734A"
 port-base = 19000
-service-host = "dn"
+service-host = "tn"
 
-[dn.Txn]
+[tn.Txn]
 
-[dn.Txn.Storage]
+[tn.Txn.Storage]
 backend = "TAE"
 fileservice = "SHARED"
 log-backend = "logservice"
 
-[dn.Ckp]
+[tn.Ckp]
 flush-interval = "60s"
 min-count = 100
 scan-interval = "5s"
 incremental-interval = "180s"
 global-min-count = 60
 
-[dn.LogtailServer]
+[tn.LogtailServer]
 rpc-max-message-size = "16KiB"
 rpc-payload-copy-buffer-size = "16KiB"
 rpc-enable-checksum = true

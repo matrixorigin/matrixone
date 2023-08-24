@@ -49,7 +49,7 @@ func TestNewBootstrapManager(t *testing.T) {
 		},
 		{
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{{
+				TNShards: []metadata.TNShardRecord{{
 					ShardID:    1,
 					LogShardID: 1,
 				}},
@@ -57,7 +57,7 @@ func TestNewBootstrapManager(t *testing.T) {
 			},
 			expected: &Manager{
 				cluster: pb.ClusterInfo{
-					DNShards: []metadata.DNShardRecord{{
+					TNShards: []metadata.TNShardRecord{{
 						ShardID:    1,
 						LogShardID: 1,
 					}},
@@ -80,12 +80,12 @@ func TestBootstrap(t *testing.T) {
 		desc string
 
 		cluster pb.ClusterInfo
-		dn      pb.DNState
+		tn      pb.TNState
 		log     pb.LogState
 
 		expectedNum            int
 		expectedInitialMembers map[uint64]string
-		expectedDNLogShardID   uint64
+		expectedTNLogShardID   uint64
 		err                    error
 	}{
 		{
@@ -109,17 +109,17 @@ func TestBootstrap(t *testing.T) {
 			},
 		},
 		{
-			desc: "1 log shard with 3 replicas and 1 dn shard",
+			desc: "1 log shard with 3 replicas and 1 tn shard",
 
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{{ShardID: 1, LogShardID: 1}},
+				TNShards: []metadata.TNShardRecord{{ShardID: 1, LogShardID: 1}},
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.DNState{
-				Stores: map[string]pb.DNStoreInfo{"dn-a": {}},
+			tn: pb.TNState{
+				Stores: map[string]pb.TNStoreInfo{"dn-a": {}},
 			},
 			log: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{
@@ -136,20 +136,20 @@ func TestBootstrap(t *testing.T) {
 				2: "log-c",
 				3: "log-b",
 			},
-			expectedDNLogShardID: 1,
+			expectedTNLogShardID: 1,
 		},
 		{
 			desc: "ignore shard 0",
 
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{},
+				TNShards: []metadata.TNShardRecord{},
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          0,
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.DNState{
-				Stores: map[string]pb.DNStoreInfo{},
+			tn: pb.TNState{
+				Stores: map[string]pb.TNStoreInfo{},
 			},
 			log: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{
@@ -162,17 +162,17 @@ func TestBootstrap(t *testing.T) {
 			err:         nil,
 		},
 		{
-			desc: "1 log shard with 3 replicas and 1 dn shard",
+			desc: "1 log shard with 3 replicas and 1 tn shard",
 
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{{ShardID: 1, LogShardID: 1}},
+				TNShards: []metadata.TNShardRecord{{ShardID: 1, LogShardID: 1}},
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: pb.DNState{
-				Stores: map[string]pb.DNStoreInfo{"dn-a": {}},
+			tn: pb.TNState{
+				Stores: map[string]pb.TNStoreInfo{"dn-a": {}},
 			},
 			log: pb.LogState{
 				Stores: map[string]pb.LogStoreInfo{
@@ -189,7 +189,7 @@ func TestBootstrap(t *testing.T) {
 				2: "log-c",
 				3: "log-b",
 			},
-			expectedDNLogShardID: 1,
+			expectedTNLogShardID: 1,
 		},
 	}
 
@@ -198,7 +198,7 @@ func TestBootstrap(t *testing.T) {
 
 		alloc := util.NewTestIDAllocator(0)
 		bm := NewBootstrapManager(c.cluster)
-		output, err := bm.Bootstrap(alloc, c.dn, c.log)
+		output, err := bm.Bootstrap(alloc, c.tn, c.log)
 		assert.Equal(t, c.err, err)
 		if err != nil {
 			continue
@@ -210,8 +210,8 @@ func TestBootstrap(t *testing.T) {
 		}
 
 		for _, command := range output {
-			if command.ServiceType == pb.DNService {
-				assert.Equal(t, c.expectedDNLogShardID, command.ConfigChange.Replica.LogShardID)
+			if command.ServiceType == pb.TNService {
+				assert.Equal(t, c.expectedTNLogShardID, command.ConfigChange.Replica.LogShardID)
 			}
 		}
 	}
@@ -332,12 +332,12 @@ func TestSortLogStores(t *testing.T) {
 	}
 }
 
-func TestSortDNStores(t *testing.T) {
+func TestSortTNStores(t *testing.T) {
 	cases := []struct {
-		dnStores map[string]pb.DNStoreInfo
+		tnStores map[string]pb.TNStoreInfo
 		expected []string
 	}{{
-		dnStores: map[string]pb.DNStoreInfo{
+		tnStores: map[string]pb.TNStoreInfo{
 			"a": {Tick: 100},
 			"b": {Tick: 120},
 			"c": {Tick: 90},
@@ -347,7 +347,7 @@ func TestSortDNStores(t *testing.T) {
 	}}
 
 	for _, c := range cases {
-		output := dnStoresSortedByTick(c.dnStores)
+		output := tnStoresSortedByTick(c.tnStores)
 		assert.Equal(t, c.expected, output)
 	}
 }
@@ -357,7 +357,7 @@ func TestIssue3814(t *testing.T) {
 		desc string
 
 		cluster pb.ClusterInfo
-		dn      pb.DNState
+		tn      pb.TNState
 		log     pb.LogState
 
 		expected error
@@ -374,15 +374,15 @@ func TestIssue3814(t *testing.T) {
 			expected: moerr.NewInternalError(context.TODO(), "not enough log stores"),
 		},
 		{
-			desc: "case not enough dn stores",
+			desc: "case not enough tn stores",
 			cluster: pb.ClusterInfo{
-				DNShards: []metadata.DNShardRecord{{
+				TNShards: []metadata.TNShardRecord{{
 					ShardID:    1,
 					LogShardID: 1,
 				}},
 			},
-			dn: pb.DNState{
-				Stores: map[string]pb.DNStoreInfo{},
+			tn: pb.TNState{
+				Stores: map[string]pb.TNStoreInfo{},
 			},
 			expected: nil,
 		},
@@ -391,7 +391,7 @@ func TestIssue3814(t *testing.T) {
 	for _, c := range cases {
 		alloc := util.NewTestIDAllocator(0)
 		bm := NewBootstrapManager(c.cluster)
-		_, err := bm.Bootstrap(alloc, c.dn, c.log)
+		_, err := bm.Bootstrap(alloc, c.tn, c.log)
 		assert.Equal(t, c.expected, err)
 	}
 }
