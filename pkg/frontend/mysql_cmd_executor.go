@@ -269,6 +269,10 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
+	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
+		// fix original issue #8165
+		stm.User = ""
+	}
 	if sqlType != constant.InternalSql {
 		ses.tStmt = stm
 	}
@@ -396,18 +400,19 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	begin := time.Now()
 	proto := ses.GetMysqlProtocol()
 
+	ec := ses.GetExportConfig()
 	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
 	procBatchBegin := time.Now()
 	n := bat.Vecs[0].Length()
 	requestCtx := ses.GetRequestContext()
 
-	if oq.ep.Outfile {
+	if ec.needExportToFile() {
 		initExportFirst(oq)
 	}
 
 	for j := 0; j < n; j++ { //row index
-		if oq.ep.Outfile {
+		if ec.needExportToFile() {
 			select {
 			case <-requestCtx.Done():
 				return nil
@@ -427,7 +432,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
-	if oq.ep.Outfile {
+	if ec.needExportToFile() {
 		oq.rowIdx = uint64(n)
 		bat2 := preCopyBat(obj, bat)
 		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
@@ -1166,6 +1171,16 @@ func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
 // handleDeallocate
 func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deallocate) error {
 	return doDeallocate(ctx, mce.GetSession(), st)
+}
+
+func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree.CreateConnector) error {
+	//todo: handle Create connector
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.DropConnector) error {
+	//todo: handle Create connector
+	return nil
 }
 
 // handleReset
@@ -2638,7 +2653,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
 				}
-
+			case *tree.CreateConnector:
+				// todo : Create and run Connector
+			case *tree.DropConnector:
+				// todo : Drop Connector
 			case *tree.Deallocate:
 				//we will not send response in COM_STMT_CLOSE command
 				if ses.GetCmd() != COM_STMT_CLOSE {
@@ -2756,11 +2774,14 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			err = doCheckFilePath(requestCtx, ses, st)
+			err = doCheckFilePath(requestCtx, ses, st.Ep)
 			if err != nil {
 				return err
 			}
-			ses.SetExportParam(st.Ep)
+			ses.InitExportConfig(st.Ep)
+			defer func() {
+				ses.ClearExportParam()
+			}()
 		}
 	}
 
@@ -2839,6 +2860,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 		if err != nil {
 			mce.GetSession().RemovePrepareStmt(prepareStmt.Name)
+			return err
+		}
+	case *tree.CreateConnector:
+		selfHandle = true
+		err = mce.handleCreateConnector(requestCtx, st)
+		if err != nil {
+			return err
+		}
+	case *tree.DropConnector:
+		selfHandle = true
+		err = mce.handleDropConnector(requestCtx, st)
+		if err != nil {
 			return err
 		}
 	case *tree.Deallocate:
@@ -3181,8 +3214,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			Step 2: Start pipeline
 			Producing the data row and sending the data row
 		*/
-		ep := ses.GetExportParam()
-		if ep.Outfile {
+		ep := ses.GetExportConfig()
+		if ep.needExportToFile() {
 			ep.DefaultBufSize = pu.SV.ExportDataDefaultFlushSize
 			initExportFileParam(ep, mrs)
 			if err = openNewFile(requestCtx, ep, mrs); err != nil {
@@ -3201,7 +3234,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
-		if ep.Outfile {
+		if ep.needExportToFile() {
 			oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
 			if err = exportAllData(oq); err != nil {
 				return err
@@ -3415,7 +3448,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
-	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
@@ -3595,7 +3627,6 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
-	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
 		requestCtx,
