@@ -112,9 +112,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 			if ctr.bat != nil && ctr.bat.RowCount() != 0 {
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
-						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.singleSel, ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
 					} else {
-						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.singleSel, ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
 					}
 				}
 
@@ -229,7 +229,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	count := ctr.bat.RowCount()
 
 	if ap.HashOnPK {
-		ctr.singleSel = make([]int32, count)
 		// if hash on primary key, prealloc hashmap size to the count of batch
 		if ctr.keyWidth <= 8 {
 			err = ctr.intHashMap.PreAlloc(uint64(count), proc.Mp())
@@ -286,9 +285,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			}
 			ai := int64(v) - 1
 
-			if ap.HashOnPK {
-				ctr.singleSel[ai] = int32(i + k)
-			} else {
+			if !ap.HashOnPK {
 				if ctr.multiSels[ai] == nil {
 					ctr.multiSels[ai] = make([]int32, 0)
 				}

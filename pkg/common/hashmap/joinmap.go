@@ -20,23 +20,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(singleSel []int32, sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMap, hasNull bool, isDup bool) *JoinMap {
+func NewJoinMap(sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMap, hasNull bool, isDup bool) *JoinMap {
 	cnt := int64(1)
 	return &JoinMap{
 		cnt:       &cnt,
 		shm:       shm,
 		ihm:       ihm,
 		expr:      expr,
-		singleSel: singleSel,
 		multiSels: sels,
 		hasNull:   hasNull,
 		dupCnt:    new(int64),
 		isDup:     isDup,
 	}
-}
-
-func (jm *JoinMap) SingleSel() []int32 {
-	return jm.singleSel
 }
 
 func (jm *JoinMap) Sels() [][]int32 {
@@ -91,14 +86,12 @@ func (jm *JoinMap) Dup() *JoinMap {
 			ihm:       m0,
 			expr:      jm.expr,
 			multiSels: jm.multiSels,
-			singleSel: jm.singleSel,
 			hasNull:   jm.hasNull,
 			cnt:       jm.cnt,
 		}
 		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
 			jm.ihm = nil
 			jm.multiSels = nil
-			jm.singleSel = nil
 		}
 		return jm0
 	} else {
@@ -117,14 +110,12 @@ func (jm *JoinMap) Dup() *JoinMap {
 			shm:       m0,
 			expr:      jm.expr,
 			multiSels: jm.multiSels,
-			singleSel: jm.singleSel,
 			hasNull:   jm.hasNull,
 			cnt:       jm.cnt,
 		}
 		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
 			jm.shm = nil
 			jm.multiSels = nil
-			jm.singleSel = nil
 		}
 		return jm0
 	}
@@ -146,7 +137,6 @@ func (jm *JoinMap) Free() {
 		jm.multiSels[i] = nil
 	}
 	jm.multiSels = nil
-	jm.singleSel = nil
 	if jm.ihm != nil {
 		jm.ihm.Free()
 	} else {

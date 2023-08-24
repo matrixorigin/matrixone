@@ -140,8 +140,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 
 	mSels := ctr.mp.Sels()
-	singleSel := ctr.mp.SingleSel()
-
 	count := bat.RowCount()
 	itr := ctr.mp.NewIterator()
 	rowCount := 0
@@ -168,7 +166,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 								return err
 							}
 						} else {
-							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(singleSel[idx]), proc.Mp()); err != nil {
+							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(idx), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
 								return err
 							}
@@ -194,7 +192,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			} else {
 				if ap.HashOnPK {
-					if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(i+k), int64(singleSel[idx])); err != nil {
+					if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(i+k), int64(idx)); err != nil {
 						return err
 					}
 					rowCount++
