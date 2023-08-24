@@ -44,7 +44,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		}
 	}
 	numOfLogShards := cfg.BootstrapConfig.NumOfLogShards
-	numOfTNShards := cfg.BootstrapConfig.NumOfTNShards
+	numOfDNShards := cfg.BootstrapConfig.NumOfDNShards
 	numOfLogReplicas := cfg.BootstrapConfig.NumOfLogShardReplicas
 
 	var nextID uint64
@@ -64,7 +64,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		default:
 		}
 		if err := s.store.setInitialClusterInfo(numOfLogShards,
-			numOfTNShards, numOfLogReplicas, nextID, nextIDByKey); err != nil {
+			numOfDNShards, numOfLogReplicas, nextID, nextIDByKey); err != nil {
 			s.runtime.SubLogger(runtime.SystemInit).Error("failed to set initial cluster info", zap.Error(err))
 			if err == dragonboat.ErrShardNotFound {
 				return nil

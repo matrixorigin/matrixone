@@ -39,7 +39,7 @@ type basicHAKeeperClient interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 	// AllocateIDByKey allocate a globally unique ID by key.
 	AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error)
-	// GetClusterDetails queries the HAKeeper and return CN and TN nodes that are
+	// GetClusterDetails queries the HAKeeper and return CN and DN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 	// GetClusterState queries the cluster state
@@ -59,13 +59,13 @@ type CNHAKeeperClient interface {
 	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
-// TNHAKeeperClient is the HAKeeper client used by a TN store.
-type TNHAKeeperClient interface {
+// DNHAKeeperClient is the HAKeeper client used by a DN store.
+type DNHAKeeperClient interface {
 	basicHAKeeperClient
-	// SendTNHeartbeat sends the specified heartbeat message to the HAKeeper. The
+	// SendDNHeartbeat sends the specified heartbeat message to the HAKeeper. The
 	// returned CommandBatch contains Schedule Commands to be executed by the local
-	// TN store.
-	SendTNHeartbeat(ctx context.Context, hb pb.TNStoreHeartbeat) (pb.CommandBatch, error)
+	// DN store.
+	SendDNHeartbeat(ctx context.Context, hb pb.DNStoreHeartbeat) (pb.CommandBatch, error)
 }
 
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
@@ -100,7 +100,7 @@ type BRHAKeeperClient interface {
 // TODO: HAKeeper discovery to be implemented
 
 var _ CNHAKeeperClient = (*managedHAKeeperClient)(nil)
-var _ TNHAKeeperClient = (*managedHAKeeperClient)(nil)
+var _ DNHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ LogHAKeeperClient = (*managedHAKeeperClient)(nil)
 var _ ProxyHAKeeperClient = (*managedHAKeeperClient)(nil)
 
@@ -115,11 +115,11 @@ func NewCNHAKeeperClient(ctx context.Context,
 	return newManagedHAKeeperClient(ctx, cfg)
 }
 
-// NewTNHAKeeperClient creates a HAKeeper client to be used by a TN node.
+// NewDNHAKeeperClient creates a HAKeeper client to be used by a DN node.
 //
 // NB: caller could specify options for morpc.Client via ctx.
-func NewTNHAKeeperClient(ctx context.Context,
-	cfg HAKeeperClientConfig) (TNHAKeeperClient, error) {
+func NewDNHAKeeperClient(ctx context.Context,
+	cfg HAKeeperClientConfig) (DNHAKeeperClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -322,13 +322,13 @@ func (c *managedHAKeeperClient) SendCNHeartbeat(ctx context.Context,
 	}
 }
 
-func (c *managedHAKeeperClient) SendTNHeartbeat(ctx context.Context,
-	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
+func (c *managedHAKeeperClient) SendDNHeartbeat(ctx context.Context,
+	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
 		}
-		cb, err := c.getClient().sendTNHeartbeat(ctx, hb)
+		cb, err := c.getClient().sendDNHeartbeat(ctx, hb)
 		if err != nil {
 			c.resetClient()
 		}
@@ -649,11 +649,11 @@ func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, key string, batch
 	return resp.AllocateID.FirstID, nil
 }
 
-func (c *hakeeperClient) sendTNHeartbeat(ctx context.Context,
-	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
+func (c *hakeeperClient) sendDNHeartbeat(ctx context.Context,
+	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
 	req := pb.Request{
-		Method:      pb.TN_HEARTBEAT,
-		TNHeartbeat: &hb,
+		Method:      pb.DN_HEARTBEAT,
+		DNHeartbeat: &hb,
 	}
 	return c.sendHeartbeat(ctx, req)
 }

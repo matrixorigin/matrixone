@@ -233,7 +233,7 @@ type TaskStorage interface {
 	UpdateCronTask(context.Context, task.CronTask, task.Task) (int, error)
 }
 
-// TaskServiceHolder create and hold the task service in the cn, tn and log node. Create
+// TaskServiceHolder create and hold the task service in the cn, dn and log node. Create
 // the TaskService from the heartbeat's CreateTaskService schedule command.
 type TaskServiceHolder interface {
 	// Close close the holder

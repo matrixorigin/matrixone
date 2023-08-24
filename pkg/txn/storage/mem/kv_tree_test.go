@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSetAndGetAndLenAtnDelete(t *testing.T) {
+func TestSetAndGetAndLenAdnDelete(t *testing.T) {
 	key := []byte("k1")
 	kv := NewKV()
 	assert.Equal(t, 0, kv.Len())

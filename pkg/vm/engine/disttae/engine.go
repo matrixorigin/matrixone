@@ -55,17 +55,17 @@ func New(
 	cli client.TxnClient,
 	idGen IDGenerator,
 ) *Engine {
-	var services []metadata.TNService
+	var services []metadata.DNService
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetTNService(clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
+	cluster.GetDNService(clusterservice.NewSelector(),
+		func(d metadata.DNService) bool {
 			services = append(services, d)
 			return true
 		})
 
-	var tnID string
+	var dnID string
 	if len(services) > 0 {
-		tnID = services[0].ServiceID
+		dnID = services[0].ServiceID
 	}
 
 	ls, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.LockService)
@@ -79,7 +79,7 @@ func New(
 		ls:    ls.(lockservice.LockService),
 		cli:   cli,
 		idGen: idGen,
-		tnID:  tnID,
+		dnID:  dnID,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -120,7 +120,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
@@ -325,7 +325,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	return nil
@@ -352,7 +352,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		engine:   e,
 		meta:     op.TxnRef(),
 		idGen:    e.idGen,
-		tnStores: e.getTNServices(),
+		dnStores: e.getDNServices(),
 		tableCache: struct {
 			cachedIndex int
 			tableMap    *sync.Map
@@ -376,7 +376,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		},
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
-		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
+		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
 	}
@@ -480,11 +480,11 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 	return op.GetWorkspace().(*Transaction)
 }
 
-func (e *Engine) getTNServices() []DNStore {
+func (e *Engine) getDNServices() []DNStore {
 	var values []DNStore
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetTNService(clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
+	cluster.GetDNService(clusterservice.NewSelector(),
+		func(d metadata.DNService) bool {
 			values = append(values, d)
 			return true
 		})

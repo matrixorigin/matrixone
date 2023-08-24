@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tnservice
+package dnservice
 
 import (
 	"context"
@@ -54,18 +54,18 @@ func (s *store) heartbeat(ctx context.Context) {
 	ctx2, cancel := context.WithTimeout(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration)
 	defer cancel()
 
-	hb := logservicepb.TNStoreHeartbeat{
+	hb := logservicepb.DNStoreHeartbeat{
 		UUID:                 s.cfg.UUID,
 		ServiceAddress:       s.txnServiceServiceAddr(),
-		Shards:               s.getTNShardInfo(),
+		Shards:               s.getDNShardInfo(),
 		TaskServiceCreated:   s.taskServiceCreated(),
 		LogtailServerAddress: s.logtailServiceServiceAddr(),
 		LockServiceAddress:   s.lockServiceServiceAddr(),
 		CtlAddress:           s.ctlServiceServiceAddr(),
 	}
-	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
+	cb, err := s.hakeeperClient.SendDNHeartbeat(ctx2, hb)
 	if err != nil {
-		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
+		s.rt.Logger().Error("failed to send dn heartbeat", zap.Error(err))
 		return
 	}
 	s.handleCommands(cb.Commands)
@@ -73,7 +73,7 @@ func (s *store) heartbeat(ctx context.Context) {
 
 func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
 	for _, cmd := range cmds {
-		if cmd.ServiceType != logservicepb.TNService {
+		if cmd.ServiceType != logservicepb.DNService {
 			s.rt.Logger().Fatal("received invalid command", zap.String("command", cmd.LogString()))
 		}
 		s.rt.Logger().Debug("applying schedule command:", zap.String("command", cmd.LogString()))
@@ -98,8 +98,8 @@ func (s *store) handleAddReplica(cmd logservicepb.ScheduleCommand) {
 	logShardID := cmd.ConfigChange.Replica.LogShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	address := s.cfg.ServiceAddress
-	if err := s.createReplica(metadata.TNShard{
-		TNShardRecord: metadata.TNShardRecord{
+	if err := s.createReplica(metadata.DNShard{
+		DNShardRecord: metadata.DNShardRecord{
 			ShardID:    shardID,
 			LogShardID: logShardID,
 		},

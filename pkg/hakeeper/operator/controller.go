@@ -93,10 +93,10 @@ func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 	return executing
 }
 
-func (c *Controller) RemoveFinishedOperator(logState pb.LogState, tnState pb.TNState, cnState pb.CNState) {
+func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState, cnState pb.CNState) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
-			op.Check(logState, tnState, cnState)
+			op.Check(logState, dnState, cnState)
 			switch op.Status() {
 			case SUCCESS, EXPIRED:
 				c.RemoveOperator(op)
@@ -106,10 +106,10 @@ func (c *Controller) RemoveFinishedOperator(logState pb.LogState, tnState pb.TNS
 }
 
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
-	tnState pb.TNState, cnState pb.CNState) (commands []pb.ScheduleCommand) {
+	dnState pb.DNState, cnState pb.CNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
-		if step := op.Check(logState, tnState, cnState); step != nil {
+		if step := op.Check(logState, dnState, cnState); step != nil {
 			commands = append(commands, generateScheduleCommand(step))
 		}
 	}
@@ -128,12 +128,12 @@ func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 		return stopLogService(st)
 	case KillLogZombie:
 		return killLogZombie(st)
-	case AddTnReplica:
-		return addTnReplica(st)
-	case RemoveTnReplica:
-		return removeTnReplica(st)
-	case StopTnStore:
-		return stopTnStore(st)
+	case AddDnReplica:
+		return addDnReplica(st)
+	case RemoveDnReplica:
+		return removeDnReplica(st)
+	case StopDnStore:
+		return stopDnStore(st)
 	case StopLogStore:
 		return stopLogStore(st)
 	case CreateTaskService:
@@ -222,7 +222,7 @@ func killLogZombie(st KillLogZombie) pb.ScheduleCommand {
 	}
 }
 
-func addTnReplica(st AddTnReplica) pb.ScheduleCommand {
+func addDnReplica(st AddDnReplica) pb.ScheduleCommand {
 	return pb.ScheduleCommand{
 		UUID: st.StoreID,
 		ConfigChange: &pb.ConfigChange{
@@ -234,11 +234,11 @@ func addTnReplica(st AddTnReplica) pb.ScheduleCommand {
 			},
 			ChangeType: pb.StartReplica,
 		},
-		ServiceType: pb.TNService,
+		ServiceType: pb.DNService,
 	}
 }
 
-func removeTnReplica(st RemoveTnReplica) pb.ScheduleCommand {
+func removeDnReplica(st RemoveDnReplica) pb.ScheduleCommand {
 	return pb.ScheduleCommand{
 		UUID: st.StoreID,
 		ConfigChange: &pb.ConfigChange{
@@ -250,17 +250,17 @@ func removeTnReplica(st RemoveTnReplica) pb.ScheduleCommand {
 			},
 			ChangeType: pb.StopReplica,
 		},
-		ServiceType: pb.TNService,
+		ServiceType: pb.DNService,
 	}
 }
 
-func stopTnStore(st StopTnStore) pb.ScheduleCommand {
+func stopDnStore(st StopDnStore) pb.ScheduleCommand {
 	return pb.ScheduleCommand{
 		UUID: st.StoreID,
 		ShutdownStore: &pb.ShutdownStore{
 			StoreID: st.StoreID,
 		},
-		ServiceType: pb.TNService,
+		ServiceType: pb.DNService,
 	}
 }
 

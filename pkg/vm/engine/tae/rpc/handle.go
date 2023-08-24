@@ -334,8 +334,8 @@ func (h *Handle) HandlePrepare(
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	participants := make([]uint64, 0, len(meta.GetTNShards()))
-	for _, shard := range meta.GetTNShards() {
+	participants := make([]uint64, 0, len(meta.GetDNShards()))
+	for _, shard := range meta.GetDNShards() {
 		participants = append(participants, shard.GetShardID())
 	}
 	txn.SetParticipants(participants)
@@ -452,10 +452,10 @@ func (h *Handle) HandleBackup(
 	return nil, err
 }
 
-func (h *Handle) HandleInspectTN(
+func (h *Handle) HandleInspectDN(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.InspectTN,
+	req *db.InspectDN,
 	resp *db.InspectResp) (cb func(), err error) {
 	args, _ := shlex.Split(req.Operation)
 	common.DoIfDebugEnabled(func() {
@@ -693,7 +693,7 @@ func (h *Handle) HandlePreCommitWrite(
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
 				Batch:        moBat,
-				PkCheck:      db.PKCheckType(pe.GetPkCheckByTn()),
+				PkCheck:      db.PKCheckType(pe.GetPkCheckByDn()),
 			}
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
@@ -975,9 +975,9 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			rowIDVec := containers.ToTNVector(bat.Vecs[0])
+			rowIDVec := containers.ToDNVector(bat.Vecs[0])
 			defer rowIDVec.Close()
-			pkVec := containers.ToTNVector(bat.Vecs[1])
+			pkVec := containers.ToDNVector(bat.Vecs[1])
 			//defer pkVec.Close()
 			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
@@ -988,9 +988,9 @@ func (h *Handle) HandleWrite(
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
-	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0))
+	rowIDVec := containers.ToDNVector(req.Batch.GetVector(0))
 	defer rowIDVec.Close()
-	pkVec := containers.ToTNVector(req.Batch.GetVector(1))
+	pkVec := containers.ToDNVector(req.Batch.GetVector(1))
 	//defer pkVec.Close()
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return

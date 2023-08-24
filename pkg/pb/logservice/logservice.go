@@ -47,7 +47,7 @@ func NewRSMState() HAKeeperRSMState {
 		ScheduleCommands: make(map[string]CommandBatch),
 		LogShards:        make(map[string]uint64),
 		CNState:          NewCNState(),
-		TNState:          NewTNState(),
+		DNState:          NewDNState(),
 		LogState:         NewLogState(),
 		ClusterInfo:      newClusterInfo(),
 	}
@@ -55,7 +55,7 @@ func NewRSMState() HAKeeperRSMState {
 
 func newClusterInfo() ClusterInfo {
 	return ClusterInfo{
-		TNShards:  make([]metadata.TNShardRecord, 0),
+		DNShards:  make([]metadata.DNShardRecord, 0),
 		LogShards: make([]metadata.LogShardRecord, 0),
 	}
 }
@@ -139,19 +139,19 @@ func (s *CNState) PatchCNStore(stateLabel CNStateLabel) {
 	s.Stores[stateLabel.UUID] = storeInfo
 }
 
-// NewTNState creates a new DNState.
-func NewTNState() TNState {
-	return TNState{
-		Stores: make(map[string]TNStoreInfo),
+// NewDNState creates a new DNState.
+func NewDNState() DNState {
+	return DNState{
+		Stores: make(map[string]DNStoreInfo),
 	}
 }
 
 // Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
 // current tick of the HAKeeper which is used as the timestamp of the heartbeat.
-func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
+func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
-		storeInfo = TNStoreInfo{}
+		storeInfo = DNStoreInfo{}
 	}
 	storeInfo.Tick = tick
 	storeInfo.Shards = hb.Shards
@@ -230,7 +230,7 @@ func (m *ScheduleCommand) LogString() string {
 
 	serviceType := map[ServiceType]string{
 		LogService: "L",
-		TNService:  "D",
+		DNService:  "D",
 		CNService:  "C",
 	}[m.ServiceType]
 

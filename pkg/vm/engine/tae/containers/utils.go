@@ -28,7 +28,7 @@ import (
 func FillConstVector(length int, typ types.Type, defautV any) Vector {
 	// TODO(aptend): use default value
 	vec := movec.NewConstNull(typ, length, common.DefaultAllocator)
-	return ToTNVector(vec)
+	return ToDNVector(vec)
 }
 
 func FillCNConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) *movec.Vector {
@@ -38,24 +38,24 @@ func FillCNConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) 
 
 // ### Shallow copy Functions
 
-func ToCNBatch(tnBat *Batch) *batch.Batch {
-	cnBat := batch.New(true, tnBat.Attrs)
-	for i, vec := range tnBat.Vecs {
+func ToCNBatch(dnBat *Batch) *batch.Batch {
+	cnBat := batch.New(true, dnBat.Attrs)
+	for i, vec := range dnBat.Vecs {
 		cnBat.Vecs[i] = vec.GetDownstreamVector()
 	}
 	return cnBat
 }
 
-func ToTNBatch(cnBat *batch.Batch) *Batch {
-	tnBat := NewEmptyBatch()
+func ToDNBatch(cnBat *batch.Batch) *Batch {
+	dnBat := NewEmptyBatch()
 	for i, vec := range cnBat.Vecs {
-		v := ToTNVector(vec)
-		tnBat.AddVector(cnBat.Attrs[i], v)
+		v := ToDNVector(vec)
+		dnBat.AddVector(cnBat.Attrs[i], v)
 	}
-	return tnBat
+	return dnBat
 }
 
-func ToTNVector(v *movec.Vector) Vector {
+func ToDNVector(v *movec.Vector) Vector {
 	vec := MakeVector(*v.GetType())
 	vec.setDownstreamVector(v)
 	return vec
@@ -258,7 +258,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	bat := NewBatch()
 	for i, attr := range b.Attrs {
-		v := ToTNVector(b.Vecs[i])
+		v := ToDNVector(b.Vecs[i])
 		bat.AddVector(attr, v)
 	}
 	return bat

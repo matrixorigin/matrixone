@@ -29,12 +29,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCmdPingTNWithEmptyTN(t *testing.T) {
+func TestCmdPingDNWithEmptyDN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime()
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
-		tn,
+		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return nil, nil
@@ -44,80 +44,80 @@ func TestCmdPingTNWithEmptyTN(t *testing.T) {
 		result)
 }
 
-func TestCmdPingTNWithSingleTN(t *testing.T) {
+func TestCmdPingDNWithSingleDN(t *testing.T) {
 	initTestRuntime(1)
 
 	shardID := uint64(1)
 	ctx := context.Background()
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
-		tn,
+		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: shardID}),
+					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: shardID}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.TNPingResponse{ShardID: shardID}},
+		Data:   []interface{}{pb.DNPingResponse{ShardID: shardID}},
 	}, result)
 }
 
-func TestCmdPingTNWithMultiTN(t *testing.T) {
+func TestCmdPingDNWithMultiDN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
-		tn,
+		dn,
 		"",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 1}),
+					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: 1}),
 				},
 				{
-					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 2}),
+					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: 2}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.TNPingResponse{ShardID: 1}, pb.TNPingResponse{ShardID: 2}},
+		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}, pb.DNPingResponse{ShardID: 2}},
 	}, result)
 }
 
-func TestCmdPingTNWithParameter(t *testing.T) {
+func TestCmdPingDNWithParameter(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
 	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
-		tn,
+		dn,
 		"1",
 		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 1}),
+					Payload: protoc.MustMarshal(&pb.DNPingResponse{ShardID: 1}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, pb.CtlResult{
 		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.TNPingResponse{ShardID: 1}},
+		Data:   []interface{}{pb.DNPingResponse{ShardID: 1}},
 	}, result)
 }
 
 func initTestRuntime(shardIDs ...uint64) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	var shards = make([]metadata.TNShard, 0, len(shardIDs))
+	var shards = make([]metadata.DNShard, 0, len(shardIDs))
 	for _, id := range shardIDs {
-		shards = append(shards, metadata.TNShard{
-			TNShardRecord: metadata.TNShardRecord{ShardID: id},
+		shards = append(shards, metadata.DNShard{
+			DNShardRecord: metadata.DNShardRecord{ShardID: id},
 		})
 	}
 
@@ -125,7 +125,7 @@ func initTestRuntime(shardIDs ...uint64) {
 		nil,
 		0,
 		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(nil, []metadata.TNService{
+		clusterservice.WithServices(nil, []metadata.DNService{
 			{
 				Shards: shards,
 			},

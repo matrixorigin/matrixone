@@ -142,7 +142,7 @@ func TestServiceConnect(t *testing.T) {
 			Method: pb.CONNECT,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    100,
+				DNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -160,7 +160,7 @@ func TestServiceConnectTimeout(t *testing.T) {
 			Method: pb.CONNECT,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    100,
+				DNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -178,7 +178,7 @@ func TestServiceConnectRO(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    100,
+				DNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -256,14 +256,14 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
-func TestServiceHandleTNHeartbeat(t *testing.T) {
+func TestServiceHandleDNHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
 		req := pb.Request{
-			Method: pb.TN_HEARTBEAT,
-			TNHeartbeat: &pb.TNStoreHeartbeat{
+			Method: pb.DN_HEARTBEAT,
+			DNHeartbeat: &pb.DNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
@@ -293,7 +293,7 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 		}
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
-		resp := s.handleTNHeartbeat(ctx, req)
+		resp := s.handleDNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)
@@ -308,14 +308,14 @@ func TestServiceHandleAppend(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    100,
+				DNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -338,14 +338,14 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    100,
+				DNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.TNID+1, data)
+		cmd := getTestAppendCmd(req.LogRequest.DNID+1, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -368,14 +368,14 @@ func TestServiceHandleRead(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    100,
+				DNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -416,14 +416,14 @@ func TestServiceTruncate(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    100,
+				DNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{

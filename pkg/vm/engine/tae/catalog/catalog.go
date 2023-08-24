@@ -1062,11 +1062,11 @@ func (catalog *Catalog) DropDBEntry(
 		err = moerr.NewTAEErrorNoCtx("not permitted")
 		return
 	}
-	tn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
+	dn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}
-	entry := tn.GetPayload()
+	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
 	if newEntry, err = entry.DropEntryLocked(txn); err == nil {

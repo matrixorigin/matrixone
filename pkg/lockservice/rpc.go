@@ -119,9 +119,9 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				return false
 			})
 	default:
-		c.cluster.GetTNService(
+		c.cluster.GetDNService(
 			clusterservice.NewSelector(),
-			func(d metadata.TNService) bool {
+			func(d metadata.DNService) bool {
 				address = d.LockServiceAddress
 				return false
 			})

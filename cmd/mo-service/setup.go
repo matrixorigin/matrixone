@@ -61,7 +61,7 @@ func setupProcessLevelRuntime(cfg *Config, stopper *stopper.Stopper) error {
 
 func getRuntime(st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper) (runtime.Runtime, error) {
 	switch st {
-	case metadata.ServiceType_TN:
+	case metadata.ServiceType_DN:
 		return newRuntime(cfg, stopper)
 	default:
 		return runtime.ProcessLevelRuntime(), nil

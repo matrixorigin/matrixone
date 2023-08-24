@@ -58,7 +58,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 
 	ccfg := ClientConfig{
 		LogShardID:       1,
-		TNReplicaID:      10,
+		DNReplicaID:      10,
 		ServiceAddresses: addr,
 	}
 	return service, ccfg, nil

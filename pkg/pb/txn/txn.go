@@ -70,7 +70,7 @@ func (m TxnRequest) DebugStringWithPayload(withPayload bool) string {
 		buffer.WriteString(">")
 	}
 	buffer.WriteString("/=><")
-	buffer.WriteString(m.GetTargetTN().DebugString())
+	buffer.WriteString(m.GetTargetDN().DebugString())
 	buffer.WriteString(">")
 	return buffer.String()
 }
@@ -140,11 +140,11 @@ func (m TxnMeta) DebugString() string {
 		buffer.WriteString(m.CommitTS.DebugString())
 	}
 
-	n := len(m.TNShards)
+	n := len(m.DNShards)
 	var buf bytes.Buffer
 	buf.WriteString("/<")
-	for idx, tn := range m.TNShards {
-		buf.WriteString(tn.DebugString())
+	for idx, dn := range m.DNShards {
+		buf.WriteString(dn.DebugString())
 		if idx < n-1 {
 			buf.WriteString(", ")
 		}
@@ -153,23 +153,23 @@ func (m TxnMeta) DebugString() string {
 	return buffer.String()
 }
 
-// GetTargetTN return tn shard ID that message need send to.
-func (m TxnRequest) GetTargetTN() metadata.TNShard {
+// GetTargetDN return dn shard ID that message need send to.
+func (m TxnRequest) GetTargetDN() metadata.DNShard {
 	switch m.Method {
 	case TxnMethod_Read, TxnMethod_Write, TxnMethod_DEBUG:
 		return m.CNRequest.Target
 	case TxnMethod_Commit:
-		return m.Txn.TNShards[0]
+		return m.Txn.DNShards[0]
 	case TxnMethod_Rollback:
-		return m.Txn.TNShards[0]
+		return m.Txn.DNShards[0]
 	case TxnMethod_Prepare:
-		return m.PrepareRequest.TNShard
+		return m.PrepareRequest.DNShard
 	case TxnMethod_GetStatus:
-		return m.GetStatusRequest.TNShard
-	case TxnMethod_CommitTNShard:
-		return m.CommitTNShardRequest.TNShard
-	case TxnMethod_RollbackTNShard:
-		return m.RollbackTNShardRequest.TNShard
+		return m.GetStatusRequest.DNShard
+	case TxnMethod_CommitDNShard:
+		return m.CommitDNShardRequest.DNShard
+	case TxnMethod_RollbackDNShard:
+		return m.RollbackDNShardRequest.DNShard
 	default:
 		panic(fmt.Sprintf("unknown txn request method: %v", m.Method))
 	}

@@ -66,7 +66,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 	defer cancel()
 
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitTNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
 
 	ctrl := gomock.NewController(t)

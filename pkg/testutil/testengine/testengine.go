@@ -40,12 +40,12 @@ func New(
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	ck := runtime.ProcessLevelRuntime().Clock()
 	addr := "1"
-	services := []metadata.TNService{{
+	services := []metadata.DNService{{
 		ServiceID:         uuid.NewString(),
 		TxnServiceAddress: "1",
-		Shards: []metadata.TNShard{
+		Shards: []metadata.DNShard{
 			{
-				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+				DNShardRecord: metadata.DNShardRecord{ShardID: 2},
 				ReplicaID:     2,
 			},
 		},

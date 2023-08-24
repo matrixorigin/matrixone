@@ -65,16 +65,16 @@ var (
 	DelSchema        *catalog.Schema
 	SegSchema        *catalog.Schema
 	TxnNodeSchema    *catalog.Schema
-	DBTNSchema       *catalog.Schema
-	TblTNSchema      *catalog.Schema
-	SegTNSchema      *catalog.Schema
-	BlkTNSchema      *catalog.Schema
+	DBDNSchema       *catalog.Schema
+	TblDNSchema      *catalog.Schema
+	SegDNSchema      *catalog.Schema
+	BlkDNSchema      *catalog.Schema
 	MetaSchema_V1    *catalog.Schema
 	MetaSchema       *catalog.Schema
 	DBDelSchema      *catalog.Schema
 	TblDelSchema     *catalog.Schema
 	ColumnDelSchema  *catalog.Schema
-	TNMetaSchema     *catalog.Schema
+	DNMetaSchema     *catalog.Schema
 )
 
 var (
@@ -104,7 +104,7 @@ var (
 		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_uint32, 0, 0),
 	}
-	DBTNSchemaAttr = []string{
+	DBDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
 		txnbase.SnapshotAttr_StartTS,
 		txnbase.SnapshotAttr_PrepareTS,
@@ -114,7 +114,7 @@ var (
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
 	}
-	DBTNSchemaType = []types.Type{
+	DBDNSchemaType = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_TS, 0, 0),
@@ -124,7 +124,7 @@ var (
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 	}
-	TblTNSchemaAttr = []string{
+	TblDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
 		txnbase.SnapshotAttr_StartTS,
 		txnbase.SnapshotAttr_PrepareTS,
@@ -137,7 +137,7 @@ var (
 		SnapshotAttr_SegmentMaxBlock,
 		SnapshotAttr_SchemaExtra,
 	}
-	TblTNSchemaType = []types.Type{
+	TblDNSchemaType = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_TS, 0, 0),
@@ -150,7 +150,7 @@ var (
 		types.New(types.T_uint16, 0, 0),
 		types.New(types.T_varchar, 0, 0),
 	}
-	SegmentTNSchemaAttr = []string{
+	SegmentDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
 		txnbase.SnapshotAttr_StartTS,
 		txnbase.SnapshotAttr_PrepareTS,
@@ -160,7 +160,7 @@ var (
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
 	}
-	SegmentTNSchemaTypes = []types.Type{
+	SegmentDNSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_TS, 0, 0),
@@ -170,7 +170,7 @@ var (
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 	}
-	BlockTNSchemaAttr = []string{
+	BlockDNSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
 		txnbase.SnapshotAttr_StartTS,
 		txnbase.SnapshotAttr_PrepareTS,
@@ -182,7 +182,7 @@ var (
 		pkgcatalog.BlockMeta_MetaLoc,
 		pkgcatalog.BlockMeta_DeltaLoc,
 	}
-	BlockTNSchemaTypes = []types.Type{
+	BlockDNSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_TS, 0, 0),
@@ -244,11 +244,11 @@ var (
 	ColumnDelSchemaTypes = []types.Type{
 		types.T_varchar.ToType(),
 	}
-	TNMetaSchemaAttr = []string{
+	DNMetaSchemaAttr = []string{
 		CheckpointMetaAttr_BlockLocation,
 		CheckpointMetaAttr_SchemaType,
 	}
-	TNMetaShcemaTypes = []types.Type{
+	DNMetaShcemaTypes = []types.Type{
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_uint16, 0, 0),
 	}
@@ -347,53 +347,53 @@ func init() {
 		}
 	}
 
-	DBTNSchema = catalog.NewEmptySchema("db_dn")
-	for i, colname := range DBTNSchemaAttr {
+	DBDNSchema = catalog.NewEmptySchema("db_dn")
+	for i, colname := range DBDNSchemaAttr {
 		if i == 0 {
-			if err := DBTNSchema.AppendPKCol(colname, DBTNSchemaType[i], 0); err != nil {
+			if err := DBDNSchema.AppendPKCol(colname, DBDNSchemaType[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := DBTNSchema.AppendCol(colname, DBTNSchemaType[i]); err != nil {
+			if err := DBDNSchema.AppendCol(colname, DBDNSchemaType[i]); err != nil {
 				panic(err)
 			}
 		}
 	}
 
-	TblTNSchema = catalog.NewEmptySchema("table_dn")
-	for i, colname := range TblTNSchemaAttr {
+	TblDNSchema = catalog.NewEmptySchema("table_dn")
+	for i, colname := range TblDNSchemaAttr {
 		if i == 0 {
-			if err := TblTNSchema.AppendPKCol(colname, TblTNSchemaType[i], 0); err != nil {
+			if err := TblDNSchema.AppendPKCol(colname, TblDNSchemaType[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := TblTNSchema.AppendCol(colname, TblTNSchemaType[i]); err != nil {
+			if err := TblDNSchema.AppendCol(colname, TblDNSchemaType[i]); err != nil {
 				panic(err)
 			}
 		}
 	}
 
-	SegTNSchema = catalog.NewEmptySchema("segment_dn")
-	for i, colname := range SegmentTNSchemaAttr {
+	SegDNSchema = catalog.NewEmptySchema("segment_dn")
+	for i, colname := range SegmentDNSchemaAttr {
 		if i == 0 {
-			if err := SegTNSchema.AppendPKCol(colname, SegmentTNSchemaTypes[i], 0); err != nil {
+			if err := SegDNSchema.AppendPKCol(colname, SegmentDNSchemaTypes[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := SegTNSchema.AppendCol(colname, SegmentTNSchemaTypes[i]); err != nil {
+			if err := SegDNSchema.AppendCol(colname, SegmentDNSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}
 	}
 
-	BlkTNSchema = catalog.NewEmptySchema("block_dn")
-	for i, colname := range BlockTNSchemaAttr {
+	BlkDNSchema = catalog.NewEmptySchema("block_dn")
+	for i, colname := range BlockDNSchemaAttr {
 		if i == 0 {
-			if err := BlkTNSchema.AppendPKCol(colname, BlockTNSchemaTypes[i], 0); err != nil {
+			if err := BlkDNSchema.AppendPKCol(colname, BlockDNSchemaTypes[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := BlkTNSchema.AppendCol(colname, BlockTNSchemaTypes[i]); err != nil {
+			if err := BlkDNSchema.AppendCol(colname, BlockDNSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}
@@ -464,14 +464,14 @@ func init() {
 		}
 	}
 
-	TNMetaSchema = catalog.NewEmptySchema("meta")
-	for i, colname := range TNMetaSchemaAttr {
+	DNMetaSchema = catalog.NewEmptySchema("meta")
+	for i, colname := range DNMetaSchemaAttr {
 		if i == 0 {
-			if err := TNMetaSchema.AppendPKCol(colname, TNMetaShcemaTypes[i], 0); err != nil {
+			if err := DNMetaSchema.AppendPKCol(colname, DNMetaShcemaTypes[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := TNMetaSchema.AppendCol(colname, TNMetaShcemaTypes[i]); err != nil {
+			if err := DNMetaSchema.AppendCol(colname, DNMetaShcemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}

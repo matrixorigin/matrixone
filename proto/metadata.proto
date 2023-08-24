@@ -26,33 +26,33 @@ option (gogoproto.goproto_enum_prefix_all) = true;
 enum ServiceType {
   // CN cn service
   CN  = 0;
-  // TN tn service
-  TN  = 1;
+  // DN dn service
+  DN  = 1;
   // LOG log service
   LOG = 2;
   // Proxy proxy service
   PROXY = 3;
 }
 
-// TNShardRecord is TN shard metadata describing what is a TN shard. It
-// is internally used by HAKeeper to maintain how many TNs available in
+// DNShardRecord is DN shard metadata describing what is a DN shard. It
+// is internally used by HAKeeper to maintain how many DNs available in
 // the system. 
-message TNShardRecord {
-  // ShardID the id of the TN shard.
+message DNShardRecord {
+  // ShardID the id of the DN shard.
   uint64 ShardID    = 1;
-  // LogShardID a TN corresponds to a unique Shard of LogService.
+  // LogShardID a DN corresponds to a unique Shard of LogService.
   uint64 LogShardID = 2;
 }
 
-// TNShard 
-message TNShard {
-  // TNShard extends TNShardRecord
-  TNShardRecord TNShardRecord = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
-  // ReplicaID only one replica for one TN. The ReplicaID is specified at
-  // the time the TN is created. TN restart ReplicaID will not change, when
-  // a TN is migrated to another node, the ReplicaID will be reset.
+// DNShard 
+message DNShard {
+  // DNShard extends DNShardRecord
+  DNShardRecord DNShardRecord = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
+  // ReplicaID only one replica for one DN. The ReplicaID is specified at
+  // the time the DN is created. DN restart ReplicaID will not change, when
+  // a DN is migrated to another node, the ReplicaID will be reset.
   uint64 ReplicaID  = 2;
-  // Address is TN's external service address.
+  // Address is DN's external service address.
   string Address    = 3;
 }
 
@@ -74,12 +74,12 @@ message LogShard {
   uint64 ReplicaID  = 2;
 }
 
-// TNStore TN store metadata
-message TNStore {
-  // UUID TNStore uuid id
+// DNStore DN store metadata
+message DNStore {
+  // UUID DNStore uuid id
   string UUID = 1;
-  // Shards TNShards
-  repeated TNShard Shards = 2 [(gogoproto.nullable) = false];
+  // Shards DNShards
+  repeated DNShard Shards = 2 [(gogoproto.nullable) = false];
 }
 
 // LogStore is for the metadata for Log store.
@@ -126,8 +126,8 @@ message CNService {
   string QueryAddress           = 8;
 }
 
-// TNService tn service metadata
-message TNService {
+// DNService dn service metadata
+message DNService {
   // ServiceID service ID
   string ServiceID              = 1;
   // TxnServiceAddress is used to provide txn service
@@ -138,8 +138,8 @@ message TNService {
   string LockServiceAddress     = 4;
   // CtlAddress is used to handle ctl request.
   string CtlAddress             = 5;
-  // Shards TN shards on service
-  repeated TNShard Shards       = 6 [(gogoproto.nullable) = false];
+  // Shards DN shards on service
+  repeated DNShard Shards       = 6 [(gogoproto.nullable) = false];
   // Labels labels on service
   map<string, LabelList> Labels = 7 [(gogoproto.nullable) = false];
 }

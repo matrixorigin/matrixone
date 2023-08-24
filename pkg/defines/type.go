@@ -182,8 +182,8 @@ type DatTypKey struct{}
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
-// TemporaryTN use TemporaryTN to get temporary storage from Context
-type TemporaryTN struct{}
+// TemporaryDN use TemporaryDN to get temporary storage from Context
+type TemporaryDN struct{}
 
 type IsMoLogger struct{}
 
@@ -196,8 +196,8 @@ type VarScopeKey struct{}
 // Determine if it is a stored procedure
 type InSp struct{}
 
-// PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
-type PkCheckByTN struct{}
+// PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
+type PkCheckByDN struct{}
 
 /*
 The autoIncrCacheManager is initialized with a starting CN.

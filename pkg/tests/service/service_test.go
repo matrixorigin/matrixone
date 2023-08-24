@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	supportMultiTN = false
+	supportMultiDN = false
 )
 
 func TestClusterStart(t *testing.T) {
@@ -153,15 +153,15 @@ func TestClusterAwareness(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if !supportMultiTN {
+	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
 		return
 	}
 
-	tnSvcNum := 2
+	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
-		WithTNServiceNum(tnSvcNum).
+		WithDNServiceNum(dnSvcNum).
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
@@ -178,8 +178,8 @@ func TestClusterAwareness(t *testing.T) {
 	// -------------------------------------------
 	// the following would test `ClusterAwareness`
 	// -------------------------------------------
-	dsuuids := c.ListTNServices()
-	require.Equal(t, tnSvcNum, len(dsuuids))
+	dsuuids := c.ListDNServices()
+	require.Equal(t, dnSvcNum, len(dsuuids))
 
 	lsuuids := c.ListLogServices()
 	require.Equal(t, logSvcNum, len(lsuuids))
@@ -187,9 +187,9 @@ func TestClusterAwareness(t *testing.T) {
 	hksvcs := c.ListHAKeeperServices()
 	require.NotZero(t, len(hksvcs))
 
-	tn, err := c.GetTNService(dsuuids[0])
+	dn, err := c.GetDNService(dsuuids[0])
 	require.NoError(t, err)
-	require.Equal(t, ServiceStarted, tn.Status())
+	require.Equal(t, ServiceStarted, dn.Status())
 
 	log, err := c.GetLogService(lsuuids[0])
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestClusterAwareness(t *testing.T) {
 	defer cancel3()
 	state, err := c.GetClusterState(ctx3)
 	require.NoError(t, err)
-	require.Equal(t, tnSvcNum, len(state.TNState.Stores))
+	require.Equal(t, dnSvcNum, len(state.DNState.Stores))
 	require.Equal(t, logSvcNum, len(state.LogState.Stores))
 }
 
@@ -221,15 +221,15 @@ func TestClusterOperation(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if !supportMultiTN {
+	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
 		return
 	}
 
-	tnSvcNum := 3
+	dnSvcNum := 3
 	logSvcNum := 3
 	opt := DefaultOptions().
-		WithTNServiceNum(tnSvcNum).
+		WithDNServiceNum(dnSvcNum).
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
@@ -247,56 +247,56 @@ func TestClusterOperation(t *testing.T) {
 	// the following would test `ClusterOperation`
 	// -------------------------------------------
 
-	// 1. start/close tn services via different ways
-	dsuuids := c.ListTNServices()
-	require.Equal(t, tnSvcNum, len(dsuuids))
-	// 1.a start/close tn service by uuid
+	// 1. start/close dn services via different ways
+	dsuuids := c.ListDNServices()
+	require.Equal(t, dnSvcNum, len(dsuuids))
+	// 1.a start/close dn service by uuid
 	{
 		index := 0
 		dsuuid := dsuuids[index]
 
-		// get the instance of tn service
-		ds, err := c.GetTNService(dsuuid)
+		// get the instance of dn service
+		ds, err := c.GetDNService(dsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
 
 		// start it
-		err = c.StartTNService(dsuuid)
+		err = c.StartDNService(dsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
 
 		// close it
-		err = c.CloseTNService(dsuuid)
+		err = c.CloseDNService(dsuuid)
 		require.NoError(t, err)
 		require.Equal(t, ServiceClosed, ds.Status())
 	}
 
-	// 1.b start/close tn service by index
+	// 1.b start/close dn service by index
 	{
 		index := 1
 
-		// get the instance of tn service
-		ds, err := c.GetTNServiceIndexed(index)
+		// get the instance of dn service
+		ds, err := c.GetDNServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
 
 		// start it
-		err = c.StartTNServiceIndexed(index)
+		err = c.StartDNServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
 
 		// close it
-		err = c.CloseTNServiceIndexed(index)
+		err = c.CloseDNServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceClosed, ds.Status())
 	}
 
-	// 1.c start/close tn service by instance
+	// 1.c start/close dn service by instance
 	{
 		index := 2
 
-		// get the instance of tn service
-		ds, err := c.GetTNServiceIndexed(index)
+		// get the instance of dn service
+		ds, err := c.GetDNServiceIndexed(index)
 		require.NoError(t, err)
 		require.Equal(t, ServiceStarted, ds.Status())
 
@@ -384,15 +384,15 @@ func TestClusterState(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if !supportMultiTN {
+	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
 		return
 	}
 
-	tnSvcNum := 2
+	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
-		WithTNServiceNum(tnSvcNum).
+		WithDNServiceNum(dnSvcNum).
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
@@ -414,8 +414,8 @@ func TestClusterState(t *testing.T) {
 	leader := c.WaitHAKeeperLeader(ctx1)
 	require.NotNil(t, leader)
 
-	dsuuids := c.ListTNServices()
-	require.Equal(t, tnSvcNum, len(dsuuids))
+	dsuuids := c.ListDNServices()
+	require.Equal(t, dnSvcNum, len(dsuuids))
 
 	lsuuids := c.ListLogServices()
 	require.Equal(t, logSvcNum, len(lsuuids))
@@ -435,13 +435,13 @@ func TestClusterState(t *testing.T) {
 	defer cancel3()
 	state, err := c.GetClusterState(ctx3)
 	require.NoError(t, err)
-	require.Equal(t, tnSvcNum, len(state.TNState.Stores))
+	require.Equal(t, dnSvcNum, len(state.DNState.Stores))
 	require.Equal(t, logSvcNum, len(state.LogState.Stores))
 
-	// FIXME: validate the result list of tn shards
+	// FIXME: validate the result list of dn shards
 	ctx4, cancel4 := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel4()
-	_, err = c.ListTNShards(ctx4)
+	_, err = c.ListDNShards(ctx4)
 	require.NoError(t, err)
 
 	// FIXME: validate the result list of log shards
@@ -456,25 +456,25 @@ func TestClusterState(t *testing.T) {
 	//   - DNStoreExpired
 	//   - DNStoreExpiredIndexed
 	{
-		tnIndex := 0
-		dsuuid := dsuuids[tnIndex]
+		dnIndex := 0
+		dsuuid := dsuuids[dnIndex]
 
 		ctx6, cancel6 := context.WithTimeout(context.Background(), defaultTestTimeout)
 		defer cancel6()
-		tnStoreInfo1, err := c.GetTNStoreInfo(ctx6, dsuuid)
+		dnStoreInfo1, err := c.GetDNStoreInfo(ctx6, dsuuid)
 		require.NoError(t, err)
 
 		ctx7, cancel7 := context.WithTimeout(context.Background(), defaultTestTimeout)
 		defer cancel7()
-		tnStoreInfo2, err := c.GetTNStoreInfoIndexed(ctx7, tnIndex)
+		dnStoreInfo2, err := c.GetDNStoreInfoIndexed(ctx7, dnIndex)
 		require.NoError(t, err)
-		require.Equal(t, tnStoreInfo1.Shards, tnStoreInfo2.Shards)
+		require.Equal(t, dnStoreInfo1.Shards, dnStoreInfo2.Shards)
 
-		expired1, err := c.TNStoreExpired(dsuuid)
+		expired1, err := c.DNStoreExpired(dsuuid)
 		require.NoError(t, err)
 		require.False(t, expired1)
 
-		expired2, err := c.TNStoreExpiredIndexed(tnIndex)
+		expired2, err := c.DNStoreExpiredIndexed(dnIndex)
 		require.NoError(t, err)
 		require.False(t, expired2)
 	}
@@ -517,15 +517,15 @@ func TestClusterWaitState(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if !supportMultiTN {
+	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
 		return
 	}
 
-	tnSvcNum := 2
+	dnSvcNum := 2
 	logSvcNum := 3
 	opt := DefaultOptions().
-		WithTNServiceNum(tnSvcNum).
+		WithDNServiceNum(dnSvcNum).
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
@@ -552,7 +552,7 @@ func TestClusterWaitState(t *testing.T) {
 	{
 		ctx2, cancel2 := context.WithTimeout(context.Background(), defaultTestTimeout)
 		defer cancel2()
-		c.WaitTNShardsReported(ctx2)
+		c.WaitDNShardsReported(ctx2)
 	}
 
 	// test WaitLogShardsReported
@@ -566,14 +566,14 @@ func TestClusterWaitState(t *testing.T) {
 	{
 		ctx4, cancel4 := context.WithTimeout(context.Background(), defaultTestTimeout)
 		defer cancel4()
-		tnShards, err := c.ListTNShards(ctx4)
+		dnShards, err := c.ListDNShards(ctx4)
 		require.NoError(t, err)
-		require.NotZero(t, len(tnShards))
+		require.NotZero(t, len(dnShards))
 
-		tnShardID := tnShards[0].ShardID
+		dnShardID := dnShards[0].ShardID
 		ctx5, cancel5 := context.WithTimeout(context.Background(), defaultTestTimeout)
 		defer cancel5()
-		c.WaitTNReplicaReported(ctx5, tnShardID)
+		c.WaitDNReplicaReported(ctx5, dnShardID)
 	}
 
 	// test WaitLogReplicaReported
@@ -599,15 +599,15 @@ func TestNetworkPartition(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if !supportMultiTN {
+	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
 		return
 	}
 
-	tnSvcNum := 2
+	dnSvcNum := 2
 	logSvcNum := 4
 	opt := DefaultOptions().
-		WithTNServiceNum(tnSvcNum).
+		WithDNServiceNum(dnSvcNum).
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
@@ -630,38 +630,38 @@ func TestNetworkPartition(t *testing.T) {
 	// the following would test network partition
 	// --------------------------------------------
 
-	// tn service index: 0, 1
+	// dn service index: 0, 1
 	// log service index: 0, 1, 2, 3
-	// seperate tn service 1 from other services
+	// seperate dn service 1 from other services
 	partition1 := c.NewNetworkPartition([]uint32{1}, nil, nil)
-	require.Equal(t, []uint32{1}, partition1.ListTNServiceIndex())
+	require.Equal(t, []uint32{1}, partition1.ListDNServiceIndex())
 	require.Nil(t, partition1.ListLogServiceIndex())
 
 	partition2 := c.RemainingNetworkPartition(partition1)
-	require.Equal(t, []uint32{0}, partition2.ListTNServiceIndex())
+	require.Equal(t, []uint32{0}, partition2.ListDNServiceIndex())
 	require.Equal(t, []uint32{0, 1, 2, 3}, partition2.ListLogServiceIndex())
 
 	// enable network partition
 	c.StartNetworkPartition(partition1, partition2)
 	ctx2, cancel2 := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel2()
-	c.WaitTNStoreTimeoutIndexed(ctx2, 1)
+	c.WaitDNStoreTimeoutIndexed(ctx2, 1)
 
 	// disable network partition
 	c.CloseNetworkPartition()
 	ctx3, cancel3 := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel3()
-	c.WaitTNStoreReportedIndexed(ctx3, 1)
+	c.WaitDNStoreReportedIndexed(ctx3, 1)
 
-	// tn service index: 0, 1
+	// dn service index: 0, 1
 	// log service index: 0, 1, 2, 3
 	// seperate log service 3 from other services
 	partition3 := c.NewNetworkPartition(nil, []uint32{3}, nil)
-	require.Nil(t, partition3.ListTNServiceIndex())
+	require.Nil(t, partition3.ListDNServiceIndex())
 	require.Equal(t, []uint32{3}, partition3.ListLogServiceIndex())
 
 	partition4 := c.RemainingNetworkPartition(partition3)
-	require.Equal(t, []uint32{0, 1}, partition4.ListTNServiceIndex())
+	require.Equal(t, []uint32{0, 1}, partition4.ListDNServiceIndex())
 	require.Equal(t, []uint32{0, 1, 2}, partition4.ListLogServiceIndex())
 
 	// enable network partition

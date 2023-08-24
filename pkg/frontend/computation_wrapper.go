@@ -198,9 +198,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.ses.IfInitedTempEngine() {
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.SetRequestContext(requestCtx)
-		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
+		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 	}
 
@@ -368,13 +368,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// check if it is necessary to initialize the temporary engine
 	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
 		// 0. init memory-non-dist storage
-		tnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
+		dnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
 		if err != nil {
 			return nil, err
 		}
 
 		// temporary storage is passed through Ctx
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 
 		// 1. init memory-non-dist engine
 		tempEngine := memoryengine.New(
@@ -387,8 +387,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 				nil,
 				0,
 				clusterservice.WithDisableRefresh(),
-				clusterservice.WithServices(nil, []metadata.TNService{
-					*tnStore,
+				clusterservice.WithServices(nil, []metadata.DNService{
+					*dnStore,
 				})),
 		)
 

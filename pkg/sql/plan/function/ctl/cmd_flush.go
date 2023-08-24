@@ -27,12 +27,12 @@ import (
 )
 
 func handleFlush() handleFunc {
-	return getTNHandlerFunc(
+	return getDNHandlerFunc(
 		pb.CmdMethod_Flush,
 		func(_ string) ([]uint64, error) {
 			return nil, nil
 		},
-		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			// parameter should be "DbName.TableName"
 			parameters := strings.Split(parameter, ".")
 			txnOp := proc.TxnOperator
@@ -68,7 +68,7 @@ func handleFlush() handleFunc {
 			return payload, nil
 		},
 		func(data []byte) (interface{}, error) {
-			resp := pb.TNStringResponse{}
+			resp := pb.DNStringResponse{}
 			protoc.MustUnmarshal(&resp, data)
 			return resp, nil
 		})

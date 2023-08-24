@@ -36,9 +36,9 @@ func TestCheckInitiatingShards(t *testing.T) {
 	idAlloc := newMockIDAllocator(nextReplicaID, enough)
 
 	workingStores := []*util.Store{
-		util.NewStore("store1", 2, TnStoreCapacity),
-		util.NewStore("store2", 3, TnStoreCapacity),
-		util.NewStore("store3", 4, TnStoreCapacity),
+		util.NewStore("store1", 2, DnStoreCapacity),
+		util.NewStore("store2", 3, DnStoreCapacity),
+		util.NewStore("store3", 4, DnStoreCapacity),
 	}
 
 	reportedShard := uint64(10)
@@ -56,14 +56,14 @@ func TestCheckInitiatingShards(t *testing.T) {
 	config := hakeeper.Config{
 		TickPerSecond:   10,
 		LogStoreTimeout: 10 * time.Second,
-		TNStoreTimeout:  10 * time.Second,
+		DNStoreTimeout:  10 * time.Second,
 	}
 
 	// mock ShardMapper
 	mapper := mockShardMapper()
 
 	earliestTick := uint64(10)
-	expiredTick := config.ExpiredTick(earliestTick, config.TNStoreTimeout) + 1
+	expiredTick := config.ExpiredTick(earliestTick, config.DNStoreTimeout) + 1
 
 	// discover an initial shard => no operators generated
 	ops := checkInitiatingShards(rs, mapper, workingStores, idAlloc, cluster, config, earliestTick)
@@ -85,9 +85,9 @@ func TestCheckReportedState(t *testing.T) {
 	mapper := mockShardMapper()
 
 	workingStores := []*util.Store{
-		util.NewStore("store1", 2, TnStoreCapacity),
-		util.NewStore("store2", 3, TnStoreCapacity),
-		util.NewStore("store3", 4, TnStoreCapacity),
+		util.NewStore("store1", 2, DnStoreCapacity),
+		util.NewStore("store2", 3, DnStoreCapacity),
+		util.NewStore("store3", 4, DnStoreCapacity),
 	}
 
 	shardID := uint64(10)
@@ -144,33 +144,33 @@ func TestInitialShards(t *testing.T) {
 	require.Equal(t, 0, len(ids))
 }
 
-func TestParseTNState(t *testing.T) {
+func TestParseDNState(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make heartbeat tick expired
 	cfg := hakeeper.Config{}
 	cfg.Fill()
-	currTick := cfg.ExpiredTick(expiredTick, cfg.TNStoreTimeout) + 1
+	currTick := cfg.ExpiredTick(expiredTick, cfg.DNStoreTimeout) + 1
 
-	// 1. no working tn stores
+	// 1. no working dn stores
 	{
-		tnState := pb.TNState{
-			Stores: map[string]pb.TNStoreInfo{
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(10, 12),
+					Shards: []pb.DNShardInfo{
+						mockDnShardInfo(10, 12),
 					},
 				},
 				"expired2": {
 					Tick: expiredTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(11, 13),
+					Shards: []pb.DNShardInfo{
+						mockDnShardInfo(11, 13),
 					},
 				},
 			},
 		}
 
-		stores, shards := parseTnState(cfg, tnState, currTick)
+		stores, shards := parseDnState(cfg, dnState, currTick)
 
 		// check stores
 		require.Equal(t, len(stores.WorkingStores()), 0)
@@ -192,32 +192,32 @@ func TestParseTNState(t *testing.T) {
 
 	// 2. verbose running shard replica
 	{
-		tnState := pb.TNState{
-			Stores: map[string]pb.TNStoreInfo{
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(10, 11),
-						mockTnShardInfo(14, 17),
+					Shards: []pb.DNShardInfo{
+						mockDnShardInfo(10, 11),
+						mockDnShardInfo(14, 17),
 					},
 				},
 				"working1": {
 					Tick: currTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(12, 13),
+					Shards: []pb.DNShardInfo{
+						mockDnShardInfo(12, 13),
 					},
 				},
 				"working2": {
 					Tick: currTick,
-					Shards: []pb.TNShardInfo{
-						mockTnShardInfo(14, 15),
-						mockTnShardInfo(12, 16),
+					Shards: []pb.DNShardInfo{
+						mockDnShardInfo(14, 15),
+						mockDnShardInfo(12, 16),
 					},
 				},
 			},
 		}
 
-		stores, shards := parseTnState(cfg, tnState, currTick)
+		stores, shards := parseDnState(cfg, dnState, currTick)
 
 		// check stores
 		require.Equal(t, len(stores.WorkingStores()), 2)
@@ -247,8 +247,8 @@ func TestParseTNState(t *testing.T) {
 	}
 }
 
-func mockTnShardInfo(shardID, replicaID uint64) pb.TNShardInfo {
-	return pb.TNShardInfo{
+func mockDnShardInfo(shardID, replicaID uint64) pb.DNShardInfo {
+	return pb.DNShardInfo{
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}
