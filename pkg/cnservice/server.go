@@ -435,14 +435,14 @@ func (s *service) initClusterService() {
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	// handleTemp is used to manipulate memorystorage stored for temporary table created by sessions.
 	// processing of temporary table is currently on local, so we need to add a WithLocalDispatch logic to service.
-	handleTemp := func(d metadata.DNShard) rpc.TxnRequestHandleFunc {
-		if d.Address != defines.TEMPORARY_TABLE_DN_ADDR {
+	handleTemp := func(d metadata.TNShard) rpc.TxnRequestHandleFunc {
+		if d.Address != defines.TEMPORARY_TABLE_TN_ADDR {
 			return nil
 		}
 
 		// read, write, commit and rollback for temporary tables
 		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) (err error) {
-			storage, ok := ctx.Value(defines.TemporaryDN{}).(*memorystorage.Storage)
+			storage, ok := ctx.Value(defines.TemporaryTN{}).(*memorystorage.Storage)
 			if !ok {
 				panic("tempStorage should never be nil")
 			}
