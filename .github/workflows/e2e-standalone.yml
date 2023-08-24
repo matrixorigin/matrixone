@@ -29,6 +29,12 @@ jobs:
       - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
+          echo ""  >> ./etc/launch/cn.toml
+          echo '[cn.txn]' >> ./etc/launch/cn.toml
+          echo 'mode = "Optimistic"' >> ./etc/launch/cn.toml
+          echo ""  >> ./etc/launch/tn.toml
+          echo '[tn.txn]' >> ./etc/launch/tn.toml
+          echo 'mode = "Optimistic"' >> ./etc/launch/tn.toml
           cat ./etc/launch/cn.toml
           cat ./etc/launch/dn.toml
       - name: Start MO
@@ -161,7 +167,7 @@ jobs:
           locale
           cd $GITHUB_WORKSPACE/mo-tester
           sed -i 's/127.0.0.1:6001/127.0.0.1:6009/' ./mo.yml
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases -e pessimistic_transaction 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
@@ -216,12 +222,6 @@ jobs:
       - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
-          echo ""  >> ./etc/launch/cn.toml
-          echo '[cn.txn]' >> ./etc/launch/cn.toml
-          echo 'mode = "Pessimistic"' >> ./etc/launch/cn.toml
-          echo ""  >> ./etc/launch/dn.toml
-          echo '[dn.txn]' >> ./etc/launch/dn.toml
-          echo 'mode = "Pessimistic"' >> ./etc/launch/dn.toml
           cat ./etc/launch/cn.toml
           cat ./etc/launch/dn.toml
 

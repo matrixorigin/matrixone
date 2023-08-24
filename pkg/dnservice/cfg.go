@@ -59,6 +59,7 @@ var (
 
 	// Service ports related.
 	defaultServiceHost = "127.0.0.1"
+	defaultTxnMode     = txn.TxnMode_Pessimistic
 )
 
 // Config dn store configuration
@@ -129,7 +130,7 @@ type Config struct {
 		// roll back the transaction.
 		ZombieTimeout toml.Duration `toml:"zombie-timeout"`
 
-		// Mode. [Optimistic|Pessimistic], default Optimistic.
+		// Mode. [Optimistic|Pessimistic], default Pessimistic.
 		Mode string `toml:"mode"`
 
 		// If IncrementalDedup is 'true', it will enable the incremental dedup feature.
@@ -238,7 +239,7 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Txn.Mode == "" {
-		c.Txn.Mode = txn.TxnMode_Optimistic.String()
+		c.Txn.Mode = defaultTxnMode.String()
 	} else {
 		if !txn.ValidTxnMode(c.Txn.Mode) {
 			return moerr.NewInternalError(context.Background(), "invalid txn mode %s", c.Txn.Mode)
