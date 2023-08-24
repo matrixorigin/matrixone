@@ -67,7 +67,6 @@ type Iterator interface {
 type JoinMap struct {
 	cnt       *int64
 	dupCnt    *int64
-	singleSel []int32
 	multiSels [][]int32
 	// push-down filter expression, possibly a bloomfilter
 	expr    *plan.Expr
