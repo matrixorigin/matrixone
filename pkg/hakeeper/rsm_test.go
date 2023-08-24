@@ -135,7 +135,7 @@ func TestHandleLogHeartbeat(t *testing.T) {
 	assert.Equal(t, hb.Replicas, lsinfo.Replicas)
 }
 
-func TestHandleTNHeartbeat(t *testing.T) {
+func TestHandleDNHeartbeat(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	cmd := GetTickCmd()
 	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
@@ -145,9 +145,9 @@ func TestHandleTNHeartbeat(t *testing.T) {
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 
-	hb := pb.TNStoreHeartbeat{
+	hb := pb.DNStoreHeartbeat{
 		UUID: "uuid1",
-		Shards: []pb.TNShardInfo{
+		Shards: []pb.DNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1},
 			{ShardID: 3, ReplicaID: 1},
@@ -155,16 +155,16 @@ func TestHandleTNHeartbeat(t *testing.T) {
 	}
 	data, err := hb.Marshal()
 	require.NoError(t, err)
-	cmd = GetTNStoreHeartbeatCmd(data)
+	cmd = GetDNStoreHeartbeatCmd(data)
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	s := tsm1.state.TNState
+	s := tsm1.state.DNState
 	assert.Equal(t, 1, len(s.Stores))
-	tninfo, ok := s.Stores[hb.UUID]
+	dninfo, ok := s.Stores[hb.UUID]
 	assert.True(t, ok)
-	assert.Equal(t, uint64(3), tninfo.Tick)
-	require.Equal(t, 3, len(tninfo.Shards))
-	assert.Equal(t, hb.Shards, tninfo.Shards)
+	assert.Equal(t, uint64(3), dninfo.Tick)
+	require.Equal(t, 3, len(dninfo.Shards))
+	assert.Equal(t, hb.Shards, dninfo.Shards)
 }
 
 func TestHandleCNHeartbeat(t *testing.T) {
@@ -366,13 +366,13 @@ func TestClusterDetailsQuery(t *testing.T) {
 		Tick:           2,
 		ServiceAddress: "addr2",
 	}
-	tsm.state.TNState = pb.TNState{
-		Stores: make(map[string]pb.TNStoreInfo),
+	tsm.state.DNState = pb.DNState{
+		Stores: make(map[string]pb.DNStoreInfo),
 	}
-	tsm.state.TNState.Stores["uuid3"] = pb.TNStoreInfo{
+	tsm.state.DNState.Stores["uuid3"] = pb.DNStoreInfo{
 		Tick:           3,
 		ServiceAddress: "addr3",
-		Shards: []pb.TNShardInfo{
+		Shards: []pb.DNShardInfo{
 			{
 				ShardID:   2,
 				ReplicaID: 1,
@@ -425,12 +425,12 @@ func TestClusterDetailsQuery(t *testing.T) {
 	v, err := tsm.Lookup(&ClusterDetailsQuery{})
 	require.NoError(t, err)
 	expected := &pb.ClusterDetails{
-		TNStores: []pb.TNStore{
+		DNStores: []pb.DNStore{
 			{
 				UUID:           "uuid3",
 				Tick:           3,
 				ServiceAddress: "addr3",
-				Shards: []pb.TNShardInfo{
+				Shards: []pb.DNShardInfo{
 					{
 						ShardID:   2,
 						ReplicaID: 1,
@@ -596,7 +596,7 @@ func TestInitialClusterRequestCmd(t *testing.T) {
 	cmd := GetInitialClusterRequestCmd(2, 2, 3, 10, nextIDByKey)
 	req := parseInitialClusterRequestCmd(cmd)
 	assert.Equal(t, uint64(2), req.NumOfLogShards)
-	assert.Equal(t, uint64(2), req.NumOfTNShards)
+	assert.Equal(t, uint64(2), req.NumOfDNShards)
 	assert.Equal(t, uint64(3), req.NumOfLogReplicas)
 	assert.Equal(t, uint64(10), req.NextID)
 	assert.Equal(t, nextIDByKey, req.NextIDByKey)
@@ -625,7 +625,7 @@ func TestHandleInitialClusterRequestCmd(t *testing.T) {
 				NumberOfReplicas: 3,
 			},
 		},
-		TNShards: []metadata.TNShardRecord{
+		DNShards: []metadata.DNShardRecord{
 			{
 				ShardID:    2,
 				LogShardID: 1,

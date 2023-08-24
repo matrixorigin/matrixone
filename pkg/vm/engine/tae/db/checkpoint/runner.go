@@ -500,11 +500,11 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 		return
 	}
 	defer data.Close()
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
+	cnLocation, dnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
 	if err != nil {
 		return
 	}
-	entry.SetLocation(cnLocation, tnLocation)
+	entry.SetLocation(cnLocation, dnLocation)
 
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
@@ -521,11 +521,11 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	}
 	defer data.Close()
 
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
+	cnLocation, dnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
 	if err != nil {
 		return
 	}
-	entry.SetLocation(cnLocation, tnLocation)
+	entry.SetLocation(cnLocation, dnLocation)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
 

@@ -21,14 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func handleInspectTN() handleFunc {
-	return getTNHandlerFunc(
+func handleInspectDN() handleFunc {
+	return getDNHandlerFunc(
 		pb.CmdMethod_Inspect,
 		func(_ string) ([]uint64, error) {
 			return nil, nil
 		},
-		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-			return types.Encode(&db.InspectTN{
+		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+			return types.Encode(&db.InspectDN{
 				AccessInfo: db.AccessInfo{
 					AccountID: proc.SessionInfo.AccountId,
 					UserID:    proc.SessionInfo.UserId,

@@ -126,7 +126,7 @@ func TestRecoveryFromMultiCommittedAfterPrepared(t *testing.T) {
 	checkData(t, wTxn, s, 3, 2, true)
 }
 
-func TestRecoveryFromMultiTNShardWithAllPrepared(t *testing.T) {
+func TestRecoveryFromMultiDNShardWithAllPrepared(t *testing.T) {
 	mlog1 := mem.NewMemLog()
 	mlog2 := mem.NewMemLog()
 
@@ -173,7 +173,7 @@ func TestRecoveryFromMultiTNShardWithAllPrepared(t *testing.T) {
 	checkData(t, wTxn, s2, 2, 2, true)
 }
 
-func TestRecoveryFromMultiTNShardWithAnyNotPrepared(t *testing.T) {
+func TestRecoveryFromMultiDNShardWithAnyNotPrepared(t *testing.T) {
 	mlog1 := mem.NewMemLog()
 	mlog2 := mem.NewMemLog()
 
@@ -213,7 +213,7 @@ func TestRecoveryFromMultiTNShardWithAnyNotPrepared(t *testing.T) {
 	checkData(t, wTxn, s2, 0, 2, false)
 }
 
-func TestRecoveryFromMultiTNShardWithCommitting(t *testing.T) {
+func TestRecoveryFromMultiDNShardWithCommitting(t *testing.T) {
 	mlog1 := mem.NewMemLog()
 	mlog2 := mem.NewMemLog()
 

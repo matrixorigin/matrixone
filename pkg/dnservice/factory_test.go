@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tnservice
+package dnservice
 
 import (
 	"context"
@@ -28,10 +28,10 @@ import (
 
 func TestCreateLogServiceClient(t *testing.T) {
 	s := &store{cfg: &Config{}, stopper: stopper.NewStopper("")}
-	s.options.logServiceClientFactory = func(d metadata.TNShard) (logservice.Client, error) {
+	s.options.logServiceClientFactory = func(d metadata.DNShard) (logservice.Client, error) {
 		return mem.NewMemLog(), nil
 	}
-	v, err := s.createLogServiceClient(metadata.TNShard{})
+	v, err := s.createLogServiceClient(metadata.DNShard{})
 	assert.NoError(t, err)
 	assert.NotNil(t, v)
 }
@@ -39,17 +39,17 @@ func TestCreateLogServiceClient(t *testing.T) {
 func TestCreateTxnStorage(t *testing.T) {
 	ctx := context.TODO()
 	s := &store{rt: runtime.DefaultRuntime(), cfg: &Config{}, stopper: stopper.NewStopper("")}
-	s.options.logServiceClientFactory = func(d metadata.TNShard) (logservice.Client, error) {
+	s.options.logServiceClientFactory = func(d metadata.DNShard) (logservice.Client, error) {
 		return mem.NewMemLog(), nil
 	}
 
 	s.cfg.Txn.Storage.Backend = StorageMEMKV
-	v, err := s.createTxnStorage(ctx, metadata.TNShard{})
+	v, err := s.createTxnStorage(ctx, metadata.DNShard{})
 	assert.NoError(t, err)
 	assert.NotNil(t, v)
 
 	s.cfg.Txn.Storage.Backend = "error"
-	v, err = s.createTxnStorage(ctx, metadata.TNShard{})
+	v, err = s.createTxnStorage(ctx, metadata.DNShard{})
 	assert.Error(t, err)
 	assert.Nil(t, v)
 }

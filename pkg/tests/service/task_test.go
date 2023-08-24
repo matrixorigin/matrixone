@@ -87,8 +87,8 @@ func TestTaskServiceCanCreate(t *testing.T) {
 	c, err := NewCluster(ctx, t, DefaultOptions().
 		WithCNServiceNum(1).
 		WithCNShardNum(1).
-		WithTNServiceNum(1).
-		WithTNShartnum(1).
+		WithDNServiceNum(1).
+		WithDNShardNum(1).
 		WithLogServiceNum(3).
 		WithLogShardNum(1))
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestTaskServiceCanCreate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitTNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 1)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 2)

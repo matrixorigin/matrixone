@@ -71,13 +71,13 @@ func TestCNStateUpdate(t *testing.T) {
 	})
 }
 
-func TestTNStateUpdate(t *testing.T) {
-	state := TNState{Stores: map[string]TNStoreInfo{}}
+func TestDNStateUpdate(t *testing.T) {
+	state := DNState{Stores: map[string]DNStoreInfo{}}
 
-	hb1 := TNStoreHeartbeat{
+	hb1 := DNStoreHeartbeat{
 		UUID:           "dn-a",
 		ServiceAddress: "addr-a",
-		Shards: []TNShardInfo{{
+		Shards: []DNShardInfo{{
 			ShardID:   1,
 			ReplicaID: 1,
 		}},
@@ -86,17 +86,17 @@ func TestTNStateUpdate(t *testing.T) {
 	tick1 := uint64(100)
 
 	state.Update(hb1, tick1)
-	assert.Equal(t, state.Stores["dn-a"], TNStoreInfo{
+	assert.Equal(t, state.Stores["dn-a"], DNStoreInfo{
 		Tick:                 tick1,
 		ServiceAddress:       hb1.ServiceAddress,
 		Shards:               hb1.Shards,
 		LogtailServerAddress: hb1.LogtailServerAddress,
 	})
 
-	hb2 := TNStoreHeartbeat{
+	hb2 := DNStoreHeartbeat{
 		UUID:           "dn-a",
 		ServiceAddress: "addr-a",
-		Shards: []TNShardInfo{
+		Shards: []DNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1}},
 		LogtailServerAddress: "addr-0",
@@ -104,7 +104,7 @@ func TestTNStateUpdate(t *testing.T) {
 	tick2 := uint64(200)
 
 	state.Update(hb2, tick2)
-	assert.Equal(t, state.Stores[hb2.UUID], TNStoreInfo{
+	assert.Equal(t, state.Stores[hb2.UUID], DNStoreInfo{
 		Tick:                 tick2,
 		ServiceAddress:       hb2.ServiceAddress,
 		Shards:               hb2.Shards,
@@ -284,7 +284,7 @@ func TestLogString(t *testing.T) {
 					ChangeType:     StartReplica,
 					InitialMembers: nil,
 				},
-				ServiceType:   TNService,
+				ServiceType:   DNService,
 				ShutdownStore: nil,
 			},
 			expected: "D/Start storeA storeA:1:4:1",

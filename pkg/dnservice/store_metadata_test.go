@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tnservice
+package dnservice
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func TestInitMetadata(t *testing.T) {
 	s := &store{rt: runtime.DefaultRuntime(), metadataFileService: fs}
 	s.cfg = &Config{UUID: "1"}
 	s.mu.metadata.UUID = "1"
-	s.mu.metadata.Shards = append(s.mu.metadata.Shards, metadata.TNShard{ReplicaID: 1})
+	s.mu.metadata.Shards = append(s.mu.metadata.Shards, metadata.DNShard{ReplicaID: 1})
 	assert.NoError(t, s.initMetadata())
 
 	v := s.mu.metadata
@@ -45,14 +45,14 @@ func TestInitMetadata(t *testing.T) {
 func TestInitMetadataWithExistData(t *testing.T) {
 	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
-	value := metadata.TNStore{
+	value := metadata.DNStore{
 		UUID: "dn1",
-		Shards: []metadata.TNShard{
+		Shards: []metadata.DNShard{
 			{
-				TNShardRecord: metadata.TNShardRecord{ShardID: 1},
+				DNShardRecord: metadata.DNShardRecord{ShardID: 1},
 			},
 			{
-				TNShardRecord: metadata.TNShardRecord{ShardID: 2},
+				DNShardRecord: metadata.DNShardRecord{ShardID: 2},
 			},
 		},
 	}
@@ -84,7 +84,7 @@ func TestInitMetadataWithInvalidUUIDWillPanic(t *testing.T) {
 
 	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
 	assert.NoError(t, err)
-	value := metadata.TNStore{
+	value := metadata.DNStore{
 		UUID: "dn1",
 	}
 	assert.NoError(t, fs.Write(context.Background(), fileservice.IOVector{

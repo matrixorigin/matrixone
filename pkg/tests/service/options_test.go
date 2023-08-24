@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,10 +27,10 @@ func TestDefaultOptons(t *testing.T) {
 	require.Equal(t, opt.rootDataDir, defaultRootDataDir)
 }
 
-func TestWithTNServiceNum(t *testing.T) {
+func TestWithDNServiceNum(t *testing.T) {
 	num := 4
-	opt := Options{}.WithTNServiceNum(num)
-	require.Equal(t, num, opt.initial.tnServiceNum)
+	opt := Options{}.WithDNServiceNum(num)
+	require.Equal(t, num, opt.initial.dnServiceNum)
 }
 
 func TestWithLogServiceNum(t *testing.T) {
@@ -45,10 +45,10 @@ func TestWithLogShardNum(t *testing.T) {
 	require.Equal(t, num, opt.initial.logShardNum)
 }
 
-func TestWithTnShartnum(t *testing.T) {
+func TestWithDnShardNum(t *testing.T) {
 	num := uint64(5)
-	opt := Options{}.WithTNShartnum(num)
-	require.Equal(t, num, opt.initial.tnShartnum)
+	opt := Options{}.WithDNShardNum(num)
+	require.Equal(t, num, opt.initial.dnShardNum)
 }
 
 func TestWithLogReplicaNum(t *testing.T) {
@@ -64,8 +64,8 @@ func TestWithRootDataDir(t *testing.T) {
 }
 
 func TestWithStorage(t *testing.T) {
-	opt := Options{}.WithTNUseMEMStorage()
-	require.Equal(t, tnservice.StorageMEM, opt.storage.tnStorage)
+	opt := Options{}.WithDNUseMEMStorage()
+	require.Equal(t, dnservice.StorageMEM, opt.storage.dnStorage)
 }
 
 func TestWithHostAddress(t *testing.T) {
@@ -92,13 +92,13 @@ func TestWithHKLogStoreTimeout(t *testing.T) {
 	require.Equal(t, timeout, opt.hakeeper.logStoreTimeout)
 }
 
-func TestWithHKTNStoreTimeout(t *testing.T) {
+func TestWithHKDNStoreTimeout(t *testing.T) {
 	opt := DefaultOptions()
-	require.Equal(t, defaultTNStoreTimeout, opt.hakeeper.tnStoreTimeout)
+	require.Equal(t, defaultDNStoreTimeout, opt.hakeeper.dnStoreTimeout)
 
 	timeout := 21 * time.Second
-	opt = opt.WithHKTNStoreTimeout(timeout)
-	require.Equal(t, timeout, opt.hakeeper.tnStoreTimeout)
+	opt = opt.WithHKDNStoreTimeout(timeout)
+	require.Equal(t, timeout, opt.hakeeper.dnStoreTimeout)
 }
 
 func TestWithHKCNStoreTimeout(t *testing.T) {
@@ -110,13 +110,13 @@ func TestWithHKCNStoreTimeout(t *testing.T) {
 	require.Equal(t, timeout, opt.hakeeper.cnStoreTimeout)
 }
 
-func TestWithTNHeartbeatInterval(t *testing.T) {
+func TestWithDNHeartbeatInterval(t *testing.T) {
 	opt := DefaultOptions()
-	require.Equal(t, defaultTNHeartbeatInterval, opt.heartbeat.tn)
+	require.Equal(t, defaultDNHeartbeatInterval, opt.heartbeat.dn)
 
 	interval := 21 * time.Second
-	opt = opt.WithTNHeartbeatInterval(interval)
-	require.Equal(t, interval, opt.heartbeat.tn)
+	opt = opt.WithDNHeartbeatInterval(interval)
+	require.Equal(t, interval, opt.heartbeat.dn)
 }
 
 func TestWithLogHeartbeatInterval(t *testing.T) {
@@ -152,5 +152,5 @@ func TestBuildHAKeeperConfig(t *testing.T) {
 	cfg := opt.BuildHAKeeperConfig()
 	require.Equal(t, opt.hakeeper.tickPerSecond, cfg.TickPerSecond)
 	require.Equal(t, opt.hakeeper.logStoreTimeout, cfg.LogStoreTimeout)
-	require.Equal(t, opt.hakeeper.tnStoreTimeout, cfg.TNStoreTimeout)
+	require.Equal(t, opt.hakeeper.dnStoreTimeout, cfg.DNStoreTimeout)
 }

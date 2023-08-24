@@ -2,8 +2,8 @@ logservices = [
     "./etc/launch/log.toml",
 ]
 
-tnservices = [
-    "./etc/launch/tn.toml"
+dnservices = [
+    "./etc/launch/dn.toml"
 ]
 
 cnservices = [

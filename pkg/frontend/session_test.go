@@ -694,9 +694,9 @@ func TestSetTempTableStorage(t *testing.T) {
 	ck := clock.NewHLCClock(func() int64 {
 		return time.Now().Unix()
 	}, math.MaxInt)
-	tnStore, _ := ses.SetTempTableStorage(ck)
+	dnStore, _ := ses.SetTempTableStorage(ck)
 
-	assert.Equal(t, defines.TEMPORARY_TABLE_TN_ADDR, tnStore.TxnServiceAddress)
+	assert.Equal(t, defines.TEMPORARY_TABLE_DN_ADDR, dnStore.TxnServiceAddress)
 }
 
 func Test_doSelectGlobalSystemVariable(t *testing.T) {
