@@ -9987,7 +9987,7 @@ func TestDoCheckFilePath(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		err := doCheckFilePath(ctx, ses, cs)
+		err := doCheckFilePath(ctx, ses, cs.Ep)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -10036,7 +10036,7 @@ func TestDoCheckFilePath(t *testing.T) {
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err := doCheckFilePath(ctx, ses, cs)
+		err := doCheckFilePath(ctx, ses, cs.Ep)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -10087,7 +10087,7 @@ func TestDoCheckFilePath(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		err := doCheckFilePath(ctx, ses, cs)
+		err := doCheckFilePath(ctx, ses, cs.Ep)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -10136,7 +10136,7 @@ func TestDoCheckFilePath(t *testing.T) {
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		err := doCheckFilePath(ctx, ses, cs)
+		err := doCheckFilePath(ctx, ses, cs.Ep)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -10187,7 +10187,7 @@ func TestDoCheckFilePath(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		err := doCheckFilePath(ctx, ses, cs)
+		err := doCheckFilePath(ctx, ses, cs.Ep)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -10238,7 +10238,7 @@ func TestDoCheckFilePath(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		err := doCheckFilePath(ctx, ses, cs)
+		err := doCheckFilePath(ctx, ses, cs.Ep)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "/tmp/t1.csv")
 	})
