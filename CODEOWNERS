@@ -71,8 +71,8 @@
 # pkg/defines
 /pkg/defines @daviszhen
 
-# pkg/tnservice
-/pkg/tnservice @zhangxu19830126
+# pkg/dnservice
+/pkg/dnservice @zhangxu19830126
 
 # pkg/fileservice
 /pkg/fileservice @reusee

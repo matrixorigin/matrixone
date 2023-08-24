@@ -68,7 +68,7 @@ func (h *mockHandle) HandleClose(ctx context.Context) error {
 
 func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) (timestamp.Timestamp, error) {
 	//2PC
-	if len(meta.TNShards) > 1 && meta.CommitTS.IsEmpty() {
+	if len(meta.DNShards) > 1 && meta.CommitTS.IsEmpty() {
 		meta.CommitTS = meta.PreparedTS.Next()
 	}
 	return h.Handle.HandleCommit(ctx, *meta)
@@ -170,9 +170,9 @@ func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	return txnMeta
 }
 
-func mockTNShard(id uint64) metadata.TNShard {
-	return metadata.TNShard{
-		TNShardRecord: metadata.TNShardRecord{
+func mockDNShard(id uint64) metadata.DNShard {
+	return metadata.DNShard{
+		DNShardRecord: metadata.DNShardRecord{
 			ShardID:    id,
 			LogShardID: id,
 		},
@@ -185,8 +185,8 @@ func mock2PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
-	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(1))
-	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(2))
+	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
+	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
 	return txnMeta
 }
 

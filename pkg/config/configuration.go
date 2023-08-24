@@ -100,8 +100,8 @@ var (
 	// defaultLogShardID default: 1
 	defaultLogShardID = 1
 
-	// defaultTNReplicaID default: 1
-	defaultTNReplicaID = 1
+	// defaultDNReplicaID default: 1
+	defaultDNReplicaID = 1
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
 
@@ -228,7 +228,7 @@ type FrontendParameters struct {
 	LogShardID uint64 `toml:"logshardid"`
 
 	//default is 1
-	TNReplicaID uint64 `toml:"tnreplicalid"`
+	DNReplicaID uint64 `toml:"dnreplicalid"`
 
 	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
 
@@ -341,8 +341,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.PortOfRpcServerInComputationEngine = int64(defaultPortOfRpcServerInComputationEngine)
 	}
 
-	if fp.TNReplicaID == 0 {
-		fp.TNReplicaID = uint64(defaultTNReplicaID)
+	if fp.DNReplicaID == 0 {
+		fp.DNReplicaID = uint64(defaultDNReplicaID)
 	}
 
 	if fp.LogShardID == 0 {

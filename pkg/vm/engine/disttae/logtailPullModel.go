@@ -38,11 +38,11 @@ func updatePartitionOfPull(
 	op client.TxnOperator,
 	engine *Engine,
 	partition *logtailreplay.Partition,
-	tn DNStore,
+	dn DNStore,
 	req api.SyncLogTailReq,
 ) error {
 	logDebugf(op.Txn(), "updatePartitionOfPull")
-	reqs, err := genLogTailReq(tn, req)
+	reqs, err := genLogTailReq(dn, req)
 	if err != nil {
 		return err
 	}
@@ -143,29 +143,29 @@ func genSyncLogTailReq(have, want timestamp.Timestamp, databaseId,
 	}
 }
 
-func genLogTailReq(tn DNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error) {
+func genLogTailReq(dn DNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error) {
 	payload, err := types.Encode(&req)
 	if err != nil {
 		return nil, err
 	}
-	reqs := make([]txn.TxnRequest, len(tn.Shards))
-	for i, info := range tn.Shards {
+	reqs := make([]txn.TxnRequest, len(dn.Shards))
+	for i, info := range dn.Shards {
 		reqs[i] = txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
 				OpCode:  uint32(api.OpCode_OpGetLogTail),
 				Payload: payload,
-				Target: metadata.TNShard{
-					TNShardRecord: metadata.TNShardRecord{
+				Target: metadata.DNShard{
+					DNShardRecord: metadata.DNShardRecord{
 						ShardID: info.ShardID,
 					},
 					ReplicaID: info.ReplicaID,
-					Address:   tn.GetTxnServiceAddress(),
+					Address:   dn.GetTxnServiceAddress(),
 				},
 			},
 			Options: &txn.TxnRequestOptions{
 				RetryCodes: []int32{
-					// tn shard not found
-					int32(moerr.ErrTNShardNotFound),
+					// dn shard not found
+					int32(moerr.ErrDNShardNotFound),
 				},
 				RetryInterval: int64(time.Second),
 			},

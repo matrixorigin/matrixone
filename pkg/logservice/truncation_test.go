@@ -31,12 +31,12 @@ func TestTruncationExportSnapshot(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 
-		tnID := uint64(100)
+		dnID := uint64(100)
 		req := pb.Request{
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    tnID,
+				DNID:    dnID,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -44,7 +44,7 @@ func TestTruncationExportSnapshot(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			data := make([]byte, 8)
-			cmd := getTestAppendCmd(tnID, data)
+			cmd := getTestAppendCmd(dnID, data)
 			req = pb.Request{
 				Method: pb.APPEND,
 				LogRequest: pb.LogRequest{
@@ -93,12 +93,12 @@ func TestTruncationImportSnapshot(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 		defer cancel()
 
-		tnID := uint64(100)
+		dnID := uint64(100)
 		req := pb.Request{
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				TNID:    tnID,
+				DNID:    dnID,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -106,7 +106,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			data := make([]byte, 8)
-			cmd := getTestAppendCmd(tnID, data)
+			cmd := getTestAppendCmd(dnID, data)
 			req = pb.Request{
 				Method: pb.APPEND,
 				LogRequest: pb.LogRequest{
@@ -171,7 +171,7 @@ func TestTruncationImportSnapshot(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			data := make([]byte, 8)
-			cmd := getTestAppendCmd(tnID, data)
+			cmd := getTestAppendCmd(dnID, data)
 			req = pb.Request{
 				Method: pb.APPEND,
 				LogRequest: pb.LogRequest{

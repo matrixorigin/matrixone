@@ -86,8 +86,8 @@ func DoTxnRequest[
 			},
 			Options: &txn.TxnRequestOptions{
 				RetryCodes: []int32{
-					// tn shard not found
-					int32(moerr.ErrTNShardNotFound),
+					// dn shard not found
+					int32(moerr.ErrDNShardNotFound),
 				},
 				RetryInterval: int64(time.Second),
 			},

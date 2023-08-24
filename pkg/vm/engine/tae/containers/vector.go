@@ -239,7 +239,7 @@ func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 
 	n += 8
 
-	// 1. Whole TN Vector
+	// 1. Whole DN Vector
 	buf = make([]byte, types.DecodeInt64(buf[:]))
 	if _, err = r.Read(buf); err != nil {
 		return

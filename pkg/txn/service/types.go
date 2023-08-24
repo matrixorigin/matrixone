@@ -30,7 +30,7 @@ import (
 // The txn service use Clock-SI to implement distributed transaction.
 type TxnService interface {
 	// Shard returns the metadata of DNShard
-	Shard() metadata.TNShard
+	Shard() metadata.DNShard
 	// Start start the txn service
 	Start() error
 	// Close close the txn service. Destroy TxnStorage if destroy is true.
@@ -52,12 +52,12 @@ type TxnService interface {
 	// GetStatus handle get txn status in current DNShard request from coordinator DN. For reuse, the
 	// response is provided by the caller.
 	GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
-	// CommitTNShard handle commit txn data in current DNShard request from coordinator DN. For reuse, the
+	// CommitDNShard handle commit txn data in current DNShard request from coordinator DN. For reuse, the
 	// response is provided by the caller.
-	CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
-	// RollbackTNShard handle rollback txn data in current DNShard request from coordinator DN. For reuse,
+	CommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
+	// RollbackDNShard handle rollback txn data in current DNShard request from coordinator DN. For reuse,
 	// the response is provided by the caller.
-	RollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
+	RollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 
 	// Debug handle txn debug request from CN. For reuse, the response is provided by the caller
 	Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error

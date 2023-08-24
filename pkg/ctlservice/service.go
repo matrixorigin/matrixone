@@ -137,10 +137,10 @@ func (s *service) resolveService(
 				address = s.CtlAddress
 				return false
 			})
-	case metadata.ServiceType_TN:
-		s.cluster.GetTNService(
+	case metadata.ServiceType_DN:
+		s.cluster.GetDNService(
 			clusterservice.NewServiceIDSelector(serviceID),
-			func(s metadata.TNService) bool {
+			func(s metadata.DNService) bool {
 				address = s.CtlAddress
 				return false
 			})

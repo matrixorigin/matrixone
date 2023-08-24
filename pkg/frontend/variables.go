@@ -1353,7 +1353,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableUintType("query_result_maxsize", 0, 18446744073709551615),
 		Default:           uint64(100),
 	},
-	//whether TN does primary key uniqueness check against transaction's workspace or not.
+	//whether DN does primary key uniqueness check against transaction's workspace or not.
 	"mo_pk_check_by_dn": {
 		Name:              "mo_pk_check_by_dn",
 		Scope:             ScopeSession,

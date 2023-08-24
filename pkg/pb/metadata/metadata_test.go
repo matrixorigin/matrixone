@@ -20,8 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIsEmptyTN(t *testing.T) {
-	v := TNShard{}
+func TestIsEmptyDN(t *testing.T) {
+	v := DNShard{}
 	assert.True(t, v.IsEmpty())
 
 	v.ShardID = 1

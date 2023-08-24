@@ -41,14 +41,14 @@ func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
 }
 
 func (bm *Manager) Bootstrap(alloc util.IDAllocator,
-	tn pb.TNState, log pb.LogState) ([]pb.ScheduleCommand, error) {
+	dn pb.DNState, log pb.LogState) ([]pb.ScheduleCommand, error) {
 	logCommands, err := bm.bootstrapLogService(alloc, log)
-	tnCommands := bm.bootstrapTN(alloc, tn)
+	dnCommands := bm.bootstrapDN(alloc, dn)
 	if err != nil {
 		return nil, err
 	}
 
-	commands := append(logCommands, tnCommands...)
+	commands := append(logCommands, dnCommands...)
 	for _, command := range commands {
 		runtime.ProcessLevelRuntime().SubLogger(runtime.SystemInit).Info("schedule command generated",
 			zap.String("command", command.LogString()))
@@ -104,15 +104,15 @@ func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
 	return
 }
 
-func (bm *Manager) bootstrapTN(alloc util.IDAllocator, tn pb.TNState) (commands []pb.ScheduleCommand) {
-	tnStores := tnStoresSortedByTick(tn.Stores)
-	if len(tnStores) < len(bm.cluster.TNShards) {
+func (bm *Manager) bootstrapDN(alloc util.IDAllocator, dn pb.DNState) (commands []pb.ScheduleCommand) {
+	dnStores := dnStoresSortedByTick(dn.Stores)
+	if len(dnStores) < len(bm.cluster.DNShards) {
 		return nil
 	}
 
-	for i, tnRecord := range bm.cluster.TNShards {
-		if i >= len(tnStores) {
-			i = i % len(tnStores)
+	for i, dnRecord := range bm.cluster.DNShards {
+		if i >= len(dnStores) {
+			i = i % len(dnStores)
 		}
 		replicaID, ok := alloc.Next()
 		if !ok {
@@ -120,18 +120,18 @@ func (bm *Manager) bootstrapTN(alloc util.IDAllocator, tn pb.TNState) (commands 
 		}
 
 		commands = append(commands, pb.ScheduleCommand{
-			UUID:          tnStores[i],
+			UUID:          dnStores[i],
 			Bootstrapping: true,
 			ConfigChange: &pb.ConfigChange{
 				Replica: pb.Replica{
-					UUID:       tnStores[i],
-					ShardID:    tnRecord.ShardID,
+					UUID:       dnStores[i],
+					ShardID:    dnRecord.ShardID,
 					ReplicaID:  replicaID,
-					LogShardID: tnRecord.LogShardID,
+					LogShardID: dnRecord.LogShardID,
 				},
 				ChangeType: pb.StartReplica,
 			},
-			ServiceType: pb.TNService,
+			ServiceType: pb.DNService,
 		})
 	}
 
@@ -167,14 +167,14 @@ func logStoresSortedByTick(logStores map[string]pb.LogStoreInfo) []string {
 	return uuidSlice
 }
 
-func tnStoresSortedByTick(tnStores map[string]pb.TNStoreInfo) []string {
-	uuidSlice := make([]string, 0, len(tnStores))
-	for uuid := range tnStores {
+func dnStoresSortedByTick(dnStores map[string]pb.DNStoreInfo) []string {
+	uuidSlice := make([]string, 0, len(dnStores))
+	for uuid := range dnStores {
 		uuidSlice = append(uuidSlice, uuid)
 	}
 
 	sort.Slice(uuidSlice, func(i, j int) bool {
-		return tnStores[uuidSlice[i]].Tick > tnStores[uuidSlice[j]].Tick
+		return dnStores[uuidSlice[i]].Tick > dnStores[uuidSlice[j]].Tick
 	})
 
 	return uuidSlice

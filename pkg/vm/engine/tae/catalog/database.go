@@ -350,11 +350,11 @@ func (e *DBEntry) TxnGetTableEntryByID(id uint64, txn txnif.AsyncTxn) (entry *Ta
 // 3. Check duplicate/not found.
 // If the entry has already been dropped, return ErrNotFound.
 func (e *DBEntry) DropTableEntry(name string, txn txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
-	tn, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn)
+	dn, err := e.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}
-	entry := tn.GetPayload()
+	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
 	newEntry, err = entry.DropEntryLocked(txn)
