@@ -32,7 +32,7 @@ import (
 )
 
 func TestHandleMessageWithSender(t *testing.T) {
-	runTestTxnServer(t, testDN1Addr, func(s *server) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
 			return nil
 		})
@@ -47,14 +47,14 @@ func TestHandleMessageWithSender(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 
-		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.DNShard{Address: testDN1Addr}}}})
+		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.TNShard{Address: testTN1Addr}}}})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(v.Responses))
 	}, WithServerEnableCompress(true))
 }
 
 func TestHandleMessageEnableCompressWithSender(t *testing.T) {
-	runTestTxnServer(t, testDN1Addr, func(s *server) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
 			return nil
 		})
@@ -68,7 +68,7 @@ func TestHandleMessageEnableCompressWithSender(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 
-		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.DNShard{Address: testDN1Addr}}}})
+		v, err := cli.Send(ctx, []txn.TxnRequest{{CNRequest: &txn.CNOpRequest{Target: metadata.TNShard{Address: testTN1Addr}}}})
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(v.Responses))
 	})
@@ -76,7 +76,7 @@ func TestHandleMessageEnableCompressWithSender(t *testing.T) {
 
 func TestHandleLargeMessageWithSender(t *testing.T) {
 	size := 1024 * 1024 * 15
-	runTestTxnServer(t, testDN1Addr, func(s *server) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
 			tr2.CNOpResponse = &txn.CNOpResponse{Payload: make([]byte, size)}
 			return nil
@@ -94,7 +94,7 @@ func TestHandleLargeMessageWithSender(t *testing.T) {
 
 		v, err := cli.Send(ctx, []txn.TxnRequest{{
 			CNRequest: &txn.CNOpRequest{
-				Target:  metadata.DNShard{Address: testDN1Addr},
+				Target:  metadata.TNShard{Address: testTN1Addr},
 				Payload: make([]byte, size),
 			},
 		}})
@@ -104,7 +104,7 @@ func TestHandleLargeMessageWithSender(t *testing.T) {
 }
 
 func TestHandleMessage(t *testing.T) {
-	runTestTxnServer(t, testDN1Addr, func(s *server) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		s.RegisterMethodHandler(txn.TxnMethod_Read, func(ctx context.Context, tr1 *txn.TxnRequest, tr2 *txn.TxnResponse) error {
 			return nil
 		})
@@ -122,7 +122,7 @@ func TestHandleMessage(t *testing.T) {
 }
 
 func TestHandleMessageWithFilter(t *testing.T) {
-	runTestTxnServer(t, testDN1Addr, func(s *server) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		n := 0
 		s.RegisterMethodHandler(txn.TxnMethod_Read, func(_ context.Context, _ *txn.TxnRequest, _ *txn.TxnResponse) error {
 			n++
@@ -140,7 +140,7 @@ func TestHandleMessageWithFilter(t *testing.T) {
 }
 
 func TestHandleInvalidMessageWillPanic(t *testing.T) {
-	runTestTxnServer(t, testDN1Addr, func(s *server) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		defer func() {
 			if err := recover(); err != nil {
 				return
@@ -154,7 +154,7 @@ func TestHandleInvalidMessageWillPanic(t *testing.T) {
 }
 
 func TestHandleNotRegisterWillPanic(t *testing.T) {
-	runTestTxnServer(t, testDN1Addr, func(s *server) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		defer func() {
 			if err := recover(); err != nil {
 				return
@@ -166,7 +166,7 @@ func TestHandleNotRegisterWillPanic(t *testing.T) {
 }
 
 func TestTimeoutRequestCannotHandled(t *testing.T) {
-	runTestTxnServer(t, testDN1Addr, func(s *server) {
+	runTestTxnServer(t, testTN1Addr, func(s *server) {
 		n := 0
 		s.RegisterMethodHandler(txn.TxnMethod_Read,
 			func(_ context.Context, _ *txn.TxnRequest, _ *txn.TxnResponse) error {

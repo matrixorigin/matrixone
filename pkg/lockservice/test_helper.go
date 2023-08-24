@@ -59,7 +59,7 @@ func RunLockServicesForTest(
 		clusterservice.WithDisableRefresh(),
 		clusterservice.WithServices(
 			cns,
-			[]metadata.DNService{
+			[]metadata.TNService{
 				{
 					LockServiceAddress: testSockets,
 				},

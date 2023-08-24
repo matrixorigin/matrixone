@@ -33,13 +33,13 @@ import (
 )
 
 var (
-	testDN1Addr = "unix:///tmp/test-dn1.sock"
-	testDN2Addr = "unix:///tmp/test-dn2.sock"
-	testDN3Addr = "unix:///tmp/test-dn3.sock"
+	testTN1Addr = "unix:///tmp/test-dn1.sock"
+	testTN2Addr = "unix:///tmp/test-dn2.sock"
+	testTN3Addr = "unix:///tmp/test-dn3.sock"
 )
 
 func TestSendWithSingleRequest(t *testing.T) {
-	s := newTestTxnServer(t, testDN1Addr)
+	s := newTestTxnServer(t, testTN1Addr)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -67,8 +67,8 @@ func TestSendWithSingleRequest(t *testing.T) {
 	req := txn.TxnRequest{
 		Method: txn.TxnMethod_Write,
 		CNRequest: &txn.CNOpRequest{
-			Target: metadata.DNShard{
-				Address: testDN1Addr,
+			Target: metadata.TNShard{
+				Address: testTN1Addr,
 			},
 		},
 	}
@@ -82,7 +82,7 @@ func TestSendWithSingleRequest(t *testing.T) {
 func TestSendEnableCompressWithSingleRequest(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	s := newTestTxnServer(t, testDN1Addr, morpc.WithCodecEnableCompress(mp))
+	s := newTestTxnServer(t, testTN1Addr, morpc.WithCodecEnableCompress(mp))
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -110,8 +110,8 @@ func TestSendEnableCompressWithSingleRequest(t *testing.T) {
 	req := txn.TxnRequest{
 		Method: txn.TxnMethod_Write,
 		CNRequest: &txn.CNOpRequest{
-			Target: metadata.DNShard{
-				Address: testDN1Addr,
+			Target: metadata.TNShard{
+				Address: testTN1Addr,
 			},
 		},
 	}
@@ -122,8 +122,8 @@ func TestSendEnableCompressWithSingleRequest(t *testing.T) {
 	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
 }
 
-func TestSendWithMultiDN(t *testing.T) {
-	addrs := []string{testDN1Addr, testDN2Addr, testDN3Addr}
+func TestSendWithMultiTN(t *testing.T) {
+	addrs := []string{testTN1Addr, testTN2Addr, testTN3Addr}
 	for _, addr := range addrs {
 		s := newTestTxnServer(t, addr)
 		defer func() {
@@ -138,7 +138,7 @@ func TestSendWithMultiDN(t *testing.T) {
 			request := m.Message.(*txn.TxnRequest)
 			return cs.Write(ctx, &txn.TxnResponse{
 				RequestID:    request.GetID(),
-				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
+				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetTN().Address, sequence))},
 			})
 		})
 	}
@@ -158,8 +158,8 @@ func TestSendWithMultiDN(t *testing.T) {
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
-				Target: metadata.DNShard{
-					DNShardRecord: metadata.DNShardRecord{
+				Target: metadata.TNShard{
+					TNShardRecord: metadata.TNShardRecord{
 						ShardID: uint64(i % len(addrs)),
 					},
 					Address: addrs[i%len(addrs)],
@@ -185,8 +185,8 @@ func TestSendWithMultiDN(t *testing.T) {
 	}
 }
 
-func TestSendWithMultiDNAndLocal(t *testing.T) {
-	addrs := []string{testDN1Addr, testDN2Addr, testDN3Addr}
+func TestSendWithMultiTNAndLocal(t *testing.T) {
+	addrs := []string{testTN1Addr, testTN2Addr, testTN3Addr}
 	for _, addr := range addrs[1:] {
 		s := newTestTxnServer(t, addr)
 		defer func() {
@@ -201,7 +201,7 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 			request := m.Message.(*txn.TxnRequest)
 			return cs.Write(ctx, &txn.TxnResponse{
 				RequestID:    request.GetID(),
-				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
+				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetTN().Address, sequence))},
 			})
 		})
 	}
@@ -209,15 +209,15 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 	sd, err := NewSender(
 		Config{},
 		newTestRuntime(newTestClock(), nil),
-		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
-			if d.Address != testDN1Addr {
+		WithSenderLocalDispatch(func(d metadata.TNShard) TxnRequestHandleFunc {
+			if d.Address != testTN1Addr {
 				return nil
 			}
 			sequence := uint64(0)
 			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
 				v := atomic.AddUint64(&sequence, 1)
 				resp.RequestID = req.RequestID
-				resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", req.GetTargetDN().Address, v))}
+				resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", req.GetTargetTN().Address, v))}
 				return nil
 			}
 		}))
@@ -235,8 +235,8 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
-				Target: metadata.DNShard{
-					DNShardRecord: metadata.DNShardRecord{
+				Target: metadata.TNShard{
+					TNShardRecord: metadata.TNShardRecord{
 						ShardID: uint64(i % len(addrs)),
 					},
 					Address: addrs[i%len(addrs)],
@@ -275,7 +275,7 @@ func BenchmarkLocalSend(b *testing.B) {
 	sd, err := NewSender(
 		Config{},
 		newTestRuntime(newTestClock(), nil),
-		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
+		WithSenderLocalDispatch(func(d metadata.TNShard) TxnRequestHandleFunc {
 			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
 				resp.RequestID = req.RequestID
 				return nil
@@ -295,7 +295,7 @@ func BenchmarkLocalSend(b *testing.B) {
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Read,
 			CNRequest: &txn.CNOpRequest{
-				Target: metadata.DNShard{},
+				Target: metadata.TNShard{},
 			},
 		})
 	}
@@ -311,7 +311,7 @@ func BenchmarkLocalSend(b *testing.B) {
 
 func TestCanSendWithLargeRequest(t *testing.T) {
 	size := 1024 * 1024 * 20
-	s := newTestTxnServer(t, testDN1Addr, morpc.WithCodecMaxBodySize(size+1024))
+	s := newTestTxnServer(t, testTN1Addr, morpc.WithCodecMaxBodySize(size+1024))
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -344,8 +344,8 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 	req := txn.TxnRequest{
 		Method: txn.TxnMethod_Write,
 		CNRequest: &txn.CNOpRequest{
-			Target: metadata.DNShard{
-				Address: testDN1Addr,
+			Target: metadata.TNShard{
+				Address: testTN1Addr,
 			},
 			Payload: make([]byte, size),
 		},

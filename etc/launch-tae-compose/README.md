@@ -1,4 +1,4 @@
-# Launch-tae-CN-tae-dn with docker-compose
+# Launch-tae-CN-tae-tn with docker-compose
 
 - [docker compose version](https://docs.docker.com/compose/install/) >= v2.12.1
 - support profiles: launch, launch-multi-cn
@@ -27,8 +27,8 @@ docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn 
 # cn-1 
 docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs cn-1
 
-# dn
-docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs dn
+# tn
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs tn
 
 # logService
 docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn logs logservice

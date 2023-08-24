@@ -1,4 +1,4 @@
-service-type = "DN"
+service-type = "TN"
 data-dir = "./mo-data"
 
 [log]
@@ -29,24 +29,24 @@ disk-path = "mo-data/file-service-cache"
 name = "ETL"
 backend = "DISK-ETL"
 
-[dn]
+[tn]
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 port-base = 19000
 
-[dn.Txn]
+[tn.Txn]
 
-[dn.Txn.Storage]
+[tn.Txn.Storage]
 backend = "TAE"
 log-backend = "logservice"
 
-[dn.Ckp]
+[tn.Ckp]
 flush-interval = "60s"
 min-count = 100
 scan-interval = "5s"
 incremental-interval = "180s"
 global-min-count = 60
 
-[dn.LogtailServer]
+[tn.LogtailServer]
 rpc-max-message-size = "16KiB"
 rpc-payload-copy-buffer-size = "16KiB"
 rpc-enable-checksum = true
