@@ -471,8 +471,8 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	for i := 0; i < 1; i++ {
 		mrs.Data[i] = make([]interface{}, columnCount)
 	}
-	exportParam := &ExportParam{
-		ExportParam: eParam,
+	exportParam := &ExportConfig{
+		userConfig: eParam,
 	}
 	//prepare output queue
 	oq := NewOutputQueue(ctx, ses, columnCount, mrs, exportParam)
