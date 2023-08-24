@@ -35,12 +35,12 @@ type outputQueue struct {
 	mrs          *MysqlResultSet
 	rowIdx       uint64
 	length       uint64
-	ep           *ExportParam
+	ep           *ExportConfig
 	lineStr      []byte
 	showStmtType ShowStatementType
 }
 
-func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportParam) *outputQueue {
+func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportConfig) *outputQueue {
 	const countOfResultSet = 1
 	if ctx == nil {
 		ctx = ses.GetRequestContext()
@@ -62,7 +62,7 @@ func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *Mys
 	}
 
 	if ep == nil {
-		ep = ses.GetExportParam()
+		ep = ses.GetExportConfig()
 	}
 
 	return &outputQueue{
@@ -107,7 +107,7 @@ func (oq *outputQueue) flush() error {
 	if oq.rowIdx <= 0 {
 		return nil
 	}
-	if oq.ep.Outfile {
+	if oq.ep.needExportToFile() {
 		if err := exportDataToCSVFile(oq); err != nil {
 			logError(oq.ses, oq.ses.GetDebugString(),
 				"Error occurred while exporting to CSV file",

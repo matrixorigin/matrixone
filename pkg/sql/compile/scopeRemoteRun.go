@@ -799,6 +799,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			HashOnPk:               t.HashOnPK,
 		}
 	case *left.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -1008,6 +1009,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:  t.Nbucket,
 			Types:    convertToPlanTypes(t.Typs),
 			Conds:    t.Conditions,
+			HashOnPk: t.HashOnPK,
 		}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
@@ -1187,6 +1189,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Result:             convertToResultPos(t.RelList, t.ColList),
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+			HashOnPK:           t.HashOnPk,
 		}
 	case vm.Left:
 		t := opr.GetLeftJoin()
@@ -1395,6 +1398,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			NeedExpr:    t.NeedExpr,
 			Typs:        convertToTypes(t.Types),
 			Conditions:  t.Conds,
+			HashOnPK:    t.HashOnPk,
 		}
 	case vm.External:
 		t := opr.GetExternalScan()

@@ -365,6 +365,9 @@ func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *Exp
 			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
 		}
 	}
+	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.HashOnPK {
+		result += "   hashOnPK"
+	}
 	return result, nil
 }
 

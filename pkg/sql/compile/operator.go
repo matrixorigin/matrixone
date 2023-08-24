@@ -127,6 +127,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:               t.Typs,
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			HashOnPK:           t.HashOnPK,
 		}
 	case vm.Left:
 		t := sourceIns.Arg.(*left.Argument)
@@ -354,6 +355,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:     t.Nbucket,
 			Typs:        t.Typs,
 			Conditions:  t.Conditions,
+			HashOnPK:    t.HashOnPK,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -698,6 +700,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 		Cond:               cond,
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -1379,6 +1382,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 			IsDup:       isDup,
+			HashOnPK:    arg.HashOnPK,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
