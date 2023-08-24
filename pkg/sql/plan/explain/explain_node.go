@@ -367,6 +367,9 @@ func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *Exp
 			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
 		}
 	}
+	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.HashOnPK {
+		result += "   hashOnPK"
+	}
 	return result, nil
 }
 
@@ -680,9 +683,6 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		}
 		if c.Stats.HashmapStats != nil && c.Stats.HashmapStats.HashmapSize > 0 {
 			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapStats.HashmapSize, 'f', 2, 64)
-			if c.Stats.HashmapStats.HashOnPK {
-				hashmapSizeStr += " hashOnPK : true "
-			}
 		}
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
