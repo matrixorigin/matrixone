@@ -60,6 +60,7 @@ const (
 	OP_BIT_XOR                // ^
 	OP_BIT_SHIFT_LEFT         // <<
 	OP_BIT_SHIFT_RIGHT        // >>
+	DECODE
 
 	ABS            // ABS
 	ACOS           // ACOS
@@ -382,6 +383,7 @@ var functionIdRegister = map[string]int32{
 	"^":          OP_BIT_XOR,
 	"<<":         OP_BIT_SHIFT_LEFT,
 	">>":         OP_BIT_SHIFT_RIGHT,
+	"decode":     DECODE,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,

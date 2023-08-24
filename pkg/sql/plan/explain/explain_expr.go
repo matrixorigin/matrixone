@@ -232,7 +232,8 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		}
 		buf.WriteString(")")
 	case function.CAST_EXPRESSION:
-		buf.WriteString("CAST(")
+		buf.WriteString(funcName)
+		buf.WriteString("(")
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
 			return err
@@ -282,7 +283,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		if err != nil {
 			return err
 		}
-		buf.WriteString(" " + funcExpr.F.Func.GetObjName() + "(")
+		buf.WriteString(" " + funcExpr.F.Func.GetObjName() + " (")
 		err = describeExpr(ctx, funcExpr.F.Args[1], options, buf)
 		if err != nil {
 			return err

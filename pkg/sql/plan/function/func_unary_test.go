@@ -17,12 +17,13 @@ package function
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/assert"
 	"math"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -2613,6 +2614,38 @@ func TestSleep(t *testing.T) {
 	for _, tc := range testCases2 {
 		fcTC := testutil.NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Sleep[float64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initDecodeTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test Decode Int",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"asdf", "jkl;", ";jioefafa"},
+					[]bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int32.ToType(),
+					[]int32{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{1717859169, 996961130, 0},
+				[]bool{false, false, true}),
+		},
+	}
+}
+
+func TestDecode(t *testing.T) {
+	testCases := initDecodeTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, BinaryDecode)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

@@ -124,6 +124,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
 
+	case *tree.DecodeExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("decode", []tree.Expr{astExpr}, depth)
+
 	case *tree.IsNullExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("isnull", []tree.Expr{exprImpl.Expr}, depth)
 
@@ -936,6 +939,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		whenExpr := tree.NewComparisonExpr(tree.EQUAL, astArgs[0], astArgs[1])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
+
 	case "ifnull":
 		// rewrite 'ifnull(expr1, expr2)' to 'case when isnull(expr1) then expr2 else null'
 		if len(astArgs) != 2 {
@@ -946,11 +950,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		whenExpr := tree.NewIsNullExpr(astArgs[0])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
-	//case "extract":
-	//	// "extract(year from col_name)"  parser return year as UnresolvedName.
-	//	// we must rewrite it to string。 because binder bind UnresolvedName as column name
-	//	unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
-	//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
+
+		//case "extract":
+		//	// "extract(year from col_name)"  parser return year as UnresolvedName.
+		//	// we must rewrite it to string。 because binder bind UnresolvedName as column name
+		//	unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
+		//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
+
 	case "count":
 		if b.ctx == nil {
 			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid field reference to COUNT")
@@ -972,6 +978,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 		}
+
 	case "approx_count":
 		if b.ctx == nil {
 			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid field reference to COUNT")
@@ -990,17 +997,44 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		default:
 			name = "count"
 		}
+
 	case "trim":
 		astArgs = astArgs[1:]
 	}
+
 	// bind ast function's args
-	args := make([]*Expr, len(astArgs))
-	for idx, arg := range astArgs {
-		expr, err := b.impl.BindExpr(arg, depth, false)
+	var args []*Expr
+	if name == "decode" {
+		decodeExpr := astArgs[0].(*tree.DecodeExpr)
+		binExpr, err := b.impl.BindExpr(decodeExpr.Expr, depth, false)
 		if err != nil {
 			return nil, err
 		}
-		args[idx] = expr
+
+		typ, err := getTypeFromAst(b.GetContext(), decodeExpr.Type)
+		if err != nil {
+			return nil, err
+		}
+		typeExpr := &Expr{
+			Typ: typ,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: DeepCopyType(typ),
+				},
+			},
+		}
+
+		args = []*Expr{binExpr, typeExpr}
+	} else {
+		args = make([]*Expr, len(astArgs))
+		for idx, arg := range astArgs {
+			expr, err := b.impl.BindExpr(arg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+
+			args[idx] = expr
+		}
 	}
 
 	if b.builder != nil {

@@ -124,6 +124,8 @@ func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.Metadata
 		fillMetadataInfoBat(retBat, proc, arg, metaInfos[i])
 	}
 
+	retBat.AddRowCount(len(metaInfos))
+
 	return retBat, nil
 }
 
@@ -233,6 +235,6 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 		default:
 		}
 	}
-	opBat.AddRowCount(len(arg.Attrs))
+
 	return nil
 }

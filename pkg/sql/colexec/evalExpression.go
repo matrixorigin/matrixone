@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -48,7 +48,7 @@ var (
 	constFType          = types.T_float32.ToType()
 	constDType          = types.T_float64.ToType()
 	constSType          = types.T_varchar.ToType()
-	constBinType        = types.T_blob.ToType()
+	constBinType        = types.T_varbinary.ToType()
 	constDateType       = types.T_date.ToType()
 	constTimeType       = types.T_time.ToType()
 	constDatetimeType   = types.T_datetime.ToType()

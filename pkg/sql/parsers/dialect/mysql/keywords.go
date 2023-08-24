@@ -121,6 +121,7 @@ func init() {
 		"dec":                        UNUSED,
 		"decimal":                    DECIMAL,
 		"declare":                    DECLARE,
+		"decode":                     DECODE,
 		"default":                    DEFAULT,
 		"instant":                    INSTANT,
 		"inplace":                    INPLACE,
