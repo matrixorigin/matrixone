@@ -71,16 +71,16 @@ func TestClusterRefresh(t *testing.T) {
 		time.Millisecond*10,
 		func(hc *testHAKeeperClient, c *cluster) {
 			cnt := 0
-			apply := func(c metadata.DNService) bool {
+			apply := func(c metadata.TNService) bool {
 				cnt++
 				return true
 			}
-			c.GetDNService(NewServiceIDSelector("dn0"), apply)
+			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			assert.Equal(t, 0, cnt)
 
-			hc.addDN("dn0")
+			hc.addTN("dn0")
 			time.Sleep(time.Millisecond * 100)
-			c.GetDNService(NewServiceIDSelector("dn0"), apply)
+			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			assert.Equal(t, 1, cnt)
 		})
 }
@@ -90,19 +90,19 @@ func BenchmarkGetService(b *testing.B) {
 		time.Hour,
 		func(hc *testHAKeeperClient, c *cluster) {
 			cnt := 0
-			apply := func(c metadata.DNService) bool {
+			apply := func(c metadata.TNService) bool {
 				cnt++
 				return true
 			}
-			c.GetDNService(NewServiceIDSelector("dn0"), apply)
+			c.GetTNService(NewServiceIDSelector("dn0"), apply)
 
-			hc.addDN("dn0")
+			hc.addTN("dn0")
 			c.ForceRefresh()
 			time.Sleep(time.Millisecond * 100)
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				c.GetDNService(NewServiceIDSelector("dn0"), apply)
+				c.GetTNService(NewServiceIDSelector("dn0"), apply)
 			}
 		})
 }
@@ -157,11 +157,11 @@ func (c *testHAKeeperClient) addCN(serviceIDs ...string) {
 	}
 }
 
-func (c *testHAKeeperClient) addDN(serviceIDs ...string) {
+func (c *testHAKeeperClient) addTN(serviceIDs ...string) {
 	c.Lock()
 	defer c.Unlock()
 	for _, id := range serviceIDs {
-		c.value.DNStores = append(c.value.DNStores, logpb.DNStore{
+		c.value.TNStores = append(c.value.TNStores, logpb.TNStore{
 			UUID: id,
 		})
 	}
