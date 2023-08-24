@@ -3484,7 +3484,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	return err
 }
 
-func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) error {
+func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (bool, error) {
 	var err error
 	var filePath string
 	var sql string
@@ -3492,8 +3492,9 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) er
 	var stageName string
 	var stageStatus string
 	var url string
+	var isPathChanged bool
 	if ep == nil {
-		return err
+		return isPathChanged, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -3504,7 +3505,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) er
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
-		return err
+		return isPathChanged, err
 	}
 
 	// detect filepath contain stage or not
@@ -3515,20 +3516,20 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) er
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 
 		// if have stage enabled
 		if execResultArrayHasData(erArray) {
-			return moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
+			return isPathChanged, moerr.NewInternalError(ctx, "stage exists, please try to check and use a stage instead")
 		} else {
 			// use the filepath
-			return err
+			return isPathChanged, err
 		}
 	} else {
 
@@ -3536,43 +3537,43 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) er
 		// check the stage status
 		sql, err = getSqlForCheckStageStatusWithStageName(ctx, stageName)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			return err
+			return isPathChanged, err
 		}
 		if execResultArrayHasData(erArray) {
 			stageStatus, err = erArray[0].GetString(ctx, 0, 1)
 			if err != nil {
-				return err
+				return isPathChanged, err
 			}
 
 			// is the stage staus is disabled
 			if stageStatus == tree.StageStatusDisabled.String() {
-				return moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
+				return isPathChanged, moerr.NewInternalError(ctx, "stage '%s' is invalid, please check", stageName)
 			} else if stageStatus == tree.StageStatusEnabled.String() {
 				// replace the filepath using stage url
 				url, err = erArray[0].GetString(ctx, 0, 0)
 				if err != nil {
-					return err
+					return isPathChanged, err
 				}
 
 				filePath = strings.Replace(filePath, stageName+":", url, 1)
 				ep.FilePath = filePath
+				isPathChanged = true
 			}
-
 		} else {
-			return moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
+			return isPathChanged, moerr.NewInternalError(ctx, "stage '%s' is not exists, please check", stageName)
 		}
 	}
-	return err
+	return isPathChanged, err
 
 }
 
