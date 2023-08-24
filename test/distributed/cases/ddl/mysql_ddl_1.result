@@ -2,9 +2,9 @@
 SQL parser error: Query was empty
 /*!40101 -- SET character_set_client = utf8 */;
 SQL parser error: Query was empty
-/*!40000 create database if not exists db_1 */;
-/*!40000 show tables in db_1 */;
-Tables_in_db_1
+/*!40000 create database if not exists mysql_ddl_test_db_5 */;
+/*!40000 show tables in mysql_ddl_test_db_5 */;
+Tables_in_mysql_ddl_test_db_5
 /* this is a comment */
 /* and this
 is also
@@ -41,6 +41,7 @@ SET @MYSQLDUMP_TEMP_LOG_BIN = @@SESSION.SQL_LOG_BIN;
 select @MYSQLDUMP_TEMP_LOG_BIN;
 @MYSQLDUMP_TEMP_LOG_BIN
 0
+SET @MYSQLDUMP_TEMP_LOG_BIN = NULL;
 SET @@SESSION.SQL_LOG_BIN= 0;
 select @@SESSION.SQL_LOG_BIN;
 @@SQL_LOG_BIN
@@ -56,6 +57,10 @@ SET TIME_ZONE='+08:00';
 select @@TIME_ZONE;
 @@TIME_ZONE
 +08:00
+SET TIME_ZONE='SYSTEM';
+select @@TIME_ZONE;
+@@TIME_ZONE
+SYSTEM
 SET @saved_cs_client = xxx;
 select @saved_cs_client;
 @saved_cs_client
@@ -68,3 +73,4 @@ drop database if exists mysql_ddl_test_db_1;
 drop database if exists mysql_ddl_test_db_2;
 drop database if exists mysql_ddl_test_db_3;
 drop database if exists mysql_ddl_test_db_4;
+drop database if exists mysql_ddl_test_db_5;

@@ -2,8 +2,8 @@
 
 /*!40101 -- SET @saved_cs_client = @@character_set_client */;
 /*!40101 -- SET character_set_client = utf8 */;
-/*!40000 create database if not exists db_1 */;
-/*!40000 show tables in db_1 */;
+/*!40000 create database if not exists mysql_ddl_test_db_5 */;
+/*!40000 show tables in mysql_ddl_test_db_5 */;
 /* this is a comment */
 /* and this 
 is also 
@@ -35,6 +35,9 @@ select database();
 
 SET @MYSQLDUMP_TEMP_LOG_BIN = @@SESSION.SQL_LOG_BIN;
 select @MYSQLDUMP_TEMP_LOG_BIN;
+SET @MYSQLDUMP_TEMP_LOG_BIN = NULL;
+
+
 
 SET @@SESSION.SQL_LOG_BIN= 0;                                                                                                          
 select @@SESSION.SQL_LOG_BIN;
@@ -47,6 +50,8 @@ select @@TIME_ZONE;
 
 SET TIME_ZONE='+08:00';
 select @@TIME_ZONE;
+SET TIME_ZONE='SYSTEM';
+select @@TIME_ZONE;
 
 SET @saved_cs_client = xxx;
 select @saved_cs_client;
@@ -57,4 +62,4 @@ drop database if exists mysql_ddl_test_db_1;
 drop database if exists mysql_ddl_test_db_2;
 drop database if exists mysql_ddl_test_db_3;
 drop database if exists mysql_ddl_test_db_4;
-
+drop database if exists mysql_ddl_test_db_5;
