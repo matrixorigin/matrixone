@@ -23,19 +23,19 @@ import (
 func NewJoinMap(sels [][]int32, expr *plan.Expr, ihm *IntHashMap, shm *StrHashMap, hasNull bool, isDup bool) *JoinMap {
 	cnt := int64(1)
 	return &JoinMap{
-		cnt:     &cnt,
-		shm:     shm,
-		ihm:     ihm,
-		expr:    expr,
-		sels:    sels,
-		hasNull: hasNull,
-		dupCnt:  new(int64),
-		isDup:   isDup,
+		cnt:       &cnt,
+		shm:       shm,
+		ihm:       ihm,
+		expr:      expr,
+		multiSels: sels,
+		hasNull:   hasNull,
+		dupCnt:    new(int64),
+		isDup:     isDup,
 	}
 }
 
 func (jm *JoinMap) Sels() [][]int32 {
-	return jm.sels
+	return jm.multiSels
 }
 
 func (jm *JoinMap) Expr() *plan.Expr {
@@ -83,15 +83,15 @@ func (jm *JoinMap) Dup() *JoinMap {
 			hashes:  make([]uint64, UnitLimit),
 		}
 		jm0 := &JoinMap{
-			ihm:     m0,
-			expr:    jm.expr,
-			sels:    jm.sels,
-			hasNull: jm.hasNull,
-			cnt:     jm.cnt,
+			ihm:       m0,
+			expr:      jm.expr,
+			multiSels: jm.multiSels,
+			hasNull:   jm.hasNull,
+			cnt:       jm.cnt,
 		}
 		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
 			jm.ihm = nil
-			jm.sels = nil
+			jm.multiSels = nil
 		}
 		return jm0
 	} else {
@@ -107,15 +107,15 @@ func (jm *JoinMap) Dup() *JoinMap {
 			strHashStates: make([][3]uint64, UnitLimit),
 		}
 		jm0 := &JoinMap{
-			shm:     m0,
-			expr:    jm.expr,
-			sels:    jm.sels,
-			hasNull: jm.hasNull,
-			cnt:     jm.cnt,
+			shm:       m0,
+			expr:      jm.expr,
+			multiSels: jm.multiSels,
+			hasNull:   jm.hasNull,
+			cnt:       jm.cnt,
 		}
 		if atomic.AddInt64(jm.dupCnt, -1) == 0 {
 			jm.shm = nil
-			jm.sels = nil
+			jm.multiSels = nil
 		}
 		return jm0
 	}
@@ -133,10 +133,10 @@ func (jm *JoinMap) Free() {
 	if atomic.AddInt64(jm.cnt, -1) != 0 {
 		return
 	}
-	for i := range jm.sels {
-		jm.sels[i] = nil
+	for i := range jm.multiSels {
+		jm.multiSels[i] = nil
 	}
-	jm.sels = nil
+	jm.multiSels = nil
 	if jm.ihm != nil {
 		jm.ihm.Free()
 	} else {
