@@ -5640,14 +5640,14 @@ func TestUpdate(t *testing.T) {
 
 // This is used to observe a lot of compactions to overflow a segment, it is not compulsory
 func TestAlwaysUpdate(t *testing.T) {
-	t.Skip("This is a long test, run it manully to observe catalog")
+	t.Skip("This is a long test, run it manully to observe what you want")
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts2(nil, 100)
-	opts.GCCfg.ScanGCInterval = 3600 * time.Second
-	opts.CatalogCfg.GCInterval = 3600 * time.Second
-	// opts := config.WithLongScanAndCKPOpts(nil)
+	// opts := config.WithQuickScanAndCKPOpts2(nil, 10)
+	// opts.GCCfg.ScanGCInterval = 3600 * time.Second
+	// opts.CatalogCfg.GCInterval = 3600 * time.Second
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
@@ -5661,8 +5661,8 @@ func TestAlwaysUpdate(t *testing.T) {
 	metalocs := make([]objectio.Location, 0, 100)
 	// write only one segment
 	for i := 0; i < 1; i++ {
-		objName1 := objectio.NewSegmentid().ToString() + "-0"
-		writer, err := blockio.NewBlockWriter(tae.Runtime.Fs.Service, objName1)
+		objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for _, bat := range bats[i*25 : (i+1)*25] {
@@ -5673,16 +5673,20 @@ func TestAlwaysUpdate(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 25, len(blocks))
 		for _, blk := range blocks {
-			loc := blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), 8192, blocks[0].GetID())
+			loc := blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), blk.GetRows(), blk.GetID())
 			assert.Nil(t, err)
 			metalocs = append(metalocs, loc)
 		}
 	}
 
+	// var did, tid uint64
 	txn, _ := tae.StartTxn(nil)
+	txn.SetDedupType(txnif.IncrementalDedup)
 	db, err := txn.CreateDatabase("db", "", "")
+	// did = db.GetID()
 	assert.NoError(t, err)
 	tbl, err := db.CreateRelation(schema)
+	// tid = tbl.ID()
 	assert.NoError(t, err)
 	assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), metalocs))
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -5691,7 +5695,7 @@ func TestAlwaysUpdate(t *testing.T) {
 
 	wg := &sync.WaitGroup{}
 
-	updateFn := func(i, j int) {
+	updateFn := func(round, i, j int) {
 		defer wg.Done()
 		tuples := bats[0].CloneWindow(0, 1)
 		defer tuples.Close()
@@ -5713,32 +5717,40 @@ func TestAlwaysUpdate(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit(context.Background()))
 		}
-		t.Logf("(%d, %d) done", i, j)
+		t.Logf("(%d, %d, %d) done", round, i, j)
 	}
 
-	p, _ := ants.NewPool(10)
+	p, _ := ants.NewPool(20)
 	defer p.Release()
 
-	ch := make(chan int, 1)
-	ticker := time.NewTicker(10 * time.Second)
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				t.Log(tae.Catalog.SimplePPString(common.PPL1))
-			case <-ch:
-			}
-		}
-	}()
+	// ch := make(chan int, 1)
+	// ticker := time.NewTicker(1 * time.Second)
+	// ticker2 := time.NewTicker(100 * time.Millisecond)
+	// go func() {
+	// 	for {
+	// 		select {
+	// 		case <-ticker.C:
+	// 			t.Log(tbl.SimplePPString(common.PPL1))
+	// 		case <-ticker2.C:
+	// 			_, _, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	// 				CnHave: tots(types.BuildTS(0, 0)),
+	// 				CnWant: tots(types.MaxTs()),
+	// 				Table:  &api.TableID{DbId: did, TbId: tid},
+	// 			}, true)
+	// 		case <-ch:
+	// 		}
+	// 	}
+	// }()
 
 	for r := 0; r < 10; r++ {
 		for i := 0; i < 40; i++ {
 			wg.Add(1)
 			start, end := i*200, (i+1)*200
-			f := func() { updateFn(start, end) }
+			f := func() { updateFn(r, start, end) }
 			p.Submit(f)
 		}
 		wg.Wait()
+		tae.CheckRowsByScan(100*100, true)
 	}
 }
 

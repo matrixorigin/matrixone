@@ -89,9 +89,6 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
-		if tenant != nil {
-			tenant.SetUser("")
-		}
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}

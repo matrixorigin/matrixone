@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"os"
 	"strings"
 	"sync"
@@ -424,6 +422,36 @@ func (h *Handle) HandleForceCheckpoint(
 	return nil, err
 }
 
+func (h *Handle) HandleBackup(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	timeout := req.FlushDuration
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	currTs = types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	var locations string
+	for i := range data {
+		locations += data[i].GetLocation().String()
+		locations += ":"
+		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += ";"
+	}
+	resp.CkpLocation = locations
+	return nil, err
+}
+
 func (h *Handle) HandleInspectDN(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -558,82 +586,13 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
-func loadDataForMOCatalog(
-	ctx context.Context,
-	es []*api.Entry,
-	fs fileservice.FileService,
-	m *mpool.MPool,
-) (err error) {
-	for _, e := range es {
-		if e.EntryType != api.Entry_Insert {
-			continue
-		}
-		if e.DatabaseId != catalog.MO_CATALOG_ID {
-			continue
-		}
-		if e.TableId != catalog.MO_TABLES_ID &&
-			e.TableId != catalog.MO_COLUMNS_ID {
-			continue
-		}
-		if e.FileName == "" {
-			continue
-		}
-		bat, err := batch.ProtoBatchToBatch(e.Bat)
-		if err != nil {
-			return err
-		}
-		rows := catalog.GenRows(bat)
-		for _, row := range rows {
-			metaLoc := string(row[0].([]byte))
-			location, err := blockio.EncodeLocationFromString(metaLoc)
-			if err != nil {
-				return err
-			}
-			var bat *batch.Batch
-			if e.TableId == catalog.MO_TABLES_ID {
-				bat, err = blockio.LoadColumns(
-					ctx,
-					catalog.MoTablesIdxs,
-					catalog.MoTablesTypes,
-					fs,
-					location,
-					m)
-				if err != nil {
-					return err
-				}
-			} else {
-				bat, err = blockio.LoadColumns(
-					ctx,
-					catalog.MoColumnsIdxs,
-					catalog.MoColumnsTypes,
-					fs,
-					location,
-					m)
-				if err != nil {
-					return err
-				}
-			}
-			e.Bat, err = batch.BatchToProtoBatch(bat)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return
-}
-
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.PrecommitWriteCmd,
 	resp *api.SyncLogTailResp) (err error) {
 	var e any
-
 	es := req.EntryList
-	err = loadDataForMOCatalog(ctx, es, h.db.Runtime.Fs.Service, nil)
-	if err != nil {
-		return err
-	}
 	for len(es) > 0 {
 		e, es, err = catalog.ParseEntryList(es)
 		if err != nil {
