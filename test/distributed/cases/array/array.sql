@@ -20,7 +20,7 @@ select * from vec_table where b>= "[1,2,3]";
 select * from vec_table where b<= "[1,2,3]";
 select * from vec_table where b!= "[1,2,3]";
 select * from vec_table where b= "[1,2,3]";
-select * from vec_table where b= cast("[1,2,3]" as vecf32);
+select * from vec_table where b= cast("[1,2,3]" as vecf32(3));
 select b + "[1,2,3]" from vec_table;
 select b + "[1,2]" from vec_table;
 select b + "[1,2,3,4]" from vec_table;
@@ -34,7 +34,7 @@ select b + c from vec_table;
 
 -- vector ops
 select abs(b) from vec_table;
-select abs(cast("[-1,-2,3]" as vecf32));
+select abs(cast("[-1,-2,3]" as vecf32(3)));
 select sqrt(b) from vec_table;
 select summation(b) from vec_table;
 select l1_norm(b) from vec_table;
@@ -54,8 +54,8 @@ create unique index t3 on vec_table(b);
 create table t3(a int, b vecf32(65537));
 
 -- throw error for Nan/Inf
-select sqrt(cast("[1,2,-3]" as vecf32));
-select b/(cast("[1,2,0]" as vecf32)) from vec_table;
+select sqrt(cast("[1,2,-3]" as vecf32(3)));
+select b/(cast("[1,2,0]" as vecf32(3))) from vec_table;
 
 -- agg
 select count(b) from vec_table;

@@ -34,7 +34,7 @@ a    b    c
 select * from vec_table where b= "[1,2,3]";
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]
-select * from vec_table where b= cast("[1,2,3]" as vecf32);
+select * from vec_table where b= cast("[1,2,3]" as vecf32(3));
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]
 select b + "[1,2,3]" from vec_table;
@@ -59,8 +59,8 @@ b + c
 select abs(b) from vec_table;
 abs(b)
 [1, 2, 3]
-select abs(cast("[-1,-2,3]" as vecf32));
-abs(cast([-1,-2,3] as vecf32))
+select abs(cast("[-1,-2,3]" as vecf32(3)));
+abs(cast([-1,-2,3] as vecf32(3)))
 [1, 2, 3]
 select sqrt(b) from vec_table;
 sqrt(b)
@@ -96,9 +96,9 @@ create unique index t3 on vec_table(b);
 not supported: VECTOR column 'b' cannot be in index
 create table t3(a int, b vecf32(65537));
 Data truncation: data out of range: data type vecf32,  typeLen is over the MaxVectorLen : 65536
-select sqrt(cast("[1,2,-3]" as vecf32));
+select sqrt(cast("[1,2,-3]" as vecf32(3)));
 invalid argument Sqrt, bad value -3
-select b/(cast("[1,2,0]" as vecf32)) from vec_table;
+select b/(cast("[1,2,0]" as vecf32(3))) from vec_table;
 Data truncation: division by zero
 select count(b) from vec_table;
 count(b)
