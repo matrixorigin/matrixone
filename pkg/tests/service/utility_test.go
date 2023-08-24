@@ -29,12 +29,12 @@ const (
 	defaultLogShardSize = 3
 )
 
-func TestParseExpectedDNShardCount(t *testing.T) {
+func TestParseExpectedTNShardCount(t *testing.T) {
 	cluster := pb.ClusterInfo{
-		DNShards: mockDNShardRecords(10, 11, 12, 12),
+		TNShards: mockTNShardRecords(10, 11, 12, 12),
 	}
-	// expected dn shards: 10, 11, 12
-	require.Equal(t, 3, ParseExpectedDNShardCount(cluster))
+	// expected tn shards: 10, 11, 12
+	require.Equal(t, 3, ParseExpectedTNShardCount(cluster))
 }
 
 func TestParseExpectedLogShardCount(t *testing.T) {
@@ -45,34 +45,34 @@ func TestParseExpectedLogShardCount(t *testing.T) {
 	require.Equal(t, 2, ParseExpectedLogShardCount(cluster))
 }
 
-func TestParseReportedDNShardCount(t *testing.T) {
+func TestParseReportedTNShardCount(t *testing.T) {
 	hkcfg := hakeeper.Config{}
 	hkcfg.Fill()
 
 	expiredTick := uint64(10)
-	currTick := hkcfg.ExpiredTick(expiredTick, hkcfg.DNStoreTimeout) + 1
+	currTick := hkcfg.ExpiredTick(expiredTick, hkcfg.TNStoreTimeout) + 1
 
-	dnState := pb.DNState{
-		Stores: map[string]pb.DNStoreInfo{
+	tnState := pb.TNState{
+		Stores: map[string]pb.TNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(10, 100),
+				Shards: []pb.TNShardInfo{
+					mockTnShardInfo(10, 100),
 				},
 			},
 			"working1": {
 				Tick: currTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(11, 101),
-					mockDnShardInfo(11, 102),
-					mockDnShardInfo(12, 103),
+				Shards: []pb.TNShardInfo{
+					mockTnShardInfo(11, 101),
+					mockTnShardInfo(11, 102),
+					mockTnShardInfo(12, 103),
 				},
 			},
 		},
 	}
 
-	// working dn shards: 11, 12
-	require.Equal(t, 2, ParseReportedDNShardCount(dnState, hkcfg, currTick))
+	// working tn shards: 11, 12
+	require.Equal(t, 2, ParseReportedTNShardCount(tnState, hkcfg, currTick))
 }
 
 func TestParseReportedLogShardCount(t *testing.T) {
@@ -167,39 +167,39 @@ func TestParseLogShardReportedSize(t *testing.T) {
 	require.Equal(t, 3, ParseLogShardReportedSize(11, logState, hkcfg, currTick))
 }
 
-func TestParseDNShardReportedSize(t *testing.T) {
+func TestParseTNShardReportedSize(t *testing.T) {
 	hkcfg := hakeeper.Config{}
 	hkcfg.Fill()
 
 	expiredTick := uint64(10)
-	currTick := hkcfg.ExpiredTick(expiredTick, hkcfg.DNStoreTimeout) + 1
+	currTick := hkcfg.ExpiredTick(expiredTick, hkcfg.TNStoreTimeout) + 1
 
-	dnState := pb.DNState{
-		Stores: map[string]pb.DNStoreInfo{
+	tnState := pb.TNState{
+		Stores: map[string]pb.TNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(10, 100),
+				Shards: []pb.TNShardInfo{
+					mockTnShardInfo(10, 100),
 				},
 			},
 			"working1": {
 				Tick: currTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(11, 101),
-					mockDnShardInfo(11, 102),
-					mockDnShardInfo(12, 103),
+				Shards: []pb.TNShardInfo{
+					mockTnShardInfo(11, 101),
+					mockTnShardInfo(11, 102),
+					mockTnShardInfo(12, 103),
 				},
 			},
 		},
 	}
 
-	require.Equal(t, 2, ParseDNShardReportedSize(11, dnState, hkcfg, currTick))
+	require.Equal(t, 2, ParseTNShardReportedSize(11, tnState, hkcfg, currTick))
 }
 
-func mockDNShardRecords(ids ...uint64) []metadata.DNShardRecord {
-	records := make([]metadata.DNShardRecord, 0, len(ids))
+func mockTNShardRecords(ids ...uint64) []metadata.TNShardRecord {
+	records := make([]metadata.TNShardRecord, 0, len(ids))
 	for _, id := range ids {
-		records = append(records, metadata.DNShardRecord{
+		records = append(records, metadata.TNShardRecord{
 			ShardID:    id,
 			LogShardID: id,
 		})
@@ -218,8 +218,8 @@ func mockLogShardRecords(ids ...uint64) []metadata.LogShardRecord {
 	return records
 }
 
-func mockDnShardInfo(shardID, replicaID uint64) pb.DNShardInfo {
-	return pb.DNShardInfo{
+func mockTnShardInfo(shardID, replicaID uint64) pb.TNShardInfo {
+	return pb.TNShardInfo{
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}

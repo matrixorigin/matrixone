@@ -49,7 +49,7 @@ const (
 // These Runtimes may only be created in main or integration test framework.
 //
 // Because most of our BVT tests and integration tests are run in a single mo-service
-// process, which runs multiple CN, DN and LOG services, the Runtime cannot be set as a
+// process, which runs multiple CN, TN and LOG services, the Runtime cannot be set as a
 // global variable, otherwise we would not be able to set a single Runtime for each service
 // and each component.
 //

@@ -2,8 +2,8 @@ logservices = [
     "./etc/launch-with-proxy/log.toml",
 ]
 
-dnservices = [
-    "./etc/launch-with-proxy/dn.toml"
+tnservices = [
+    "./etc/launch-with-proxy/tn.toml"
 ]
 
 cnservices = [
