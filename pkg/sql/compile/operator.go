@@ -389,10 +389,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Stream:
 		t := sourceIns.Arg.(*stream.Argument)
 		res.Arg = &stream.Argument{
-			TblDef:  t.TblDef,
-			Limit:   t.Limit,
-			Offset:  t.Offset,
-			Configs: t.Configs,
+			TblDef: t.TblDef,
+			Limit:  t.Limit,
+			Offset: t.Offset,
 		}
 	case vm.Connector:
 		ok := false

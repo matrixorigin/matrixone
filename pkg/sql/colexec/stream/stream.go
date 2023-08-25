@@ -16,9 +16,9 @@ package stream
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,7 +34,7 @@ func Prepare(proc *process.Process, arg any) error {
 	p := arg.(*Argument)
 	p.attrs = make([]string, len(p.TblDef.Cols))
 	p.types = make([]types.Type, len(p.TblDef.Cols))
-	p.Configs = make(map[string]interface{})
+	p.configs = make(map[string]interface{})
 	for i, col := range p.TblDef.Cols {
 		p.attrs[i] = col.Name
 		p.types[i] = types.Type{
@@ -47,7 +47,7 @@ func Prepare(proc *process.Process, arg any) error {
 		switch v := def.Def.(type) {
 		case *plan.TableDef_DefType_Properties:
 			for _, x := range v.Properties.Properties {
-				p.Configs[x.Key] = x.Value
+				p.configs[x.Key] = x.Value
 			}
 		}
 	}
@@ -56,15 +56,23 @@ func Prepare(proc *process.Process, arg any) error {
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	_, span := trace.Start(proc.Ctx, "StreamCall")
-	defer span.End()
-	p := arg.(*Argument)
-	b, err := mokafka.RetrieveData(proc.Ctx, p.Configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
-	if err != nil {
-		return process.ExecStop, err
-	}
+	return process.ExecStop, moerr.NewNYI(proc.Ctx, "stream scan operator")
+	//_, span := trace.Start(proc.Ctx, "StreamCall")
+	//defer span.End()
 
-	proc.SetInputBatch(b)
-	//todo: change to process.ExecNext
-	return process.ExecStop, nil
+	//p := arg.(*Argument)
+	//if p.end {
+	//	proc.SetInputBatch(nil)
+	//	return process.ExecStop, nil
+	//}
+	//
+	////TODO:
+	////b, err := RetrieveData(ctx, p.configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), NewKafkaAdapter)
+	////if err != nil {
+	////	return process.ExecStop, err
+	////}
+	//p.end = true
+	//proc.SetInputBatch(nil)
+	//
+	//return process.ExecStop, nil
 }

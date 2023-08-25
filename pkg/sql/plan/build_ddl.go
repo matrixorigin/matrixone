@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"strconv"
 	"strings"
 
@@ -143,7 +142,7 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 		Key:   catalog.SystemRelAttr_Kind,
 		Value: catalog.SystemStreamRel,
 	})
-	configs := make(map[string]interface{})
+	//configs := make(map[string]interface{})
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.CreateStreamWithOption:
@@ -153,12 +152,13 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 				Key:   key,
 				Value: val,
 			})
-			configs[key] = val
+			//configs[key] = val
 		}
 	}
-	if err := mokafka.ValidateConfig(context.Background(), configs, mokafka.NewKafkaAdapter); err != nil {
-		return nil, err
-	}
+	// TODO:
+	// if err := ValidateConfig(ctx, configs); err != nil {
+	//     return nil, err
+	// }
 	createStream.TableDef.Defs = append(createStream.TableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Properties{
 			Properties: &plan.PropertiesDef{
