@@ -426,6 +426,10 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 		return vector.MustFixedCol[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
 		return vec.GetStringAt(0), nil
+	case types.T_array_float32:
+		return vector.GetArrayAt[float32](vec, 0), nil
+	case types.T_array_float64:
+		return vector.GetArrayAt[float64](vec, 0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAt[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
