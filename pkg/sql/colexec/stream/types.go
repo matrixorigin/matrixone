@@ -28,7 +28,7 @@ type Argument struct {
 	//end     bool
 	attrs   []string
 	types   []types.Type
-	Configs map[string]interface{}
+	configs map[string]interface{}
 }
 
 func (arg *Argument) Free(*process.Process, bool) {}

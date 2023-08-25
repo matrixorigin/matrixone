@@ -93,7 +93,6 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
 			s.upgrade()
-			s.initMOConnectorMgr()
 		}
 	}
 }
