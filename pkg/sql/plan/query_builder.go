@@ -2726,8 +2726,48 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						}
 					}
 					// union all statement
+					var limitExpr *Expr
+					var offsetExpr *Expr
+					if s.Limit != nil {
+						limitBinder := NewLimitBinder(builder, ctx)
+						if s.Limit.Offset != nil {
+							offsetExpr, err = limitBinder.BindExpr(s.Limit.Offset, 0, true)
+							if err != nil {
+								return 0, err
+							}
+
+							if cExpr, ok := offsetExpr.Expr.(*plan.Expr_C); ok {
+								if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+									if c.I64Val < 0 {
+										return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
+									}
+								}
+							}
+						}
+						if s.Limit.Count != nil {
+							limitExpr, err = limitBinder.BindExpr(s.Limit.Count, 0, true)
+							if err != nil {
+								return 0, err
+							}
+
+							if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
+								if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+									if c.I64Val < 0 {
+										return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
+									}
+									ctx.hasSingleRow = c.I64Val == 1
+								}
+							}
+						}
+					}
+
 					sourceStep := builder.appendStep(recursiveLastNodeID)
 					nodeID = appendCTEScanNode(builder, ctx, sourceStep, initCtx.sinkTag)
+					if limitExpr != nil || offsetExpr != nil {
+						node := builder.qry.Nodes[nodeID]
+						node.Limit = limitExpr
+						node.Offset = offsetExpr
+					}
 					for i := 0; i < len(recursiveSteps)-1; i++ {
 						builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, recursiveSteps[i])
 					}
