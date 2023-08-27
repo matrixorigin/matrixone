@@ -15,7 +15,9 @@
 package types
 
 import (
+	"encoding/hex"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"reflect"
 	"testing"
 )
@@ -238,6 +240,136 @@ func TestStringToArray(t *testing.T) {
 				} else {
 					if !reflect.DeepEqual(gotErr, tt.wantErr) {
 						t.Errorf("StringToArray() = %v, want %v", gotErr, tt.wantErr)
+					}
+				}
+			}
+
+		})
+	}
+}
+
+func TestBlobToArray(t *testing.T) {
+	type args struct {
+		input []byte
+		typ   T
+	}
+	type testCase struct {
+		name       string
+		args       args
+		wantResF32 []float32
+		wantResF64 []float64
+		wantErr    error
+	}
+	tests := []testCase{
+		{
+			name:       "Test 1  - float32",
+			args:       args{input: util.UnsafeStringToBytes("7e98b23e9e10383b2f41133f"), typ: T_array_float32},
+			wantResF32: []float32{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669},
+		},
+		{
+			name:       "Test 2  - float64",
+			args:       args{input: util.UnsafeStringToBytes("000000c00f53d63f000000c01302673f000000e02568e23f"), typ: T_array_float64},
+			wantResF64: []float64{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669},
+		},
+		{
+			name:    "Test 3  - float64 error",
+			args:    args{input: util.UnsafeStringToBytes("lzzsdf"), typ: T_array_float64},
+			wantErr: hex.InvalidByteError(util.UnsafeStringToBytes("lzzsdf")[0]),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			if tt.wantResF32 != nil {
+				if gotRes, err := BlobToArray[float32](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
+					t.Errorf("BlobToArray() = %v, want %v", gotRes, tt.wantResF32)
+				}
+			}
+			if tt.wantResF64 != nil {
+				if gotRes, err := BlobToArray[float64](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
+					t.Errorf("BlobToArray() = %v, want %v", gotRes, tt.wantResF64)
+				}
+			}
+
+			if tt.wantErr != nil && tt.args.typ == T_array_float32 {
+				if _, gotErr := BlobToArray[float32](tt.args.input); gotErr == nil {
+					t.Errorf("BlobToArray() = %v, want %v", gotErr, tt.wantErr)
+				} else {
+					if !reflect.DeepEqual(gotErr, tt.wantErr) {
+						t.Errorf("BlobToArray() = %v, want %v", gotErr, tt.wantErr)
+					}
+				}
+			}
+
+			if tt.wantErr != nil && tt.args.typ == T_array_float64 {
+				if _, gotErr := BlobToArray[float64](tt.args.input); gotErr == nil {
+					t.Errorf("BlobToArray() = %v, want %v", gotErr, tt.wantErr)
+				} else {
+					if !reflect.DeepEqual(gotErr, tt.wantErr) {
+						t.Errorf("BlobToArray() = %v, want %v", gotErr, tt.wantErr)
+					}
+				}
+			}
+
+		})
+	}
+}
+
+func TestArrayToBlob(t *testing.T) {
+
+	type testCase struct {
+		name    string
+		typ     T
+		argsF32 []float32
+		argsF64 []float64
+		wantRes []byte
+		wantErr error
+	}
+	tests := []testCase{
+		{
+			name:    "Test 1  - float32",
+			typ:     T_array_float32,
+			argsF32: []float32{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669},
+			wantRes: util.UnsafeStringToBytes("7e98b23e9e10383b2f41133f"),
+		},
+		{
+			name:    "Test 2  - float64",
+			typ:     T_array_float32,
+			argsF64: []float64{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669},
+			wantRes: util.UnsafeStringToBytes("000000c00f53d63f000000c01302673f000000e02568e23f"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			if tt.argsF32 != nil {
+				if gotRes, err := ArrayToBlob[float32](tt.argsF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantRes) {
+					t.Errorf("ArrayToBlob() = %v, want %v", gotRes, tt.wantRes)
+				}
+			}
+			if tt.argsF64 != nil {
+				if gotRes, err := ArrayToBlob[float64](tt.argsF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantRes) {
+					//fmt.Println(util.UnsafeBytesToString(gotRes))
+					t.Errorf("ArrayToBlob() = %v, want %v", gotRes, tt.wantRes)
+				}
+			}
+
+			if tt.wantErr != nil && tt.typ == T_array_float32 {
+				if _, gotErr := ArrayToBlob[float32](tt.argsF32); gotErr == nil {
+					t.Errorf("ArrayToBlob() = %v, want %v", gotErr, tt.wantErr)
+				} else {
+					if !reflect.DeepEqual(gotErr, tt.wantErr) {
+						t.Errorf("ArrayToBlob() = %v, want %v", gotErr, tt.wantErr)
+					}
+				}
+			}
+
+			if tt.wantErr != nil && tt.typ == T_array_float64 {
+				if _, gotErr := ArrayToBlob[float64](tt.argsF64); gotErr == nil {
+					t.Errorf("ArrayToBlob() = %v, want %v", gotErr, tt.wantErr)
+				} else {
+					if !reflect.DeepEqual(gotErr, tt.wantErr) {
+						t.Errorf("ArrayToBlob() = %v, want %v", gotErr, tt.wantErr)
 					}
 				}
 			}
