@@ -17,6 +17,7 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 )
@@ -30,6 +31,7 @@ func plusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -46,6 +48,7 @@ func minusOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
 	case types.T_date, types.T_datetime:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -61,6 +64,7 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -74,6 +78,7 @@ func divOperatorSupports(typ1, typ2 types.Type) bool {
 	switch typ1.Oid {
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -160,6 +165,11 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 			r, _, err := v1.Add(v2, scale1, scale2)
 			return r, err
 		})
+
+	case types.T_array_float32:
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32])
+	case types.T_array_float64:
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float64])
 	}
 	panic("unreached code")
 }
@@ -225,6 +235,10 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, int64](parameters, result, proc, length, func(v1, v2 types.Datetime) int64 {
 			return v1.DatetimeMinusWithSecond(v2)
 		})
+	case types.T_array_float32:
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float32])
+	case types.T_array_float64:
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, minusFnArray[float64])
 	}
 	panic("unreached code")
 }
@@ -282,6 +296,11 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			r, _, err := v1.Mul(v2, scale1, scale2)
 			return r, err
 		})
+
+	case types.T_array_float32:
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32])
+	case types.T_array_float64:
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float64])
 	}
 	panic("unreached code")
 }
@@ -307,6 +326,10 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 			r, _, err := v1.Div(v2, scale1, scale2)
 			return r, err
 		})
+	case types.T_array_float32:
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32])
+	case types.T_array_float64:
+		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float64])
 	}
 	panic("unreached code")
 }
@@ -381,4 +404,56 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		})
 	}
 	panic("unreached code")
+}
+
+func plusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
+
+	_v1 := types.BytesToArray[T](v1)
+	_v2 := types.BytesToArray[T](v2)
+
+	r, err := moarray.Add(_v1, _v2)
+	if err != nil {
+		return nil, err
+	}
+
+	return types.ArrayToBytes[T](r), nil
+}
+
+func minusFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
+
+	_v1 := types.BytesToArray[T](v1)
+	_v2 := types.BytesToArray[T](v2)
+
+	r, err := moarray.Subtract(_v1, _v2)
+	if err != nil {
+		return nil, err
+	}
+
+	return types.ArrayToBytes[T](r), nil
+}
+
+func multiFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
+
+	_v1 := types.BytesToArray[T](v1)
+	_v2 := types.BytesToArray[T](v2)
+
+	r, err := moarray.Multiply(_v1, _v2)
+	if err != nil {
+		return nil, err
+	}
+
+	return types.ArrayToBytes[T](r), nil
+}
+
+func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
+
+	_v1 := types.BytesToArray[T](v1)
+	_v2 := types.BytesToArray[T](v2)
+
+	r, err := moarray.Divide(_v1, _v2)
+	if err != nil {
+		return nil, err
+	}
+
+	return types.ArrayToBytes[T](r), nil
 }
