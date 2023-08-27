@@ -308,10 +308,20 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				DatabaseId: item.DatabaseId,
 				Name:       item.Name,
 			}
-			cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
-				Version: math.MaxUint32,
-				Ts:      &item.Ts,
-			})
+
+			oldVersion := cc.tables.tableGuard.getSchemaVersion(key)
+
+			if oldVersion != nil && oldVersion.TableId != item.Id {
+				// drop old table for alter table stmt
+				oldVersion.Version = math.MaxUint32
+				cc.tables.tableGuard.setSchemaVersion(key, oldVersion)
+			} else {
+				// normal drop table stmt
+				cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+					Version: math.MaxUint32,
+					Ts:      &item.Ts,
+				})
+			}
 		}
 	}
 }
@@ -396,6 +406,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 			cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
 				Version: math.MaxUint32,
 				Ts:      &item.Ts,
+				TableId: item.Id,
 			})
 		}
 
@@ -404,9 +415,11 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 			DatabaseId: item.DatabaseId,
 			Name:       item.Name,
 		}
+
 		cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
 			Version: item.Version,
 			Ts:      &item.Ts,
+			TableId: item.Id,
 		})
 		cc.tables.addTableItem(item)
 		cc.tables.rowidIndex.Set(item)

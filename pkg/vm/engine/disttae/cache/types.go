@@ -43,6 +43,7 @@ type TableKey struct {
 type TableVersion struct {
 	Version uint32
 	Ts      *timestamp.Timestamp
+	TableId uint64
 }
 
 // catalog cache
