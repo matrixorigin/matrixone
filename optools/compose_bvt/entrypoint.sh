@@ -26,7 +26,6 @@ function run_bvt() {
       i=$(($i+1))
       sleep 1
     done
-    echo "qinshuqi"
     cd /mo-tester && ./run.sh -n -g -p /matrixone/test/distributed/cases/ -s /matrixone/test/distributed/resources/ -e optimistic 2>&1
 }
 

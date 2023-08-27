@@ -90,7 +90,7 @@ jobs:
           echo '${{ needs.docker_image_build.outputs.version }}'
           cd $GITHUB_WORKSPACE/matrixone
           sed -i 's/nsformocheckin/mo-checkin-regression-${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
-          sed -i 's/s3pathformocheckin/mo-checkin-regression\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
+          sed -i 's/s3pathformocheckin/merge-run-test\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
           sed -i "s/imagetag/${{ needs.docker_image_build.outputs.version }}/g" $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
           cat $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
       - name: Clean EKS ENV
