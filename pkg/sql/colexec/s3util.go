@@ -475,6 +475,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 			merge = NewMerge(len(w.Bats), sort.NewUuidCompLess(), getFixedCols[types.Uuid](w.Bats, pos), nulls)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[string](), getStrCols(w.Bats, pos), nulls)
+			//TODO: check if we need T_array here? T_json is missing here.
 		}
 		if _, err := w.generateWriter(proc); err != nil {
 			return err

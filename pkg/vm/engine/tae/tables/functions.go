@@ -58,6 +58,9 @@ var dedupNABlkFunctions = map[types.T]any{
 	types.T_varbinary: dedupNABlkBytesFunc,
 	types.T_json:      dedupNABlkBytesFunc,
 	types.T_text:      dedupNABlkBytesFunc,
+
+	types.T_array_float32: dedupNABlkBytesFunc,
+	types.T_array_float64: dedupNABlkBytesFunc,
 }
 
 var dedupAlkFunctions = map[types.T]any{
@@ -92,6 +95,9 @@ var dedupAlkFunctions = map[types.T]any{
 	types.T_varbinary: dedupABlkBytesFunc,
 	types.T_json:      dedupABlkBytesFunc,
 	types.T_text:      dedupABlkBytesFunc,
+
+	types.T_array_float32: dedupABlkBytesFunc,
+	types.T_array_float64: dedupABlkBytesFunc,
 }
 
 func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *nulls.Bitmap, def *catalog.ColDef) {
