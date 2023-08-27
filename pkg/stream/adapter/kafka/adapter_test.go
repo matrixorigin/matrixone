@@ -18,12 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/schemaregistry"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
+
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

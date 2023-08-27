@@ -20,12 +20,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/confluentinc/confluent-kafka-go/schemaregistry"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/jhump/protoreflect/desc"

@@ -17,7 +17,8 @@ package moconnector
 import (
 	"context"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
