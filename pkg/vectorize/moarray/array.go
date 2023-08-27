@@ -76,22 +76,22 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	return r, nil
 }
 
+// Compare the l2_norm between 2 ARRAY's. This is more accurate than element wise comparison because
+//  1. there won't be dimension mismatch issue
+//  2. the float32[i] value in ARRAY/VECTOR is always going to have some subtle difference between v1 and v2,
+//     resulting in full element wise comparison of v1 and v2.
+//  3. l2_norm comparison helps in ordering ARRAYs by nearness on the cartesian plane.
 func Compare[T types.RealNumbers](v1, v2 []T) int {
-	if len(v1) != len(v2) {
-		// NOTE: We will not compare Arrays with different dimension.
-		// panic is fine here as Compare is used in many places, which does not use err.
-		panic(moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2)))
+	a, _ := L2Norm[T](v1) // you can ignore the l2_norm error.
+	b, _ := L2Norm[T](v2)
+
+	if a == b {
+		return 0
 	}
-	for i := 0; i < len(v1); i++ {
-		if v1[i] == v2[i] {
-			continue
-		} else if v1[i] > v2[i] {
-			return +1
-		} else {
-			return -1
-		}
+	if a < b {
+		return -1
 	}
-	return 0
+	return +1
 }
 
 func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O) {
@@ -156,6 +156,8 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	return sum, nil
 }
 
+// L1Norm returns l1 distance to origin.
+// The only time, this could throw error is when T= int8 (v is -128)
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 
@@ -174,6 +176,9 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 	return sum, nil
 }
 
+// L2Norm returns l2 distance to origin.
+// You can ignore the error as math.sqrt will not throw -ve error since,
+// sum is always +ve due to sum(pow(v,2)).
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 
