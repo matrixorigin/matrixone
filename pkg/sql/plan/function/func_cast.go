@@ -287,6 +287,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_text: {
@@ -328,9 +329,11 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_array_float32: {
 		types.T_array_float32, types.T_array_float64,
+		types.T_blob,
 	},
 	types.T_array_float64: {
 		types.T_array_float32, types.T_array_float64,
+		types.T_blob,
 	},
 }
 
@@ -1414,6 +1417,25 @@ func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	ctx := proc.Ctx
+
+	fromType := source.GetType()
+	if fromType.Oid == types.T_blob {
+		// For handling BLOB to ARRAY casting.
+		// This is used for VECTOR FAST/BINARY IO.
+		switch toType.Oid {
+		case types.T_array_float32:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[float32](proc.Ctx, source, rs, length, toType)
+		case types.T_array_float64:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[float64](proc.Ctx, source, rs, length, toType)
+			// NOTE 1: don't add `switch default` and panic here. If `T_blob` to `ARRAY` is not required,
+			// then continue to the `str` to `Other` code.
+			// NOTE 2: don't create a switch T_blob case in NewCast() as
+			// we only want to handle blob-->ARRAY condition separately and
+			// rest of the flow is similar to str --> Other.
+		}
+	}
 	switch toType.Oid {
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
@@ -3898,6 +3920,9 @@ func strToStr(
 			}
 		}
 	} else {
+		// VARCHAR to BLOB path. ie CAST("binary_data_from_numpy" as BLOB).
+		// This has zero cost.
+		// NOTE: numpy data is converted to hex encoding before sending it to mo.
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
@@ -3941,6 +3966,40 @@ func strToArray[T types.RealNumbers](
 	return nil
 }
 
+func blobToArray[T types.RealNumbers](
+	_ context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
+
+	toType := to.GetType()
+
+	var i uint64
+	var l = uint64(length)
+	for i = 0; i < l; i++ {
+
+		v, null := from.GetStrValue(i)
+		if null || len(v) == 0 {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			arr, err := types.BlobToArray[T](v)
+			if err != nil {
+				return err
+			}
+
+			if int(toType.Width) != len(arr) {
+				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
+			}
+
+			if err = to.AppendBytes(types.ArrayToBytes[T](arr), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -3957,12 +4016,17 @@ func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 			continue
 		}
 
+		if to.GetType().Width != from.GetType().Width {
+			return moerr.NewArrayDefMismatchNoCtx(int(to.GetType().Width), int(from.GetType().Width))
+		}
+
 		if from.GetType().Oid == to.GetType().Oid {
-			// If Array types are same, then we don't need casting.
+			// Eg:- VECF32(3) --> VECF32(3)
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
 		} else {
+			// Eg:- VECF32(3) --> VECF64(3)
 			_v := types.BytesToArray[I](v)
 			cast := moarray.Cast[I, O](_v)
 			bytes := types.ArrayToBytes[O](cast)
