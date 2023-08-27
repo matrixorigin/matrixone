@@ -16,8 +16,10 @@ package types
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"strings"
 )
@@ -29,6 +31,7 @@ const (
 	MaxArrayDimension = 65536
 )
 
+// BytesToArray bytes should be of little-endian format
 func BytesToArray[T RealNumbers](input []byte) (res []T) {
 	return DecodeSlice[T](input)
 }
@@ -109,4 +112,17 @@ func BytesToArrayToString[T RealNumbers](input []byte) string {
 
 	// Convert []float32{1.0, 2.0, 3.0} --> "[1,2,3]"
 	return ArrayToString[T](a)
+}
+
+func BlobToArray[T RealNumbers](input []byte) ([]T, error) {
+	bytearray, err := hex.DecodeString(util.UnsafeBytesToString(input))
+	if err != nil {
+		return nil, err
+	}
+	return BytesToArray[T](bytearray), nil
+}
+
+func ArrayToBlob[T RealNumbers](input []T) ([]byte, error) {
+	hexEncoding := hex.EncodeToString(ArrayToBytes[T](input))
+	return util.UnsafeStringToBytes(hexEncoding), nil
 }
