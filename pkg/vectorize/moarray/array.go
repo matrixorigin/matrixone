@@ -20,10 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 )
 
-const (
-	DimensionMismatchErrMsg = "dimension mismatch. %v != %v"
-)
-
 //TODO: Check on optimization.
 // 1. Should we return []T or *[]T
 // 2. Should we accept v1 *[]T. v1 is a Slice, so I think, it should be pass by reference.
@@ -31,7 +27,7 @@ const (
 
 func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -43,7 +39,7 @@ func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -55,7 +51,7 @@ func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -67,7 +63,7 @@ func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -145,7 +141,7 @@ func Summation[T types.RealNumbers](v []T) float64 {
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	if len(v1) != len(v2) {
-		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
 	n := len(v1)
@@ -195,7 +191,7 @@ func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float32, error) {
 
 	if len(v1) != len(v2) {
-		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
 	a, err := InnerProduct[T](v1, v2)
