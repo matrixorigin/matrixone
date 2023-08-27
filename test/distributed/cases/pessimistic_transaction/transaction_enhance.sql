@@ -388,6 +388,7 @@ use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
+commit;
 insert into alter01 values (6,"h");
 select * from alter01;
 
