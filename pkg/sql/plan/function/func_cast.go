@@ -1526,6 +1526,8 @@ func arrayTypeToOthers(proc *process.Process,
 			return ArrayToArray[float32, float32](proc.Ctx, source, rs, length, toType)
 		case types.T_array_float64:
 			return ArrayToArray[float32, float64](proc.Ctx, source, rs, length, toType)
+		case types.T_blob:
+			return ArrayToBlob[float32](proc.Ctx, source, rs, length, toType)
 		}
 	case types.T_array_float64:
 		switch toType.Oid {
@@ -1533,6 +1535,8 @@ func arrayTypeToOthers(proc *process.Process,
 			return ArrayToArray[float64, float32](proc.Ctx, source, rs, length, toType)
 		case types.T_array_float64:
 			return ArrayToArray[float64, float64](proc.Ctx, source, rs, length, toType)
+		case types.T_blob:
+			return ArrayToBlob[float64](proc.Ctx, source, rs, length, toType)
 		}
 	}
 
@@ -4035,6 +4039,34 @@ func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 			}
 		}
 
+	}
+	return nil
+}
+
+func ArrayToBlob[T types.RealNumbers](
+	_ context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
+
+	var i uint64
+	var l = uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetStrValue(i)
+		if null || len(v) == 0 {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			_v := types.BytesToArray[T](v)
+			b, err := types.ArrayToBlob[T](_v)
+			// NOTE: we need not check this condition len(b) < T_blob.Width as Blob has no width limit.
+			if err != nil {
+				return err
+			}
+			if err = to.AppendBytes(b, false); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
