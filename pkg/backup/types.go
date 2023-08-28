@@ -31,6 +31,8 @@ const (
 	moMeta       = "mo_meta"
 	configDir    = "config"
 	taeDir       = "tae"
+	taeList      = "tae_list"
+	taeSize      = "tae_size"
 	hakeeperDir  = "hakeeper"
 	HakeeperFile = "hk_data"
 )
@@ -228,4 +230,28 @@ type pathConfig struct {
 	forETL bool
 	s3Config
 	filesystemConfig
+}
+
+type taeFile struct {
+	path string
+	size int64
+}
+
+func (tfs *taeFile) String() string {
+	line := tfs.CsvString()
+	return strings.Join(line, ",")
+}
+
+func (tfs *taeFile) CsvString() []string {
+	return []string{tfs.path, fmt.Sprintf("%d", tfs.size)}
+}
+
+func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
+	lines := make([][]string, 0, len(files))
+	ret := int64(0)
+	for _, file := range files {
+		lines = append(lines, file.CsvString())
+		ret += file.size
+	}
+	return lines, ret
 }

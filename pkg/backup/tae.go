@@ -129,6 +129,9 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			}
 		}
 	}
+
+	// record files
+	taeFileList := make([]*taeFile, 0, len(files))
 	for _, dentry := range files {
 		if dentry.IsDir {
 			panic("not support dir")
@@ -143,34 +146,51 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			}
 
 		}
+		taeFileList = append(taeFileList, &taeFile{
+			path: dentry.Name,
+			size: dentry.Size,
+		})
 	}
 
-	err := CopyDir(ctx, srcFs, dstFs, "ckp")
+	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp")
 	if err != nil {
 		return err
 	}
-	err = CopyDir(ctx, srcFs, dstFs, "gc")
+	taeFileList = append(taeFileList, sizeList...)
+	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc")
+	if err != nil {
+		return err
+	}
+	taeFileList = append(taeFileList, sizeList...)
+	//save tae files size
+	err = saveTaeFilesList(ctx, dstFs, taeFileList)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string) error {
+func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string) ([]*taeFile, error) {
 	files, err := srcFs.List(ctx, dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	taeFileList := make([]*taeFile, 0, len(files))
 	for _, file := range files {
 		if file.IsDir {
 			panic("not support dir")
 		}
 		err = CopyFile(ctx, srcFs, dstFs, &file, dir)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		taeFileList = append(taeFileList, &taeFile{
+			//TODO: add dir prefix
+			path: file.Name,
+			size: file.Size,
+		})
 	}
-	return nil
+	return taeFileList, nil
 }
 
 func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry *fileservice.DirEntry, dstDir string) error {

@@ -16,6 +16,7 @@ package backup
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/csv"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -166,4 +167,21 @@ func ToCsvLine2(s [][]string) (string, error) {
 
 	writer.Flush()
 	return ss.String(), nil
+}
+
+func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile) error {
+	lines, size := taeFileListToCsv(taeFiles)
+	metas, err := ToCsvLine2(lines)
+	if err != nil {
+		return err
+	}
+	//save tae files list
+	err = writeFile(ctx, Fs, taeList, []byte(metas))
+	if err != nil {
+		return err
+	}
+	//save tae files size
+	var temp [8]byte
+	binary.BigEndian.PutUint64(temp[:], uint64(size))
+	return writeFile(ctx, Fs, taeSize, temp[:])
 }

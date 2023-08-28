@@ -35,6 +35,8 @@
 /cmd/generate-config @daviszhen
 /cmd/mo-service @zhangxu19830126
 
+/pkg/backup @daviszhen @LeftHandCold @qingxinhome
+
 # subdirectory of pkg
 # pkg/catalog
 /pkg/catalog @nnsgmsone
