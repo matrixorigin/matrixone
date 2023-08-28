@@ -42,7 +42,7 @@ jobs:
           asset_content_type: application/zip
   
   linux-arm64-build-job:
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     steps:
       - name: Checkout source
         uses: actions/checkout@v3     

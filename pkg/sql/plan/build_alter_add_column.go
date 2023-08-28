@@ -189,6 +189,12 @@ func checkAddColumnType(ctx context.Context, colType *plan.Type, columnName stri
 			return moerr.NewInvalidInput(ctx, "string width (%d) is too long", colType.GetWidth())
 		}
 	}
+
+	if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
+		if colType.GetWidth() > types.MaxArrayDimension {
+			return moerr.NewInvalidInput(ctx, "vector width (%d) is too long", colType.GetWidth())
+		}
+	}
 	return nil
 }
 

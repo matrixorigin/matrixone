@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 	"math"
@@ -2445,4 +2446,21 @@ func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 		return "", true
 	}
 	return strSlice[cnt-1], false
+}
+
+func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+
+		return moarray.InnerProduct[T](_v1, _v2)
+	})
+}
+
+func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float32](ivecs, result, proc, length, func(v1, v2 []byte) (out float32, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.CosineSimilarity[T](_v1, _v2)
+	})
 }

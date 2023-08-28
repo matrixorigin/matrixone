@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"go.uber.org/zap"
@@ -68,9 +67,6 @@ type Catalog struct {
 	link      *common.GenericSortedDList[*DBEntry]
 
 	nodesMu sync.RWMutex
-
-	tableCnt  atomic.Int32
-	columnCnt atomic.Int32
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -893,26 +889,6 @@ func (catalog *Catalog) CoarseDBCnt() int {
 	return len(catalog.entries)
 }
 
-func (catalog *Catalog) CoarseTableCnt() int {
-	return int(catalog.tableCnt.Load())
-}
-
-func (catalog *Catalog) CoarseColumnCnt() int {
-	return int(catalog.columnCnt.Load())
-}
-
-func (catalog *Catalog) AddTableCnt(cnt int) {
-	if catalog.tableCnt.Add(int32(cnt)) < 0 {
-		panic("logic error")
-	}
-}
-
-func (catalog *Catalog) AddColumnCnt(cnt int) {
-	if catalog.columnCnt.Add(int32(cnt)) < 0 {
-		panic("logic error")
-	}
-}
-
 func (catalog *Catalog) GetItemNodeByIDLocked(id uint64) *common.GenericDLNode[*DBEntry] {
 	return catalog.entries[id]
 }
@@ -1062,11 +1038,11 @@ func (catalog *Catalog) DropDBEntry(
 		err = moerr.NewTAEErrorNoCtx("not permitted")
 		return
 	}
-	dn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
+	tn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}
-	entry := dn.GetPayload()
+	entry := tn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
 	if newEntry, err = entry.DropEntryLocked(txn); err == nil {

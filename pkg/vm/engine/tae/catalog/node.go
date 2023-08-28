@@ -135,7 +135,7 @@ func (n *nodeList[T]) GetNode() *common.GenericDLNode[T] {
 // 8. Txn4 can still find "tb1"
 // 9. Txn5 start and cannot find "tb1"
 func (n *nodeList[T]) TxnGetNodeLocked(txn txnif.TxnReader, targetName string) (
-	dn *common.GenericDLNode[T], err error) {
+	tn *common.GenericDLNode[T], err error) {
 	fn := func(nn *nameNode[T]) bool {
 		dlNode := nn.GetNode()
 		visible, dropped, visibleName := n.visibilityFn(dlNode, txn)
@@ -149,11 +149,11 @@ func (n *nodeList[T]) TxnGetNodeLocked(txn txnif.TxnReader, targetName string) (
 		if targetName != visibleName {
 			return true
 		}
-		dn = dlNode
+		tn = dlNode
 		return false
 	}
 	n.ForEachNodes(fn)
-	if dn == nil && err == nil {
+	if tn == nil && err == nil {
 		err = moerr.GetOkExpectedEOB()
 	}
 	return

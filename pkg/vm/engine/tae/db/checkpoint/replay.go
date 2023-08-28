@@ -94,7 +94,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		if bats[0].Vecs[i].Length() == 0 {
 			vec = containers.MakeVector(colTypes[i])
 		} else {
-			vec = containers.ToDNVector(bats[0].Vecs[i])
+			vec = containers.ToTNVector(bats[0].Vecs[i])
 		}
 		bat.AddVector(colNames[i], vec)
 	}
@@ -120,17 +120,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		} else {
 			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
 		}
-		var dnLoc objectio.Location
+		var tnLoc objectio.Location
 		if version <= logtail.CheckpointVersion4 {
-			dnLoc = cnLoc
+			tnLoc = cnLoc
 		} else {
-			dnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
+			tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
 		}
 		checkpointEntry := &CheckpointEntry{
 			start:      start,
 			end:        end,
 			cnLocation: cnLoc,
-			dnLocation: dnLoc,
+			tnLocation: tnLoc,
 			state:      ST_Finished,
 			entryType:  typ,
 			version:    version,

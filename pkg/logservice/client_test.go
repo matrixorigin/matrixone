@@ -41,7 +41,7 @@ var getClientConfig = func(readOnly bool) ClientConfig {
 	return ClientConfig{
 		ReadOnly:         readOnly,
 		LogShardID:       1,
-		DNReplicaID:      2,
+		TNReplicaID:      2,
 		ServiceAddresses: []string{testServiceAddress},
 		MaxMessageSize:   defaultMaxMessageSize,
 	}
@@ -161,7 +161,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 
 	scfg := ClientConfig{
 		LogShardID:       1,
-		DNReplicaID:      2,
+		TNReplicaID:      2,
 		ServiceAddresses: []string{"localhost:53032"}, // unreachable
 		DiscoveryAddress: testServiceAddress,
 	}
@@ -229,7 +229,7 @@ func TestClientAppend(t *testing.T) {
 		assert.Equal(t, uint64(5), lsn)
 
 		cmd := make([]byte, 16+headerSize+8)
-		cmd = getAppendCmd(cmd, cfg.DNReplicaID+1)
+		cmd = getAppendCmd(cmd, cfg.TNReplicaID+1)
 		_, err = c.Append(ctx, pb.LogRecord{Data: cmd})
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
 	}
@@ -322,7 +322,7 @@ func TestClientSendWithMsgSize(t *testing.T) {
 		return ClientConfig{
 			ReadOnly:         readOnly,
 			LogShardID:       1,
-			DNReplicaID:      2,
+			TNReplicaID:      2,
 			ServiceAddresses: []string{testServiceAddress},
 			MaxMessageSize:   testServerMaxMsgSize,
 		}
