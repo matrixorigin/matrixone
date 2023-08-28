@@ -180,7 +180,7 @@ func (txn *activeTxn) clearBlocked(txnID []byte, w *waiter) {
 			ws = append(ws, v)
 		}
 	}
-	txn.blockedWaiters = txn.blockedWaiters[:0]
+	txn.blockedWaiters = ws
 }
 
 func (txn *activeTxn) setBlocked(txnID []byte, w *waiter) {
