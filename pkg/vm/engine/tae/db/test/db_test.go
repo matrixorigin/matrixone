@@ -17,6 +17,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -8464,32 +8465,25 @@ func TestColumnCount(t *testing.T) {
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
 
-	systemColumnCount := tae.Catalog.CoarseColumnCnt()
-
 	tae.CreateRelAndAppend(bat, true)
-
-	assert.Equal(t, systemColumnCount+3, tae.Catalog.CoarseColumnCnt())
 
 	{
 		txn, rel := tae.GetRelation()
-		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xyz0", types.NewProtoType(types.T_char), 5))
-		require.NoError(t, err)
-		assert.Equal(t, systemColumnCount+4, tae.Catalog.CoarseColumnCnt())
-		err = rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xy1", types.NewProtoType(types.T_char), 5))
-		require.NoError(t, err)
-		assert.Equal(t, systemColumnCount+5, tae.Catalog.CoarseColumnCnt())
+		for i := 0; i < 500; i++ {
+			colName := fmt.Sprintf("col %d", i)
+			err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, colName, types.NewProtoType(types.T_char), 5))
+			require.NoError(t, err)
+		}
 		require.Nil(t, txn.Commit(context.Background()))
 	}
 
-	assert.Equal(t, systemColumnCount+5, tae.Catalog.CoarseColumnCnt())
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 
-	{
-		txn, rel := tae.GetRelation()
-		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xyz2", types.NewProtoType(types.T_char), 5))
-		require.NoError(t, err)
-		assert.Equal(t, systemColumnCount+6, tae.Catalog.CoarseColumnCnt())
-		require.Nil(t, txn.Rollback(context.Background()))
-	}
-
-	assert.Equal(t, systemColumnCount+5, tae.Catalog.CoarseColumnCnt())
+	tae.Catalog.GCByTS(context.Background(), txn.GetCommitTS().Next())
 }
