@@ -67,6 +67,15 @@ insert into t4 values(1, "[1,2]", "[1,2]");
 insert into t4 values(1, "[1,2,3,4,5,6]", "[1,2,3,4,5,6]");
 select * from t4;
 
+-- insert vector as binary
+create table t5(a int, b vecf32(3));
+insert into t5 values(1, (cast( cast('7e98b23e9e10383b2f41133f' as BLOB) as vecf32(3))) );
+insert into t5 values(2, (cast( cast('0363733ff13e0b3f7aa39d3e' as BLOB) as vecf32(3))) );
+insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as BLOB) as vecf32(3))) );
+insert into t5 values(4, "[0,2,3]");
+select * from t5;
+select * from t5 where t5.b > "[0,0,0]";
+
 -- insert, flush and select
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
 insert into vec_table values(3, "[1,3,3]", "[4,1,6]");
