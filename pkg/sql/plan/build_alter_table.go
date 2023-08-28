@@ -504,10 +504,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
 	}
 
-	if tableDef.ClusterBy != nil {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table for cluster table")
-	}
-
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 	}
