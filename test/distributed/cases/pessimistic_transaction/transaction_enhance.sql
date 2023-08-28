@@ -184,7 +184,9 @@ begin;
 alter table atomic_table_12_5 drop index key1;
 -- @session:id=1{
 use transaction_enhance;
+-- @bvt:issue#11334
 show create table atomic_table_12_5;
+-- @bvt:issue
 select * from atomic_table_12_5;
 -- @session}
 commit;
