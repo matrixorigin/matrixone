@@ -137,7 +137,6 @@ insert into atomic_table_13 values (6,"h");
 commit;
 show create table atomic_table_13;
 
--- @bvt:issue#11213
 drop table if exists atomic_table_12_3;
 drop table if exists atomic_table_13;
 create table atomic_table_12_3(c1 int primary key,c2 varchar(25));
@@ -173,7 +172,6 @@ select * from atomic_table_13;
 -- @session}
 rollback ;
 show create table atomic_table_13;
--- @bvt:issue
 
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
@@ -390,6 +388,7 @@ use transaction_enhance;
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
+commit;
 insert into alter01 values (6,"h");
 select * from alter01;
 
