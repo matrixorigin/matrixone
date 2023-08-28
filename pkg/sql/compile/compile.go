@@ -1264,7 +1264,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := c.newMergeScope(ss)
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers),
+			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
 		})
 
 		return []*Scope{rs}, nil

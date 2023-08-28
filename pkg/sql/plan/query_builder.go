@@ -2761,21 +2761,23 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						}
 					}
 
-					sourceStep := builder.appendStep(recursiveLastNodeID)
-					nodeID = appendCTEScanNode(builder, ctx, sourceStep, initCtx.sinkTag)
+					_ = builder.appendStep(recursiveLastNodeID)
+					nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
 					if limitExpr != nil || offsetExpr != nil {
 						node := builder.qry.Nodes[nodeID]
 						node.Limit = limitExpr
 						node.Offset = offsetExpr
 					}
-					for i := 0; i < len(recursiveSteps)-1; i++ {
+					for i := 0; i < len(recursiveSteps); i++ {
 						builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, recursiveSteps[i])
 					}
 					curStep := int32(len(builder.qry.Steps))
 					for _, id := range recursiveNodeIDs {
-						builder.qry.Nodes[id].SourceStep = append(builder.qry.Nodes[id].SourceStep, curStep)
+						// builder.qry.Nodes[id].SourceStep = append(builder.qry.Nodes[id].SourceStep, curStep)
+						builder.qry.Nodes[id].SourceStep[0] = curStep
 					}
 					unionAllLastNodeID := appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
+					builder.qry.Nodes[unionAllLastNodeID].RecursiveSink = true
 
 					// final statement
 					ctx.finalSelect = true
@@ -2784,9 +2786,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					if err != nil {
 						return
 					}
-					sourceStep = builder.appendStep(unionAllLastNodeID)
+					sourceStep := builder.appendStep(unionAllLastNodeID)
 					nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
-					builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, initSourceStep)
+					// builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, initSourceStep)
 				}
 
 				break
