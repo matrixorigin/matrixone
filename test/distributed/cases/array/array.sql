@@ -69,23 +69,23 @@ select * from t4;
 
 -- insert vector as binary
 create table t5(a int, b vecf32(3));
-insert into t5 values(1, (cast( cast('7e98b23e9e10383b2f41133f' as BLOB) as vecf32(3))) );
-insert into t5 values(2, (cast( cast('0363733ff13e0b3f7aa39d3e' as BLOB) as vecf32(3))) );
-insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as BLOB) as vecf32(3))) );
+insert into t5 values(1, (cast( cast('7e98b23e9e10383b2f41133f' as TEXT) as vecf32(3))) );
+insert into t5 values(2, (cast( cast('0363733ff13e0b3f7aa39d3e' as TEXT) as vecf32(3))) );
+insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as TEXT) as vecf32(3))) );
 
 insert into t5 values(4, "[0,2,3]");
 
-insert into t5 values(5, (cast( cast('05486c3f3ee2863e713d503dd58e8e3e7b88743f' as BLOB) as vecf32(3))) ); -- be1... is float32[5]
-insert into t5 values(6, (cast( cast('9be2123fcf92de3e' as BLOB) as vecf32(3))) ); -- be1... is float32[2]
+insert into t5 values(5, (cast( cast('05486c3f3ee2863e713d503dd58e8e3e7b88743f' as TEXT) as vecf32(3))) ); -- be1... is float32[5]
+insert into t5 values(6, (cast( cast('9be2123fcf92de3e' as TEXT) as vecf32(3))) ); -- be1... is float32[2]
 
-insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as BLOB) as vecf32(5))) );
-insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as BLOB) as vecf32(2))) );
+insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as TEXT) as vecf32(5))) );
+insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as TEXT) as vecf32(2))) );
 
 select * from t5;
 select * from t5 where t5.b > "[0,0,0]";
 
 -- output vector as binary (the output is little endian hex encoding)
-select cast(b as BLOB) from t5;
+select cast(b as TEXT) from t5;
 
 -- insert, flush and select
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");

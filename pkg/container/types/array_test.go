@@ -248,7 +248,7 @@ func TestStringToArray(t *testing.T) {
 	}
 }
 
-func TestBlobToArray(t *testing.T) {
+func TestHexEncodingToArray(t *testing.T) {
 	type args struct {
 		input []byte
 		typ   T
@@ -296,32 +296,32 @@ func TestBlobToArray(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.wantResF32 != nil {
-				if gotRes, err := BlobToArray[float32](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
-					t.Errorf("BlobToArray() = %v, want %v", gotRes, tt.wantResF32)
+				if gotRes, err := HexEncodingToArray[float32](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF32) {
+					t.Errorf("HexEncodingToArray() = %v, want %v", gotRes, tt.wantResF32)
 				}
 			}
 			if tt.wantResF64 != nil {
-				if gotRes, err := BlobToArray[float64](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
-					t.Errorf("BlobToArray() = %v, want %v", gotRes, tt.wantResF64)
+				if gotRes, err := HexEncodingToArray[float64](tt.args.input); err != nil || !reflect.DeepEqual(gotRes, tt.wantResF64) {
+					t.Errorf("HexEncodingToArray() = %v, want %v", gotRes, tt.wantResF64)
 				}
 			}
 
 			if tt.wantErr != nil && tt.args.typ == T_array_float32 {
-				if _, gotErr := BlobToArray[float32](tt.args.input); gotErr == nil {
-					t.Errorf("BlobToArray() = %v, want %v", gotErr, tt.wantErr)
+				if _, gotErr := HexEncodingToArray[float32](tt.args.input); gotErr == nil {
+					t.Errorf("HexEncodingToArray() = %v, want %v", gotErr, tt.wantErr)
 				} else {
 					if !reflect.DeepEqual(gotErr, tt.wantErr) {
-						t.Errorf("BlobToArray() = %v, want %v", gotErr, tt.wantErr)
+						t.Errorf("HexEncodingToArray() = %v, want %v", gotErr, tt.wantErr)
 					}
 				}
 			}
 
 			if tt.wantErr != nil && tt.args.typ == T_array_float64 {
-				if _, gotErr := BlobToArray[float64](tt.args.input); gotErr == nil {
-					t.Errorf("BlobToArray() = %v, want %v", gotErr, tt.wantErr)
+				if _, gotErr := HexEncodingToArray[float64](tt.args.input); gotErr == nil {
+					t.Errorf("HexEncodingToArray() = %v, want %v", gotErr, tt.wantErr)
 				} else {
 					if !reflect.DeepEqual(gotErr, tt.wantErr) {
-						t.Errorf("BlobToArray() = %v, want %v", gotErr, tt.wantErr)
+						t.Errorf("HexEncodingToArray() = %v, want %v", gotErr, tt.wantErr)
 					}
 				}
 			}
@@ -330,7 +330,7 @@ func TestBlobToArray(t *testing.T) {
 	}
 }
 
-func TestArrayToBlob(t *testing.T) {
+func TestArrayToHexEncoding(t *testing.T) {
 
 	type testCase struct {
 		name    string
@@ -376,33 +376,33 @@ func TestArrayToBlob(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.argsF32 != nil {
-				if gotRes, err := ArrayToBlob[float32](tt.argsF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantRes) {
-					t.Errorf("ArrayToBlob() = %v, want %v", gotRes, tt.wantRes)
+				if gotRes, err := ArrayToHexEncoding[float32](tt.argsF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantRes) {
+					t.Errorf("ArrayToHexEncoding() = %v, want %v", gotRes, tt.wantRes)
 				}
 			}
 			if tt.argsF64 != nil {
-				if gotRes, err := ArrayToBlob[float64](tt.argsF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantRes) {
+				if gotRes, err := ArrayToHexEncoding[float64](tt.argsF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantRes) {
 					//fmt.Println(util.UnsafeBytesToString(gotRes))
-					t.Errorf("ArrayToBlob() = %v, want %v", gotRes, tt.wantRes)
+					t.Errorf("ArrayToHexEncoding() = %v, want %v", gotRes, tt.wantRes)
 				}
 			}
 
 			if tt.wantErr != nil && tt.typ == T_array_float32 {
-				if _, gotErr := ArrayToBlob[float32](tt.argsF32); gotErr == nil {
-					t.Errorf("ArrayToBlob() = %v, want %v", gotErr, tt.wantErr)
+				if _, gotErr := ArrayToHexEncoding[float32](tt.argsF32); gotErr == nil {
+					t.Errorf("ArrayToHexEncoding() = %v, want %v", gotErr, tt.wantErr)
 				} else {
 					if !reflect.DeepEqual(gotErr, tt.wantErr) {
-						t.Errorf("ArrayToBlob() = %v, want %v", gotErr, tt.wantErr)
+						t.Errorf("ArrayToHexEncoding() = %v, want %v", gotErr, tt.wantErr)
 					}
 				}
 			}
 
 			if tt.wantErr != nil && tt.typ == T_array_float64 {
-				if _, gotErr := ArrayToBlob[float64](tt.argsF64); gotErr == nil {
-					t.Errorf("ArrayToBlob() = %v, want %v", gotErr, tt.wantErr)
+				if _, gotErr := ArrayToHexEncoding[float64](tt.argsF64); gotErr == nil {
+					t.Errorf("ArrayToHexEncoding() = %v, want %v", gotErr, tt.wantErr)
 				} else {
 					if !reflect.DeepEqual(gotErr, tt.wantErr) {
-						t.Errorf("ArrayToBlob() = %v, want %v", gotErr, tt.wantErr)
+						t.Errorf("ArrayToHexEncoding() = %v, want %v", gotErr, tt.wantErr)
 					}
 				}
 			}

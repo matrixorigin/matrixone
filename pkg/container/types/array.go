@@ -114,8 +114,8 @@ func BytesToArrayToString[T RealNumbers](input []byte) string {
 	return ArrayToString[T](a)
 }
 
-// BlobToArray convert blob (ie Hex encoding of []T array) to []T
-func BlobToArray[T RealNumbers](input []byte) ([]T, error) {
+// HexEncodingToArray convert HexEncoding to []T
+func HexEncodingToArray[T RealNumbers](input []byte) ([]T, error) {
 	bytearray, err := hex.DecodeString(util.UnsafeBytesToString(input))
 	if err != nil {
 		return nil, err
@@ -123,8 +123,8 @@ func BlobToArray[T RealNumbers](input []byte) ([]T, error) {
 	return BytesToArray[T](bytearray), nil
 }
 
-// ArrayToBlob convert []T to HexEncoding
-func ArrayToBlob[T RealNumbers](input []T) ([]byte, error) {
+// ArrayToHexEncoding convert []T to HexEncoding
+func ArrayToHexEncoding[T RealNumbers](input []T) ([]byte, error) {
 	hexEncoding := hex.EncodeToString(ArrayToBytes[T](input))
 	return util.UnsafeStringToBytes(hexEncoding), nil
 }
