@@ -426,9 +426,6 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 		fullname := genTblFullName(schema.AcInfo.TenantID, schema.Name)
 		entry.GetDB().RollbackRenameTable(fullname, entry.ID)
 	}
-	lastCount := entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode.getColumnCount()
-	currentCount := t.BaseNode.getColumnCount()
-	entry.db.catalog.AddColumnCnt(lastCount - currentCount)
 	var isEmpty bool
 	isEmpty, err = entry.BaseEntryImpl.PrepareRollback()
 	if err != nil {
@@ -439,6 +436,10 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 		if err != nil {
 			return
 		}
+	} else {
+		lastCount := entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode.getColumnCount()
+		currentCount := t.BaseNode.getColumnCount()
+		entry.db.catalog.AddColumnCnt(lastCount - currentCount)
 	}
 	return
 }
