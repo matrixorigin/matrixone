@@ -22,7 +22,7 @@ import (
 )
 
 func TestAvailableStores(t *testing.T) {
-	dnStores := []*util.Store{
+	tnStores := []*util.Store{
 		util.NewStore("1", 1, 1), // full
 		util.NewStore("2", 3, 3), // full
 		util.NewStore("3", 1, 3), // 2 slots
@@ -30,12 +30,12 @@ func TestAvailableStores(t *testing.T) {
 		util.NewStore("5", 1, 4), // 3 slots
 	}
 
-	stores := spareStores(dnStores)
+	stores := spareStores(tnStores)
 	require.Equal(t, 2, len(stores))
 }
 
 func TestFilter(t *testing.T) {
-	dnStores := []*util.Store{
+	tnStores := []*util.Store{
 		util.NewStore("0", 0, 10),
 		util.NewStore("1", 1, 10),
 		util.NewStore("10", 10, 10),
@@ -43,8 +43,8 @@ func TestFilter(t *testing.T) {
 	}
 
 	fullFilter := &filterOutFull{}
-	candidates := make([]*util.Store, 0, len(dnStores))
-	for _, store := range dnStores {
+	candidates := make([]*util.Store, 0, len(tnStores))
+	for _, store := range tnStores {
 		if fullFilter.Filter(store) {
 			continue
 		}

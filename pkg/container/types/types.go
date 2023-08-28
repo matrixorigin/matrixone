@@ -82,6 +82,12 @@ const (
 
 	// system family
 	T_tuple T = 201
+
+	// Array/Vector family
+	T_array_float32 T = 224 // In SQL , it is vecf32
+	T_array_float64 T = 225 // In SQL , it is vecf64
+
+	//note: max value of uint8 is 255
 )
 
 const (
@@ -118,7 +124,6 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	if len(data) < t.ProtoSize() {
 		panic("invalid byte slice")
 	}
-
 	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
 	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
 	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
@@ -126,7 +131,6 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
 	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
 	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
-
 	return 20, nil
 }
 
@@ -158,7 +162,6 @@ func (t *Type) Unmarshal(data []byte) error {
 	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
 	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
 	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
-
 	return nil
 }
 
@@ -323,6 +326,10 @@ type FixedSizeT interface {
 	FixedSizeTExceptStrType | Varlena
 }
 
+type RealNumbers interface {
+	constraints.Float
+}
+
 type FixedSizeTExceptStrType interface {
 	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
 }
@@ -375,6 +382,9 @@ var Types map[string]T = map[string]T{
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
 	"blockid":               T_Blockid,
+
+	"array float32": T_array_float32,
+	"array float64": T_array_float64,
 }
 
 func New(oid T, width, scale int32) Type {
@@ -574,6 +584,9 @@ func (t T) ToType() Type {
 	case T_varchar:
 		typ.Size = VarlenaSize
 		typ.Width = MaxVarcharLen
+	case T_array_float32, T_array_float64:
+		typ.Size = VarlenaSize
+		typ.Width = MaxArrayDimension
 	case T_binary:
 		typ.Size = VarlenaSize
 		typ.Width = MaxBinaryLen
@@ -657,6 +670,10 @@ func (t T) String() string {
 		return "BLOCKID"
 	case T_interval:
 		return "INTERVAL"
+	case T_array_float32:
+		return "VECTOR FLOAT"
+	case T_array_float64:
+		return "VECTOR DOUBLE"
 	case T_enum:
 		return "ENUM"
 	}
@@ -728,6 +745,10 @@ func (t T) OidString() string {
 		return "T_interval"
 	case T_enum:
 		return "T_enum"
+	case T_array_float32:
+		return "T_array_float32"
+	case T_array_float64:
+		return "T_array_float64"
 	}
 	return "unknown_type"
 }
@@ -757,7 +778,7 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary:
+	case T_char, T_varchar, T_json, T_blob, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
 		return VarlenaSize
 	case T_decimal64:
 		return 8
@@ -808,7 +829,7 @@ func (t T) FixedLength() int {
 		return RowidSize
 	case T_Blockid:
 		return BlockidSize
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
 		return -24
 	case T_enum:
 		return 2
@@ -877,6 +898,13 @@ func (t T) IsMySQLString() bool {
 
 func (t T) IsDateRelate() bool {
 	if t == T_date || t == T_datetime || t == T_timestamp || t == T_time {
+		return true
+	}
+	return false
+}
+
+func (t T) IsArrayRelate() bool {
+	if t == T_array_float32 || t == T_array_float64 {
 		return true
 	}
 	return false

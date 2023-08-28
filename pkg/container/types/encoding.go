@@ -347,7 +347,7 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[TS](val)
 	case T_Rowid:
 		return DecodeFixed[Rowid](val)
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64:
 		return val
 	case T_enum:
 		return DecodeFixed[Enum](val)
@@ -398,7 +398,10 @@ func EncodeValue(val any, t T) []byte {
 		return EncodeFixed(val.(TS))
 	case T_Rowid:
 		return EncodeFixed(val.(Rowid))
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
+		T_array_float32, T_array_float64:
+		// Mainly used by Zonemap, which receives val input from DN batch/vector.
+		// This val is mostly []bytes and not []float32 or []float64
 		return val.([]byte)
 	case T_enum:
 		return EncodeFixed(val.(Enum))

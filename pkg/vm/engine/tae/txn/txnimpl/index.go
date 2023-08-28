@@ -102,6 +102,11 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 		for k := range idx.tree {
 			vec.Append([]byte(k.(string)), false)
 		}
+	case types.T_array_float32, types.T_array_float64:
+		// No usage for this func.
+		for k := range idx.tree {
+			vec.Append(k.([]byte), false)
+		}
 	default:
 		for k := range idx.tree {
 			vec.Append(k, false)
@@ -122,6 +127,23 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 				vec = containers.MakeVector(kType)
 			}
 			vec.Append([]byte(k.(string)), false)
+		}
+	case types.T_array_float32:
+		// No usage for this func.
+		for k := range idx.tree {
+			if vec.Length() > int(MaxNodeRows) {
+				vecs = append(vecs, vec)
+				vec = containers.MakeVector(kType)
+			}
+			vec.Append(types.BytesToArrayToString[float32](k.([]byte)), false)
+		}
+	case types.T_array_float64:
+		for k := range idx.tree {
+			if vec.Length() > int(MaxNodeRows) {
+				vecs = append(vecs, vec)
+				vec = containers.MakeVector(kType)
+			}
+			vec.Append(types.BytesToArrayToString[float64](k.([]byte)), false)
 		}
 	default:
 		for k := range idx.tree {
@@ -288,6 +310,52 @@ func (idx *simpleTableIndex) BatchInsert(
 			idx.tree[v] = row
 			row++
 		}
+	case types.T_array_float32:
+		vec := col.GetDownstreamVector()
+		if dedupInput {
+			set := make(map[string]bool)
+			for i := start; i < start+count; i++ {
+				v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
+				if _, ok := set[v]; ok {
+					entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
+					return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				}
+				set[v] = true
+			}
+			break
+		}
+		for i := start; i < start+count; i++ {
+			v := types.ArrayToString[float32](vector.GetArrayAt[float32](vec, i))
+			if _, ok := idx.tree[v]; ok {
+				entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
+				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			}
+			idx.tree[v] = row
+			row++
+		}
+	case types.T_array_float64:
+		vec := col.GetDownstreamVector()
+		if dedupInput {
+			set := make(map[string]bool)
+			for i := start; i < start+count; i++ {
+				v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
+				if _, ok := set[v]; ok {
+					entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
+					return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				}
+				set[v] = true
+			}
+			break
+		}
+		for i := start; i < start+count; i++ {
+			v := types.ArrayToString[float64](vector.GetArrayAt[float64](vec, i))
+			if _, ok := idx.tree[v]; ok {
+				entry := common.TypeStringValue(*colType, vec.GetBytesAt(i), false)
+				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			}
+			idx.tree[v] = row
+			row++
+		}
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%s not supported", col.GetType().String()))
 	}
@@ -369,6 +437,26 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 		for i := 0; i < col.Length(); i++ {
 			bs := vec.GetBytesAt(i)
 			v := util.UnsafeBytesToString(bs)
+			if _, ok := idx.tree[v]; ok {
+				entry := common.TypeStringValue(*colType, bs, false)
+				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			}
+		}
+	case types.T_array_float32:
+		vec := col.GetDownstreamVector()
+		for i := 0; i < col.Length(); i++ {
+			bs := vec.GetBytesAt(i)
+			v := types.BytesToArrayToString[float32](bs)
+			if _, ok := idx.tree[v]; ok {
+				entry := common.TypeStringValue(*colType, bs, false)
+				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			}
+		}
+	case types.T_array_float64:
+		vec := col.GetDownstreamVector()
+		for i := 0; i < col.Length(); i++ {
+			bs := vec.GetBytesAt(i)
+			v := types.BytesToArrayToString[float64](bs)
 			if _, ok := idx.tree[v]; ok {
 				entry := common.TypeStringValue(*colType, bs, false)
 				return moerr.NewDuplicateEntryNoCtx(entry, attr)

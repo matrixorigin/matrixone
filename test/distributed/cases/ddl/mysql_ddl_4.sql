@@ -1,0 +1,215 @@
+-- testcase_4: create view
+
+
+create database if not exists mysql_ddl_test_db_4;
+use mysql_ddl_test_db_4;
+
+DROP TABLE IF EXISTS `mysql_ddl_test_t41`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `mysql_ddl_test_t41` (
+  `SEQID` int(10) NOT NULL AUTO_INCREMENT,
+  `SA_CONTRACT_LINE_ID` decimal(11,0) DEFAULT NULL,
+  `SA_CONTRACT_HEAD_ID` decimal(11,0) DEFAULT NULL,
+  `LINENO` decimal(11,0) DEFAULT NULL,
+  `ITEM_ID` decimal(11,0) DEFAULT NULL,
+  `ASSISTANT_UOM_ID` decimal(11,0) DEFAULT NULL,
+  `LENGTH` decimal(11,2) DEFAULT NULL,
+  `WIDTH` decimal(11,2) DEFAULT NULL,
+  `BASE_LEVEL_ID` decimal(11,0) DEFAULT NULL,
+  `BASE_PRICE` decimal(10,2) DEFAULT NULL,
+  `CONTRACT_PRICE` decimal(10,2) DEFAULT NULL,
+  `QTY_CONVERT` decimal(10,2) DEFAULT NULL,
+  `SMETER_PRICE` decimal(10,2) DEFAULT NULL,
+  `REMARK` varchar(255) DEFAULT NULL,
+  `CREATED_BY` varchar(255) DEFAULT NULL,
+  `CREATION_DATE` datetime DEFAULT NULL,
+  `LAST_UPDATED_BY` varchar(255) DEFAULT NULL,
+  `LAST_UPDATE_DATE` datetime DEFAULT NULL,
+  `ATTRIBUTE11` varchar(255) DEFAULT NULL,
+  `ATTRIBUTE21` varchar(255) DEFAULT NULL,
+  `ATTRIBUTE31` varchar(255) DEFAULT NULL,
+  `ATTRIBUTE41` varchar(255) DEFAULT NULL,
+  `ATTRIBUTE51` varchar(255) DEFAULT NULL,
+  `DEPOSIT_RATE` decimal(11,2) DEFAULT NULL,
+  `SUESYN` decimal(10,0) DEFAULT NULL,
+  `SREMARK` varchar(255) DEFAULT NULL,
+  `SINTIM` datetime DEFAULT NULL,
+  `SUPTIM` datetime DEFAULT NULL,
+  PRIMARY KEY (`SEQID`) USING BTREE,
+  KEY `SA_CONTRACT_LINE_IDX1` (`SA_CONTRACT_HEAD_ID`,`ITEM_ID`,`ASSISTANT_UOM_ID`,`LENGTH`,`WIDTH`,`BASE_LEVEL_ID`) USING BTREE,
+  KEY `SYS_C0042516` (`SA_CONTRACT_LINE_ID`) USING BTREE
+) ENGINE=InnoDB AUTO_INCREMENT=11994 DEFAULT CHARSET=utf8;
+
+
+DROP TABLE IF EXISTS `mysql_ddl_test_t42`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `mysql_ddl_test_t42` (
+  `SEQID` int(10) NOT NULL AUTO_INCREMENT,
+  `ORGANIZATION_ID` decimal(11,0) DEFAULT NULL,
+  `SA_CONTRACT_HEAD_ID` decimal(11,0) DEFAULT NULL,
+  `CONTRACT_NO` varchar(255) DEFAULT NULL,
+  `SIGN_DATE` datetime DEFAULT NULL,
+  `SIGN_ADDR` varchar(255) DEFAULT NULL,
+  `BASE_CURRENCY_ID` decimal(11,0) DEFAULT NULL,
+  `BEGINDATE` datetime DEFAULT NULL,
+  `ENDDATE` datetime DEFAULT NULL,
+  `FINAL_CUSTOMER_ID` decimal(11,0) DEFAULT NULL,
+  `TAX_RATE` double DEFAULT NULL,
+  `DUTY_PERSON_ID` decimal(11,0) DEFAULT NULL,
+  `DUTY_PERSON` varchar(255) DEFAULT NULL,
+  `DEAL_PERSON_ID` decimal(11,0) DEFAULT NULL,
+  `DEAL_PERSON` varchar(255) DEFAULT NULL,
+  `INNER_CUSTOMER_ID` decimal(11,0) DEFAULT NULL,
+  `SALECOMPANY_ID` decimal(11,0) DEFAULT NULL,
+  `ISVALID` decimal(11,0) DEFAULT NULL,
+  `NOTE` varchar(255) DEFAULT NULL,
+  `STAT` varchar(255) DEFAULT NULL,
+  `WFID` decimal(11,2) DEFAULT NULL,
+  `WFFLAG` decimal(11,2) DEFAULT NULL,
+  `PROCID` decimal(11,0) DEFAULT NULL,
+  `WFRIGHT` decimal(11,2) DEFAULT NULL,
+  `CREATED_BY` varchar(255) DEFAULT NULL,
+  `CREATION_DATE` datetime DEFAULT NULL,
+  `LAST_UPDATED_BY` varchar(255) DEFAULT NULL,
+  `LAST_UPDATE_DATE` datetime DEFAULT NULL,
+  `ATTRIBUTE1` varchar(255) DEFAULT NULL,
+  `ATTRIBUTE2` varchar(255) DEFAULT NULL,
+  `ATTRIBUTE3` varchar(255) DEFAULT NULL,
+  `ATTRIBUTE4` varchar(255) DEFAULT NULL,
+  `ATTRIBUTE5` varchar(255) DEFAULT NULL,
+  `SUESYN` decimal(10,0) DEFAULT NULL,
+  `SREMARK` varchar(255) DEFAULT NULL,
+  `SINTIM` datetime DEFAULT NULL,
+  `SUPTIM` datetime DEFAULT NULL,
+  PRIMARY KEY (`SEQID`) USING BTREE,
+  KEY `IDX_SA_CONTRACT_HEAD_ID` (`SA_CONTRACT_HEAD_ID`) USING BTREE
+) ENGINE=InnoDB AUTO_INCREMENT=1958 DEFAULT CHARSET=utf8;
+
+DROP TABLE IF EXISTS `mysql_ddl_test_t43`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `mysql_ddl_test_t43` (
+  `SEQID` int(10) NOT NULL AUTO_INCREMENT,
+  `PMS_CONTRACT_ITEM_ID` decimal(10,0) NOT NULL,
+  `PMS_CONTRACT_ID` decimal(10,0) NOT NULL,
+  `ITEM_ID` decimal(10,0) DEFAULT NULL,
+  `ITEM_CODE` varchar(128) DEFAULT NULL,
+  `ITEM_NAME` varchar(128) DEFAULT NULL,
+  `SPECS` varchar(32) DEFAULT NULL,
+  `COLOR_NUMBER` varchar(32) DEFAULT NULL,
+  `USE_AREA` decimal(18,8) DEFAULT NULL,
+  `QTY_BOX` decimal(18,8) DEFAULT NULL,
+  `QTY_SLICE` decimal(18,8) DEFAULT NULL,
+  `PRICE_SLICE` decimal(18,8) DEFAULT NULL,
+  `AMOUNT` decimal(18,2) DEFAULT NULL,
+  `REMARK` varchar(128) DEFAULT NULL,
+  `COST_PRICE` decimal(18,8) DEFAULT NULL,
+  `GROSS_PROFIT` decimal(18,8) DEFAULT NULL,
+  `PRICE_SQUARE` decimal(18,8) DEFAULT NULL,
+  `UOM_ID` decimal(10,0) DEFAULT NULL,
+  `UOM_NAME` varchar(16) DEFAULT NULL,
+  `COST` decimal(18,8) DEFAULT NULL,
+  `ITEM_AREA` decimal(10,0) DEFAULT NULL,
+  `CONVRATE` decimal(10,0) DEFAULT NULL,
+  `PRICE_BOX` decimal(18,8) DEFAULT NULL,
+  `BASE_LEVEL_ID` decimal(10,0) DEFAULT NULL,
+  `STANDARD_PRICE_SLICE` decimal(18,2) DEFAULT NULL,
+  `STANDARD_PRICE_SQUARE` decimal(18,2) DEFAULT NULL,
+  `SUESYN` decimal(10,0) DEFAULT NULL,
+  `SREMARK` varchar(255) DEFAULT NULL,
+  `SINTIM` datetime DEFAULT NULL,
+  `SUPTIM` datetime DEFAULT NULL,
+  PRIMARY KEY (`SEQID`) USING BTREE,
+  KEY `PK_PMS_CONTRACT_ITEM_ID` (`PMS_CONTRACT_ITEM_ID`) USING BTREE
+) ENGINE=InnoDB AUTO_INCREMENT=234835 DEFAULT CHARSET=utf8;
+
+
+DROP TABLE IF EXISTS `mysql_ddl_test_t44`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `mysql_ddl_test_t44` (
+  `SEQID` int(11) NOT NULL AUTO_INCREMENT,
+  `PMS_CONTRACT_ID` decimal(10,0) NOT NULL,
+  `CONTRACT_NO` varchar(128) NOT NULL,
+  `CONTRACT_NAME` varchar(128) NOT NULL,
+  `CONTRACT_TYPE` int(1) NOT NULL DEFAULT '1',
+  `PMS_PROJECT_ID` decimal(10,0) DEFAULT NULL,
+  `CUSTOMER_ID` decimal(10,0) DEFAULT NULL,
+  `CUSTOMER_CODE` varchar(32) DEFAULT NULL,
+  `CUSTOMER_NAME` varchar(128) DEFAULT NULL,
+  `CONTRACT_DATE` date DEFAULT NULL,
+  `CONTRACT_EFFECTIVE_START` date DEFAULT NULL,
+  `CONTRACT_EFFECTIVE_END` date DEFAULT NULL,
+  `CONTRACT_SEQ` varchar(32) DEFAULT NULL,
+  `SETTLEMENT_ID` decimal(10,0) DEFAULT NULL,
+  `SETTLEMENT_CODE` varchar(32) DEFAULT NULL,
+  `SETTLEMENT_NAME` varchar(128) DEFAULT NULL,
+  `TOTAL_AMOUNT` decimal(18,2) DEFAULT NULL,
+  `PAY_METHOD` decimal(18,2) DEFAULT NULL,
+  `COST_AMOUNT` decimal(18,2) DEFAULT NULL,
+  `MIN_AMOUNT` decimal(18,2) DEFAULT NULL,
+  `BAIL` decimal(18,2) DEFAULT NULL,
+  `BAIL_EXPIRE_DATE` datetime DEFAULT NULL,
+  `CONSTRUCTOR_NAME` varchar(64) DEFAULT NULL,
+  `CREDIT_CUSTOMER_ID` decimal(10,2) DEFAULT NULL,
+  `VERSION` decimal(10,2) DEFAULT NULL,
+  `REMARK` varchar(1000) DEFAULT NULL,
+  `CREATED_BY` varchar(32) DEFAULT NULL,
+  `CREATED_DATE` datetime DEFAULT NULL,
+  `PRODUCT_AMOUNT` decimal(18,2) DEFAULT NULL,
+  `CARRIAGE_AMOUNT` decimal(18,2) DEFAULT NULL,
+  `OTHER_AMOUNT` decimal(18,2) DEFAULT NULL,
+  `GROSS_PROFIT` decimal(18,2) DEFAULT NULL,
+  `DELIVERY_ADDRESS` varchar(256) DEFAULT NULL,
+  `WFID` decimal(10,2) NOT NULL DEFAULT '0.00',
+  `WFFLAG` decimal(10,2) DEFAULT NULL,
+  `WFRIGHT` decimal(10,2) DEFAULT NULL,
+  `PROCID` decimal(10,2) DEFAULT NULL,
+  `STAT` decimal(10,2) DEFAULT NULL,
+  `CREDIT_CUSTOMER_CODE` varchar(32) DEFAULT NULL,
+  `CREDIT_CUSTOMER_NAME` varchar(128) DEFAULT NULL,
+  `PROJECT_CODE` varchar(32) DEFAULT NULL,
+  `PROJECT_NAME` varchar(128) DEFAULT NULL,
+  `SETTLEMENT_METHOD` decimal(10,2) DEFAULT NULL,
+  `DEPT_ID` decimal(10,2) DEFAULT NULL,
+  `BASE_CURRENCY_ID` decimal(10,2) NOT NULL DEFAULT '1.00',
+  `SUESYN` decimal(10,2) DEFAULT NULL,
+  `SREMARK` varchar(255) DEFAULT NULL,
+  `SINTIM` datetime DEFAULT NULL,
+  `SUPTIM` datetime(6) DEFAULT NULL,
+  PRIMARY KEY (`SEQID`) USING BTREE,
+  UNIQUE KEY `PK_PMS_CONTRACT_ID` (`PMS_CONTRACT_ID`) USING BTREE
+) ENGINE=InnoDB AUTO_INCREMENT=6574 DEFAULT CHARSET=utf8;
+
+
+DROP VIEW IF EXISTS mysql_ddl_test_v41;
+CREATE VIEW `mysql_ddl_test_v41` AS 
+select 'U' AS `TYPE`,`b`.`ORGANIZATION_ID` AS `ORGANIZATION_ID`,
+`a`.`SA_CONTRACT_HEAD_ID` AS `CONTRACT`,`a`.`ITEM_ID` AS `ITEM_ID`,`a`.`BASE_LEVEL_ID` AS `BASE_LEVEL_ID`,`a`.`CONTRACT_PRICE` AS `CONTRACT_PRICE` 
+from (
+  `mysql_ddl_test_t41` `a` 
+left join `mysql_ddl_test_t42` `b` 
+on((`a`.`SA_CONTRACT_HEAD_ID` = `b`.`SA_CONTRACT_HEAD_ID`))) 
+where (now() between `b`.`BEGINDATE` and `b`.`ENDDATE`) 
+union 
+select 'P' AS `TYPE`,'1111' AS `ORGANIZATION_ID`,`a`.`PMS_CONTRACT_ID` AS `CONTRACT`,`a`.`ITEM_ID` AS `ITEM_ID`,`a`.`BASE_LEVEL_ID` AS `BASE_LEVEL_ID`,`a`.`PRICE_SLICE` AS `CONTRACT_PRICE` 
+from (
+`mysql_ddl_test_t43` `a` 
+left join `mysql_ddl_test_t44` `b` 
+on((`a`.`PMS_CONTRACT_ID` = `b`.`PMS_CONTRACT_ID`))) 
+where (now() between `b`.`CONTRACT_EFFECTIVE_START` and `b`.`CONTRACT_EFFECTIVE_END`) ;
+
+
+SHOW CREATE VIEW mysql_ddl_test_v41;
+
+-- @bvt:issue#moc 1229
+DROP VIEW IF EXISTS mysql_ddl_test_v42;
+/*!50001 CREATE ALGORITHM=UNDEFINED */
+/*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER */
+/*!50001 VIEW mysql_ddl_test_v41 AS select `a`.`QUERYID` AS `QUERYID`,floor(`a`.`ORGANIZATION_ID`) AS `ORGANIZATION_ID`,floor(`a`.`WAREHOUSE_ID`) AS `WAREHOUSE_ID`,`d`.`WAREHOUSE_CODE` AS `WAREHOUSE_CODE`,`d`.`WAREHOUSE_NAME` AS `WAREHOUSE_NAME`,`d`.`WAREHOUSE_PID` AS `WAREHOUSE_PID`,`h`.`WAREHOUSE_NAME` AS `WAREHOUSE_PNAME`,floor(`a`.`ITEM_ID`) AS `ITEM_ID`,`b`.`ITEM_CLASS3` AS `ITEM_CLASS3`,`b`.`ITEM_CODE` AS `ITNBR`,`b`.`ITEM_NAME` AS `ITDSC`,`a`.`COLORNUMBER` AS `COLORNUMBER`,`a`.`BASE_LEVEL_ID` AS `BASE_LEVEL_ID`,`e`.`LEVELNAME` AS `LEVELNAME`,`a`.`WIDTH` AS `PRDWID`,`a`.`LENGTH` AS `PRDLNG`,floor(`a`.`BASE_PADDR_ID`) AS `BASE_PADDR_ID`,`f`.`BASE_PADDR` AS `BASE_PADDR`,floor(`a`.`ASSISTANT_UOM_ID`) AS `ASSISTANT_UOM_ID`,floor(`c`.`UOM_ID`) AS `UOM_ID`,`c`.`UOM_NAME` AS `UOM_NAME`,floor(`a`.`INV_BATCH_ID`) AS `INV_BATCH_ID`,`a`.`QTY_CANDRAFIT` AS `QTY_CANDRAFIT`,`a`.`QTY_SUBSISTENCE` AS `QTY_SUBSISTENCE`,`a`.`QTY_PRESHIP` AS `QTY_PRESHIP`,`a`.`QTY_FREEZE` AS `QTY_FREEZE`,`a`.`QTY_ONHAND` AS `QTY_ONHAND`,`a`.`QTY_ONHAND2` AS `QTY_ONHAND2`,`a`.`INV_ITEM_ID` AS `INV_ITEM_ID`,`a`.`IS_PALLET` AS `IS_PALLET`,`a`.`INV_BATCH_CODE` AS `INV_BATCH_CODE`,`a`.`CUSTOMER_ID` AS `CUSTOMER_ID`,`a`.`CUSTOMER_CODE` AS `CUSTOMER_CODE`,`a`.`CUSTOMER_NAME` AS `CUSTOMER_NAME`,(`a`.`QTY_CANDRAFIT` - ifnull(`g`.`LOCKQTY`,0)) AS `USEFULQTY`,ifnull(`g`.`LOCKQTY`,0) AS `LOCKQTY`,`a`.`KULINGDAY` AS `KULINGDAY` from (((((((`skim`.`ces0020m` `a` join `skim`.`kaf_item` `b`) join `skim`.`kaf_uom` `c`) join `skim`.`kaf_warehouse` `d`) join `skim`.`kaf_base_level` `e`) left join `skim`.`kaf_base_paddr` `f` on((`a`.`BASE_PADDR_ID` = `f`.`BASE_PADDR_ID`))) left join (select sum(`skim`.`ces0021`.`LOCKQTY`) AS `LOCKQTY`,`skim`.`ces0021`.`ITNBR` AS `itnbr`,`skim`.`ces0021`.`WAREHOUSE_ID` AS `WAREHOUSE_ID`,`skim`.`ces0021`.`UOMID` AS `UOMID`,`skim`.`ces0021`.`COLORNUMBER` AS `COLORNUMBER`,`skim`.`ces0021`.`BASE_LEVEL_ID` AS `base_level_id`,`skim`.`ces0021`.`LENGTH` AS `LENGTH`,`skim`.`ces0021`.`WIDTH` AS `WIDTH`,`skim`.`ces0021`.`IS_PALLET` AS `IS_PALLET` from `skim`.`ces0021` where ((`skim`.`ces0021`.`VALIDYN` = 'Y') and (`skim`.`ces0021`.`LOCKTYPE` = '1')) group by `skim`.`ces0021`.`ITNBR`,`skim`.`ces0021`.`WAREHOUSE_ID`,`skim`.`ces0021`.`UOMID`,`skim`.`ces0021`.`COLORNUMBER`,`skim`.`ces0021`.`BASE_LEVEL_ID`,`skim`.`ces0021`.`LENGTH`,`skim`.`ces0021`.`WIDTH`,`skim`.`ces0021`.`IS_PALLET`) `g` on(((`b`.`ITEM_CODE` = `g`.`itnbr`) and (`a`.`WAREHOUSE_ID` = `g`.`WAREHOUSE_ID`) and (`a`.`ASSISTANT_UOM_ID` = `g`.`UOMID`) and (`a`.`COLORNUMBER` = `g`.`COLORNUMBER`) and (`a`.`BASE_LEVEL_ID` = `g`.`base_level_id`) and (`a`.`LENGTH` = `g`.`LENGTH`) and (`a`.`WIDTH` = `g`.`WIDTH`) and (`a`.`IS_PALLET` = `g`.`IS_PALLET`)))) left join `skim`.`kaf_warehouse` `h` on(((`d`.`WAREHOUSE_PID` = `h`.`WAREHOUSE_ID`) and (`d`.`ORGANIZATION_ID` = `h`.`ORGANIZATION_ID`)))) where ((`a`.`ITEM_ID` = `b`.`ITEM_ID`) and (`a`.`ASSISTANT_UOM_ID` = `c`.`UOM_ID`) and (`a`.`WAREHOUSE_ID` = `d`.`WAREHOUSE_ID`) and (`a`.`BASE_LEVEL_ID` = `e`.`BASE_LEVEL_ID`) and (`d`.`ACCOUNT_FLAG` = '1')) */;
+SHOW CREATE VIEW mysql_ddl_test_v42;
+-- @bvt:issue
+
+drop database if exists mysql_ddl_test_db_4;

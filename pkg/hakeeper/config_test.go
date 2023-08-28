@@ -25,5 +25,5 @@ func TestTimeoutConfig(t *testing.T) {
 	c.Fill()
 	assert.Equal(t, DefaultTickPerSecond, c.TickPerSecond)
 	assert.Equal(t, DefaultLogStoreTimeout, c.LogStoreTimeout)
-	assert.Equal(t, DefaultDNStoreTimeout, c.DNStoreTimeout)
+	assert.Equal(t, DefaultTNStoreTimeout, c.TNStoreTimeout)
 }

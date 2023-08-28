@@ -337,7 +337,6 @@ commit;
 drop table if exists t1;
 
 -- -------------------------------------------------------
--- @bvt:issue#11279
 drop table if exists rename01;
 create table rename01 (c int primary key,d int);
 insert into rename01 values(1,1);
@@ -354,6 +353,6 @@ insert into rename01 (c, d) values (5,7);
 insert into rename01 (newCCCC, d) values (5,7);
 select * from rename01;
 -- @session}
+commit;
 select * from rename01;
 drop table rename01;
--- @bvt:issue

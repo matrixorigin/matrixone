@@ -1053,7 +1053,7 @@ func (m *UnlockResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_UnlockResponse proto.InternalMessageInfo
 
-// GetBindRequest get bind request from allocator request. CN -> DN
+// GetBindRequest get bind request from allocator request. CN -> TN
 type GetBindRequest struct {
 	ServiceID            string   `protobuf:"bytes,1,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
 	Table                uint64   `protobuf:"varint,2,opt,name=Table,proto3" json:"Table,omitempty"`
@@ -1109,7 +1109,7 @@ func (m *GetBindRequest) GetTable() uint64 {
 	return 0
 }
 
-// GetBindResponse get bind request from allocator response. DN -> CN
+// GetBindResponse get bind request from allocator response. TN -> CN
 type GetBindResponse struct {
 	LockTable            LockTable `protobuf:"bytes,2,opt,name=LockTable,proto3" json:"LockTable"`
 	XXX_NoUnkeyedLiteral struct{}  `json:"-"`
@@ -1157,7 +1157,7 @@ func (m *GetBindResponse) GetLockTable() LockTable {
 	return LockTable{}
 }
 
-// KeepLockTableBindRequest keep lock table bind request. CN -> DN
+// KeepLockTableBindRequest keep lock table bind request. CN -> TN
 type KeepLockTableBindRequest struct {
 	ServiceID            string   `protobuf:"bytes,1,opt,name=ServiceID,proto3" json:"ServiceID,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -1205,7 +1205,7 @@ func (m *KeepLockTableBindRequest) GetServiceID() string {
 	return ""
 }
 
-// KeepLockTableBindResponse keep lock table bind response. DN -> CN
+// KeepLockTableBindResponse keep lock table bind response. TN -> CN
 type KeepLockTableBindResponse struct {
 	OK                   bool     `protobuf:"varint,1,opt,name=OK,proto3" json:"OK,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -1301,7 +1301,7 @@ func (m *KeepRemoteLockRequest) GetServiceID() string {
 	return ""
 }
 
-// KeepRemoteLockResponse keep lock on remote lockservice response. DN -> CN
+// KeepRemoteLockResponse keep lock on remote lockservice response. TN -> CN
 type KeepRemoteLockResponse struct {
 	OK                   bool     `protobuf:"varint,1,opt,name=OK,proto3" json:"OK,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`

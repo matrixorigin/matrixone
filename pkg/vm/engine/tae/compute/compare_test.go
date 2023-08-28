@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestComapreGeneric(t *testing.T) {
+func TestCompareGeneric(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	x := types.Decimal256{
 		B0_63: 0, B64_127: 0,
@@ -41,4 +41,17 @@ func TestComapreGeneric(t *testing.T) {
 	})
 	t2 := t1.Next()
 	assert.True(t, CompareGeneric(t1, t2, types.T_TS) == -1)
+
+	{
+		// Array Float32
+		a1 := types.ArrayToBytes[float32]([]float32{1, 2, 3})
+		b1 := types.ArrayToBytes[float32]([]float32{1, 2, 3})
+		assert.True(t, CompareGeneric(a1, b1, types.T_array_float32) == 0)
+
+		// Array Float64
+		a1 = types.ArrayToBytes[float64]([]float64{1, 2, 3})
+		b1 = types.ArrayToBytes[float64]([]float64{1, 2, 3})
+		assert.True(t, CompareGeneric(a1, b1, types.T_array_float64) == 0)
+	}
+
 }

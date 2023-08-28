@@ -78,7 +78,7 @@ type S3Writer struct {
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
-	WriteS3Threshold uint64 = 64 * mpool.MB
+	WriteS3Threshold uint64 = 128 * mpool.MB
 
 	TagS3Size            uint64 = 10 * mpool.MB
 	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
@@ -475,6 +475,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 			merge = NewMerge(len(w.Bats), sort.NewUuidCompLess(), getFixedCols[types.Uuid](w.Bats, pos), nulls)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[string](), getStrCols(w.Bats, pos), nulls)
+			//TODO: check if we need T_array here? T_json is missing here.
 		}
 		if _, err := w.generateWriter(proc); err != nil {
 			return err
