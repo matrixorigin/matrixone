@@ -67,7 +67,6 @@ type Catalog struct {
 	link      *common.GenericSortedDList[*DBEntry]
 
 	nodesMu sync.RWMutex
-
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -882,6 +881,12 @@ func (catalog *Catalog) ReplayTableRows() {
 }
 func (catalog *Catalog) Close() error {
 	return nil
+}
+
+func (catalog *Catalog) CoarseDBCnt() int {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	return len(catalog.entries)
 }
 
 func (catalog *Catalog) GetItemNodeByIDLocked(id uint64) *common.GenericDLNode[*DBEntry] {
