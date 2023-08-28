@@ -3565,7 +3565,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) er
 				}
 
 				filePath = strings.Replace(filePath, stageName+":", url, 1)
-				ep.FilePath = filePath
+				ses.ep.userConfig.FilePath = filePath
 			}
 
 		} else {
