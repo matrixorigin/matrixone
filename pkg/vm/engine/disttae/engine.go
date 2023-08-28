@@ -380,6 +380,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
 	}
+	if txn.meta.IsRCIsolation() {
+		txn.tableCache.cachedIndex = e.catalog.GetDeletedTableIndex()
+	}
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
