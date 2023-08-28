@@ -570,7 +570,13 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	ranges = append(ranges, []byte{})
 
 	if len(tbl.blockInfos) == 0 {
-		return
+		cnblks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
+		if err != nil {
+			return nil, err
+		}
+		if len(cnblks) == 0 {
+			return ranges, err
+		}
 	}
 
 	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
