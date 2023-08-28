@@ -34,18 +34,6 @@ const (
 	MO_TIMESTAMP_IDX = 1
 )
 
-type TableKey struct {
-	AccountId  uint32
-	DatabaseId uint64
-	Name       string
-}
-
-type TableVersion struct {
-	Version uint32
-	Ts      *timestamp.Timestamp
-	TableId uint64
-}
-
 // catalog cache
 type CatalogCache struct {
 	tables    *tableCache
