@@ -75,7 +75,7 @@ func NewInvalidInputNoCtx(msg string, args ...any) *Error {
 }
 
 func NewArrayInvalidOpNoCtx(expected, actual int) *Error {
-	xmsg := fmt.Sprintf("vector ops between different dimension is not permitted. %v != %v.", expected, actual)
+	xmsg := fmt.Sprintf("vector ops between different dimensions (%v, %v) is not permitted.", expected, actual)
 	return newError(Context(), ErrInvalidInput, xmsg)
 }
 

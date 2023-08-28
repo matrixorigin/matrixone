@@ -3926,7 +3926,6 @@ func strToStr(
 	} else {
 		// VARCHAR to BLOB path. ie CAST("binary_data_from_numpy" as BLOB).
 		// This has zero cost.
-		// NOTE: numpy data is converted to hex encoding before sending it to mo.
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {

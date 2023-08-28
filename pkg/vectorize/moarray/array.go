@@ -78,8 +78,8 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 // Compare the l2_norm between 2 ARRAY's. This is more accurate than element wise comparison because
 //  1. there won't be dimension mismatch issue
-//  2. the float32[i] value in ARRAY/VECTOR is always going to have some subtle difference between v1 and v2,
-//     resulting in full element wise comparison of v1 and v2.
+//  2. for element-wise comparison, the float32[i] value in ARRAY/VECTOR is always going
+//     to have some subtle difference between v1 and v2, resulting in full element wise comparison of v1 and v2.
 //  3. l2_norm comparison helps in ordering ARRAYs by nearness on the cartesian plane.
 func Compare[T types.RealNumbers](v1, v2 []T) int {
 	a, _ := L2Norm[T](v1) // you can ignore the l2_norm error.
@@ -157,7 +157,7 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 // L1Norm returns l1 distance to origin.
-// The only time, this could throw error is when T= int8 (v is -128)
+// The only time, this could throw error is when T = int8 (v[i] is -128)
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 
