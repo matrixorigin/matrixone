@@ -289,7 +289,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 			types.T_array_float32, types.T_array_float64:
 			// NOTE 1: We will consider T_array as bytes here just like JSON, VARBINARY and BLOB.
 			// If not, we need to define arrayType in types/tuple.go as arrayF32TypeCode, arrayF64TypeCode etc
-			// NOTE 2: vs is []string (and not of form "[1,2,3]") and not []byte.
+			// NOTE 2: vs is []string and not []byte. vs[i] is not of form "[1,2,3]". It is binary string of []float32{1,2,3}
 			// NOTE 3: This class is mainly used by PreInsertUnique which gets triggered before inserting into column having
 			// Unique Key or Primary Key constraint. Vector cannot be UK or PK.
 			vs := vector.MustStrCol(v)
