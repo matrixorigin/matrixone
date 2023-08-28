@@ -258,7 +258,7 @@ func CheckColumnNameValid(ctx context.Context, colName string) error {
 func handleClusterByKey(ctx context.Context, alterPlan *plan.AlterTable, newColName string, originalColName string) error {
 	if alterPlan.CopyTableDef.ClusterBy != nil && alterPlan.CopyTableDef.ClusterBy.Name != "" {
 		clusterBy := alterPlan.CopyTableDef.ClusterBy
-		clNames := make([]string, 0)
+		var clNames []string
 		if util.JudgeIsCompositeClusterByColumn(clusterBy.Name) {
 			clNames = util.SplitCompositeClusterByColumnName(clusterBy.Name)
 		} else {

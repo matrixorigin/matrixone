@@ -453,7 +453,7 @@ func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColD
 func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, originCol *ColDef) error {
 	if copyTableDef.ClusterBy != nil && copyTableDef.ClusterBy.Name != "" {
 		clusterBy := copyTableDef.ClusterBy
-		clNames := make([]string, 0)
+		var clNames []string
 		if util.JudgeIsCompositeClusterByColumn(clusterBy.Name) {
 			clNames = util.SplitCompositeClusterByColumnName(clusterBy.Name)
 		} else {
