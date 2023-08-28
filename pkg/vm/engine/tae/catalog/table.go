@@ -426,6 +426,9 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 		fullname := genTblFullName(schema.AcInfo.TenantID, schema.Name)
 		entry.GetDB().RollbackRenameTable(fullname, entry.ID)
 	}
+	lastCount := entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode.getColumnCount()
+	currentCount := t.BaseNode.getColumnCount()
+	entry.db.catalog.AddColumnCnt(lastCount - currentCount)
 	var isEmpty bool
 	isEmpty, err = entry.BaseEntryImpl.PrepareRollback()
 	if err != nil {
@@ -532,6 +535,12 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	}
 	var node *MVCCNode[*TableMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	var lastColumnCount int
+	if isNewNode {
+		lastColumnCount = entry.GetLatestCommittedNode().BaseNode.getColumnCount()
+	} else {
+		lastColumnCount = node.BaseNode.getColumnCount()
+	}
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
@@ -544,6 +553,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return
 	}
+	entry.db.catalog.AddColumnCnt(len(newSchema.ColDefs) - lastColumnCount)
 	if isNewNode {
 		node.BaseNode.Schema.Version += 1
 	}

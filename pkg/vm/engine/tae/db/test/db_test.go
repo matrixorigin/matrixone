@@ -8472,19 +8472,24 @@ func TestColumnCount(t *testing.T) {
 
 	{
 		txn, rel := tae.GetRelation()
-		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xyz", types.NewProtoType(types.T_char), 5))
+		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xyz0", types.NewProtoType(types.T_char), 5))
 		require.NoError(t, err)
+		assert.Equal(t, systemColumnCount+4, tae.Catalog.CoarseColumnCnt())
+		err = rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xy1", types.NewProtoType(types.T_char), 5))
+		require.NoError(t, err)
+		assert.Equal(t, systemColumnCount+5, tae.Catalog.CoarseColumnCnt())
 		require.Nil(t, txn.Commit(context.Background()))
 	}
 
-	assert.Equal(t, systemColumnCount+4, tae.Catalog.CoarseColumnCnt())
+	assert.Equal(t, systemColumnCount+5, tae.Catalog.CoarseColumnCnt())
 
 	{
 		txn, rel := tae.GetRelation()
 		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xyz2", types.NewProtoType(types.T_char), 5))
 		require.NoError(t, err)
+		assert.Equal(t, systemColumnCount+6, tae.Catalog.CoarseColumnCnt())
 		require.Nil(t, txn.Rollback(context.Background()))
 	}
 
-	assert.Equal(t, systemColumnCount+4, tae.Catalog.CoarseColumnCnt())
+	assert.Equal(t, systemColumnCount+5, tae.Catalog.CoarseColumnCnt())
 }
