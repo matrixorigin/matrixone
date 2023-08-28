@@ -75,7 +75,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				return process.ExecNext, nil
 			}
 			if bat.IsEmpty() {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 
@@ -103,7 +103,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
 		ctr.hasNull = ctr.mp.HasNull()
-		anal.Alloc(ctr.mp.Map().Size())
+		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
 }
@@ -129,7 +129,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 				}
 			}
 		}
-		rbat.SetRowCount(rbat.RowCount() + n)
+		rbat.AddRowCount(n)
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
@@ -162,7 +162,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.Map().NewIterator()
+	itr := ctr.mp.NewIterator()
 	eligible := make([]int32, 0, hashmap.UnitLimit)
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i

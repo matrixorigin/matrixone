@@ -98,6 +98,130 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	return &tableDef, nil
 }
 
+func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, error) {
+	streamName := string(stmt.StreamName.ObjectName)
+	createStream := &plan.CreateTable{
+		IfNotExists: stmt.IfNotExists,
+		TableDef: &TableDef{
+			TableType: catalog.SystemStreamRel,
+			Name:      streamName,
+		},
+	}
+	if len(stmt.StreamName.SchemaName) == 0 {
+		createStream.Database = ctx.DefaultDatabase()
+	} else {
+		createStream.Database = string(stmt.StreamName.SchemaName)
+	}
+
+	if sub, err := ctx.GetSubscriptionMeta(createStream.Database); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
+		return nil, err
+	} else if sub != nil {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
+	}
+
+	if stmt.AsSource != nil {
+		return nil, moerr.NewNYI(ctx.GetContext(), "create stream as : '%v'", stmt.AsSource)
+		//tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+		//if err != nil {
+		//	return nil, err
+		//}
+		//
+		//createStream.TableDef.Cols = tableDef.Cols
+		//createStream.TableDef.ViewSql = tableDef.ViewSql
+		//createStream.TableDef.Defs = tableDef.Defs
+	} else {
+		if err := buildStreamDefs(stmt, ctx, createStream); err != nil {
+			return nil, err
+		}
+	}
+	var properties []*plan.Property
+	properties = append(properties, &plan.Property{
+		Key:   catalog.SystemRelAttr_Kind,
+		Value: catalog.SystemStreamRel,
+	})
+	//configs := make(map[string]interface{})
+	for _, option := range stmt.Options {
+		switch opt := option.(type) {
+		case *tree.CreateStreamWithOption:
+			key := strings.ToLower(string(opt.Key))
+			val := opt.Val.(*tree.NumVal).OrigString()
+			properties = append(properties, &plan.Property{
+				Key:   key,
+				Value: val,
+			})
+			//configs[key] = val
+		}
+	}
+	// TODO:
+	// if err := ValidateConfig(ctx, configs); err != nil {
+	//     return nil, err
+	// }
+	createStream.TableDef.Defs = append(createStream.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_TABLE,
+				Definition: &plan.DataDefinition_CreateTable{
+					CreateTable: createStream,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildStreamDefs(stmt *tree.CreateStream, ctx CompilerContext, createStream *plan.CreateTable) error {
+	colMap := make(map[string]*ColDef)
+	for _, item := range stmt.Defs {
+		switch def := item.(type) {
+		case *tree.ColumnTableDef:
+			colName := def.Name.Parts[0]
+			if _, ok := colMap[colName]; ok {
+				return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name: %s", colName)
+			}
+			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
+			if err != nil {
+				return err
+			}
+			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
+				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
+				if colType.GetWidth() > types.MaxStringSize {
+					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
+				}
+			}
+			col := &ColDef{
+				Name: colName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colType,
+			}
+			colMap[colName] = col
+			for _, attr := range def.Attributes {
+				switch a := attr.(type) {
+				case *tree.AttributeKey:
+					col.Primary = true
+				case *tree.AttributeHeader:
+					col.Header = a.Key
+				case *tree.AttributeHeaders:
+					col.Headers = true
+				}
+			}
+			createStream.TableDef.Cols = append(createStream.TableDef.Cols, col)
+		case *tree.CreateStreamWithOption:
+		default:
+			return moerr.NewNYI(ctx.GetContext(), "stream def: '%v'", def)
+		}
+	}
+	return nil
+}
+
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
 	createTable := &plan.CreateTable{
@@ -606,6 +730,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
+			if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
+				if colType.GetWidth() > types.MaxArrayDimension {
+					return moerr.NewInvalidInput(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
+				}
+			}
 			var pks []string
 			var comment string
 			var auto_incr bool
@@ -620,6 +749,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
+					}
+					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
 				case *tree.AttributeComment:
@@ -981,6 +1113,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
+			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
+			}
+
 			indexParts = append(indexParts, name)
 		}
 
@@ -1593,16 +1729,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		databaseName = ctx.DefaultDatabase()
 	}
 
-	obj, tableDef := ctx.Resolve(databaseName, tableName)
+	_, tableDef := ctx.Resolve(databaseName, tableName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
-	if tableDef.ViewSql != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statement for View")
-	}
-	if obj.PubInfo != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
-	}
+
 	alterTable.Database = databaseName
 	alterTable.IsClusterTable = util.TableIsClusterTable(tableDef.GetTableType())
 	if alterTable.IsClusterTable && ctx.GetAccountId() != catalog.System_Account {
@@ -1852,6 +1983,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
+
+			if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
+				if colType.GetWidth() > types.MaxArrayDimension {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
+				}
+			}
 			var pks []string
 			var comment string
 			var auto_incr bool
@@ -1866,6 +2003,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					}
 					if colType.GetId() == int32(types.T_json) {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
+					}
+					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
 					}
 					pks = append(pks, opt.Column.Name.Parts[0])
 				case *tree.AttributeComment:

@@ -170,6 +170,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		// Marshal and Unmarshal()
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
+		agg0.Free(m)
 		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
 		unmarshalErr := agg1.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
@@ -190,6 +191,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 			vec.Free(m)
 		}
 		v.Free(m)
+		agg1.Free(m)
 	}
 
 	// Merge() Test
@@ -217,6 +219,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		// Marshal and Unmarshal()
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
+		agg0.Free(m)
 		mAgg, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
 		unmarshalErr := mAgg.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
@@ -224,6 +227,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 
 		// Merge()
 		mAgg.Merge(agg1, 0, 0)
+		agg1.Free(m)
 
 		// Eval()
 		v, err := mAgg.Eval(m)
@@ -236,8 +240,12 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 			vec2.Free(m)
 		}
 		v.Free(m)
+		mAgg.Free(m)
 	}
-	//require.Equal(t, int64(0), m.Size())
+
+	// the ut should be rewritten because the source vector is not allocate from mpool.
+	// it's bad to check the size of mpool.
+	//require.Equal(t, int64(0), m.CurrNB())
 }
 
 func GetVector(typ types.Type, input any, nsp []uint64) (*vector.Vector, int) {
@@ -284,6 +292,10 @@ func GetVector(typ types.Type, input any, nsp []uint64) (*vector.Vector, int) {
 		// Make vector by string.
 		// There is another function which can make uuid by uuid directly
 		return testutil.MakeUuidVectorByString(input.([]string), nsp), len(input.([]string))
+	case types.T_array_float32:
+		return testutil.MakeArrayF32Vector(input.([][]float32), nsp), len(input.([][]float32))
+	case types.T_array_float64:
+		return testutil.MakeArrayF64Vector(input.([][]float64), nsp), len(input.([][]float64))
 	}
 
 	return nil, 0
@@ -317,6 +329,10 @@ func CompareResult(t *testing.T, typ types.Type, expected any, vec *vector.Vecto
 		require.Equal(t, expected.([]string), vector.MustStrCol(vec))
 	case types.T_varchar:
 		require.Equal(t, expected.([]string), vector.MustStrCol(vec))
+	case types.T_array_float32:
+		require.Equal(t, expected.([]float32), vector.MustArrayCol[float32](vec))
+	case types.T_array_float64:
+		require.Equal(t, expected.([]float64), vector.MustArrayCol[float64](vec))
 	case types.T_date:
 		require.Equal(t, expected.([]types.Date), vector.MustFixedCol[types.Date](vec))
 	case types.T_time:

@@ -75,6 +75,16 @@ func (s *subPathFS) Read(ctx context.Context, vector *IOVector) error {
 	return s.upstream.Read(ctx, &subVector)
 }
 
+func (s *subPathFS) ReadCache(ctx context.Context, vector *IOVector) error {
+	subVector := *vector
+	p, err := s.toUpstreamPath(subVector.FilePath)
+	if err != nil {
+		return err
+	}
+	subVector.FilePath = p
+	return s.upstream.ReadCache(ctx, &subVector)
+}
+
 func (s *subPathFS) List(ctx context.Context, dirPath string) ([]DirEntry, error) {
 	p, err := s.toUpstreamPath(dirPath)
 	if err != nil {
@@ -85,18 +95,6 @@ func (s *subPathFS) List(ctx context.Context, dirPath string) ([]DirEntry, error
 		return nil, err
 	}
 	return entries, nil
-}
-
-func (s *subPathFS) Preload(ctx context.Context, filePath string) error {
-	p, err := s.toUpstreamPath(filePath)
-	if err != nil {
-		return err
-	}
-	err = s.upstream.Preload(ctx, p)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s *subPathFS) Delete(ctx context.Context, filePaths ...string) error {

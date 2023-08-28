@@ -22,22 +22,22 @@ import (
 
 func TestServiceAddress(t *testing.T) {
 	logServiceNum := 3
-	dnServiceNum := 2
+	tnServiceNum := 2
 	cnServiceNum := 2
 
-	address := newServiceAddresses(t, logServiceNum, dnServiceNum, cnServiceNum, "127.0.0.1")
-	address.assertDNService()
+	address := newServiceAddresses(t, logServiceNum, tnServiceNum, cnServiceNum, "127.0.0.1")
+	address.assertTNService()
 	address.assertLogService()
 	address.assertCnService()
 
-	for i := 0; i < dnServiceNum; i++ {
-		addrList := address.listDnServiceAddresses(i)
-		// 1 address for every dn service now
+	for i := 0; i < tnServiceNum; i++ {
+		addrList := address.listTnServiceAddresses(i)
+		// 1 address for every tn service now
 		require.Equal(t, 2, len(addrList))
 	}
-	// valid dn index: 0, 1
-	// invalid dn index: 2
-	addrList := address.listDnServiceAddresses(2)
+	// valid tn index: 0, 1
+	// invalid tn index: 2
+	addrList := address.listTnServiceAddresses(2)
 	require.Equal(t, 0, len(addrList))
 
 	for i := 0; i < logServiceNum; i++ {
@@ -45,8 +45,8 @@ func TestServiceAddress(t *testing.T) {
 		// 3 addresses for every log service now
 		require.Equal(t, 3, len(addrList))
 	}
-	// valid dn index: 0, 1, 2
-	// invalid dn index: 3
+	// valid tn index: 0, 1, 2
+	// invalid tn index: 3
 	addrList = address.listLogServiceAddresses(3)
 	require.Equal(t, 0, len(addrList))
 
@@ -55,38 +55,38 @@ func TestServiceAddress(t *testing.T) {
 		// 1 address for every cn service now
 		require.Equal(t, 1, len(addrList))
 	}
-	// valid dn index: 0, 1
-	// invalid dn index: 2
+	// valid tn index: 0, 1
+	// invalid tn index: 2
 	addrList = address.listCnServiceAddresses(2)
 	require.Equal(t, 0, len(addrList))
 
 	// ------------------------------
 	// integrate with NetworkPartition
 	// ------------------------------
-	dnIndex := uint32(1)
+	tnIndex := uint32(1)
 	logIndex := uint32(2)
 	cnIndex := uint32(1)
 	partition1 := newNetworkPartition(
 		logServiceNum, []uint32{logIndex},
-		dnServiceNum, []uint32{dnIndex},
+		tnServiceNum, []uint32{tnIndex},
 		cnServiceNum, []uint32{cnIndex},
 	)
 
-	partition2 := remainingNetworkPartition(logServiceNum, dnServiceNum, cnServiceNum, partition1)
+	partition2 := remainingNetworkPartition(logServiceNum, tnServiceNum, cnServiceNum, partition1)
 
 	addrSets := address.buildPartitionAddressSets(partition1, partition2)
 	// there are 2 address sets corresponding with 2 partitions
 	require.Equal(t, 2, len(addrSets))
-	// in partition 1, there are 1 dn service, 1 log service and 1 cn service.
+	// in partition 1, there are 1 tn service, 1 log service and 1 cn service.
 	require.Equal(t, 3+2+1, len(addrSets[0]))
-	// in partition 2, there are 1 dn service, 1 cn service and 2 log service.
+	// in partition 2, there are 1 tn service, 1 cn service and 2 log service.
 	require.Equal(t, 3*2+2+1, len(addrSets[1]))
 
 	// the first address set should contain the following addresses.
-	dnListenAddr := address.getDnListenAddress(int(dnIndex))
-	require.True(t, addrSets[0].contains(dnListenAddr))
-	dnServiceAddr := address.getDnLogtailAddress(int(dnIndex))
-	require.True(t, addrSets[0].contains(dnServiceAddr))
+	tnListenAddr := address.getTnListenAddress(int(tnIndex))
+	require.True(t, addrSets[0].contains(tnListenAddr))
+	tnServiceAddr := address.getTnLogtailAddress(int(tnIndex))
+	require.True(t, addrSets[0].contains(tnServiceAddr))
 	logListenAddr := address.getLogListenAddress(int(logIndex))
 	require.True(t, addrSets[0].contains(logListenAddr))
 	logRaftAddr := address.getLogListenAddress(int(logIndex))
@@ -95,14 +95,14 @@ func TestServiceAddress(t *testing.T) {
 	require.True(t, addrSets[0].contains(logGossipAddr))
 }
 
-func TestGetDnListenAddress(t *testing.T) {
-	dnNum := 3
-	address := newServiceAddresses(t, 1, dnNum, 0, "127.0.0.1")
+func TestGetTnListenAddress(t *testing.T) {
+	tnNum := 3
+	address := newServiceAddresses(t, 1, tnNum, 0, "127.0.0.1")
 
-	addr0 := address.getDnListenAddress(0)
-	addr1 := address.getDnListenAddress(1)
-	addr2 := address.getDnListenAddress(2)
-	addr3 := address.getDnListenAddress(3)
+	addr0 := address.getTnListenAddress(0)
+	addr1 := address.getTnListenAddress(1)
+	addr2 := address.getTnListenAddress(2)
+	addr3 := address.getTnListenAddress(3)
 
 	require.NotEqual(t, addr0, addr1)
 	require.NotEqual(t, addr0, addr2)
@@ -110,14 +110,14 @@ func TestGetDnListenAddress(t *testing.T) {
 	require.Equal(t, "", addr3)
 }
 
-func TestGetDnServiceAddress(t *testing.T) {
-	dnNum := 3
-	address := newServiceAddresses(t, 1, dnNum, 0, "127.0.0.1")
+func TestGetTnServiceAddress(t *testing.T) {
+	tnNum := 3
+	address := newServiceAddresses(t, 1, tnNum, 0, "127.0.0.1")
 
-	addr0 := address.getDnLogtailAddress(0)
-	addr1 := address.getDnLogtailAddress(1)
-	addr2 := address.getDnLogtailAddress(2)
-	addr3 := address.getDnLogtailAddress(3)
+	addr0 := address.getTnLogtailAddress(0)
+	addr1 := address.getTnLogtailAddress(1)
+	addr2 := address.getTnLogtailAddress(2)
+	addr3 := address.getTnLogtailAddress(3)
 
 	require.NotEqual(t, addr0, addr1)
 	require.NotEqual(t, addr0, addr2)
@@ -201,47 +201,47 @@ func TestGetLogGossipSeedAddresses(t *testing.T) {
 
 func TestPartition(t *testing.T) {
 	logServiceNum := 3
-	dnServiceNum := 2
+	tnServiceNum := 2
 	cnServiceNum := 1
 
 	// normal condition
 	{
 		partition := newNetworkPartition(
 			logServiceNum, []uint32{1},
-			dnServiceNum, []uint32{0, 1},
+			tnServiceNum, []uint32{0, 1},
 			cnServiceNum, []uint32{1},
 		)
-		require.Equal(t, []uint32{0, 1}, partition.ListDNServiceIndex())
+		require.Equal(t, []uint32{0, 1}, partition.ListTNServiceIndex())
 		require.Equal(t, []uint32{1}, partition.ListLogServiceIndex())
 
-		remaining := remainingNetworkPartition(logServiceNum, dnServiceNum, cnServiceNum, partition)
-		require.Nil(t, remaining.ListDNServiceIndex())
+		remaining := remainingNetworkPartition(logServiceNum, tnServiceNum, cnServiceNum, partition)
+		require.Nil(t, remaining.ListTNServiceIndex())
 		require.Equal(t, []uint32{0, 2}, remaining.ListLogServiceIndex())
 
-		require.Equal(t, uint64(0), remaining.dnIndexSet.GetCardinality())
+		require.Equal(t, uint64(0), remaining.tnIndexSet.GetCardinality())
 		require.Equal(t, uint64(2), remaining.logIndexSet.GetCardinality())
 		require.True(t, remaining.logIndexSet.Contains(0))
 		require.True(t, remaining.logIndexSet.Contains(2))
 	}
 
-	// valid dn index should be: 0, 1
-	// invoker specifies invalid dn index: 2, 3
+	// valid tn index should be: 0, 1
+	// invoker specifies invalid tn index: 2, 3
 	{
 		partition := newNetworkPartition(
 			logServiceNum, nil,
-			dnServiceNum, []uint32{0, 2, 3},
+			tnServiceNum, []uint32{0, 2, 3},
 			cnServiceNum, nil,
 		)
-		require.Equal(t, []uint32{0}, partition.ListDNServiceIndex())
+		require.Equal(t, []uint32{0}, partition.ListTNServiceIndex())
 		require.Nil(t, partition.ListLogServiceIndex())
 
-		remaining := remainingNetworkPartition(logServiceNum, dnServiceNum, cnServiceNum, partition)
-		require.Equal(t, []uint32{1}, remaining.ListDNServiceIndex())
+		remaining := remainingNetworkPartition(logServiceNum, tnServiceNum, cnServiceNum, partition)
+		require.Equal(t, []uint32{1}, remaining.ListTNServiceIndex())
 		require.Equal(t, []uint32{0, 1, 2}, remaining.ListLogServiceIndex())
 
-		require.Equal(t, uint64(1), remaining.dnIndexSet.GetCardinality())
+		require.Equal(t, uint64(1), remaining.tnIndexSet.GetCardinality())
 		require.Equal(t, uint64(3), remaining.logIndexSet.GetCardinality())
-		require.True(t, remaining.dnIndexSet.Contains(1))
+		require.True(t, remaining.tnIndexSet.Contains(1))
 		require.True(t, remaining.logIndexSet.Contains(0))
 		require.True(t, remaining.logIndexSet.Contains(1))
 		require.True(t, remaining.logIndexSet.Contains(2))

@@ -79,7 +79,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				continue
 			}
 			if bat.IsEmpty() {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.IsEmpty() {
@@ -87,8 +87,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+				bat.Clean(proc.Mp())
 				return process.ExecNext, err
 			}
+			proc.PutBatch(bat)
 			return process.ExecNext, nil
 
 		default:
@@ -107,13 +109,12 @@ func (ctr *container) build(anal process.Analyze) error {
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Map().Size())
+		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
@@ -131,7 +132,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.Map().NewIterator()
+	itr := ctr.mp.NewIterator()
 
 	rowCountIncrease := 0
 	eligible := make([]int32, 0, hashmap.UnitLimit)

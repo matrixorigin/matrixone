@@ -56,6 +56,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = TableScan
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
+	case plan.Node_STREAM_SCAN:
+		pname = "Stream Scan"
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
 	case plan.Node_PROJECT:
@@ -134,7 +136,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_STREAM_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
@@ -360,6 +362,14 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: " + ndesc.Node.JoinType.String()
+	if ndesc.Node.BuildOnLeft {
+		if ndesc.Node.JoinType == plan.Node_SEMI || ndesc.Node.JoinType == plan.Node_ANTI {
+			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
+		}
+	}
+	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.HashOnPK {
+		result += "   hashOnPK"
+	}
 	return result, nil
 }
 
@@ -395,6 +405,10 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 				return "", err
 			}
 			buf.WriteString(")")
+		}
+
+		if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Complex {
+			buf.WriteString(" COMPLEX ")
 		}
 	}
 
@@ -531,6 +545,12 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 				return "", err
 			}
 			buf.WriteString(")")
+		}
+
+		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			buf.WriteString(" REUSE ")
+		} else if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+			buf.WriteString(" RESHUFFLE ")
 		}
 	}
 	return buf.String(), nil

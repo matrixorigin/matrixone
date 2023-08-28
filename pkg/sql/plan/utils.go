@@ -1206,6 +1206,7 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+	//TODO: Check if T_array is required here?
 	switch constT.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {
@@ -1715,4 +1716,20 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
+}
+
+// databaseIsValid checks whether the database exists or not.
+func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+
+	if dbName == "" {
+		return "", moerr.NewNoDB(ctx.GetContext())
+	}
+
+	if !ctx.DatabaseExists(dbName) {
+		return "", moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+	return dbName, nil
 }

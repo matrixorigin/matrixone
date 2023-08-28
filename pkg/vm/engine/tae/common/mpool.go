@@ -31,7 +31,7 @@ func init() {
 	InitTAEMPool()
 }
 
-// dn service call this during start up, to get a real cached pool.
+// tn service call this during start up, to get a real cached pool.
 var once sync.Once
 
 func InitTAEMPool() {

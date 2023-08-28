@@ -44,6 +44,13 @@ type strCompare struct {
 	isConstNull []bool
 }
 
+type arrayCompare struct {
+	desc        bool
+	nullsLast   bool
+	vs          []*vector.Vector
+	isConstNull []bool
+}
+
 const nullsCompareFlag = 100
 
 func nullsCompare(n0, n1 bool, nullsLast bool) int {

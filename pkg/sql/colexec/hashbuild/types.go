@@ -42,17 +42,17 @@ type container struct {
 
 	state int
 
-	hasNull bool
-	isMerge bool
-
-	sels [][]int32
-
-	bat *batch.Batch
+	hasNull   bool
+	isMerge   bool
+	multiSels [][]int32
+	bat       *batch.Batch
 
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *hashmap.StrHashMap
+	intHashMap *hashmap.IntHashMap
+	strHashMap *hashmap.StrHashMap
+	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 }
 
 type Argument struct {
@@ -66,6 +66,7 @@ type Argument struct {
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 
+	HashOnPK             bool
 	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 }
 
@@ -103,8 +104,12 @@ func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 }
 
 func (ctr *container) cleanHashMap() {
-	if ctr.mp != nil {
-		ctr.mp.Free()
-		ctr.mp = nil
+	if ctr.intHashMap != nil {
+		ctr.intHashMap.Free()
+		ctr.intHashMap = nil
+	}
+	if ctr.strHashMap != nil {
+		ctr.strHashMap.Free()
+		ctr.strHashMap = nil
 	}
 }

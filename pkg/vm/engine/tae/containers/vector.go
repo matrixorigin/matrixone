@@ -123,6 +123,14 @@ func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 	return vec
 }
 
+func (vec *vectorWrapper) ApproxSize() int {
+	if vec.wrapped.NeedDup() {
+		return 0
+	} else {
+		return vec.wrapped.Size()
+	}
+}
+
 func (vec *vectorWrapper) PreExtend(length int) (err error) {
 	vec.tryCOW()
 	return vec.wrapped.PreExtend(length, vec.mpool)
@@ -231,7 +239,7 @@ func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 
 	n += 8
 
-	// 1. Whole DN Vector
+	// 1. Whole TN Vector
 	buf = make([]byte, types.DecodeInt64(buf[:]))
 	if _, err = r.Read(buf); err != nil {
 		return
@@ -497,33 +505,15 @@ func (vec *vectorWrapper) String() string {
 // Deprecated: Only use for test functions
 func (vec *vectorWrapper) PPString(num int) string {
 	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
 	limit := vec.Length()
 	if num > 0 && num < limit {
 		limit = num
 	}
-	size := vec.Length()
-	long := false
-	if size > limit {
-		long = true
-		size = limit
-	}
-	for i := 0; i < size; i++ {
-		if vec.IsNull(i) {
-			_, _ = w.WriteString("null")
-			continue
-		}
-		if vec.GetType().IsVarlen() {
-			_, _ = w.WriteString(fmt.Sprintf("%s, ", vec.Get(i).([]byte)))
-		} else {
-			_, _ = w.WriteString(fmt.Sprintf("%v, ", vec.Get(i)))
-		}
-	}
-	if long {
+	_, _ = w.WriteString(fmt.Sprintf("[T=%s]%s", vec.GetType().String(), common.MoVectorToString(vec.GetDownstreamVector(), limit)))
+	if vec.Length() > num {
 		_, _ = w.WriteString("...")
 	}
-	_, _ = w.WriteString(")]")
-	_, _ = w.WriteString(fmt.Sprintf(")][%v]", vec.element != nil))
+	_, _ = w.WriteString(fmt.Sprintf("[%v]", vec.element != nil))
 	return w.String()
 }
 

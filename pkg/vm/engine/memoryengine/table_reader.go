@@ -82,13 +82,13 @@ func (t *Table) NewReader(
 			id := binary.LittleEndian.Uint64(bs)
 			idSet[id] = true
 		}
-		for _, store := range getDNServices(t.engine.cluster) {
+		for _, store := range getTNServices(t.engine.cluster) {
 			for _, shard := range store.Shards {
 				if !idSet[shard.ShardID] {
 					continue
 				}
 				shards = append(shards, Shard{
-					DNShardRecord: metadata.DNShardRecord{
+					TNShardRecord: metadata.TNShardRecord{
 						ShardID: shard.ShardID,
 					},
 					ReplicaID: shard.ReplicaID,
@@ -210,7 +210,7 @@ func (t *Table) GetEngineType() engine.EngineType {
 
 func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([][]byte, error) {
 	// return encoded shard ids
-	nodes := getDNServices(t.engine.cluster)
+	nodes := getTNServices(t.engine.cluster)
 	shards := make([][]byte, 0, len(nodes))
 	for _, node := range nodes {
 		for _, shard := range node.Shards {
@@ -220,4 +220,8 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([][]byte, error) {
 		}
 	}
 	return shards, nil
+}
+
+func (t *Table) UpdateBlockInfos(_ context.Context) error {
+	return nil
 }

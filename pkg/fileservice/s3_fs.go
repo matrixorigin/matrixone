@@ -24,7 +24,6 @@ import (
 	"net"
 	stdhttp "net/http"
 	"net/url"
-	"os"
 	pathpkg "path"
 	gotrace "runtime/trace"
 	"sort"
@@ -144,8 +143,8 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			WithLRU(int64(*config.MemoryCapacity)),
-			WithPerfCounterSets(s.perfCounterSets),
+			NewLRUCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			s.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", s.name),
@@ -470,6 +469,35 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
+func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	if len(vector.Entries) == 0 {
+		return moerr.NewEmptyVectorNoCtx()
+	}
+
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: vector.FilePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
+	}
+
+	if s.memCache != nil {
+		if err := s.memCache.Read(ctx, vector); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	if vector.allDone() {
 		return nil
@@ -507,29 +535,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 	getReader := func(ctx context.Context, readToEnd bool, min int64, max int64) (io.ReadCloser, error) {
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
-
-		// try to load from disk cache
-		if s.diskCache != nil {
-			r, err := s.diskCache.GetFileContent(ctx, vector.FilePath, min)
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) ||
-				os.IsNotExist(err) {
-				err = nil
-			}
-			if err != nil {
-				return nil, err
-			}
-			if r != nil {
-				// cache hit
-				if readToEnd {
-					return r, nil
-				} else {
-					return &readCloser{
-						r:         io.LimitReader(r, max-min),
-						closeFunc: r.Close,
-					}, nil
-				}
-			}
-		}
 
 		if readToEnd {
 			r, err := s.s3GetObject(
@@ -716,16 +721,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		vector.Entries[i] = entry
 	}
 
-	return nil
-}
-
-func (s *S3FS) Preload(ctx context.Context, filePath string) error {
-	if s.diskCache != nil {
-		err := s.diskCache.SetFileContent(ctx, filePath, s.read)
-		if err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

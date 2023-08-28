@@ -35,6 +35,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -81,8 +82,8 @@ func (ncw *NullComputationWrapper) GetUUID() []byte {
 	return ncw.uuid[:]
 }
 
-func (ncw *NullComputationWrapper) Run(ts uint64) error {
-	return nil
+func (ncw *NullComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
+	return nil, nil
 }
 
 func (ncw *NullComputationWrapper) GetLoadTag() bool {
@@ -90,11 +91,12 @@ func (ncw *NullComputationWrapper) GetLoadTag() bool {
 }
 
 type TxnComputationWrapper struct {
-	stmt    tree.Statement
-	plan    *plan2.Plan
-	proc    *process.Process
-	ses     *Session
-	compile *compile.Compile
+	stmt      tree.Statement
+	plan      *plan2.Plan
+	proc      *process.Process
+	ses       *Session
+	compile   *compile.Compile
+	runResult *util2.RunResult
 
 	uuid uuid.UUID
 }
@@ -185,7 +187,7 @@ func (cwft *TxnComputationWrapper) GetClock() clock.Clock {
 }
 
 func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
-	return cwft.compile.GetAffectedRows()
+	return cwft.runResult.AffectRows
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
@@ -196,9 +198,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.ses.IfInitedTempEngine() {
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.SetRequestContext(requestCtx)
-		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 	}
 
@@ -352,6 +354,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.ses.isInternal,
 		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
 	)
+	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
+		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+	})
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
@@ -363,13 +368,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// check if it is necessary to initialize the temporary engine
 	if cwft.compile.NeedInitTempEngine(cwft.ses.IfInitedTempEngine()) {
 		// 0. init memory-non-dist storage
-		dnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
+		tnStore, err := cwft.ses.SetTempTableStorage(cwft.GetClock())
 		if err != nil {
 			return nil, err
 		}
 
 		// temporary storage is passed through Ctx
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
 
 		// 1. init memory-non-dist engine
 		tempEngine := memoryengine.New(
@@ -382,8 +387,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 				nil,
 				0,
 				clusterservice.WithDisableRefresh(),
-				clusterservice.WithServices(nil, []metadata.DNService{
-					*dnStore,
+				clusterservice.WithServices(nil, []metadata.TNService{
+					*tnStore,
 				})),
 		)
 
@@ -415,13 +420,15 @@ func (cwft *TxnComputationWrapper) GetUUID() []byte {
 	return cwft.uuid[:]
 }
 
-func (cwft *TxnComputationWrapper) Run(ts uint64) error {
+func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 	logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run begin")
 	defer func() {
 		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
-	err := cwft.compile.Run(ts)
-	return err
+	runResult, err := cwft.compile.Run(ts)
+	cwft.runResult = runResult
+	cwft.compile = nil
+	return runResult, err
 }
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {

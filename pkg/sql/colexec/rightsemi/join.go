@@ -83,7 +83,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				continue
 			}
 			if bat.IsEmpty() {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 
@@ -93,9 +93,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			}
 
 			if err = ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
+				bat.Clean(proc.Mp())
 				return process.ExecNext, err
 			}
-
+			proc.PutBatch(bat)
 			continue
 
 		case SendLast:
@@ -129,7 +130,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(bat.RowCount())
-		analyze.Alloc(ctr.mp.Map().Size())
+		analyze.Alloc(ctr.mp.Size())
 	}
 	return nil
 }
@@ -182,7 +183,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) error {
-	defer proc.PutBatch(bat)
 	analyze.Input(bat, isFirst)
 
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
@@ -196,7 +196,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.Map().NewIterator()
+	itr := ctr.mp.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -235,8 +235,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 	}
-
-	// proc.SetInputBatch(batch.EmptyBatch)
 	return nil
 }
 

@@ -335,3 +335,23 @@ update t1 set a=null where b=1;
 select * from t1;
 commit;
 drop table if exists t1;
+
+-- -------------------------------------------------------
+drop table if exists rename01;
+create table rename01 (c int primary key,d int);
+insert into rename01 values(1,1);
+insert into rename01 values(2,2);
+begin;
+insert into rename01 values(3,1);
+insert into rename01 values(4,2);
+alter table rename01 rename column c to `newCCCC`;
+select * from rename01;
+-- @session:id=1{
+use isolation;
+-- @wait:0:commit
+insert into rename01 (c, d) values (5,7);
+insert into rename01 (newCCCC, d) values (5,7);
+select * from rename01;
+-- @session}
+select * from rename01;
+drop table rename01;

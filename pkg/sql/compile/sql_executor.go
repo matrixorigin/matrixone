@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -249,12 +250,14 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	if err != nil {
 		return executor.Result{}, err
 	}
-	if err := c.Run(0); err != nil {
+	var runResult *util.RunResult
+	runResult, err = c.Run(0)
+	if err != nil {
 		return executor.Result{}, err
 	}
 
 	result.Batches = batches
-	result.AffectedRows = c.GetAffectedRows()
+	result.AffectedRows = runResult.AffectRows
 	return result, nil
 }
 

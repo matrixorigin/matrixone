@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -159,7 +160,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			if ctr.blockId_type[blkid] != 0 {
 				continue
 			}
-			err = s3writer.WriteBlock(bat)
+			err = s3writer.WriteBlock(bat, objectio.SchemaTombstone)
 			if err != nil {
 				return 0, err
 			}
@@ -332,7 +333,8 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAt[types.Rowid](col, int(row))
 	case types.T_Blockid:
 		return vector.GetFixedAt[types.Blockid](col, int(row))
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		return col.GetBytesAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport

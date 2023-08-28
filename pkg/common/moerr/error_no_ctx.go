@@ -204,8 +204,8 @@ func NewTAEErrorNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrTAEError, xmsg)
 }
 
-func NewDNShardNotFoundNoCtx(uuid string, id uint64) *Error {
-	return newError(Context(), ErrDNShardNotFound, uuid, id)
+func NewTNShardNotFoundNoCtx(uuid string, id uint64) *Error {
+	return newError(Context(), ErrTNShardNotFound, uuid, id)
 }
 
 func NewShardNotReportedNoCtx(uuid string, id uint64) *Error {
@@ -310,6 +310,10 @@ func NewProcedureAlreadyExistsNoCtx(f string) *Error {
 
 func NewTxnNeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnNeedRetry)
+}
+
+func NewTxnNeedRetryWithDefChangedNoCtx() *Error {
+	return newError(Context(), ErrTxnNeedRetryWithDefChanged)
 }
 
 func NewTxnCannotRetryNoCtx() *Error {

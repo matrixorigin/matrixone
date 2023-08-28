@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -39,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -50,7 +50,7 @@ var (
 
 	supportServiceTypes = map[string]metadata.ServiceType{
 		metadata.ServiceType_CN.String():    metadata.ServiceType_CN,
-		metadata.ServiceType_DN.String():    metadata.ServiceType_DN,
+		metadata.ServiceType_TN.String():    metadata.ServiceType_TN,
 		metadata.ServiceType_LOG.String():   metadata.ServiceType_LOG,
 		metadata.ServiceType_PROXY.String(): metadata.ServiceType_PROXY,
 	}
@@ -60,8 +60,8 @@ var (
 type LaunchConfig struct {
 	// LogServiceConfigFiles log service config files
 	LogServiceConfigFiles []string `toml:"logservices"`
-	// DNServiceConfigsFiles log service config files
-	DNServiceConfigsFiles []string `toml:"dnservices"`
+	// TNServiceConfigsFiles log service config files
+	TNServiceConfigsFiles []string `toml:"tnservices"`
 	// CNServiceConfigsFiles log service config files
 	CNServiceConfigsFiles []string `toml:"cnservices"`
 	// CNServiceConfigsFiles log service config files
@@ -75,14 +75,15 @@ type Config struct {
 	// Log log config
 	Log logutil.LogConfig `toml:"log"`
 	// ServiceType service type, select the corresponding configuration to start the
-	// service according to the service type. [CN|DN|LOG|PROXY]
+	// service according to the service type. [CN|TN|LOG|PROXY]
 	ServiceType string `toml:"service-type"`
 	// FileServices the config for file services
 	FileServices []fileservice.Config `toml:"fileservice"`
 	// HAKeeperClient hakeeper client config
 	HAKeeperClient logservice.HAKeeperClientConfig `toml:"hakeeper-client"`
-	// DN dn service config
-	DN dnservice.Config `toml:"dn"`
+	// TN tn service config
+	TN_please_use_getTNServiceConfig *tnservice.Config `toml:"tn"`
+	TNCompatible                     *tnservice.Config `toml:"dn"` // for old config files compatibility
 	// LogService is the config for log service
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
@@ -257,8 +258,13 @@ func (c *Config) createFileService(ctx context.Context, defaultName string, perf
 		})
 	}
 
-	for _, config := range c.FileServices {
+	// set distributed cache callbacks
+	for i, config := range c.FileServices {
+		c.setDistributedCacheCallbacks(&config)
+		c.FileServices[i] = config
+	}
 
+	for _, config := range c.FileServices {
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			ctx,
@@ -338,8 +344,14 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	return cfg
 }
 
-func (c *Config) getDNServiceConfig() dnservice.Config {
-	cfg := c.DN
+func (c *Config) getTNServiceConfig() tnservice.Config {
+	if c.TN_please_use_getTNServiceConfig == nil && c.TNCompatible != nil {
+		c.TN_please_use_getTNServiceConfig = c.TNCompatible
+	}
+	var cfg tnservice.Config
+	if c.TN_please_use_getTNServiceConfig != nil {
+		cfg = *c.TN_please_use_getTNServiceConfig
+	}
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "dn-data", cfg.UUID)
 	return cfg
@@ -405,8 +417,8 @@ func (c *Config) hashNodeID() uint16 {
 	switch st {
 	case metadata.ServiceType_CN:
 		uuid = c.CN.UUID
-	case metadata.ServiceType_DN:
-		uuid = c.DN.UUID
+	case metadata.ServiceType_TN:
+		uuid = c.getTNServiceConfig().UUID
 	case metadata.ServiceType_LOG:
 		uuid = c.LogService.UUID
 	}
@@ -423,6 +435,9 @@ func (c *Config) hashNodeID() uint16 {
 }
 
 func (c *Config) getServiceType() (metadata.ServiceType, error) {
+	if c.ServiceType == "DN" { // for old config files compatibility
+		c.ServiceType = metadata.ServiceType_TN.String()
+	}
 	if v, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; ok {
 		return v, nil
 	}
@@ -441,12 +456,24 @@ func (c *Config) mustGetServiceUUID() string {
 	switch c.mustGetServiceType() {
 	case metadata.ServiceType_CN:
 		return c.CN.UUID
-	case metadata.ServiceType_DN:
-		return c.DN.UUID
+	case metadata.ServiceType_TN:
+		return c.getTNServiceConfig().UUID
 	case metadata.ServiceType_LOG:
 		return c.LogService.UUID
 	case metadata.ServiceType_PROXY:
 		return c.ProxyConfig.UUID
 	}
 	panic("impossible")
+}
+
+func (c *Config) setDistributedCacheCallbacks(fsConfig *fileservice.Config) {
+
+	fsConfig.Cache.PostSet = append(fsConfig.Cache.PostSet, func(key fileservice.CacheKey, value fileservice.CacheData) {
+		//TODO
+	})
+
+	fsConfig.Cache.PostEvict = append(fsConfig.Cache.PostEvict, func(key fileservice.CacheKey, value fileservice.CacheData) {
+		//TODO
+	})
+
 }

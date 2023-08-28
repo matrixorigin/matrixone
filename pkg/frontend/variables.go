@@ -1353,7 +1353,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableUintType("query_result_maxsize", 0, 18446744073709551615),
 		Default:           uint64(100),
 	},
-	//whether DN does primary key uniqueness check against transaction's workspace or not.
+	//whether TN does primary key uniqueness check against transaction's workspace or not.
 	"mo_pk_check_by_dn": {
 		Name:              "mo_pk_check_by_dn",
 		Scope:             ScopeSession,
@@ -3090,6 +3090,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("sql_log_off"),
 		Default:           int64(0),
 	},
+	"sql_log_bin": {
+		Name:              "sql_log_bin",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("sql_log_bin"),
+		Default:           int64(0),
+	},
 	"sql_notes": {
 		Name:              "sql_notes",
 		Scope:             ScopeBoth,
@@ -3449,6 +3457,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableStringType("version"),
 		Default:           "8.0.30-MatrixOne-v1.0.0",
+	},
+	"gtid_purged": {
+		Name:              "gtid_purged",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("gtid_purged"),
+		Default:           "",
 	},
 }
 

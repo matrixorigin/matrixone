@@ -175,6 +175,7 @@ const (
 	BlockMeta_DeltaLoc        = "delta_loc"
 	BlockMeta_CommitTs        = "committs"
 	BlockMeta_SegmentID       = "segment_id"
+	BlockMeta_MemTruncPoint   = "trunc_pointt"
 	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
 	BlockMeta_Type            = "%!%mo__meta_type"
 	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
@@ -192,6 +193,7 @@ const (
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
 	SystemExternalRel     = plan.SystemExternalRel
+	SystemStreamRel       = "s"
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
@@ -277,13 +279,14 @@ const (
 	MO_COLUMNS_ATT_SEQNUM_IDX            = 22
 	MO_COLUMNS_ATT_ENUM_IDX              = 23
 
-	BLOCKMETA_ID_IDX         = 0
-	BLOCKMETA_ENTRYSTATE_IDX = 1
-	BLOCKMETA_SORTED_IDX     = 2
-	BLOCKMETA_METALOC_IDX    = 3
-	BLOCKMETA_DELTALOC_IDX   = 4
-	BLOCKMETA_COMMITTS_IDX   = 5
-	BLOCKMETA_SEGID_IDX      = 6
+	BLOCKMETA_ID_IDX            = 0
+	BLOCKMETA_ENTRYSTATE_IDX    = 1
+	BLOCKMETA_SORTED_IDX        = 2
+	BLOCKMETA_METALOC_IDX       = 3
+	BLOCKMETA_DELTALOC_IDX      = 4
+	BLOCKMETA_COMMITTS_IDX      = 5
+	BLOCKMETA_SEGID_IDX         = 6
+	BLOCKMETA_MemTruncPoint_IDX = 7
 
 	SKIP_ROWID_OFFSET = 1 //rowid is the 0th vector in the batch
 )
@@ -541,6 +544,16 @@ var (
 		BlockMeta_DeltaLoc,
 		BlockMeta_CommitTs,
 		BlockMeta_SegmentID,
+		BlockMeta_MemTruncPoint,
+	}
+	MoTableMetaSchemaV1 = []string{
+		BlockMeta_ID,
+		BlockMeta_EntryState,
+		BlockMeta_Sorted,
+		BlockMeta_MetaLoc,
+		BlockMeta_DeltaLoc,
+		BlockMeta_CommitTs,
+		BlockMeta_SegmentID,
 	}
 	MoDatabaseTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),     // dat_id
@@ -651,6 +664,62 @@ var (
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
 		types.New(types.T_TS, 0, 0),                        // committs
 		types.New(types.T_uuid, 0, 0),                      // segment_id
+		types.New(types.T_TS, 0, 0),                        // flush_point
+	}
+	MoTableMetaTypesV1 = []types.Type{
+		types.New(types.T_Blockid, 0, 0),                   // block_id
+		types.New(types.T_bool, 0, 0),                      // entry_state, true for appendable
+		types.New(types.T_bool, 0, 0),                      // sorted, true for sorted by primary key
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // meta_loc
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
+		types.New(types.T_TS, 0, 0),                        // committs
+		types.New(types.T_uuid, 0, 0),                      // segment_id
+	}
+	MoTablesIdxs = []uint16{
+		MO_TABLES_REL_ID_IDX,
+		MO_TABLES_REL_NAME_IDX,
+		MO_TABLES_RELDATABASE_IDX,
+		MO_TABLES_RELDATABASE_ID_IDX,
+		MO_TABLES_RELPERSISTENCE_IDX,
+		MO_TABLES_RELKIND_IDX,
+		MO_TABLES_REL_COMMENT_IDX,
+		MO_TABLES_REL_CREATESQL_IDX,
+		MO_TABLES_CREATED_TIME_IDX,
+		MO_TABLES_CREATOR_IDX,
+		MO_TABLES_OWNER_IDX,
+		MO_TABLES_ACCOUNT_ID_IDX,
+		MO_TABLES_PARTITIONED_IDX,
+		MO_TABLES_PARTITION_INFO_IDX,
+		MO_TABLES_VIEWDEF_IDX,
+		MO_TABLES_CONSTRAINT_IDX,
+		MO_TABLES_VERSION_IDX,
+		MO_TABLES_CATALOG_VERSION_IDX,
+	}
+	MoColumnsIdxs = []uint16{
+		MO_COLUMNS_ATT_UNIQ_NAME_IDX,
+		MO_COLUMNS_ACCOUNT_ID_IDX,
+		MO_COLUMNS_ATT_DATABASE_ID_IDX,
+		MO_COLUMNS_ATT_DATABASE_IDX,
+		MO_COLUMNS_ATT_RELNAME_ID_IDX,
+		MO_COLUMNS_ATT_RELNAME_IDX,
+		MO_COLUMNS_ATTNAME_IDX,
+		MO_COLUMNS_ATTTYP_IDX,
+		MO_COLUMNS_ATTNUM_IDX,
+		MO_COLUMNS_ATT_LENGTH_IDX,
+		MO_COLUMNS_ATTNOTNULL_IDX,
+		MO_COLUMNS_ATTHASDEF_IDX,
+		MO_COLUMNS_ATT_DEFAULT_IDX,
+		MO_COLUMNS_ATTISDROPPED_IDX,
+		MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX,
+		MO_COLUMNS_ATT_IS_UNSIGNED_IDX,
+		MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX,
+		MO_COLUMNS_ATT_COMMENT_IDX,
+		MO_COLUMNS_ATT_IS_HIDDEN_IDX,
+		MO_COLUMNS_ATT_HAS_UPDATE_IDX,
+		MO_COLUMNS_ATT_UPDATE_IDX,
+		MO_COLUMNS_ATT_IS_CLUSTERBY,
+		MO_COLUMNS_ATT_SEQNUM_IDX,
+		MO_COLUMNS_ATT_ENUM_IDX,
 	}
 
 	// used by memengine or tae

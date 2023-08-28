@@ -87,6 +87,9 @@ func (s *CNServer) Connect() (goetty.IOSession, error) {
 	if err != nil {
 		return nil, newConnectErr(err)
 	}
+	if len(s.salt) != 20 {
+		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
+	}
 	// When build connection with backend server, proxy send its salt
 	// to make sure the backend server uses the same salt to do authentication.
 	if err := c.Write(s.salt, goetty.WriteOptions{Flush: true}); err != nil {

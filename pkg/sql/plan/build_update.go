@@ -187,10 +187,8 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 					if err != nil {
 						return 0, nil, err
 					}
-					tblName := tableInfo.tableDefs[0].Name
 					exprs := []tree.Expr{
-						tree.NewNumValWithType(constant.MakeString(tblName), tblName, false, tree.P_char),
-						tree.NewNumValWithType(constant.MakeString(colName), colName, false, tree.P_char),
+						tree.NewNumValWithType(constant.MakeString(coldef.Typ.Enumvalues), coldef.Typ.Enumvalues, false, tree.P_char),
 						updateKey,
 					}
 					if updateKeyExpr.Typ.Id >= 20 && updateKeyExpr.Typ.Id <= 29 {

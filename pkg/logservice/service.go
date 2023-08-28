@@ -19,6 +19,7 @@ package logservice
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -56,7 +58,7 @@ func firstError(err1 error, err2 error) error {
 // Service is the top layer component of a log service node. It manages the
 // underlying log store which in turn manages all log shards including the
 // HAKeeper shard. The Log Service component communicates with LogService
-// clients owned by DN nodes and the HAKeeper service via network, it can
+// clients owned by TN nodes and the HAKeeper service via network, it can
 // be considered as the interface layer of the LogService.
 type Service struct {
 	cfg         Config
@@ -266,8 +268,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleCNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CN_ALLOCATE_ID:
 		return s.handleCNAllocateID(ctx, req), pb.LogRecordResponse{}
-	case pb.DN_HEARTBEAT:
-		return s.handleDNHeartbeat(ctx, req), pb.LogRecordResponse{}
+	case pb.TN_HEARTBEAT:
+		return s.handleTNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CHECK_HAKEEPER:
 		return s.handleCheckHAKeeper(ctx, req), pb.LogRecordResponse{}
 	case pb.GET_CLUSTER_DETAILS:
@@ -285,7 +287,11 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 	case pb.DELETE_CN_STORE:
 		return s.handleDeleteCNStore(ctx, req), pb.LogRecordResponse{}
 	default:
-		panic("unknown log service method type")
+		resp := getResponse(req)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
+			moerr.NewNotSupported(ctx,
+				fmt.Sprintf("logservice method type %d", req.Method)))
+		return resp, pb.LogRecordResponse{}
 	}
 }
 
@@ -337,7 +343,7 @@ func (s *Service) handleTsoUpdate(ctx context.Context, req pb.Request) pb.Respon
 func (s *Service) handleConnect(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.getOrExtendDNLease(ctx, r.ShardID, r.DNID); err != nil {
+	if err := s.store.getOrExtendTNLease(ctx, r.ShardID, r.TNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -436,10 +442,10 @@ func (s *Service) handleCNAllocateID(ctx context.Context, req pb.Request) pb.Res
 	return resp
 }
 
-func (s *Service) handleDNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
-	hb := req.DNHeartbeat
+func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	hb := req.TNHeartbeat
 	resp := getResponse(req)
-	if cb, err := s.store.addDNStoreHeartbeat(ctx, *hb); err != nil {
+	if cb, err := s.store.addTNStoreHeartbeat(ctx, *hb); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {

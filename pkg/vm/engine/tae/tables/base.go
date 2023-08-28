@@ -79,6 +79,22 @@ func (blk *baseBlock) Close() {
 	// TODO
 }
 
+func (blk *baseBlock) GetRuntime() *dbutils.Runtime {
+	return blk.rt
+}
+
+func (blk *baseBlock) EstimateMemSize() int {
+	node := blk.PinNode()
+	defer node.Unref()
+	blk.RLock()
+	defer blk.RUnlock()
+	size := blk.mvcc.EstimateMemSizeLocked()
+	if !node.IsPersisted() {
+		size += node.MustMNode().EstimateMemSize()
+	}
+	return size
+}
+
 func (blk *baseBlock) PinNode() *Node {
 	n := blk.node.Load()
 	// if ref fails, reload.
@@ -176,7 +192,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if bat.Vecs[0].GetType().Oid != types.T_TS {
 		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
 	}
-	vec = containers.ToDNVector(bat.Vecs[0])
+	vec = containers.ToTNVector(bat.Vecs[0])
 	return
 }
 
@@ -307,7 +323,9 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 		abortVec := deletes.Vecs[3].GetDownstreamVector()
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
-		for i := 0; i < deletes.Length(); i++ {
+
+		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), &blk.meta.ID)
+		for i := rstart; i < rend; i++ {
 			if skipAbort {
 				abort := vector.GetFixedAt[bool](abortVec, i)
 				if abort {
@@ -563,11 +581,10 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
-	return
+	return blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 }
 
 func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *containers.BlockView, err error) {
@@ -676,13 +693,16 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 			if bat == nil {
 				bat = containers.NewBatchWithCapacity(len(delBat.Attrs))
 				for i, name := range delBat.Attrs {
+					if !withAborted && name == catalog.AttrAborted {
+						continue
+					}
 					bat.AddVector(
 						name,
 						blk.rt.VectorPool.Transient.GetVector(delBat.Vecs[i].GetType()),
 					)
 				}
 			}
-			for _, name := range delBat.Attrs {
+			for _, name := range bat.Attrs {
 				retVec := bat.GetVectorByName(name)
 				srcVec := delBat.GetVectorByName(name)
 				retVec.PreExtend(sels.Length())

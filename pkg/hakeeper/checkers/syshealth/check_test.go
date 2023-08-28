@@ -46,9 +46,9 @@ func TestShutdownStores(t *testing.T) {
 		}
 	}
 
-	// operator for dn service
+	// operator for tn service
 	{
-		serviceType := pb.DNService
+		serviceType := pb.TNService
 		ops := shutdownStores(serviceType, stores)
 		require.Equal(t, len(stores), len(ops))
 
@@ -57,7 +57,7 @@ func TestShutdownStores(t *testing.T) {
 			steps := op.OpSteps()
 			require.Equal(t, 1, len(steps))
 
-			_, ok := steps[0].(operator.StopDnStore)
+			_, ok := steps[0].(operator.StopTnStore)
 			require.True(t, ok)
 		}
 	}
@@ -99,44 +99,44 @@ func TestParseLogStores(t *testing.T) {
 	require.Equal(t, 2, len(logStores.shutdownWorkingStores()))
 }
 
-func TestParseDnStores(t *testing.T) {
+func TestParseTnStores(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make heartbeat tick expired
 	cfg := hakeeper.Config{}
 	cfg.Fill()
-	currTick := cfg.ExpiredTick(expiredTick, cfg.DNStoreTimeout) + 1
+	currTick := cfg.ExpiredTick(expiredTick, cfg.TNStoreTimeout) + 1
 
-	dnState := pb.DNState{
-		Stores: map[string]pb.DNStoreInfo{
+	tnState := pb.TNState{
+		Stores: map[string]pb.TNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(10, 100),
+				Shards: []pb.TNShardInfo{
+					mockTnShardInfo(10, 100),
 				},
 			},
 			"working1": {
 				Tick: currTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(11, 101),
+				Shards: []pb.TNShardInfo{
+					mockTnShardInfo(11, 101),
 				},
 			},
 			"working2": {
 				Tick: currTick,
-				Shards: []pb.DNShardInfo{
-					mockDnShardInfo(12, 102),
-					mockDnShardInfo(13, 103),
+				Shards: []pb.TNShardInfo{
+					mockTnShardInfo(12, 102),
+					mockTnShardInfo(13, 103),
 				},
 			},
 		},
 	}
 
-	dnStores := parseDnState(cfg, dnState, currTick)
-	require.Equal(t, len(dnState.Stores), dnStores.length())
-	require.Equal(t, pb.DNService, dnStores.serviceType)
-	require.Equal(t, 1, len(dnStores.expired))
-	require.Equal(t, 1, len(dnStores.shutdownExpiredStores()))
-	require.Equal(t, 2, len(dnStores.working))
-	require.Equal(t, 2, len(dnStores.shutdownWorkingStores()))
+	tnStores := parseTnState(cfg, tnState, currTick)
+	require.Equal(t, len(tnState.Stores), tnStores.length())
+	require.Equal(t, pb.TNService, tnStores.serviceType)
+	require.Equal(t, 1, len(tnStores.expired))
+	require.Equal(t, 1, len(tnStores.shutdownExpiredStores()))
+	require.Equal(t, 2, len(tnStores.working))
+	require.Equal(t, 2, len(tnStores.shutdownWorkingStores()))
 }
 
 func TestLogShard(t *testing.T) {
@@ -270,31 +270,31 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		dnState := pb.DNState{
-			Stores: map[string]pb.DNStoreInfo{
+		tnState := pb.TNState{
+			Stores: map[string]pb.TNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(10, 100),
+					Shards: []pb.TNShardInfo{
+						mockTnShardInfo(10, 100),
 					},
 				},
 				"working11": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(11, 101),
+					Shards: []pb.TNShardInfo{
+						mockTnShardInfo(11, 101),
 					},
 				},
 				"working12": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(12, 102),
-						mockDnShardInfo(13, 103),
+					Shards: []pb.TNShardInfo{
+						mockTnShardInfo(12, 102),
+						mockTnShardInfo(13, 103),
 					},
 				},
 			},
 		}
 
-		ops, healthy := Check(cfg, pb.ClusterInfo{}, dnState, logState, currTick)
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick)
 		require.True(t, healthy)
 		require.Equal(t, 0, len(ops))
 	}
@@ -321,31 +321,31 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		dnState := pb.DNState{
-			Stores: map[string]pb.DNStoreInfo{
+		tnState := pb.TNState{
+			Stores: map[string]pb.TNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(10, 100),
+					Shards: []pb.TNShardInfo{
+						mockTnShardInfo(10, 100),
 					},
 				},
 				"working11": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(11, 101),
+					Shards: []pb.TNShardInfo{
+						mockTnShardInfo(11, 101),
 					},
 				},
 				"working12": {
 					Tick: currTick,
-					Shards: []pb.DNShardInfo{
-						mockDnShardInfo(12, 102),
-						mockDnShardInfo(13, 103),
+					Shards: []pb.TNShardInfo{
+						mockTnShardInfo(12, 102),
+						mockTnShardInfo(13, 103),
 					},
 				},
 			},
 		}
 
-		ops, healthy := Check(cfg, pb.ClusterInfo{}, dnState, logState, currTick)
+		ops, healthy := Check(cfg, pb.ClusterInfo{}, tnState, logState, currTick)
 		require.False(t, healthy)
 		require.Equal(t, 6, len(ops))
 	}
@@ -366,8 +366,8 @@ func mockLogStoreInfo(tick uint64, replicas ...pb.LogReplicaInfo) pb.LogStoreInf
 	}
 }
 
-func mockDnShardInfo(shardID, replicaID uint64) pb.DNShardInfo {
-	return pb.DNShardInfo{
+func mockTnShardInfo(shardID, replicaID uint64) pb.TNShardInfo {
+	return pb.TNShardInfo{
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}
