@@ -36,7 +36,7 @@ type CheckpointEntry struct {
 	state      State
 	entryType  EntryType
 	cnLocation objectio.Location
-	dnLocation objectio.Location
+	tnLocation objectio.Location
 	lastPrint  time.Time
 	version    uint32
 }
@@ -85,11 +85,11 @@ func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
 func (e *CheckpointEntry) LessEq(ts types.TS) bool {
 	return e.end.LessEq(ts)
 }
-func (e *CheckpointEntry) SetLocation(cn, dn objectio.Location) {
+func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	e.Lock()
 	defer e.Unlock()
 	e.cnLocation = cn
-	e.dnLocation = dn
+	e.tnLocation = tn
 }
 
 func (e *CheckpointEntry) GetLocation() objectio.Location {
@@ -156,7 +156,7 @@ func (e *CheckpointEntry) Prefetch(
 		ctx,
 		e.version,
 		fs.Service,
-		e.dnLocation,
+		e.tnLocation,
 	); err != nil {
 		return
 	}
@@ -168,7 +168,7 @@ func (e *CheckpointEntry) Read(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
+	reader, err := blockio.NewObjectReader(fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
@@ -176,7 +176,7 @@ func (e *CheckpointEntry) Read(
 	if err = data.ReadFrom(
 		ctx,
 		e.version,
-		e.dnLocation,
+		e.tnLocation,
 		reader,
 		fs.Service,
 		common.DefaultAllocator,
@@ -195,7 +195,7 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 		ctx,
 		e.version,
 		fs.Service,
-		e.dnLocation,
+		e.tnLocation,
 	); err != nil {
 		return
 	}
@@ -207,11 +207,11 @@ func (e *CheckpointEntry) ReadMetaIdx(
 	fs *objectio.ObjectFS,
 	data *logtail.CheckpointData,
 ) (err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, e.dnLocation)
+	reader, err := blockio.NewObjectReader(fs.Service, e.tnLocation)
 	if err != nil {
 		return
 	}
-	return data.ReadDNMetaBatch(ctx, e.version, e.dnLocation, reader)
+	return data.ReadTNMetaBatch(ctx, e.version, e.tnLocation, reader)
 }
 
 func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {

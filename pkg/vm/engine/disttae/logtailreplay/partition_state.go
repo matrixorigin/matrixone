@@ -476,8 +476,12 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			if !ok {
 				blockEntry = pivot
 				numInserted++
+			} else if blockEntry.CommitTs.GreaterEq(commitTimeVector[i]) {
+				// it possible to get an older version blk from lazy loaded checkpoint
+				return
 			}
 
+			// the following codes handle created block or newer version of block
 			if location := objectio.Location(metaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 				blockEntry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}

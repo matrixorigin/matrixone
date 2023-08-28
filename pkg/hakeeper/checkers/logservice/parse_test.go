@@ -104,7 +104,7 @@ func TestCollectStats(t *testing.T) {
 		{
 			desc: "Normal case",
 			cluster: pb.ClusterInfo{
-				DNShards: nil,
+				TNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3}}},
@@ -151,7 +151,7 @@ func TestCollectStats(t *testing.T) {
 		{
 			desc: "Shard 1 has only 2 replicas, which is expected as 3.",
 			cluster: pb.ClusterInfo{
-				DNShards: nil,
+				TNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3}}},
@@ -274,7 +274,7 @@ func TestCollectStats(t *testing.T) {
 		{
 			desc: "do not remove replica d if it is in LogShardInfo.Replicas, despite it's epoch is small.",
 			cluster: pb.ClusterInfo{
-				DNShards: nil,
+				TNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 4}}},
@@ -319,7 +319,7 @@ func TestCollectStats(t *testing.T) {
 		{
 			desc: "Shard 1 has 4 replicas, which is expected as 3.",
 			cluster: pb.ClusterInfo{
-				DNShards: nil,
+				TNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3}}},
@@ -436,7 +436,7 @@ func TestCollectStore(t *testing.T) {
 		{
 			desc: "no expired stores",
 			cluster: pb.ClusterInfo{
-				DNShards:  nil,
+				TNShards:  nil,
 				LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}},
 			},
 			infos: pb.LogState{
@@ -457,7 +457,7 @@ func TestCollectStore(t *testing.T) {
 		{
 			desc: "store b expired",
 			cluster: pb.ClusterInfo{
-				DNShards:  nil,
+				TNShards:  nil,
 				LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 3}},
 			},
 			infos: pb.LogState{

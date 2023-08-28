@@ -79,6 +79,7 @@ func (c *ColType) ToType() types.Type {
 		return types.T_text.ToType()
 	case TVarchar:
 		return types.T_varchar.ToType()
+		//TODO : Need to see how T_array should be included in this class.
 	case TSkip:
 		fallthrough
 	default:

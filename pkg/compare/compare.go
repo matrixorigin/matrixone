@@ -143,6 +143,14 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),
 		}
+	case types.T_array_float32, types.T_array_float64:
+		//NOTE: Used by merge_order, merge_top, top agg operators.
+		return &arrayCompare{
+			desc:        desc,
+			nullsLast:   nullsLast,
+			vs:          make([]*vector.Vector, 2),
+			isConstNull: make([]bool, 2),
+		}
 	}
 	return nil
 }

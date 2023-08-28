@@ -841,3 +841,60 @@ func increaseTagCnt(expr *plan.Expr, inc int, tagCnt map[int32]int) {
 		}
 	}
 }
+
+func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		if node.BindingTags[0] == tag {
+			return node.TableDef
+		}
+	} else if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER {
+		if node.Stats.HashmapStats.HashOnPK {
+			return findHashOnPKTable(node.Children[0], tag, builder)
+		}
+	}
+	return nil
+}
+
+func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			determineHashOnPK(child, builder)
+		}
+	}
+	// for now ,only support inner join
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
+		return
+	}
+	if !builder.IsEquiJoin(node) {
+		return
+	}
+	//for now, only support 1 join cond
+	if len(node.OnList) != 1 {
+		return
+	}
+
+	var hashCol *plan.ColRef
+	cond := node.OnList[0]
+	switch condImpl := cond.Expr.(type) {
+	case *plan.Expr_F:
+		expr := condImpl.F.Args[1]
+		switch exprImpl := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			hashCol = exprImpl.Col
+		}
+	}
+	if hashCol == nil {
+		return
+	}
+
+	tableDef := findHashOnPKTable(node.Children[1], hashCol.RelPos, builder)
+	if tableDef == nil {
+		return
+	}
+	if containsAllPKs([]int32{hashCol.ColPos}, tableDef) {
+		node.Stats.HashmapStats.HashOnPK = true
+	}
+
+}

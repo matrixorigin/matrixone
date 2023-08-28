@@ -15,6 +15,7 @@
 package sort
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -230,6 +231,20 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, strCol 
 		} else {
 			genericSort(strCol, os, genericGreater[string])
 		}
+	case types.T_array_float32:
+		col := vector.MustArrayCol[float32](vec)
+		if !desc {
+			genericSort(col, os, arrayLess[float32])
+		} else {
+			genericSort(col, os, arrayGreater[float32])
+		}
+	case types.T_array_float64:
+		col := vector.MustArrayCol[float64](vec)
+		if !desc {
+			genericSort(col, os, arrayLess[float64])
+		} else {
+			genericSort(col, os, arrayGreater[float64])
+		}
 	}
 }
 
@@ -261,8 +276,16 @@ func uuidLess(data []types.Uuid, i, j int64) bool {
 	return data[i].Compare(data[j]) < 0
 }
 
+func arrayLess[T types.RealNumbers](data [][]T, i, j int64) bool {
+	return moarray.Compare[T](data[i], data[j]) < 0
+}
+
 func uuidGreater(data []types.Uuid, i, j int64) bool {
 	return data[i].Compare(data[j]) > 0
+}
+
+func arrayGreater[T types.RealNumbers](data [][]T, i, j int64) bool {
+	return moarray.Compare[T](data[i], data[j]) > 0
 }
 
 func genericLess[T types.OrderedT](data []T, i, j int64) bool {

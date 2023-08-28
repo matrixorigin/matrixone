@@ -42,12 +42,10 @@ type container struct {
 
 	state int
 
-	hasNull bool
-	isMerge bool
-
-	sels [][]int32
-
-	bat *batch.Batch
+	hasNull   bool
+	isMerge   bool
+	multiSels [][]int32
+	bat       *batch.Batch
 
 	evecs []evalVector
 	vecs  []*vector.Vector
@@ -68,6 +66,7 @@ type Argument struct {
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 
+	HashOnPK             bool
 	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 }
 
