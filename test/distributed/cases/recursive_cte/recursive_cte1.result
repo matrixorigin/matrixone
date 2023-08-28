@@ -48,25 +48,25 @@ manager_id    job_name    emp_num
 with non_cte_7(manager_id,emp_num)as (select manager_id ,count(id) from emp where manager_id is not null group by manager_id) select avg(emp_num) as "average emp per manager" from non_cte_7;
 average emp per manager
 1.5000
-with recursive non_cte_10(id, productID,js,price,old_price) AS (select p.id,p.p_id,'20' as js,p.price+3.65,ceil(p.price) from product p where p.p_id < 100)select id, productID,js,price,old_price from cte_ab_10 order by old_price;
-Table 'recursive_cte1.cte_ab_10' doesn't exist
+with non_cte_10(id, productID,js,price,old_price) AS (select p.id,p.p_id,'20' as js,p.price+3.65,ceil(p.price) from product p where p.p_id < 100)select id, productID,js,price,old_price from cte_ab_10 order by old_price;
+SQL parser error: table "cte_ab_10" does not exist
 truncate table non_cte_6;
-Table 'recursive_cte1.non_cte_6' doesn't exist
+no such table recursive_cte1.non_cte_6
 drop table non_cte_7;
-Unknown table 'recursive_cte1.non_cte_7'
+no such table recursive_cte1.non_cte_7
 with non_cte_8(manager_id,name) as
-(SELECT a.manager_id,
-a.name AS job_name
-FROM emp a), non_cte_9(id,name) as
-(SELECT m.id,
+(select a.manager_id,
+a.name as job_name
+from emp a), non_cte_9(id,name) as
+(select m.id,
 m.name
-FROM employees_mgr m
-WHERE m.name != "lucky")
-SELECT a.manager_id,a.name
-FROM non_cte_8 a
-JOIN non_cte_9 b
-ON a.manager_id = b.id
-ORDER BY  a.manager_id;
+from employees_mgr m
+where m.name != "lucky")
+select a.manager_id,a.name
+from non_cte_8 a
+join non_cte_9 b
+on a.manager_id = b.id
+order by  a.manager_id;
 manager_id    name
 29    职员2
 29    职员1
@@ -74,20 +74,20 @@ manager_id    name
 333    副总2
 692    主任2
 with non_cte_8(manager_id,name) as
-(SELECT a.manager_id,
-a.name AS job_name
-FROM emp a), non_cte_9(id,name) as
-(SELECT m.id,
+(select a.manager_id,
+a.name as job_name
+from emp a), non_cte_9(id,name) as
+(select m.id,
 m.name
-FROM employees_mgr m
-WHERE m.name != "lucky"), non_cte_11(id,p_name) as
+from employees_mgr m
+where m.name != "lucky"), non_cte_11(id,p_name) as
 (
 select p.id,p.p_name from product p
 )
-select ncte.manager_id,ncte.name from (SELECT a.manager_id,a.name
-FROM non_cte_8 a
-JOIN non_cte_9 b
-ON a.manager_id = b.id) as ncte
+select ncte.manager_id,ncte.name from (select a.manager_id,a.name
+from non_cte_8 a
+join non_cte_9 b
+on a.manager_id = b.id) as ncte
 union all select c.id,c.p_name from non_cte_11 c;
 manager_id    name
 29    职员2
@@ -111,7 +111,12 @@ null    333    总经理
 333    692    副总2
 692    123    主任2
 with 111 as(select manager_id,id,name from emp  order by manager_id )select * from 111;
-You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '111 as(select manager_id,id,name from emp  order by manager_id )select * from 11' at line 1
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 8 near " 111 as(select manager_id,id,name from emp  order by manager_id )select * from 111;";
+prepare s1 from 'with non_cte_1 as(select manager_id,id,name from emp  order by manager_id ) select manager_id,id,name from non_cte_1 where id in (29,72);';
+execute s1;
+manager_id    id    name
+29    72    职员2
+198    29    主任1
 CREATE TABLE MyEmployees
 (
 EmployeeID SMALLINT PRIMARY KEY NOT NULL,
@@ -183,22 +188,22 @@ EmployeeID    Name    Title    EmployeeLevel
 285    Syed Abbas    Pacific Sales Manager    3
 286    Lynn Tsoflias    Sales Representative    4
 with recursive cte_ab_11(id, productID,price) AS
-(SELECT p.id,
+(select p.id,
 p.p_id,
 p.price
-FROM product p
-WHERE p.p_id is null
-UNION all
-SELECT pr.id,
+from product p
+where p.p_id is null
+union all
+select pr.id,
 pr.p_id,
 pr.price*12.01
-FROM product pr
-JOIN (select * from cte_ab_11 c where c.price between 20 and 1000)
-ON pr.id = c.productID
-GROUP BY  c.id, c.productID )
-SELECT *
-FROM cte_ab_11;
-Every derived table must have its own alias
+from product pr
+join cte_ab_11 c
+on pr.id = c.productID
+group by c.id, c.productID )
+select *
+from cte_ab_11;
+SQL parser error: not support group by in recursive cte: 'group by c.id, c.productid'
 WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
 (
 SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
@@ -228,6 +233,16 @@ null    1    Chief Executive Officer
 274    276    Sales Representative
 285    286    Sales Representative
 333    null    总经理
+prepare stmt from 'with recursive cte_ab_8(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_8 c on p.manager_id= c.id) select * from cte_ab_8';
+execute stmt;
+id    manager_id    name
+333    null    总经理
+198    333    副总1
+692    333    副总2
+29    198    主任1
+123    692    主任2
+72    29    职员2
+4610    29    职员1
 create table cte_insert_table (c1 int,c2 int ,c3 varchar(50),c4 int);
 insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
 (
@@ -254,6 +269,36 @@ null    1    Chief Executive Officer    0
 274    275    Sales Representative    3
 274    276    Sales Representative    3
 285    286    Sales Representative    3
+truncate table cte_insert_table;
+begin;
+insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+)
+SELECT ManagerID, EmployeeID, Title, EmployeeLevel
+FROM DirectReports
+ORDER BY ManagerID;
+select * from cte_insert_table;
+c1    c2    c3    c4
+null    1    Chief Executive Officer    0
+1    273    Vice President of Sales    1
+16    23    Marketing Specialist    3
+273    16    Marketing Manager    2
+273    274    North American Sales Manager    2
+273    285    Pacific Sales Manager    2
+274    275    Sales Representative    3
+274    276    Sales Representative    3
+285    286    Sales Representative    3
+rollback;
+select * from cte_insert_table;
+c1    c2    c3    c4
 update cte_insert_table set c3= (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
 (
 SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
@@ -268,15 +313,6 @@ ON e.ManagerID = d.EmployeeID
 select title from  DirectReports where ManagerID=16) where c2=274;
 select * from cte_insert_table;
 c1    c2    c3    c4
-null    1    Chief Executive Officer    0
-1    273    Vice President of Sales    1
-16    23    Marketing Specialist    3
-273    16    Marketing Manager    2
-273    274    Marketing Specialist    2
-273    285    Pacific Sales Manager    2
-274    275    Sales Representative    3
-274    276    Sales Representative    3
-285    286    Sales Representative    3
 delete from  cte_insert_table where  c3 = (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
 (
 SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
@@ -291,13 +327,6 @@ ON e.ManagerID = d.EmployeeID
 select Title from  DirectReports where ManagerID=16);
 select * from cte_insert_table;
 c1    c2    c3    c4
-null    1    Chief Executive Officer    0
-1    273    Vice President of Sales    1
-273    16    Marketing Manager    2
-273    285    Pacific Sales Manager    2
-274    275    Sales Representative    3
-274    276    Sales Representative    3
-285    286    Sales Representative    3
 create view cte_view as(
 WITH  RECURSIVE DirectReports(Name, Title, EmployeeID, EmployeeLevel)
 AS (SELECT concat(e.FirstName," ",e.LastName) as name,
@@ -328,15 +357,15 @@ EmployeeID    Name    Title    EmployeeLevel
 276    Linda Mitchell    Sales Representative    4
 286    Lynn Tsoflias    Sales Representative    4
 with recursive cte_ab_1(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, avg(p.price) FROM product p JOIN cte_ab_1 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_1;
-Recursive Common Table Expression 'cte_ab_1' can contain neither aggregation nor window functions in recursive query block
+SQL parser error: not support group by in recursive cte: 'group by c.id, c.productid'
 with recursive cte_ab_2(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, sum(p.price) FROM product p JOIN cte_ab_2 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_2;
-Recursive Common Table Expression 'cte_ab_2' can contain neither aggregation nor window functions in recursive query block
+SQL parser error: not support group by in recursive cte: 'group by c.id, c.productid'
 with recursive cte_ab_3(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, count(p.price) FROM product p JOIN cte_ab_3 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_3;
-Recursive Common Table Expression 'cte_ab_3' can contain neither aggregation nor window functions in recursive query block
+SQL parser error: not support group by in recursive cte: 'group by c.id, c.productid'
 with recursive cte_ab_4(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, max(p.price) FROM product p JOIN cte_ab_4 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_4;
-Recursive Common Table Expression 'cte_ab_4' can contain neither aggregation nor window functions in recursive query block
+SQL parser error: not support group by in recursive cte: 'group by c.id, c.productid'
 with recursive cte_ab_5(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, min(p.price) FROM product p JOIN cte_ab_5 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_5;
-Recursive Common Table Expression 'cte_ab_5' can contain neither aggregation nor window functions in recursive query block
+SQL parser error: not support group by in recursive cte: 'group by c.id, c.productid'
 with recursive cte_ab_6(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_6 c on p.manager_id= c.id order by c.id) select * from cte_ab_6 order by id;
 Table 'c' from one of the SELECTs cannot be used in global ORDER clause
 with recursive cte_ab_7(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select distinct p.id,p.manager_id,p.name from emp p join cte_ab_7 c on p.manager_id= c.id) select * from cte_ab_7;
