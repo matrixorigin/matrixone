@@ -53,7 +53,7 @@ var (
 	defaultCtlListenAddress          = "127.0.0.1:19958"
 	defaultQueryServiceListenAddress = "0.0.0.0:19998"
 	// defaultTxnIsolation     = txn.TxnIsolation_SI
-	defaultTxnMode             = txn.TxnMode_Optimistic
+	defaultTxnMode             = txn.TxnMode_Pessimistic
 	maxForMaxPreparedStmtCount = 1000000
 
 	// Service ports related.
@@ -174,7 +174,7 @@ type Config struct {
 		// Isolation txn isolation. SI or RC
 		// when Isolation is not set. we will set SI when Mode is optimistic, RC when Mode is pessimistic
 		Isolation string `toml:"isolation"`
-		// Mode txn mode. optimistic or pessimistic, default is optimistic
+		// Mode txn mode. optimistic or pessimistic, default is pessimistic
 		Mode string `toml:"mode"`
 		// EnableSacrificingFreshness In Push Mode, the transaction is not guaranteed
 		// to see the latest commit data, and the latest Logtail commit timestamp received
