@@ -353,5 +353,6 @@ insert into rename01 (c, d) values (5,7);
 insert into rename01 (newCCCC, d) values (5,7);
 select * from rename01;
 -- @session}
+commit;
 select * from rename01;
 drop table rename01;
