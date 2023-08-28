@@ -143,12 +143,12 @@ show create table atomic_table_12_2;
 Table    Create Table
 atomic_table_12_2    CREATE TABLE `atomic_table_12_2` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
 insert into atomic_table_13 values (8,"h");
-internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
 c1    c2
 3    d
 4    e
 5    f
+8    h
 insert into atomic_table_13 values (6,"h");
 internal error: Cannot add or update a child row: a foreign key constraint fails
 commit;
@@ -422,7 +422,6 @@ col1new    col2
 4.0    b
 5.0    c
 8.0    h
-commit;
 insert into alter01 values (6,"h");
 select * from alter01;
 col1new    col2
