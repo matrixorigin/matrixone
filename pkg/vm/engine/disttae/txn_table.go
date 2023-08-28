@@ -575,7 +575,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 			return nil, err
 		}
 		if len(cnblks) == 0 {
-			return nil, err
+			return ranges, err
 		}
 	}
 
