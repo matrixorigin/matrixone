@@ -87,6 +87,7 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchUUIDRows
 	case types.T_char, types.T_varchar, types.T_binary:
 		return fetchVarlenaRows
+		// T_json, T_blob, T_array_float32 etc. cannot be PK.
 	case types.T_enum:
 		return fetchEnumRows
 	default:

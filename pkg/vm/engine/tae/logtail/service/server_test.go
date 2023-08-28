@@ -161,7 +161,7 @@ func (m *logtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 
 func mockRuntime() runtime.Runtime {
 	return runtime.NewRuntime(
-		metadata.ServiceType_DN,
+		metadata.ServiceType_TN,
 		"uuid",
 		logutil.GetLogger(),
 		runtime.WithClock(

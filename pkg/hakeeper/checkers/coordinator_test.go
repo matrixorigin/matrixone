@@ -46,7 +46,7 @@ func TestFixExpiredStore(t *testing.T) {
 		desc        string
 		idAlloc     *util.TestIDAllocator
 		cluster     pb.ClusterInfo
-		dn          pb.DNState
+		tn          pb.TNState
 		log         pb.LogState
 		currentTick uint64
 		expected    []pb.ScheduleCommand
@@ -292,7 +292,7 @@ func TestFixExpiredStore(t *testing.T) {
 		output := coordinator.Check(c.idAlloc, pb.CheckerState{
 			Tick:        c.currentTick,
 			ClusterInfo: c.cluster,
-			DNState:     c.dn,
+			TNState:     c.tn,
 			LogState:    c.log,
 		})
 		assert.Equal(t, c.expected, output)
@@ -304,7 +304,7 @@ func TestFixZombie(t *testing.T) {
 		desc     string
 		idAlloc  *util.TestIDAllocator
 		cluster  pb.ClusterInfo
-		dn       pb.DNState
+		tn       pb.TNState
 		log      pb.LogState
 		tick     uint64
 		expected []pb.ScheduleCommand
@@ -455,7 +455,7 @@ func TestFixZombie(t *testing.T) {
 		output := coordinator.Check(c.idAlloc, pb.CheckerState{
 			Tick:        c.tick,
 			ClusterInfo: c.cluster,
-			DNState:     c.dn,
+			TNState:     c.tn,
 			LogState:    c.log,
 		})
 		assert.Equal(t, c.expected, output)

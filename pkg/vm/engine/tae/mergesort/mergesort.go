@@ -72,8 +72,10 @@ func SortBlockColumns(
 	case types.T_Blockid:
 		Sort(cols[pk], blockidLess, sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		Sort(cols[pk], bytesLess, sortedIdx)
+	//TODO: check if I should add T_array here? Is bytesLess enough?
 	default:
 		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
 	}
@@ -136,7 +138,8 @@ func MergeSortedColumn(
 	case types.T_Blockid:
 		ret, mapping = Merge(column, sortedIdx, blockidLess, fromLayout, toLayout, pool)
 	case types.T_char, types.T_json, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		ret, mapping = Merge(column, sortedIdx, bytesLess, fromLayout, toLayout, pool)
 	default:
 		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))

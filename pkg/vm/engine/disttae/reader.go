@@ -433,7 +433,7 @@ func (r *blockMergeReader) prefetchDeletes() error {
 	//load delta locations for r.blocks.
 	if !r.loaded {
 		for _, info := range r.blks {
-			bats, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[info.BlockID]
+			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch[info.BlockID]
 			if !ok {
 				return nil
 			}

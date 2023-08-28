@@ -33,7 +33,7 @@ func (a *TestIDAllocator) Next() (uint64, bool) {
 	return a.id, true
 }
 
-// Store records metadata for dn store.
+// Store records metadata for tn store.
 type Store struct {
 	ID       string
 	Length   int

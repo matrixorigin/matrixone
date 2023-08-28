@@ -206,10 +206,10 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 	return uint64(id), err
 }
 
-func getDNServices(cluster clusterservice.MOCluster) []metadata.DNService {
-	var values []metadata.DNService
-	cluster.GetDNService(clusterservice.NewSelector(),
-		func(d metadata.DNService) bool {
+func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {
+	var values []metadata.TNService
+	cluster.GetTNService(clusterservice.NewSelector(),
+		func(d metadata.TNService) bool {
 			values = append(values, d)
 			return true
 		})

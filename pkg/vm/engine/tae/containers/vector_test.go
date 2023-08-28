@@ -29,12 +29,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDnConst(t *testing.T) {
+func TestTnConst(t *testing.T) {
 	m := mpool.MustNewZero()
 	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
 	v.IsConstNull()
-	dnv := ToDNVector(v)
-	require.True(t, dnv.IsNull(2))
+	tnv := ToTNVector(v)
+	require.True(t, tnv.IsNull(2))
 }
 
 func withAllocator(opt Options) Options {
@@ -180,7 +180,7 @@ func TestVector3(t *testing.T) {
 
 func TestVector5(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(23)
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
 	for _, vecType := range vecTypes {
@@ -222,7 +222,7 @@ func TestVector5(t *testing.T) {
 
 func TestVector6(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(23)
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
@@ -309,7 +309,7 @@ func TestVector6(t *testing.T) {
 
 func TestVector7(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(23)
 	testF := func(typ types.Type, nullable bool) {
 		vec := MockVector(typ, 10, false, nil)
 		if nullable {
@@ -633,7 +633,10 @@ func getOverload(typ types.T, t *testing.T, rows *roaring.Bitmap, vec Vector) an
 		return overLoadFactory[types.Blockid](t, rows, vec)
 	case types.T_uuid:
 		return overLoadFactory[types.Uuid](t, rows, vec)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+	case types.T_enum:
+		return overLoadFactory[types.Enum](t, rows, vec)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		return overLoadFactory[[]byte](t, rows, vec)
 	default:
 		panic("unsupport")
@@ -650,7 +653,7 @@ func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func
 
 func TestForeachSelectBitmap(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(17)
+	vecTypes := types.MockColTypes(23)
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {

@@ -2183,6 +2183,143 @@ func TestSqrt(t *testing.T) {
 	}
 }
 
+func initSqrtArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test sqrt float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{4, 9, 16}, {0, 25, 49}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				//NOTE: SQRT(vecf32) --> vecf64
+				[][]float64{{2, 3, 4}, {0, 5, 7}},
+				[]bool{false, false}),
+		},
+		{
+			info: "test sqrt float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{4, 9, 16}, {0, 25, 49}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				[][]float64{{2, 3, 4}, {0, 5, 7}},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestSqrtArray(t *testing.T) {
+	testCases := initSqrtArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrtArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrtArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// Inner Product
+func initInnerProductArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test InnerProduct float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{14, 77},
+				[]bool{false, false}),
+		},
+		{
+			info: "test InnerProduct float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{14, 77},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestInnerProductArray(t *testing.T) {
+	testCases := initInnerProductArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, InnerProductArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, InnerProductArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// Cosine Similarity
+func initCosineSimilarityArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test CosineSimilarity float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float32.ToType(), false,
+				[]float32{1, 1},
+				[]bool{false, false}),
+		},
+		{
+			info: "test CosineSimilarity float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float32.ToType(), false,
+				[]float32{1, 1},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestCosineSimilarityArray(t *testing.T) {
+	testCases := initCosineSimilarityArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, CosineSimilarityArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, CosineSimilarityArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // Extract
 func initExtractTestCase() []tcTemp {
 	MakeDates := func(values ...string) []types.Date {
