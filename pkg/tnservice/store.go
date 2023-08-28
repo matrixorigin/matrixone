@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package tnservice
 
 import (
 	"context"
@@ -62,14 +62,14 @@ func WithBackendFilter(filter func(morpc.Message, string) bool) Option {
 }
 
 // WithHAKeeperClientFactory set hakeeper client factory
-func WithHAKeeperClientFactory(factory func() (logservice.DNHAKeeperClient, error)) Option {
+func WithHAKeeperClientFactory(factory func() (logservice.TNHAKeeperClient, error)) Option {
 	return func(s *store) {
 		s.options.hakeekerClientFactory = factory
 	}
 }
 
 // WithLogServiceClientFactory set log service client factory
-func WithLogServiceClientFactory(factory func(metadata.DNShard) (logservice.Client, error)) Option {
+func WithLogServiceClientFactory(factory func(metadata.TNShard) (logservice.Client, error)) Option {
 	return func(s *store) {
 		s.options.logServiceClientFactory = factory
 	}
@@ -88,7 +88,7 @@ type store struct {
 	rt                  runtime.Runtime
 	sender              rpc.TxnSender
 	server              rpc.TxnServer
-	hakeeperClient      logservice.DNHAKeeperClient
+	hakeeperClient      logservice.TNHAKeeperClient
 	fileService         fileservice.FileService
 	metadataFileService fileservice.ReplaceableFileService
 	lockTableAllocator  lockservice.LockTableAllocator
@@ -99,15 +99,15 @@ type store struct {
 	shutdownC           chan struct{}
 
 	options struct {
-		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
-		hakeekerClientFactory   func() (logservice.DNHAKeeperClient, error)
+		logServiceClientFactory func(metadata.TNShard) (logservice.Client, error)
+		hakeekerClientFactory   func() (logservice.TNHAKeeperClient, error)
 		backendFilter           func(msg morpc.Message, backendAddr string) bool
 		adjustConfigFunc        func(c *Config)
 	}
 
 	mu struct {
 		sync.RWMutex
-		metadata metadata.DNStore
+		metadata metadata.TNStore
 	}
 
 	task struct {
@@ -120,7 +120,7 @@ type store struct {
 	addressMgr address.AddressManager
 }
 
-// NewService create DN Service
+// NewService create TN Service
 func NewService(
 	perfCounter *perfcounter.CounterSet,
 	cfg *Config,
@@ -160,7 +160,7 @@ func NewService(
 	s.replicas = &sync.Map{}
 	s.stopper = stopper.NewStopper("dn-store",
 		stopper.WithLogger(s.rt.Logger().RawLogger()))
-	s.mu.metadata = metadata.DNStore{UUID: cfg.UUID}
+	s.mu.metadata = metadata.TNStore{UUID: cfg.UUID}
 	if s.options.adjustConfigFunc != nil {
 		s.options.adjustConfigFunc(s.cfg)
 	}
@@ -192,7 +192,7 @@ func NewService(
 }
 
 func (s *store) Start() error {
-	if err := s.startDNShards(); err != nil {
+	if err := s.startTNShards(); err != nil {
 		return err
 	}
 	if err := s.server.Start(); err != nil {
@@ -233,15 +233,15 @@ func (s *store) Close() error {
 	return err
 }
 
-func (s *store) StartDNReplica(shard metadata.DNShard) error {
+func (s *store) StartTNReplica(shard metadata.TNShard) error {
 	return s.createReplica(shard)
 }
 
-func (s *store) CloseDNReplica(shard metadata.DNShard) error {
+func (s *store) CloseTNReplica(shard metadata.TNShard) error {
 	return s.removeReplica(shard.ShardID)
 }
 
-func (s *store) startDNShards() error {
+func (s *store) startTNShards() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -253,11 +253,11 @@ func (s *store) startDNShards() error {
 	return nil
 }
 
-func (s *store) getDNShardInfo() []logservicepb.DNShardInfo {
-	var shards []logservicepb.DNShardInfo
+func (s *store) getTNShardInfo() []logservicepb.TNShardInfo {
+	var shards []logservicepb.TNShardInfo
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
-		shards = append(shards, logservicepb.DNShardInfo{
+		shards = append(shards, logservicepb.TNShardInfo{
 			ShardID:   r.shard.ShardID,
 			ReplicaID: r.shard.ReplicaID,
 		})
@@ -266,7 +266,7 @@ func (s *store) getDNShardInfo() []logservicepb.DNShardInfo {
 	return shards
 }
 
-func (s *store) createReplica(shard metadata.DNShard) error {
+func (s *store) createReplica(shard metadata.TNShard) error {
 	r := newReplica(shard, s.rt)
 	v, ok := s.replicas.LoadOrStore(shard.ShardID, r)
 	if ok {
@@ -304,15 +304,15 @@ func (s *store) createReplica(shard metadata.DNShard) error {
 		return err
 	}
 
-	s.addDNShardLocked(shard)
+	s.addTNShardLocked(shard)
 	return nil
 }
 
-func (s *store) removeReplica(dnShardID uint64) error {
-	if r := s.getReplica(dnShardID); r != nil {
+func (s *store) removeReplica(tnShardID uint64) error {
+	if r := s.getReplica(tnShardID); r != nil {
 		err := r.close(true)
-		s.replicas.Delete(dnShardID)
-		s.removeDNShard(dnShardID)
+		s.replicas.Delete(tnShardID)
+		s.removeTNShard(tnShardID)
 		return err
 	}
 	return nil
@@ -386,7 +386,7 @@ func (s *store) initHAKeeperClient() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.DiscoveryTimeout.Duration)
 	defer cancel()
-	client, err := logservice.NewDNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
+	client, err := logservice.NewTNHAKeeperClient(ctx, s.cfg.HAKeeper.ClientConfig)
 	if err != nil {
 		return err
 	}

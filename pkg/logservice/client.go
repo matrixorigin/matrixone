@@ -55,7 +55,7 @@ type Client interface {
 	Config() ClientConfig
 	// GetLogRecord returns a new LogRecord instance with its Data field enough
 	// to hold payloadLength bytes of payload. The layout of the Data field is
-	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes DN replica ID +
+	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes TN replica ID +
 	// payloadLength bytes of actual payload.
 	GetLogRecord(payloadLength int) pb.LogRecord
 	// Append appends the specified LogRecord into the Log Service. On success, the
@@ -122,7 +122,7 @@ func (c *managedClient) Config() ClientConfig {
 func (c *managedClient) GetLogRecord(payloadLength int) pb.LogRecord {
 	data := make([]byte, headerSize+8+payloadLength)
 	binaryEnc.PutUint32(data, uint32(pb.UserEntryUpdate))
-	binaryEnc.PutUint64(data[headerSize:], c.cfg.DNReplicaID)
+	binaryEnc.PutUint64(data[headerSize:], c.cfg.TNReplicaID)
 	return pb.LogRecord{Data: data}
 }
 
@@ -402,7 +402,7 @@ func (c *client) request(ctx context.Context,
 		Method: mt,
 		LogRequest: pb.LogRequest{
 			ShardID: c.cfg.LogShardID,
-			DNID:    c.cfg.DNReplicaID,
+			TNID:    c.cfg.TNReplicaID,
 			Lsn:     lsn,
 			MaxSize: maxSize,
 		},

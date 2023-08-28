@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package tnservice
 
 import (
 	"context"
@@ -39,12 +39,12 @@ import (
 )
 
 var (
-	testDNStoreAddr      = "unix:///tmp/test-dnstore.sock"
-	testDNLogtailAddress = "127.0.0.1:22001"
+	testTNStoreAddr      = "unix:///tmp/test-dnstore.sock"
+	testTNLogtailAddress = "127.0.0.1:22001"
 )
 
 func TestNewAndStartAndCloseService(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		thc := s.hakeeperClient.(*testHAKeeperClient)
 		for {
 			if v := thc.getCount(); v > 0 {
@@ -55,7 +55,7 @@ func TestNewAndStartAndCloseService(t *testing.T) {
 }
 
 func TestAddReplica(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
+	runTNStoreTest(t, func(s *store) {
 		addTestReplica(t, s, 1, 2, 3)
 	})
 }
@@ -67,7 +67,7 @@ func TestHandleShutdown(t *testing.T) {
 			ShutdownStore: &logservicepb.ShutdownStore{
 				StoreID: s.cfg.UUID,
 			},
-			ServiceType: logservicepb.DNService,
+			ServiceType: logservicepb.TNService,
 		}
 
 		shutdownC := make(chan struct{})
@@ -95,7 +95,7 @@ func TestHandleShutdown(t *testing.T) {
 		}
 
 	}
-	runDNStoreTest(t, fn)
+	runTNStoreTest(t, fn)
 }
 
 func TestStartWithReplicas(t *testing.T) {
@@ -114,27 +114,27 @@ func TestStartWithReplicas(t *testing.T) {
 		)
 	}
 
-	runDNStoreTestWithFileServiceFactory(t, func(s *store) {
+	runTNStoreTestWithFileServiceFactory(t, func(s *store) {
 		addTestReplica(t, s, 1, 2, 3)
 	}, factory)
 
-	runDNStoreTestWithFileServiceFactory(t, func(s *store) {
+	runTNStoreTestWithFileServiceFactory(t, func(s *store) {
 
 	}, factory)
 }
 
 func TestStartReplica(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		assert.NoError(t, s.StartDNReplica(newTestDNShard(1, 2, 3)))
+	runTNStoreTest(t, func(s *store) {
+		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
 		r.waitStarted()
-		assert.Equal(t, newTestDNShard(1, 2, 3), r.shard)
+		assert.Equal(t, newTestTNShard(1, 2, 3), r.shard)
 	})
 }
 
 func TestRemoveReplica(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		assert.NoError(t, s.StartDNReplica(newTestDNShard(1, 2, 3)))
+	runTNStoreTest(t, func(s *store) {
+		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 2, 3)))
 		r := s.getReplica(1)
 		r.waitStarted()
 
@@ -142,7 +142,7 @@ func TestRemoveReplica(t *testing.T) {
 		thc.setCommandBatch(logservicepb.CommandBatch{
 			Commands: []logservicepb.ScheduleCommand{
 				{
-					ServiceType: logservicepb.DNService,
+					ServiceType: logservicepb.TNService,
 					ConfigChange: &logservicepb.ConfigChange{
 						ChangeType: logservicepb.RemoveReplica,
 						Replica: logservicepb.Replica{
@@ -166,23 +166,23 @@ func TestRemoveReplica(t *testing.T) {
 }
 
 func TestCloseReplica(t *testing.T) {
-	runDNStoreTest(t, func(s *store) {
-		shard := newTestDNShard(1, 2, 3)
-		assert.NoError(t, s.StartDNReplica(shard))
+	runTNStoreTest(t, func(s *store) {
+		shard := newTestTNShard(1, 2, 3)
+		assert.NoError(t, s.StartTNReplica(shard))
 		r := s.getReplica(1)
 		r.waitStarted()
 		assert.Equal(t, shard, r.shard)
 
-		assert.NoError(t, s.CloseDNReplica(shard))
+		assert.NoError(t, s.CloseTNReplica(shard))
 		assert.Nil(t, s.getReplica(1))
 	})
 }
 
-func runDNStoreTest(
+func runTNStoreTest(
 	t *testing.T,
 	testFn func(*store),
 	opts ...Option) {
-	runDNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
+	runTNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
 		local, err := fileservice.NewMemoryFS(
 			defines.LocalFileServiceName,
 			fileservice.DisabledCacheConfig, nil,
@@ -208,7 +208,7 @@ func runDNStoreTest(
 	}, opts...)
 }
 
-func runDNStoreTestWithFileServiceFactory(
+func runTNStoreTestWithFileServiceFactory(
 	t *testing.T,
 	testFn func(*store),
 	fsFactory fileservice.NewFileServicesFunc,
@@ -216,10 +216,10 @@ func runDNStoreTestWithFileServiceFactory(
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	thc := newTestHAKeeperClient()
 	opts = append(opts,
-		WithHAKeeperClientFactory(func() (logservice.DNHAKeeperClient, error) {
+		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {
 			return thc, nil
 		}),
-		WithLogServiceClientFactory(func(d metadata.DNShard) (logservice.Client, error) {
+		WithLogServiceClientFactory(func(d metadata.TNShard) (logservice.Client, error) {
 			return mem.NewMemLog(), nil
 		}),
 		WithConfigAdjust(func(c *Config) {
@@ -249,7 +249,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 	thc.setCommandBatch(logservicepb.CommandBatch{
 		Commands: []logservicepb.ScheduleCommand{
 			{
-				ServiceType: logservicepb.DNService,
+				ServiceType: logservicepb.TNService,
 				ConfigChange: &logservicepb.ConfigChange{
 					ChangeType: logservicepb.AddReplica,
 					Replica: logservicepb.Replica{
@@ -266,7 +266,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 		r := s.getReplica(1)
 		if r != nil {
 			r.waitStarted()
-			assert.Equal(t, newTestDNShard(shardID, replicaID, logShardID), r.shard)
+			assert.Equal(t, newTestTNShard(shardID, replicaID, logShardID), r.shard)
 			return
 		}
 		time.Sleep(time.Millisecond * 10)
@@ -278,18 +278,18 @@ func newTestStore(
 	uuid string,
 	fsFactory fileservice.NewFileServicesFunc,
 	options ...Option) *store {
-	assert.NoError(t, os.RemoveAll(testDNStoreAddr[7:]))
+	assert.NoError(t, os.RemoveAll(testTNStoreAddr[7:]))
 	c := &Config{
 		UUID:           uuid,
-		ListenAddress:  testDNStoreAddr,
-		ServiceAddress: testDNStoreAddr,
+		ListenAddress:  testTNStoreAddr,
+		ServiceAddress: testTNStoreAddr,
 	}
-	c.LogtailServer.ListenAddress = testDNLogtailAddress
+	c.LogtailServer.ListenAddress = testTNLogtailAddress
 	fs, err := fsFactory(defines.LocalFileServiceName)
 	assert.Nil(t, err)
 
 	rt := runtime.NewRuntime(
-		metadata.ServiceType_DN,
+		metadata.ServiceType_TN,
 		"",
 		logutil.Adjust(nil),
 		runtime.WithClock(
@@ -308,12 +308,12 @@ func newTestStore(
 	return s.(*store)
 }
 
-func newTestDNShard(shardID, replicaID, logShardID uint64) metadata.DNShard {
-	dnShard := service.NewTestDNShard(shardID)
-	dnShard.ReplicaID = replicaID
-	dnShard.LogShardID = logShardID
-	dnShard.Address = testDNStoreAddr
-	return dnShard
+func newTestTNShard(shardID, replicaID, logShardID uint64) metadata.TNShard {
+	tnShard := service.NewTestTNShard(shardID)
+	tnShard.ReplicaID = replicaID
+	tnShard.LogShardID = logShardID
+	tnShard.Address = testTNStoreAddr
+	return tnShard
 }
 
 type testHAKeeperClient struct {
@@ -345,7 +345,7 @@ func (thc *testHAKeeperClient) Close() error {
 	return nil
 }
 
-func (thc *testHAKeeperClient) SendDNHeartbeat(ctx context.Context, hb logservicepb.DNStoreHeartbeat) (logservicepb.CommandBatch, error) {
+func (thc *testHAKeeperClient) SendTNHeartbeat(ctx context.Context, hb logservicepb.TNStoreHeartbeat) (logservicepb.CommandBatch, error) {
 	atomic.AddUint64(&thc.atomic.count, 1)
 	thc.mu.RLock()
 	defer thc.mu.RUnlock()

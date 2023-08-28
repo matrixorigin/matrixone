@@ -633,6 +633,8 @@ func Test_typeconvert(t *testing.T) {
 			types.T_time,
 			types.T_datetime,
 			types.T_json,
+			types.T_array_float32,
+			types.T_array_float64,
 		}
 
 		type kase struct {
@@ -656,6 +658,8 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
+			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
+			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 		}
 
 		convey.So(len(input), convey.ShouldEqual, len(output))

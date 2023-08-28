@@ -187,7 +187,7 @@ func handle(
 	ctx context.Context,
 	handler OperationHandler,
 	meta txn.TxnMeta,
-	_ metadata.DNShard,
+	_ metadata.TNShard,
 	op uint32,
 	req encoding.BinaryMarshaler,
 	resp encoding.BinaryUnmarshaler,
