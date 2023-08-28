@@ -90,6 +90,22 @@ var (
 		return makeStringVector(values, nsp, varcharType)
 	}
 
+	MakeArrayF32Vector = func(values [][]float32, nsp []uint64) *vector.Vector {
+		ns := nulls.Build(len(values), nsp...)
+		vec := vector.NewVec(arrayF32Type)
+		vector.AppendArrayList[float32](vec, values, nil, TestUtilMp)
+		vec.SetNulls(ns)
+		return vec
+	}
+
+	MakeArrayF64Vector = func(values [][]float64, nsp []uint64) *vector.Vector {
+		ns := nulls.Build(len(values), nsp...)
+		vec := vector.NewVec(arrayF64Type)
+		vector.AppendArrayList[float64](vec, values, nil, TestUtilMp)
+		vec.SetNulls(ns)
+		return vec
+	}
+
 	MakeBinaryVector = func(values []string, nsp []uint64) *vector.Vector {
 		return makeStringVector(values, nsp, binaryType)
 	}

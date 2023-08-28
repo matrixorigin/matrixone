@@ -46,6 +46,8 @@ var (
 	textType       = types.T_text.ToType()
 	uuidType       = types.T_uuid.ToType()
 	rowIdType      = types.T_Rowid.ToType()
+	arrayF32Type   = types.T_array_float32.ToType()
+	arrayF64Type   = types.T_array_float64.ToType()
 )
 
 func MakeDecimal64Type(width, scalar int32) types.Type {

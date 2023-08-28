@@ -311,7 +311,7 @@ func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, t
 // skip SCA check for unused function.
 var _ = (&Engine{}).UpdateOfPull
 
-func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
+func (e *Engine) UpdateOfPull(ctx context.Context, tnList []DNStore, tbl *txnTable, op client.TxnOperator,
 	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	logDebugf(op.Txn(), "UpdateOfPull")
 
@@ -329,7 +329,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		}
 
 		if err := updatePartitionOfPull(
-			primarySeqnum, tbl, ctx, op, e, part, dnList[0],
+			primarySeqnum, tbl, ctx, op, e, part, tnList[0],
 			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
 		); err != nil {
 			return err

@@ -742,10 +742,10 @@ func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
-	v := ctx.Value(defines.PkCheckByDN{})
+	v := ctx.Value(defines.PkCheckByTN{})
 	for _, e := range writes {
 		//SKIP update/delete on mo_columns
-		//The DN does not counsume the update/delete on mo_columns.
+		//The TN does not counsume the update/delete on mo_columns.
 		//there are update/delete entries on mo_columns just after one on mo_tables.
 		//case 1: (DELETE,MO_TABLES),(UPDATE/DELETE,MO_COLUMNS),(UPDATE/DELETE,MO_COLUMNS),...
 		//there is none update/delete entries on mo_columns just after one on mo_tables.
@@ -759,15 +759,15 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 			continue
 		}
 		if v != nil {
-			e.pkChkByDN = v.(int8)
+			e.pkChkByTN = v.(int8)
 		}
 		pe, err := toPBEntry(e)
 		if err != nil {
 			return nil, err
 		}
-		mp[e.dnStore.ServiceID] = append(mp[e.dnStore.ServiceID], pe)
-		if _, ok := mq[e.dnStore.ServiceID]; !ok {
-			mq[e.dnStore.ServiceID] = e.dnStore
+		mp[e.tnStore.ServiceID] = append(mp[e.tnStore.ServiceID], pe)
+		if _, ok := mq[e.tnStore.ServiceID]; !ok {
+			mq[e.tnStore.ServiceID] = e.tnStore
 		}
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
@@ -776,24 +776,24 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 		if err != nil {
 			return nil, err
 		}
-		dn := mq[k]
-		for _, info := range dn.Shards {
+		tn := mq[k]
+		for _, info := range tn.Shards {
 			reqs = append(reqs, txn.TxnRequest{
 				CNRequest: &txn.CNOpRequest{
 					OpCode:  uint32(api.OpCode_OpPreCommit),
 					Payload: payload,
-					Target: metadata.DNShard{
-						DNShardRecord: metadata.DNShardRecord{
+					Target: metadata.TNShard{
+						TNShardRecord: metadata.TNShardRecord{
 							ShardID: info.ShardID,
 						},
 						ReplicaID: info.ReplicaID,
-						Address:   dn.TxnServiceAddress,
+						Address:   tn.TxnServiceAddress,
 					},
 				},
 				Options: &txn.TxnRequestOptions{
 					RetryCodes: []int32{
-						// dn shard not found
-						int32(moerr.ErrDNShardNotFound),
+						// tn shard not found
+						int32(moerr.ErrTNShardNotFound),
 					},
 					RetryInterval: int64(time.Second),
 				},
@@ -858,7 +858,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		TableName:    e.tableName,
 		DatabaseName: e.databaseName,
 		FileName:     e.fileName,
-		PkCheckByDn:  int32(e.pkChkByDN),
+		PkCheckByTn:  int32(e.pkChkByTN),
 	}, nil
 }
 
@@ -1301,6 +1301,7 @@ func transferSval(v string, oid types.T) (bool, bool, any) {
 		var uv types.Uuid
 		copy(uv[:], []byte(v)[:])
 		return true, false, uv
+		//TODO: should we add T_array for this code?
 	default:
 		return false, false, nil
 	}

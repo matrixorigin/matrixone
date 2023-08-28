@@ -400,18 +400,19 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	begin := time.Now()
 	proto := ses.GetMysqlProtocol()
 
+	ec := ses.GetExportConfig()
 	oq := NewOutputQueue(ses.GetRequestContext(), ses, len(bat.Vecs), nil, nil)
 	row2colTime := time.Duration(0)
 	procBatchBegin := time.Now()
 	n := bat.Vecs[0].Length()
 	requestCtx := ses.GetRequestContext()
 
-	if oq.ep.Outfile {
+	if ec.needExportToFile() {
 		initExportFirst(oq)
 	}
 
 	for j := 0; j < n; j++ { //row index
-		if oq.ep.Outfile {
+		if ec.needExportToFile() {
 			select {
 			case <-requestCtx.Done():
 				return nil
@@ -431,7 +432,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
-	if oq.ep.Outfile {
+	if ec.needExportToFile() {
 		oq.rowIdx = uint64(n)
 		bat2 := preCopyBat(obj, bat)
 		go constructByte(obj, bat2, oq.ep.Index, oq.ep.ByteChan, oq)
@@ -2773,11 +2774,14 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			err = doCheckFilePath(requestCtx, ses, st)
+			err = doCheckFilePath(requestCtx, ses, st.Ep)
 			if err != nil {
 				return err
 			}
-			ses.SetExportParam(st.Ep)
+			ses.InitExportConfig(st.Ep)
+			defer func() {
+				ses.ClearExportParam()
+			}()
 		}
 	}
 
@@ -3210,8 +3214,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			Step 2: Start pipeline
 			Producing the data row and sending the data row
 		*/
-		ep := ses.GetExportParam()
-		if ep.Outfile {
+		ep := ses.GetExportConfig()
+		if ep.needExportToFile() {
 			ep.DefaultBufSize = pu.SV.ExportDataDefaultFlushSize
 			initExportFileParam(ep, mrs)
 			if err = openNewFile(requestCtx, ep, mrs); err != nil {
@@ -3230,7 +3234,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 		}
 
-		if ep.Outfile {
+		if ep.needExportToFile() {
 			oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
 			if err = exportAllData(oq); err != nil {
 				return err
@@ -3444,7 +3448,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
-	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
@@ -3624,7 +3627,6 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(input.getSql())
-	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
 		requestCtx,
@@ -3936,6 +3938,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_char:
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_array_float32, types.T_array_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_binary:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)

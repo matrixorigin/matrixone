@@ -121,6 +121,7 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			elems[colIdx] = table.Float64Field(val)
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			//TAEWriter is deprecated. So no need to add T_array here.
 			elems[colIdx] = table.StringField(field)
 		case types.T_json:
 			elems[colIdx] = table.StringField(field)
@@ -216,6 +217,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 			cols[rowIdx] = field.GetFloat64()
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+			//TODO: How to handle T_array here?
 			switch field.Type {
 			case table.TVarchar, table.TText:
 				err := vector.SetStringAt(vec, rowIdx, field.String, mp)
@@ -390,7 +392,8 @@ func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
 	case types.T_float64:
 		cols := vector.MustFixedCol[float64](vec)
 		return len(cols), nil
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		cols := vector.MustFixedCol[types.Varlena](vec)
 		return len(cols), nil
 	case types.T_json:
@@ -420,6 +423,12 @@ func ValToString(ctx context.Context, vec *vector.Vector, rowIdx int) (string, e
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		cols, area := vector.MustVarlenaRawData(vec)
 		return cols[rowIdx].GetString(area), nil
+	case types.T_array_float32:
+		cols, area := vector.MustVarlenaRawData(vec)
+		return types.ArrayToString[float32](types.GetArray[float32](&cols[rowIdx], area)), nil
+	case types.T_array_float64:
+		cols, area := vector.MustVarlenaRawData(vec)
+		return types.ArrayToString[float64](types.GetArray[float64](&cols[rowIdx], area)), nil
 	case types.T_json:
 		cols, area := vector.MustVarlenaRawData(vec)
 		val := cols[rowIdx].GetByteSlice(area)
