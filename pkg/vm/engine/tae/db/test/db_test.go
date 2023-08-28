@@ -46,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -6451,8 +6450,7 @@ func TestAlterFakePk(t *testing.T) {
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 		newSchema := meta.GetSchema()
 		blkdata := meta.GetBlockData()
-		sels := nulls.NewWithSize(4)
-		sels.Add(1, 3)
+		sels := []uint32{1, 3}
 		rows := make([]int, 0, 4)
 		blkdata.Foreach(context.Background(), newSchema, 1 /*"add1" column*/, func(v any, isnull bool, row int) error {
 			require.True(t, true)
