@@ -262,9 +262,24 @@ func TestBlobToArray(t *testing.T) {
 	}
 	tests := []testCase{
 		{
-			name:       "Test 1  - float32",
+			name:       "Test 1a  - float32",
 			args:       args{input: util.UnsafeStringToBytes("7e98b23e9e10383b2f41133f"), typ: T_array_float32},
 			wantResF32: []float32{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669},
+		},
+		{
+			name:       "Test 1b  - float32",
+			args:       args{input: util.UnsafeStringToBytes("0363733ff13e0b3f7aa39d3e"), typ: T_array_float32},
+			wantResF32: []float32{0.95072953, 0.54392913, 0.30788785},
+		},
+		{
+			name:       "Test 1c  - float32",
+			args:       args{input: util.UnsafeStringToBytes("855e7d3f77881c3fcdbe8e3e"), typ: T_array_float32},
+			wantResF32: []float32{0.98972348, 0.61145728, 0.27879944},
+		},
+		{
+			name:       "Test 1d  - float32",
+			args:       args{input: util.UnsafeStringToBytes("be1ac03e485d083ef6bc723f"), typ: T_array_float32},
+			wantResF32: []float32{0.37520402, 0.13316834, 0.94819581},
 		},
 		{
 			name:       "Test 2  - float64",
@@ -327,10 +342,28 @@ func TestArrayToBlob(t *testing.T) {
 	}
 	tests := []testCase{
 		{
-			name:    "Test 1  - float32",
+			name:    "Test 1a  - float32",
 			typ:     T_array_float32,
 			argsF32: []float32{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669},
 			wantRes: util.UnsafeStringToBytes("7e98b23e9e10383b2f41133f"),
+		},
+		{
+			name:    "Test 1b  - float32",
+			typ:     T_array_float32,
+			argsF32: []float32{0.95072953, 0.54392913, 0.30788785},
+			wantRes: util.UnsafeStringToBytes("0363733ff13e0b3f7aa39d3e"),
+		},
+		{
+			name:    "Test 1c  - float32",
+			typ:     T_array_float32,
+			argsF32: []float32{0.98972348, 0.61145728, 0.27879944},
+			wantRes: util.UnsafeStringToBytes("855e7d3f77881c3fcdbe8e3e"),
+		},
+		{
+			name:    "Test 1d  - float32",
+			typ:     T_array_float32,
+			argsF32: []float32{0.37520402, 0.13316834, 0.94819581},
+			wantRes: util.UnsafeStringToBytes("be1ac03e485d083ef6bc723f"),
 		},
 		{
 			name:    "Test 2  - float64",
