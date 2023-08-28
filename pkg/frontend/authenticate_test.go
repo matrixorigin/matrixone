@@ -10246,6 +10246,6 @@ func TestDoCheckFilePath(t *testing.T) {
 
 		err := doCheckFilePath(ctx, ses, cs.Ep)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "/tmp/t1.csv")
+		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "stage1:/t1.csv")
 	})
 }
