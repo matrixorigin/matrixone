@@ -76,6 +76,9 @@ insert into t5 values(4, "[0,2,3]");
 select * from t5;
 select * from t5 where t5.b > "[0,0,0]";
 
+-- output vector as binary (the output is little endian hex encoding)
+select cast(b as BLOB) from t5;
+
 -- insert, flush and select
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
 insert into vec_table values(3, "[1,3,3]", "[4,1,6]");
