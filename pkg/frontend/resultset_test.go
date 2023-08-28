@@ -343,7 +343,7 @@ func Test_GetFloat64(t *testing.T) {
 func Test_GetString(t *testing.T) {
 	var ret string
 	var err error
-	var colNum = 17
+	var colNum = 19
 	convey.Convey("GetString succ", t, func() {
 		mrs := &MysqlResultSet{}
 		mrs.Data = make([][]interface{}, colNum)
@@ -448,5 +448,15 @@ func Test_GetString(t *testing.T) {
 		ret, err = mrs.GetString(context.TODO(), 16, 0)
 		convey.So(ret, convey.ShouldEqual, "")
 		convey.So(err, convey.ShouldNotBeNil)
+
+		mrs.Data[17][0] = []float32{1, 2, 3}
+		ret, err = mrs.GetString(context.TODO(), 17, 0)
+		convey.So(ret, convey.ShouldEqual, "[1, 2, 3]")
+		convey.So(err, convey.ShouldBeNil)
+
+		mrs.Data[18][0] = []float64{1, 2, 3}
+		ret, err = mrs.GetString(context.TODO(), 18, 0)
+		convey.So(ret, convey.ShouldEqual, "[1, 2, 3]")
+		convey.So(err, convey.ShouldBeNil)
 	})
 }

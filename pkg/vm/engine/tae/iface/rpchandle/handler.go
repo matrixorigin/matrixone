@@ -84,10 +84,10 @@ type Handler interface {
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
 
-	HandleInspectDN(
+	HandleInspectTN(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req *db.InspectDN,
+		req *db.InspectTN,
 		resp *db.InspectResp,
 	) (func(), error)
 

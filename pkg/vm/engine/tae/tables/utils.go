@@ -47,7 +47,7 @@ func LoadPersistedColumnData(
 	if err != nil {
 		return
 	}
-	return containers.ToDNVector(bat.Vecs[0]), nil
+	return containers.ToTNVector(bat.Vecs[0]), nil
 }
 
 func LoadPersistedColumnDatas(
@@ -93,7 +93,7 @@ func LoadPersistedColumnDatas(
 		if idx >= phyAddIdx && phyAddIdx > -1 {
 			idx++
 		}
-		vectors[idx] = containers.ToDNVector(vec)
+		vectors[idx] = containers.ToTNVector(vec)
 	}
 	return vectors, nil
 }
@@ -117,12 +117,12 @@ func LoadPersistedDeletes(
 	if isPersistedByCN {
 		colNames := []string{catalog.PhyAddrColumnName, pkName}
 		for i := 0; i < 2; i++ {
-			bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
+			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i]))
 		}
 	} else {
 		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, pkName, catalog.AttrAborted}
 		for i := 0; i < 4; i++ {
-			bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
+			bat.AddVector(colNames[i], containers.ToTNVector(movbat.Vecs[i]))
 		}
 	}
 	return

@@ -105,9 +105,9 @@ func TestGCZombieNonCoordinatorTxn(t *testing.T) {
 	sender.AddTxnService(s)
 
 	wTxn := NewTestTxn(1, 1, 1)
-	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
+	wTxn.TNShards = append(wTxn.TNShards, NewTestTNShard(2))
 	// make shard 2 is coordinator
-	wTxn.DNShards[0], wTxn.DNShards[1] = wTxn.DNShards[1], wTxn.DNShards[0]
+	wTxn.TNShards[0], wTxn.TNShards[1] = wTxn.TNShards[1], wTxn.TNShards[0]
 
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 

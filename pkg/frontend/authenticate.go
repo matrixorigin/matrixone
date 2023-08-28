@@ -3484,7 +3484,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	return err
 }
 
-func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
+func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) error {
 	var err error
 	var filePath string
 	var sql string
@@ -3492,7 +3492,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 	var stageName string
 	var stageStatus string
 	var url string
-	if st.Ep == nil {
+	if ep == nil {
 		return err
 	}
 
@@ -3508,7 +3508,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 	}
 
 	// detect filepath contain stage or not
-	filePath = st.Ep.FilePath
+	filePath = ep.FilePath
 	if !strings.Contains(filePath, ":") {
 		// the filepath is the target path
 		sql = getSqlForCheckStageStatus(ctx, "enabled")
@@ -3565,7 +3565,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, st *tree.Select) error {
 				}
 
 				filePath = strings.Replace(filePath, stageName+":", url, 1)
-				st.Ep.FilePath = filePath
+				ep.FilePath = filePath
 			}
 
 		} else {
@@ -5543,6 +5543,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		writeDatabaseAndTableDirectly = true
 		if st.StreamName != nil {
 			dbName = string(st.StreamName.SchemaName)
+		}
+	case *tree.CreateConnector:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.ConnectorName != nil {
+			dbName = string(st.ConnectorName.SchemaName)
 		}
 	case *tree.CreateSequence:
 		objType = objectTypeDatabase

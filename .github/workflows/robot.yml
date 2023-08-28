@@ -119,7 +119,7 @@ jobs:
 
   nightly-check:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     steps:
       - uses: actions/checkout@v3
         with:
@@ -180,7 +180,7 @@ jobs:
           locale
 
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e pessimistic_transaction 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e optimistic 2>&1
       - name: Generate UT and BVT Coverage File
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
