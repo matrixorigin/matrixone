@@ -68,10 +68,6 @@ func (e *TableMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, e
 	return
 }
 
-func (e *TableMVCCNode) getColumnCount() int {
-	return len(e.Schema.ColDefs)
-}
-
 type TableNode struct {
 	// The latest schema. A shortcut to the schema in the last mvvcnode.
 	schema atomic.Pointer[Schema]
