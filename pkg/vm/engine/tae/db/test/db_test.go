@@ -8450,3 +8450,41 @@ func TestEstimateMemSize(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 	}
 }
+
+func TestColumnCount(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+
+	systemColumnCount := tae.Catalog.CoarseColumnCnt()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	assert.Equal(t, systemColumnCount+3, tae.Catalog.CoarseColumnCnt())
+
+	{
+		txn, rel := tae.GetRelation()
+		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xyz", types.NewProtoType(types.T_char), 5))
+		require.NoError(t, err)
+		require.Nil(t, txn.Commit(context.Background()))
+	}
+
+	assert.Equal(t, systemColumnCount+4, tae.Catalog.CoarseColumnCnt())
+
+	{
+		txn, rel := tae.GetRelation()
+		err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, "xyz2", types.NewProtoType(types.T_char), 5))
+		require.NoError(t, err)
+		require.Nil(t, txn.Rollback(context.Background()))
+	}
+
+	assert.Equal(t, systemColumnCount+4, tae.Catalog.CoarseColumnCnt())
+}
