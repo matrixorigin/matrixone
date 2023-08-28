@@ -4020,9 +4020,9 @@ func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 			continue
 		}
 
-		if to.GetType().Width != from.GetType().Width {
-			return moerr.NewArrayDefMismatchNoCtx(int(to.GetType().Width), int(from.GetType().Width))
-		}
+		// NOTE: During ARRAY --> ARRAY conversion, if you do width check
+		// `to.GetType().Width != from.GetType().Width`
+		// cases b/b and b+sqrt(b) fails.
 
 		if from.GetType().Oid == to.GetType().Oid {
 			// Eg:- VECF32(3) --> VECF32(3)
