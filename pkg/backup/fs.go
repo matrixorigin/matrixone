@@ -16,7 +16,9 @@ package backup
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/csv"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
@@ -112,7 +114,10 @@ func etlFSDir(filepath string) string {
 }
 
 func writeFile(ctx context.Context, fs fileservice.FileService, path string, data []byte) error {
-	return fs.Write(ctx, fileservice.IOVector{
+	var err error
+	var checksum []byte
+	//write file
+	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: path,
 		Entries: []fileservice.IOEntry{
 			{
@@ -121,5 +126,27 @@ func writeFile(ctx context.Context, fs fileservice.FileService, path string, dat
 				Data:   data,
 			},
 		},
+		Hash: fileservice.Hash{
+			Sum: &checksum,
+			New: md5.New,
+		},
 	})
+	if err != nil {
+		return err
+	}
+
+	//write checksum file for the file
+	checksumFile := path + ".md5"
+	checksumContent := fmt.Sprintf("%x", checksum)
+	err = fs.Write(ctx, fileservice.IOVector{
+		FilePath: checksumFile,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   int64(len(checksumContent)),
+				Data:   []byte(checksumContent),
+			},
+		},
+	})
+	return err
 }

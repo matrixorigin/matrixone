@@ -32,7 +32,7 @@ const (
 	configDir    = "config"
 	taeDir       = "tae"
 	taeList      = "tae_list"
-	taeSize      = "tae_size"
+	taeSum       = "tae_sum"
 	hakeeperDir  = "hakeeper"
 	HakeeperFile = "hk_data"
 )
@@ -255,4 +255,8 @@ func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
 		ret += file.size
 	}
 	return lines, ret
+}
+
+func taeBackupTimeAndSizeToCsv(backupTime string, size int64) []string {
+	return []string{backupTime, fmt.Sprintf("%d", size)}
 }
