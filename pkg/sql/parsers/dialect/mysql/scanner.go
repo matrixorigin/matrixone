@@ -214,8 +214,8 @@ func (s *Scanner) Scan() (int, string) {
 			return s.stepBackOneChar(ch)
 		}
 		s.inc()
-		switch s.cur() {
-		case '+':
+		switch {
+		case s.cur() == '+':
 			s.inc()
 			switch s.cur() {
 			case '\'':
@@ -223,6 +223,8 @@ func (s *Scanner) Scan() (int, string) {
 			default:
 				return s.scanStringAddPlus(ch, STRING)
 			}
+		case isLetter(s.cur()):
+			return s.scanString(ch, STRING)
 		default:
 			return s.Scan()
 		}
