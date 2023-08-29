@@ -21,17 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	SendA         = 0
-	SendLastBatch = 1
-	SendB         = 2
-)
-
 type container struct {
 	colexec.ReceiverOperator
-	bats   []*batch.Batch
-	status int32
-	last   bool
+	bats []*batch.Batch
+	last bool
 }
 
 type Argument struct {
