@@ -51,6 +51,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			proc.SetInputBatch(nil)
 			return process.ExecStop, nil
 		}
+		if bat.Last() {
+			proc.SetInputBatch(bat)
+			return process.ExecNext, nil
+		}
 
 		anal.Input(bat, isFirst)
 		if ap.ctr.seen >= ap.Limit {
