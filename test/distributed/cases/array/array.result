@@ -113,18 +113,14 @@ select * from t4;
 a    b    c
 1    [1, 2, 3, 4, 5]    [1, 2, 3, 4, 5]
 create table t5(a int, b vecf32(3));
-insert into t5 values(1, (cast( cast('7e98b23e9e10383b2f41133f' as TEXT) as vecf32(3))) );
-insert into t5 values(2, (cast( cast('0363733ff13e0b3f7aa39d3e' as TEXT) as vecf32(3))) );
-insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as TEXT) as vecf32(3))) );
+insert into t5 values(1, decode('7e98b23e9e10383b2f41133f','hex'));
+insert into t5 values(2, decode('0363733ff13e0b3f7aa39d3e','hex'));
+insert into t5 values(3, decode('be1ac03e485d083ef6bc723f','hex'));
 insert into t5 values(4, "[0,2,3]");
-insert into t5 values(5, (cast( cast('05486c3f3ee2863e713d503dd58e8e3e7b88743f' as TEXT) as vecf32(3))) ); -- be1... is float32[5]
+insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- be1... is float32[5]
 invalid input: expected vector dimension 3 != actual dimension 5.
-insert into t5 values(6, (cast( cast('9be2123fcf92de3e' as TEXT) as vecf32(3))) ); -- be1... is float32[2]
+insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- be1... is float32[2]
 invalid input: expected vector dimension 3 != actual dimension 2.
-insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as TEXT) as vecf32(5))) );
-invalid input: expected vector dimension 5 != actual dimension 3.
-insert into t5 values(3, (cast( cast('be1ac03e485d083ef6bc723f' as TEXT) as vecf32(2))) );
-invalid input: expected vector dimension 2 != actual dimension 3.
 select * from t5;
 a    b
 1    [0.34881967, 0.0028086076, 0.5752134]
@@ -137,8 +133,8 @@ a    b
 2    [0.95072955, 0.54392916, 0.30788785]
 3    [0.37520403, 0.13316834, 0.9481958]
 4    [0, 2, 3]
-select cast(b as TEXT) from t5;
-cast(b as text)
+select encode(b,'hex') from t5;
+encode(b, hex)
 7e98b23e9e10383b2f41133f
 0363733ff13e0b3f7aa39d3e
 be1ac03e485d083ef6bc723f

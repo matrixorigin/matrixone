@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
+	"math"
 )
 
 //TODO: Check on optimization.
@@ -131,11 +132,11 @@ func Sqrt[T types.RealNumbers](v []T) (res []float64, err error) {
 
 func Summation[T types.RealNumbers](v []T) float64 {
 	n := len(v)
-	var sum float64 = 0
+	var sum T = 0
 	for i := 0; i < n; i++ {
-		sum = sum + float64(v[i])
+		sum += v[i]
 	}
-	return sum
+	return float64(sum)
 }
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -146,14 +147,11 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	n := len(v1)
 
-	var productVal T
-	var sum float64 = 0
-
+	var sum T = 0
 	for i := 0; i < n; i++ {
-		productVal = v1[i] * v2[i]
-		sum = sum + float64(productVal)
+		sum += v1[i] * v2[i]
 	}
-	return sum, nil
+	return float64(sum), nil
 }
 
 // L1Norm returns l1 distance to origin.
@@ -163,7 +161,7 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 
 	var absVal T
 	var err error
-	var sum float64 = 0
+	var sum T = 0
 
 	for i := 0; i < n; i++ {
 		absVal, err = momath.AbsSigned[T](v[i])
@@ -171,26 +169,25 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 			return 0, err
 		}
 
-		sum = sum + float64(absVal)
+		sum += absVal
 	}
-	return sum, nil
+	return float64(sum), nil
 }
 
 // L2Norm returns l2 distance to origin.
-// You can ignore the error as math.sqrt will not throw -ve error since,
-// sum is always +ve due to sum(pow(v,2)).
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 
 	var sqrVal T
-	var sum float64 = 0
+	var sum T = 0
 
 	for i := 0; i < n; i++ {
 		sqrVal = v[i] * v[i]
-		sum = sum + float64(sqrVal)
+		sum += sqrVal
 	}
 
-	return momath.Sqrt(sum)
+	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
+	return math.Sqrt(float64(sum)), nil
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float32, error) {
@@ -199,21 +196,18 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float32, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	a, err := InnerProduct[T](v1, v2)
-	if err != nil {
-		return 0, err
+	n := len(v1)
+
+	var innerProduct T = 0
+	var normV1 T = 0
+	var normV2 T = 0
+	for i := 0; i < n; i++ {
+		innerProduct += v1[i] * v2[i]
+		normV1 += v1[i] * v1[i]
+		normV2 += v2[i] * v2[i]
 	}
 
-	b, err := L2Norm[T](v1)
-	if err != nil {
-		return 0, err
-	}
-
-	c, err := L2Norm[T](v2)
-	if err != nil {
-		return 0, err
-	}
-
-	sum := a / (b * c)
-	return float32(sum), nil
+	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
+	// casting it to float32, because cosine_similarity is between 1 and -1.
+	return float32(float64(innerProduct) / math.Sqrt(float64(normV1*normV2))), nil
 }

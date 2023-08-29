@@ -16,10 +16,8 @@ package types
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"strings"
 )
@@ -112,19 +110,4 @@ func BytesToArrayToString[T RealNumbers](input []byte) string {
 
 	// Convert []float32{1.0, 2.0, 3.0} --> "[1,2,3]"
 	return ArrayToString[T](a)
-}
-
-// HexEncodingToArray convert HexEncoding to []T
-func HexEncodingToArray[T RealNumbers](input []byte) ([]T, error) {
-	bytearray, err := hex.DecodeString(util.UnsafeBytesToString(input))
-	if err != nil {
-		return nil, err
-	}
-	return BytesToArray[T](bytearray), nil
-}
-
-// ArrayToHexEncoding convert []T to HexEncoding
-func ArrayToHexEncoding[T RealNumbers](input []T) ([]byte, error) {
-	hexEncoding := hex.EncodeToString(ArrayToBytes[T](input))
-	return util.UnsafeStringToBytes(hexEncoding), nil
 }
