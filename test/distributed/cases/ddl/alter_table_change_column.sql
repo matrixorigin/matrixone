@@ -840,7 +840,6 @@ drop table foreign01;
 
 
 -- decimal：Conversion between high precision and low precision
--- @bvt:issue#11245
 drop table if exists decimal01;
 create table decimal01 (col1 decimal,col2 decimal(38,10));
 insert into decimal01 values (23746723468723.242334243, 38208439024234.43242342423423423422342);
@@ -855,7 +854,6 @@ show create table decimal01;
 insert into decimal01 values (37298342.123, -37829342.3244234, -283794324.2342);
 select * from decimal01;
 drop table decimal01;
--- @bvt:issue
 
 
 -- abnormal test: change column from null to not null, null exist in the table
