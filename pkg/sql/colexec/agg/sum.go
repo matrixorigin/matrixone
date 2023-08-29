@@ -169,11 +169,16 @@ func (s *Decimal128Sum) Eval(vs []types.Decimal128, err error) ([]types.Decimal1
 func (s *Decimal128Sum) Fill(_ int64, value types.Decimal128, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
 	if !isNull {
 		var err error
-		value, _, err = value.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, 0, 0)
-		if err == nil {
+		if z == 1 {
 			ov, err = ov.Add128(value)
+			return ov, false, err
+		} else {
+			value, _, err = value.Mul(types.Decimal128{B0_63: uint64(z), B64_127: 0}, 0, 0)
+			if err == nil {
+				ov, err = ov.Add128(value)
+			}
+			return ov, false, err
 		}
-		return ov, false, err
 	}
 	return ov, isEmpty, nil
 }
