@@ -136,7 +136,12 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 	var err error
 	ep.CurFileSize = 0
 	if !ep.UseFileService {
-		filePath := getExportFilePath(ep.userConfig.FilePath, ep.FileCnt)
+		var filePath string
+		if len(ep.userConfig.StageFilePath) != 0 {
+			filePath = getExportFilePath(ep.userConfig.StageFilePath, ep.FileCnt)
+		} else {
+			filePath = getExportFilePath(ep.userConfig.FilePath, ep.FileCnt)
+		}
 		ep.File, err = OpenFile(filePath, os.O_RDWR|os.O_EXCL|os.O_CREATE, 0o666)
 		if err != nil {
 			return err
