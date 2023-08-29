@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -303,9 +302,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 	if !ap.NeedMergedBatch && ctr.inputBatchRowCount >= 8192 {
+		// if do not need merged batch, free it now to save memory
+		// for further optimization, do not merge input batches to get best performance
 		ctr.cleanBatch(proc.Mp())
 		ctr.bat = batch.NewWithSize(len(ap.Typs))
-		logutil.Infof("do not need merged batches, size %v", ctr.inputBatchRowCount)
 	}
 	return nil
 }
