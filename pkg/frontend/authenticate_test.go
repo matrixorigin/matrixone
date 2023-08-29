@@ -8838,7 +8838,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckDatabaseWithOwner(ctx, ad.DbName)
+		sql, _ := getSqlForCheckDatabaseWithOwner(ctx, ad.DbName, int64(ses.GetTenantInfo().GetTenantID()))
 		mrs := newMrsForPasswordOfUser([][]interface{}{
 			{0, 0},
 		})
@@ -8894,7 +8894,7 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckDatabaseWithOwner(ctx, ad.DbName)
+		sql, _ := getSqlForCheckDatabaseWithOwner(ctx, ad.DbName, int64(ses.GetTenantInfo().GetTenantID()))
 		mrs := newMrsForPasswordOfUser([][]interface{}{
 			{0, 1},
 		})
