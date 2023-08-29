@@ -21,7 +21,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -51,11 +50,9 @@ func acquireWaiter(
 
 func newWaiter() *waiter {
 	w := &waiter{
-		timer:   time.NewTimer(time.Second),
 		c:       make(chan notifyValue, 1),
 		waiters: newWaiterQueue(),
 	}
-	w.timer.Stop()
 	w.setFinalizer()
 	w.setStatus("", ready)
 	return w
@@ -92,18 +89,16 @@ const (
 // 16. s1.Unlock()
 // 17. waiter-k1-B.wait() returned and get the lock
 type waiter struct {
-	txnID           []byte
-	waitingForTxnID []byte
-	status          atomic.Int32
-	timer           *time.Timer
-	c               chan notifyValue
-	waiters         waiterQueue
-	sameTxnWaiters  []*waiter
-	refCount        atomic.Int32
-	latestCommitTS  timestamp.Timestamp
-	waitTxn         pb.WaitTxn
-	belongTo        pb.WaitTxn
-	event           event
+	txnID          []byte
+	status         atomic.Int32
+	c              chan notifyValue
+	waiters        waiterQueue
+	sameTxnWaiters []*waiter
+	refCount       atomic.Int32
+	latestCommitTS timestamp.Timestamp
+	waitTxn        pb.WaitTxn
+	belongTo       pb.WaitTxn
+	event          event
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -253,14 +248,10 @@ func (w *waiter) wait(
 		logWaiterGetNotify(serviceID, w, v)
 		w.setStatus(serviceID, completed)
 	}
-	w.timer.Reset(time.Second)
-	defer w.timer.Stop()
 	select {
 	case v := <-w.c:
 		apply(v)
 		return v
-	case <-w.timer.C:
-		return notifyValue{suspectedDeadlock: true}
 	case <-ctx.Done():
 		select {
 		case v := <-w.c:
@@ -380,8 +371,6 @@ func (w *waiter) reset(serviceID string) {
 
 	logWaiterContactPool(serviceID, w, "put")
 	w.txnID = nil
-	w.waitingForTxnID = nil
-	w.timer.Stop()
 	w.event = event{}
 	w.latestCommitTS = timestamp.Timestamp{}
 	w.setStatus(serviceID, ready)
@@ -393,10 +382,9 @@ func (w *waiter) reset(serviceID string) {
 }
 
 type notifyValue struct {
-	err               error
-	ts                timestamp.Timestamp
-	defChanged        bool
-	suspectedDeadlock bool
+	err        error
+	ts         timestamp.Timestamp
+	defChanged bool
 }
 
 func (v notifyValue) String() string {
