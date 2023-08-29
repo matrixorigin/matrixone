@@ -116,13 +116,13 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 
 		if !ok {
 			logutil.Errorf("children pipeline closed unexpectedly")
-			r.removeChosen(chosen)
+			r.RemoveChosen(chosen)
 			return nil, true, nil
 		}
 
 		bat := (*batch.Batch)(value.UnsafePointer())
 		if bat == nil {
-			r.removeChosen(chosen)
+			r.RemoveChosen(chosen)
 			continue
 		}
 
@@ -154,7 +154,7 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 	}
 }
 
-func (r *ReceiverOperator) removeChosen(idx int) {
+func (r *ReceiverOperator) RemoveChosen(idx int) {
 	r.receiverListener = append(r.receiverListener[:idx], r.receiverListener[idx+1:]...)
 	r.aliveMergeReceiver--
 }
