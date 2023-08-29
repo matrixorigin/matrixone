@@ -206,16 +206,11 @@ func (ctr *container) mergeBuildBatches(ap *Argument, proc *process.Process, ana
 	return nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	err := ctr.mergeBuildBatches(ap, proc, anal, isFirst)
-	if err != nil {
-		return err
-	}
-
+func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Process) error {
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
 	}
-
+	var err error
 	if err = ctr.evalJoinCondition(ctr.bat, proc); err != nil {
 		return err
 	}
@@ -292,6 +287,18 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				ctr.multiSels[ai] = append(ctr.multiSels[ai], int32(i+k))
 			}
 		}
+	}
+	return nil
+}
+
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
+	err := ctr.mergeBuildBatches(ap, proc, anal, isFirst)
+	if err != nil {
+		return err
+	}
+	err = ctr.buildHashmapByMergedBatch(ap, proc)
+	if err != nil {
+		return err
 	}
 	return nil
 }
