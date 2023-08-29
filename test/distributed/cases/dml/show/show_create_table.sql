@@ -199,4 +199,5 @@ CREATE TABLE `mysql_ddl_test_t32` (
  PARTITION hour164 VALUES IN (164) ENGINE = InnoDB,
  PARTITION hour165 VALUES IN (165) ENGINE = InnoDB,
  PARTITION hour167 VALUES IN (167) ENGINE = InnoDB) */;
-show create table mysql_ddl_test_t32; 
+show create table mysql_ddl_test_t32;
+drop table mysql_ddl_test_t32;
