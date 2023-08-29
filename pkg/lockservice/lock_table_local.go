@@ -93,6 +93,7 @@ func (l *localLockTable) doLock(
 	}
 
 	var err error
+	var bw *waiter
 	table := l.bind.Table
 	for {
 		// blocked used for async callback, waiter is created, and added to wait list.
@@ -106,7 +107,7 @@ func (l *localLockTable) doLock(
 			}
 			// no waiter, all locks are added
 			if c.w == nil {
-				c.txn.clearBlocked(c.txn.txnID)
+				c.txn.clearBlocked(c.txn.txnID, bw)
 				logLocalLockAdded(l.bind.ServiceID, c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
 					c.result.Timestamp = c.lockedTS
@@ -114,6 +115,7 @@ func (l *localLockTable) doLock(
 				c.done(nil)
 				return
 			}
+			bw = c.w
 
 			// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
 			// the rpc will be blocked.
@@ -127,7 +129,16 @@ func (l *localLockTable) doLock(
 		// or other concurrent txn method.
 		oldTxnID := c.txn.txnID
 		c.txn.Unlock()
-		v := c.w.wait(c.ctx, l.bind.ServiceID)
+
+		var v notifyValue
+		for {
+			v = c.w.wait(c.ctx, l.bind.ServiceID)
+			if !v.suspectedDeadlock {
+				break
+			}
+			_ = l.detector.check(c.w.waitingForTxnID, c.w.belongTo)
+		}
+
 		c.txn.Lock()
 
 		logLocalLockWaitOnResult(l.bind.ServiceID, c.txn, table, c.rows[c.idx], c.opts, c.w, v)
@@ -185,6 +196,13 @@ func (l *localLockTable) unlock(
 					l.bind.ServiceID,
 					notifyValue{ts: commitTS, defChanged: lock.isLockTableDefChanged()})
 				logUnlockTableKeyOnLocal(l.bind.ServiceID, txn, l.bind, key, lock, next)
+				if next != nil {
+					// waiting relation changed
+					next.waiters.iter(func(w *waiter) bool {
+						_ = l.detector.check(next.txnID, w.belongTo)
+						return true
+					})
+				}
 			}
 			l.mu.store.Delete(key)
 		}
@@ -369,6 +387,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	conflictWith.waiter.waiters.beginChange()
 	defer func() {
 		if err == nil {
+			w.waitingForTxnID = conflictWith.txnID
 			return
 		}
 		conflictWith.waiter.waiters.rollbackChange()
