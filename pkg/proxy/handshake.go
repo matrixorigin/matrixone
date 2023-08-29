@@ -64,7 +64,6 @@ func (c *clientConn) handleHandshakeResp() error {
 	}
 
 	li := &c.clientInfo.labelInfo
-	li.merge(c.mysqlProto.GetConnectAttrs())
 	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, li.Labels)
 	return nil
 }
