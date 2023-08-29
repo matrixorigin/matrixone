@@ -9982,6 +9982,7 @@ func TestDoCheckFilePath(t *testing.T) {
 		ses.SetTenantInfo(tenant)
 
 		cs := &tree.Select{}
+		ses.InitExportConfig(cs.Ep)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -10027,6 +10028,7 @@ func TestDoCheckFilePath(t *testing.T) {
 				FilePath: "/mnt/disk1/t1.csv",
 			},
 		}
+		ses.InitExportConfig(cs.Ep)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -10076,6 +10078,7 @@ func TestDoCheckFilePath(t *testing.T) {
 				FilePath: "/mnt/disk1/t1.csv",
 			},
 		}
+		ses.InitExportConfig(cs.Ep)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -10127,6 +10130,7 @@ func TestDoCheckFilePath(t *testing.T) {
 				FilePath: "stage1:/t1.csv",
 			},
 		}
+		ses.InitExportConfig(cs.Ep)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -10176,6 +10180,7 @@ func TestDoCheckFilePath(t *testing.T) {
 				FilePath: "stage1:/t1.csv",
 			},
 		}
+		ses.InitExportConfig(cs.Ep)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -10227,6 +10232,7 @@ func TestDoCheckFilePath(t *testing.T) {
 				FilePath: "stage1:/t1.csv",
 			},
 		}
+		ses.InitExportConfig(cs.Ep)
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -10241,7 +10247,7 @@ func TestDoCheckFilePath(t *testing.T) {
 
 		err := doCheckFilePath(ctx, ses, cs.Ep)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "/tmp/t1.csv")
+		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "stage1:/t1.csv")
 	})
 }
 
