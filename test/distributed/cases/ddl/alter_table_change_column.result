@@ -1520,33 +1520,28 @@ foreign02    col3    INT    NO
 drop table foreign02;
 drop table foreign01;
 drop table if exists decimal01;
-[unknown result because it is related to issue#11245]
 create table decimal01 (col1 decimal,col2 decimal(38,10));
-[unknown result because it is related to issue#11245]
 insert into decimal01 values (23746723468723.242334243, 38208439024234.43242342423423423422342);
-[unknown result because it is related to issue#11245]
 insert into decimal01 values (32487329847923424, -4324324324.3297932749028949373324242423424);
-[unknown result because it is related to issue#11245]
 alter table decimal01 change column col1 col1New decimal(38,6);
-[unknown result because it is related to issue#11245]
 alter table decimal01 change col2 col2New38782ufdhwg43o2uih4f32f4 decimal(38,9);
-[unknown result because it is related to issue#11245]
 show create table decimal01;
-[unknown result because it is related to issue#11245]
+Table    Create Table
+decimal01    CREATE TABLE `decimal01` (\n`col1new` DECIMAL(38,6) DEFAULT null,\n`col2new38782ufdhwg43o2uih4f32f4` DECIMAL(38,9) DEFAULT null\n)
 select * from decimal01;
-[unknown result because it is related to issue#11245]
+col1new    col2new38782ufdhwg43o2uih4f32f4
+23746723468723.000000    38208439024234.432423424
+32487329847923424.000000    -4324324324.329793275
 truncate table decimal01;
-[unknown result because it is related to issue#11245]
 alter table decimal01 add column col3 decimal(19,0) first;
-[unknown result because it is related to issue#11245]
 show create table decimal01;
-[unknown result because it is related to issue#11245]
+Table    Create Table
+decimal01    CREATE TABLE `decimal01` (\n`col3` DECIMAL(19,0) DEFAULT null,\n`col1new` DECIMAL(38,6) DEFAULT null,\n`col2new38782ufdhwg43o2uih4f32f4` DECIMAL(38,9) DEFAULT null\n)
 insert into decimal01 values (37298342.123, -37829342.3244234, -283794324.2342);
-[unknown result because it is related to issue#11245]
 select * from decimal01;
-[unknown result because it is related to issue#11245]
+col3    col1new    col2new38782ufdhwg43o2uih4f32f4
+37298342    -37829342.324423    -283794324.234200000
 drop table decimal01;
-[unknown result because it is related to issue#11245]
 drop table if exists null01;
 create table null01(col1 int default null, col2 binary(10));
 insert into null01 values (1, '32143');
@@ -2099,7 +2094,7 @@ col1    col2    col3    col4
 alter table mix01 add column col1_2 binary after col1;
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`col1` INT NOT NULL,\n`col1_2` BINARY(1) DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\n`col3` DATE DEFAULT NULL,\n`col4` VARCHAR(100) DEFAULT NULL\n)
+mix01    CREATE TABLE `mix01` (\n`col1` INT NOT NULL,\n`col1_2` BINARY(1) DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO
@@ -2122,7 +2117,7 @@ truncate table mix01;
 alter table mix01 add column col5 int;
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`col1_2new` VARBINARY(10) DEFAULT null,\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null,\n`col5` INT DEFAULT NULL\n)
+mix01    CREATE TABLE `mix01` (\n`col1_2new` VARBINARY(10) DEFAULT null,\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null,\n`col5` INT DEFAULT null\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO
