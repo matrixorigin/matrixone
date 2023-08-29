@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -118,12 +119,21 @@ type taskRunner struct {
 	parallelismC chan struct{}
 	doneC        chan runningTask
 
-	mu struct {
+	started atomic.Bool
+
+	executors struct {
 		sync.RWMutex
-		started      bool
-		executors    map[task.TaskCode]TaskExecutor
-		runningTasks map[uint64]runningTask
-		retryTasks   []runningTask
+		m map[task.TaskCode]TaskExecutor
+	}
+
+	runningTasks struct {
+		sync.RWMutex
+		m map[uint64]runningTask
+	}
+
+	retryTasks struct {
+		sync.Mutex
+		s []runningTask
 	}
 
 	options struct {
@@ -144,7 +154,7 @@ func NewTaskRunner(runnerID string, service TaskService, opts ...RunnerOption) T
 		runnerID: runnerID,
 		service:  service,
 	}
-	r.mu.executors = make(map[task.TaskCode]TaskExecutor)
+	r.executors.m = make(map[task.TaskCode]TaskExecutor)
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -155,7 +165,7 @@ func NewTaskRunner(runnerID string, service TaskService, opts ...RunnerOption) T
 	r.parallelismC = make(chan struct{}, r.options.parallelism)
 	r.waitTasksC = make(chan runningTask, r.options.maxWaitTasks)
 	r.doneC = make(chan runningTask, r.options.maxWaitTasks)
-	r.mu.runningTasks = make(map[uint64]runningTask)
+	r.runningTasks.m = make(map[uint64]runningTask)
 	return r
 }
 
@@ -191,14 +201,9 @@ func (r *taskRunner) ID() string {
 }
 
 func (r *taskRunner) Start() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.mu.started {
+	if !r.started.CompareAndSwap(false, true) {
 		return nil
 	}
-
-	r.mu.started = true
 
 	if err := r.stopper.RunNamedTask("fetch-task", r.fetch); err != nil {
 		return err
@@ -219,13 +224,9 @@ func (r *taskRunner) Start() error {
 }
 
 func (r *taskRunner) Stop() error {
-	r.mu.Lock()
-	if !r.mu.started {
-		r.mu.Unlock()
+	if !r.started.CompareAndSwap(true, false) {
 		return nil
 	}
-	r.mu.started = false
-	r.mu.Unlock()
 
 	r.stopper.Stop()
 	close(r.waitTasksC)
@@ -239,26 +240,26 @@ func (r *taskRunner) Parallelism() int {
 }
 
 func (r *taskRunner) RegisterExecutor(code task.TaskCode, executor TaskExecutor) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.executors.Lock()
+	defer r.executors.Unlock()
 
-	if _, ok := r.mu.executors[code]; !ok {
+	if _, ok := r.executors.m[code]; !ok {
 		r.logger.Debug("executor registered", zap.Any("code", code))
-		r.mu.executors[code] = executor
+		r.executors.m[code] = executor
 	}
 }
 
 func (r *taskRunner) fetch(ctx context.Context) {
 	r.logger.Debug("fetch task started")
-	timer := time.NewTicker(r.options.fetchInterval)
-	defer timer.Stop()
+	ticker := time.NewTicker(r.options.fetchInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			r.logger.Debug("fetch task stopped")
 			return
-		case <-timer.C:
+		case <-ticker.C:
 			if taskFrameworkDisabled() {
 				continue
 			}
@@ -283,13 +284,13 @@ func (r *taskRunner) doFetch() ([]task.Task, error) {
 		return nil, err
 	}
 	newTasks := tasks[:0]
-	r.mu.RLock()
+	r.runningTasks.RLock()
 	for _, t := range tasks {
-		if _, ok := r.mu.runningTasks[t.ID]; !ok {
+		if _, ok := r.runningTasks.m[t.ID]; !ok {
 			newTasks = append(newTasks, t)
 		}
 	}
-	r.mu.RUnlock()
+	r.runningTasks.RUnlock()
 	if len(newTasks) == 0 {
 		return nil, nil
 	}
@@ -316,9 +317,9 @@ func (r *taskRunner) addToWait(ctx context.Context, task task.Task) bool {
 	case <-ctx.Done():
 		return false
 	case r.waitTasksC <- rt:
-		r.mu.Lock()
-		r.mu.runningTasks[task.ID] = rt
-		r.mu.Unlock()
+		r.runningTasks.Lock()
+		r.runningTasks.m[task.ID] = rt
+		r.runningTasks.Unlock()
 		r.logger.Debug("task added", zap.String("task", task.DebugString()))
 		return true
 	}
@@ -343,8 +344,8 @@ func (r *taskRunner) dispatch(ctx context.Context) {
 
 func (r *taskRunner) retry(ctx context.Context) {
 	r.logger.Debug("retry task started")
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
 	var needRetryTasks []runningTask
 	for {
@@ -352,37 +353,32 @@ func (r *taskRunner) retry(ctx context.Context) {
 		case <-ctx.Done():
 			r.logger.Debug("retry task stopped")
 			return
-		case <-timer.C:
-			if !taskFrameworkDisabled() {
-				now := time.Now()
-				needRetryTasks = needRetryTasks[:0]
-				r.mu.Lock()
-				for idx, rt := range r.mu.retryTasks {
-					if rt.retryAt.After(now) {
-						r.mu.retryTasks = r.mu.retryTasks[:copy(r.mu.retryTasks, r.mu.retryTasks[idx:])]
-						break
-					}
-					needRetryTasks = append(needRetryTasks, rt)
+		case <-ticker.C:
+			if taskFrameworkDisabled() {
+				continue
+			}
+			needRetryTasks = needRetryTasks[:0]
+			r.retryTasks.Lock()
+			for i, rt := range r.retryTasks.s {
+				if rt.retryAt.After(time.Now()) {
+					r.retryTasks.s = r.retryTasks.s[:copy(r.retryTasks.s, r.retryTasks.s[i:])]
+					break
 				}
-				r.mu.Unlock()
-				if len(needRetryTasks) > 0 {
-					for _, rt := range needRetryTasks {
-						r.runTask(ctx, rt)
-					}
-				}
+				needRetryTasks = append(needRetryTasks, rt)
+			}
+			r.retryTasks.Unlock()
+			for _, rt := range needRetryTasks {
+				r.runTask(ctx, rt)
 			}
 		}
-		timer.Reset(time.Millisecond * 100)
 	}
 }
 
-func (r *taskRunner) runTask(ctx context.Context, rt runningTask) bool {
+func (r *taskRunner) runTask(ctx context.Context, rt runningTask) {
 	select {
 	case <-ctx.Done():
-		return false
 	case r.parallelismC <- struct{}{}:
 		r.run(rt)
-		return true
 	}
 }
 
@@ -434,15 +430,15 @@ func (r *taskRunner) addDoneTask(rt runningTask) {
 }
 
 func (r *taskRunner) addRetryTask(task runningTask) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.mu.retryTasks) >= r.options.maxWaitTasks {
+	r.retryTasks.Lock()
+	defer r.retryTasks.Unlock()
+	if len(r.retryTasks.s) >= r.options.maxWaitTasks {
 		return false
 	}
 
-	r.mu.retryTasks = append(r.mu.retryTasks, task)
-	sort.Slice(r.mu.retryTasks, func(i, j int) bool {
-		return r.mu.retryTasks[i].retryAt.Before(r.mu.retryTasks[j].retryAt)
+	r.retryTasks.s = append(r.retryTasks.s, task)
+	sort.Slice(r.retryTasks.s, func(i, j int) bool {
+		return r.retryTasks.s[i].retryAt.Before(r.retryTasks.s[j].retryAt)
 	})
 	return true
 }
@@ -497,30 +493,30 @@ func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
 
 func (r *taskRunner) heartbeat(ctx context.Context) {
 	r.logger.Debug("heartbeat task started")
-	timer := time.NewTimer(r.options.heartbeatInterval)
-	defer timer.Stop()
+	ticker := time.NewTicker(r.options.heartbeatInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			r.logger.Debug("heartbeat task stopped")
 			return
-		case <-timer.C:
-			if !taskFrameworkDisabled() {
-				r.doHeartbeat(ctx)
+		case <-ticker.C:
+			if taskFrameworkDisabled() {
+				continue
 			}
+			r.doHeartbeat(ctx)
 		}
-		timer.Reset(r.options.heartbeatInterval)
 	}
 }
 
 func (r *taskRunner) doHeartbeat(ctx context.Context) {
-	r.mu.RLock()
-	tasks := make([]runningTask, 0, len(r.mu.runningTasks))
-	for _, rt := range r.mu.runningTasks {
+	r.runningTasks.RLock()
+	tasks := make([]runningTask, 0, len(r.runningTasks.m))
+	for _, rt := range r.runningTasks.m {
 		tasks = append(tasks, rt)
 	}
-	r.mu.RUnlock()
+	r.runningTasks.RUnlock()
 
 	for _, rt := range tasks {
 		if err := r.service.Heartbeat(ctx, rt.task); err != nil {
@@ -534,17 +530,17 @@ func (r *taskRunner) doHeartbeat(ctx context.Context) {
 }
 
 func (r *taskRunner) removeRunningTask(id uint64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.runningTasks.Lock()
+	defer r.runningTasks.Unlock()
 
-	delete(r.mu.runningTasks, id)
+	delete(r.runningTasks.m, id)
 }
 
 func (r *taskRunner) getExecutor(code task.TaskCode) (TaskExecutor, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.executors.RLock()
+	defer r.executors.RUnlock()
 
-	if executor, ok := r.mu.executors[code]; ok {
+	if executor, ok := r.executors.m[code]; ok {
 		return executor, nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("executor with code %d not exists", code)
