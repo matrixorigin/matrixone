@@ -114,7 +114,7 @@ type taskRunner struct {
 	runnerID     string
 	service      TaskService
 	stopper      stopper.Stopper
-	waitTasksC   chan task.Task
+	waitTasksC   chan runningTask
 	parallelismC chan struct{}
 	doneC        chan runningTask
 
@@ -153,7 +153,7 @@ func NewTaskRunner(runnerID string, service TaskService, opts ...RunnerOption) T
 	r.logger = logutil.Adjust(r.logger).Named("task-runner").With(zap.String("runner-id", r.runnerID))
 	r.stopper = *stopper.NewStopper("task-runner", stopper.WithLogger(r.logger))
 	r.parallelismC = make(chan struct{}, r.options.parallelism)
-	r.waitTasksC = make(chan task.Task, r.options.maxWaitTasks)
+	r.waitTasksC = make(chan runningTask, r.options.maxWaitTasks)
 	r.doneC = make(chan runningTask, r.options.maxWaitTasks)
 	r.mu.runningTasks = make(map[uint64]runningTask)
 	return r
@@ -250,7 +250,7 @@ func (r *taskRunner) RegisterExecutor(code task.TaskCode, executor TaskExecutor)
 
 func (r *taskRunner) fetch(ctx context.Context) {
 	r.logger.Debug("fetch task started")
-	timer := time.NewTimer(r.options.fetchInterval)
+	timer := time.NewTicker(r.options.fetchInterval)
 	defer timer.Stop()
 
 	for {
@@ -259,15 +259,15 @@ func (r *taskRunner) fetch(ctx context.Context) {
 			r.logger.Debug("fetch task stopped")
 			return
 		case <-timer.C:
-			if !taskFrameworkDisabled() {
-				tasks, err := r.doFetch()
-				if err != nil {
-					break
-				}
-				r.addTasks(ctx, tasks)
+			if taskFrameworkDisabled() {
+				continue
 			}
+			tasks, err := r.doFetch()
+			if err != nil {
+				break
+			}
+			r.addTasks(ctx, tasks)
 		}
-		timer.Reset(r.options.fetchInterval)
 	}
 }
 
@@ -299,16 +299,26 @@ func (r *taskRunner) doFetch() ([]task.Task, error) {
 }
 
 func (r *taskRunner) addTasks(ctx context.Context, tasks []task.Task) {
-	for _, task := range tasks {
-		r.addToWait(ctx, task)
+	for _, t := range tasks {
+		r.addToWait(ctx, t)
 	}
 }
 
 func (r *taskRunner) addToWait(ctx context.Context, task task.Task) bool {
+	ctx2, cancel := context.WithCancel(ctx)
+	rt := runningTask{
+		task:   task,
+		ctx:    ctx2,
+		cancel: cancel,
+	}
+
 	select {
 	case <-ctx.Done():
 		return false
-	case r.waitTasksC <- task:
+	case r.waitTasksC <- rt:
+		r.mu.Lock()
+		r.mu.runningTasks[task.ID] = rt
+		r.mu.Unlock()
 		r.logger.Debug("task added", zap.String("task", task.DebugString()))
 		return true
 	}
@@ -322,10 +332,11 @@ func (r *taskRunner) dispatch(ctx context.Context) {
 		case <-ctx.Done():
 			r.logger.Debug("dispatch task stopped")
 			return
-		case task := <-r.waitTasksC:
-			if !taskFrameworkDisabled() {
-				r.runTask(ctx, task)
+		case rt := <-r.waitTasksC:
+			if taskFrameworkDisabled() {
+				continue
 			}
+			r.runTask(ctx, rt)
 		}
 	}
 }
@@ -365,23 +376,11 @@ func (r *taskRunner) retry(ctx context.Context) {
 	}
 }
 
-func (r *taskRunner) runTask(ctx context.Context, value any) bool {
+func (r *taskRunner) runTask(ctx context.Context, rt runningTask) bool {
 	select {
 	case <-ctx.Done():
 		return false
 	case r.parallelismC <- struct{}{}:
-		var rt runningTask
-		switch value := value.(type) {
-		case task.Task:
-			rt = runningTask{task: value}
-			rt.ctx, rt.cancel = context.WithCancel(ctx)
-			r.mu.Lock()
-			r.mu.runningTasks[rt.task.ID] = rt
-			r.mu.Unlock()
-		case runningTask:
-			rt = value
-		}
-
 		r.run(rt)
 		return true
 	}
@@ -465,10 +464,11 @@ func (r *taskRunner) done(ctx context.Context) {
 		case <-ctx.Done():
 			r.logger.Debug("done task stopped")
 			return
-		case task := <-r.doneC:
-			if !taskFrameworkDisabled() {
-				r.doTaskDone(ctx, task)
+		case rt := <-r.doneC:
+			if taskFrameworkDisabled() {
+				continue
 			}
+			r.doTaskDone(ctx, rt)
 		}
 	}
 }
