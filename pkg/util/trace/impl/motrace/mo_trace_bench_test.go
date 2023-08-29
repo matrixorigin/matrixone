@@ -16,8 +16,11 @@ package motrace
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 // BenchmarkMOSpan_1kFree
@@ -287,6 +290,98 @@ func BenchmarkMOSpan_ApplyOneAndFree(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				go bm.op(&wg, eventCnt, param)
+			}
+		})
+	}
+}
+
+func dummyReturnNilEndFuncNoCtxValue(
+	ctx context.Context,
+) (
+	_ context.Context,
+	end func(),
+) {
+	return ctx, nil
+}
+
+func dummyReturnNilEndFunc(
+	ctx context.Context,
+) (
+	_ context.Context,
+	end func(),
+) {
+	v := ctx.Value(fileservice.CtxKeyStatementProfiler)
+	if v == nil {
+		return ctx, nil
+	}
+	return ctx, nil
+}
+
+func dummyReturnEmptyEndFunc(
+	ctx context.Context,
+) (
+	_ context.Context,
+	end func(),
+) {
+	v := ctx.Value(fileservice.CtxKeyStatementProfiler)
+	if v == nil {
+		return ctx, func() {}
+	}
+	return ctx, func() {}
+}
+
+func BenchmarkMOSpan_if_vs_for(b *testing.B) {
+
+	ctx := context.TODO()
+
+	benchmarks := []struct {
+		name    string
+		prepare func(arrF []func()) []func()
+	}{
+		{
+			name: "if_check_nil_no_ctx_value",
+			prepare: func(arrF []func()) []func() {
+				_, end := dummyReturnNilEndFuncNoCtxValue(ctx)
+				if end != nil {
+					return append(arrF, end)
+				}
+				return arrF
+			},
+		},
+		{
+			name: "if_check_nil",
+			prepare: func(arrF []func()) []func() {
+				_, end := dummyReturnNilEndFunc(ctx)
+				if end != nil {
+					return append(arrF, end)
+				}
+				return arrF
+			},
+		},
+		{
+			name: "for_empty_end",
+			prepare: func(arrF []func()) []func() {
+				_, end := dummyReturnEmptyEndFunc(ctx)
+				return append(arrF, end)
+			},
+		},
+	}
+
+	eventCnt := rand.Intn(10) + 1
+	var arrF = make([]func(), 0, eventCnt)
+	b.Logf("eventCnt: %d", eventCnt)
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				arrF = arrF[:0]
+				for j := 0; j < eventCnt; j++ {
+					arrF = bm.prepare(arrF)
+				}
+				for _, f := range arrF {
+					f()
+				}
 			}
 		})
 	}
