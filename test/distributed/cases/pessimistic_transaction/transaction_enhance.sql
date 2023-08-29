@@ -173,7 +173,9 @@ select * from atomic_table_13;
 -- @session}
 rollback ;
 show create table atomic_table_13;
+-- @bvt:issue
 
+-- @bvt:issue#11334
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
