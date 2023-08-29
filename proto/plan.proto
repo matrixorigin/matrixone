@@ -750,6 +750,7 @@ message Node {
 	repeated RuntimeFilterSpec runtime_filter_build_list = 41;
 
 	bytes uuid = 42;
+	bool recursive_sink = 43;
 }
 
 message LockTarget {
