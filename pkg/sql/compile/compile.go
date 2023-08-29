@@ -1252,7 +1252,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return []*Scope{rs}, nil
+		return c.compileSort(n, []*Scope{rs}), nil
 	case plan.Node_SINK:
 		receivers := c.getStepRegs(step)
 		if len(receivers) == 0 {
@@ -1265,7 +1265,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := c.newMergeScope(ss)
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers),
+			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
 		})
 
 		return []*Scope{rs}, nil
