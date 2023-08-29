@@ -361,10 +361,6 @@ func (f *dummyFileWriterFactory) GetWriter(ctx context.Context, fp string) io.Wr
 }
 
 func TestMOSpan_doProfile(t *testing.T) {
-	if runtime.NumCPU() < 4 {
-		t.Skip("machine's performance too low to handle time sensitive case, found by #11505")
-		return
-	}
 	type fields struct {
 		opts   []trace.SpanStartOption
 		ctx    context.Context
