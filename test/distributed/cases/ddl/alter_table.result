@@ -396,5 +396,4 @@ drop table t5;
 create table t5(a int, b int) cluster by a;
 alter table t5 add column c int;
 alter table t5 drop column a;
-internal error: drop a column with constraint
 drop table t5;

@@ -35,7 +35,7 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	// Check whether original column has existed.
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), originalColName, tableDef.Name)
+		return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
 	}
 
 	if originalColName == newColName {
