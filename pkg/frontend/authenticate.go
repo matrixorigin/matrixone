@@ -313,6 +313,38 @@ func getUserPart(user string) string {
 	return user
 }
 
+// getLabelPart gets the label part from the full string.
+// The full string could contain CN label information which
+// is used by proxy module.
+func getLabelPart(user string) string {
+	parts := strings.Split(user, "?")
+	if len(parts) > 1 {
+		return parts[1]
+	}
+	return ""
+}
+
+// ParseLabel parses the label string. The labels are seperated by
+// ",", key and value are seperated by "=".
+func ParseLabel(labelStr string) (map[string]string, error) {
+	labelMap := make(map[string]string)
+	if len(labelStr) == 0 {
+		return labelMap, nil
+	}
+	const delimiter1 = ","
+	const delimiter2 = "="
+	kvs := strings.Split(labelStr, delimiter1)
+	for _, label := range kvs {
+		parts := strings.Split(label, delimiter2)
+		if len(parts) == 2 && len(parts[0]) != 0 && len(parts[1]) != 0 {
+			labelMap[parts[0]] = parts[1]
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx("invalid label format: should be like 'a=b'")
+		}
+	}
+	return labelMap, nil
+}
+
 // initUser for initialization or something special
 type initUser struct {
 	account  *TenantInfo
