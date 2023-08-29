@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -185,14 +186,17 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	}
 
 	if err = u.UpgradeNewTableColumn(ctx); err != nil {
+		logutil.Errorf("upgrade new table column failed: %s", err.Error())
 		return err
 	}
 
 	if err = u.UpgradeNewTable(ctx, allTenants); err != nil {
+		logutil.Errorf("upgrade new table failed: %s", err.Error())
 		return err
 	}
 
 	if err = u.UpgradeNewView(ctx, allTenants); err != nil {
+		logutil.Errorf("upgrade new system view failed: %s", err.Error())
 		return err
 	}
 	return nil
