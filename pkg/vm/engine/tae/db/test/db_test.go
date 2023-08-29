@@ -46,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -6451,8 +6450,7 @@ func TestAlterFakePk(t *testing.T) {
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 		newSchema := meta.GetSchema()
 		blkdata := meta.GetBlockData()
-		sels := nulls.NewWithSize(4)
-		sels.Add(1, 3)
+		sels := []uint32{1, 3}
 		rows := make([]int, 0, 4)
 		blkdata.Foreach(context.Background(), newSchema, 1 /*"add1" column*/, func(v any, isnull bool, row int) error {
 			require.True(t, true)
@@ -8473,4 +8471,38 @@ func TestColumnCount(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.Catalog.GCByTS(context.Background(), txn.GetCommitTS().Next())
+}
+
+func TestCollectDeletesInRange(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
+	filter := handle.NewEQFilter(v)
+	err := rel.DeleteByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	err = txn.Commit(context.Background())
+	assert.NoError(t, err)
+
+	txn, rel = tae.GetRelation()
+	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	filter = handle.NewEQFilter(v)
+	err = rel.DeleteByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	err = txn.Commit(context.Background())
+	assert.NoError(t, err)
+
+	tae.CheckCollectDeleteInRange()
 }
