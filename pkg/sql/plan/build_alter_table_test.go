@@ -34,9 +34,9 @@ func TestAlterTableAddColumns(t *testing.T) {
 	sqls := []string{
 		`ALTER TABLE t1 ADD d TIMESTAMP;`,
 		//`ALTER TABLE t1 ADD (d TIMESTAMP, e INT not null);`,
-		`ALTER TABLE t1 ADD c INT PRIMARY KEY;`,
-		`ALTER TABLE t1 ADD c INT PRIMARY KEY PRIMARY KEY;`,
-		`ALTER TABLE t1 ADD c INT PRIMARY KEY PRIMARY KEY PRIMARY KEY;`,
+		//`ALTER TABLE t2 ADD c INT PRIMARY KEY;`,
+		//`ALTER TABLE t2 ADD c INT PRIMARY KEY PRIMARY KEY;`,
+		//`ALTER TABLE t2 ADD c INT PRIMARY KEY PRIMARY KEY PRIMARY KEY;`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }

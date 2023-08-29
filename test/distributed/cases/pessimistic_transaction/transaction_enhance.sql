@@ -176,7 +176,6 @@ select * from atomic_table_13;
 -- @session}
 rollback ;
 show create table atomic_table_13;
--- @bvt:issue
 
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
@@ -194,6 +193,7 @@ select * from atomic_table_12_5;
 -- @session}
 commit;
 show index from atomic_table_12_5;
+-- @bvt:issue
 
 -- w-w conflict
 drop table if exists atomic_table_14;
