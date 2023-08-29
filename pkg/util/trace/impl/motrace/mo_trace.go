@@ -75,7 +75,10 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 
 	// per statement profiler
 	ctx, end := fileservice.StatementProfileNewSpan(ctx)
-	span.onEnd = append(span.onEnd, end)
+	if end != nil {
+		// Tips: check the BenchmarkMOSpan_if_vs_for result
+		span.onEnd = append(span.onEnd, end)
+	}
 
 	span.tracer = t
 	span.ctx = ctx
