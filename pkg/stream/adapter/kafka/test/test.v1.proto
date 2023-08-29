@@ -12,23 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package stream
+syntax = "proto3";
+option go_package = "./proto/test_v1";
+package test_v1;
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
-
-type Argument struct {
-	TblDef *plan.TableDef
-	Offset int64
-	Limit  int64
-
-	//end     bool
-	attrs   []string
-	types   []types.Type
-	Configs map[string]interface{}
+message UserMessage {
+  string Name = 1;
+  string Email = 2;
+  int32 Age = 4;
 }
-
-func (arg *Argument) Free(*process.Process, bool) {}
