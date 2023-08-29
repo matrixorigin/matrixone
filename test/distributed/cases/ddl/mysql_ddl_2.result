@@ -42,7 +42,7 @@ alter table mmysql_ddl_test_t210 add column class varchar(50);
 UNLOCK TABLES;
 show create table mmysql_ddl_test_t210;
 Table    Create Table
-mmysql_ddl_test_t210    CREATE TABLE `mmysql_ddl_test_t210` (\n`id` INT DEFAULT NULL,\n`class` VARCHAR(50) DEFAULT NULL\n)
+mmysql_ddl_test_t210    CREATE TABLE `mmysql_ddl_test_t210` (\n`id` INT DEFAULT null,\n`class` VARCHAR(50) DEFAULT null\n)
 create table mmysql_ddl_test_t211 (id int AUTO_INCREMENT);
 show create table mmysql_ddl_test_t211;
 Table    Create Table
