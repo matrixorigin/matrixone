@@ -527,10 +527,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
 	}
 
-	if tableDef.ClusterBy != nil {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table for cluster table")
-	}
-
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 	}
@@ -575,7 +571,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
-				algorithm = plan.AlterTable_INPLACE
+				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropIndex:
 				algorithm = plan.AlterTable_INPLACE
 			case tree.AlterTableDropKey:
@@ -594,7 +590,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
-			algorithm = plan.AlterTable_INPLACE
+			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableChangeColumnClause:
