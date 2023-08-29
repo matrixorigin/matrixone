@@ -145,7 +145,8 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 			Result: rp,
 		},
 		barg: &hashbuild.Argument{
-			Typs: ts,
+			Typs:            ts,
+			NeedMergedBatch: true,
 		},
 	}
 }
