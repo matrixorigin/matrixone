@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -109,7 +110,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 			}
 
 		case Eval:
-			if ctr.bat != nil && ctr.bat.RowCount() != 0 {
+			if ctr.bat != nil && ctr.inputBatchRowCount != 0 {
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
 						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
@@ -292,15 +293,19 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-
 	err := ctr.mergeBuildBatches(ap, proc, anal, isFirst)
 	if err != nil {
 		return err
 	}
-
+	ctr.inputBatchRowCount = ctr.bat.RowCount()
 	err = ctr.buildHashmapByMergedBatch(ap, proc)
 	if err != nil {
 		return err
+	}
+	if !ap.NeedMergedBatch {
+		ctr.cleanBatch(proc.Mp())
+		ctr.bat = batch.NewWithSize(len(ap.Typs))
+		logutil.Infof("do not need merged batches, size %v", ctr.inputBatchRowCount)
 	}
 	return nil
 }
@@ -312,7 +317,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	}
 
 	vec := ctr.vecs[0]
-	if ctr.bat.RowCount() == 0 || vec == nil || vec.Length() == 0 {
+	if ctr.inputBatchRowCount == 0 || vec == nil || vec.Length() == 0 {
 		select {
 		case <-proc.Ctx.Done():
 			ctr.state = End

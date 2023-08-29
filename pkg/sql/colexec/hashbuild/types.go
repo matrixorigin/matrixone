@@ -42,10 +42,11 @@ type container struct {
 
 	state int
 
-	hasNull   bool
-	isMerge   bool
-	multiSels [][]int32
-	bat       *batch.Batch
+	hasNull            bool
+	isMerge            bool
+	multiSels          [][]int32
+	bat                *batch.Batch
+	inputBatchRowCount int
 
 	evecs []evalVector
 	vecs  []*vector.Vector
