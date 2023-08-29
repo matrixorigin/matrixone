@@ -16,6 +16,7 @@ package backup
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -136,7 +137,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if dentry.IsDir {
 			panic("not support dir")
 		}
-		err := CopyFile(ctx, srcFs, dstFs, dentry, "")
+		checksum, err := CopyFile(ctx, srcFs, dstFs, dentry, "")
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
 				isGC(gcFileMap, dentry.Name) {
@@ -147,8 +148,9 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 
 		}
 		taeFileList = append(taeFileList, &taeFile{
-			path: dentry.Name,
-			size: dentry.Size,
+			path:     dentry.Name,
+			size:     dentry.Size,
+			checksum: checksum,
 		})
 	}
 
@@ -171,6 +173,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 }
 
 func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string) ([]*taeFile, error) {
+	var checksum []byte
 	files, err := srcFs.List(ctx, dir)
 	if err != nil {
 		return nil, err
@@ -180,19 +183,22 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 		if file.IsDir {
 			panic("not support dir")
 		}
-		err = CopyFile(ctx, srcFs, dstFs, &file, dir)
+		checksum, err = CopyFile(ctx, srcFs, dstFs, &file, dir)
 		if err != nil {
 			return nil, err
 		}
 		taeFileList = append(taeFileList, &taeFile{
-			path: dir + "/" + file.Name,
-			size: file.Size,
+			path:     dir + "/" + file.Name,
+			size:     file.Size,
+			checksum: checksum,
 		})
 	}
 	return taeFileList, nil
 }
 
-func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry *fileservice.DirEntry, dstDir string) error {
+// CopyFile copy file from srcFs to dstFs and return checksum of the written file.
+func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry *fileservice.DirEntry, dstDir string) ([]byte, error) {
+	var checksum []byte
 	name := dentry.Name
 	if dstDir != "" {
 		name = path.Join(dstDir, name)
@@ -209,12 +215,16 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 	}
 	err := srcFs.Read(ctx, ioVec)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dstIoVec := fileservice.IOVector{
 		FilePath:    name,
 		Entries:     make([]fileservice.IOEntry, 1),
 		CachePolicy: fileservice.SkipAll,
+		Hash: fileservice.Hash{
+			Sum: &checksum,
+			New: md5.New,
+		},
 	}
 	dstIoVec.Entries[0] = fileservice.IOEntry{
 		Offset: 0,
@@ -222,7 +232,7 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 		Size:   dentry.Size,
 	}
 	err = dstFs.Write(ctx, dstIoVec)
-	return err
+	return checksum, err
 }
 
 func mergeGCFile(gcFiles []string, gcFileMap map[string]string) {

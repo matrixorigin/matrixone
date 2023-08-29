@@ -233,8 +233,9 @@ type pathConfig struct {
 }
 
 type taeFile struct {
-	path string
-	size int64
+	path     string
+	size     int64
+	checksum []byte
 }
 
 func (tfs *taeFile) String() string {
@@ -243,7 +244,7 @@ func (tfs *taeFile) String() string {
 }
 
 func (tfs *taeFile) CsvString() []string {
-	return []string{tfs.path, fmt.Sprintf("%d", tfs.size)}
+	return []string{tfs.path, fmt.Sprintf("%d", tfs.size), fmt.Sprintf("%x", tfs.checksum)}
 }
 
 func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
