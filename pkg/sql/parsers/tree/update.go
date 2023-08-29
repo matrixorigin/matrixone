@@ -416,6 +416,8 @@ type ExportParam struct {
 	// header flag
 	Header     bool
 	ForceQuote []string
+	// stage filename path
+	StageFilePath string
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {
