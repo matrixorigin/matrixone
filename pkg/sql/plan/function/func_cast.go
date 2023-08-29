@@ -287,6 +287,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_text: {
@@ -301,7 +302,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_json: {
@@ -329,11 +329,9 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_array_float32: {
 		types.T_array_float32, types.T_array_float64,
-		types.T_text,
 	},
 	types.T_array_float64: {
 		types.T_array_float32, types.T_array_float64,
-		types.T_text,
 	},
 }
 
@@ -1419,27 +1417,22 @@ func strTypeToOthers(proc *process.Process,
 	ctx := proc.Ctx
 
 	fromType := source.GetType()
-	if fromType.Oid == types.T_text {
-		// For handling TEXT to ARRAY casting.
+	if fromType.Oid == types.T_blob {
+		// For handling BLOB to ARRAY implicit casting.
 		// This is used for VECTOR FAST/BINARY IO.
+		// SQL: insert into t2 values(2, decode("7e98b23e9e10383b2f41133f", "hex"));
 		switch toType.Oid {
 		case types.T_array_float32:
 			rs := vector.MustFunctionResult[types.Varlena](result)
-			return textToArray[float32](proc.Ctx, source, rs, length, toType)
+			return blobToArray[float32](proc.Ctx, source, rs, length, toType)
 		case types.T_array_float64:
 			rs := vector.MustFunctionResult[types.Varlena](result)
-			return textToArray[float64](proc.Ctx, source, rs, length, toType)
-			// NOTE 1: don't add `switch default` and panic here. If `T_text` to `ARRAY` is not required,
+			return blobToArray[float64](proc.Ctx, source, rs, length, toType)
+			// NOTE 1: don't add `switch default` and panic here. If `T_blob` to `ARRAY` is not required,
 			// then continue to the `str` to `Other` code.
-			// NOTE 2: don't create a switch T_text case in NewCast() as
-			// we only want to handle TEXT-->ARRAY condition separately and
+			// NOTE 2: don't create a switch T_blob case in NewCast() as
+			// we only want to handle BLOB-->ARRAY condition separately and
 			// rest of the flow is similar to strTypeToOthers.
-			// NOTE 3: we use T_text instead of T_blob. Both T_text and T_blob don't have width.
-			// However, BLOB is a binary string with no character set sorting, so they are treated
-			// as numeric values while TEXT object is treated as character string.
-			// If we use T_blob, we get
-			// cast(b as BLOB) = 0x376539386232336539653130333833623266343131333366 in SQL client, but instead we want
-			// cast(b as TEXT) = 7e98b23e9e10383b2f41133f
 		}
 	}
 	switch toType.Oid {
@@ -1532,8 +1525,6 @@ func arrayTypeToOthers(proc *process.Process,
 			return ArrayToArray[float32, float32](proc.Ctx, source, rs, length, toType)
 		case types.T_array_float64:
 			return ArrayToArray[float32, float64](proc.Ctx, source, rs, length, toType)
-		case types.T_text:
-			return ArrayToText[float32](proc.Ctx, source, rs, length, toType)
 		}
 	case types.T_array_float64:
 		switch toType.Oid {
@@ -1541,8 +1532,6 @@ func arrayTypeToOthers(proc *process.Process,
 			return ArrayToArray[float64, float32](proc.Ctx, source, rs, length, toType)
 		case types.T_array_float64:
 			return ArrayToArray[float64, float64](proc.Ctx, source, rs, length, toType)
-		case types.T_text:
-			return ArrayToText[float64](proc.Ctx, source, rs, length, toType)
 		}
 	}
 
@@ -3930,8 +3919,6 @@ func strToStr(
 			}
 		}
 	} else {
-		// VARCHAR to TEXT path. ie CAST("binary_data_from_numpy" as TEXT).
-		// This has zero cost.
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
@@ -3975,7 +3962,7 @@ func strToArray[T types.RealNumbers](
 	return nil
 }
 
-func textToArray[T types.RealNumbers](
+func blobToArray[T types.RealNumbers](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
@@ -3992,16 +3979,12 @@ func textToArray[T types.RealNumbers](
 				return err
 			}
 		} else {
-			arr, err := types.HexEncodingToArray[T](v)
-			if err != nil {
-				return err
-			}
-
+			arr := types.BytesToArray[T](v)
 			if int(toType.Width) != len(arr) {
 				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
 			}
 
-			if err = to.AppendBytes(types.ArrayToBytes[T](arr), false); err != nil {
+			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
 		}
@@ -4044,34 +4027,6 @@ func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 			}
 		}
 
-	}
-	return nil
-}
-
-func ArrayToText[T types.RealNumbers](
-	_ context.Context,
-	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
-
-	var i uint64
-	var l = uint64(length)
-	for i = 0; i < l; i++ {
-		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
-			if err := to.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			_v := types.BytesToArray[T](v)
-			b, err := types.ArrayToHexEncoding[T](_v)
-			// NOTE: we need not check this condition len(b) < T_text.Width as TEXT and BLOB has no width limit.
-			if err != nil {
-				return err
-			}
-			if err = to.AppendBytes(b, false); err != nil {
-				return err
-			}
-		}
 	}
 	return nil
 }
