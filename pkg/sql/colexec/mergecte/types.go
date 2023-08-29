@@ -20,10 +20,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	sendInitial   = 0
+	sendLastTag   = 1
+	sendRecursive = 2
+)
+
 type container struct {
 	colexec.ReceiverOperator
 	nodeCnt    int32
 	curNodeCnt int32
+	status     int32
 }
 
 type Argument struct {
