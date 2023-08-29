@@ -214,7 +214,7 @@ func (ss *snapshotRecord) remove(index snapshotIndex) error {
 // in logservice and the other is in DN. The snapshot cannot be taken
 // like that in this case, because when a replica starts, it applies the
 // latest snapshot, whose index is greater than truncate LSN. As a result,
-// the DN cannot read the log entries between truncate LSN and snapshot
+// the TN cannot read the log entries between truncate LSN and snapshot
 // index to replay.
 // The solution is, set Exported to true in snapshot option. This prevents
 // taking an active snapshot, and just export the snapshot files to an external

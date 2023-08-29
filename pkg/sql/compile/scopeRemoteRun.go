@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -175,12 +176,12 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		}
 		defer func() {
 			// record the number of s3 requests
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.Put.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.s3CounterSet.FileService.S3.List.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Head.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Get.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.Delete.Load()
-			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.s3CounterSet.FileService.S3.DeleteMulti.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Head.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
+			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
 		}()
 		receiver.finalAnalysisInfo = c.proc.AnalInfos
 		return nil
@@ -799,6 +800,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			HashOnPk:               t.HashOnPK,
 		}
 	case *left.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -1008,6 +1010,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:  t.Nbucket,
 			Types:    convertToPlanTypes(t.Typs),
 			Conds:    t.Conditions,
+			HashOnPk: t.HashOnPK,
 		}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
@@ -1025,6 +1028,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			CreateSql:       t.Es.CreateSql,
 			FileList:        t.Es.FileList,
 			Filter:          t.Es.Filter.FilterExpr,
+		}
+	case *stream.Argument:
+		in.StreamScan = &pipeline.StreamScan{
+			TblDef: t.TblDef,
+			Limit:  t.Limit,
+			Offset: t.Offset,
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -1187,6 +1196,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Result:             convertToResultPos(t.RelList, t.ColList),
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+			HashOnPK:           t.HashOnPk,
 		}
 	case vm.Left:
 		t := opr.GetLeftJoin()
@@ -1395,6 +1405,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			NeedExpr:    t.NeedExpr,
 			Typs:        convertToTypes(t.Types),
 			Conditions:  t.Conds,
+			HashOnPK:    t.HashOnPk,
 		}
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1420,6 +1431,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 					},
 				},
 			},
+		}
+	case vm.Stream:
+		t := opr.GetStreamScan()
+		v.Arg = &stream.Argument{
+			TblDef: t.TblDef,
+			Limit:  t.Limit,
+			Offset: t.Offset,
 		}
 	default:
 		return v, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))

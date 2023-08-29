@@ -1564,6 +1564,16 @@ func appendSinkScanNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, sour
 		SourceStep:  []int32{sourceStep},
 		ProjectList: sinkScanProject,
 		BindingTags: []int32{tag},
+		TableDef:    &TableDef{Name: bindCtx.cteName},
+	}
+	b := bindCtx.bindings[0]
+	sinkScanNode.TableDef.Cols = make([]*ColDef, len(b.cols))
+	for i, col := range b.cols {
+		sinkScanNode.TableDef.Cols[i] = &ColDef{
+			Name:   col,
+			Hidden: b.colIsHidden[i],
+			Typ:    b.types[i],
+		}
 	}
 	lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
 	return lastNodeId
@@ -1578,6 +1588,16 @@ func appendRecursiveScanNode(builder *QueryBuilder, bindCtx *BindContext, source
 		SourceStep:  []int32{sourceStep},
 		ProjectList: recursiveScanProject,
 		BindingTags: []int32{tag},
+		TableDef:    &TableDef{Name: bindCtx.cteName},
+	}
+	b := bindCtx.bindings[0]
+	recursiveScanNode.TableDef.Cols = make([]*ColDef, len(b.cols))
+	for i, col := range b.cols {
+		recursiveScanNode.TableDef.Cols[i] = &ColDef{
+			Name:   col,
+			Hidden: b.colIsHidden[i],
+			Typ:    b.types[i],
+		}
 	}
 	lastNodeId = builder.appendNode(recursiveScanNode, bindCtx)
 	return lastNodeId
@@ -2434,6 +2454,7 @@ type sinkScanMeta struct {
 	sinkNodeId     int32
 	preNodeId      int32
 	preNodeIsUnion bool //if preNode is Union, one sinkScan to one sink is fine
+	recursive      bool
 }
 
 func reduceSinkSinkScanNodes(qry *Query) {
@@ -2450,7 +2471,7 @@ func reduceSinkSinkScanNodes(qry *Query) {
 	// merge one sink to one sinkScan
 	pointToNodeMap := make(map[int32][]int32)
 	for sinkNodeId, meta := range sinks {
-		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion {
+		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion && !meta.scans[0].recursive {
 			// one sink to one sinkScan
 			sinkNode := qry.Nodes[sinkNodeId]
 			sinkScanPreNode := qry.Nodes[meta.scans[0].preNodeId]
@@ -2482,7 +2503,11 @@ func reduceSinkSinkScanNodes(qry *Query) {
 			newSteps = append(newSteps, nodeId)
 			if sinkScanNodeIds, ok := pointToNodeMap[nodeId]; ok {
 				for _, sinkScanNodeId := range sinkScanNodeIds {
-					qry.Nodes[sinkScanNodeId].SourceStep = []int32{int32(newStepIdx)}
+					if len(qry.Nodes[sinkScanNodeId].SourceStep) > 1 {
+						qry.Nodes[sinkScanNodeId].SourceStep[0] = int32(newStepIdx)
+					} else {
+						qry.Nodes[sinkScanNodeId].SourceStep = []int32{int32(newStepIdx)}
+					}
 				}
 			}
 		}
@@ -2507,7 +2532,7 @@ func collectSinkAndSinkScanMeta(
 		} else {
 			sinks[nodeId].step = oldStep
 		}
-	} else if node.NodeType == plan.Node_SINK_SCAN {
+	} else if node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_CTE || node.NodeType == plan.Node_RECURSIVE_SCAN {
 		sinkNodeId := qry.Steps[node.SourceStep[0]]
 		if _, ok := sinks[sinkNodeId]; !ok {
 			sinks[sinkNodeId] = &sinkMeta{
@@ -2522,6 +2547,7 @@ func collectSinkAndSinkScanMeta(
 			sinkNodeId:     sinkNodeId,
 			preNodeId:      preNodeId,
 			preNodeIsUnion: qry.Nodes[preNodeId].NodeType == plan.Node_UNION,
+			recursive:      len(node.SourceStep) > 1 || node.NodeType == plan.Node_RECURSIVE_CTE,
 		}
 		sinks[sinkNodeId].scans = append(sinks[sinkNodeId].scans, meta)
 	}

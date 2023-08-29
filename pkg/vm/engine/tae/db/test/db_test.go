@@ -17,6 +17,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -1911,7 +1912,6 @@ func TestDelete1(t *testing.T) {
 	var row uint32
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		assert.Equal(t, bat.Length(), int(rel.Rows()))
 		pkCol := bat.Vecs[schema.GetSingleSortKeyIdx()]
 		pkVal := pkCol.Get(5)
 		filter := handle.NewEQFilter(pkVal)
@@ -1924,7 +1924,6 @@ func TestDelete1(t *testing.T) {
 	}
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		assert.Equal(t, bat.Length()-1, int(rel.Rows()))
 		pkCol := bat.Vecs[schema.GetSingleSortKeyIdx()]
 		pkVal := pkCol.Get(5)
 		filter := handle.NewEQFilter(pkVal)
@@ -1967,7 +1966,6 @@ func TestDelete1(t *testing.T) {
 	}
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-		assert.Equal(t, bat.Length()-2, int(rel.Rows()))
 		blk := testutil.GetOneBlock(rel)
 		view, err := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
 		assert.NoError(t, err)
@@ -2659,7 +2657,6 @@ func TestChaos1(t *testing.T) {
 	t.Logf("DeleteCnt: %d", deleteCnt)
 	assert.True(t, appendCnt-deleteCnt <= 1)
 	_, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
-	assert.Equal(t, int64(appendCnt-deleteCnt), rel.Rows())
 	blk := testutil.GetOneBlock(rel)
 	view, err := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
 	assert.NoError(t, err)
@@ -3019,7 +3016,6 @@ func TestMergeblocks2(t *testing.T) {
 	t.Log("********************")
 	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 4, true)
-	assert.Equal(t, int64(4), rel.Rows())
 
 	v := testutil.GetSingleSortKeyValue(bat, schema, 1)
 	filter := handle.NewEQFilter(v)
@@ -3284,12 +3280,10 @@ func TestTruncate(t *testing.T) {
 		time.Sleep(time.Millisecond * 2)
 	}
 	wg.Wait()
-	txn, rel := tae.GetRelation()
-	t.Logf("Rows: %d", rel.Rows())
+	txn, _ := tae.GetRelation()
 	assert.NoError(t, txn.Commit(context.Background()))
 	tae.Truncate()
-	txn, rel = tae.GetRelation()
-	assert.Zero(t, 0, rel.Rows())
+	txn, _ = tae.GetRelation()
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
@@ -3430,12 +3424,10 @@ func TestCompactBlk1(t *testing.T) {
 
 	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
-	assert.Equal(t, int64(3), rel.Rows())
 
 	tae.Restart(ctx)
 	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
-	assert.Equal(t, int64(3), rel.Rows())
 }
 
 func TestCompactBlk2(t *testing.T) {
@@ -3519,7 +3511,6 @@ func TestCompactBlk2(t *testing.T) {
 
 	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 2, true)
-	assert.Equal(t, int64(2), rel.Rows())
 
 	v = testutil.GetSingleSortKeyValue(bat, schema, 2)
 	filter = handle.NewEQFilter(v)
@@ -3532,7 +3523,6 @@ func TestCompactBlk2(t *testing.T) {
 	assert.NotNil(t, err)
 
 	tae.Restart(ctx)
-	assert.Equal(t, int64(2), rel.Rows())
 }
 
 func TestCompactblk3(t *testing.T) {
@@ -5004,12 +4994,10 @@ func TestCompactDeltaBlk(t *testing.T) {
 
 	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
-	assert.Equal(t, int64(3), rel.Rows())
 
 	tae.Restart(ctx)
 	_, rel = tae.GetRelation()
 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
-	assert.Equal(t, int64(3), rel.Rows())
 }
 
 func TestFlushTable(t *testing.T) {
@@ -5640,14 +5628,14 @@ func TestUpdate(t *testing.T) {
 
 // This is used to observe a lot of compactions to overflow a segment, it is not compulsory
 func TestAlwaysUpdate(t *testing.T) {
-	t.Skip("This is a long test, run it manully to observe catalog")
+	t.Skip("This is a long test, run it manully to observe what you want")
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts2(nil, 100)
-	opts.GCCfg.ScanGCInterval = 3600 * time.Second
-	opts.CatalogCfg.GCInterval = 3600 * time.Second
-	// opts := config.WithLongScanAndCKPOpts(nil)
+	// opts := config.WithQuickScanAndCKPOpts2(nil, 10)
+	// opts.GCCfg.ScanGCInterval = 3600 * time.Second
+	// opts.CatalogCfg.GCInterval = 3600 * time.Second
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
@@ -5661,8 +5649,8 @@ func TestAlwaysUpdate(t *testing.T) {
 	metalocs := make([]objectio.Location, 0, 100)
 	// write only one segment
 	for i := 0; i < 1; i++ {
-		objName1 := objectio.NewSegmentid().ToString() + "-0"
-		writer, err := blockio.NewBlockWriter(tae.Runtime.Fs.Service, objName1)
+		objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for _, bat := range bats[i*25 : (i+1)*25] {
@@ -5673,16 +5661,20 @@ func TestAlwaysUpdate(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, 25, len(blocks))
 		for _, blk := range blocks {
-			loc := blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), 8192, blocks[0].GetID())
+			loc := blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), blk.GetRows(), blk.GetID())
 			assert.Nil(t, err)
 			metalocs = append(metalocs, loc)
 		}
 	}
 
+	// var did, tid uint64
 	txn, _ := tae.StartTxn(nil)
+	txn.SetDedupType(txnif.IncrementalDedup)
 	db, err := txn.CreateDatabase("db", "", "")
+	// did = db.GetID()
 	assert.NoError(t, err)
 	tbl, err := db.CreateRelation(schema)
+	// tid = tbl.ID()
 	assert.NoError(t, err)
 	assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), metalocs))
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -5691,7 +5683,7 @@ func TestAlwaysUpdate(t *testing.T) {
 
 	wg := &sync.WaitGroup{}
 
-	updateFn := func(i, j int) {
+	updateFn := func(round, i, j int) {
 		defer wg.Done()
 		tuples := bats[0].CloneWindow(0, 1)
 		defer tuples.Close()
@@ -5713,32 +5705,40 @@ func TestAlwaysUpdate(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NoError(t, txn.Commit(context.Background()))
 		}
-		t.Logf("(%d, %d) done", i, j)
+		t.Logf("(%d, %d, %d) done", round, i, j)
 	}
 
-	p, _ := ants.NewPool(10)
+	p, _ := ants.NewPool(20)
 	defer p.Release()
 
-	ch := make(chan int, 1)
-	ticker := time.NewTicker(10 * time.Second)
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				t.Log(tae.Catalog.SimplePPString(common.PPL1))
-			case <-ch:
-			}
-		}
-	}()
+	// ch := make(chan int, 1)
+	// ticker := time.NewTicker(1 * time.Second)
+	// ticker2 := time.NewTicker(100 * time.Millisecond)
+	// go func() {
+	// 	for {
+	// 		select {
+	// 		case <-ticker.C:
+	// 			t.Log(tbl.SimplePPString(common.PPL1))
+	// 		case <-ticker2.C:
+	// 			_, _, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	// 				CnHave: tots(types.BuildTS(0, 0)),
+	// 				CnWant: tots(types.MaxTs()),
+	// 				Table:  &api.TableID{DbId: did, TbId: tid},
+	// 			}, true)
+	// 		case <-ch:
+	// 		}
+	// 	}
+	// }()
 
 	for r := 0; r < 10; r++ {
 		for i := 0; i < 40; i++ {
 			wg.Add(1)
 			start, end := i*200, (i+1)*200
-			f := func() { updateFn(start, end) }
+			f := func() { updateFn(r, start, end) }
 			p.Submit(f)
 		}
 		wg.Wait()
+		tae.CheckRowsByScan(100*100, true)
 	}
 }
 
@@ -6477,23 +6477,23 @@ func TestAlterFakePk(t *testing.T) {
 
 	insBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	require.NoError(t, err)
-	dnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat)
-	t.Log(dnInsBat.Attrs)
-	require.Equal(t, 6, len(dnInsBat.Vecs)) // 3 col + 1 fake pk + 1 rowid + 1 committs
-	for _, v := range dnInsBat.Vecs {
+	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat)
+	t.Log(tnInsBat.Attrs)
+	require.Equal(t, 6, len(tnInsBat.Vecs)) // 3 col + 1 fake pk + 1 rowid + 1 committs
+	for _, v := range tnInsBat.Vecs {
 		require.Equal(t, 4, v.Length())
 	}
-	t.Log(dnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+	t.Log(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
 	delBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat)
 	require.NoError(t, err)
-	dnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat)
-	t.Log(dnDelBat.Attrs)
-	require.Equal(t, 3, len(dnDelBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
-	for _, v := range dnDelBat.Vecs {
+	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat)
+	t.Log(tnDelBat.Attrs)
+	require.Equal(t, 3, len(tnDelBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
+	for _, v := range tnDelBat.Vecs {
 		require.Equal(t, 2, v.Length())
 	}
-	t.Log(dnDelBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+	t.Log(tnDelBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
 }
 
@@ -8437,4 +8437,40 @@ func TestEstimateMemSize(t *testing.T) {
 		require.Less(t, schema50rowSize, size1)
 		require.NoError(t, txn.Commit(ctx))
 	}
+}
+
+func TestColumnCount(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	{
+		txn, rel := tae.GetRelation()
+		for i := 0; i < 500; i++ {
+			colName := fmt.Sprintf("col %d", i)
+			err := rel.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, colName, types.NewProtoType(types.T_char), 5))
+			require.NoError(t, err)
+		}
+		require.Nil(t, txn.Commit(context.Background()))
+	}
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.Catalog.GCByTS(context.Background(), txn.GetCommitTS().Next())
 }

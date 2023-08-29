@@ -73,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
@@ -127,6 +128,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:               t.Typs,
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			HashOnPK:           t.HashOnPK,
 		}
 	case vm.Left:
 		t := sourceIns.Arg.(*left.Argument)
@@ -354,6 +356,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Nbucket:     t.Nbucket,
 			Typs:        t.Typs,
 			Conditions:  t.Conditions,
+			HashOnPK:    t.HashOnPK,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -382,6 +385,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					},
 				},
 			},
+		}
+	case vm.Stream:
+		t := sourceIns.Arg.(*stream.Argument)
+		res.Arg = &stream.Argument{
+			TblDef:  t.TblDef,
+			Limit:   t.Limit,
+			Offset:  t.Offset,
+			Configs: t.Configs,
 		}
 	case vm.Connector:
 		ok := false
@@ -664,6 +675,15 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 		},
 	}
 }
+
+func constructStream(n *plan.Node, p [2]int64) *stream.Argument {
+	return &stream.Argument{
+		TblDef: n.TableDef,
+		Offset: p[0],
+		Limit:  p[1],
+	}
+}
+
 func constructTableFunction(n *plan.Node) *table_function.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -698,6 +718,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 		Cond:               cond,
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -1379,6 +1400,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 			IsDup:       isDup,
+			HashOnPK:    arg.HashOnPK,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {

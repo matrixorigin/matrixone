@@ -586,7 +586,6 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		}
 		offset++
 	}
-	s.Finalize(true)
 	return offset
 }
 
@@ -949,7 +948,7 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 		}
 		name := fmt.Sprintf("%s%d", prefix, i)
 		var typ types.Type
-		switch i % 18 {
+		switch i % 20 {
 		case 0:
 			typ = types.T_int8.ToType()
 			typ.Width = 8
@@ -1004,6 +1003,12 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 		case 17:
 			typ = types.T_bool.ToType()
 			typ.Width = 8
+		case 18:
+			typ = types.T_array_float32.ToType()
+			typ.Width = 100
+		case 19:
+			typ = types.T_array_float64.ToType()
+			typ.Width = 100
 		}
 
 		if pkIdx == i {

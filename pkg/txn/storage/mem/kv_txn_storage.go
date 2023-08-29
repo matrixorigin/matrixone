@@ -302,7 +302,7 @@ func (kv *KVTxnStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (times
 
 	newTxn := kv.changeUncommittedTxnStatusLocked(txnMeta.ID, txn.TxnStatus_Prepared)
 	newTxn.PreparedTS = txnMeta.PreparedTS
-	newTxn.DNShards = txnMeta.DNShards
+	newTxn.TNShards = txnMeta.TNShards
 	kv.recoverFrom = lsn
 	kv.eventC <- Event{Txn: *newTxn, Type: PrepareType}
 	return txnMeta.PreparedTS, nil

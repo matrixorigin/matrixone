@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -44,20 +45,36 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	}
 
 	if ap.NeedHashMap {
-		if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
-			return err
-		}
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions))
-
 		ctr := ap.ctr
 		ctr.evecs = make([]evalVector, len(ap.Conditions))
-		for i := range ctr.evecs {
+		ctr.keyWidth = 0
+		for i, expr := range ap.Conditions {
+			typ := expr.Typ
+			width := types.T(typ.Id).TypeLen()
+			// todo : for varlena type, always go strhashmap
+			if types.T(typ.Id).FixedLength() < 0 {
+				width = 128
+			}
+			ctr.keyWidth += width
 			ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, ap.Conditions[i])
 			if err != nil {
 				return err
 			}
 		}
+
+		if ctr.keyWidth <= 8 {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+				return err
+			}
+		} else {
+			if ctr.strHashMap, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+				return err
+			}
+		}
+
 	}
+
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
@@ -79,8 +96,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 				ctr.cleanHashMap()
 				return process.ExecNext, err
 			}
-			if ap.ctr.mp != nil {
-				anal.Alloc(ap.ctr.mp.Size())
+			if ap.ctr.intHashMap != nil {
+				anal.Alloc(ap.ctr.intHashMap.Size())
+			} else if ap.ctr.strHashMap != nil {
+				anal.Alloc(ap.ctr.strHashMap.Size())
 			}
 			ctr.state = HandleRuntimeFilter
 
@@ -92,13 +111,18 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 		case Eval:
 			if ctr.bat != nil && ctr.bat.RowCount() != 0 {
 				if ap.NeedHashMap {
-					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ap.IsDup)
+					if ctr.keyWidth <= 8 {
+						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
+					} else {
+						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
+					}
 				}
 
 				proc.SetInputBatch(ctr.bat)
-				ctr.mp = nil
+				ctr.intHashMap = nil
+				ctr.strHashMap = nil
 				ctr.bat = nil
-				ctr.sels = nil
+				ctr.multiSels = nil
 			} else {
 				ctr.cleanHashMap()
 				proc.SetInputBatch(nil)
@@ -113,7 +137,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
+func (ctr *container) mergeBuildBatches(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
 
 	batches := make([]*batch.Batch, 0)
@@ -179,6 +203,14 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		}
 		proc.PutBatch(batches[i])
 	}
+	return nil
+}
+
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
+	err := ctr.mergeBuildBatches(ap, proc, anal, isFirst)
+	if err != nil {
+		return err
+	}
 
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
@@ -188,10 +220,27 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		return err
 	}
 
-	itr := ctr.mp.NewIterator()
+	var itr hashmap.Iterator
+	if ctr.keyWidth <= 8 {
+		itr = ctr.intHashMap.NewIterator()
+	} else {
+		itr = ctr.strHashMap.NewIterator()
+	}
 	count := ctr.bat.RowCount()
 
-	ctr.sels = make([][]int32, count)
+	if ap.HashOnPK {
+		// if hash on primary key, prealloc hashmap size to the count of batch
+		if ctr.keyWidth <= 8 {
+			err = ctr.intHashMap.PreAlloc(uint64(count), proc.Mp())
+		} else {
+			err = ctr.strHashMap.PreAlloc(uint64(count), proc.Mp())
+		}
+		if err != nil {
+			return err
+		}
+	} else {
+		ctr.multiSels = make([][]int32, count)
+	}
 
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -199,16 +248,26 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			n = hashmap.UnitLimit
 		}
 
+		// if not hash on primary key, estimate the hashmap size after 8192 rows
 		//preAlloc to improve performance and reduce memory reAlloc
-		if count > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
-			groupCount := ctr.mp.GroupCount()
-			rate := float64(groupCount) / float64(i)
-			hashmapCount := uint64(float64(count) * rate)
-			if hashmapCount > groupCount {
-				err = ctr.mp.PreAlloc(hashmapCount-groupCount, proc.Mp())
-				if err != nil {
-					return err
+		if !ap.HashOnPK && count > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
+			if ctr.keyWidth <= 8 {
+				groupCount := ctr.intHashMap.GroupCount()
+				rate := float64(groupCount) / float64(i)
+				hashmapCount := uint64(float64(count) * rate)
+				if hashmapCount > groupCount {
+					err = ctr.intHashMap.PreAlloc(hashmapCount-groupCount, proc.Mp())
 				}
+			} else {
+				groupCount := ctr.strHashMap.GroupCount()
+				rate := float64(groupCount) / float64(i)
+				hashmapCount := uint64(float64(count) * rate)
+				if hashmapCount > groupCount {
+					err = ctr.strHashMap.PreAlloc(hashmapCount-groupCount, proc.Mp())
+				}
+			}
+			if err != nil {
+				return err
 			}
 		}
 
@@ -225,10 +284,13 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				continue
 			}
 			ai := int64(v) - 1
-			if ctr.sels[ai] == nil {
-				ctr.sels[ai] = make([]int32, 0)
+
+			if !ap.HashOnPK {
+				if ctr.multiSels[ai] == nil {
+					ctr.multiSels[ai] = make([]int32, 0)
+				}
+				ctr.multiSels[ai] = append(ctr.multiSels[ai], int32(i+k))
 			}
-			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
 	}
 	return nil
@@ -240,17 +302,8 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	}
 
-	var runtimeFilter *pipeline.RuntimeFilter
-
-	sels := make([]int32, 0, len(ctr.sels))
-	for _, sel := range ctr.sels {
-		if len(sel) > 0 {
-			sels = append(sels, sel[0])
-		}
-	}
-
 	vec := ctr.vecs[0]
-	if len(sels) == 0 || vec == nil || vec.Length() == 0 {
+	if ctr.bat.RowCount() == 0 || vec == nil || vec.Length() == 0 {
 		select {
 		case <-proc.Ctx.Done():
 			ctr.state = End
@@ -262,8 +315,26 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	}
 
+	var runtimeFilter *pipeline.RuntimeFilter
+	var hashmapCount uint64
+	if ctr.keyWidth <= 8 {
+		hashmapCount = ctr.intHashMap.GroupCount()
+	} else {
+		hashmapCount = ctr.strHashMap.GroupCount()
+	}
+
+	var sels []int32
+	if !ap.HashOnPK {
+		sels = make([]int32, 0, hashmapCount)
+		for _, sel := range ctr.multiSels {
+			if len(sel) > 0 {
+				sels = append(sels, sel[0])
+			}
+		}
+	}
+
 	// Composite primary key
-	if len(ctr.vecs) > 1 && len(ctr.sels) <= plan.BloomFilterCardLimit {
+	if len(ctr.vecs) > 1 && hashmapCount <= plan.BloomFilterCardLimit {
 		bat := batch.NewWithSize(len(ctr.vecs))
 		bat.SetRowCount(ctr.vecs[0].Length())
 		copy(bat.Vecs, ctr.vecs)
@@ -283,14 +354,20 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		}
 	}()
 
-	if len(ctr.sels) <= plan.InFilterCardLimit {
-		inList := vector.NewVec(*vec.GetType())
-		if err := inList.Union(vec, sels, proc.Mp()); err != nil {
-			return err
+	var err error
+	if hashmapCount <= plan.InFilterCardLimit {
+		var inList *vector.Vector
+		if ap.HashOnPK {
+			if inList, err = vec.Dup(proc.Mp()); err != nil {
+				return err
+			}
+		} else {
+			inList = vector.NewVec(*vec.GetType())
+			if err = inList.Union(vec, sels, proc.Mp()); err != nil {
+				return err
+			}
 		}
-
 		defer inList.Free(proc.Mp())
-
 		colexec.SortInFilter(inList)
 		data, err := inList.MarshalBinary()
 		if err != nil {
@@ -301,11 +378,19 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			Typ:  pipeline.RuntimeFilter_IN,
 			Data: data,
 		}
-	} else if len(ctr.sels) <= plan.BloomFilterCardLimit {
+	} else if hashmapCount <= plan.BloomFilterCardLimit {
 		zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
-		for i := range sels {
-			bs := vec.GetRawBytesAt(int(sels[i]))
-			index.UpdateZM(zm, bs)
+		if ap.HashOnPK {
+			length := vec.Length()
+			for i := 0; i < length; i++ {
+				bs := vec.GetRawBytesAt(i)
+				index.UpdateZM(zm, bs)
+			}
+		} else {
+			for i := range sels {
+				bs := vec.GetRawBytesAt(int(sels[i]))
+				index.UpdateZM(zm, bs)
+			}
 		}
 
 		runtimeFilter = &pipeline.RuntimeFilter{

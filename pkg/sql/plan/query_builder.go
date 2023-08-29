@@ -249,7 +249,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_STREAM_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1120,20 +1120,20 @@ func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBoo
 	}
 }
 
-func (builder *QueryBuilder) remapSinkScanColRefs(nodeID int32, step int32, sinkColRef map[[2]int32]int) {
-	node := builder.qry.Nodes[nodeID]
-
-	switch node.NodeType {
-	case plan.Node_SINK_SCAN:
-		for _, expr := range node.ProjectList {
-			expr.Expr.(*plan.Expr_Col).Col.ColPos = int32(sinkColRef[[2]int32{step, expr.Expr.(*plan.Expr_Col).Col.ColPos}])
-		}
-	default:
-		for i := range node.Children {
-			builder.remapSinkScanColRefs(node.Children[i], step, sinkColRef)
-		}
-	}
-}
+//func (builder *QueryBuilder) remapSinkScanColRefs(nodeID int32, step int32, sinkColRef map[[2]int32]int) {
+//	node := builder.qry.Nodes[nodeID]
+//
+//	switch node.NodeType {
+//	case plan.Node_SINK_SCAN:
+//		for _, expr := range node.ProjectList {
+//			expr.Expr.(*plan.Expr_Col).Col.ColPos = int32(sinkColRef[[2]int32{step, expr.Expr.(*plan.Expr_Col).Col.ColPos}])
+//		}
+//	default:
+//		for i := range node.Children {
+//			builder.remapSinkScanColRefs(node.Children[i], step, sinkColRef)
+//		}
+//	}
+//}
 
 func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
@@ -1249,6 +1249,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
+		determineHashOnPK(rootID, builder)
 		builder.pushdownRuntimeFilters(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
@@ -1283,9 +1284,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 	}
 
-	for i := 1; i < len(builder.qry.Steps); i++ {
-		builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
-	}
+	//for i := 1; i < len(builder.qry.Steps); i++ {
+	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
+	//}
 
 	return builder.qry, nil
 }
@@ -1759,7 +1760,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 						return 0, err
 					}
 					sourceStep := builder.appendStep(recursiveNodeId)
-					nodeID := appendSinkScanNodeWithTag(builder, subCtx, sourceStep, subCtx.sinkTag)
+					nodeID := appendRecursiveScanNode(builder, subCtx, sourceStep, subCtx.sinkTag)
 					subCtx.recRecursiveScanNodeId = nodeID
 					recursiveNodeId, err = builder.buildSelect(&tree.Select{Select: r}, subCtx, false)
 					if err != nil {
@@ -2725,16 +2726,58 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						}
 					}
 					// union all statement
-					sourceStep := builder.appendStep(recursiveLastNodeID)
-					nodeID = appendCTEScanNode(builder, ctx, sourceStep, initCtx.sinkTag)
-					for i := 0; i < len(recursiveSteps)-1; i++ {
+					var limitExpr *Expr
+					var offsetExpr *Expr
+					if s.Limit != nil {
+						limitBinder := NewLimitBinder(builder, ctx)
+						if s.Limit.Offset != nil {
+							offsetExpr, err = limitBinder.BindExpr(s.Limit.Offset, 0, true)
+							if err != nil {
+								return 0, err
+							}
+
+							if cExpr, ok := offsetExpr.Expr.(*plan.Expr_C); ok {
+								if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+									if c.I64Val < 0 {
+										return 0, moerr.NewSyntaxError(builder.GetContext(), "offset value must be nonnegative")
+									}
+								}
+							}
+						}
+						if s.Limit.Count != nil {
+							limitExpr, err = limitBinder.BindExpr(s.Limit.Count, 0, true)
+							if err != nil {
+								return 0, err
+							}
+
+							if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
+								if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+									if c.I64Val < 0 {
+										return 0, moerr.NewSyntaxError(builder.GetContext(), "limit value must be nonnegative")
+									}
+									ctx.hasSingleRow = c.I64Val == 1
+								}
+							}
+						}
+					}
+
+					_ = builder.appendStep(recursiveLastNodeID)
+					nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
+					if limitExpr != nil || offsetExpr != nil {
+						node := builder.qry.Nodes[nodeID]
+						node.Limit = limitExpr
+						node.Offset = offsetExpr
+					}
+					for i := 0; i < len(recursiveSteps); i++ {
 						builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, recursiveSteps[i])
 					}
 					curStep := int32(len(builder.qry.Steps))
 					for _, id := range recursiveNodeIDs {
-						builder.qry.Nodes[id].SourceStep = append(builder.qry.Nodes[id].SourceStep, curStep)
+						// builder.qry.Nodes[id].SourceStep = append(builder.qry.Nodes[id].SourceStep, curStep)
+						builder.qry.Nodes[id].SourceStep[0] = curStep
 					}
 					unionAllLastNodeID := appendSinkNodeWithTag(builder, ctx, nodeID, ctx.sinkTag)
+					builder.qry.Nodes[unionAllLastNodeID].RecursiveSink = true
 
 					// final statement
 					ctx.finalSelect = true
@@ -2743,9 +2786,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					if err != nil {
 						return
 					}
-					sourceStep = builder.appendStep(unionAllLastNodeID)
+					sourceStep := builder.appendStep(unionAllLastNodeID)
 					nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
-					builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, initSourceStep)
+					// builder.qry.Nodes[nodeID].SourceStep = append(builder.qry.Nodes[nodeID].SourceStep, initSourceStep)
 				}
 
 				break
@@ -2774,6 +2817,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				},
 			}
 			tableDef.Cols = append(tableDef.Cols, col)
+		} else if tableDef.TableType == catalog.SystemStreamRel {
+			nodeType = plan.Node_STREAM_SCAN
 		} else if tableDef.TableType == catalog.SystemViewRel {
 			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
 				currentDB := schema
@@ -2994,7 +3039,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 	var table string
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_STREAM_SCAN {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
 		}
@@ -3007,6 +3052,9 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		} else {
 			if node.NodeType == plan.Node_FUNCTION_SCAN {
 				return moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
+			}
+			if node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_SINK_SCAN {
+				return nil
 			}
 
 			table = node.TableDef.Name
@@ -3082,11 +3130,13 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	ctx.bindingByTag[binding.tag] = binding
 	ctx.bindingByTable[binding.table] = binding
 
-	for _, col := range binding.cols {
-		if _, ok := ctx.bindingByCol[col]; ok {
-			ctx.bindingByCol[col] = nil
-		} else {
-			ctx.bindingByCol[col] = binding
+	if node.NodeType != plan.Node_RECURSIVE_SCAN && node.NodeType != plan.Node_SINK_SCAN {
+		for _, col := range binding.cols {
+			if _, ok := ctx.bindingByCol[col]; ok {
+				ctx.bindingByCol[col] = nil
+			} else {
+				ctx.bindingByCol[col] = binding
+			}
 		}
 	}
 
@@ -3265,7 +3315,7 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 			}
 		}
 		return false
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_STREAM_SCAN:
 		return onlyContainsTag(expr, node.BindingTags[0])
 	case plan.Node_JOIN:
 		if containsTag(expr, builder.qry.Nodes[node.Children[0]].BindingTags[0]) && containsTag(expr, builder.qry.Nodes[node.Children[1]].BindingTags[0]) {

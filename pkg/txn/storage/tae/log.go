@@ -31,13 +31,13 @@ func logReq[
 	deferFunc func(),
 ) {
 	return func() {}
-	//logutil.Debug("engine: DN "+msg,
+	//logutil.Debug("engine: TN "+msg,
 	//	zap.String("type", fmt.Sprintf("%T", req)),
 	//	zap.Any("txn", meta),
 	//	zap.Any("data", req),
 	//)
 	//return func() {
-	//	logutil.Debug("engine: DN "+msg+" result",
+	//	logutil.Debug("engine: TN "+msg+" result",
 	//		zap.String("type", fmt.Sprintf("%T", *resp)),
 	//		zap.Any("txn", meta),
 	//		zap.Any("data", *resp),

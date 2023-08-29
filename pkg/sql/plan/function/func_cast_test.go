@@ -175,6 +175,22 @@ func initCastTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.T_time.ToType(), false,
 				[]types.Time{661220261227}, []bool{false}),
 		},
+		{
+			info: "vecf32 to vecf32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{}}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{{1, 2, 3}}, []bool{false}),
+		},
+		{
+			info: "vecf64 to vecf64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{}}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false, [][]float64{{1, 2, 3}}, []bool{false}),
+		},
 	}
 	castInt8ToOthers := []tcTemp{
 		// test cast int8 to others.
@@ -1362,6 +1378,22 @@ func initCastTestCase() []tcTemp {
 				},
 				[]bool{false, false, false}),
 		},
+		{
+			info: "str type to vecf32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3]", "[4,5,6]"}, nil),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+		},
+		{
+			info: "str type to vecf64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"[1,2,3]", "[4,5,6]"}, nil),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false, [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+		},
 	}
 	castDecToOthers := []tcTemp{
 		{
@@ -1465,6 +1497,28 @@ func initCastTestCase() []tcTemp {
 		},
 	}
 
+	castArrayFloat32ToOthers := []tcTemp{
+		{
+			info: "vecf32 type to vecf64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, nil),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false, [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+		},
+	}
+
+	castArrayFloat64ToOthers := []tcTemp{
+		{
+			info: "vecf64 type to vecf32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, nil),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+		},
+	}
+
 	// init the testCases
 	testCases = append(testCases, castToSameTypeCases...)
 	testCases = append(testCases, castInt8ToOthers...)
@@ -1480,6 +1534,8 @@ func initCastTestCase() []tcTemp {
 	testCases = append(testCases, castStrToOthers...)
 	testCases = append(testCases, castDecToOthers...)
 	testCases = append(testCases, castTimestampToOthers...)
+	testCases = append(testCases, castArrayFloat32ToOthers...)
+	testCases = append(testCases, castArrayFloat64ToOthers...)
 
 	return testCases
 }

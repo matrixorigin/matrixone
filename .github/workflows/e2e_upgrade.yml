@@ -3,7 +3,7 @@ name: MatrixOne e2e upgrade CI
 on:
   pull_request:
     types: [ opened, synchronize, reopened ]
-    branches: [ main,'[0-9]+.[0-9]+.[0-9]+' ]
+    branches: [ main,'[0-9]+.[0-9]+.[0-9]+*' ]
 
 jobs:
   upgrade-ci-linux-x86:
@@ -51,10 +51,17 @@ jobs:
           mv $GITHUB_WORKSPACE/upstream/etc .
           mv $GITHUB_WORKSPACE/upstream/mo-service .
           mv $GITHUB_WORKSPACE/upstream/optools .
+          
+          # Explicitly declare pessimistic mode
           echo "==============cn configuration of upstram=============="
-          cat ./etc/launch/cn.toml
+          echo ""  >> ./etc/launch/cn.toml
+          echo '[cn.txn]' >> ./etc/launch/cn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch/cn.toml
           echo "==============dn configuration of upstram=============="
-          cat ./etc/launch/dn.toml     
+          echo ""  >> ./etc/launch/tn.toml
+          echo '[dn.txn]' >> ./etc/launch/tn.toml
+          echo 'mode = "Pessimistic"' >> ./etc/launch/tn.toml
+          cat ./etc/launch/tn.toml     
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Clone test-tool repository
@@ -77,7 +84,7 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/upstream/test/distributed/cases -e pessimistic_transaction 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/upstream/test/distributed/cases -e optimistic 2>&1
 
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
@@ -110,8 +117,12 @@ jobs:
           mv $GITHUB_WORKSPACE/head/mo-service .
           echo "==============cn configuration of upstram=============="
           cat ./etc/launch/cn.toml
-          echo "==============dn configuration of upstram=============="
-          cat ./etc/launch/dn.toml   
+          echo "==============tn configuration of upstram=============="
+          if [[ -f ./etc/launch/dn.toml ]]; then
+            cat ./etc/launch/dn.toml     
+          else 
+            cat ./etc/launch/tn.toml     
+          fi
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Start BVT Test for MO with Version of Head
@@ -120,7 +131,7 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases -e pessimistic_transaction 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1
 
       - name: Dump mo-service-new goroutines
         if: ${{ always() && !cancelled() }}

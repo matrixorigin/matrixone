@@ -175,6 +175,7 @@ rollback ;
 show create table atomic_table_13;
 -- @bvt:issue
 
+-- @bvt:issue#11334
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -189,6 +190,7 @@ select * from atomic_table_12_5;
 -- @session}
 commit;
 show index from atomic_table_12_5;
+-- @bvt:issue
 
 -- w-w conflict
 drop table if exists atomic_table_14;
@@ -379,7 +381,6 @@ show create table atomic_table_12_5;
 
 
 -- alter table change primary key column
--- @bvt:issue#11268
 drop table if exists alter01;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
@@ -393,7 +394,6 @@ select * from alter01;
 -- @session
 insert into alter01 values (6,"h");
 select * from alter01;
--- @bvt:issue
 
 -- alter table rename column
 -- @bvt:issue#11213
@@ -415,12 +415,47 @@ show create table atomic_table_12_5;
 
 
 -- alter table rename primary key column
--- @bvt:issue#11268
 drop table if exists alter01;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 rename column col1 to col1New;
+-- @session:id=1{
+-- @wait:0:commit
+use transaction_enhance;
+insert into alter01 values (8,"h");
+select * from alter01;
+-- @session
+insert into alter01 values (6,"h");
+select * from alter01;
+
+----------------------------------------------------------
+-- alter table add primary key column
+-- @bvt:issue#11213
+drop table if exists alter01;
+create table alter01(col1 int,col2 varchar(25));
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+begin;
+alter table alter01 add constraint primary key (col1);
+-- @session:id=1{
+-- @wait:0:commit
+use transaction_enhance;
+insert into alter01 values (8,"h");
+select * from alter01;
+-- @session
+insert into alter01 values (6,"h");
+select * from alter01;
+-- @bvt:issue
+
+
+----------------------------------------------------------
+-- alter table drop primary key column
+-- @bvt:issue#11213
+drop table if exists alter01;
+create table alter01(col1 int primary key,col2 varchar(25));
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+begin;
+alter table alter01 drop primary key;
 -- @session:id=1{
 -- @wait:0:commit
 use transaction_enhance;

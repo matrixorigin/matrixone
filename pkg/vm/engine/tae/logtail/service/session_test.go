@@ -450,7 +450,7 @@ func mockMorpcStream(
 func mockMOLogger() *log.MOLogger {
 	return log.GetServiceLogger(
 		logutil.GetGlobalLogger().Named(LogtailServiceRPCName),
-		metadata.ServiceType_DN,
+		metadata.ServiceType_TN,
 		"uuid",
 	)
 }

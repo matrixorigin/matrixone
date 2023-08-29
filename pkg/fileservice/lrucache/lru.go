@@ -74,7 +74,7 @@ func New[K comparable, V BytesLike](
 	}
 }
 
-func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
+func (l *LRU[K, V]) Set(ctx context.Context, key K, value V) {
 	l.Lock()
 	defer l.Unlock()
 
@@ -84,9 +84,6 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 		l.size -= item.Size
 		size := int64(len(value.Bytes()))
 		l.size += size
-		if !preloading {
-			l.evicts.MoveToFront(elem)
-		}
 		item.Size = size
 		item.Key = key
 		if l.postEvict != nil {
@@ -102,12 +99,7 @@ func (l *LRU[K, V]) Set(ctx context.Context, key K, value V, preloading bool) {
 			Value: value,
 			Size:  size,
 		}
-		var elem *list.Element
-		if preloading {
-			elem = l.evicts.PushBack(item)
-		} else {
-			elem = l.evicts.PushFront(item)
-		}
+		elem := l.evicts.PushFront(item)
 		l.kv[key] = elem
 		l.size += size
 	}
@@ -160,13 +152,10 @@ func (l *LRU[K, V]) evict(ctx context.Context) {
 	}
 }
 
-func (l *LRU[K, V]) Get(ctx context.Context, key K, preloading bool) (value V, ok bool) {
+func (l *LRU[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
-		if !preloading {
-			l.evicts.MoveToFront(elem)
-		}
 		item := elem.Value.(*lruItem[K, V])
 		item.NumRead++
 		if l.postGet != nil {

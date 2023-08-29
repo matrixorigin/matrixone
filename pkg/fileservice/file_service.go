@@ -40,6 +40,10 @@ type FileService interface {
 	// returns ErrEmptyVector if no IOEntry is passed
 	Read(ctx context.Context, vector *IOVector) error
 
+	// ReadCache reads cached data if any
+	// if cache hit, IOEntry.CachedData will be set
+	ReadCache(ctx context.Context, vector *IOVector) error
+
 	// List lists sub-entries in a dir
 	List(ctx context.Context, dirPath string) ([]DirEntry, error)
 
@@ -50,9 +54,6 @@ type FileService interface {
 	// Stat returns infomations about a file
 	// returns ErrFileNotFound if requested file not found
 	StatFile(ctx context.Context, filePath string) (*DirEntry, error)
-
-	// Preload indicates the service to preload a file
-	Preload(ctx context.Context, filePath string) error
 }
 
 type IOVector struct {
@@ -75,8 +76,6 @@ type IOVector struct {
 	ExpireAt time.Time
 	// CachePolicy controls cache policy for the vector
 	CachePolicy CachePolicy
-	// Preloading indicates whether the I/O is for preloading
-	Preloading bool
 
 	// Hash stores hash sum of written file if both Sum and New is not null
 	// Hash.Sum may be incorrect if Write fails

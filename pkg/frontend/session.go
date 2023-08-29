@@ -85,7 +85,7 @@ type Session struct {
 	isInternal bool
 
 	data         [][]interface{}
-	ep           *ExportParam
+	ep           *ExportConfig
 	showStmtType ShowStatementType
 
 	txnHandler    *TxnHandler
@@ -207,7 +207,7 @@ type Session struct {
 	rt *Routine
 
 	// when starting a transaction in session, the snapshot ts of the transaction
-	// is to get a DN push to CN to get the maximum commitTS. but there is a problem,
+	// is to get a TN push to CN to get the maximum commitTS. but there is a problem,
 	// when the last transaction ends and the next one starts, it is possible that the
 	// log of the last transaction has not been pushed to CN, we need to wait until at
 	// least the commit of the last transaction log of the previous transaction arrives.
@@ -392,16 +392,9 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient, txnCtx, txnOp)
 
 	ses := &Session{
-		protocol: proto,
-		mp:       mp,
-		pu:       pu,
-		ep: &ExportParam{
-			ExportParam: &tree.ExportParam{
-				Outfile: false,
-				Fields:  &tree.Fields{},
-				Lines:   &tree.Lines{},
-			},
-		},
+		protocol:   proto,
+		mp:         mp,
+		pu:         pu,
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
@@ -685,22 +678,22 @@ func (ses *Session) GetTempTableStorage() *memorystorage.Storage {
 	return ses.tempTablestorage
 }
 
-func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.DNService, error) {
+func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.TNService, error) {
 	// Without concurrency, there is no potential for data competition
 
 	// Arbitrary value is OK since it's single sharded. Let's use 0xbeef
 	// suggested by @reusee
-	shards := []metadata.DNShard{
+	shards := []metadata.TNShard{
 		{
 			ReplicaID:     0xbeef,
-			DNShardRecord: metadata.DNShardRecord{ShardID: 0xbeef},
+			TNShardRecord: metadata.TNShardRecord{ShardID: 0xbeef},
 		},
 	}
 	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
-	dnAddr := defines.TEMPORARY_TABLE_DN_ADDR
-	dnStore := metadata.DNService{
+	tnAddr := defines.TEMPORARY_TABLE_TN_ADDR
+	tnStore := metadata.TNService{
 		ServiceID:         uuid.NewString(),
-		TxnServiceAddress: dnAddr,
+		TxnServiceAddress: tnAddr,
 		Shards:            shards,
 	}
 
@@ -713,7 +706,7 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.DNService, er
 		return nil, err
 	}
 	ses.tempTablestorage = ms
-	return &dnStore, nil
+	return &tnStore, nil
 }
 
 func (ses *Session) GetPrivilegeCache() *privilegeCache {
@@ -803,16 +796,22 @@ func (ses *Session) AppendData(row []interface{}) {
 	ses.data = append(ses.data, row)
 }
 
-func (ses *Session) SetExportParam(ep *tree.ExportParam) {
+func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep.ExportParam = ep
+	ses.ep = &ExportConfig{userConfig: ep}
 }
 
-func (ses *Session) GetExportParam() *ExportParam {
+func (ses *Session) GetExportConfig() *ExportConfig {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.ep
+}
+
+func (ses *Session) ClearExportParam() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.ep = nil
 }
 
 func (ses *Session) SetShowStmtType(sst ShowStatementType) {

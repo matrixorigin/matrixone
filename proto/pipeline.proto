@@ -180,6 +180,7 @@ message Join {
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
+  bool hash_on_pk = 10;
 }
 
 message AntiJoin{
@@ -294,6 +295,7 @@ message HashBuild {
   uint64 nbucket = 4;
   repeated plan.Type types = 5;
   repeated plan.Expr conds = 6;
+  bool hash_on_pk = 7;
 }
 
 message ExternalName2ColIndex {
@@ -315,6 +317,12 @@ message ExternalScan {
   repeated string file_list = 7;
   repeated plan.ColDef origin_cols = 8;
   plan.Expr    filter = 9;
+}
+
+message StreamScan {
+  plan.TableDef tbl_def = 1;
+  int64 offset = 2;
+  int64 limit = 3;
 }
 
 message Instruction{
@@ -357,6 +365,7 @@ message Instruction{
   LockOp lock_op = 32;
   Shuffle shuffle = 33;
   Merge merge = 34;
+  StreamScan stream_scan = 35;
 }
 
 message AnalysisList {

@@ -292,6 +292,10 @@ func GetVector(typ types.Type, input any, nsp []uint64) (*vector.Vector, int) {
 		// Make vector by string.
 		// There is another function which can make uuid by uuid directly
 		return testutil.MakeUuidVectorByString(input.([]string), nsp), len(input.([]string))
+	case types.T_array_float32:
+		return testutil.MakeArrayF32Vector(input.([][]float32), nsp), len(input.([][]float32))
+	case types.T_array_float64:
+		return testutil.MakeArrayF64Vector(input.([][]float64), nsp), len(input.([][]float64))
 	}
 
 	return nil, 0
@@ -325,6 +329,10 @@ func CompareResult(t *testing.T, typ types.Type, expected any, vec *vector.Vecto
 		require.Equal(t, expected.([]string), vector.MustStrCol(vec))
 	case types.T_varchar:
 		require.Equal(t, expected.([]string), vector.MustStrCol(vec))
+	case types.T_array_float32:
+		require.Equal(t, expected.([]float32), vector.MustArrayCol[float32](vec))
+	case types.T_array_float64:
+		require.Equal(t, expected.([]float64), vector.MustArrayCol[float64](vec))
 	case types.T_date:
 		require.Equal(t, expected.([]types.Date), vector.MustFixedCol[types.Date](vec))
 	case types.T_time:
