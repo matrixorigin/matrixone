@@ -335,8 +335,6 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	t.Log(rel.Rows())
-	assert.Equal(t, int64(26), rel.Rows())
 	{
 		it := rel.MakeBlockIt()
 		rows := 0

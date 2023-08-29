@@ -109,7 +109,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (proces
 			}
 
 		case Eval:
-			if ctr.bat != nil && ctr.bat.RowCount() != 0 {
+			if ctr.bat != nil && ctr.inputBatchRowCount != 0 {
 				if ap.NeedHashMap {
 					if ctr.keyWidth <= 8 {
 						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, ctr.intHashMap, nil, ctr.hasNull, ap.IsDup)
@@ -206,16 +206,11 @@ func (ctr *container) mergeBuildBatches(ap *Argument, proc *process.Process, ana
 	return nil
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
-	err := ctr.mergeBuildBatches(ap, proc, anal, isFirst)
-	if err != nil {
-		return err
-	}
-
+func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Process) error {
 	if ctr.bat == nil || ctr.bat.RowCount() == 0 || !ap.NeedHashMap {
 		return nil
 	}
-
+	var err error
 	if err = ctr.evalJoinCondition(ctr.bat, proc); err != nil {
 		return err
 	}
@@ -296,6 +291,25 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
+	err := ctr.mergeBuildBatches(ap, proc, anal, isFirst)
+	if err != nil {
+		return err
+	}
+	ctr.inputBatchRowCount = ctr.bat.RowCount()
+	err = ctr.buildHashmapByMergedBatch(ap, proc)
+	if err != nil {
+		return err
+	}
+	if !ap.NeedMergedBatch && ctr.inputBatchRowCount >= 8192 {
+		// if do not need merged batch, free it now to save memory
+		// for further optimization, do not merge input batches to get best performance
+		ctr.cleanBatch(proc.Mp())
+		ctr.bat = batch.NewWithSize(len(ap.Typs))
+	}
+	return nil
+}
+
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
 	if len(ap.RuntimeFilterSenders) == 0 {
 		ctr.state = Eval
@@ -303,7 +317,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	}
 
 	vec := ctr.vecs[0]
-	if ctr.bat.RowCount() == 0 || vec == nil || vec.Length() == 0 {
+	if ctr.inputBatchRowCount == 0 || vec == nil || vec.Length() == 0 {
 		select {
 		case <-proc.Ctx.Done():
 			ctr.state = End

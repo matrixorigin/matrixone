@@ -459,27 +459,28 @@ alter table mix01 modify col1 float after col3, change column col2 col2New doubl
 insert into mix01 (col1, col2, col3, col4) values (3, 'w', 37283.323, 'dswhjkfrewr');
 Unknown column 'col2' in 'mix01'
 alter table mix01 add column col5 int after col1, rename column col2new to newnewCol2;
-invalid input: Do not support this stmt now.
 select * from mix01;
-col2new    newcol3    col1    col4
-2.0    a    1.0    w3uir34jn2k48ujf4
-3.0    d    2.0    3289u3ji2dff43
+newnewcol2    newcol3    col1    col5    col4
+2.0    a    1.0    null    w3uir34jn2k48ujf4
+3.0    d    2.0    null    3289u3ji2dff43
 alter table mix01 rename column col2new to newnewCol2, drop primary key;
+Unknown column 'col2new' in 'mix01'
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`newnewcol2` DOUBLE DEFAULT null,\n`newcol3` CHAR(1) DEFAULT null,\n`col1` FLOAT NOT NULL,\n`col4` VARCHAR(100) DEFAULT null\n)
+mix01    CREATE TABLE `mix01` (\n`newnewcol2` DOUBLE DEFAULT null,\n`newcol3` CHAR(1) DEFAULT null,\n`col1` FLOAT NOT NULL,\n`col5` INT DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null,\nPRIMARY KEY (`col1`)\n)
 delete from mix01 where newnewcol2 = 2;
 update mix01 set newnewcol2 = 8290432.324 where newcol3 = 'd';
 select * from mix01;
-newnewcol2    newcol3    col1    col4
-8290432.324    d    2.0    3289u3ji2dff43
+newnewcol2    newcol3    col1    col5    col4
+8290432.324    d    2.0    null    3289u3ji2dff43
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`newnewcol2` DOUBLE DEFAULT null,\n`newcol3` CHAR(1) DEFAULT null,\n`col1` FLOAT NOT NULL,\n`col4` VARCHAR(100) DEFAULT null\n)
+mix01    CREATE TABLE `mix01` (\n`newnewcol2` DOUBLE DEFAULT null,\n`newcol3` CHAR(1) DEFAULT null,\n`col1` FLOAT NOT NULL,\n`col5` INT DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null,\nPRIMARY KEY (`col1`)\n)
 show columns from mix01;
 Field    Type    Null    Key    Default    Extra    Comment
 newnewcol2    DOUBLE(0)    YES        null        
 newcol3    CHAR(1)    YES        null        
-col1    FLOAT(0)    NO        null        
+col1    FLOAT(0)    NO    PRI    null        
+col5    INT(32)    YES        null        
 col4    VARCHAR(100)    YES        null        
 drop table mix01;
