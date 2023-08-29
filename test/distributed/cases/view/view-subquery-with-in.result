@@ -491,46 +491,44 @@ select * from v1;
 id
 1
 SELECT * FROM t2 WHERE id IN (SELECT 1 UNION SELECT 3);
-[unknown result because it is related to issue#4354]
+id
+1
 SELECT * FROM t2 WHERE id IN (SELECT 1+(select 1));
-[unknown result because it is related to issue#4354]
+id
+2
 SELECT * FROM t2 WHERE id IN (SELECT 5 UNION SELECT 3);
-[unknown result because it is related to issue#4354]
+id
 SELECT * FROM t2 WHERE id IN (SELECT 5 UNION SELECT 2);
-[unknown result because it is related to issue#4354]
+id
+2
 SELECT * FROM t2 WHERE id NOT IN (SELECT 5 UNION SELECT 2);
-[unknown result because it is related to issue#4354]
+id
+1
 create view v2 as SELECT * FROM t2 WHERE id IN (SELECT 1 UNION SELECT 3);
-[unknown result because it is related to issue#4354]
 create view v3 as SELECT * FROM t2 WHERE id IN (SELECT 1+(select 1));
-[unknown result because it is related to issue#4354]
 create view v4 as SELECT * FROM t2 WHERE id IN (SELECT 5 UNION SELECT 3);
-[unknown result because it is related to issue#4354]
 create view v5 as SELECT * FROM t2 WHERE id IN (SELECT 5 UNION SELECT 2);
-[unknown result because it is related to issue#4354]
 create view v6 as SELECT * FROM t2 WHERE id NOT IN (SELECT 5 UNION SELECT 2);
-[unknown result because it is related to issue#4354]
 select * from v2;
-[unknown result because it is related to issue#4354]
+id
+1
 select * from v3;
-[unknown result because it is related to issue#4354]
+id
+2
 select * from v4;
-[unknown result because it is related to issue#4354]
+id
 select * from v5;
-[unknown result because it is related to issue#4354]
+id
+2
 select * from v6;
-[unknown result because it is related to issue#4354]
+id
+1
 drop view v1;
 drop view v2;
-[unknown result because it is related to issue#4354]
 drop view v3;
-[unknown result because it is related to issue#4354]
 drop view v4;
-[unknown result because it is related to issue#4354]
 drop view v5;
-[unknown result because it is related to issue#4354]
 drop view v6;
-[unknown result because it is related to issue#4354]
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (a int);
