@@ -349,13 +349,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
-			NeedHashMap: t.NeedHashMap,
-			NeedExpr:    t.NeedExpr,
-			Ibucket:     t.Ibucket,
-			Nbucket:     t.Nbucket,
-			Typs:        t.Typs,
-			Conditions:  t.Conditions,
-			HashOnPK:    t.HashOnPK,
+			NeedHashMap:     t.NeedHashMap,
+			NeedExpr:        t.NeedExpr,
+			Ibucket:         t.Ibucket,
+			Nbucket:         t.Nbucket,
+			Typs:            t.Typs,
+			Conditions:      t.Conditions,
+			HashOnPK:        t.HashOnPK,
+			NeedMergedBatch: t.NeedMergedBatch,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -1360,19 +1361,21 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
+			NeedHashMap:     true,
+			Typs:            arg.Typs,
+			Conditions:      arg.Conditions[1],
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
+			NeedHashMap:     true,
+			Typs:            arg.Typs,
+			Conditions:      arg.Conditions[1],
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	case vm.Join:
@@ -1384,6 +1387,19 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			IsDup:       isDup,
 			HashOnPK:    arg.HashOnPK,
 		}
+
+		// to find if hashmap need to merge batches into one large batch and keep this batch for join
+		var needMergedBatch bool
+		if arg.Cond != nil {
+			needMergedBatch = true
+		}
+		for _, rp := range arg.Result {
+			if rp.Rel == 1 {
+				needMergedBatch = true
+				break
+			}
+		}
+		retArg.NeedMergedBatch = needMergedBatch
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
@@ -1404,10 +1420,11 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
 		retArg := &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
+			NeedHashMap:     true,
+			Typs:            arg.Typs,
+			Conditions:      arg.Conditions[1],
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1429,12 +1446,13 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 	case vm.Right:
 		arg := in.Arg.(*right.Argument)
 		retArg := &hashbuild.Argument{
-			Ibucket:     arg.Ibucket,
-			Nbucket:     arg.Nbucket,
-			NeedHashMap: true,
-			Typs:        arg.RightTypes,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
+			Ibucket:         arg.Ibucket,
+			Nbucket:         arg.Nbucket,
+			NeedHashMap:     true,
+			Typs:            arg.RightTypes,
+			Conditions:      arg.Conditions[1],
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
@@ -1456,12 +1474,13 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 	case vm.RightSemi:
 		arg := in.Arg.(*rightsemi.Argument)
 		retArg := &hashbuild.Argument{
-			Ibucket:     arg.Ibucket,
-			Nbucket:     arg.Nbucket,
-			NeedHashMap: true,
-			Typs:        arg.RightTypes,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
+			Ibucket:         arg.Ibucket,
+			Nbucket:         arg.Nbucket,
+			NeedHashMap:     true,
+			Typs:            arg.RightTypes,
+			Conditions:      arg.Conditions[1],
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
@@ -1483,12 +1502,13 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 	case vm.RightAnti:
 		arg := in.Arg.(*rightanti.Argument)
 		retArg := &hashbuild.Argument{
-			Ibucket:     arg.Ibucket,
-			Nbucket:     arg.Nbucket,
-			NeedHashMap: true,
-			Typs:        arg.RightTypes,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
+			Ibucket:         arg.Ibucket,
+			Nbucket:         arg.Nbucket,
+			NeedHashMap:     true,
+			Typs:            arg.RightTypes,
+			Conditions:      arg.Conditions[1],
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
@@ -1510,10 +1530,11 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
 		retArg := &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
+			NeedHashMap:     true,
+			Typs:            arg.Typs,
+			Conditions:      arg.Conditions[1],
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1535,10 +1556,11 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
 		retArg := &hashbuild.Argument{
-			NeedHashMap: true,
-			Typs:        arg.Typs,
-			Conditions:  arg.Conditions[1],
-			IsDup:       isDup,
+			NeedHashMap:     true,
+			Typs:            arg.Typs,
+			Conditions:      arg.Conditions[1],
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 		if arg.RuntimeFilterSpecs != nil {
@@ -1560,57 +1582,64 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
-			IsDup:       isDup,
+			NeedHashMap:     false,
+			Typs:            arg.Typs,
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
-			IsDup:       isDup,
+			NeedHashMap:     false,
+			Typs:            arg.Typs,
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
-			IsDup:       isDup,
+			NeedHashMap:     false,
+			Typs:            arg.Typs,
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
-			IsDup:       isDup,
+			NeedHashMap:     false,
+			Typs:            arg.Typs,
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
-			IsDup:       isDup,
+			NeedHashMap:     false,
+			Typs:            arg.Typs,
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
-			IsDup:       isDup,
+			NeedHashMap:     false,
+			Typs:            arg.Typs,
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
 		return &hashbuild.Argument{
-			NeedHashMap: false,
-			Typs:        arg.Typs,
-			IsDup:       isDup,
+			NeedHashMap:     false,
+			Typs:            arg.Typs,
+			IsDup:           isDup,
+			NeedMergedBatch: true,
 		}
 
 	default:

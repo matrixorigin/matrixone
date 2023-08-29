@@ -296,6 +296,7 @@ message HashBuild {
   repeated plan.Type types = 5;
   repeated plan.Expr conds = 6;
   bool hash_on_pk = 7;
+  bool need_merged_batch = 8;
 }
 
 message ExternalName2ColIndex {
