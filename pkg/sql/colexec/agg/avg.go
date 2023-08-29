@@ -157,19 +157,25 @@ func (a *Decimal64Avg) Eval(vs []types.Decimal128, err error) ([]types.Decimal12
 func (a *Decimal64Avg) Fill(i int64, value types.Decimal64, ov types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
 	if !isNull {
 		a.Cnts[i] += z
-		x := types.Decimal128{B0_63: uint64(z), B64_127: 0}
-		if z < 0 {
-			x.B64_127 = ^x.B64_127
+		if z == 1 {
+			var err error
+			ov, err = ov.Decimal128AddDecimal64SameSign(value)
+			return ov, false, err
+		} else {
+			x := types.Decimal128{B0_63: uint64(z), B64_127: 0}
+			if z < 0 {
+				x.B64_127 = ^x.B64_127
+			}
+			y := types.Decimal128{B0_63: uint64(value), B64_127: 0}
+			if value>>63 != 0 {
+				y.B64_127 = ^y.B64_127
+			}
+			tmp, _, err := y.Mul(x, a.Typ.Scale, 0)
+			if err == nil {
+				ov, err = ov.Add128(tmp)
+			}
+			return ov, false, err
 		}
-		y := types.Decimal128{B0_63: uint64(value), B64_127: 0}
-		if value>>63 != 0 {
-			y.B64_127 = ^y.B64_127
-		}
-		tmp, _, err := y.Mul(x, a.Typ.Scale, 0)
-		if err == nil {
-			ov, err = ov.Add128(tmp)
-		}
-		return ov, false, err
 	}
 	return ov, isEmpty, nil
 }
