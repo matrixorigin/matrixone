@@ -185,8 +185,7 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 			return nil, err
 		}
 		taeFileList = append(taeFileList, &taeFile{
-			//TODO: add dir prefix
-			path: file.Name,
+			path: dir + "/" + file.Name,
 			size: file.Size,
 		})
 	}
