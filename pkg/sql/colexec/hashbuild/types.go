@@ -67,6 +67,7 @@ type Argument struct {
 	Conditions  []*plan.Expr
 
 	HashOnPK             bool
+	NeedMergedBatch      bool
 	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 }
 

@@ -292,10 +292,12 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
+
 	err := ctr.mergeBuildBatches(ap, proc, anal, isFirst)
 	if err != nil {
 		return err
 	}
+
 	err = ctr.buildHashmapByMergedBatch(ap, proc)
 	if err != nil {
 		return err

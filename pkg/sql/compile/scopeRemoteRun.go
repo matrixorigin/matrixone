@@ -1004,13 +1004,14 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *hashbuild.Argument:
 		in.HashBuild = &pipeline.HashBuild{
-			NeedExpr: t.NeedExpr,
-			NeedHash: t.NeedHashMap,
-			Ibucket:  t.Ibucket,
-			Nbucket:  t.Nbucket,
-			Types:    convertToPlanTypes(t.Typs),
-			Conds:    t.Conditions,
-			HashOnPk: t.HashOnPK,
+			NeedExpr:        t.NeedExpr,
+			NeedHash:        t.NeedHashMap,
+			Ibucket:         t.Ibucket,
+			Nbucket:         t.Nbucket,
+			Types:           convertToPlanTypes(t.Typs),
+			Conds:           t.Conditions,
+			HashOnPk:        t.HashOnPK,
+			NeedMergedBatch: t.NeedMergedBatch,
 		}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
@@ -1399,13 +1400,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.HashBuild:
 		t := opr.GetHashBuild()
 		v.Arg = &hashbuild.Argument{
-			Ibucket:     t.Ibucket,
-			Nbucket:     t.Nbucket,
-			NeedHashMap: t.NeedHash,
-			NeedExpr:    t.NeedExpr,
-			Typs:        convertToTypes(t.Types),
-			Conditions:  t.Conds,
-			HashOnPK:    t.HashOnPk,
+			Ibucket:         t.Ibucket,
+			Nbucket:         t.Nbucket,
+			NeedHashMap:     t.NeedHash,
+			NeedExpr:        t.NeedExpr,
+			Typs:            convertToTypes(t.Types),
+			Conditions:      t.Conds,
+			HashOnPK:        t.HashOnPk,
+			NeedMergedBatch: t.NeedMergedBatch,
 		}
 	case vm.External:
 		t := opr.GetExternalScan()

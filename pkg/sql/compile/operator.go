@@ -350,13 +350,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.HashBuild:
 		t := sourceIns.Arg.(*hashbuild.Argument)
 		res.Arg = &hashbuild.Argument{
-			NeedHashMap: t.NeedHashMap,
-			NeedExpr:    t.NeedExpr,
-			Ibucket:     t.Ibucket,
-			Nbucket:     t.Nbucket,
-			Typs:        t.Typs,
-			Conditions:  t.Conditions,
-			HashOnPK:    t.HashOnPK,
+			NeedHashMap:     t.NeedHashMap,
+			NeedExpr:        t.NeedExpr,
+			Ibucket:         t.Ibucket,
+			Nbucket:         t.Nbucket,
+			Typs:            t.Typs,
+			Conditions:      t.Conditions,
+			HashOnPK:        t.HashOnPK,
+			NeedMergedBatch: t.NeedMergedBatch,
 		}
 	case vm.External:
 		t := sourceIns.Arg.(*external.Argument)
@@ -1401,6 +1402,16 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			IsDup:       isDup,
 			HashOnPK:    arg.HashOnPK,
 		}
+
+		// to find if hashmap need to merge batches into one large batch and keep this batch for join
+		var needMergedBatch bool
+		for _, rp := range arg.Result {
+			if rp.Rel == 1 {
+				needMergedBatch = true
+				break
+			}
+		}
+		retArg.NeedMergedBatch = needMergedBatch
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
