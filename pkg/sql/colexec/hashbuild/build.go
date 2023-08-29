@@ -302,7 +302,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if err != nil {
 		return err
 	}
-	if !ap.NeedMergedBatch {
+	if !ap.NeedMergedBatch && ctr.inputBatchRowCount >= 8192 {
 		ctr.cleanBatch(proc.Mp())
 		ctr.bat = batch.NewWithSize(len(ap.Typs))
 		logutil.Infof("do not need merged batches, size %v", ctr.inputBatchRowCount)
