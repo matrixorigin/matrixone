@@ -15,7 +15,6 @@
 package proxy
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -156,48 +155,4 @@ func TestIsErrPacket(t *testing.T) {
 	data = []byte{0, 0, 0, 0, 0xFF, 0}
 	ret = isErrPacket(data)
 	require.True(t, ret)
-}
-
-func TestParseLabel(t *testing.T) {
-	cases := []struct {
-		str string
-		ret map[string]string
-	}{
-		{
-			str: "",
-			ret: nil,
-		},
-		{
-			str: "a=1",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a=1,",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a=1,b=2",
-			ret: map[string]string{"b": "2", "a": "1"},
-		},
-		{
-			str: "a=1,b",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a=1,b=",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a=1,=2",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a=1,=",
-			ret: map[string]string{"a": "1"},
-		},
-	}
-
-	for _, item := range cases {
-		require.True(t, reflect.DeepEqual(item.ret, parseLabel(item.str)))
-	}
 }
