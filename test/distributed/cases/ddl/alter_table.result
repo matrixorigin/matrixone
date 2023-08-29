@@ -395,7 +395,5 @@ invalid input: can't add/drop column for partition table now
 drop table t5;
 create table t5(a int, b int) cluster by a;
 alter table t5 add column c int;
-not supported: alter table for cluster table
 alter table t5 drop column a;
-not supported: alter table for cluster table
 drop table t5;

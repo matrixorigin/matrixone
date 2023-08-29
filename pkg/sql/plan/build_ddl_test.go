@@ -421,3 +421,13 @@ func TestBuildAlterTableError(t *testing.T) {
 	}
 	runTestShouldError(mock, t, sqls)
 }
+
+func TestCreateSingleTable(t *testing.T) {
+	sql := "create cluster table a (a int);"
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	outPutPlan(logicPlan, true, t)
+}

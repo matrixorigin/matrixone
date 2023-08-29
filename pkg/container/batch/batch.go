@@ -347,7 +347,7 @@ func (bat *Batch) AntiShrink(sels []int64) {
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0
+	return bat.rowCount == 0 && bat.AuxData == nil
 }
 
 func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {
