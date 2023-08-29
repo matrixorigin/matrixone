@@ -1971,20 +1971,18 @@ create table cluster01(col1 int, col2 decimal) cluster by col1;
 insert into cluster01 values (1, 389234924);
 insert into cluster01 values (2, -2893428);
 alter table cluster01 change col2 col2worejnfenrororiri float;
-not supported: alter table for cluster table
 alter table cluster01 change col1 iwijwehfndatabasectm double after col2worejnfenrororiri;
-not supported: alter table for cluster table
 show create table cluster01;
 Table    Create Table
-cluster01    CREATE TABLE `cluster01` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n) CLUSTER BY (`col1`)
+cluster01    CREATE TABLE `cluster01` (\n`col2worejnfenrororiri` FLOAT DEFAULT null,\n`iwijwehfndatabasectm` DOUBLE DEFAULT null\n) CLUSTER BY (`iwijwehfndatabasectm`)
 select * from cluster01;
-col1    col2
-1    389234924
-2    -2893428
+col2worejnfenrororiri    iwijwehfndatabasectm
+3.892349E8    1.0
+-2893428.0    2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
-cluster01    col1    INT    YES
-cluster01    col2    DECIMAL128    YES
+cluster01    iwijwehfndatabasectm    DOUBLE    YES
+cluster01    col2worejnfenrororiri    FLOAT    YES
 drop table cluster01;
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);
