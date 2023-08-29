@@ -5625,6 +5625,94 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
+func TestCollectDeletesAfterCKP(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.Name = "testupdate"
+	schema.BlockMaxRows = 8192
+	schema.SegmentMaxBlocks = 20
+	tae.BindSchema(schema)
+
+	bat := catalog.MockBatch(schema, 400)
+	// write only one block by apply metaloc
+	objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil)
+	assert.Nil(t, err)
+	writer.SetPrimaryKey(3)
+	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+	assert.Nil(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+	blk := blocks[0]
+	metalocs := []objectio.Location{blockio.EncodeLocation(writer.GetName(), blk.GetExtent(), blk.GetRows(), blk.GetID())}
+	{
+		txn, _ := tae.StartTxn(nil)
+		txn.SetDedupType(txnif.IncrementalDedup)
+		db, err := txn.CreateDatabase("db", "", "")
+		assert.NoError(t, err)
+		tbl, err := db.CreateRelation(schema)
+		assert.NoError(t, err)
+		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), metalocs))
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	updateFn := func(round, i, j int) {
+		tuples := bat.CloneWindow(0, 1)
+		defer tuples.Close()
+		for x := i; x < j; x++ {
+			txn, rel := tae.GetRelation()
+			filter := handle.NewEQFilter(int64(x))
+			id, offset, err := rel.GetByFilter(context.Background(), filter)
+			assert.NoError(t, err)
+			_, _, err = rel.GetValue(id, offset, 2)
+			assert.NoError(t, err)
+			err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+			if err != nil {
+				t.Logf("range delete %v, rollbacking", err)
+				_ = txn.Rollback(context.Background())
+				return
+			}
+			tuples.Vecs[3].Update(0, int64(x), false)
+			err = rel.Append(context.Background(), tuples)
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit(context.Background()))
+		}
+		t.Logf("(%d, %d, %d) done", round, i, j)
+	}
+	updateFn(1, 100, 110)
+	{
+		txn, rel := tae.GetRelation()
+		meta := testutil.GetOneBlockMeta(rel)
+		bat, err := meta.GetBlockData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true)
+		require.NoError(t, err)
+		require.Equal(t, 10, bat.Length())
+		require.NoError(t, txn.Commit(ctx))
+	}
+	tae.ForceLongCheckpoint()
+	{
+		txn, rel := tae.GetRelation()
+		meta := testutil.GetOneBlockMeta(rel)
+		bat, err := meta.GetBlockData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true)
+		require.NoError(t, err)
+		require.Equal(t, 10, bat.Length())
+		require.NoError(t, txn.Commit(ctx))
+	}
+	tae.Restart(ctx)
+	{
+		txn, rel := tae.GetRelation()
+		meta := testutil.GetOneBlockMeta(rel)
+		bat, err := meta.GetBlockData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true)
+		require.NoError(t, err)
+		require.Equal(t, 10, bat.Length())
+		require.NoError(t, txn.Commit(ctx))
+	}
+}
+
 // This is used to observe a lot of compactions to overflow a segment, it is not compulsory
 func TestAlwaysUpdate(t *testing.T) {
 	t.Skip("This is a long test, run it manully to observe what you want")
