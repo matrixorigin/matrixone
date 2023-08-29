@@ -233,7 +233,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid.IsArrayRelate() {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
@@ -575,7 +575,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
-				algorithm = plan.AlterTable_INPLACE
+				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropIndex:
 				algorithm = plan.AlterTable_INPLACE
 			case tree.AlterTableDropKey:
@@ -594,7 +594,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
-			algorithm = plan.AlterTable_INPLACE
+			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableChangeColumnClause:

@@ -1461,12 +1461,15 @@ func doShowBackendServers(ses *Session) error {
 
 	tenant := ses.GetTenantInfo().GetTenant()
 	var se clusterservice.Selector
-	labels := ses.GetMysqlProtocol().GetConnectAttrs()
+	labels, err := ParseLabel(getLabelPart(ses.GetUserName()))
+	if err != nil {
+		return err
+	}
 	labels["account"] = tenant
 	se = clusterservice.NewSelector().SelectByLabel(
 		filterLabels(labels), clusterservice.EQ)
 	if isSysTenant(tenant) {
-		u := ses.GetUserName()
+		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
 		if isSuperUser(u) {
 			clusterservice.GetMOCluster().GetCNService(
@@ -3938,6 +3941,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_char:
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_array_float32, types.T_array_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_binary:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)

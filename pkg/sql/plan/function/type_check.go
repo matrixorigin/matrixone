@@ -53,6 +53,16 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 			}
 		}
 
+		if t1.Oid.IsArrayRelate() {
+			if t1.Oid == t2.Oid {
+				if s1.Oid == t1.Oid {
+					return true, s1, s1
+				} else if s2.Oid == t2.Oid {
+					return true, s2, s2
+				}
+			}
+		}
+
 		setTargetScaleFromSource(&s1, &t1)
 		setTargetScaleFromSource(&s2, &t2)
 
@@ -755,6 +765,8 @@ func initFixed1() {
 		{types.T_varchar, types.T_varbinary, types.T_varchar, types.T_varchar},
 		{types.T_varchar, types.T_blob, types.T_varchar, types.T_varchar},
 		{types.T_varchar, types.T_text, types.T_varchar, types.T_varchar},
+		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
+		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_json, types.T_any, types.T_json, types.T_json},
 		{types.T_json, types.T_bool, types.T_bool, types.T_bool},
 		{types.T_json, types.T_int8, types.T_int8, types.T_int8},
@@ -882,6 +894,10 @@ func initFixed1() {
 		{types.T_text, types.T_binary, types.T_binary, types.T_binary},
 		{types.T_text, types.T_varbinary, types.T_varbinary, types.T_varbinary},
 		{types.T_text, types.T_blob, types.T_blob, types.T_blob},
+		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
+		{types.T_array_float32, types.T_array_float64, types.T_array_float64, types.T_array_float64},
+		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
+		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
 	}
 
 	for _, r := range ru {
@@ -1265,6 +1281,9 @@ func initFixed2() {
 		{types.T_varchar, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_varchar, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_varchar, types.T_decimal128, types.T_float64, types.T_float64},
+		//A
+		{types.T_varchar, types.T_array_float32, types.T_array_float32, types.T_array_float32},
+		{types.T_varchar, types.T_array_float64, types.T_array_float64, types.T_array_float64},
 		{types.T_binary, types.T_any, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int8, types.T_float64, types.T_float64},
 		{types.T_binary, types.T_int16, types.T_float64, types.T_float64},
@@ -1330,6 +1349,11 @@ func initFixed2() {
 		{types.T_text, types.T_float64, types.T_float64, types.T_float64},
 		{types.T_text, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_text, types.T_decimal128, types.T_float64, types.T_float64},
+		//B
+		{types.T_array_float32, types.T_varchar, types.T_array_float32, types.T_array_float32},
+		{types.T_array_float32, types.T_array_float32, types.T_array_float32, types.T_array_float32},
+		{types.T_array_float64, types.T_varchar, types.T_array_float64, types.T_array_float64},
+		{types.T_array_float64, types.T_array_float32, types.T_array_float64, types.T_array_float64},
 	}
 
 	for _, r := range ru {
@@ -1760,6 +1784,9 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
+				//C
+				{toType: types.T_array_float32, preferLevel: 2},
+				{toType: types.T_array_float64, preferLevel: 2},
 			},
 		},
 
@@ -1892,6 +1919,18 @@ func initFixed3() {
 				{toType: types.T_varbinary, preferLevel: 2},
 				{toType: types.T_blob, preferLevel: 2},
 				{toType: types.T_text, preferLevel: 2},
+			},
+		},
+		{
+			from: types.T_array_float32,
+			toList: []toRule{
+				{toType: types.T_array_float64, preferLevel: 2},
+			},
+		},
+		{
+			from: types.T_array_float64,
+			toList: []toRule{
+				{toType: types.T_array_float32, preferLevel: 1},
 			},
 		},
 	}

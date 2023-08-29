@@ -41,6 +41,9 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedMathBuiltIns {
 		allSupportedFunctions[fn.functionId] = fn
 	}
+	for _, fn := range supportedArrayOperations {
+		allSupportedFunctions[fn.functionId] = fn
+	}
 	for _, fn := range supportedControlBuiltIns {
 		allSupportedFunctions[fn.functionId] = fn
 	}

@@ -1121,7 +1121,8 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			}
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64:
 			// XXX Memory accounting?
 			buf.WriteString(field)
 			bs := buf.Bytes()

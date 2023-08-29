@@ -15,6 +15,7 @@
 package momath
 
 import (
+	"golang.org/x/exp/constraints"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -79,4 +80,18 @@ func Sinh(v float64) (float64, error) {
 
 func Tan(v float64) (float64, error) {
 	return math.Tan(v), nil
+}
+
+func AbsSigned[T constraints.Signed | constraints.Float](v T) (T, error) {
+	//NOTE: AbsSigned specifically deals with int and float and not uint.
+	// If we have uint, we return the value as such.
+	if v < 0 {
+		v = -v
+	}
+	if v < 0 {
+		// This could occur for int8 (-128 to 127)
+		// If the v is -128 and if we multiply by -1 = 128, which is out of range of int8. It could give a -ve value for such case.
+		return 0, moerr.NewOutOfRangeNoCtx("int", "'%v'", v)
+	}
+	return v, nil
 }
