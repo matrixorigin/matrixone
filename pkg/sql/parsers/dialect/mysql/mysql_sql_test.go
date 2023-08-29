@@ -2469,7 +2469,7 @@ var (
 		},
 		{
 			input:  "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */",
-			output: "set OLD_SQL_MODE = @@SQL_MODE, sql_mode = no_auto_value_on_zero",
+			output: "set OLD_SQL_MODE = @@SQL_MODE, sql_mode = NO_AUTO_VALUE_ON_ZERO",
 		},
 		{
 			input:  "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;",
@@ -2493,6 +2493,9 @@ var (
 		{
 			input:  "prepare stmt from 'select /*+ inl_join(t2) */ * from t t1 join t t2 on t1.a = t2.a and t1.c = t2.c where t2.a = 1 or t2.b = 1;';",
 			output: "prepare stmt from select /*+ inl_join(t2) */ * from t t1 join t t2 on t1.a = t2.a and t1.c = t2.c where t2.a = 1 or t2.b = 1;",
+		}, {
+			input:  "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `ucl360_demo_v3` /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci */ /*!80016 DEFAULT ENCRYPTION='N' */;",
+			output: "create database if not exists ucl360_demo_v3 default character set utf8mb4 collate utf8mb4_0900_ai_ci encryption N",
 		},
 		{
 			input:  "alter table t1 algorithm = DEFAULT",
