@@ -211,15 +211,11 @@ drop table if exists t2;
 CREATE TABLE t2 (id int(11) default NULL);
 INSERT INTO t2 VALUES (1),(2);
 SELECT * FROM t2 WHERE id IN (SELECT 1);
--- @bvt:issue#4354
 SELECT * FROM t2 WHERE id IN (SELECT 1 UNION SELECT 3);
--- @bvt:issue
 SELECT * FROM t2 WHERE id IN (SELECT 1+(select 1));
--- @bvt:issue#4354
 SELECT * FROM t2 WHERE id IN (SELECT 5 UNION SELECT 3);
 SELECT * FROM t2 WHERE id IN (SELECT 5 UNION SELECT 2);
 SELECT * FROM t2 WHERE id NOT IN (SELECT 5 UNION SELECT 2);
--- @bvt:issue
 
 -- @case
 -- @desc:test for [in] subquery with null
@@ -1117,9 +1113,7 @@ SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (a INTEGER);
 INSERT INTO t1 VALUES (1), (2), (3);
--- @bvt:issue#4354
 SELECT 2 IN ( SELECT 5 UNION SELECT NULL ) FROM t1;
--- @bvt:issue
 DROP TABLE IF EXISTS t1;
 
 

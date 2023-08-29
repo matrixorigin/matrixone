@@ -476,12 +476,6 @@ func (e *DBEntry) RollbackRenameTable(fullname string, tid uint64) {
 }
 
 func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
-	defer func() {
-		if err == nil {
-			e.catalog.AddTableCnt(-1)
-			e.catalog.AddColumnCnt(-1 * len(table.GetLastestSchema().ColDefs))
-		}
-	}()
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(table.String()))
 	e.Lock()
@@ -528,12 +522,6 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 // 2.2.2 Check duplicate/not found.
 // If the entry hasn't been dropped, return ErrDuplicate.
 func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDedup bool) (err error) {
-	defer func() {
-		if err == nil {
-			e.catalog.AddTableCnt(1)
-			e.catalog.AddColumnCnt(len(table.GetLastestSchema().ColDefs))
-		}
-	}()
 	fullName := table.GetFullName()
 	nn := e.nameNodes[fullName]
 	if nn == nil {

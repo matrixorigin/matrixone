@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10248,4 +10249,75 @@ func TestDoCheckFilePath(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(cs.Ep.FilePath, convey.ShouldEqual, "stage1:/t1.csv")
 	})
+}
+
+func TestGetLabelPart(t *testing.T) {
+	user1 := "user1"
+	require.Equal(t, "", getLabelPart(user1))
+	user1 = "user1?"
+	require.Equal(t, "", getLabelPart(user1))
+	user1 = "user1?a:b"
+	require.Equal(t, "a:b", getLabelPart(user1))
+}
+
+func TestParseLabel(t *testing.T) {
+	cases := []struct {
+		str string
+		ret map[string]string
+		err bool
+	}{
+		{
+			str: "",
+			ret: map[string]string{},
+			err: false,
+		},
+		{
+			str: "a=1",
+			ret: map[string]string{"a": "1"},
+			err: false,
+		},
+		{
+			str: "a=1,",
+			err: true,
+		},
+		{
+			str: "a=1,b=2",
+			ret: map[string]string{"b": "2", "a": "1"},
+			err: false,
+		},
+		{
+			str: "a=1,b",
+			err: true,
+		},
+		{
+			str: "a=1,b=",
+			err: true,
+		},
+		{
+			str: "a=1,=2",
+			err: true,
+		},
+		{
+			str: "a=1,=",
+			err: true,
+		},
+		{
+			str: "a",
+			err: true,
+		},
+		{
+			str: "a=1,b:2",
+			err: true,
+		},
+	}
+
+	for _, item := range cases {
+		lb, err := ParseLabel(item.str)
+		if item.err {
+			require.Error(t, err)
+		} else {
+			require.True(t, reflect.DeepEqual(item.ret, lb))
+			require.NoError(t, err)
+		}
+	}
 }
