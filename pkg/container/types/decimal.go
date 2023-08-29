@@ -785,6 +785,17 @@ func (x Decimal64) Add(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 	return
 }
 
+func (x Decimal128) Decimal128AddDecimal64SameSign(y Decimal64) (Decimal128, error) {
+	var err error
+	z := x
+	z.B0_63, z.B64_127 = bits.Add64(x.B0_63, uint64(y), 0)
+	z.B64_127, _ = bits.Add64(x.B64_127, 0, z.B64_127)
+	if x.Sign() != z.Sign() {
+		err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
+	}
+	return z, err
+}
+
 func (x Decimal128) Add(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {
 	if scale1 > scale2 {
 		scale = scale1

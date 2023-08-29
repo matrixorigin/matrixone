@@ -200,11 +200,8 @@ func (a *Decimal64Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, n
 			continue
 		}
 
-		dec := types.Decimal128{B0_63: uint64(vvs[i+start]), B64_127: 0}
-		if dec.B0_63>>63 != 0 {
-			dec.B64_127 = ^dec.B64_127
-		}
-		rrs[vps[i]-1], _, err = rrs[vps[i]-1].Add(dec, 0, 0)
+		rrs[vps[i]-1], err = rrs[vps[i]-1].Decimal128AddDecimal64SameSign(vvs[i+start])
+
 		if err != nil {
 			return err
 		}
