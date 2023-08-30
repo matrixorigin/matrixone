@@ -3480,7 +3480,7 @@ func TestCompactBlk2(t *testing.T) {
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
-	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime)
+	task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.BlockEntry{meta}, tae.DB.Runtime, types.TS{})
 	assert.NoError(t, err)
 	err = task.OnExec(context.Background())
 	assert.NoError(t, err)
