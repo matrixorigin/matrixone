@@ -399,7 +399,7 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 	for n-m > 19 || n-m < -19 {
 		if n > 0 {
 			m += 19
-			err = x.Mul128InPlace(&Decimal128{Pow10[19], 0})
+			err = x.Mul64InPlace(Decimal64(Pow10[19]))
 		} else {
 			m -= 19
 			err = x.Div128InPlace(&Decimal128{Pow10[19], 0})
@@ -416,7 +416,7 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 		return nil
 	}
 	if n-m > 0 {
-		err = x.Mul128InPlace(&Decimal128{Pow10[n-m], 0})
+		err = x.Mul64InPlace(Decimal64(Pow10[n-m]))
 	} else {
 		err = x.Div128InPlace(&Decimal128{Pow10[m-n], 0})
 	}
@@ -601,6 +601,24 @@ func (x Decimal64) Mul64(y Decimal64) (Decimal64, error) {
 		err = moerr.NewInvalidInputNoCtx("Decimal64 Mul overflow: %s*%s", x.Format(0), y.Format(0))
 	}
 	return z, err
+}
+
+func (x *Decimal128) Mul64InPlace(y Decimal64) error {
+	z := Decimal128{0, 0}
+	z.B64_127, z.B0_63 = bits.Mul64(x.B0_63, uint64(y))
+	w := Decimal128{0, 0}
+	if x.B64_127 != 0 {
+		w.B0_63, w.B64_127 = bits.Mul64(x.B64_127, uint64(y))
+	}
+	if w.B0_63 != 0 || w.Sign() || z.Sign() {
+		return moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+	}
+	z.B64_127 += w.B64_127
+	if z.Sign() {
+		return moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+	}
+	*x = z
+	return nil
 }
 
 func (x *Decimal128) Mul128InPlace(y *Decimal128) error {
