@@ -3253,9 +3253,7 @@ func decimal64ToDecimal128(
 				}
 			} else {
 				if totype.Scale == fromtype.Scale {
-					if err := to.Append(fromdec, false); err != nil {
-						return err
-					}
+					to.AppendMustValue(fromdec)
 				} else {
 					result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
 					if err != nil {
