@@ -464,7 +464,7 @@ newnewcol2    newcol3    col1    col5    col4
 2.0    a    1.0    null    w3uir34jn2k48ujf4
 3.0    d    2.0    null    3289u3ji2dff43
 alter table mix01 rename column col2new to newnewCol2, drop primary key;
-Unknown column 'mix01' in 'col2new'
+Unknown column 'col2new' in 'mix01'
 show create table mix01;
 Table    Create Table
 mix01    CREATE TABLE `mix01` (\n`newnewcol2` DOUBLE DEFAULT null,\n`newcol3` CHAR(1) DEFAULT null,\n`col1` FLOAT NOT NULL,\n`col5` INT DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null,\nPRIMARY KEY (`col1`)\n)
