@@ -308,9 +308,10 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 			Cond:       cond,
 		},
 		barg: &hashbuild.Argument{
-			Typs:        ts,
-			NeedHashMap: true,
-			Conditions:  cs[1],
+			Typs:            ts,
+			NeedHashMap:     true,
+			Conditions:      cs[1],
+			NeedMergedBatch: true,
 		},
 	}
 }

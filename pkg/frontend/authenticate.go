@@ -1240,7 +1240,7 @@ const (
 
 	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
 
-	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s";`
+	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
 	checkDatabaseTableFormat = `select t.rel_id from mo_catalog.mo_database d, mo_catalog.mo_tables t
 										where d.dat_id = t.reldatabase_id
@@ -1887,12 +1887,12 @@ func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) 
 	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
 }
 
-func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string) (string, error) {
+func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string, accountId int64) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName), nil
+	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName, accountId), nil
 }
 
 func getSqlForCheckDatabaseTable(ctx context.Context, dbName, tableName string) (string, error) {
@@ -3597,7 +3597,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) er
 				}
 
 				filePath = strings.Replace(filePath, stageName+":", url, 1)
-				ep.FilePath = filePath
+				ses.ep.userConfig.StageFilePath = filePath
 			}
 
 		} else {
@@ -8517,7 +8517,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		}
 
 		// step1:check database exists or not and get database owner
-		sql, err = getSqlForCheckDatabaseWithOwner(ctx, dbName)
+		sql, err = getSqlForCheckDatabaseWithOwner(ctx, dbName, int64(ses.GetTenantInfo().GetTenantID()))
 		if err != nil {
 			return err
 		}

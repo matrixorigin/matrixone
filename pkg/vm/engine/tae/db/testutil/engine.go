@@ -676,3 +676,29 @@ func (e *TestEngine) CheckReadCNCheckpoint() {
 		}
 	}
 }
+
+func (e *TestEngine) CheckCollectDeleteInRange() {
+	txn, rel := e.GetRelation()
+	ForEachBlock(rel, func(blk handle.Block) error {
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		deleteBat, err := meta.GetBlockData().CollectDeleteInRange(context.Background(), types.TS{}, txn.GetStartTS(), false)
+		assert.NoError(e.t, err)
+		pkDef := e.schema.GetPrimaryKey()
+		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
+		deletePKs := deleteBat.GetVectorByName(pkDef.Name)
+		pks, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, pkDef.Idx)
+		assert.NoError(e.t, err)
+		rowIDs, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, e.schema.PhyAddrKey.Idx)
+		assert.NoError(e.t, err)
+		for i := 0; i < deleteBat.Length(); i++ {
+			rowID := deleteRowIDs.Get(i).(types.Rowid)
+			offset := rowID.GetRowOffset()
+			appendRowID := rowIDs.GetData().Get(int(offset)).(types.Rowid)
+			e.t.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.Get(i), appendRowID.String(), pks.GetData().Get(int(offset)))
+			assert.Equal(e.t, pks.GetData().Get(int(offset)), deletePKs.Get(i))
+		}
+		return nil
+	})
+	err := txn.Commit(context.Background())
+	assert.NoError(e.t, err)
+}
