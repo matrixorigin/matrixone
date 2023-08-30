@@ -391,20 +391,19 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 		return nil
 	}
 	signx := x.Sign()
+	x1 := *x
 	if signx {
-		x.MinusInplace()
+		x1.MinusInplace()
 	}
-
 	m := int32(0)
 	var err error
-	var x1 Decimal128
 	for n-m > 19 || n-m < -19 {
 		if n > 0 {
 			m += 19
-			x1, err = x.Mul128(Decimal128{Pow10[19], 0})
+			x1, err = x1.Mul128(Decimal128{Pow10[19], 0})
 		} else {
 			m -= 19
-			x1, err = x.Div128(Decimal128{Pow10[19], 0})
+			x1, err = x1.Div128(Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
 			err = moerr.NewInvalidInputNoCtx("Decimal128 scale overflow: %s(Scale:%d)", x.Format(0), n)
@@ -863,10 +862,10 @@ func (x Decimal128) Add64(y Decimal64) (Decimal128, error) {
 func (x Decimal128) Add(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {
 	if scale1 > scale2 {
 		scale = scale1
-		y, err = y.Scale(scale - scale2)
-	} else {
+		err = y.ScaleInplace(scale - scale2)
+	} else if scale1 < scale2 {
 		scale = scale2
-		x, err = x.Scale(scale - scale1)
+		err = x.ScaleInplace(scale - scale1)
 	}
 	if err == nil {
 		z, err = x.Add128(y)
@@ -914,10 +913,10 @@ func (x Decimal64) Sub(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 func (x Decimal128) Sub(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {
 	if scale1 > scale2 {
 		scale = scale1
-		y, err = y.Scale(scale - scale2)
-	} else {
+		err = y.ScaleInplace(scale - scale2)
+	} else if scale1 < scale2 {
 		scale = scale2
-		x, err = x.Scale(scale - scale1)
+		err = x.ScaleInplace(scale - scale1)
 	}
 	if err == nil {
 		z, err = x.Sub128(y)

@@ -3252,12 +3252,18 @@ func decimal64ToDecimal128(
 					return err
 				}
 			} else {
-				result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
+				if totype.Scale == fromtype.Scale {
+					if err := to.Append(fromdec, false); err != nil {
+						return err
+					}
+				} else {
+					result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+					if err != nil {
+						return err
+					}
+					if err = to.Append(result, false); err != nil {
+						return err
+					}
 				}
 			}
 		}
