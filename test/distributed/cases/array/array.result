@@ -41,9 +41,9 @@ select b + "[1,2,3]" from vec_table;
 b + [1,2,3]
 [2, 4, 6]
 select b + "[1,2]" from vec_table;
-invalid input: dimension mismatch. 3 != 2
+invalid input: vector ops between different dimensions (3, 2) is not permitted.
 select b + "[1,2,3,4]" from vec_table;
-invalid input: dimension mismatch. 3 != 4
+invalid input: vector ops between different dimensions (3, 4) is not permitted.
 select cast("[1,2,3]" as vecf32(3));
 cast([1,2,3] as vecf32(3))
 [1, 2, 3]
@@ -106,12 +106,39 @@ count(b)
 create table t4(a int, b vecf32(5), c vecf64(5));
 insert into t4 values(1, "[1,2,3,4,5]", "[1,2,3,4,5]");
 insert into t4 values(1, "[1,2]", "[1,2]");
+invalid input: expected vector dimension 5 != actual dimension 2.
 insert into t4 values(1, "[1,2,3,4,5,6]", "[1,2,3,4,5,6]");
-internal error: Can't cast '1,2,3,4,5,6' to VECTOR FLOAT type. Src length 6 is larger than Dest length 5
+invalid input: expected vector dimension 5 != actual dimension 6.
 select * from t4;
 a    b    c
 1    [1, 2, 3, 4, 5]    [1, 2, 3, 4, 5]
-1    [1, 2, 0, 0, 0]    [1, 2, 0, 0, 0]
+create table t5(a int, b vecf32(3));
+insert into t5 values(1, decode('7e98b23e9e10383b2f41133f','hex'));
+insert into t5 values(2, decode('0363733ff13e0b3f7aa39d3e','hex'));
+insert into t5 values(3, decode('be1ac03e485d083ef6bc723f','hex'));
+insert into t5 values(4, "[0,2,3]");
+insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- be1... is float32[5]
+invalid input: expected vector dimension 3 != actual dimension 5.
+insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- be1... is float32[2]
+invalid input: expected vector dimension 3 != actual dimension 2.
+select * from t5;
+a    b
+1    [0.34881967, 0.0028086076, 0.5752134]
+2    [0.95072955, 0.54392916, 0.30788785]
+3    [0.37520403, 0.13316834, 0.9481958]
+4    [0, 2, 3]
+select * from t5 where t5.b > "[0,0,0]";
+a    b
+1    [0.34881967, 0.0028086076, 0.5752134]
+2    [0.95072955, 0.54392916, 0.30788785]
+3    [0.37520403, 0.13316834, 0.9481958]
+4    [0, 2, 3]
+select encode(b,'hex') from t5;
+encode(b, hex)
+7e98b23e9e10383b2f41133f
+0363733ff13e0b3f7aa39d3e
+be1ac03e485d083ef6bc723f
+000000000000004000004040
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
 insert into vec_table values(3, "[1,3,3]", "[4,1,6]");
 select mo_ctl('dn', 'flush', 'vecdb.vec_table');
