@@ -103,6 +103,10 @@ func (n *MVCCHandle) EstimateMemSizeLocked() int {
 // ==========================================================
 
 func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
+	if n.persistedTS.IsEmpty() {
+		// persitedTs is empty after restarting, fetch it from chain
+		return n.meta.GetDeltaPersistedTS()
+	}
 	return n.persistedTS
 }
 
