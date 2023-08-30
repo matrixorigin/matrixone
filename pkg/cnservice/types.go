@@ -241,6 +241,10 @@ type Config struct {
 	// InitWorkState is the initial work state for CN. Valid values are:
 	// "working", "draining" and "drained".
 	InitWorkState string `toml:"init-work-state"`
+
+	PythonUdfClient struct {
+		ServerAddress string `toml:"server-address"`
+	} `toml:"python-udf-client"`
 }
 
 func (c *Config) Validate() error {

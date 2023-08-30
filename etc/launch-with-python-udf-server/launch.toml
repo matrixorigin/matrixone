@@ -1,0 +1,16 @@
+logservices = [
+    "./etc/launch/log.toml",
+]
+
+dnservices = [
+    "./etc/launch/dn.toml"
+]
+
+cnservices = [
+    "./etc/launch-with-python-udf-server/cn.toml"
+]
+
+python-udf-services = [
+    "./etc/launch-with-python-udf-server/python-udf-server.toml"
+]
+

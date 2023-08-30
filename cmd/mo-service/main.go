@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
+	"github.com/matrixorigin/matrixone/pkg/pythonserver"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -205,6 +206,8 @@ func startService(
 		return startLogService(cfg, stopper, fs, globalCounterSet, shutdownC)
 	case metadata.ServiceType_PROXY:
 		return startProxyService(cfg, stopper)
+	case metadata.ServiceType_PYTHON_UDF:
+		return startPythonUdfService(cfg, stopper)
 	default:
 		panic("unknown service type")
 	}
@@ -356,6 +359,28 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 			cfg.getProxyConfig(),
 			proxy.WithRuntime(runtime.ProcessLevelRuntime()),
 		)
+		if err != nil {
+			panic(err)
+		}
+		if err := s.Start(); err != nil {
+			panic(err)
+		}
+		<-ctx.Done()
+		if err := s.Close(); err != nil {
+			panic(err)
+		}
+	})
+}
+
+// startPythonUdfService starts the python udf service.
+func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+		return err
+	}
+	serviceWG.Add(1)
+	return stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
+		defer serviceWG.Done()
+		s, err := pythonserver.NewService(cfg.PythonUdfServerConfig)
 		if err != nil {
 			panic(err)
 		}

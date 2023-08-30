@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import argparse
 import datetime
 from concurrent import futures
 from typing import Any, Callable, Optional
@@ -202,10 +203,18 @@ def value2Data(value: Any, typ: pb2.DataType) -> pb2.Data:
 def run():
     server = grpc.server(futures.ThreadPoolExecutor())
     pb2_grpc.add_PythonUdfServiceServicer_to_server(Server(), server)
-    server.add_insecure_port('[::]:50051')
+    server.add_insecure_port(ARGS.address)
     server.start()
     server.wait_for_termination()
 
 
+ARGS = None
+
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        prog='python udf server',
+        epilog='Copyright(r), 2023'
+    )
+    parser.add_argument('--address', default='[::]:50051', help='address')
+    ARGS = parser.parse_args()
     run()
