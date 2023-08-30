@@ -229,6 +229,8 @@ func (s *Scanner) Scan() (int, string) {
 			return s.scanString(ch, STRING)
 		case s.cur() == '\'':
 			return s.scanString(ch, STRING)
+		case s.cur() == '|':
+			return s.scanString(ch, STRING)
 		default:
 			return s.Scan()
 		}
