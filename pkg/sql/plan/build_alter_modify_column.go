@@ -36,7 +36,7 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	colName := specNewColumn.Name.Parts[0]
 	col := FindColumn(tableDef.Cols, originalColName)
 	if col == nil || col.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), tableDef.Name, colName)
+		return moerr.NewBadFieldError(ctx.GetContext(), colName, alterPlan.TableDef.Name)
 	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
