@@ -29,6 +29,7 @@ const (
 	MaxArrayDimension = 65536
 )
 
+// BytesToArray bytes should be of little-endian format
 func BytesToArray[T RealNumbers](input []byte) (res []T) {
 	return DecodeSlice[T](input)
 }

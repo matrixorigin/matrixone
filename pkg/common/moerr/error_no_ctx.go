@@ -74,6 +74,16 @@ func NewInvalidInputNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrInvalidInput, xmsg)
 }
 
+func NewArrayInvalidOpNoCtx(expected, actual int) *Error {
+	xmsg := fmt.Sprintf("vector ops between different dimensions (%v, %v) is not permitted.", expected, actual)
+	return newError(Context(), ErrInvalidInput, xmsg)
+}
+
+func NewArrayDefMismatchNoCtx(expected, actual int) *Error {
+	xmsg := fmt.Sprintf("expected vector dimension %v != actual dimension %v.", expected, actual)
+	return newError(Context(), ErrInvalidInput, xmsg)
+}
+
 func NewSyntaxErrorNoCtx(msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
 	return newError(Context(), ErrSyntaxError, xmsg)
