@@ -64,6 +64,15 @@ func (x Decimal64) Minus() Decimal64 {
 	return ^x + 1
 }
 
+func (x *Decimal128) MinusInplace() {
+	if x.B0_63 == 0 {
+		x.B64_127 = ^x.B64_127 + 1
+	} else {
+		x.B64_127 = ^x.B64_127
+		x.B0_63 = ^x.B0_63 + 1
+	}
+}
+
 func (x Decimal128) Minus() Decimal128 {
 	if x.B0_63 == 0 {
 		x.B64_127 = ^x.B64_127 + 1
@@ -375,6 +384,54 @@ func (x Decimal64) Scale(n int32) (Decimal64, error) {
 		x1 = x1.Minus()
 	}
 	return x1, err
+}
+
+func (x *Decimal128) ScaleInplace(n int32) error {
+	if n == 0 {
+		return nil
+	}
+	signx := x.Sign()
+	if signx {
+		x.MinusInplace()
+	}
+
+	m := int32(0)
+	var err error
+	var x1 Decimal128
+	for n-m > 19 || n-m < -19 {
+		if n > 0 {
+			m += 19
+			x1, err = x.Mul128(Decimal128{Pow10[19], 0})
+		} else {
+			m -= 19
+			x1, err = x.Div128(Decimal128{Pow10[19], 0})
+		}
+		if err != nil {
+			err = moerr.NewInvalidInputNoCtx("Decimal128 scale overflow: %s(Scale:%d)", x.Format(0), n)
+			return err
+		}
+	}
+	if n == m {
+		if signx {
+			x1.MinusInplace()
+		}
+		*x = x1
+		return nil
+	}
+	if n-m > 0 {
+		x1, err = x1.Mul128(Decimal128{Pow10[n-m], 0})
+	} else {
+		x1, err = x1.Div128(Decimal128{Pow10[m-n], 0})
+	}
+	if err != nil {
+		err = moerr.NewInvalidInputNoCtx("Decimal128 scale overflow: %s(Scale:%d)", x.Format(0), n)
+		return err
+	}
+	if signx {
+		x1.MinusInplace()
+	}
+	*x = x1
+	return nil
 }
 
 func (x Decimal128) Scale(n int32) (Decimal128, error) {
@@ -949,10 +1006,10 @@ func (x Decimal128) Mul(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 	signy := y.Sign()
 	y1 := y
 	if signx {
-		x1 = x1.Minus()
+		x1.MinusInplace()
 	}
 	if signy {
-		y1 = y1.Minus()
+		y1.MinusInplace()
 	}
 	z, err = x1.Mul128(y1)
 	if err != nil {
@@ -973,9 +1030,11 @@ func (x Decimal128) Mul(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		}
 		return
 	}
-	z, _ = z.Scale(scale - scale1 - scale2)
+	if scale-scale1-scale2 != 0 {
+		z.ScaleInplace(scale - scale1 - scale2)
+	}
 	if signx != signy {
-		z = z.Minus()
+		z.MinusInplace()
 	}
 	return
 }
