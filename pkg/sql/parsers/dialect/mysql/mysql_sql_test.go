@@ -2465,16 +2465,13 @@ var (
 		}, {
 			input:  "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */",
 			output: "set OLD_CHARACTER_SET_CLIENT = @@CHARACTER_SET_CLIENT",
-		},
-		{
+		}, {
 			input:  "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */",
 			output: "set OLD_TIME_ZONE = @@TIME_ZONE",
-		},
-		{
+		}, {
 			input:  "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */",
 			output: "set OLD_SQL_MODE = @@SQL_MODE, sql_mode = NO_AUTO_VALUE_ON_ZERO",
-		},
-		{
+		}, {
 			input:  "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;",
 			output: "set OLD_SQL_NOTES = @@SQL_NOTES, sql_notes = 0",
 		}, {
@@ -2492,15 +2489,13 @@ var (
 		}, {
 			input:  "explain analyze select /*+ HASH_JOIN(t1, t2) */ t1.k from t t1, t t2 where t1.v = t2.v+1",
 			output: "explain (analyze) select t1.k from t as t1 cross join t as t2 where t1.v = t2.v + 1",
-		},
-		{
+		}, {
 			input:  "prepare stmt from 'select /*+ inl_join(t2) */ * from t t1 join t t2 on t1.a = t2.a and t1.c = t2.c where t2.a = 1 or t2.b = 1;';",
 			output: "prepare stmt from select /*+ inl_join(t2) */ * from t t1 join t t2 on t1.a = t2.a and t1.c = t2.c where t2.a = 1 or t2.b = 1;",
 		}, {
 			input:  "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `ucl360_demo_v3` /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci */ /*!80016 DEFAULT ENCRYPTION='N' */;",
 			output: "create database if not exists ucl360_demo_v3 default character set utf8mb4 collate utf8mb4_0900_ai_ci encryption N",
-		},
-		{
+		}, {
 			input:  "alter table t1 algorithm = DEFAULT",
 			output: "alter table t1 alter algorithm not enforce",
 		}, {
@@ -2607,6 +2602,15 @@ var (
 		{
 			input:  `backup '123' s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'}`,
 			output: `backup 123 s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='jsonline/jsonline_object.jl', 'region'='us-west-2', 'compression'='none', 'format'='jsonline', 'jsondata'='object'}`,
+		},
+
+		{
+			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `pga0010` AS select distinct `a`.`FACDIV` AS `FACDIV`,`a`.`BLDCD` AS `BLDCD`,`a`.`PRDCD` AS `PRDCD`,`a`.`PRDNAM` AS `PRDNAM`,`a`.`PRDLNG` AS `PRDLNG`,`a`.`PRDWID` AS `PRDWID`,`a`.`PRDGAG` AS `PRDGAG`,`a`.`AREA` AS `AREA`,`a`.`GLZTYP` AS `GLZTYP`,`a`.`TECTYP` AS `TECTYP`,`a`.`PRDCATE` AS `PRDCATE`,`a`.`PRCCD` AS `PRCCD`,`a`.`PRCDSC` AS `PRCDSC`,`a`.`GLSSTR` AS `GLSSTR`,`a`.`REMARK` AS `REMARK`,`a`.`USEYN` AS `USEYN`,`a`.`ISMES` AS `ISMES` from (select 'N' AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCDFATHER` AS `BLDCD`,substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'Y') and (`skim`.`bga0010`.`USEYN` = 'Y') and (not(substring_index(`skim`.`bga0010`.`PRDCD`,'-',1) in (select `skim`.`bga0010`.`PRDCD` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y')))))) union all select `skim`.`bga0010`.`ISMES` AS `ISMES`,`skim`.`bga0010`.`USEYN` AS `USEYN`,`skim`.`bga0010`.`FACDIV` AS `FACDIV`,`skim`.`bga0010`.`BLDCD` AS `BLDCD`,`skim`.`bga0010`.`PRDCD` AS `PRDCD`,`skim`.`bga0010`.`PRDNAM` AS `PRDNAM`,`skim`.`bga0010`.`PRDLNG` AS `PRDLNG`,`skim`.`bga0010`.`PRDWID` AS `PRDWID`,`skim`.`bga0010`.`PRDGAG` AS `PRDGAG`,`skim`.`bga0010`.`AREA` AS `AREA`,`skim`.`bga0010`.`GLZTYP` AS `GLZTYP`,`skim`.`bga0010`.`TECTYP` AS `TECTYP`,`skim`.`bga0010`.`PRDCATE` AS `PRDCATE`,`skim`.`bga0010`.`MATCST` AS `MATCST`,`skim`.`bga0010`.`PRCCD` AS `PRCCD`,`skim`.`bga0010`.`PRCDSC` AS `PRCDSC`,`skim`.`bga0010`.`GLSSTR` AS `GLSSTR`,`skim`.`bga0010`.`REMARK` AS `REMARK` from `skim`.`bga0010` where ((`skim`.`bga0010`.`ISMES` = 'N') and (`skim`.`bga0010`.`USEYN` = 'Y'))) `a` order by `a`.`BLDCD` */;",
+			output: "create view pga0010 as select distinct a.facdiv as FACDIV, a.bldcd as BLDCD, a.prdcd as PRDCD, a.prdnam as PRDNAM, a.prdlng as PRDLNG, a.prdwid as PRDWID, a.prdgag as PRDGAG, a.area as AREA, a.glztyp as GLZTYP, a.tectyp as TECTYP, a.prdcate as PRDCATE, a.prccd as PRCCD, a.prcdsc as PRCDSC, a.glsstr as GLSSTR, a.remark as REMARK, a.useyn as USEYN, a.ismes as ISMES from (select N as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcdfather as BLDCD, substring_index(skim.bga0010.prdcd, -, 1) as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = Y) and (skim.bga0010.useyn = Y) and (not (substring_index(skim.bga0010.prdcd, -, 1) in (select skim.bga0010.prdcd from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y)))))) union all select skim.bga0010.ismes as ISMES, skim.bga0010.useyn as USEYN, skim.bga0010.facdiv as FACDIV, skim.bga0010.bldcd as BLDCD, skim.bga0010.prdcd as PRDCD, skim.bga0010.prdnam as PRDNAM, skim.bga0010.prdlng as PRDLNG, skim.bga0010.prdwid as PRDWID, skim.bga0010.prdgag as PRDGAG, skim.bga0010.area as AREA, skim.bga0010.glztyp as GLZTYP, skim.bga0010.tectyp as TECTYP, skim.bga0010.prdcate as PRDCATE, skim.bga0010.matcst as MATCST, skim.bga0010.prccd as PRCCD, skim.bga0010.prcdsc as PRCDSC, skim.bga0010.glsstr as GLSSTR, skim.bga0010.remark as REMARK from skim.bga0010 where ((skim.bga0010.ismes = N) and (skim.bga0010.useyn = Y))) as a order by a.bldcd",
+		},
+		{
+			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `sale_employee` AS select `ct`.`ENTID` AS `ORGANIZATION_ID`,`cu`.`SYSUSERID` AS `SALE_EMPLOYEE_ID`,`cu`.`SYSUSERID` AS `EMPLOYEE_ID`,`cu`.`ACTIVED` AS `ISUSEABLE`,`cu`.`CREATOR` AS `CREATED_BY`,`cu`.`CREATETIME` AS `CREATION_DATE`,`cu`.`UPDATOR` AS `LAST_UPDATED_BY`,`cu`.`UPDATETIME` AS `LAST_UPDATE_DATE`,'' AS `ATTRIBUTE11`,'' AS `ATTRIBUTE21`,'' AS `ATTRIBUTE31`,0 AS `ATTRIBUTE41`,0 AS `ATTRIBUTE51`,0 AS `AREA_ID` from (`kaf_cpcuser` `cu` join `kaf_cpcent` `ct`) where (`cu`.`ISSALEEMPLOYEE` = 2) */;",
+			output: "create view sale_employee as select ct.entid as ORGANIZATION_ID, cu.sysuserid as SALE_EMPLOYEE_ID, cu.sysuserid as EMPLOYEE_ID, cu.actived as ISUSEABLE, cu.creator as CREATED_BY, cu.createtime as CREATION_DATE, cu.updator as LAST_UPDATED_BY, cu.updatetime as LAST_UPDATE_DATE,  as ATTRIBUTE11,  as ATTRIBUTE21,  as ATTRIBUTE31, 0 as ATTRIBUTE41, 0 as ATTRIBUTE51, 0 as AREA_ID from kaf_cpcuser as cu inner join kaf_cpcent as ct where (cu.issaleemployee = 2)",
 		},
 	}
 )
