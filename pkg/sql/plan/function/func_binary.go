@@ -1807,7 +1807,7 @@ func Encode(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			return buf, nil
 			//TODO: Implement ESCAPE later.
 		default:
-			panic(moerr.NewInternalErrorNoCtx("unhandled format: %s", format))
+			return nil, moerr.NewInternalErrorNoCtx("unhandled format: %s", format)
 		}
 	})
 }
@@ -1835,7 +1835,7 @@ func Decode(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			return buf, nil
 			//TODO: Implement ESCAPE later.
 		default:
-			panic(moerr.NewInternalErrorNoCtx("unhandled format: %s", format))
+			return nil, moerr.NewInternalErrorNoCtx("unhandled format: %s", format)
 		}
 	})
 }
