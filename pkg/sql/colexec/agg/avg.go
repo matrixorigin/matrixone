@@ -159,7 +159,7 @@ func (a *Decimal64Avg) Fill(i int64, value types.Decimal64, ov types.Decimal128,
 		a.Cnts[i] += z
 		if z == 1 {
 			var err error
-			ov, err = ov.Decimal128AddDecimal64SameSign(value)
+			ov, err = ov.Add64(value)
 			return ov, false, err
 		} else {
 			x := types.Decimal128{B0_63: uint64(z), B64_127: 0}
@@ -206,7 +206,7 @@ func (a *Decimal64Avg) BatchFill(rs, vs any, start, count int64, vps []uint64, n
 			continue
 		}
 
-		rrs[vps[i]-1], err = rrs[vps[i]-1].Decimal128AddDecimal64SameSign(vvs[i+start])
+		rrs[vps[i]-1], err = rrs[vps[i]-1].Add64(vvs[i+start])
 
 		if err != nil {
 			return err
