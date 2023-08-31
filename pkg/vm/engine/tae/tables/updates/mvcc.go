@@ -102,11 +102,7 @@ func (n *MVCCHandle) EstimateMemSizeLocked() int {
 // *************** All deletes related APIs *****************
 // ==========================================================
 
-func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
-	if n.persistedTS.IsEmpty() {
-		// persitedTs is empty after restarting, fetch it from chain
-		return n.meta.GetDeltaPersistedTS()
-	}
+func (n *MVCCHandle) GetDeletesPersistedTSInMVCCChain() types.TS {
 	return n.persistedTS
 }
 
