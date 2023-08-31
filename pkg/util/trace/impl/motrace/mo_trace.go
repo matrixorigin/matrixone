@@ -75,7 +75,10 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 
 	// per statement profiler
 	ctx, end := fileservice.StatementProfileNewSpan(ctx)
-	span.onEnd = append(span.onEnd, end)
+	if end != nil {
+		// Tips: check the BenchmarkMOSpan_if_vs_for result
+		span.onEnd = append(span.onEnd, end)
+	}
 
 	span.tracer = t
 	span.ctx = ctx
@@ -186,7 +189,9 @@ type MOSpan struct {
 }
 
 var spanPool = &sync.Pool{New: func() any {
-	return &MOSpan{}
+	return &MOSpan{
+		onEnd: make([]func(), 0, 2), // speedup first append op
+	}
 }}
 
 func newMOSpan() *MOSpan {
@@ -217,6 +222,7 @@ func (s *MOSpan) Free() {
 	s.StartTime = table.ZeroTime
 	s.EndTime = table.ZeroTime
 	s.doneProfile = false
+	s.onEnd = s.onEnd[:0]
 	spanPool.Put(s)
 }
 
@@ -264,11 +270,11 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 // 1. If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the Deadline.
 // 2. If NOT set Deadline, then check condition: MOSpan.Duration >= MOSpan.GetLongTimeThreshold().
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
+	var err error
+	s.EndTime = time.Now()
 	for _, fn := range s.onEnd {
 		fn()
 	}
-	var err error
-	s.EndTime = time.Now()
 	deadline, hasDeadline := s.ctx.Deadline()
 	s.Duration = s.EndTime.Sub(s.StartTime)
 	// check need record
