@@ -83,6 +83,26 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 			parts: []string{"a"},
 			proc:  proc,
 		},
+		{
+			vecs: []*vector.Vector{
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+			},
+			attrs: []string{"a", "b", "c"},
+			parts: []string{"a", "b", "c"},
+			proc:  proc,
+		},
+		{
+			vecs: []*vector.Vector{
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+			},
+			attrs: []string{"a", "b", "c"},
+			parts: []string{"a"},
+			proc:  proc,
+		},
 	}
 	for _, test := range tests {
 		if len(test.parts) >= 2 {
@@ -119,6 +139,26 @@ func TestCompactUniqueKeyBatch(t *testing.T) {
 				testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
 				testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
 				testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
+			},
+			attrs: []string{"a", "b", "c"},
+			parts: []string{"b"},
+			proc:  proc,
+		},
+		{
+			vecs: []*vector.Vector{
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+			},
+			attrs: []string{"a", "b", "c"},
+			parts: []string{"a", "b", "c"},
+			proc:  proc,
+		},
+		{
+			vecs: []*vector.Vector{
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
+				testutil.NewVector(3, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}),
 			},
 			attrs: []string{"a", "b", "c"},
 			parts: []string{"b"},
