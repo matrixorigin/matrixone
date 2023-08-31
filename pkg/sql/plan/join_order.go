@@ -206,10 +206,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				node.Children[i] = builder.determineJoinOrder(child)
 			}
 		}
-		if node.NodeType == plan.Node_JOIN {
-			//swap join order for left & right join, inner join is not here
-			builder.applySwapRuleByStats(node.NodeId, false)
-		}
 		return nodeID
 	}
 
