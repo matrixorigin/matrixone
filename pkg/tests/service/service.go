@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
@@ -38,6 +37,7 @@ import (
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,15 +66,15 @@ type Cluster interface {
 
 // ClusterOperation supports kinds of cluster operations.
 type ClusterOperation interface {
-	// CloseDNService closes dn service by uuid.
-	CloseDNService(uuid string) error
-	// StartDNService starts dn service by uuid.
-	StartDNService(uuid string) error
+	// CloseTNService closes tn service by uuid.
+	CloseTNService(uuid string) error
+	// StartTNService starts tn service by uuid.
+	StartTNService(uuid string) error
 
-	// CloseDNServiceIndexed closes dn service by its index.
-	CloseDNServiceIndexed(index int) error
-	// StartDNServiceIndexed starts dn service by its index.
-	StartDNServiceIndexed(index int) error
+	// CloseTNServiceIndexed closes tn service by its index.
+	CloseTNServiceIndexed(index int) error
+	// StartTNServiceIndexed starts tn service by its index.
+	StartTNServiceIndexed(index int) error
 
 	// CloseLogService closes log service by uuid.
 	CloseLogService(uuid string) error
@@ -97,7 +97,7 @@ type ClusterOperation interface {
 	StartCNServiceIndexed(index int) error
 
 	// NewNetworkPartition constructs network partition from service index.
-	NewNetworkPartition(dnIndexes, logIndexes, cnIndexes []uint32) NetworkPartition
+	NewNetworkPartition(tnIndexes, logIndexes, cnIndexes []uint32) NetworkPartition
 	// RemainingNetworkPartition returns partition for the remaining services.
 	RemainingNetworkPartition(partitions ...NetworkPartition) NetworkPartition
 	// StartNetworkPartition enables network partition feature.
@@ -108,8 +108,8 @@ type ClusterOperation interface {
 
 // ClusterAwareness provides cluster awareness information.
 type ClusterAwareness interface {
-	// ListDNServices lists uuid of all dn services.
-	ListDNServices() []string
+	// ListTNServices lists uuid of all tn services.
+	ListTNServices() []string
 	// ListLogServices lists uuid of all log services.
 	ListLogServices() []string
 	// ListCnServices lists uuid of all cn services.
@@ -117,12 +117,12 @@ type ClusterAwareness interface {
 	// ListHAKeeperServices lists all hakeeper log services.
 	ListHAKeeperServices() []LogService
 
-	// GetDNService fetches dn service instance by uuid.
-	GetDNService(uuid string) (DNService, error)
+	// GetTNService fetches tn service instance by uuid.
+	GetTNService(uuid string) (TNService, error)
 	// GetLogService fetches log service instance by index.
 	GetLogService(uuid string) (LogService, error)
-	// GetDNServiceIndexed fetches dn service instance by uuid.
-	GetDNServiceIndexed(index int) (DNService, error)
+	// GetTNServiceIndexed fetches tn service instance by uuid.
+	GetTNServiceIndexed(index int) (TNService, error)
 	// GetLogServiceIndexed fetches log service instance by index.
 	GetLogServiceIndexed(index int) (LogService, error)
 	// GetCNService fetches cn service instance by index.
@@ -136,15 +136,15 @@ type ClusterAwareness interface {
 
 // ClusterState provides cluster running state.
 type ClusterState interface {
-	// ListDNShards lists all dn shards within the cluster.
-	ListDNShards(ctx context.Context) ([]metadata.DNShardRecord, error)
+	// ListTNShards lists all tn shards within the cluster.
+	ListTNShards(ctx context.Context) ([]metadata.TNShardRecord, error)
 	// ListLogShards lists all log shards within the cluster.
 	ListLogShards(ctx context.Context) ([]metadata.LogShardRecord, error)
 
-	// GetDNStoreInfo gets dn store information by uuid.
-	GetDNStoreInfo(ctx context.Context, uuid string) (logpb.DNStoreInfo, error)
-	// GetDNStoreInfoIndexed gets dn store information by index.
-	GetDNStoreInfoIndexed(ctx context.Context, index int) (logpb.DNStoreInfo, error)
+	// GetTNStoreInfo gets tn store information by uuid.
+	GetTNStoreInfo(ctx context.Context, uuid string) (logpb.TNStoreInfo, error)
+	// GetTNStoreInfoIndexed gets tn store information by index.
+	GetTNStoreInfoIndexed(ctx context.Context, index int) (logpb.TNStoreInfo, error)
 
 	// GetLogStoreInfo gets log store information by uuid.
 	GetLogStoreInfo(ctx context.Context, uuid string) (logpb.LogStoreInfo, error)
@@ -161,10 +161,10 @@ type ClusterState interface {
 	// GetHAKeeperConfig returns hakeeper configuration.
 	GetHAKeeperConfig() hakeeper.Config
 
-	// DNStoreExpired checks dn store expired or not by uuid.
-	DNStoreExpired(uuid string) (bool, error)
-	// DNStoreExpiredIndexed checks dn store expired or not by index.
-	DNStoreExpiredIndexed(index int) (bool, error)
+	// TNStoreExpired checks tn store expired or not by uuid.
+	TNStoreExpired(uuid string) (bool, error)
+	// TNStoreExpiredIndexed checks tn store expired or not by index.
+	TNStoreExpiredIndexed(index int) (bool, error)
 	// LogStoreExpired checks log store expired or not by uuid.
 	LogStoreExpired(uuid string) (bool, error)
 	// LogStoreExpiredIndexed checks log store expired or not by index.
@@ -185,27 +185,27 @@ type ClusterWaitState interface {
 	// WaitHAKeeperState waits the specific hakeeper state.
 	WaitHAKeeperState(ctx context.Context, expected logpb.HAKeeperState)
 
-	// WaitDNShardsReported waits the expected count of dn shards reported.
-	WaitDNShardsReported(ctx context.Context)
+	// WaitTNShardsReported waits the expected count of tn shards reported.
+	WaitTNShardsReported(ctx context.Context)
 	// WaitLogShardsReported waits the expected count of log shards reported.
 	WaitLogShardsReported(ctx context.Context)
-	// WaitDNReplicaReported waits dn replica reported.
-	WaitDNReplicaReported(ctx context.Context, shardID uint64)
+	// WaitTNReplicaReported waits tn replica reported.
+	WaitTNReplicaReported(ctx context.Context, shardID uint64)
 	// WaitLogReplicaReported waits log replicas reported.
 	WaitLogReplicaReported(ctx context.Context, shardID uint64)
 
-	// WaitDNStoreTimeout waits dn store timeout by uuid.
-	WaitDNStoreTimeout(ctx context.Context, uuid string)
-	// WaitDNStoreTimeoutIndexed waits dn store timeout by index.
-	WaitDNStoreTimeoutIndexed(ctx context.Context, index int)
-	// WaitDNStoreReported waits dn store reported by uuid.
-	WaitDNStoreReported(ctx context.Context, uuid string)
-	// WaitDNStoreReportedIndexed waits dn store reported by index.
-	WaitDNStoreReportedIndexed(ctx context.Context, index int)
-	// WaitDNStoreTaskServiceCreated waits dn store task service started by uuid.
-	WaitDNStoreTaskServiceCreated(ctx context.Context, uuid string)
-	// WaitDNStoreTaskServiceCreatedIndexed waits dn store task service started by index.
-	WaitDNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+	// WaitTNStoreTimeout waits tn store timeout by uuid.
+	WaitTNStoreTimeout(ctx context.Context, uuid string)
+	// WaitTNStoreTimeoutIndexed waits tn store timeout by index.
+	WaitTNStoreTimeoutIndexed(ctx context.Context, index int)
+	// WaitTNStoreReported waits tn store reported by uuid.
+	WaitTNStoreReported(ctx context.Context, uuid string)
+	// WaitTNStoreReportedIndexed waits tn store reported by index.
+	WaitTNStoreReportedIndexed(ctx context.Context, index int)
+	// WaitTNStoreTaskServiceCreated waits tn store task service started by uuid.
+	WaitTNStoreTaskServiceCreated(ctx context.Context, uuid string)
+	// WaitTNStoreTaskServiceCreatedIndexed waits tn store task service started by index.
+	WaitTNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
 	// WaitCNStoreReported waits cn store reported by uuid.
 	WaitCNStoreReported(ctx context.Context, uuid string)
 	// WaitCNStoreReportedIndexed waits cn store reported by index.
@@ -233,7 +233,7 @@ type ClusterWaitState interface {
 // The following are implements for interface `Cluster`.
 // ----------------------------------------------------
 
-// testCluster simulates a cluster with dn and log service.
+// testCluster simulates a cluster with tn and log service.
 type testCluster struct {
 	t       *testing.T
 	testID  string
@@ -242,11 +242,11 @@ type testCluster struct {
 	stopper *stopper.Stopper
 	clock   clock.Clock
 
-	dn struct {
+	tn struct {
 		sync.Mutex
-		cfgs []*dnservice.Config
-		opts []dnOptions
-		svcs []DNService
+		cfgs []*tnservice.Config
+		opts []tnOptions
+		svcs []TNService
 	}
 
 	log struct {
@@ -307,8 +307,8 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	c.network.addresses = c.buildServiceAddresses()
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
-	// build dn service configurations
-	c.dn.cfgs, c.dn.opts = c.buildDNConfigs(c.network.addresses)
+	// build tn service configurations
+	c.tn.cfgs, c.tn.opts = c.buildTNConfigs(c.network.addresses)
 	// build cn service configurations
 	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
 	// build FileService instances
@@ -334,8 +334,8 @@ func (c *testCluster) Start() error {
 		return err
 	}
 
-	// start dn services
-	if err := c.startDNServices(ctx); err != nil {
+	// start tn services
+	if err := c.startTNServices(ctx); err != nil {
 		return err
 	}
 
@@ -367,8 +367,8 @@ func (c *testCluster) Close() error {
 		return err
 	}
 
-	// close all dn services
-	if err := c.closeDNServices(); err != nil {
+	// close all tn services
+	if err := c.closeTNServices(); err != nil {
 		return err
 	}
 
@@ -391,14 +391,14 @@ func (c *testCluster) Close() error {
 // ----------------------------------------------------------
 // The following are implements for interface `ClusterState`.
 // ----------------------------------------------------------
-func (c *testCluster) ListDNShards(
+func (c *testCluster) ListTNShards(
 	ctx context.Context,
-) ([]metadata.DNShardRecord, error) {
+) ([]metadata.TNShardRecord, error) {
 	state, err := c.GetClusterState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return state.ClusterInfo.DNShards, nil
+	return state.ClusterInfo.TNShards, nil
 }
 
 func (c *testCluster) ListLogShards(
@@ -411,28 +411,28 @@ func (c *testCluster) ListLogShards(
 	return state.ClusterInfo.LogShards, nil
 }
 
-func (c *testCluster) GetDNStoreInfo(
+func (c *testCluster) GetTNStoreInfo(
 	ctx context.Context, uuid string,
-) (logpb.DNStoreInfo, error) {
+) (logpb.TNStoreInfo, error) {
 	state, err := c.GetClusterState(ctx)
 	if err != nil {
-		return logpb.DNStoreInfo{}, err
+		return logpb.TNStoreInfo{}, err
 	}
-	stores := state.DNState.Stores
+	stores := state.TNState.Stores
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.DNStoreInfo{}, moerr.NewNoService(ctx, uuid)
+	return logpb.TNStoreInfo{}, moerr.NewNoService(ctx, uuid)
 }
 
-func (c *testCluster) GetDNStoreInfoIndexed(
+func (c *testCluster) GetTNStoreInfoIndexed(
 	ctx context.Context, index int,
-) (logpb.DNStoreInfo, error) {
-	ds, err := c.GetDNServiceIndexed(index)
+) (logpb.TNStoreInfo, error) {
+	ds, err := c.GetTNServiceIndexed(index)
 	if err != nil {
-		return logpb.DNStoreInfo{}, err
+		return logpb.TNStoreInfo{}, err
 	}
-	return c.GetDNStoreInfo(ctx, ds.ID())
+	return c.GetTNStoreInfo(ctx, ds.ID())
 }
 
 func (c *testCluster) GetLogStoreInfo(
@@ -489,22 +489,22 @@ func (c *testCluster) GetHAKeeperConfig() hakeeper.Config {
 	return c.opt.BuildHAKeeperConfig()
 }
 
-func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
+func (c *testCluster) TNStoreExpired(uuid string) (bool, error) {
 	state := c.getClusterState()
 	require.NotNil(c.t, state)
 
-	dnStore, ok := state.DNState.Stores[uuid]
+	tnStore, ok := state.TNState.Stores[uuid]
 	if !ok {
 		return false, moerr.NewShardNotReportedNoCtx(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
-	expired := hkcfg.DNStoreExpired(dnStore.Tick, state.Tick)
+	expired := hkcfg.TNStoreExpired(tnStore.Tick, state.Tick)
 
 	c.logger.Info(
-		"check dn store expired or not",
+		"check tn store expired or not",
 		zap.Any("hakeeper config", hkcfg),
-		zap.Uint64("dn store tick", dnStore.Tick),
+		zap.Uint64("dn store tick", tnStore.Tick),
 		zap.Uint64("current tick", state.Tick),
 		zap.Bool("expired", expired),
 	)
@@ -512,12 +512,12 @@ func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
 	return expired, nil
 }
 
-func (c *testCluster) DNStoreExpiredIndexed(index int) (bool, error) {
-	ds, err := c.GetDNServiceIndexed(index)
+func (c *testCluster) TNStoreExpiredIndexed(index int) (bool, error) {
+	ds, err := c.GetTNServiceIndexed(index)
 	if err != nil {
 		return false, err
 	}
-	return c.DNStoreExpired(ds.ID())
+	return c.TNStoreExpired(ds.ID())
 }
 
 func (c *testCluster) LogStoreExpired(uuid string) (bool, error) {
@@ -588,7 +588,7 @@ func (c *testCluster) IsClusterHealthy() bool {
 	_, healthy := syshealth.Check(
 		hkcfg,
 		state.GetClusterInfo(),
-		state.GetDNState(),
+		state.GetTNState(),
 		state.GetLogState(),
 		state.GetTick(),
 	)
@@ -643,13 +643,13 @@ func (c *testCluster) WaitHAKeeperState(
 	}
 }
 
-func (c *testCluster) WaitDNShardsReported(ctx context.Context) {
+func (c *testCluster) WaitTNShardsReported(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting for all dn shards reported",
+				"terminated when waiting for all tn shards reported",
 				"error: %s", ctx.Err(),
 			)
 		default:
@@ -660,9 +660,9 @@ func (c *testCluster) WaitDNShardsReported(ctx context.Context) {
 				continue
 			}
 
-			expected := ParseExpectedDNShardCount(state.ClusterInfo)
-			reported := ParseReportedDNShardCount(
-				state.DNState, c.GetHAKeeperConfig(), state.Tick,
+			expected := ParseExpectedTNShardCount(state.ClusterInfo)
+			reported := ParseReportedTNShardCount(
+				state.TNState, c.GetHAKeeperConfig(), state.Tick,
 			)
 
 			// FIXME: what about reported larger than expected
@@ -702,13 +702,13 @@ func (c *testCluster) WaitLogShardsReported(ctx context.Context) {
 	}
 }
 
-func (c *testCluster) WaitDNReplicaReported(ctx context.Context, shardID uint64) {
+func (c *testCluster) WaitTNReplicaReported(ctx context.Context, shardID uint64) {
 	for {
 		select {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting replica of dn shard reported",
+				"terminated when waiting replica of tn shard reported",
 				"shard %d, error: %s", shardID, ctx.Err(),
 			)
 		default:
@@ -719,10 +719,10 @@ func (c *testCluster) WaitDNReplicaReported(ctx context.Context, shardID uint64)
 				continue
 			}
 
-			reported := ParseDNShardReportedSize(
-				shardID, state.DNState, c.GetHAKeeperConfig(), state.Tick,
+			reported := ParseTNShardReportedSize(
+				shardID, state.TNState, c.GetHAKeeperConfig(), state.Tick,
 			)
-			if reported >= DNShardExpectedSize {
+			if reported >= TNShardExpectedSize {
 				return
 			}
 		}
@@ -757,21 +757,21 @@ func (c *testCluster) WaitLogReplicaReported(ctx context.Context, shardID uint64
 	}
 }
 
-func (c *testCluster) WaitDNStoreTimeout(ctx context.Context, uuid string) {
+func (c *testCluster) WaitTNStoreTimeout(ctx context.Context, uuid string) {
 	for {
 		select {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting dn store timeout",
+				"terminated when waiting tn store timeout",
 				"dn store %s, error: %s", uuid, ctx.Err(),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
 
-			expired, err := c.DNStoreExpired(uuid)
+			expired, err := c.TNStoreExpired(uuid)
 			if err != nil {
-				c.logger.Error("fail to check dn store expired or not",
+				c.logger.Error("fail to check tn store expired or not",
 					zap.Error(err),
 					zap.String("uuid", uuid),
 				)
@@ -785,28 +785,28 @@ func (c *testCluster) WaitDNStoreTimeout(ctx context.Context, uuid string) {
 	}
 }
 
-func (c *testCluster) WaitDNStoreTimeoutIndexed(ctx context.Context, index int) {
-	ds, err := c.GetDNServiceIndexed(index)
+func (c *testCluster) WaitTNStoreTimeoutIndexed(ctx context.Context, index int) {
+	ds, err := c.GetTNServiceIndexed(index)
 	require.NoError(c.t, err)
 
-	c.WaitDNStoreTimeout(ctx, ds.ID())
+	c.WaitTNStoreTimeout(ctx, ds.ID())
 }
 
-func (c *testCluster) WaitDNStoreReported(ctx context.Context, uuid string) {
+func (c *testCluster) WaitTNStoreReported(ctx context.Context, uuid string) {
 	for {
 		select {
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting dn store reported",
+				"terminated when waiting tn store reported",
 				"dn store %s, error: %s", uuid, ctx.Err(),
 			)
 		default:
 			time.Sleep(defaultWaitInterval)
 
-			expired, err := c.DNStoreExpired(uuid)
+			expired, err := c.TNStoreExpired(uuid)
 			if err != nil {
-				c.logger.Error("fail to check dn store expired or not",
+				c.logger.Error("fail to check tn store expired or not",
 					zap.Error(err),
 					zap.String("uuid", uuid),
 				)
@@ -820,11 +820,11 @@ func (c *testCluster) WaitDNStoreReported(ctx context.Context, uuid string) {
 	}
 }
 
-func (c *testCluster) WaitDNStoreReportedIndexed(ctx context.Context, index int) {
-	ds, err := c.GetDNServiceIndexed(index)
+func (c *testCluster) WaitTNStoreReportedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetTNServiceIndexed(index)
 	require.NoError(c.t, err)
 
-	c.WaitDNStoreReported(ctx, ds.ID())
+	c.WaitTNStoreReported(ctx, ds.ID())
 }
 
 func (c *testCluster) WaitCNStoreReported(ctx context.Context, uuid string) {
@@ -890,8 +890,8 @@ func (c *testCluster) WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, 
 	c.WaitCNStoreTaskServiceCreated(ctx, ds.ID())
 }
 
-func (c *testCluster) WaitDNStoreTaskServiceCreated(ctx context.Context, uuid string) {
-	ds, err := c.GetDNService(uuid)
+func (c *testCluster) WaitTNStoreTaskServiceCreated(ctx context.Context, uuid string) {
+	ds, err := c.GetTNService(uuid)
 	require.NoError(c.t, err)
 
 	for {
@@ -899,7 +899,7 @@ func (c *testCluster) WaitDNStoreTaskServiceCreated(ctx context.Context, uuid st
 		case <-ctx.Done():
 			assert.FailNow(
 				c.t,
-				"terminated when waiting task service created on dn store",
+				"terminated when waiting task service created on tn store",
 				"dn store %s, error: %s", uuid, ctx.Err(),
 			)
 		default:
@@ -912,10 +912,10 @@ func (c *testCluster) WaitDNStoreTaskServiceCreated(ctx context.Context, uuid st
 	}
 }
 
-func (c *testCluster) WaitDNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
-	ds, err := c.GetDNServiceIndexed(index)
+func (c *testCluster) WaitTNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
+	ds, err := c.GetTNServiceIndexed(index)
 	require.NoError(c.t, err)
-	c.WaitDNStoreTaskServiceCreated(ctx, ds.ID())
+	c.WaitTNStoreTaskServiceCreated(ctx, ds.ID())
 }
 
 func (c *testCluster) WaitLogStoreTaskServiceCreated(ctx context.Context, uuid string) {
@@ -1019,9 +1019,9 @@ func (c *testCluster) WaitLogStoreReportedIndexed(ctx context.Context, index int
 // --------------------------------------------------------------
 // The following are implements for interface `ClusterAwareness`.
 // --------------------------------------------------------------
-func (c *testCluster) ListDNServices() []string {
-	ids := make([]string, 0, len(c.dn.svcs))
-	for _, cfg := range c.dn.cfgs {
+func (c *testCluster) ListTNServices() []string {
+	ids := make([]string, 0, len(c.tn.svcs))
+	for _, cfg := range c.tn.cfgs {
 		ids = append(ids, cfg.UUID)
 	}
 	return ids
@@ -1047,13 +1047,13 @@ func (c *testCluster) ListHAKeeperServices() []LogService {
 	return c.selectHAkeeperServices()
 }
 
-func (c *testCluster) GetDNService(uuid string) (DNService, error) {
-	c.dn.Lock()
-	defer c.dn.Unlock()
+func (c *testCluster) GetTNService(uuid string) (TNService, error) {
+	c.tn.Lock()
+	defer c.tn.Unlock()
 
-	for i, cfg := range c.dn.cfgs {
+	for i, cfg := range c.tn.cfgs {
 		if cfg.UUID == uuid {
-			return c.dn.svcs[i], nil
+			return c.tn.svcs[i], nil
 		}
 	}
 	return nil, moerr.NewNoServiceNoCtx(uuid)
@@ -1083,14 +1083,14 @@ func (c *testCluster) GetCNService(uuid string) (CNService, error) {
 	return nil, moerr.NewNoServiceNoCtx(uuid)
 }
 
-func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
-	c.dn.Lock()
-	defer c.dn.Unlock()
+func (c *testCluster) GetTNServiceIndexed(index int) (TNService, error) {
+	c.tn.Lock()
+	defer c.tn.Unlock()
 
-	if index >= len(c.dn.svcs) || index < 0 {
+	if index >= len(c.tn.svcs) || index < 0 {
 		return nil, moerr.NewInvalidServiceIndexNoCtx(index)
 	}
-	return c.dn.svcs[index], nil
+	return c.tn.svcs[index], nil
 }
 
 func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
@@ -1125,32 +1125,32 @@ func (c *testCluster) GetClusterState(
 // --------------------------------------------------------------
 // The following are implements for interface `ClusterOperation`.
 // --------------------------------------------------------------
-func (c *testCluster) CloseDNService(uuid string) error {
-	ds, err := c.GetDNService(uuid)
+func (c *testCluster) CloseTNService(uuid string) error {
+	ds, err := c.GetTNService(uuid)
 	if err != nil {
 		return err
 	}
 	return ds.Close()
 }
 
-func (c *testCluster) StartDNService(uuid string) error {
-	ds, err := c.GetDNService(uuid)
+func (c *testCluster) StartTNService(uuid string) error {
+	ds, err := c.GetTNService(uuid)
 	if err != nil {
 		return err
 	}
 	return ds.Start()
 }
 
-func (c *testCluster) CloseDNServiceIndexed(index int) error {
-	ds, err := c.GetDNServiceIndexed(index)
+func (c *testCluster) CloseTNServiceIndexed(index int) error {
+	ds, err := c.GetTNServiceIndexed(index)
 	if err != nil {
 		return err
 	}
 	return ds.Close()
 }
 
-func (c *testCluster) StartDNServiceIndexed(index int) error {
-	ds, err := c.GetDNServiceIndexed(index)
+func (c *testCluster) StartTNServiceIndexed(index int) error {
+	ds, err := c.GetTNServiceIndexed(index)
 	if err != nil {
 		return err
 	}
@@ -1222,11 +1222,11 @@ func (c *testCluster) StartCNServiceIndexed(index int) error {
 }
 
 func (c *testCluster) NewNetworkPartition(
-	dnIndexes, logIndexes, cnIndexes []uint32,
+	tnIndexes, logIndexes, cnIndexes []uint32,
 ) NetworkPartition {
 	return newNetworkPartition(
 		c.opt.initial.logServiceNum, logIndexes,
-		c.opt.initial.dnServiceNum, dnIndexes,
+		c.opt.initial.tnServiceNum, tnIndexes,
 		c.opt.initial.cnServiceNum, cnIndexes,
 	)
 }
@@ -1234,7 +1234,7 @@ func (c *testCluster) NewNetworkPartition(
 func (c *testCluster) RemainingNetworkPartition(
 	partitions ...NetworkPartition,
 ) NetworkPartition {
-	return remainingNetworkPartition(c.opt.initial.logServiceNum, c.opt.initial.dnServiceNum, 0, partitions...)
+	return remainingNetworkPartition(c.opt.initial.logServiceNum, c.opt.initial.tnServiceNum, 0, partitions...)
 }
 
 func (c *testCluster) StartNetworkPartition(parts ...NetworkPartition) {
@@ -1259,23 +1259,23 @@ func (c *testCluster) CloseNetworkPartition() {
 // buildServiceAddresses builds addresses for all services.
 func (c *testCluster) buildServiceAddresses() serviceAddresses {
 	return newServiceAddresses(c.t, c.opt.initial.logServiceNum,
-		c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum, c.opt.hostAddr)
+		c.opt.initial.tnServiceNum, c.opt.initial.cnServiceNum, c.opt.hostAddr)
 }
 
-// buildDNConfigs builds configurations for all dn services.
-func (c *testCluster) buildDNConfigs(
+// buildTNConfigs builds configurations for all tn services.
+func (c *testCluster) buildTNConfigs(
 	address serviceAddresses,
-) ([]*dnservice.Config, []dnOptions) {
-	batch := c.opt.initial.dnServiceNum
+) ([]*tnservice.Config, []tnOptions) {
+	batch := c.opt.initial.tnServiceNum
 
-	cfgs := make([]*dnservice.Config, 0, batch)
-	opts := make([]dnOptions, 0, batch)
+	cfgs := make([]*tnservice.Config, 0, batch)
+	opts := make([]tnOptions, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := buildDNConfig(i, c.opt, address)
+		cfg := buildTNConfig(i, c.opt, address)
 		cfgs = append(cfgs, cfg)
 
 		localAddr := cfg.ListenAddress
-		opt := buildDNOptions(cfg, c.backendFilterFactory(localAddr))
+		opt := buildTNOptions(cfg, c.backendFilterFactory(localAddr))
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -1318,27 +1318,27 @@ func (c *testCluster) buildCNConfigs(
 	return cfgs, opts
 }
 
-// initDNServices builds all dn services.
+// initTNServices builds all tn services.
 //
-// Before initializing dn service, log service must be started already.
-func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
-	batch := c.opt.initial.dnServiceNum
+// Before initializing tn service, log service must be started already.
+func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
+	batch := c.opt.initial.tnServiceNum
 
-	c.logger.Info("initialize dn services", zap.Int("batch", batch))
+	c.logger.Info("initialize tn services", zap.Int("batch", batch))
 
-	svcs := make([]DNService, 0, batch)
+	svcs := make([]TNService, 0, batch)
 	for i := 0; i < batch; i++ {
-		cfg := c.dn.cfgs[i]
-		opt := c.dn.opts[i]
+		cfg := c.tn.cfgs[i]
+		opt := c.tn.opts[i]
 		fs, err := fileservice.NewFileServices(
 			defines.LocalFileServiceName,
-			fileservices.getDNLocalFileService(i),
+			fileservices.getTNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
 		if err != nil {
 			panic(err)
 		}
-		ds, err := newDNService(
+		ds, err := newTNService(
 			cfg,
 			c.newRuntime(),
 			fs,
@@ -1417,19 +1417,19 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 	return svcs
 }
 
-// startDNServices initializes and starts all dn services.
-func (c *testCluster) startDNServices(ctx context.Context) error {
-	// initialize all dn services
-	c.dn.svcs = c.initDNServices(c.fileservices)
+// startTNServices initializes and starts all tn services.
+func (c *testCluster) startTNServices(ctx context.Context) error {
+	// initialize all tn services
+	c.tn.svcs = c.initTNServices(c.fileservices)
 
-	// start dn services
-	for _, ds := range c.dn.svcs {
+	// start tn services
+	for _, ds := range c.tn.svcs {
 		if err := ds.Start(); err != nil {
 			return err
 		}
 	}
 
-	c.WaitDNShardsReported(ctx)
+	c.WaitTNShardsReported(ctx)
 	return nil
 }
 
@@ -1474,12 +1474,12 @@ func (c *testCluster) startCNServices(ctx context.Context) error {
 	return nil
 }
 
-// closeDNServices closes all dn services.
-func (c *testCluster) closeDNServices() error {
-	c.logger.Info("start to close dn services")
+// closeTNServices closes all tn services.
+func (c *testCluster) closeTNServices() error {
+	c.logger.Info("start to close tn services")
 
-	for i, ds := range c.dn.svcs {
-		c.logger.Info("close dn service", zap.Int("index", i))
+	for i, ds := range c.tn.svcs {
+		c.logger.Info("close tn service", zap.Int("index", i))
 		if err := ds.Close(); err != nil {
 			return err
 		}

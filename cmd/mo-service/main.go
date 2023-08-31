@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -42,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -116,7 +116,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 	case sig := <-sigchan:
 		detail += "signal: " + sig.String()
 	case <-shutdownC:
-		// waiting, give a chance let all log stores and dn stores to get
+		// waiting, give a chance let all log stores and tn stores to get
 		// shutdown cmd from ha keeper
 		time.Sleep(time.Second * 5)
 		detail += "ha keeper issues shutdown command"
@@ -172,8 +172,8 @@ func startService(
 	switch st {
 	case metadata.ServiceType_CN:
 		return startCNService(cfg, stopper, fs, globalCounterSet)
-	case metadata.ServiceType_DN:
-		return startDNService(cfg, stopper, fs, globalCounterSet, shutdownC)
+	case metadata.ServiceType_TN:
+		return startTNService(cfg, stopper, fs, globalCounterSet, shutdownC)
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, globalCounterSet, shutdownC)
 	case metadata.ServiceType_PROXY:
@@ -225,7 +225,7 @@ func startCNService(
 	})
 }
 
-func startDNService(
+func startTNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
@@ -235,18 +235,18 @@ func startDNService(
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
 	}
-	r, err := getRuntime(metadata.ServiceType_DN, cfg, stopper)
+	r, err := getRuntime(metadata.ServiceType_TN, cfg, stopper)
 	if err != nil {
 		return err
 	}
 	serviceWG.Add(1)
-	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
+	return stopper.RunNamedTask("tn-service", func(ctx context.Context) {
 		defer serviceWG.Done()
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
-		c := cfg.getDNServiceConfig()
+		c := cfg.getTNServiceConfig()
 
-		s, err := dnservice.NewService(
+		s, err := tnservice.NewService(
 			perfCounterSet,
 			&c,
 			r,
@@ -340,8 +340,8 @@ func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUI
 			return "", moerr.ConvertPanicError(ctx, err)
 		}
 		UUID = nodeUUID.String()
-	case metadata.ServiceType_DN:
-		UUID = cfg.DN.UUID
+	case metadata.ServiceType_TN:
+		UUID = cfg.getTNServiceConfig().UUID
 	case metadata.ServiceType_LOG:
 		UUID = cfg.LogService.UUID
 	}
@@ -357,7 +357,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 
 	nodeRole := st.String()
 	if *launchFile != "" {
-		nodeRole = "ALL"
+		nodeRole = mometric.LaunchMode
 	}
 
 	if !SV.DisableTrace || !SV.DisableMetric {

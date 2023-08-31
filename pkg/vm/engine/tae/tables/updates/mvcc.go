@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
+
+var (
+	AppendNodeApproxSize int
+	DeleteNodeApproxSize int
+
+	DeleteChainApproxSize int
+	MVCCHandleApproxSize  int
+)
+
+func init() {
+	txnNodeSize := int(unsafe.Sizeof(txnbase.TxnMVCCNode{}))
+	AppendNodeApproxSize = int(unsafe.Sizeof(AppendNode{})) + txnNodeSize
+	DeleteNodeApproxSize = int(unsafe.Sizeof(DeleteNode{})) + txnNodeSize
+
+	DeleteChainApproxSize = int(unsafe.Sizeof(DeleteChain{}))
+	MVCCHandleApproxSize = int(unsafe.Sizeof(MVCCHandle{}))
+}
 
 type MVCCHandle struct {
 	*sync.RWMutex
@@ -72,11 +90,19 @@ func (n *MVCCHandle) StringLocked() string {
 	return s
 }
 
+func (n *MVCCHandle) EstimateMemSizeLocked() int {
+	size := n.deletes.Load().EstimateMemSizeLocked()
+	if n.appends != nil {
+		size += len(n.appends.MVCC) * AppendNodeApproxSize
+	}
+	return size + MVCCHandleApproxSize
+}
+
 // ==========================================================
 // *************** All deletes related APIs *****************
 // ==========================================================
 
-func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
+func (n *MVCCHandle) GetDeletesPersistedTSInMVCCChain() types.TS {
 	return n.persistedTS
 }
 
@@ -153,7 +179,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS,
 ) (
 	rowIDVec, commitTSVec, abortVec containers.Vector,
-	aborts, deletes *nulls.Bitmap,
+	aborts *nulls.Bitmap, deletes []uint32,
 ) {
 	if n.deletes.Load().IsEmpty() {
 		return
@@ -162,44 +188,58 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		return
 	}
 
-	rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
-	commitTSVec = containers.MakeVector(types.T_TS.ToType())
-	aborts = &nulls.Bitmap{}
-	id := n.meta.ID
+	for {
+		needWaitFound := false
+		if rowIDVec != nil {
+			rowIDVec.Close()
+		}
+		rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
+		if commitTSVec != nil {
+			commitTSVec.Close()
+		}
+		commitTSVec = containers.MakeVector(types.T_TS.ToType())
+		aborts = &nulls.Bitmap{}
+		id := n.meta.ID
 
-	n.deletes.Load().LoopChain(
-		func(node *DeleteNode) bool {
-			needWait, txn := node.NeedWaitCommitting(end.Next())
-			if needWait {
-				n.RUnlock()
-				txn.GetTxnState(true)
-				n.RLock()
-			}
-			if node.nt == NT_Persisted {
-				return true
-			}
-			in, before := node.PreparedIn(start, end)
-			if in {
-				it := node.mask.Iterator()
-				if node.IsAborted() {
+		n.deletes.Load().LoopChain(
+			func(node *DeleteNode) bool {
+				needWait, txn := node.NeedWaitCommitting(end.Next())
+				if needWait {
+					n.RUnlock()
+					txn.GetTxnState(true)
+					n.RLock()
+					needWaitFound = true
+					return false
+				}
+				if node.nt == NT_Persisted {
+					return true
+				}
+				in, before := node.PreparedIn(start, end)
+				if in {
 					it := node.mask.Iterator()
+					if node.IsAborted() {
+						it := node.mask.Iterator()
+						for it.HasNext() {
+							row := it.Next()
+							nulls.Add(aborts, uint64(row))
+						}
+					}
 					for it.HasNext() {
 						row := it.Next()
-						nulls.Add(aborts, uint64(row))
+						if deletes == nil {
+							deletes = make([]uint32, 0)
+						}
+						deletes = append(deletes, row)
+						rowIDVec.Append(*objectio.NewRowid(&id, row), false)
+						commitTSVec.Append(node.GetEnd(), false)
 					}
 				}
-				for it.HasNext() {
-					row := it.Next()
-					if deletes == nil {
-						deletes = nulls.NewWithSize(int(row))
-					}
-					deletes.Add(uint64(row))
-					rowIDVec.Append(*objectio.NewRowid(&id, row), false)
-					commitTSVec.Append(node.GetEnd(), false)
-				}
-			}
-			return !before
-		})
+				return !before
+			})
+		if !needWaitFound {
+			break
+		}
+	}
 	abortVec = containers.NewConstFixed[bool](types.T_bool.ToType(), false, rowIDVec.Length())
 	return
 }
@@ -207,21 +247,30 @@ func (n *MVCCHandle) CollectDeleteLocked(
 // ExistDeleteInRange check if there is any delete in the range [start, end]
 // it loops the delete chain and check if there is any delete node in the range
 func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
-	n.deletes.Load().LoopChain(
-		func(node *DeleteNode) bool {
-			needWait, txn := node.NeedWaitCommitting(end.Next())
-			if needWait {
-				n.RUnlock()
-				txn.GetTxnState(true)
-				n.RLock()
-			}
-			in, before := node.PreparedIn(start, end)
-			if in {
-				exist = true
-				return false
-			}
-			return !before
-		})
+	for {
+		needWaitFound := false
+		n.deletes.Load().LoopChain(
+			func(node *DeleteNode) bool {
+				needWait, txn := node.NeedWaitCommitting(end.Next())
+				if needWait {
+					n.RUnlock()
+					txn.GetTxnState(true)
+					n.RLock()
+					needWaitFound = true
+					return false
+				}
+				in, before := node.PreparedIn(start, end)
+				if in {
+					exist = true
+					return false
+				}
+				return !before
+			})
+		if !needWaitFound {
+			break
+		}
+	}
+
 	return
 }
 

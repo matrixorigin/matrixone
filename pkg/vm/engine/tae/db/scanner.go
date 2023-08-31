@@ -99,7 +99,9 @@ func NewDBScanner(db *DB, errHandler ErrHandler) *dbScanner {
 	scanner.SegmentFn = scanner.onSegment
 	scanner.PostSegmentFn = scanner.onPostSegment
 	scanner.TableFn = scanner.onTable
+	scanner.PostTableFn = scanner.onPostTable
 	scanner.DatabaseFn = scanner.onDatabase
+	scanner.PostDatabaseFn = scanner.onPostDatabase
 	return scanner
 }
 
@@ -121,6 +123,26 @@ func (scanner *dbScanner) onPostSegment(entry *catalog.SegmentEntry) (err error)
 	for _, op := range scanner.ops {
 		err = op.OnPostSegment(entry)
 		if err = scanner.errHandler.OnSegmentErr(entry, err); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func (scanner *dbScanner) onPostTable(entry *catalog.TableEntry) (err error) {
+	for _, op := range scanner.ops {
+		err = op.OnPostTable(entry)
+		if err = scanner.errHandler.OnTableErr(entry, err); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func (scanner *dbScanner) onPostDatabase(entry *catalog.DBEntry) (err error) {
+	for _, op := range scanner.ops {
+		err = op.OnPostDatabase(entry)
+		if err = scanner.errHandler.OnDatabaseErr(entry, err); err != nil {
 			break
 		}
 	}

@@ -45,7 +45,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
 		bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
 		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
-		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.dnLocation), false)
+		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
@@ -57,7 +57,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(entry.GetLocation()), false)
 		bat.GetVectorByName(CheckpointAttr_EntryType).Append(false, false)
 		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
-		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.dnLocation), false)
+		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
 	}
 	return bat
 }
@@ -144,6 +144,52 @@ func (r *runner) GetGlobalCheckpointCount() int {
 	r.storage.RLock()
 	defer r.storage.RUnlock()
 	return r.storage.globals.Len()
+}
+
+func (r *runner) getLastFinishedGlobalCheckpointLocked() *CheckpointEntry {
+	g, ok := r.storage.globals.Max()
+	if !ok {
+		return nil
+	}
+	if g.IsFinished() {
+		return g
+	}
+	it := r.storage.globals.Iter()
+	it.Seek(g)
+	defer it.Release()
+	if !it.Prev() {
+		return nil
+	}
+	return it.Item()
+}
+
+func (r *runner) GetAllCheckpoints() []*CheckpointEntry {
+	ckps := make([]*CheckpointEntry, 0)
+	var ts types.TS
+	r.storage.Lock()
+	g := r.getLastFinishedGlobalCheckpointLocked()
+	tree := r.storage.entries.Copy()
+	r.storage.Unlock()
+	if g != nil {
+		ts = g.GetEnd()
+		ckps = append(ckps, g)
+	}
+	pivot := NewCheckpointEntry(ts.Next(), ts.Next(), ET_Incremental)
+	iter := tree.Iter()
+	defer iter.Release()
+	if ok := iter.Seek(pivot); ok {
+		for {
+			e := iter.Item()
+			if !e.IsFinished() {
+				break
+			}
+			ckps = append(ckps, e)
+			if !iter.Next() {
+				break
+			}
+		}
+	}
+	return ckps
 }
 
 func (r *runner) GCByTS(ctx context.Context, ts types.TS) error {

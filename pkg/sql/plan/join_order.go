@@ -206,10 +206,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				node.Children[i] = builder.determineJoinOrder(child)
 			}
 		}
-		if node.NodeType == plan.Node_JOIN {
-			//swap join order for left & right join, inner join is not here
-			builder.applySwapRuleByStats(node.NodeId, false)
-		}
 		return nodeID
 	}
 
@@ -295,7 +291,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				Children: children,
 				JoinType: plan.Node_INNER,
 			}, nil)
-			builder.applySwapRuleByStats(nodeID, false)
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
 				eligible[i] = eligible[i] || adj
@@ -322,7 +317,6 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				Children: children,
 				JoinType: plan.Node_INNER,
 			}, nil)
-			builder.applySwapRuleByStats(nodeID, false)
 		}
 	}
 
@@ -522,15 +516,21 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		}, nil)
 
 		vertex.node = builder.qry.Nodes[nodeID]
-		builder.applySwapRuleByStats(nodeID, false)
 	}
 }
 
-func containsAllPKs(cols, pks []int32) bool {
+func containsAllPKs(cols []int32, tableDef *plan.TableDef) bool {
+	if tableDef.Pkey == nil {
+		return false
+	}
+	pkNames := tableDef.Pkey.Names
+	pks := make([]int32, len(pkNames))
+	for i := range pkNames {
+		pks[i] = tableDef.Name2ColIndex[pkNames[i]]
+	}
 	if len(pks) == 0 {
 		return false
 	}
-
 	for _, pk := range pks {
 		found := false
 		for _, col := range cols {
@@ -539,12 +539,10 @@ func containsAllPKs(cols, pks []int32) bool {
 				break
 			}
 		}
-
 		if !found {
 			return false
 		}
 	}
-
 	return true
 }
 

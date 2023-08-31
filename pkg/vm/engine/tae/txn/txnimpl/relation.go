@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -148,19 +147,6 @@ func (h *txnRelation) GetMeta() any { return h.table.entry }
 // Schema return schema in txnTable, not the lastest schema in TableEntry
 func (h *txnRelation) Schema() any { return h.table.GetLocalSchema() }
 
-func (h *txnRelation) Rows() int64 {
-	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
-		if h.table.GetLocalSchema().Name == pkgcatalog.MO_DATABASE {
-			return int64(h.table.entry.GetCatalog().CoarseDBCnt())
-		} else if h.table.GetLocalSchema().Name == pkgcatalog.MO_TABLES {
-			return int64(h.table.entry.GetCatalog().CoarseTableCnt())
-		} else if h.table.GetLocalSchema().Name == pkgcatalog.MO_COLUMNS {
-			return int64(h.table.entry.GetCatalog().CoarseColumnCnt())
-		}
-		panic("logic error")
-	}
-	return int64(h.table.entry.GetRows())
-}
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
 func (h *txnRelation) BatchDedup(col containers.Vector) error {

@@ -130,8 +130,7 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) 
 	return tbl, nil
 }
 
-func (tbl *txnTable) PrePreareTransfer(phase string) (err error) {
-	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+func (tbl *txnTable) PrePreareTransfer(phase string, ts types.TS) (err error) {
 	return tbl.TransferDeletes(ts, phase)
 }
 
@@ -254,9 +253,10 @@ func (tbl *txnTable) recurTransferDelete(
 	if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
 		return err
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d",
 			depth,
+			tbl.schema.Name,
 			id.BlockID.String(),
 			row,
 			blockID.String(),
@@ -652,7 +652,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 				if err != nil {
 					return err
 				}
-				vec := containers.ToDNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0])
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -866,6 +866,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (er
 	if err != nil {
 		return
 	}
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
@@ -885,6 +886,7 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	if err != nil {
 		return
 	}
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
@@ -1168,7 +1170,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				if err != nil {
 					return err
 				}
-				vec := containers.ToDNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0])
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(

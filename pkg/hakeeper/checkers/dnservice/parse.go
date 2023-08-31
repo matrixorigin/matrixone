@@ -27,49 +27,49 @@ import (
 )
 
 const (
-	DnStoreCapacity = 32
+	TnStoreCapacity = 32
 )
 
-// ShardMapper used to get log shard ID for dn shard
+// ShardMapper used to get log shard ID for tn shard
 type ShardMapper interface {
-	getLogShardID(dnShardID uint64) (uint64, error)
+	getLogShardID(tnShardID uint64) (uint64, error)
 }
 
-// dnShardToLogShard implements interface `ShardMapper`
-type dnShardToLogShard map[uint64]uint64
+// tnShardToLogShard implements interface `ShardMapper`
+type tnShardToLogShard map[uint64]uint64
 
 // parseClusterInfo parses information from `pb.ClusterInfo`
-func parseClusterInfo(cluster pb.ClusterInfo) dnShardToLogShard {
+func parseClusterInfo(cluster pb.ClusterInfo) tnShardToLogShard {
 	m := make(map[uint64]uint64)
-	for _, r := range cluster.DNShards {
-		// warning with duplicated dn shard ID
+	for _, r := range cluster.TNShards {
+		// warning with duplicated tn shard ID
 		m[r.ShardID] = r.LogShardID
 	}
 	return m
 }
 
 // getLogShardID implements interface `ShardMapper`
-func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
-	if logShardID, ok := d[dnShardID]; ok {
+func (d tnShardToLogShard) getLogShardID(tnShardID uint64) (uint64, error) {
+	if logShardID, ok := d[tnShardID]; ok {
 		return logShardID, nil
 	}
-	return 0, moerr.NewInvalidStateNoCtx("shard %d not recorded", dnShardID)
+	return 0, moerr.NewInvalidStateNoCtx("shard %d not recorded", tnShardID)
 }
 
-// parseDnState parses cluster dn state.
-func parseDnState(cfg hakeeper.Config,
-	dnState pb.DNState, currTick uint64,
+// parseTnState parses cluster tn state.
+func parseTnState(cfg hakeeper.Config,
+	tnState pb.TNState, currTick uint64,
 ) (*util.ClusterStores, *reportedShards) {
 	stores := util.NewClusterStores()
 	shards := newReportedShards()
 
-	for storeID, storeInfo := range dnState.Stores {
+	for storeID, storeInfo := range tnState.Stores {
 		expired := false
-		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
+		if cfg.TNStoreExpired(storeInfo.Tick, currTick) {
 			expired = true
 		}
 
-		store := util.NewStore(storeID, len(storeInfo.Shards), DnStoreCapacity)
+		store := util.NewStore(storeID, len(storeInfo.Shards), TnStoreCapacity)
 		if expired {
 			stores.RegisterExpired(store)
 		} else {
@@ -112,7 +112,7 @@ func checkReportedState(rs *reportedShards, mapper ShardMapper, workingStores []
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for reported dn shards", len(ops)))
+	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for reported tn shards", len(ops)))
 
 	return ops
 }
@@ -123,7 +123,7 @@ func checkInitiatingShards(
 	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
 	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64) []*operator.Operator {
 	// update the registered newly-created shards
-	for _, record := range cluster.DNShards {
+	for _, record := range cluster.TNShards {
 		shardID := record.ShardID
 		_, err := rs.getShard(shardID)
 		if err != nil {
@@ -140,12 +140,12 @@ func checkInitiatingShards(
 
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
-		return cfg.DNStoreExpired(start, currTick)
+		return cfg.TNStoreExpired(start, currTick)
 	})
 
 	var ops []*operator.Operator
 	for _, id := range expired {
-		steps := checkShard(newDnShard(id), mapper, workingStores, idAlloc)
+		steps := checkShard(newTnShard(id), mapper, workingStores, idAlloc)
 		if len(steps) > 0 { // avoid Operator with nil steps
 			ops = append(ops,
 				operator.NewOperator("dnservice", id, operator.NoopEpoch, steps...),
@@ -153,7 +153,7 @@ func checkInitiatingShards(
 		}
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
+	runtime.ProcessLevelRuntime().Logger().Debug(fmt.Sprintf("construct %d operators for initiating tn shards", len(ops)))
 	if bootstrapping && len(ops) != 0 {
 		bootstrapping = false
 	}
@@ -165,7 +165,7 @@ type earliestTick struct {
 	tick uint64
 }
 
-// initialShards records all fresh dn shards.
+// initialShards records all fresh tn shards.
 type initialShards struct {
 	shards map[uint64]earliestTick
 }
@@ -214,24 +214,24 @@ func (w *initialShards) clear() {
 	w.shards = make(map[uint64]earliestTick)
 }
 
-// reportedShards collects all reported dn shards.
+// reportedShards collects all reported tn shards.
 type reportedShards struct {
-	shards   map[uint64]*dnShard
+	shards   map[uint64]*tnShard
 	shardIDs []uint64
 }
 
 func newReportedShards() *reportedShards {
 	return &reportedShards{
-		shards: make(map[uint64]*dnShard),
+		shards: make(map[uint64]*tnShard),
 	}
 }
 
-// registerReplica collects dn shard replicas by their status.
-func (rs *reportedShards) registerReplica(replica *dnReplica, expired bool) {
+// registerReplica collects tn shard replicas by their status.
+func (rs *reportedShards) registerReplica(replica *tnReplica, expired bool) {
 	shardID := replica.shardID
 	if _, ok := rs.shards[shardID]; !ok {
 		rs.shardIDs = append(rs.shardIDs, shardID)
-		rs.shards[shardID] = newDnShard(shardID)
+		rs.shards[shardID] = newTnShard(shardID)
 	}
 	rs.shards[shardID].register(replica, expired)
 }
@@ -242,29 +242,29 @@ func (rs *reportedShards) listShards() []uint64 {
 	return rs.shardIDs
 }
 
-// getShard returns dn shard by shard ID.
-func (rs *reportedShards) getShard(shardID uint64) (*dnShard, error) {
+// getShard returns tn shard by shard ID.
+func (rs *reportedShards) getShard(shardID uint64) (*tnShard, error) {
 	if shard, ok := rs.shards[shardID]; ok {
 		return shard, nil
 	}
 	return nil, moerr.NewShardNotReportedNoCtx("", shardID)
 }
 
-// dnShard records metadata for dn shard.
-type dnShard struct {
+// tnShard records metadata for tn shard.
+type tnShard struct {
 	shardID uint64
-	expired []*dnReplica
-	working []*dnReplica
+	expired []*tnReplica
+	working []*tnReplica
 }
 
-func newDnShard(shardID uint64) *dnShard {
-	return &dnShard{
+func newTnShard(shardID uint64) *tnShard {
+	return &tnShard{
 		shardID: shardID,
 	}
 }
 
-// register collects dn shard replica.
-func (s *dnShard) register(replica *dnReplica, expired bool) {
+// register collects tn shard replica.
+func (s *tnShard) register(replica *tnReplica, expired bool) {
 	if expired {
 		s.expired = append(s.expired, replica)
 	} else {
@@ -274,18 +274,18 @@ func (s *dnShard) register(replica *dnReplica, expired bool) {
 
 // workingReplicas returns all working replicas.
 // NB: the returned order isn't deterministic.
-func (s *dnShard) workingReplicas() []*dnReplica {
+func (s *tnShard) workingReplicas() []*tnReplica {
 	return s.working
 }
 
 // workingReplicas returns all expired replicas.
 // NB: the returned order isn't deterministic.
-func (s *dnShard) expiredReplicas() []*dnReplica {
+func (s *tnShard) expiredReplicas() []*tnReplica {
 	return s.expired
 }
 
-// dnReplica records metadata for dn shard replica
-type dnReplica struct {
+// tnReplica records metadata for tn shard replica
+type tnReplica struct {
 	replicaID uint64
 	shardID   uint64
 	storeID   string
@@ -293,8 +293,8 @@ type dnReplica struct {
 
 func newReplica(
 	replicaID, shardID uint64, storeID string,
-) *dnReplica {
-	return &dnReplica{
+) *tnReplica {
+	return &tnReplica{
 		replicaID: replicaID,
 		shardID:   shardID,
 		storeID:   storeID,

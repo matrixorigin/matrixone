@@ -22,9 +22,9 @@ import (
 )
 
 type container struct {
-	filter *bloom.BloomFilter
-    collisionCnt int
-	isCpk bool
+	filter       *bloom.BloomFilter
+	collisionCnt int
+	isCpk        bool
 	// refer func generateRbat
 	rbat *batch.Batch
 }

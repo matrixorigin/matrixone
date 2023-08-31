@@ -44,7 +44,8 @@ import (
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
-	HandleNotifyTimeout = 120 * time.Second
+	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
+	HandleNotifyTimeout = 300 * time.Second
 )
 
 // cnInformation records service information to help handle messages.
@@ -288,7 +289,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		anal: &anaylze{analInfos: proc.AnalInfos},
 		addr: receiver.cnInformation.cnAddr,
 	}
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
 	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)
 
 	c.fill = func(_ any, b *batch.Batch) error {

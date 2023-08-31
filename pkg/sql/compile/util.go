@@ -67,7 +67,7 @@ var (
 	// WHERE (pk1, pk2) IN ((1, 1), (2, 1))
 	// GROUP BY pk1, pk2
 	// HAVING cnt > 1;
-	// 
+	//
 	doubleCheckForFuzzyFilterWithCK = "select %s, count(*) as cnt from %s.%s where %s having cnt > 1;"
 )
 

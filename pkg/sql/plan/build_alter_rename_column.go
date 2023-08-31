@@ -35,7 +35,7 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	// Check whether original column has existed.
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), tableDef.Name, originalColName)
+		return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
 	}
 
 	if originalColName == newColName {
@@ -76,6 +76,8 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 				break
 			}
 		}
+		// handle cluster by key in modify column
+		handleClusterByKey(ctx.GetContext(), alterPlan, newColName, originalCol.Name)
 	}
 
 	for i, col := range tableDef.Cols {
@@ -108,7 +110,7 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 	// Check whether original column has existed.
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), tableDef.Name, originalColName)
+		return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
 	}
 
 	for i, col := range tableDef.Cols {
@@ -143,7 +145,7 @@ func OrderByColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.A
 		// Check whether original column has existed.
 		originalCol := FindColumn(tableDef.Cols, originalColName)
 		if originalCol == nil || originalCol.Hidden {
-			return moerr.NewBadFieldError(ctx.GetContext(), tableDef.Name, originalColName)
+			return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
 		}
 	}
 	return nil

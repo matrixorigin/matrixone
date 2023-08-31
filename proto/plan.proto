@@ -251,6 +251,8 @@ message ColDef {
 	bool clusterBy		= 12;
 	bool primary        = 13;
 	int32 pkidx 		= 14;
+	bool headers = 15;
+	string header = 16;
 }
 
 message Default {
@@ -610,6 +612,7 @@ message Node {
 		FUNCTION_SCAN = 3;
 		EXTERNAL_SCAN = 4;
 		MATERIAL_SCAN = 5;
+		STREAM_SCAN = 6;
 
 		// Proj, for convenience
 		PROJECT = 10;
@@ -752,6 +755,7 @@ message Node {
 	repeated RuntimeFilterSpec runtime_filter_build_list = 41;
 
 	bytes uuid = 42;
+	bool recursive_sink = 43;
 }
 
 message LockTarget {
@@ -1117,9 +1121,11 @@ message AlterTable {
 	bool is_cluster_table	    = 4;
 	repeated Action actions   = 5;
 	AlgorithmType algorithm_type = 6;
-	string create_table_sql = 7;
-	string insert_data_sql = 8;
-	map<uint64, ColDef> change_tbl_colId_map = 9;
+	string create_tmp_table_sql = 7;
+	string insert_tmp_data_sql = 8;
+	string create_table_sql = 9;
+	string insert_data_sql = 10;
+	map<uint64, ColDef> change_tbl_colId_map = 11;
 }
 
 message DropTable {

@@ -17,6 +17,8 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 	"math"
@@ -1788,6 +1791,55 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, isEqualSuffix)
 }
 
+// Encode convert binary data into a textual representation. Supported formats are: base64 and hex. return type types.T_text
+// eg:- encode("abc", "hex") -> 616263
+// https://www.postgresql.org/docs/9.0/functions-binarystring.html#FUNCTIONS-BINARYSTRING-OTHER
+func Encode(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data, format []byte) ([]byte, error) {
+		switch strings.ToUpper(functionUtil.QuickBytesToStr(format)) {
+		case "HEX":
+			buf := make([]byte, hex.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
+			hex.Encode(buf, data)
+			return buf, nil
+		case "BASE64":
+			buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
+			base64.StdEncoding.Encode(buf, data)
+			return buf, nil
+			//TODO: Implement ESCAPE later.
+		default:
+			return nil, moerr.NewInternalErrorNoCtx("unhandled format: %s", format)
+		}
+	})
+}
+
+// Decode convert binary data from textual representation in string. Options for format are same as in encode. return type types.T_blob.
+// eg:- decode("616263", "hex") -> abc
+// https://www.postgresql.org/docs/9.0/functions-binarystring.html#FUNCTIONS-BINARYSTRING-OTHER
+// NOTE: bytea in postgres is BLOB in mysql.https://stackoverflow.com/q/1942586/1609570
+func Decode(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data, format []byte) ([]byte, error) {
+		switch strings.ToUpper(functionUtil.QuickBytesToStr(format)) {
+		case "HEX":
+			buf := make([]byte, hex.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
+			_, err = hex.Decode(buf, data)
+			if err != nil {
+				return nil, err
+			}
+			return buf, nil
+		case "BASE64":
+			buf := make([]byte, base64.StdEncoding.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
+			_, err = base64.StdEncoding.Decode(buf, data)
+			if err != nil {
+				return nil, err
+			}
+			return buf, nil
+			//TODO: Implement ESCAPE later.
+		default:
+			return nil, moerr.NewInternalErrorNoCtx("unhandled format: %s", format)
+		}
+	})
+}
+
 func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	extractFromDate := func(unit string, d types.Date) (uint32, error) {
 		var r uint32
@@ -2445,4 +2497,21 @@ func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 		return "", true
 	}
 	return strSlice[cnt-1], false
+}
+
+func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+
+		return moarray.InnerProduct[T](_v1, _v2)
+	})
+}
+
+func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float32](ivecs, result, proc, length, func(v1, v2 []byte) (out float32, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.CosineSimilarity[T](_v1, _v2)
+	})
 }

@@ -26,7 +26,7 @@ function run_bvt() {
       i=$(($i+1))
       sleep 1
     done
-    cd /mo-tester && ./run.sh -n -g -p /matrixone/test/distributed/cases/ -s /test/distributed/resources 2>&1
+    cd /mo-tester && ./run.sh -n -g -p /matrixone/test/distributed/cases/ -s /matrixone/test/distributed/resources/ -e optimistic 2>&1
 }
 
 run_bvt

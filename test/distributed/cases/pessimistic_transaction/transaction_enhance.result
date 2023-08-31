@@ -143,12 +143,12 @@ show create table atomic_table_12_2;
 Table    Create Table
 atomic_table_12_2    CREATE TABLE `atomic_table_12_2` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
 insert into atomic_table_13 values (8,"h");
+internal error: Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
 c1    c2
 3    d
 4    e
 5    f
-8    h
 insert into atomic_table_13 values (6,"h");
 internal error: Cannot add or update a child row: a foreign key constraint fails
 commit;
@@ -410,25 +410,26 @@ select * from atomic_table_12_5;
 show create table atomic_table_12_5;
 [unknown result because it is related to issue#11213]
 drop table if exists alter01;
-[unknown result because it is related to issue#11268]
 create table alter01(col1 int primary key,col2 varchar(25));
-[unknown result because it is related to issue#11268]
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11268]
 begin;
-[unknown result because it is related to issue#11268]
 alter table alter01 change col1 col1New float;
-[unknown result because it is related to issue#11268]
 use transaction_enhance;
-[unknown result because it is related to issue#11268]
 insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11268]
 select * from alter01;
-[unknown result because it is related to issue#11268]
+col1new    col2
+3.0    a
+4.0    b
+5.0    c
+8.0    h
 insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11268]
 select * from alter01;
-[unknown result because it is related to issue#11268]
+col1new    col2
+3.0    a
+4.0    b
+5.0    c
+8.0    h
+6.0    h
 drop table if exists atomic_table_12_5;
 [unknown result because it is related to issue#11213]
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -452,24 +453,65 @@ select * from atomic_table_12_5;
 show create table atomic_table_12_5;
 [unknown result because it is related to issue#11213]
 drop table if exists alter01;
-[unknown result because it is related to issue#11268]
 create table alter01(col1 int primary key,col2 varchar(25));
-[unknown result because it is related to issue#11268]
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11268]
 begin;
-[unknown result because it is related to issue#11268]
 alter table alter01 rename column col1 to col1New;
-[unknown result because it is related to issue#11268]
 use transaction_enhance;
-[unknown result because it is related to issue#11268]
 insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11268]
 select * from alter01;
-[unknown result because it is related to issue#11268]
+col1new    col2
+3    a
+4    b
+5    c
+8    h
 insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11268]
 select * from alter01;
-[unknown result because it is related to issue#11268]
+col1new    col2
+3    a
+4    b
+5    c
+8    h
+6    h
+drop table if exists alter01;
+[unknown result because it is related to issue#11213]
+create table alter01(col1 int,col2 varchar(25));
+[unknown result because it is related to issue#11213]
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+alter table alter01 add constraint primary key (col1);
+[unknown result because it is related to issue#11213]
+use transaction_enhance;
+[unknown result because it is related to issue#11213]
+insert into alter01 values (8,"h");
+[unknown result because it is related to issue#11213]
+select * from alter01;
+[unknown result because it is related to issue#11213]
+insert into alter01 values (6,"h");
+[unknown result because it is related to issue#11213]
+select * from alter01;
+[unknown result because it is related to issue#11213]
+drop table if exists alter01;
+[unknown result because it is related to issue#11213]
+create table alter01(col1 int primary key,col2 varchar(25));
+[unknown result because it is related to issue#11213]
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+[unknown result because it is related to issue#11213]
+begin;
+[unknown result because it is related to issue#11213]
+alter table alter01 drop primary key;
+[unknown result because it is related to issue#11213]
+use transaction_enhance;
+[unknown result because it is related to issue#11213]
+insert into alter01 values (8,"h");
+[unknown result because it is related to issue#11213]
+select * from alter01;
+[unknown result because it is related to issue#11213]
+insert into alter01 values (6,"h");
+[unknown result because it is related to issue#11213]
+select * from alter01;
+[unknown result because it is related to issue#11213]
 
 

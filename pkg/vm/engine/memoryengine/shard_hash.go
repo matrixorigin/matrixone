@@ -45,7 +45,7 @@ func (*HashShard) Batch(
 	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
-	nodes []metadata.DNService,
+	nodes []metadata.TNService,
 ) (
 	sharded []*ShardedBatch,
 	err error,
@@ -96,7 +96,7 @@ func (*HashShard) Batch(
 	for _, store := range nodes {
 		for _, info := range store.Shards {
 			shards = append(shards, &Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,
@@ -157,7 +157,7 @@ func (h *HashShard) Vector(
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
-	nodes []metadata.DNService,
+	nodes []metadata.TNService,
 ) (
 	sharded []*ShardedVector,
 	err error,
@@ -195,7 +195,7 @@ func (h *HashShard) Vector(
 	for _, store := range nodes {
 		for _, info := range store.Shards {
 			shards = append(shards, &Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: info.ShardID,
 				},
 				ReplicaID: info.ReplicaID,
@@ -460,7 +460,8 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,

@@ -175,23 +175,23 @@ message UnlockResponse {
 
 }
 
-// GetBindRequest get bind request from allocator request. CN -> DN
+// GetBindRequest get bind request from allocator request. CN -> TN
 message GetBindRequest {
   string ServiceID = 1;
   uint64 Table     = 2;
 }
 
-// GetBindResponse get bind request from allocator response. DN -> CN
+// GetBindResponse get bind request from allocator response. TN -> CN
 message GetBindResponse {
   LockTable LockTable = 2 [(gogoproto.nullable) = false];
 }
 
-// KeepLockTableBindRequest keep lock table bind request. CN -> DN
+// KeepLockTableBindRequest keep lock table bind request. CN -> TN
 message KeepLockTableBindRequest {
   string ServiceID = 1;
 }
 
-// KeepLockTableBindResponse keep lock table bind response. DN -> CN
+// KeepLockTableBindResponse keep lock table bind response. TN -> CN
 message KeepLockTableBindResponse {
   bool OK = 1;
 }
@@ -201,7 +201,7 @@ message KeepRemoteLockRequest {
   string ServiceID       = 1;
 }
 
-// KeepRemoteLockResponse keep lock on remote lockservice response. DN -> CN
+// KeepRemoteLockResponse keep lock on remote lockservice response. TN -> CN
 message KeepRemoteLockResponse {
   bool OK = 1;
 }

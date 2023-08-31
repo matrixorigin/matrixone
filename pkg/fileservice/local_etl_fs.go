@@ -338,7 +338,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 }
 
-func (l *LocalETLFS) Preload(ctx context.Context, filePath string) error {
+func (l *LocalETLFS) ReadCache(ctx context.Context, vector *IOVector) error {
 	return nil
 }
 

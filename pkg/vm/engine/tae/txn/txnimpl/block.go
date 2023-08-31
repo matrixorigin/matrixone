@@ -241,7 +241,7 @@ func (blk *txnBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (
 }
 
 func (blk *txnBlock) GetDeltaPersistedTS() types.TS {
-	return blk.entry.GetDeltaPersistedTSByTxn(blk.Txn)
+	return blk.entry.GetDeltaPersistedTS()
 }
 
 func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*containers.ColumnView, error) {
@@ -258,7 +258,7 @@ func (blk *txnBlock) GetColumnDataByIds(ctx context.Context, colIdxes []int) (*c
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdxes)
 }
 
-func (blk *txnBlock) Prefetch(idxes []uint16) error {
+func (blk *txnBlock) Prefetch(idxes []int) error {
 	schema := blk.table.GetLocalSchema()
 	seqnums := make([]uint16, 0, len(idxes))
 	for _, idx := range idxes {

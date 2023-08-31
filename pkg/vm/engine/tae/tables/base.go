@@ -79,6 +79,22 @@ func (blk *baseBlock) Close() {
 	// TODO
 }
 
+func (blk *baseBlock) GetRuntime() *dbutils.Runtime {
+	return blk.rt
+}
+
+func (blk *baseBlock) EstimateMemSize() int {
+	node := blk.PinNode()
+	defer node.Unref()
+	blk.RLock()
+	defer blk.RUnlock()
+	size := blk.mvcc.EstimateMemSizeLocked()
+	if !node.IsPersisted() {
+		size += node.MustMNode().EstimateMemSize()
+	}
+	return size
+}
+
 func (blk *baseBlock) PinNode() *Node {
 	n := blk.node.Load()
 	// if ref fails, reload.
@@ -103,7 +119,7 @@ func (blk *baseBlock) Rows() int {
 		return int(node.Rows())
 	}
 }
-func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
@@ -176,7 +192,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if bat.Vecs[0].GetType().Oid != types.T_TS {
 		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
 	}
-	vec = containers.ToDNVector(bat.Vecs[0])
+	vec = containers.ToTNVector(bat.Vecs[0])
 	return
 }
 
@@ -307,7 +323,9 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 		abortVec := deletes.Vecs[3].GetDownstreamVector()
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
-		for i := 0; i < deletes.Length(); i++ {
+
+		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), &blk.meta.ID)
+		for i := rstart; i < rend; i++ {
 			if skipAbort {
 				abort := vector.GetFixedAt[bool](abortVec, i)
 				if abort {
@@ -563,11 +581,10 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
-	return
+	return blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 }
 
 func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *containers.BlockView, err error) {
@@ -615,7 +632,13 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
 	blk.RLock()
-	persistedTS = blk.mvcc.GetDeletesPersistedTS()
+	persistedTS = blk.mvcc.GetDeletesPersistedTSInMVCCChain()
+	if persistedTS.IsEmpty() {
+		blk.RUnlock()
+		// persitedTs is empty after restarting, fetch it from chain
+		persistedTS = blk.meta.GetDeltaPersistedTS()
+		blk.RLock()
+	}
 	if persistedTS.GreaterEq(end) {
 		blk.RUnlock()
 		return

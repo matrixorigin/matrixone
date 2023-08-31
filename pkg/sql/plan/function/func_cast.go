@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"strconv"
 	"strings"
@@ -245,6 +246,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_binary: {
@@ -285,6 +287,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_text: {
@@ -322,6 +325,13 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text,
+	},
+
+	types.T_array_float32: {
+		types.T_array_float32, types.T_array_float64,
+	},
+	types.T_array_float64: {
+		types.T_array_float32, types.T_array_float64,
 	},
 }
 
@@ -400,6 +410,12 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length)
+	case types.T_array_float32, types.T_array_float64:
+		//NOTE: Don't mix T_array and T_varchar.
+		// T_varchar will have "[1,2,3]" string
+		// T_array will have "@@@#@!#@!@#!" binary.
+		s := vector.GenerateFunctionStrParameter(from)
+		err = arrayTypeToOthers(proc, s, *toType, result, length)
 	case types.T_uuid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](from)
 		err = uuidToOthers(proc.Ctx, s, *toType, result, length)
@@ -447,7 +463,8 @@ func scalarNullToOthers(ctx context.Context,
 	case types.T_uint64:
 		return appendNulls[uint64](result, length)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_json:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
+		types.T_array_float32, types.T_array_float64:
 		return appendNulls[types.Varlena](result, length)
 	case types.T_float32:
 		return appendNulls[float32](result, length)
@@ -1398,6 +1415,26 @@ func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	ctx := proc.Ctx
+
+	fromType := source.GetType()
+	if fromType.Oid == types.T_blob {
+		// For handling BLOB to ARRAY implicit casting.
+		// This is used for VECTOR FAST/BINARY IO.
+		// SQL: insert into t2 values(2, decode("7e98b23e9e10383b2f41133f", "hex"));
+		switch toType.Oid {
+		case types.T_array_float32:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[float32](proc.Ctx, source, rs, length, toType)
+		case types.T_array_float64:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[float64](proc.Ctx, source, rs, length, toType)
+			// NOTE 1: don't add `switch default` and panic here. If `T_blob` to `ARRAY` is not required,
+			// then continue to the `str` to `Other` code.
+			// NOTE 2: don't create a switch T_blob case in NewCast() as
+			// we only want to handle BLOB-->ARRAY condition separately and
+			// rest of the flow is similar to strTypeToOthers.
+		}
+	}
 	switch toType.Oid {
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
@@ -1464,8 +1501,41 @@ func strTypeToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_blob:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(proc.Ctx, source, rs, length, toType)
+	case types.T_array_float32:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[float32](proc.Ctx, source, rs, length, toType)
+	case types.T_array_float64:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[float64](proc.Ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
+}
+
+func arrayTypeToOthers(proc *process.Process,
+	source vector.FunctionParameterWrapper[types.Varlena],
+	toType types.Type, result vector.FunctionResultWrapper, length int) error {
+	ctx := proc.Ctx
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	fromType := source.GetType()
+
+	switch fromType.Oid {
+	case types.T_array_float32:
+		switch toType.Oid {
+		case types.T_array_float32:
+			return ArrayToArray[float32, float32](proc.Ctx, source, rs, length, toType)
+		case types.T_array_float64:
+			return ArrayToArray[float32, float64](proc.Ctx, source, rs, length, toType)
+		}
+	case types.T_array_float64:
+		switch toType.Oid {
+		case types.T_array_float32:
+			return ArrayToArray[float64, float32](proc.Ctx, source, rs, length, toType)
+		case types.T_array_float64:
+			return ArrayToArray[float64, float64](proc.Ctx, source, rs, length, toType)
+		}
+	}
+
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", fromType, toType))
 }
 
 func uuidToOthers(ctx context.Context,
@@ -3203,12 +3273,16 @@ func decimal64ToDecimal128(
 					return err
 				}
 			} else {
-				result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(result, false); err != nil {
-					return err
+				if totype.Scale == fromtype.Scale {
+					to.AppendMustValue(fromdec)
+				} else {
+					result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+					if err != nil {
+						return err
+					}
+					if err = to.Append(result, false); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -3861,6 +3935,102 @@ func strToStr(
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func strToArray[T types.RealNumbers](
+	_ context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
+
+	var i uint64
+	var l = uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetStrValue(i)
+		if null || len(v) == 0 {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+
+			b, err := types.StringToArrayToBytes[T](convertByteSliceToString(v))
+			if err != nil {
+				return err
+			}
+			if err = to.AppendBytes(b, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func blobToArray[T types.RealNumbers](
+	_ context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
+
+	toType := to.GetType()
+
+	var i uint64
+	var l = uint64(length)
+	for i = 0; i < l; i++ {
+
+		v, null := from.GetStrValue(i)
+		if null || len(v) == 0 {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			arr := types.BytesToArray[T](v)
+			if int(toType.Width) != len(arr) {
+				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
+			}
+
+			if err := to.AppendBytes(v, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
+	_ context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
+
+	var i uint64
+	var l = uint64(length)
+	for i = 0; i < l; i++ {
+		v, null := from.GetStrValue(i)
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// NOTE: During ARRAY --> ARRAY conversion, if you do width check
+		// `to.GetType().Width != from.GetType().Width`
+		// cases b/b and b+sqrt(b) fails.
+
+		if from.GetType().Oid == to.GetType().Oid {
+			// Eg:- VECF32(3) --> VECF32(3)
+			if err := to.AppendBytes(v, false); err != nil {
+				return err
+			}
+		} else {
+			// Eg:- VECF32(3) --> VECF64(3)
+			_v := types.BytesToArray[I](v)
+			cast := moarray.Cast[I, O](_v)
+			bytes := types.ArrayToBytes[O](cast)
+			if err := to.AppendBytes(bytes, false); err != nil {
+				return err
+			}
+		}
+
 	}
 	return nil
 }

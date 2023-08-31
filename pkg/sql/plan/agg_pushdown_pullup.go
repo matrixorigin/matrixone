@@ -140,9 +140,6 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 		return nodeID
 	}
 
-	//make sure left child is bigger and  agg pushdown to left child
-	builder.applySwapRuleByStats(join.NodeId, false)
-
 	leftChild := builder.qry.Nodes[join.Children[0]]
 	rightChild := builder.qry.Nodes[join.Children[1]]
 
@@ -288,15 +285,10 @@ func addAnyValueForNonPKInPlan(nodeID int32, exceptID int32, cols []*plan.Expr_C
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
 	//rightcol must be primary key of right table
 	// or we  add rowid in group by, implement this in the future
-	rightBinding := builder.ctxByNode[rightScan.NodeId].bindingByTag[rightScan.BindingTags[0]]
 	if rightScan.TableDef.Pkey == nil {
 		return false
 	}
 	pkNames := rightScan.TableDef.Pkey.Names
-	pks := make([]int32, len(pkNames))
-	for i := range pkNames {
-		pks[i] = rightBinding.FindColumn(pkNames[i])
-	}
 
 	if len(join.OnList) != len(pkNames) || len(join.OnList) != len(agg.GroupBy) || !builder.IsEquiJoin(join) {
 		return false
@@ -321,7 +313,7 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		leftColPos[i] = leftCol.Col.ColPos
 		groupColsInAgg[i] = groupColInAgg
 	}
-	if !containsAllPKs(leftColPos, pks) {
+	if !containsAllPKs(leftColPos, rightScan.TableDef) {
 		return false
 	}
 
@@ -362,9 +354,6 @@ func (builder *QueryBuilder) aggPullup(rootID, nodeID int32) int32 {
 	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER {
 		return nodeID
 	}
-
-	//make sure left child is bigger
-	builder.applySwapRuleByStats(join.NodeId, false)
 
 	agg := builder.qry.Nodes[join.Children[0]]
 	if agg.NodeType != plan.Node_AGG {

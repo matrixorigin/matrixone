@@ -89,10 +89,10 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
 	}
 
-	if storage, ok := reqCtx.Value(defines.TemporaryDN{}).(*memorystorage.Storage); ok {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, storage)
+	if storage, ok := reqCtx.Value(defines.TemporaryTN{}).(*memorystorage.Storage); ok {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN{}, storage)
 	} else if th.ses.IfInitedTempEngine() {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, th.ses.GetTempTableStorage())
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN{}, th.ses.GetTempTableStorage())
 	}
 	return retTxnCtx
 }
@@ -100,7 +100,7 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 func (th *TxnHandler) AttachTempStorageToTxnCtx() {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryDN{}, th.ses.GetTempTableStorage())
+	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryTN{}, th.ses.GetTempTableStorage())
 }
 
 // we don't need to lock. TxnHandler is holded by one session.
@@ -283,7 +283,7 @@ func (th *TxnHandler) CommitTxn() error {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TemporaryDN{}, ses.tempTablestorage)
+		txnCtx = context.WithValue(txnCtx, defines.TemporaryTN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(
@@ -296,7 +296,7 @@ func (th *TxnHandler) CommitTxn() error {
 		return e
 	}
 	if val != nil {
-		ctx2 = context.WithValue(ctx2, defines.PkCheckByDN{}, val.(int8))
+		ctx2 = context.WithValue(ctx2, defines.PkCheckByTN{}, val.(int8))
 	}
 	var err error
 	defer func() {
@@ -350,7 +350,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TemporaryDN{}, ses.tempTablestorage)
+		txnCtx = context.WithValue(txnCtx, defines.TemporaryTN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(

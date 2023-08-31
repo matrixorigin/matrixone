@@ -23,7 +23,8 @@ const shuffleBatchSize = 8192
 
 const (
 	input = iota
-	outPut
+	outPutNotEnding
+	outPutEnding
 )
 
 type Argument struct {

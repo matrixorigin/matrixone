@@ -1,0 +1,20 @@
+SELECT encode('\xa7', 'hex');
+encode(xa7, hex)
+786137
+SELECT decode('616263', 'hex');
+decode(616263, hex)
+abc
+SELECT encode('abc', 'hex'), decode('616263', 'hex');
+encode(abc, hex)    decode(616263, hex)
+616263    abc
+SELECT encode('abc', 'base64'), decode('YWJj', 'base64');
+encode(abc, base64)    decode(YWJj, base64)
+YWJj    abc
+SELECT decode('invalid', 'hex');
+encoding/hex: invalid byte: U+0069 'i'
+SELECT decode('invalid', 'base64');
+illegal base64 data at input byte 4
+SELECT encode('abc', 'fake');
+internal error: unhandled format: fake
+SELECT decode('abc', 'fake');
+internal error: unhandled format: fake

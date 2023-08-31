@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -78,6 +79,7 @@ func WithRuntimeThrottle(t *Throttle) RuntimeOption {
 }
 
 type Runtime struct {
+	Now        func() types.TS
 	VectorPool struct {
 		Small     *containers.VectorPool
 		Transient *containers.VectorPool
@@ -91,8 +93,9 @@ type Runtime struct {
 
 	Fs *objectio.ObjectFS
 
-	TransferTable *model.HashPageTable
-	Scheduler     tasks.TaskScheduler
+	TransferTable   *model.HashPageTable
+	TransferDelsMap *model.TransDelsForBlks
+	Scheduler       tasks.TaskScheduler
 
 	Options *options.Options
 
@@ -103,6 +106,7 @@ type Runtime struct {
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {
 	r := new(Runtime)
+	r.TransferDelsMap = model.NewTransDelsForBlks()
 	for _, opt := range opts {
 		opt(r)
 	}

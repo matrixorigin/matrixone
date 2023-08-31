@@ -299,6 +299,10 @@ func MockColTypes(colCnt int) (ct []Type) {
 			typ = T_varbinary.ToType()
 		case 20:
 			typ = T_enum.ToType()
+		case 21:
+			typ = T_array_float32.ToType()
+		case 22:
+			typ = T_array_float64.ToType()
 		}
 		ct = append(ct, typ)
 	}

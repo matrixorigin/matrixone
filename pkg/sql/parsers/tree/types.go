@@ -43,6 +43,8 @@ const (
 	BlobFamily
 
 	GeometryFamily
+
+	ArrayFamily
 )
 
 type IntervalDurationField struct {
@@ -75,6 +77,7 @@ type InternalType struct {
 		From: https://dev.mysql.com/doc/refman/8.0/en/numeric-type-attributes.html
 		display width
 	*/
+	//TODO: Fix Typo
 	DisplayWith int32
 
 	//the accuracy of the data type.
@@ -161,6 +164,13 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 		}
 	case "varbinary":
 		if node.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
+	case "vecf32", "vecf64":
+		if node.DisplayWith >= 0 {
+			// Prints 'vecf32(4)'
 			ctx.WriteByte('(')
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
 			ctx.WriteByte(')')

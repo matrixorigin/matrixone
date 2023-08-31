@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"os"
 	"strings"
 	"sync"
@@ -336,8 +334,8 @@ func (h *Handle) HandlePrepare(
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	participants := make([]uint64, 0, len(meta.GetDNShards()))
-	for _, shard := range meta.GetDNShards() {
+	participants := make([]uint64, 0, len(meta.GetTNShards()))
+	for _, shard := range meta.GetTNShards() {
 		participants = append(participants, shard.GetShardID())
 	}
 	txn.SetParticipants(participants)
@@ -424,10 +422,40 @@ func (h *Handle) HandleForceCheckpoint(
 	return nil, err
 }
 
-func (h *Handle) HandleInspectDN(
+func (h *Handle) HandleBackup(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.InspectDN,
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	timeout := req.FlushDuration
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	currTs = types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
+	if err != nil {
+		return nil, err
+	}
+	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	var locations string
+	for i := range data {
+		locations += data[i].GetLocation().String()
+		locations += ":"
+		locations += fmt.Sprintf("%d", data[i].GetVersion())
+		locations += ";"
+	}
+	resp.CkpLocation = locations
+	return nil, err
+}
+
+func (h *Handle) HandleInspectTN(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.InspectTN,
 	resp *db.InspectResp) (cb func(), err error) {
 	args, _ := shlex.Split(req.Operation)
 	common.DoIfDebugEnabled(func() {
@@ -558,82 +586,13 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
-func loadDataForMOCatalog(
-	ctx context.Context,
-	es []*api.Entry,
-	fs fileservice.FileService,
-	m *mpool.MPool,
-) (err error) {
-	for _, e := range es {
-		if e.EntryType != api.Entry_Insert {
-			continue
-		}
-		if e.DatabaseId != catalog.MO_CATALOG_ID {
-			continue
-		}
-		if e.TableId != catalog.MO_TABLES_ID &&
-			e.TableId != catalog.MO_COLUMNS_ID {
-			continue
-		}
-		if e.FileName == "" {
-			continue
-		}
-		bat, err := batch.ProtoBatchToBatch(e.Bat)
-		if err != nil {
-			return err
-		}
-		rows := catalog.GenRows(bat)
-		for _, row := range rows {
-			metaLoc := string(row[0].([]byte))
-			location, err := blockio.EncodeLocationFromString(metaLoc)
-			if err != nil {
-				return err
-			}
-			var bat *batch.Batch
-			if e.TableId == catalog.MO_TABLES_ID {
-				bat, err = blockio.LoadColumns(
-					ctx,
-					catalog.MoTablesIdxs,
-					catalog.MoTablesTypes,
-					fs,
-					location,
-					m)
-				if err != nil {
-					return err
-				}
-			} else {
-				bat, err = blockio.LoadColumns(
-					ctx,
-					catalog.MoColumnsIdxs,
-					catalog.MoColumnsTypes,
-					fs,
-					location,
-					m)
-				if err != nil {
-					return err
-				}
-			}
-			e.Bat, err = batch.BatchToProtoBatch(bat)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return
-}
-
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.PrecommitWriteCmd,
 	resp *api.SyncLogTailResp) (err error) {
 	var e any
-
 	es := req.EntryList
-	err = loadDataForMOCatalog(ctx, es, h.db.Runtime.Fs.Service, nil)
-	if err != nil {
-		return err
-	}
 	for len(es) > 0 {
 		e, es, err = catalog.ParseEntryList(es)
 		if err != nil {
@@ -734,7 +693,7 @@ func (h *Handle) HandlePreCommitWrite(
 				TableName:    pe.GetTableName(),
 				FileName:     pe.GetFileName(),
 				Batch:        moBat,
-				PkCheck:      db.PKCheckType(pe.GetPkCheckByDn()),
+				PkCheck:      db.PKCheckType(pe.GetPkCheckByTn()),
 			}
 			if req.FileName != "" {
 				rows := catalog.GenRows(req.Batch)
@@ -1016,9 +975,9 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			rowIDVec := containers.ToDNVector(bat.Vecs[0])
+			rowIDVec := containers.ToTNVector(bat.Vecs[0])
 			defer rowIDVec.Close()
-			pkVec := containers.ToDNVector(bat.Vecs[1])
+			pkVec := containers.ToTNVector(bat.Vecs[1])
 			//defer pkVec.Close()
 			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
@@ -1029,9 +988,9 @@ func (h *Handle) HandleWrite(
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
-	rowIDVec := containers.ToDNVector(req.Batch.GetVector(0))
+	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0))
 	defer rowIDVec.Close()
-	pkVec := containers.ToDNVector(req.Batch.GetVector(1))
+	pkVec := containers.ToTNVector(req.Batch.GetVector(1))
 	//defer pkVec.Close()
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return

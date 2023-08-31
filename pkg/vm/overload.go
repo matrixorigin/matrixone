@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -131,6 +132,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	LockOp: lockop.String,
 
 	Shuffle: shuffle.String,
+	Stream:  stream.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -192,6 +194,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	LockOp: lockop.Prepare,
 
 	Shuffle: shuffle.Prepare,
+	Stream:  stream.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecStatus, error){
@@ -254,4 +257,5 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecSt
 	LockOp: lockop.Call,
 
 	Shuffle: shuffle.Call,
+	Stream:  stream.Call,
 }
