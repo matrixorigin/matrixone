@@ -1320,6 +1320,68 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `encode`
+	{
+		functionId: ENCODE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Encode
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float32, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Encode
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_float64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Encode
+				},
+			},
+		},
+	},
+
+	// function `decode`
+	{
+		functionId: DECODE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Decode
+				},
+			},
+		},
+	},
+
 	// function `substring`, `substr`, `mid`
 	{
 		functionId: SUBSTRING,

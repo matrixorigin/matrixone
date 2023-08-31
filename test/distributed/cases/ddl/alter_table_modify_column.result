@@ -1106,21 +1106,22 @@ alter table decimal01 modify column col1 decimal(38,6);
 alter table decimal01 modify col2 decimal(38,9);
 
 show create table decimal01;
-
+Table    Create Table
+decimal01    CREATE TABLE `decimal01` (\n`col1` DECIMAL(38,6) DEFAULT null,\n`col2` DECIMAL(38,9) DEFAULT null\n)
 select * from decimal01;
-
+col1    col2
+23746723468723.000000    38208439024234.432423424
+32487329847923424.000000    -4324324324.329793275
 truncate table decimal01;
-
 alter table decimal01 add column col3 decimal(19,0) first;
-
 show create table decimal01;
-
+Table    Create Table
+decimal01    CREATE TABLE `decimal01` (\n`col3` DECIMAL(19,0) DEFAULT null,\n`col1` DECIMAL(38,6) DEFAULT null,\n`col2` DECIMAL(38,9) DEFAULT null\n)
 insert into decimal01 values (37298342.123, -37829342.3244234, -283794324.2342);
-
 select * from decimal01;
-
+col3    col1    col2
+37298342    -37829342.324423    -283794324.234200000
 drop table decimal01;
-
 drop table if exists null01;
 create table null01(col1 int default null, col2 binary(10));
 insert into null01 values (1, '32143');
@@ -1533,20 +1534,18 @@ create table cluster01(col1 int, col2 decimal) cluster by col1;
 insert into cluster01 values (1, 389234924);
 insert into cluster01 values (2, -2893428);
 alter table cluster01 modify column col2 float;
-not supported: alter table for cluster table
 alter table cluster01 modify col1 double after col2;
-not supported: alter table for cluster table
 show create table cluster01;
 Table    Create Table
-cluster01    CREATE TABLE `cluster01` (\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n) CLUSTER BY (`col1`)
+cluster01    CREATE TABLE `cluster01` (\n`col2` FLOAT DEFAULT null,\n`col1` DOUBLE DEFAULT null\n) CLUSTER BY (`col1`)
 select * from cluster01;
-col1    col2
-1    389234924
-2    -2893428
+col2    col1
+3.892349E8    1.0
+-2893428.0    2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
-cluster01    col1    INT    YES
-cluster01    col2    DECIMAL128    YES
+cluster01    col1    DOUBLE    YES
+cluster01    col2    FLOAT    YES
 drop table cluster01;
 drop table if exists insert01;
 create table insert01 (col1 int, col2 decimal(20,10), col3 date);
@@ -1662,7 +1661,7 @@ col1    col2    col3    col4
 alter table mix01 add column col1_2 binary after col1;
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`col1` INT NOT NULL,\n`col1_2` BINARY(1) DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\n`col3` DATE DEFAULT NULL,\n`col4` VARCHAR(100) DEFAULT NULL\n)
+mix01    CREATE TABLE `mix01` (\n`col1` INT NOT NULL,\n`col1_2` BINARY(1) DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO
@@ -1685,7 +1684,7 @@ truncate table mix01;
 alter table mix01 add column col5 int;
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`col1_2` VARBINARY(10) DEFAULT null,\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null,\n`col5` INT DEFAULT NULL\n)
+mix01    CREATE TABLE `mix01` (\n`col1_2` VARBINARY(10) DEFAULT null,\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null,\n`col5` INT DEFAULT null\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO

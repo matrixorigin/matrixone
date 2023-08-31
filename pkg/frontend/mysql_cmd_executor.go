@@ -1461,12 +1461,15 @@ func doShowBackendServers(ses *Session) error {
 
 	tenant := ses.GetTenantInfo().GetTenant()
 	var se clusterservice.Selector
-	labels := ses.GetMysqlProtocol().GetConnectAttrs()
+	labels, err := ParseLabel(getLabelPart(ses.GetUserName()))
+	if err != nil {
+		return err
+	}
 	labels["account"] = tenant
 	se = clusterservice.NewSelector().SelectByLabel(
 		filterLabels(labels), clusterservice.EQ)
 	if isSysTenant(tenant) {
-		u := ses.GetUserName()
+		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
 		if isSuperUser(u) {
 			clusterservice.GetMOCluster().GetCNService(
@@ -2774,14 +2777,14 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			err = doCheckFilePath(requestCtx, ses, st.Ep)
-			if err != nil {
-				return err
-			}
 			ses.InitExportConfig(st.Ep)
 			defer func() {
 				ses.ClearExportParam()
 			}()
+			err = doCheckFilePath(requestCtx, ses, st.Ep)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
