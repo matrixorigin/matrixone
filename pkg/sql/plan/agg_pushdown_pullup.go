@@ -140,9 +140,6 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 		return nodeID
 	}
 
-	//make sure left child is bigger and  agg pushdown to left child
-	builder.applySwapRuleByStats(join.NodeId, false)
-
 	leftChild := builder.qry.Nodes[join.Children[0]]
 	rightChild := builder.qry.Nodes[join.Children[1]]
 
@@ -357,9 +354,6 @@ func (builder *QueryBuilder) aggPullup(rootID, nodeID int32) int32 {
 	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER {
 		return nodeID
 	}
-
-	//make sure left child is bigger
-	builder.applySwapRuleByStats(join.NodeId, false)
 
 	agg := builder.qry.Nodes[join.Children[0]]
 	if agg.NodeType != plan.Node_AGG {
