@@ -203,6 +203,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAt(vec, row, v)
+	case types.T_enum:
+		v, err := strconv.ParseUint(val, 0, 16)
+		if err != nil {
+			return moerr.NewOutOfRange(ctx, "enum", "value '%v'", val)
+		}
+		return vector.SetFixedAt(vec, row, types.Enum(v))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
 	}
@@ -251,6 +257,8 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 		return setInsertValueDateTime(proc, numVal, vec)
 	case types.T_timestamp:
 		return setInsertValueTimeStamp(proc, numVal, vec)
+	case types.T_enum:
+		return setInsertValueNumber[uint16](proc, numVal, vec)
 	}
 
 	return false, nil
