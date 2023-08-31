@@ -17,8 +17,12 @@ package backup
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -26,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/panjf2000/ants/v2"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"path"
 	"sync"
@@ -120,4 +125,504 @@ func TestBackupData(t *testing.T) {
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100), true)
 	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func Test_saveTaeFilesList(t *testing.T) {
+	type args struct {
+		ctx        context.Context
+		Fs         fileservice.FileService
+		taeFiles   []*taeFile
+		backupTime string
+	}
+
+	Fs := getTestFs(t, true)
+	Fs2 := getTestFs(t, true)
+	ts := time.Now().Format(time.DateTime)
+	tests := []struct {
+		name    string
+		args    args
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			args: args{
+				ctx:        context.Background(),
+				Fs:         Fs,
+				taeFiles:   nil,
+				backupTime: "",
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				return true
+			},
+		},
+		{
+			name: "t2",
+			args: args{
+				ctx:        context.Background(),
+				Fs:         Fs,
+				taeFiles:   nil,
+				backupTime: ts,
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				//check file
+				check, err2 := readFileAndCheck(context.Background(), Fs, taeList)
+				assert.NoError(t, err2)
+				assert.Equal(t, check, []byte(""))
+				check, err2 = readFileAndCheck(context.Background(), Fs, taeSum)
+				assert.NoError(t, err2)
+				lines, err2 := fromCsvBytes(check)
+				assert.NoError(t, err2)
+				assert.Equal(t, lines[0][0], ts)
+				assert.Equal(t, lines[0][1], "0")
+				return false
+			},
+		},
+		{
+			name: "t3",
+			args: args{
+				ctx:        context.Background(),
+				Fs:         nil,
+				taeFiles:   nil,
+				backupTime: "",
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				return true
+			},
+		},
+		{
+			name: "t4",
+			args: args{
+				ctx: context.Background(),
+				Fs:  Fs2,
+				taeFiles: []*taeFile{
+					{
+						path:     "t1",
+						size:     1,
+						checksum: []byte{1},
+					},
+				},
+				backupTime: ts,
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				//check file
+				check, err2 := readFileAndCheck(context.Background(), Fs2, taeList)
+				assert.NoError(t, err2)
+				lines, err2 := fromCsvBytes(check)
+				assert.NoError(t, err2)
+				assert.Equal(t, lines[0][0], "t1")
+				assert.Equal(t, lines[0][1], "1")
+				assert.Equal(t, lines[0][2], hexStr([]byte{1}))
+				check, err2 = readFileAndCheck(context.Background(), Fs2, taeSum)
+				assert.NoError(t, err2)
+				lines, err2 = fromCsvBytes(check)
+				assert.NoError(t, err2)
+				assert.Equal(t, lines[0][0], ts)
+				assert.Equal(t, lines[0][1], "1")
+				return false
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.wantErr(t, saveTaeFilesList(tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime), fmt.Sprintf("saveTaeFilesList(%v, %v, %v, %v)", tt.args.ctx, tt.args.Fs, tt.args.taeFiles, tt.args.backupTime))
+		})
+	}
+}
+
+func Test_saveMetas(t *testing.T) {
+	type args struct {
+		ctx context.Context
+		cfg *Config
+	}
+
+	Fs := getTestFs(t, true)
+
+	tests := []struct {
+		name    string
+		args    args
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			args: args{
+				ctx: context.Background(),
+				cfg: nil,
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				return false
+			},
+		},
+		{
+			name: "t2",
+			args: args{
+				ctx: context.Background(),
+				cfg: &Config{
+					Timestamp:  types.TS{},
+					GeneralDir: Fs,
+					SharedFs:   nil,
+					TaeDir:     nil,
+					HAkeeper:   nil,
+					Metas: &Metas{
+						metas: []*Meta{
+							{
+								Typ:     TypeVersion,
+								Version: "version",
+							},
+							{
+								Typ:       TypeBuildinfo,
+								Buildinfo: "build_info",
+							},
+							{
+								Typ:              TypeLaunchconfig,
+								LaunchConfigFile: "launch_conf",
+							},
+							{
+								Typ:              TypeLaunchconfig,
+								SubTyp:           CnConfig,
+								LaunchConfigFile: "launch_cn_conf",
+							},
+						},
+					},
+				},
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				check, err2 := readFileAndCheck(context.Background(), Fs, moMeta)
+				assert.NoError(t, err2)
+				lines, err2 := fromCsvBytes(check)
+				assert.NoError(t, err2)
+				assert.Equal(t, lines[0][0], "version")
+				assert.Equal(t, lines[0][1], "version")
+				assert.Equal(t, lines[1][0], "buildinfo")
+				assert.Equal(t, lines[1][1], "build_info")
+				assert.Equal(t, lines[2][0], "launchconfig")
+				assert.Equal(t, lines[2][1], "")
+				assert.Equal(t, lines[2][2], "launch_conf")
+				assert.Equal(t, lines[3][0], "launchconfig")
+				assert.Equal(t, lines[3][1], CnConfig)
+				assert.Equal(t, lines[3][2], "launch_cn_conf")
+				return false
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.wantErr(t, saveMetas(tt.args.ctx, tt.args.cfg), fmt.Sprintf("saveMetas(%v, %v)", tt.args.ctx, tt.args.cfg))
+		})
+	}
+}
+
+func Test_backupConfigFile(t *testing.T) {
+	type args struct {
+		ctx        context.Context
+		typ        string
+		configPath string
+		cfg        *Config
+	}
+
+	Fs := getTestFs(t, true)
+	file := getTempFile(t, "", "t1", "test_t1")
+
+	tests := []struct {
+		name    string
+		args    args
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			args: args{
+				ctx:        context.Background(),
+				typ:        "",
+				configPath: "",
+				cfg:        nil,
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				return true
+			},
+		},
+		{
+			name: "t2",
+			args: args{
+				ctx:        context.Background(),
+				typ:        CnConfig,
+				configPath: file.Name(),
+				cfg: &Config{
+					Timestamp:  types.TS{},
+					GeneralDir: Fs,
+					SharedFs:   nil,
+					TaeDir:     nil,
+					HAkeeper:   nil,
+					Metas:      &Metas{},
+				},
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				list, err2 := Fs.List(context.Background(), configDir)
+				assert.NoError(t, err2)
+				var configFile string
+				for _, entry := range list {
+					if entry.IsDir {
+						continue
+					}
+					configFile = entry.Name
+					break
+				}
+				check, err2 := readFileAndCheck(context.Background(), Fs, configDir+"/"+configFile)
+				assert.NoError(t, err2)
+				assert.Equal(t, check, []byte("test_t1"))
+				return true
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.wantErr(t, backupConfigFile(tt.args.ctx, tt.args.typ, tt.args.configPath, tt.args.cfg), fmt.Sprintf("backupConfigFile(%v, %v, %v, %v)", tt.args.ctx, tt.args.typ, tt.args.configPath, tt.args.cfg))
+		})
+	}
+}
+
+var _ logservice.CNHAKeeperClient = new(dumpHakeeper)
+
+const (
+	backupData = "backup_data"
+)
+
+type dumpHakeeper struct {
+}
+
+func (d *dumpHakeeper) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d *dumpHakeeper) AllocateID(ctx context.Context) (uint64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d *dumpHakeeper) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d *dumpHakeeper) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d *dumpHakeeper) GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d *dumpHakeeper) GetClusterState(ctx context.Context) (pb.CheckerState, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (d *dumpHakeeper) GetBackupData(ctx context.Context) ([]byte, error) {
+	return []byte(backupData), nil
+}
+
+func (d *dumpHakeeper) SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func Test_backupHakeeper(t *testing.T) {
+	type args struct {
+		ctx    context.Context
+		config *Config
+	}
+	etlFs := getTestFs(t, true)
+	taeFs := getTestFs(t, false)
+
+	tests := []struct {
+		name    string
+		args    args
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			args: args{
+				ctx:    context.Background(),
+				config: nil,
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				return false
+			},
+		},
+		{
+			name: "t2",
+			args: args{
+				ctx: context.Background(),
+				config: &Config{
+					Timestamp:  types.TS{},
+					GeneralDir: nil,
+					SharedFs:   nil,
+					TaeDir:     nil,
+					HAkeeper:   nil,
+					Metas:      &Metas{},
+				},
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				return false
+			},
+		},
+		{
+			name: "t3",
+			args: args{
+				ctx: context.Background(),
+				config: &Config{
+					Timestamp:  types.TS{},
+					GeneralDir: etlFs,
+					SharedFs:   nil,
+					TaeDir:     etlFs,
+					HAkeeper:   &dumpHakeeper{},
+					Metas:      &Metas{},
+				},
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				check, err2 := readFileAndCheck(context.Background(), etlFs, hakeeperDir+"/"+HakeeperFile)
+				assert.NoError(t, err2)
+				assert.Equal(t, check, []byte(backupData))
+				return false
+			},
+		},
+		{
+			name: "t4",
+			args: args{
+				ctx: context.Background(),
+				config: &Config{
+					Timestamp:  types.TS{},
+					GeneralDir: etlFs,
+					SharedFs:   nil,
+					TaeDir:     taeFs,
+					HAkeeper:   &dumpHakeeper{},
+					Metas:      &Metas{},
+				},
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				check, err2 := readFileAndCheck(context.Background(), taeFs, hakeeperDir+"/"+HakeeperFile)
+				assert.NoError(t, err2)
+				assert.Equal(t, check, []byte(backupData))
+				return false
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.wantErr(t, backupHakeeper(tt.args.ctx, tt.args.config), fmt.Sprintf("backupHakeeper(%v, %v)", tt.args.ctx, tt.args.config))
+		})
+	}
+}
+
+func TestBackup(t *testing.T) {
+	type args struct {
+		ctx context.Context
+		bs  *tree.BackupStart
+		cfg *Config
+	}
+
+	stubs := gostub.StubFunc(&backupTae, nil)
+	defer stubs.Reset()
+
+	tDir := getTempDir(t, "test")
+	tf1 := getTempFile(t, "", "t1", "test_t1")
+
+	bs := &tree.BackupStart{
+		IsS3: false,
+		Dir:  tDir,
+	}
+
+	//backup configs
+	SaveLaunchConfigPath(CnConfig, []string{tf1.Name()})
+
+	tests := []struct {
+		name    string
+		args    args
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			args: args{
+				ctx: nil,
+				bs:  bs,
+				cfg: nil,
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				return false
+			},
+		},
+		{
+			name: "t2",
+			args: args{
+				ctx: context.Background(),
+				bs:  bs,
+				cfg: &Config{
+					Timestamp:  types.TS{},
+					GeneralDir: nil,
+					SharedFs:   nil,
+					TaeDir:     nil,
+					HAkeeper:   &dumpHakeeper{},
+					Metas:      NewMetas(),
+				},
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				cfg := i[0].(*Config)
+				assert.NoError(t, err)
+				assert.NotNil(t, cfg)
+
+				//checkup config files
+				list, err2 := cfg.GeneralDir.List(context.Background(), configDir)
+				assert.NoError(t, err2)
+				var configFile string
+				for _, entry := range list {
+					if entry.IsDir {
+						continue
+					}
+					configFile = entry.Name
+					break
+				}
+				check, err2 := readFileAndCheck(context.Background(), cfg.GeneralDir, configDir+"/"+configFile)
+				assert.NoError(t, err2)
+				assert.Equal(t, check, []byte("test_t1"))
+
+				//check hakeeper files
+				check, err2 = readFileAndCheck(context.Background(), cfg.TaeDir, hakeeperDir+"/"+HakeeperFile)
+				assert.NoError(t, err2)
+				assert.Equal(t, check, []byte(backupData))
+
+				//check metas
+				check, err2 = readFileAndCheck(context.Background(), cfg.GeneralDir, moMeta)
+				assert.NoError(t, err2)
+				lines, err2 := fromCsvBytes(check)
+				assert.NoError(t, err2)
+				assert.Equal(t, lines[0][0], "version")
+				assert.Equal(t, lines[0][1], Version)
+				assert.Equal(t, lines[1][0], "buildinfo")
+				assert.Equal(t, lines[1][1], buildInfo())
+				assert.Equal(t, lines[2][0], "launchconfig")
+				assert.Equal(t, lines[2][1], CnConfig)
+				assert.Equal(t, lines[2][2], cfg.Metas.metas[2].LaunchConfigFile)
+				return false
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.wantErr(t, Backup(tt.args.ctx, tt.args.bs, tt.args.cfg), tt.args.cfg, fmt.Sprintf("Backup(%v, %v, %v)", tt.args.ctx, tt.args.bs, tt.args.cfg))
+		})
+	}
 }

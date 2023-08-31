@@ -136,6 +136,9 @@ func (m *Metas) AppendBuildinfo(info string) {
 }
 
 func (m *Metas) AppendLaunchconfig(subTyp, file string) {
+	if !subTypeIsValid(subTyp) {
+		return
+	}
 	m.Append(&Meta{
 		Typ:              TypeLaunchconfig,
 		SubTyp:           subTyp,
@@ -176,7 +179,21 @@ func (m *Metas) String() string {
 
 var (
 	launchConfigPaths = make(map[string][]string)
+	subTypes          = map[string]int8{
+		CnConfig:     1,
+		DnConfig:     1,
+		LogConfig:    1,
+		ProxyConfig:  1,
+		LaunchConfig: 1,
+	}
 )
+
+func subTypeIsValid(subType string) bool {
+	if _, ok := subTypes[subType]; ok {
+		return ok
+	}
+	return false
+}
 
 const (
 	CnConfig     = "cn"
@@ -203,6 +220,14 @@ type Config struct {
 	HAkeeper logservice.CNHAKeeperClient
 
 	Metas *Metas
+}
+
+func (c *Config) isValid() bool {
+	return !(c == nil || c.Metas == nil || c.GeneralDir == nil)
+}
+
+func (c *Config) isValid2() bool {
+	return !(c == nil || c.Metas == nil)
 }
 
 type s3Config struct {

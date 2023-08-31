@@ -15,6 +15,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"github.com/google/uuid"
@@ -25,6 +26,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 )
 
 // Backup
@@ -32,8 +34,12 @@ import (
 func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 	var err error
 	var s3Conf *s3Config
-	cfg.Metas = NewMetas()
-
+	if !cfg.isValid2() {
+		return moerr.NewInternalError(ctx, "invalid config or metas or fileservice")
+	}
+	if bs == nil {
+		return moerr.NewInternalError(ctx, "invalid backup start")
+	}
 	// step 1 : setup fileservice
 	//1.1 setup ETL fileservice for general usage
 	if !bs.IsS3 {
@@ -108,7 +114,7 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 	return err
 }
 
-func backupTae(ctx context.Context, config *Config) error {
+var backupTae = func(ctx context.Context, config *Config) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
 	return BackupData(ctx, config.SharedFs, fs, "")
 }
@@ -118,6 +124,9 @@ func backupHakeeper(ctx context.Context, config *Config) error {
 		err    error
 		haData []byte
 	)
+	if !config.isValid() {
+		return moerr.NewInternalError(ctx, "invalid config or metas or fileservice")
+	}
 	if config.HAkeeper == nil {
 		return moerr.NewInternalError(ctx, "hakeeper client is nil")
 	}
@@ -131,6 +140,9 @@ func backupHakeeper(ctx context.Context, config *Config) error {
 }
 
 func backupConfigFile(ctx context.Context, typ, configPath string, cfg *Config) error {
+	if !cfg.isValid() {
+		return moerr.NewInternalError(ctx, "invalid config or metas or fileservice")
+	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		logutil.Errorf("read file %s failed, err: %v", configPath, err)
@@ -146,6 +158,9 @@ func backupConfigFile(ctx context.Context, typ, configPath string, cfg *Config) 
 }
 
 func saveMetas(ctx context.Context, cfg *Config) error {
+	if !cfg.isValid() {
+		return moerr.NewInternalError(ctx, "invalid config or metas or fileservice")
+	}
 	lines := cfg.Metas.CsvString()
 	metas, err := ToCsvLine2(lines)
 	if err != nil {
@@ -169,6 +184,14 @@ func ToCsvLine2(s [][]string) (string, error) {
 }
 
 func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles []*taeFile, backupTime string) error {
+	var err error
+	if Fs == nil {
+		return moerr.NewInternalError(ctx, "fileservice is nil")
+	}
+	_, err = time.Parse(time.DateTime, backupTime)
+	if err != nil {
+		return err
+	}
 	lines, size := taeFileListToCsv(taeFiles)
 	metas, err := ToCsvLine2(lines)
 	if err != nil {
@@ -187,4 +210,10 @@ func saveTaeFilesList(ctx context.Context, Fs fileservice.FileService, taeFiles 
 		return err
 	}
 	return writeFile(ctx, Fs, taeSum, []byte(metas))
+}
+
+// fromCsvBytes converts the csv bytes to the array of string
+func fromCsvBytes(data []byte) ([][]string, error) {
+	r := csv.NewReader(bytes.NewReader(data))
+	return r.ReadAll()
 }
