@@ -323,8 +323,6 @@ commit;
 select * from atomic_table_18;
 set autocommit=1;
 drop account if exists trans_acc1;
--- @bvt:issue#9852
-
 
 -- alter table modify column primary key
 drop table if exists alter01;
