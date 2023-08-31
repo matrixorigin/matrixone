@@ -222,6 +222,8 @@ const (
 	EXTRACT   // EXTRACT
 	OCT
 	SUBSTRING       // SUBSTRING
+	ENCODE          // ENCODE
+	DECODE          // DECODE
 	SUBSTRING_INDEX //SUBSTRING_INDEX
 	WEEK            //WEEK
 	WEEKDAY
@@ -437,6 +439,8 @@ var functionIdRegister = map[string]int32{
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
 	"mid":               SUBSTRING,
+	"encode":            ENCODE,
+	"decode":            DECODE,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,

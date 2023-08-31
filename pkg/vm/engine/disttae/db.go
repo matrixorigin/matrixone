@@ -318,14 +318,14 @@ func (e *Engine) UpdateOfPull(ctx context.Context, tnList []DNStore, tbl *txnTab
 	part := e.ensureTablePart(databaseId, tableId)
 
 	if err := func() error {
-		select {
-		case <-part.Lock():
-			defer part.Unlock()
-			if part.TS.Greater(ts) || part.TS.Equal(ts) {
-				return nil
-			}
-		case <-ctx.Done():
-			return ctx.Err()
+		lockErr := part.Lock(ctx)
+		if lockErr != nil {
+			return lockErr
+		}
+		defer part.Unlock()
+
+		if part.TS.Greater(ts) || part.TS.Equal(ts) {
+			return nil
 		}
 
 		if err := updatePartitionOfPull(

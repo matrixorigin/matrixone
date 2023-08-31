@@ -103,6 +103,10 @@ func (n *MVCCHandle) EstimateMemSizeLocked() int {
 // ==========================================================
 
 func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
+	if n.persistedTS.IsEmpty() {
+		// persitedTs is empty after restarting, fetch it from chain
+		return n.meta.GetDeltaPersistedTS()
+	}
 	return n.persistedTS
 }
 
@@ -179,7 +183,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS,
 ) (
 	rowIDVec, commitTSVec, abortVec containers.Vector,
-	aborts, deletes *nulls.Bitmap,
+	aborts *nulls.Bitmap, deletes []uint32,
 ) {
 	if n.deletes.Load().IsEmpty() {
 		return
@@ -227,9 +231,9 @@ func (n *MVCCHandle) CollectDeleteLocked(
 					for it.HasNext() {
 						row := it.Next()
 						if deletes == nil {
-							deletes = nulls.NewWithSize(int(row))
+							deletes = make([]uint32, 0)
 						}
-						deletes.Add(uint64(row))
+						deletes = append(deletes, row)
 						rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 						commitTSVec.Append(node.GetEnd(), false)
 					}
