@@ -16,7 +16,7 @@ package plan
 
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-// for A*(B*C), if C.sel=1 and B<C, change this to (A*B)*C
+// for A*(B*C), if C.sel>0.9 and B<C, change this to (A*B)*C
 func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
@@ -40,6 +40,14 @@ func (builder *QueryBuilder) applyAssociativeLaw(nodeID int32) int32 {
 	}
 
 	node.Children[1] = NodeB.NodeId
+
+	determineHashOnPK(node.NodeId, builder)
+	if !node.Stats.HashmapStats.HashOnPK {
+		// a join b must be hash on primary key, or we can not do this change
+		node.Children[1] = rightChild.NodeId
+		return node.NodeId
+	}
+
 	rightChild.Children[0] = node.NodeId
 	ReCalcNodeStats(rightChild.NodeId, builder, true, false)
 	return rightChild.NodeId
