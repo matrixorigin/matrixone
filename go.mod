@@ -15,6 +15,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.19.0
 	github.com/aws/smithy-go v1.13.5
 	github.com/axiomhq/hyperloglog v0.0.0-20230201085229-3ddf4bad03dc
+	github.com/bits-and-blooms/bloom v2.0.3+incompatible
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/docker/go-units v0.5.0
@@ -46,7 +47,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.38.1
 	github.com/shirou/gopsutil/v3 v3.22.4
-	github.com/smartystreets/goconvey v1.8.0
+	github.com/smartystreets/goconvey v1.7.2
 	github.com/spf13/cobra v1.7.0
 	github.com/stretchr/testify v1.8.2
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.673
@@ -81,7 +82,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.12.10 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.14.10 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bits-and-blooms/bitset v1.2.0 // indirect
+	github.com/bits-and-blooms/bitset v1.8.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect
 	github.com/cockroachdb/redact v1.1.3 // indirect
@@ -91,7 +92,7 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/gopherjs/gopherjs v1.17.2 // indirect
+	github.com/gopherjs/gopherjs v1.12.80 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.0.0 // indirect
 	github.com/hashicorp/go-msgpack v0.5.3 // indirect
@@ -118,11 +119,13 @@ require (
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/smartystreets/assertions v1.13.1 // indirect
+	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/tklauser/go-sysconf v0.3.11 // indirect
 	github.com/tklauser/numcpus v0.6.0 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
+	github.com/willf/bitset v1.1.11 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

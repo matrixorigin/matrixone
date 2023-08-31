@@ -214,10 +214,22 @@ type Compile struct {
 	cnLabel map[string]string
 
 	buildPlanFunc func() (*plan2.Plan, error)
+
+	fuzzy *fuzzyCheckInfo
 }
 
 type RemoteReceivRegInfo struct {
 	Idx      int
 	Uuid     uuid.UUID
 	FromAddr string
+}
+
+// use to contains some info to run a background SQL when
+// fuzzy filter can not draw a definite conclusion for duplicate check
+type fuzzyCheckInfo struct {
+	db        string
+	tbl       string
+	isCpk     bool
+	attrs     []string
+	condition string
 }

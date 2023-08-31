@@ -394,12 +394,22 @@ func (c *Compile) Run(_ uint64) error {
 				c.fatalLog(1, err)
 				return err
 			}
+			if cc.fuzzy != nil {
+				// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
+				return cc.fuzzy.backgroundSQLCheck(cc)
+			}
 			// set affectedRows to old compile to return
 			c.setAffectedRows(cc.GetAffectedRows())
 			return c.proc.TxnOperator.GetWorkspace().Adjust()
 		}
 		return err
 	}
+
+	if c.fuzzy != nil {
+		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
+		return c.fuzzy.backgroundSQLCheck(c)
+	}
+
 	if c.proc.TxnOperator != nil {
 		return c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
@@ -980,6 +990,16 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Arg: constructOnduplicateKey(n, c.e),
 		}
 		return []*Scope{rs}, nil
+	case plan.Node_FUZZY_FILTER:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		ss = c.compileFuzzyFilter(n, ss)
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
 	case plan.Node_PRE_INSERT_UK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -2179,6 +2199,38 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		Arg: constructMergeLimit(n, c.proc),
 	}
 	return []*Scope{rs}
+}
+
+func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope) []*Scope {
+	if len(ss) != 1 {
+		panic("fuzzy filter should have only one prescope")
+	}
+
+	ss[0].appendInstruction(vm.Instruction{
+		Op:  vm.FuzzyFilter,
+		Idx: c.anal.curr,
+		Arg: constructFuzzyFilter(n),
+	})
+
+	ss[0].appendInstruction(vm.Instruction{
+		Op: vm.Output,
+		Arg: &output.Argument{
+			Func: func(a any, bat *batch.Batch) error {
+				if bat == nil || bat.IsEmpty() {
+					return nil
+				}
+
+				c.fuzzy = newFuzzyInfo(bat)
+				if err := c.fuzzy.genCondition(c.ctx, bat); err != nil {
+					return err
+				}
+
+				return nil
+			},
+		},
+	})
+
+	return ss
 }
 
 func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {

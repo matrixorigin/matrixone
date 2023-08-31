@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"time"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -56,7 +57,18 @@ const (
 )
 
 var (
-	selectOriginTableConstraintFormat = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
+	selectOriginTableConstraintFormat  = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
+	doubleCheckForFuzzyFilterWithoutCK = "select %s, count(*) as cnt from %s.%s where %s in (%s) having cnt > 1;"
+	// not using __mo_cpkey_col because efficiency considerations
+	// the current implementation also has some redundant code in condition string concatenation, because currently plan can not support sql like
+	//
+	// SELECT pk1, pk2, COUNT(*) AS cnt
+	// FROM tbl
+	// WHERE (pk1, pk2) IN ((1, 1), (2, 1))
+	// GROUP BY pk1, pk2
+	// HAVING cnt > 1;
+	// 
+	doubleCheckForFuzzyFilterWithCK = "select %s, count(*) as cnt from %s.%s where %s having cnt > 1;"
 )
 
 var (
