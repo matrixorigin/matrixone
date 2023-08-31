@@ -146,7 +146,16 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 					appendToTbl(alias, colName, expr)
 				}
 			}
-			if !found {
+			if !found && stmt.With != nil {
+				var str string
+				for i, c := range stmt.With.CTEs {
+					if i > 0 {
+						str += ", "
+					}
+					str += string(c.Name.Alias)
+				}
+				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", colName, str)
+			} else if !found {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", colName, tblName)
 			}
 		}
