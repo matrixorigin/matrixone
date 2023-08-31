@@ -1158,7 +1158,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	ses := mp.GetSession()
 	if !mp.SV.SkipCheckUser {
 		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
-		psw, err = ses.AuthenticateUser(mp.GetUserName())
+		psw, err = ses.AuthenticateUser(mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), mp.checkPassword)
 		if err != nil {
 			return err
 		}
@@ -1192,6 +1192,11 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	}
 	mp.incDebugCount(1)
 	return nil
+}
+
+func (mp *MysqlProtocolImpl) authenticateDBName(ctx context.Context, authResponse []byte) error {
+	ses := mp.GetSession()
+	return ses.AuthenticateDBName(mp.GetDatabaseName())
 }
 
 func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte) (bool, error) {
@@ -1270,6 +1275,20 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 		}
 		return err
 	}
+
+	//if dbName := mp.GetDatabaseName(); dbName != "" {
+	//	if err := mp.authenticateDBName(ctx, mp.authResponse); err != nil {
+	//		logutil.Errorf("authenticate user failed.error:%v", err)
+	//		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+	//		tipsFormat := "Access denied for user %s. %s"
+	//		msg := fmt.Sprintf(tipsFormat, getUserPart(mp.username), err.Error())
+	//		err2 := mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], msg)
+	//		if err2 != nil {
+	//			logutil.Errorf("send err packet failed.error:%v", err2)
+	//			return err2
+	//		}
+	//	}
+	//}
 
 	mp.incDebugCount(2)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")

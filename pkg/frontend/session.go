@@ -1291,8 +1291,8 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 	return false
 }
 
-// AuthenticateUser verifies the password of the user.
-func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
+// AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
+func (ses *Session) AuthenticateUser(userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd, salt, auth []byte) bool) ([]byte, error) {
 	var defaultRoleID int64
 	var defaultRole string
 	var tenant *TenantInfo
@@ -1503,11 +1503,52 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 		tenant.SetDefaultRole(defaultRole)
 	}
+	//------------------------------------------------------------------------------------------------------------------
+	psw, err := GetPassWord(pwd)
+	if err != nil {
+		return nil, err
+	}
+
+	// TO Check password
+	if checkPassword(psw, salt, authResponse) {
+		logDebugf(sessionInfo, "check password succeeded")
+		ses.InitGlobalSystemVariables()
+	} else {
+		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
+	}
+
+	// If the login information contains the database name, verify if the database exists
+	if dbName != "" {
+		_, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, pu, "use "+dbName)
+		if err != nil {
+			return nil, err
+		}
+		logDebugf(sessionInfo, "check database name succeeded")
+	}
+	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
 	logInfo(ses, sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
+}
+
+func (ses *Session) AuthenticateDBName(dbName string) error {
+	txnHandler := ses.GetTxnHandler()
+	var txnCtx context.Context
+	var txn TxnOperator
+	var err error
+	//var dbMeta engine.Database
+	txnCtx, txn, err = txnHandler.GetTxn()
+	if err != nil {
+		return err
+	}
+	//TODO: check meta data
+	if _, err = ses.GetParameterUnit().StorageEngine.Database(txnCtx, dbName, txn); err != nil {
+		//echo client. no such database
+		return moerr.NewBadDB(ses.connectCtx, dbName)
+	}
+	return nil
 }
 
 func (ses *Session) InitGlobalSystemVariables() error {
