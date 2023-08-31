@@ -239,15 +239,12 @@ num_col1    num_col2
 127    32767
 null    null
 drop table if exists s3t;
-[unknown result because it is related to issue#11442]
 create table s3t (a int, b int, c int, primary key(a, b));
-[unknown result because it is related to issue#11442]
 insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
-[unknown result because it is related to issue#11442]
 select count(*) from s3t;
-[unknown result because it is related to issue#11442]
+count(*)
+30000
 begin;
-[unknown result because it is related to issue#11442]
 CREATE TABLE `s3t_copy` (
 `a` INT NOT NULL,
 `b` INT NOT NULL,
@@ -255,10 +252,8 @@ CREATE TABLE `s3t_copy` (
 `c` INT DEFAULT null,
 PRIMARY KEY (`a`,`b`)
 );
-[unknown result because it is related to issue#11442]
 insert into s3t_copy(a, b, c) select a, b, c from s3t;
-[unknown result because it is related to issue#11442]
 select count(*) from s3t_copy;
-[unknown result because it is related to issue#11442]
+count(*)
+30000
 commit;
-[unknown result because it is related to issue#11442]

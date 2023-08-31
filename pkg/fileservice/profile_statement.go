@@ -111,6 +111,8 @@ func NewStatementProfiler(
 	return
 }
 
+// StatementProfileNewSpan return context.Context and func() function.
+// return the input ctx and nil function, if ctx.Value(CtxKeyStatementProfiler) is nil.
 func StatementProfileNewSpan(
 	ctx context.Context,
 ) (
@@ -119,7 +121,7 @@ func StatementProfileNewSpan(
 ) {
 	v := ctx.Value(CtxKeyStatementProfiler)
 	if v == nil {
-		return ctx, func() {}
+		return ctx, nil
 	}
 	profiler := v.(*SpanProfiler)
 	newProfiler, end := profiler.Begin(1)

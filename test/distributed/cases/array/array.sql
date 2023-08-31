@@ -60,12 +60,29 @@ select b/(cast("[1,2,0]" as vecf32(3))) from vec_table;
 -- agg
 select count(b) from vec_table;
 
--- insert test (zero pad, more dim error)
+-- insert test (more dim error)
 create table t4(a int, b vecf32(5), c vecf64(5));
 insert into t4 values(1, "[1,2,3,4,5]", "[1,2,3,4,5]");
 insert into t4 values(1, "[1,2]", "[1,2]");
 insert into t4 values(1, "[1,2,3,4,5,6]", "[1,2,3,4,5,6]");
 select * from t4;
+
+-- insert vector as binary
+create table t5(a int, b vecf32(3));
+insert into t5 values(1, decode('7e98b23e9e10383b2f41133f','hex'));
+insert into t5 values(2, decode('0363733ff13e0b3f7aa39d3e','hex'));
+insert into t5 values(3, decode('be1ac03e485d083ef6bc723f','hex'));
+
+insert into t5 values(4, "[0,2,3]");
+
+insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- be1... is float32[5]
+insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- be1... is float32[2]
+
+select * from t5;
+select * from t5 where t5.b > "[0,0,0]";
+
+-- output vector as binary (the output is little endian hex encoding)
+select encode(b,'hex') from t5;
 
 -- insert, flush and select
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
