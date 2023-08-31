@@ -183,8 +183,11 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	// for now, if join children is agg, do not allow shuffle
+	// for now, if join children is agg or filter, do not allow shuffle
 	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_AGG {
+		return
+	}
+	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_FILTER || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_FILTER {
 		return
 	}
 
@@ -246,8 +249,9 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	// for now, if agg children is agg, do not allow shuffle
-	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+	child := builder.qry.Nodes[n.Children[0]]
+	// for now, if agg children is agg or filter, do not allow shuffle
+	if child.NodeType == plan.Node_AGG || child.NodeType == plan.Node_FILTER {
 		return
 	}
 
@@ -283,7 +287,6 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
-	child := builder.qry.Nodes[n.Children[0]]
 	if child.NodeType == plan.Node_JOIN {
 		if n.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
 			// shuffle group can follow shuffle join
