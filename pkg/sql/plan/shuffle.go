@@ -232,12 +232,6 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 	}
-
-	// for now, do not support hash shuffle join. will support it in the future
-	if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash {
-		n.Stats.HashmapStats.Shuffle = false
-	}
-
 }
 
 // to determine if groupby need to go shuffle
