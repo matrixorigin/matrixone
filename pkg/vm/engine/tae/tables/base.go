@@ -632,7 +632,13 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
 	blk.RLock()
-	persistedTS = blk.mvcc.GetDeletesPersistedTS()
+	persistedTS = blk.mvcc.GetDeletesPersistedTSInMVCCChain()
+	if persistedTS.IsEmpty() {
+		blk.RUnlock()
+		// persitedTs is empty after restarting, fetch it from chain
+		persistedTS = blk.meta.GetDeltaPersistedTS()
+		blk.RLock()
+	}
 	if persistedTS.GreaterEq(end) {
 		blk.RUnlock()
 		return
