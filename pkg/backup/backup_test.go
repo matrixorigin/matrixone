@@ -115,6 +115,8 @@ func TestBackupData(t *testing.T) {
 	}
 
 	locations := make([]string, 0)
+	backupTime := time.Now().UTC()
+	locations = append(locations, backupTime.Format(time.DateTime))
 	for _, location := range files {
 		locations = append(locations, location)
 	}
