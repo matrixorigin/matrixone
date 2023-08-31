@@ -1734,9 +1734,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				subCtx := NewBindContext(builder, ctx)
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				cteRef.isRecursive = false
-				_, err := builder.buildSelect(s, subCtx, false)
+				nodeID, err := builder.buildSelect(s, subCtx, false)
 				if err != nil {
 					return 0, err
+				}
+				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[nodeID].ProjectList) {
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[nodeID].ProjectList), len(cteRef.ast.Name.Cols))
 				}
 			} else {
 
@@ -1747,6 +1750,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				initLastNodeID, err := builder.buildSelect(&tree.Select{Select: *left}, initCtx, false)
 				if err != nil {
 					return 0, err
+				}
+				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[initLastNodeID].ProjectList) {
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[initLastNodeID].ProjectList), len(cteRef.ast.Name.Cols))
 				}
 				recursiveNodeId := initLastNodeID
 				for _, r := range stmts {
@@ -1933,6 +1939,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, err
 		}
 	} else {
+		if ctx.recSelect && clause.Distinct {
+			return 0, moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
+		}
 		// build FROM clause
 		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
 		if err != nil {
@@ -2660,6 +2669,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						subCtx.headings[i] = string(col)
 					}
 				} else {
+					if len(s.OrderBy) > 0 {
+						return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
+					}
 					// initial statement
 					initCtx := NewBindContext(builder, ctx)
 					initCtx.initSelect = true
