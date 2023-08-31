@@ -1235,6 +1235,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.determineJoinOrder(rootID)
 		rootID = builder.removeRedundantJoinCond(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
+		rootID = builder.applyAssociativeLaw(rootID)
 		builder.applySwapRuleByStats(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
