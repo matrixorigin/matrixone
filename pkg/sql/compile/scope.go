@@ -66,9 +66,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 	var p *pipeline.Pipeline
 	defer func() {
 		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(c.proc.Ctx, e)
+			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 		}
-		p.Cleanup(c.proc, err != nil)
+		p.Cleanup(s.Proc, err != nil)
 	}()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
