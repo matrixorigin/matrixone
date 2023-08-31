@@ -88,7 +88,7 @@ func NewDiskCache(
 	return ret, nil
 }
 
-var _ IOVectorCache = new(DiskCache)
+var _ Cache = new(DiskCache)
 
 func (d *DiskCache) Read(
 	ctx context.Context,
@@ -118,6 +118,19 @@ func (d *DiskCache) Read(
 		return err
 	}
 
+	contentOK := false
+	contentPath := d.fullDataFilePath(path.File)
+	d.waitUpdateComplete(contentPath)
+
+	contentFile, err := os.Open(contentPath)
+	if err == nil {
+		numOpen++
+		contentOK = true
+		defer contentFile.Close()
+	} else {
+		err = nil // ignore
+	}
+
 	for i, entry := range vector.Entries {
 		if entry.done {
 			continue
@@ -131,14 +144,22 @@ func (d *DiskCache) Read(
 		numRead++
 
 		var file *os.File
-		// open entry file
-		entryPath := d.entryDataFilePath(path.File, entry)
-		d.waitUpdateComplete(entryPath)
-		entryFile, err := os.Open(entryPath)
-		if err == nil {
-			file = entryFile
-			defer entryFile.Close()
-			numOpen++
+		if contentOK {
+			// use content file
+			_, err = contentFile.Seek(entry.Offset, io.SeekStart)
+			if err == nil {
+				file = contentFile
+			}
+		} else {
+			// open entry file
+			entryPath := d.entryDataFilePath(path.File, entry)
+			d.waitUpdateComplete(entryPath)
+			entryFile, err := os.Open(entryPath)
+			if err == nil {
+				file = entryFile
+				defer entryFile.Close()
+				numOpen++
+			}
 		}
 		if file == nil {
 			// no file available
@@ -276,6 +297,75 @@ func (d *DiskCache) Update(
 
 func (d *DiskCache) Flush() {
 	//TODO
+}
+
+var _ FileCache = new(DiskCache)
+
+func (d *DiskCache) GetFile(
+	ctx context.Context,
+	path string,
+) (
+	r io.ReadSeekCloser,
+	err error,
+) {
+
+	contentPath := d.fullDataFilePath(path)
+	d.waitUpdateComplete(contentPath)
+
+	f, err := os.Open(contentPath)
+	if err != nil {
+		return nil, err
+	}
+	perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+		set.FileService.Cache.Disk.OpenFile.Add(1)
+	})
+	perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+		set.FileService.Cache.Disk.GetFileContent.Add(1)
+	})
+
+	return f, nil
+}
+
+func (d *DiskCache) SetFile(
+	ctx context.Context,
+	path string,
+) (
+	w io.WriteCloser,
+	err error,
+) {
+
+	contentPath := d.fullDataFilePath(path)
+	doneUpdate := d.startUpdate(contentPath)
+	defer doneUpdate()
+
+	_, err = os.Stat(contentPath)
+	if err == nil {
+		// file exists
+		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
+			set.FileService.Cache.Disk.StatFile.Add(1)
+		})
+		return
+	}
+
+	writer, done, closeW, err := d.newFileContentWriter(contentPath)
+	if err != nil {
+		return nil, err
+	}
+
+	w = &writeCloser{
+		w: writer,
+		closeFunc: func() error {
+			if err := closeW(); err != nil {
+				return err
+			}
+			if err := done(ctx); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+
+	return
 }
 
 func (d *DiskCache) triggerEvict(ctx context.Context, bytesWritten int64) {
@@ -443,6 +533,14 @@ func (d *DiskCache) entryDataFilePath(path string, entry IOEntry) string {
 		d.path,
 		toOSPath(path),
 		fmt.Sprintf("%d-%d%s", entry.Offset, entry.Size, cacheFileSuffix),
+	)
+}
+
+func (d *DiskCache) fullDataFilePath(path string) string {
+	return filepath.Join(
+		d.path,
+		toOSPath(path),
+		"full-data"+cacheFileSuffix,
 	)
 }
 

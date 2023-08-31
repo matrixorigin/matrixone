@@ -33,7 +33,7 @@ type MemoryFS struct {
 	name string
 	sync.RWMutex
 	tree            *btree.BTreeG[*_MemFSEntry]
-	caches          []IOVectorCache
+	caches          []Cache
 	perfCounterSets []*perfcounter.CounterSet
 	asyncUpdate     bool
 }

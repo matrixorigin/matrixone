@@ -95,7 +95,7 @@ func NewLRUCache(
 	return lrucache.New[CacheKey, CacheData](capacity, postSetFn, postGetFn, postEvictFn)
 }
 
-var _ IOVectorCache = new(MemCache)
+var _ Cache = new(MemCache)
 
 func (m *MemCache) Read(
 	ctx context.Context,

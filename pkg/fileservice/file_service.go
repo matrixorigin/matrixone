@@ -129,7 +129,7 @@ type IOEntry struct {
 	done bool
 
 	// fromCache indicates which cache filled the entry
-	fromCache IOVectorCache
+	fromCache Cache
 }
 
 type CacheData interface {

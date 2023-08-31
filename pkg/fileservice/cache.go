@@ -16,63 +16,14 @@ package fileservice
 
 import (
 	"context"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"io"
 )
-
-type CacheConfig struct {
-	MemoryCapacity       *toml.ByteSize `toml:"memory-capacity"`
-	DiskPath             *string        `toml:"disk-path"`
-	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
-	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
-	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
-
-	CacheCallbacks
-
-	enableDiskCacheForLocalFS bool // for testing only
-}
-
-type CacheCallbacks struct {
-	PostGet   []CacheCallbackFunc
-	PostSet   []CacheCallbackFunc
-	PostEvict []CacheCallbackFunc
-}
-
-type CacheCallbackFunc = func(CacheKey, CacheData)
-
-func (c *CacheConfig) setDefaults() {
-	if c.MemoryCapacity == nil {
-		size := toml.ByteSize(512 << 20)
-		c.MemoryCapacity = &size
-	}
-	if c.DiskCapacity == nil {
-		size := toml.ByteSize(8 << 30)
-		c.DiskCapacity = &size
-	}
-	if c.DiskMinEvictInterval == nil {
-		c.DiskMinEvictInterval = &toml.Duration{
-			Duration: time.Minute * 7,
-		}
-	}
-	if c.DiskEvictTarget == nil {
-		target := 0.8
-		c.DiskEvictTarget = &target
-	}
-}
-
-var DisabledCacheConfig = CacheConfig{
-	MemoryCapacity: ptrTo[toml.ByteSize](DisableCacheCapacity),
-	DiskCapacity:   ptrTo[toml.ByteSize](DisableCacheCapacity),
-}
-
-const DisableCacheCapacity = 1
 
 // var DefaultCacheDataAllocator = RCBytesPool
 var DefaultCacheDataAllocator = new(bytesAllocator)
 
-// VectorCache caches IOVector
-type IOVectorCache interface {
+// Cache is the interface for reading IOEntry
+type Cache interface {
 	Read(
 		ctx context.Context,
 		vector *IOVector,
@@ -99,4 +50,23 @@ type DataCache interface {
 	Capacity() int64
 	Used() int64
 	Available() int64
+}
+
+// FileCache caches whole files
+type FileCache interface {
+	GetFile(
+		ctx context.Context,
+		path string,
+	) (
+		r io.ReadSeekCloser,
+		err error,
+	)
+
+	SetFile(
+		ctx context.Context,
+		path string,
+	) (
+		w io.WriteCloser,
+		err error,
+	)
 }
