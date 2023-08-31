@@ -184,10 +184,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	// for now, if join children is agg or filter, do not allow shuffle
-	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_AGG {
-		return
-	}
-	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_FILTER || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_FILTER {
+	if isAggOrFilter(builder.qry.Nodes[n.Children[0]], builder) || isAggOrFilter(builder.qry.Nodes[n.Children[1]], builder) {
 		return
 	}
 
@@ -237,6 +234,18 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 }
 
+// find agg or agg->filter node
+func isAggOrFilter(n *plan.Node, builder *QueryBuilder) bool {
+	if n.NodeType == plan.Node_AGG {
+		return true
+	} else if n.NodeType == plan.Node_FILTER {
+		if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+			return true
+		}
+	}
+	return false
+}
+
 // to determine if groupby need to go shuffle
 func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	// do not shuffle by default
@@ -251,7 +260,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 	child := builder.qry.Nodes[n.Children[0]]
 	// for now, if agg children is agg or filter, do not allow shuffle
-	if child.NodeType == plan.Node_AGG || child.NodeType == plan.Node_FILTER {
+	if isAggOrFilter(child, builder) {
 		return
 	}
 
