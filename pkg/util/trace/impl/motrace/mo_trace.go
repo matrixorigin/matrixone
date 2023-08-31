@@ -268,7 +268,7 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 
 // End completes the Span. Span will be recorded if meets the following condition:
 // 1. If set Deadline in ctx, which specified at the MOTracer.Start, just check if encounters the Deadline.
-// 2. If NOT set Deadline, then check condition: Span.Duration > span.GetLongTimeThreshold().
+// 2. If NOT set Deadline, then check condition: MOSpan.Duration >= MOSpan.GetLongTimeThreshold().
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	var err error
 	s.EndTime = time.Now()
