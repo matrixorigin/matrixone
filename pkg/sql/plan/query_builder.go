@@ -1229,11 +1229,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
 
 		ReCalcNodeStats(rootID, builder, true, true)
+		builder.applySwapRuleByStats(rootID, true)
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
 		rootID = builder.removeRedundantJoinCond(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
+		builder.applySwapRuleByStats(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
