@@ -17,6 +17,7 @@ package pythonservice
 import (
 	"context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"sync"
 )
 
@@ -40,7 +41,7 @@ func (c *client) init() error {
 			c.mutex.Lock()
 			defer c.mutex.Unlock()
 			if c.sc == nil {
-				conn, err := grpc.Dial(c.cfg.ServerAddress, grpc.WithInsecure())
+				conn, err := grpc.Dial(c.cfg.ServerAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {
 					return err
 				}
