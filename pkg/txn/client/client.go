@@ -475,10 +475,18 @@ func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Unlock()
 
 	for _, op := range ops {
+		tempWorkspace := op.workspace
+
+		op.workspace = nil
 		_ = op.Rollback(context.Background())
+		op.workspace = tempWorkspace
 	}
 	for _, op := range waitOps {
+		tempWorkspace := op.workspace
+
+		op.workspace = nil
 		_ = op.Rollback(context.Background())
+		op.workspace = tempWorkspace
 		op.notifyActive()
 	}
 }
