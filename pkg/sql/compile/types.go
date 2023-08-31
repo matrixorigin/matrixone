@@ -219,6 +219,8 @@ type Compile struct {
 
 	// [tag-11768] a hack for resolving mpool leak bug temporarily.
 	tag11768 bool
+
+	fuzzy *fuzzyCheckInfo
 }
 
 type runtimeFilterReceiver struct {
@@ -230,4 +232,14 @@ type RemoteReceivRegInfo struct {
 	Idx      int
 	Uuid     uuid.UUID
 	FromAddr string
+}
+
+// use to contains some info to run a background SQL when
+// fuzzy filter can not draw a definite conclusion for duplicate check
+type fuzzyCheckInfo struct {
+	db        string
+	tbl       string
+	isCpk     bool
+	attrs     []string
+	condition string
 }

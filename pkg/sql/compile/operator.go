@@ -18,6 +18,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,7 +74,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
@@ -528,6 +530,16 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		TableDef:        oldCtx.TableDef,
 		IsIgnore:        oldCtx.IsIgnore,
+	}
+}
+
+func constructFuzzyFilter(n *plan.Node) *fuzzyfilter.Argument {
+	tblName := n.TableDef.GetName()
+	dbName := n.ObjRef.GetSchemaName()
+
+	return &fuzzyfilter.Argument{
+		TblName: tblName,
+		DbName:  dbName,
 	}
 }
 

@@ -82,6 +82,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 	anal.Alloc(int64(newAlloc))
 
+	// may be used by fuzzy filter to report which attribute violated dup constraint
+	rattrs := make([]string, 0)
+	for _, e := range ap.Es {
+		if col := e.GetCol(); col != nil {
+			rattrs = append(rattrs, col.Name)
+		}
+	}
+	rbat.SetAttributes(rattrs)
+
 	rbat.SetRowCount(bat.RowCount())
 
 	proc.PutBatch(bat)
