@@ -67,8 +67,13 @@ func (p *Partition) MutateState() (*PartitionState, func()) {
 	}
 }
 
-func (p *Partition) Lock() <-chan struct{} {
-	return p.lock
+func (p *Partition) Lock(ctx context.Context) error {
+	select {
+	case <-p.lock:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (p *Partition) Unlock() {
@@ -89,12 +94,11 @@ func (p *Partition) ConsumeCheckpoints(
 		return nil
 	}
 
-	select {
-	case <-p.Lock():
-		defer p.Unlock()
-	case <-ctx.Done():
-		return ctx.Err()
+	lockErr := p.Lock(ctx)
+	if lockErr != nil {
+		return lockErr
 	}
+	defer p.Unlock()
 
 	curState := p.state.Load()
 	if len(curState.checkpoints) == 0 {
