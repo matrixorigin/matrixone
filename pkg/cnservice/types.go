@@ -44,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -242,9 +244,7 @@ type Config struct {
 	// "working", "draining" and "drained".
 	InitWorkState string `toml:"init-work-state"`
 
-	PythonUdfClient struct {
-		ServerAddress string `toml:"server-address"`
-	} `toml:"python-udf-client"`
+	PythonUdfClient pythonservice.ClientConfig `toml:"python-udf-client"`
 }
 
 func (c *Config) Validate() error {
@@ -539,6 +539,7 @@ type service struct {
 		lockService lockservice.LockService,
 		queryService queryservice.QueryService,
 		hakeeper logservice.CNHAKeeperClient,
+		udfService udf.Service,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
@@ -562,6 +563,8 @@ type service struct {
 	sessionMgr             *queryservice.SessionManager
 	// queryService is used to send query request between CN services.
 	queryService queryservice.QueryService
+	// udfService is used to handle non-sql udf
+	udfService udf.Service
 
 	stopper     *stopper.Stopper
 	aicm        *defines.AutoIncrCacheManager

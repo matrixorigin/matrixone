@@ -4,7 +4,7 @@
 // - protoc             v3.17.0
 // source: python_udf.proto
 
-package function
+package pythonservice
 
 import (
 	context "context"
@@ -35,7 +35,7 @@ func NewPythonUdfServiceClient(cc grpc.ClientConnInterface) PythonUdfServiceClie
 
 func (c *pythonUdfServiceClient) Run(ctx context.Context, in *PythonUdfRequest, opts ...grpc.CallOption) (*PythonUdfResponse, error) {
 	out := new(PythonUdfResponse)
-	err := c.cc.Invoke(ctx, "/function.PythonUdfService/run", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/pythonservice.PythonUdfService/run", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ func _PythonUdfService_Run_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/function.PythonUdfService/run",
+		FullMethod: "/pythonservice.PythonUdfService/run",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PythonUdfServiceServer).Run(ctx, req.(*PythonUdfRequest))
@@ -92,7 +92,7 @@ func _PythonUdfService_Run_Handler(srv interface{}, ctx context.Context, dec fun
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var PythonUdfService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "function.PythonUdfService",
+	ServiceName: "pythonservice.PythonUdfService",
 	HandlerType: (*PythonUdfServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

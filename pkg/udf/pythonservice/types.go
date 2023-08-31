@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package pythonserver
+package pythonservice
+
+import "context"
 
 type PythonUdfServer interface {
 	Start() error
 	Close() error
+}
+
+type PythonUdfClient interface {
+	Run(ctx context.Context, request *PythonUdfRequest) (*PythonUdfResponse, error)
 }

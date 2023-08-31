@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package pythonserver
+package pythonservice
 
 import (
 	"os"
@@ -39,11 +39,16 @@ func (s *service) Start() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if s.process == nil {
+		file := path.Join(s.cfg.Path, "server.py")
+		_, err := os.Stat(file)
+		if err != nil {
+			return err
+		}
 		cmd := exec.Command(
 			"/bin/bash", "-c",
-			"python -u "+path.Join(s.cfg.Path, "server.py")+" --address="+s.cfg.Address+" > server.log 2>&1 &",
+			"python -u "+file+" --address="+s.cfg.Address+" >> server.log 2>&1 &",
 		)
-		err := cmd.Run()
+		err = cmd.Run()
 		if err != nil {
 			return err
 		}

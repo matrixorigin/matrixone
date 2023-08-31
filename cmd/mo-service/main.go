@@ -43,9 +43,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
-	"github.com/matrixorigin/matrixone/pkg/pythonserver"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -380,7 +380,7 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 	serviceWG.Add(1)
 	return stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
 		defer serviceWG.Done()
-		s, err := pythonserver.NewService(cfg.PythonUdfServerConfig)
+		s, err := pythonservice.NewService(cfg.PythonUdfServerConfig)
 		if err != nil {
 			panic(err)
 		}

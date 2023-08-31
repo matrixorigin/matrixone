@@ -13,8 +13,8 @@
 // limitations under the License.
 
 syntax = "proto3";
-package function;
-option go_package = "../function";
+package pythonservice;
+option go_package = "../pythonservice";
 
 // protoc --go_out=. --go-grpc_out=. ./python_udf.proto
 

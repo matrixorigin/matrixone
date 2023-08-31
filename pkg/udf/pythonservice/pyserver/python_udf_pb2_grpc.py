@@ -17,7 +17,7 @@ class PythonUdfServiceStub(object):
             channel: A grpc.Channel.
         """
         self.run = channel.unary_unary(
-                '/function.PythonUdfService/run',
+                '/pythonservice.PythonUdfService/run',
                 request_serializer=python__udf__pb2.PythonUdfRequest.SerializeToString,
                 response_deserializer=python__udf__pb2.PythonUdfResponse.FromString,
                 )
@@ -44,7 +44,7 @@ def add_PythonUdfServiceServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'function.PythonUdfService', rpc_method_handlers)
+            'pythonservice.PythonUdfService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
 
 
@@ -65,7 +65,7 @@ class PythonUdfService(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/function.PythonUdfService/run',
+        return grpc.experimental.unary_unary(request, target, '/pythonservice.PythonUdfService/run',
             python__udf__pb2.PythonUdfRequest.SerializeToString,
             python__udf__pb2.PythonUdfResponse.FromString,
             options, channel_credentials,

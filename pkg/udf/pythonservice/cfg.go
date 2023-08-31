@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package pythonserver
+package pythonservice
 
 import (
 	"context"
@@ -31,6 +31,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Path == "" {
 		return moerr.NewInternalError(context.Background(), "missing python udf server path")
+	}
+	return nil
+}
+
+type ClientConfig struct {
+	ServerAddress string `toml:"server-address"`
+}
+
+func (c *ClientConfig) Validate() error {
+	if c.ServerAddress == "" {
+		return moerr.NewInternalError(context.Background(), "missing python udf server address")
 	}
 	return nil
 }
