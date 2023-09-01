@@ -51,6 +51,7 @@ var (
 		strings.ToUpper(pb.CmdMethod_SyncCommit.String()):    handleSyncCommit,
 		strings.ToUpper(pb.CmdMethod_AddFaultPoint.String()): handleAddFaultPoint(),
 		strings.ToUpper(pb.CmdMethod_Backup.String()):        handleBackup(),
+		strings.ToUpper(pb.CmdMethod_EnableFSSpan.String()):  handleEnableFSSpan,
 	}
 )
 

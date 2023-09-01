@@ -147,8 +147,19 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
-	ctx, span := trace.Start(ctx, "LocalFS.Write")
-	defer span.End()
+	var err error
+	sCtx, span := trace.Start(ctx, "LocalFS.Write", trace.WithKind(trace.SpanKindLocalFSVis))
+	// collect read info only when cache missing
+	defer func() {
+		// cover another func to catch the err returned by l.read
+		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, func() int64 {
+			size := int64(0)
+			for idx := range vector.Entries {
+				size += vector.Entries[idx].Size
+			}
+			return size
+		}()))
+	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -160,10 +171,12 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	_, err = os.Stat(nativePath)
 	if err == nil {
 		// existed
-		return moerr.NewFileAlreadyExistsNoCtx(path.File)
+		err = moerr.NewFileAlreadyExistsNoCtx(path.File)
+		return err
 	}
 
-	return l.write(ctx, vector)
+	err = l.write(sCtx, vector)
+	return err
 }
 
 func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
@@ -269,9 +282,6 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
-	ctx, span := trace.Start(ctx, "LocalFS.Read")
-	defer span.End()
-
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
@@ -309,7 +319,20 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
-	if err := l.read(ctx, vector); err != nil {
+	// collect read info only when cache missing
+	sCtx, span := trace.Start(ctx, "LocalFS.Read", trace.WithKind(trace.SpanKindLocalFSVis))
+	defer func() {
+		// cover another func to catch the err returned by l.read
+		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, func() int64 {
+			size := int64(0)
+			for idx := range vector.Entries {
+				size += vector.Entries[idx].Size
+			}
+			return size
+		}()))
+	}()
+
+	if err = l.read(sCtx, vector); err != nil {
 		return err
 	}
 
@@ -524,8 +547,12 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 	default:
 	}
 
-	ctx, span := trace.Start(ctx, "LocalFS.List")
-	defer span.End()
+	ctx, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
+	defer func() {
+		span.AddExtraFields([]zap.Field{zap.String("list", dirPath)}...)
+		span.End()
+	}()
+
 	_ = ctx
 
 	t0 := time.Now()
@@ -592,8 +619,11 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	default:
 	}
 
-	ctx, span := trace.Start(ctx, "LocalFS.StatFile")
-	defer span.End()
+	ctx, span := trace.Start(ctx, "LocalFS.StatFile", trace.WithKind(trace.SpanKindLocalFSVis))
+	defer func() {
+		span.AddExtraFields([]zap.Field{zap.String("stat", filePath)}...)
+		span.End()
+	}()
 
 	t0 := time.Now()
 	defer func() {
@@ -633,8 +663,11 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	default:
 	}
 
-	ctx, span := trace.Start(ctx, "LocalFS.Delete")
-	defer span.End()
+	ctx, span := trace.Start(ctx, "LocalFS.Delete", trace.WithKind(trace.SpanKindLocalFSVis))
+	defer func() {
+		span.AddExtraFields([]zap.Field{zap.String("delete", strings.Join(filePaths, "|"))}...)
+		span.End()
+	}()
 
 	t0 := time.Now()
 	defer func() {

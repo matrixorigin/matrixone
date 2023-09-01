@@ -67,7 +67,7 @@ type MOTracer struct {
 // but also trigger profile dump specify by `WithProfileGoroutine()`, `WithProfileHeap()`, `WithProfileThreadCreate()`,
 // `WithProfileAllocs()`, `WithProfileBlock()`, `WithProfileMutex()`, `WithProfileCpuSecs()`, `WithProfileTraceSecs()` SpanOption.
 func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
-	if !t.IsEnable() {
+	if !t.IsEnable(opts...) {
 		return ctx, trace.NoopSpan{}
 	}
 
@@ -111,8 +111,22 @@ func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanSta
 	return t.Start(ctx, name, opts...)
 }
 
-func (t *MOTracer) IsEnable() bool {
-	return t.provider.IsEnable()
+func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
+	var cfg trace.SpanConfig
+	for idx := range opts {
+		opts[idx].ApplySpanStart(&cfg)
+	}
+
+	// The enable state of kind, which falls within [SpanKindS3FSVis, SpanKindLocalFSVis],
+	// is managed by 'mo_ctl'
+	switch cfg.Kind {
+	case trace.SpanKindS3FSVis:
+		return trace.MOCtledSpanEnableConfig.EnableS3FSSpan
+	case trace.SpanKindLocalFSVis:
+		return trace.MOCtledSpanEnableConfig.EnableLocalFSSpan
+	default:
+		return t.provider.IsEnable()
+	}
 }
 
 var _ trace.Span = (*MOHungSpan)(nil)
@@ -284,7 +298,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 			err = s.ctx.Err()
 		}
 	} else {
-		if s.Duration >= s.GetLongTimeThreshold() {
+		if s.NeedRecord(s.Duration) {
 			s.needRecord = true
 		}
 	}
@@ -296,6 +310,9 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	for _, opt := range options {
 		opt.ApplySpanEnd(&s.SpanConfig)
 	}
+
+	s.AddExtraFields(s.SpanConfig.Extra...)
+
 	// do profile
 	if s.NeedProfile() {
 		s.doProfile()

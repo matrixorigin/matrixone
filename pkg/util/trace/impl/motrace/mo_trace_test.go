@@ -24,6 +24,7 @@ package motrace
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"io"
 	"os"
 	"path"
@@ -517,4 +518,34 @@ func TestContextDeadlineAndCancel(t *testing.T) {
 	t.Logf("deadlineCtx.Err: %s", deadlineCtx.Err())
 	quitCancel()
 	require.Equal(t, context.DeadlineExceeded, deadlineCtx.Err())
+}
+
+func TestWithFSSpan(t *testing.T) {
+
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+
+	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan = true
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan = false
+
+	_, span := tracer.Start(context.Background(), "test", trace.WithKind(
+		trace.SpanKindLocalFSVis))
+
+	_, ok := span.(trace.NoopSpan)
+
+	assert.True(t, tracer.IsEnable(trace.WithKind(trace.SpanKindLocalFSVis)))
+	assert.False(t, ok)
+	assert.True(t, span.(*MOSpan).NeedRecord(0))
+	span.End()
+
+	_, span = tracer.Start(context.Background(), "test", trace.WithKind(
+		trace.SpanKindS3FSVis))
+	_, ok = span.(trace.NoopSpan)
+	assert.False(t, tracer.IsEnable(trace.WithKind(trace.SpanKindS3FSVis)))
+	assert.True(t, ok)
+	span.End()
+
 }
