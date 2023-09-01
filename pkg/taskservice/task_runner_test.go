@@ -185,9 +185,9 @@ func TestCancelRunningTask(t *testing.T) {
 		for v := mustGetTestTask(t, store, 1)[0]; v.Status != task.TaskStatus_Completed; v = mustGetTestTask(t, store, 1)[0] {
 			time.Sleep(10 * time.Millisecond)
 		}
-		r.mu.RLock()
-		defer r.mu.RUnlock()
-		assert.Equal(t, 0, len(r.mu.runningTasks))
+		r.runningTasks.RLock()
+		defer r.runningTasks.RUnlock()
+		assert.Equal(t, 0, len(r.runningTasks.m))
 	}, WithRunnerParallelism(2),
 		WithRunnerHeartbeatInterval(time.Millisecond),
 		WithRunnerFetchInterval(time.Millisecond))

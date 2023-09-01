@@ -124,6 +124,11 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		} else {
 			return fmt.Sprintf("%x", buf)
 		}
+	case types.T_array_float32:
+		//TODO: Should this behave like Varchar or JSON  type?
+		return types.BytesToArrayToString[float32](v.([]byte))
+	case types.T_array_float64:
+		return types.BytesToArrayToString[float64](v.([]byte))
 	case types.T_date:
 		val := v.(types.Date)
 		return val.String()
@@ -163,6 +168,9 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_Blockid:
 		val := v.(types.Blockid)
 		return val.String()
+	case types.T_enum:
+		val := v.(types.Enum)
+		return fmt.Sprintf("%v", val)
 	default:
 		return fmt.Sprintf("%v", v)
 	}

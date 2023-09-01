@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -212,6 +213,43 @@ func VarlenGetMinMax(vec *Vector) (minv, maxv []byte) {
 				minv = val
 			}
 			if bytes.Compare(maxv, val) < 0 {
+				maxv = val
+			}
+		}
+	}
+	return
+}
+
+func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
+	col, area := MustVarlenaRawData(vec)
+	if vec.HasNull() {
+		first := true
+		for i, j := 0, vec.Length(); i < j; i++ {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			val := types.GetArray[T](&col[i], area)
+			if first {
+				minv, maxv = val, val
+				first = false
+			} else {
+				if moarray.Compare[T](minv, val) > 0 {
+					minv = val
+				}
+				if moarray.Compare[T](maxv, val) < 0 {
+					maxv = val
+				}
+			}
+		}
+	} else {
+		val := types.GetArray[T](&col[0], area)
+		minv, maxv = val, val
+		for i, j := 1, vec.Length(); i < j; i++ {
+			val := types.GetArray[T](&col[i], area)
+			if moarray.Compare[T](minv, val) > 0 {
+				minv = val
+			}
+			if moarray.Compare[T](maxv, val) < 0 {
 				maxv = val
 			}
 		}

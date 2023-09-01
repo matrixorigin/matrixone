@@ -500,11 +500,11 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 		return
 	}
 	defer data.Close()
-	cnLocation, dnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
+	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
 	if err != nil {
 		return
 	}
-	entry.SetLocation(cnLocation, dnLocation)
+	entry.SetLocation(cnLocation, tnLocation)
 
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
@@ -521,11 +521,11 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	}
 	defer data.Close()
 
-	cnLocation, dnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
+	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
 	if err != nil {
 		return
 	}
-	entry.SetLocation(cnLocation, dnLocation)
+	entry.SetLocation(cnLocation, tnLocation)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
 
@@ -771,7 +771,9 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 
 	factory := jobs.FlushTableTailTaskFactory(metas, r.rt, endTs)
 	if _, err := r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory); err != nil {
-		logutil.Warnf("[FlushTabletail] %d-%s %v", table.ID, table.GetLastestSchema().Name, err)
+		if err != tasks.ErrScheduleScopeConflict {
+			logutil.Infof("[FlushTabletail] %d-%s %v", table.ID, table.GetLastestSchema().Name, err)
+		}
 		return moerr.GetOkExpectedEOB()
 	}
 	return nil
@@ -846,7 +848,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		defer stats.Unlock()
 
 		// debug log, delete later
-		if !stats.LastFlush.IsEmpty() && size > 1*1000*1024 {
+		if !stats.LastFlush.IsEmpty() && size > 2*1000*1024 {
 			logutil.Infof("[flushtabletail] %s(%s)  FlushCountDown %v",
 				table.GetLastestSchema().Name,
 				humanReadableSize(size),

@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"math"
 	"sort"
+
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -52,6 +54,7 @@ var (
 	constDateType       = types.T_date.ToType()
 	constTimeType       = types.T_time.ToType()
 	constDatetimeType   = types.T_datetime.ToType()
+	constEnumType       = types.T_enum.ToType()
 	constTimestampTypes = []types.Type{
 		types.New(types.T_timestamp, 0, 0),
 		types.New(types.T_timestamp, 0, 1),
@@ -61,6 +64,7 @@ var (
 		types.New(types.T_timestamp, 0, 5),
 		types.New(types.T_timestamp, 0, 6),
 	}
+	//No need to add T_array here, as Array is cast from varchar.
 )
 
 // ExpressionExecutor
@@ -654,12 +658,26 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
 				vec = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+			} else if typ.Oid == types.T_array_float32 {
+				array, err := types.StringToArray[float32](sval)
+				if err != nil {
+					return nil, err
+				}
+				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+			} else if typ.Oid == types.T_array_float64 {
+				array, err := types.StringToArray[float64](sval)
+				if err != nil {
+					return nil, err
+				}
+				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else {
 				vec = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
 			}
 		case *plan.Const_Defaultval:
 			defaultVal := con.GetDefaultval()
 			vec = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
+		case *plan.Const_EnumVal:
+			vec = vector.NewConstFixed(constEnumType, uint16(con.GetU16Val()), 1, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
@@ -947,6 +965,10 @@ func getConstZM(
 		zm = index.NewZM(constBType.Oid, 0)
 		v := c.C.GetDefaultval()
 		index.UpdateZM(zm, types.EncodeBool(&v))
+	case *plan.Const_EnumVal:
+		zm = index.NewZM(constEnumType.Oid, 0)
+		v := types.Enum(c.C.GetU16Val())
+		index.UpdateZM(zm, types.EncodeEnum(&v))
 	default:
 		err = moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", c.C.GetValue()))
 	}
@@ -1331,6 +1353,23 @@ func SortInFilter(vec *vector.Vector) {
 		col, area := vector.MustVarlenaRawData(vec)
 		sort.Slice(col, func(i, j int) bool {
 			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		})
+
+	case types.T_array_float32:
+		col, area := vector.MustVarlenaRawData(vec)
+		sort.Slice(col, func(i, j int) bool {
+			return moarray.Compare[float32](
+				types.GetArray[float32](&col[i], area),
+				types.GetArray[float32](&col[j], area),
+			) < 0
+		})
+	case types.T_array_float64:
+		col, area := vector.MustVarlenaRawData(vec)
+		sort.Slice(col, func(i, j int) bool {
+			return moarray.Compare[float64](
+				types.GetArray[float64](&col[i], area),
+				types.GetArray[float64](&col[j], area),
+			) < 0
 		})
 	}
 }

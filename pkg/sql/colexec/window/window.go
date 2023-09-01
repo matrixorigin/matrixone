@@ -189,7 +189,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 		// plan.Function_AGG, plan.Function_WIN_VALUE
 		for j := 0; j < n; j++ {
 
-			start, end := 0, ctr.bat.Vecs[0].Length()
+			start, end := 0, n
 
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
@@ -491,6 +491,13 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 			if err := ctr.aggVecs[k].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
 				panic(err)
 			}
+		}
+	}
+
+	t := len(ctr.orderVecs) - 1
+	if ctr.orderVecs[t].vec != nil && !ctr.orderVecs[t].executor.IsColumnExpr() {
+		if err := ctr.orderVecs[t].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
+			panic(err)
 		}
 	}
 

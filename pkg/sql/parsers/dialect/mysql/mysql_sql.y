@@ -167,6 +167,7 @@ import (
     ifNotExists bool
     defaultOptional bool
     streamOptional bool
+    connectorOptional bool
     fullOpt bool
     boolVal bool
     int64Val int64
@@ -299,7 +300,7 @@ import (
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION
 
@@ -395,7 +396,7 @@ import (
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Stream
-%token <str> SOURCE STREAM HEADERS
+%token <str> SOURCE STREAM HEADERS CONNECTOR
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
@@ -440,11 +441,11 @@ import (
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> create_stream_stmt
+%type <statement> create_stream_stmt create_connector_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
@@ -468,6 +469,7 @@ import (
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
+%type <statement> backup_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -534,7 +536,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
+%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list connector_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -549,7 +551,7 @@ import (
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
-%type <tableOption> table_option stream_option
+%type <tableOption> table_option stream_option connector_option
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
@@ -725,6 +727,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
+%token <str> BACKUP FILESYSTEM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %start start_command
@@ -846,6 +849,25 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
+|   backup_stmt
+
+backup_stmt:
+    BACKUP STRING FILESYSTEM STRING
+	{
+		$$ = &tree.BackupStart{
+		    Timestamp: $2,
+		    IsS3 : false,
+		    Dir: $4,
+		}
+	}
+    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
+    {
+    	$$ = &tree.BackupStart{
+        	    Timestamp: $2,
+        	    IsS3 : true,
+        	    Option : $5,
+        	}
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -3670,6 +3692,11 @@ drop_table_stmt:
         $$ = &tree.DropTable{IfExists: $3, Names: $4}
     }
 
+drop_connector_stmt:
+    DROP CONNECTOR exists_opt table_name_list
+    {
+	$$ = &tree.DropConnector{IfExists: $3, Names: $4}
+    }
 
 drop_view_stmt:
     DROP VIEW exists_opt table_name_list
@@ -5071,6 +5098,7 @@ create_ddl_stmt:
 |   create_sequence_stmt
 |   create_procedure_stmt
 |	create_stream_stmt
+|	create_connector_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -6084,6 +6112,15 @@ default_opt:
         $$ = true
     }
 
+create_connector_stmt:
+    CREATE CONNECTOR table_name WITH '(' connector_option_list ')'
+    {
+        $$ = &tree.CreateConnector{
+            ConnectorName: $3,
+            Options: $6,
+        }
+    }
+
 create_stream_stmt:
     CREATE replace_opt STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
     {
@@ -6651,6 +6688,26 @@ linear_opt:
     {
         $$ = true
     }
+
+connector_option_list:
+	connector_option
+	{
+		$$ = []tree.TableOption{$1}
+	}
+|	connector_option_list ',' connector_option
+	{
+		$$ = append($1, $3)
+	}
+
+connector_option:
+	ident equal_opt literal
+    {
+        $$ = &tree.CreateConnectorWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
+    }
+    |   STRING equal_opt literal
+        {
+             $$ = &tree.CreateConnectorWithOption{Key: tree.Identifier($1), Val: $3}
+        }
 
 stream_option_list_opt:
     {
@@ -9622,6 +9679,32 @@ char_type:
             },
         }
     }
+|   VECF32 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECF64 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
 |   ENUM '(' enum_values ')'
     {
         locale := ""
@@ -10056,6 +10139,7 @@ non_reserved_keyword:
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
+|   CONNECTOR
 |   SECONDARY_ENGINE_ATTRIBUTE
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
@@ -10094,6 +10178,8 @@ non_reserved_keyword:
 |   INDEXES
 |   ISOLATION
 |   JSON
+|   VECF32
+|   VECF64
 |   KEY_BLOCK_SIZE
 |   KEYS
 |   LANGUAGE
@@ -10231,6 +10317,8 @@ non_reserved_keyword:
 |   SQL
 |   STAGE
 |   STAGES
+|   BACKUP
+| FILESYSTEM
 
 func_not_keyword:
     DATE_ADD

@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"math"
 	"net"
 	"runtime"
@@ -62,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -73,10 +75,8 @@ import (
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold              uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate            uint64 = 300 * mpool.B
-	shuffleJoinProbeChannelBufferSize        = 8
-	shuffleJoinBuildChannelBufferSize        = 2
+	DistributedThreshold   uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate uint64 = 300 * mpool.B
 )
 
 var (
@@ -99,7 +99,6 @@ var analPool = sync.Pool{
 func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
 	c := pool.Get().(*Compile)
-	c.clear()
 	c.e = e
 	c.db = db
 	c.ctx = ctx
@@ -115,6 +114,22 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
 	return c
+}
+
+func putCompile(c *Compile) {
+	if c == nil {
+		return
+	}
+	if c.anal != nil {
+		for i := range c.anal.analInfos {
+			analPool.Put(c.anal.analInfos[i])
+		}
+		c.anal.analInfos = nil
+	}
+
+	c.proc.CleanValueScanBatchs()
+	c.clear()
+	pool.Put(c)
 }
 
 func (c *Compile) clear() {
@@ -227,7 +242,7 @@ func (c *Compile) setAffectedRows(n uint64) {
 	c.affectRows.Store(n)
 }
 
-func (c *Compile) GetAffectedRows() uint64 {
+func (c *Compile) getAffectedRows() uint64 {
 	affectRows := c.affectRows.Load()
 	return affectRows
 }
@@ -329,20 +344,17 @@ func (c *Compile) run(s *Scope) error {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(_ uint64) error {
+func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
+	var cc *Compile
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer task.End()
 	defer func() {
-		if c.anal != nil {
-			for i := range c.anal.analInfos {
-				analPool.Put(c.anal.analInfos[i])
-			}
-			c.anal.analInfos = nil
-		}
-
-		c.proc.CleanValueScanBatchs()
-		pool.Put(c)
+		putCompile(c)
+		putCompile(cc)
 	}()
+	result := &util2.RunResult{
+		AffectRows: 0,
+	}
 	if c.proc.TxnOperator != nil {
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
@@ -359,16 +371,16 @@ func (c *Compile) Run(_ uint64) error {
 
 			// clear the workspace of the failed statement
 			if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
-				return e
+				return nil, e
 			}
 			//  increase the statement id
 			if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
-				return e
+				return nil, e
 			}
 
 			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 			// improved to refresh expression in the future.
-			cc := New(
+			cc = New(
 				c.addr,
 				c.db,
 				c.sql,
@@ -383,28 +395,31 @@ func (c *Compile) Run(_ uint64) error {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				pn, err := c.buildPlanFunc()
 				if err != nil {
-					return err
+					return nil, err
 				}
 				c.pn = pn
 			}
 			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 				c.fatalLog(1, err)
-				return err
+				return nil, err
 			}
 			if err := cc.runOnce(); err != nil {
 				c.fatalLog(1, err)
-				return err
+				return nil, err
 			}
 			// set affectedRows to old compile to return
-			c.setAffectedRows(cc.GetAffectedRows())
-			return c.proc.TxnOperator.GetWorkspace().Adjust()
+			c.setAffectedRows(cc.getAffectedRows())
+			result.AffectRows = cc.getAffectedRows()
+			return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 		}
-		return err
+		return nil, err
 	}
+
+	result.AffectRows = c.getAffectedRows()
 	if c.proc.TxnOperator != nil {
-		return c.proc.TxnOperator.GetWorkspace().Adjust()
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
-	return nil
+	return result, nil
 }
 
 // run once
@@ -1197,7 +1212,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return []*Scope{rs}, nil
+		return c.compileProjection(n, []*Scope{rs}), nil
 	case plan.Node_RECURSIVE_SCAN:
 		receivers := make([]*process.WaitRegister, len(n.SourceStep))
 		for i, step := range n.SourceStep {
@@ -1237,7 +1252,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return []*Scope{rs}, nil
+		return c.compileSort(n, []*Scope{rs}), nil
 	case plan.Node_SINK:
 		receivers := c.getStepRegs(step)
 		if len(receivers) == 0 {
@@ -1250,7 +1265,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := c.newMergeScope(ss)
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers),
+			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
 		})
 
 		return []*Scope{rs}, nil
@@ -1310,10 +1325,20 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	_, span := trace.Start(ctx, "compileStreamScan")
 	defer span.End()
+	configs := make(map[string]interface{})
+	for _, def := range n.TableDef.Defs {
+		switch v := def.Def.(type) {
+		case *plan.TableDef_DefType_Properties:
+			for _, p := range v.Properties.Properties {
+				configs[p.Key] = p.Value
+			}
+		}
+	}
 
-	// TODO:
-	// end, err := GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, factory KafkaAdapterFactory) (int64, error)
-	end := int64(0)
+	end, err := mokafka.GetStreamCurrentSize(ctx, configs, mokafka.NewKafkaAdapter)
+	if err != nil {
+		return nil, err
+	}
 	ps := calculatePartitions(0, end, int64(ncpu))
 
 	ss := make([]*Scope, len(ps))
@@ -2684,6 +2709,9 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
 			ss[i].BuildIdx = lnum
+			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
 		}
 		children = append(children, ss...)
 		if !single {
@@ -2765,6 +2793,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
+			Ch:  make(chan *batch.Batch, 16),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -2814,10 +2843,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			},
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
-		// this is for shuffle join build scope
-		for _, mr := range rs.Proc.Reg.MergeReceivers {
-			mr.Ch = make(chan *batch.Batch, shuffleJoinBuildChannelBufferSize)
-		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,

@@ -162,15 +162,8 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 		return false
 	}
 	// first to check if it is primary key.
-	if tableDef.Pkey != nil {
-		pkNames := tableDef.Pkey.Names
-		pks := make([]int32, len(pkNames))
-		for i := range pkNames {
-			pks[i] = tableDef.Name2ColIndex[pkNames[i]]
-		}
-		if containsAllPKs(cols, pks) {
-			return true
-		}
+	if containsAllPKs(cols, tableDef) {
+		return true
 	}
 
 	sc := builder.compCtx.GetStatsCache()

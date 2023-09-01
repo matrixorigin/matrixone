@@ -400,6 +400,10 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
 		return vec.GetStringAt(rowIndex), nil
+	case types.T_array_float32:
+		return types.ArrayToString[float32](vector.GetArrayAt[float32](vec, rowIndex)), nil
+	case types.T_array_float64:
+		return types.ArrayToString[float64](vector.GetArrayAt[float64](vec, rowIndex)), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAt[types.Decimal64](vec, rowIndex)
 		return val.Format(vec.GetType().Scale), nil

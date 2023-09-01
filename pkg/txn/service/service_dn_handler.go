@@ -59,7 +59,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 		return nil
 	}
 
-	newTxn.DNShards = request.Txn.DNShards
+	newTxn.TNShards = request.Txn.TNShards
 	ts, err := s.storage.Prepare(ctx, newTxn)
 	if err != nil {
 		response.TxnError = txn.WrapError(err, moerr.ErrTAEPrepare)
@@ -103,13 +103,13 @@ func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, respon
 	return nil
 }
 
-func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+func (s *service) CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
 	util.LogTxnHandleRequest(request)
 	defer util.LogTxnHandleResult(response)
 
-	response.CommitDNShardResponse = &txn.TxnCommitDNShardResponse{}
+	response.CommitTNShardResponse = &txn.TxnCommitTNShardResponse{}
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
@@ -158,13 +158,13 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 	return nil
 }
 
-func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+func (s *service) RollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
 	util.LogTxnHandleRequest(request)
 	defer util.LogTxnHandleResult(response)
 
-	response.RollbackDNShardResponse = &txn.TxnRollbackDNShardResponse{}
+	response.RollbackTNShardResponse = &txn.TxnRollbackTNShardResponse{}
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)

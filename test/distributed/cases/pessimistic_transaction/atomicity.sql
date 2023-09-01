@@ -85,13 +85,13 @@ rollback ;
 show create table test_12;
 select * from test_12;
 
--- @bvt:issue#9852
 start transaction;
 create table test_12(col1 int primary key,col2 varchar(25));
 insert into test_12 values(1,'a'),(2,'b');
 -- @session:id=1{
 use atomicity;
 select * from test_12;
+-- @wait:0:commit
 create table test_12(col1 int,col2 varchar(25));
 insert into test_12 values (90,'tt');
 -- @session}
@@ -101,7 +101,6 @@ commit;
 show create table test_12;
 select * from test_12;
 drop table test_12;
--- @bvt:issue
 
 start transaction;
 create table test_12(col1 int primary key auto_increment,col2 varchar(25));
@@ -239,3 +238,17 @@ select * from rename01;
 show create table rename01;
 
 drop table rename01;
+
+---------------------------------------------------------
+drop table if exists pri01;
+create table pri01(col1 int ,col2 int);
+begin;
+insert into pri01 values(1,1);
+insert into pri01 values(2,2);
+alter table pri01 add constraint primary key(col1);
+show create table pri01;
+rollback;
+select * from pri01;
+show create table pri01;
+
+drop table pri01;

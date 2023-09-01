@@ -87,6 +87,7 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchUUIDRows
 	case types.T_char, types.T_varchar, types.T_binary:
 		return fetchVarlenaRows
+		// T_json, T_blob, T_array_float32 etc. cannot be PK.
 	case types.T_enum:
 		return fetchEnumRows
 	default:
@@ -449,8 +450,8 @@ func fetchEnumRows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.MaxUint16)
-		max := fn(0)
+		min := fn(0)
+		max := fn(math.MaxUint16)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}

@@ -119,7 +119,7 @@ func (blk *baseBlock) Rows() int {
 		return int(node.Rows())
 	}
 }
-func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
@@ -192,7 +192,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if bat.Vecs[0].GetType().Oid != types.T_TS {
 		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
 	}
-	vec = containers.ToDNVector(bat.Vecs[0])
+	vec = containers.ToTNVector(bat.Vecs[0])
 	return
 }
 
@@ -632,7 +632,13 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
 	blk.RLock()
-	persistedTS = blk.mvcc.GetDeletesPersistedTS()
+	persistedTS = blk.mvcc.GetDeletesPersistedTSInMVCCChain()
+	if persistedTS.IsEmpty() {
+		blk.RUnlock()
+		// persitedTs is empty after restarting, fetch it from chain
+		persistedTS = blk.meta.GetDeltaPersistedTS()
+		blk.RLock()
+	}
 	if persistedTS.GreaterEq(end) {
 		blk.RUnlock()
 		return

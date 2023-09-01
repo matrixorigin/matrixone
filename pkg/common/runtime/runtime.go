@@ -54,7 +54,7 @@ func SetupProcessLevelRuntime(r Runtime) {
 	processLevel.Store(r)
 }
 
-// WithClock setup clock for a runtime, CN and DN must contain an instance of the
+// WithClock setup clock for a runtime, CN and TN must contain an instance of the
 // Clock that is used to provide the timestamp service to the transaction.
 func WithClock(clock clock.Clock) Option {
 	return func(r *runtime) {

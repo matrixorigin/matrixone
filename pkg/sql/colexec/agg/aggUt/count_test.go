@@ -26,6 +26,8 @@ func TestCount(t *testing.T) {
 	int8TestTyp := types.New(types.T_int8, 0, 0)
 	boolTestTyp := types.New(types.T_bool, 0, 0)
 	varcharTestTyp := types.New(types.T_varchar, types.MaxVarcharLen, 0)
+	arrayF32TestTyp := types.New(types.T_array_float32, types.MaxArrayDimension, 0)
+	arrayF64TestTyp := types.New(types.T_array_float64, types.MaxArrayDimension, 0)
 	decimal64TestTyp := types.New(types.T_decimal64, 0, 0)
 	decimal128TestTyp := types.New(types.T_decimal128, 0, 0)
 	uuidTestTyp := types.New(types.T_uuid, 0, 0)
@@ -201,6 +203,70 @@ func TestCount(t *testing.T) {
 			},
 			mergeNsp:    nil,
 			mergeExpect: []int64{5},
+			testMarshal: false,
+		},
+
+		// array_f32 count test
+		{
+			op:         agg.AggregateCount,
+			isDistinct: false,
+			inputTyp:   arrayF32TestTyp,
+
+			input:    [][]float32{{1, 1, 1}, {2, 2, 2}},
+			inputNsp: nil,
+			expected: []int64{2},
+
+			mergeInput:  [][]float32{{1, 1, 1}, {2, 2, 2}},
+			mergeNsp:    nil,
+			mergeExpect: []int64{4},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: true,
+			inputTyp:   arrayF32TestTyp,
+
+			input:    [][]float32{{1, 1, 1}, {2, 2, 2}},
+			inputNsp: nil,
+			expected: []int64{2},
+
+			mergeInput:  [][]float32{{1, 1, 1}, {2, 2, 2}},
+			mergeNsp:    nil,
+			mergeExpect: []int64{2},
+
+			testMarshal: false,
+		},
+
+		// array_f64 count test
+		{
+			op:         agg.AggregateCount,
+			isDistinct: false,
+			inputTyp:   arrayF64TestTyp,
+
+			input:    [][]float64{{1, 1, 1}, {2, 2, 2}},
+			inputNsp: nil,
+			expected: []int64{2},
+
+			mergeInput:  [][]float64{{1, 1, 1}, {2, 2, 2}},
+			mergeNsp:    nil,
+			mergeExpect: []int64{4},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: true,
+			inputTyp:   arrayF64TestTyp,
+
+			input:    [][]float64{{1, 1, 1}, {2, 2, 2}},
+			inputNsp: nil,
+			expected: []int64{2},
+
+			mergeInput:  [][]float64{{1, 1, 1}, {2, 2, 2}},
+			mergeNsp:    nil,
+			mergeExpect: []int64{2},
+
 			testMarshal: false,
 		},
 	}

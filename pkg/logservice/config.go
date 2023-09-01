@@ -85,13 +85,13 @@ type Config struct {
 	// no port value in it.
 	ServiceHost string `toml:"service-host"`
 	// ServiceAddress is log service's service address that can be reached by
-	// other nodes such as DN nodes. It is deprecated and will be removed.
+	// other nodes such as TN nodes. It is deprecated and will be removed.
 	ServiceAddress string `toml:"logservice-address"`
 	// ServiceListenAddress is the local listen address of the ServiceAddress.
 	// It is deprecated and will be removed.
 	ServiceListenAddress string `toml:"logservice-listen-address"`
 	// ServicePort is log service's service address port that can be reached by
-	// other nodes such as DN nodes.
+	// other nodes such as TN nodes.
 	LogServicePort int `toml:"logservice-port"`
 	// RaftAddress is the address that can be reached by other log service nodes
 	// via their raft layer. It is deprecated and will be removed.
@@ -159,9 +159,9 @@ type Config struct {
 		BootstrapCluster bool `toml:"bootstrap-cluster"`
 		// NumOfLogShards defines the number of Log shards in the initial deployment.
 		NumOfLogShards uint64 `toml:"num-of-log-shards"`
-		// NumOfDNShards defines the number of DN shards in the initial deployment.
+		// NumOfTNShards defines the number of TN shards in the initial deployment.
 		// The count must be the same as NumOfLogShards in the current implementation.
-		NumOfDNShards uint64 `toml:"num-of-dn-shards"`
+		NumOfTNShards uint64 `toml:"num-of-tn-shards"`
 		// NumOfLogShardReplicas is the number of replicas for each shard managed by
 		// Log Stores, including Log Service shards and the HAKeeper.
 		NumOfLogShardReplicas uint64 `toml:"num-of-log-shard-replicas"`
@@ -200,13 +200,13 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
 		// it regards the log store as down.
 		LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-		// DNStoreTimeout is the actual time limit between a dn store's heartbeat.
-		// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
-		// it regards the dn store as down.
-		DNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		// TNStoreTimeout is the actual time limit between a tn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within TNStoreTimeout,
+		// it regards the tn store as down.
+		TNStoreTimeout toml.Duration `toml:"tn-store-timeout"`
 		// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
-		// it regards the dn store as down.
+		// it regards the tn store as down.
 		CNStoreTimeout toml.Duration `toml:"cn-store-timeout"`
 	}
 
@@ -230,7 +230,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 	return hakeeper.Config{
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
 		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
-		DNStoreTimeout:  c.HAKeeperConfig.DNStoreTimeout.Duration,
+		TNStoreTimeout:  c.HAKeeperConfig.TNStoreTimeout.Duration,
 		CNStoreTimeout:  c.HAKeeperConfig.CNStoreTimeout.Duration,
 	}
 }
@@ -319,7 +319,7 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("LogStoreTimeout not set")
 	}
-	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+	if c.HAKeeperConfig.TNStoreTimeout.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("DNStoreTimeout not set")
 	}
 	if c.GossipProbeInterval.Duration == 0 {
@@ -339,13 +339,13 @@ func (c *Config) Validate() error {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfLogShards not set")
 		}
-		if c.BootstrapConfig.NumOfDNShards == 0 {
+		if c.BootstrapConfig.NumOfTNShards == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfDNShards not set")
 		}
 		if c.BootstrapConfig.NumOfLogShardReplicas == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfLogShardReplica not set")
 		}
-		if c.BootstrapConfig.NumOfDNShards != c.BootstrapConfig.NumOfLogShards {
+		if c.BootstrapConfig.NumOfTNShards != c.BootstrapConfig.NumOfLogShards {
 			return moerr.NewBadConfigNoCtx("NumOfDNShards does not match NumOfLogShards")
 		}
 		members, err := c.GetInitHAKeeperMembers()
@@ -400,7 +400,7 @@ func DefaultConfig() Config {
 		BootstrapConfig: struct {
 			BootstrapCluster      bool     `toml:"bootstrap-cluster"`
 			NumOfLogShards        uint64   `toml:"num-of-log-shards"`
-			NumOfDNShards         uint64   `toml:"num-of-dn-shards"`
+			NumOfTNShards         uint64   `toml:"num-of-tn-shards"`
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
 			InitHAKeeperMembers   []string `toml:"init-hakeeper-members"`
 			Restore               struct {
@@ -409,7 +409,7 @@ func DefaultConfig() Config {
 		}(struct {
 			BootstrapCluster      bool
 			NumOfLogShards        uint64
-			NumOfDNShards         uint64
+			NumOfTNShards         uint64
 			NumOfLogShardReplicas uint64
 			InitHAKeeperMembers   []string
 			Restore               struct {
@@ -418,7 +418,7 @@ func DefaultConfig() Config {
 		}{
 			BootstrapCluster:      true,
 			NumOfLogShards:        1,
-			NumOfDNShards:         1,
+			NumOfTNShards:         1,
 			NumOfLogShardReplicas: 1,
 			InitHAKeeperMembers:   []string{"131072:" + uid},
 			Restore:               struct{ FilePath string }{FilePath: ""},
@@ -426,17 +426,17 @@ func DefaultConfig() Config {
 		HAKeeperConfig: struct {
 			TickPerSecond   int           `toml:"tick-per-second"`
 			LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-			DNStoreTimeout  toml.Duration `toml:"dn-store-timeout"`
+			TNStoreTimeout  toml.Duration `toml:"tn-store-timeout"`
 			CNStoreTimeout  toml.Duration `toml:"cn-store-timeout"`
 		}(struct {
 			TickPerSecond   int
 			LogStoreTimeout toml.Duration
-			DNStoreTimeout  toml.Duration
+			TNStoreTimeout  toml.Duration
 			CNStoreTimeout  toml.Duration
 		}{
 			TickPerSecond:   hakeeper.DefaultTickPerSecond,
 			LogStoreTimeout: toml.Duration{Duration: hakeeper.DefaultLogStoreTimeout},
-			DNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultDNStoreTimeout},
+			TNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultTNStoreTimeout},
 			CNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultCNStoreTimeout},
 		}),
 		HAKeeperClientConfig: HAKeeperClientConfig{
@@ -520,8 +520,8 @@ type ClientConfig struct {
 	ReadOnly bool
 	// LogShardID is the shard ID of the log service shard to be used.
 	LogShardID uint64
-	// DNReplicaID is the replica ID of the DN that owns the created client.
-	DNReplicaID uint64
+	// TNReplicaID is the replica ID of the TN that owns the created client.
+	TNReplicaID uint64
 	// DiscoveryAddress is the Log Service discovery address provided by k8s.
 	DiscoveryAddress string
 	// LogService nodes service addresses. This field is provided for testing
@@ -538,7 +538,7 @@ func (c *ClientConfig) Validate() error {
 	if c.LogShardID == 0 {
 		return moerr.NewBadConfigNoCtx("LogShardID value cannot be 0")
 	}
-	if c.DNReplicaID == 0 {
+	if c.TNReplicaID == 0 {
 		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {

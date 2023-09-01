@@ -135,13 +135,25 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName)
+	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, true)
+	if err != nil {
+		return nil, err
+	}
+	alterTablePlan.CreateTmpTableSql = createTmpDdl
+
+	createDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.originTableName, false)
 	if err != nil {
 		return nil, err
 	}
 	alterTablePlan.CreateTableSql = createDdl
 
-	insertDml, err := buildAlterInsertDataSQL(ctx, alterTableCtx)
+	insertTmpDml, err := buildAlterInsertDataSQL(ctx, alterTableCtx)
+	if err != nil {
+		return nil, err
+	}
+	alterTablePlan.InsertTmpDataSql = insertTmpDml
+
+	insertDml, err := builInsertSQL(ctx, alterTableCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +173,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	}, nil
 }
 
-func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string) (string, error) {
-	tblName := tableDef.Name
+func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblName string, skipFkey bool) (string, error) {
 	var createStr string
 	if tableDef.TableType == catalog.SystemOrdinaryRel {
 		createStr = fmt.Sprintf("CREATE TABLE `%s`.`%s` (", formatStr(schemaName), formatStr(tblName))
@@ -222,7 +233,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string) (str
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid.IsArrayRelate() {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
@@ -289,31 +300,33 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string) (str
 		}
 	}
 
-	for _, fk := range tableDef.Fkeys {
-		colNames := make([]string, len(fk.Cols))
-		for i, colId := range fk.Cols {
-			colNames[i] = colIdToName[colId]
-		}
-		_, fkTableDef := ctx.ResolveById(fk.ForeignTbl)
-		fkColIdToName := make(map[uint64]string)
-		for _, col := range fkTableDef.Cols {
-			fkColIdToName[col.ColId] = col.Name
-		}
-		fkColNames := make([]string, len(fk.ForeignCols))
-		for i, colId := range fk.ForeignCols {
-			fkColNames[i] = fkColIdToName[colId]
-		}
+	if !skipFkey {
+		for _, fk := range tableDef.Fkeys {
+			colNames := make([]string, len(fk.Cols))
+			for i, colId := range fk.Cols {
+				colNames[i] = colIdToName[colId]
+			}
+			_, fkTableDef := ctx.ResolveById(fk.ForeignTbl)
+			fkColIdToName := make(map[uint64]string)
+			for _, col := range fkTableDef.Cols {
+				fkColIdToName[col.ColId] = col.Name
+			}
+			fkColNames := make([]string, len(fk.ForeignCols))
+			for i, colId := range fk.ForeignCols {
+				fkColNames[i] = fkColIdToName[colId]
+			}
 
-		if rowCount != 0 {
-			createStr += ",\n"
-		}
+			if rowCount != 0 {
+				createStr += ",\n"
+			}
 
-		if fk.Name == "" {
-			createStr += fmt.Sprintf("CONSTRAINT FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-				strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
-		} else {
-			createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
-				formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+			if fk.Name == "" {
+				createStr += fmt.Sprintf("CONSTRAINT FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
+					strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+			} else {
+				createStr += fmt.Sprintf("CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES `%s` (`%s`) ON DELETE %s ON UPDATE %s",
+					formatStr(fk.Name), strings.Join(colNames, "`,`"), formatStr(fkTableDef.Name), strings.Join(fkColNames, "`,`"), fk.OnDelete.String(), fk.OnUpdate.String())
+			}
 		}
 	}
 
@@ -438,6 +451,16 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	return insertSQL, nil
 }
 
+func builInsertSQL(ctx CompilerContext, alterCtx *AlterTableContext) (string, error) {
+	schemaName := alterCtx.schemaName
+	originTableName := alterCtx.originTableName
+	copyTableName := alterCtx.copyTableName
+
+	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` SELECT * FROM `%s`.`%s`",
+		formatStr(schemaName), formatStr(originTableName), formatStr(schemaName), formatStr(copyTableName))
+	return insertSQL, nil
+}
+
 const UnKnownColId uint64 = math.MaxUint64
 
 type AlterTableContext struct {
@@ -504,10 +527,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
 	}
 
-	if tableDef.ClusterBy != nil {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table for cluster table")
-	}
-
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 	}
@@ -552,7 +571,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
-				algorithm = plan.AlterTable_INPLACE
+				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropIndex:
 				algorithm = plan.AlterTable_INPLACE
 			case tree.AlterTableDropKey:
@@ -571,7 +590,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		case *tree.AlterTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
-			algorithm = plan.AlterTable_INPLACE
+			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableChangeColumnClause:

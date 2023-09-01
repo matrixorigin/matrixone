@@ -271,6 +271,8 @@ func getNonCompositePKSearchFuncByExpr(
 			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{util.UnsafeStringToBytes(val.Sval)})
 		case *plan.Const_Jsonval:
 			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{util.UnsafeStringToBytes(val.Jsonval)})
+		case *plan.Const_EnumVal:
+			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Enum{types.Enum(val.EnumVal)})
 		}
 
 	case *plan.Expr_Bin:
@@ -310,8 +312,11 @@ func getNonCompositePKSearchFuncByExpr(
 			searchPKFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal64](vec), types.CompareDecimal64)
 		case types.T_decimal128:
 			searchPKFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64:
 			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.MustBytesCol(vec))
+		case types.T_enum:
+			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec))
 		}
 	}
 
@@ -379,6 +384,8 @@ func getPkValueByExpr(
 			return transferTimestampval(val.Timestampval, oid)
 		case *plan.Const_Jsonval:
 			return transferSval(val.Jsonval, oid)
+		case *plan.Const_EnumVal:
+			return transferUval(val.EnumVal, oid)
 		}
 
 	case *plan.Expr_Bin:
@@ -1135,7 +1142,11 @@ func getCompositeFilterFuncByExpr(
 			return EvalSelectedOnVarlenSortedColumnFactory(util.UnsafeStringToBytes(val.Jsonval))
 		}
 		return EvalSelectedOnVarlenColumnFactory(util.UnsafeStringToBytes(val.Jsonval))
-
+	case *plan.Const_EnumVal:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(val.EnumVal)
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(val.EnumVal)
 	default:
 		panic(fmt.Sprintf("unexpected const expr %v", expr))
 	}
@@ -1181,6 +1192,8 @@ func serialTupleByConstExpr(expr *plan.Const, packer *types.Packer) {
 		packer.EncodeStringType(util.UnsafeStringToBytes(val.Sval))
 	case *plan.Const_Jsonval:
 		packer.EncodeStringType(util.UnsafeStringToBytes(val.Jsonval))
+	case *plan.Const_EnumVal:
+		packer.EncodeEnum(types.Enum(val.EnumVal))
 	default:
 		panic(fmt.Sprintf("unexpected const expr %v", expr))
 	}

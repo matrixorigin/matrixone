@@ -105,6 +105,8 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			// If the table already contains a primary key, an `ErrMultiplePriKey` error is reported
 			if alterPlan.CopyTableDef.Pkey != nil && alterPlan.CopyTableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 				return nil, moerr.NewErrMultiplePriKey(ctx.GetContext())
+			} else if alterPlan.CopyTableDef.ClusterBy != nil && alterPlan.CopyTableDef.ClusterBy.Name != "" {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 			} else {
 				alterPlan.CopyTableDef.Pkey = &PrimaryKeyDef{
 					Names:       []string{newColName},
@@ -187,6 +189,12 @@ func checkAddColumnType(ctx context.Context, colType *plan.Type, columnName stri
 		colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 		if colType.GetWidth() > types.MaxStringSize {
 			return moerr.NewInvalidInput(ctx, "string width (%d) is too long", colType.GetWidth())
+		}
+	}
+
+	if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
+		if colType.GetWidth() > types.MaxArrayDimension {
+			return moerr.NewInvalidInput(ctx, "vector width (%d) is too long", colType.GetWidth())
 		}
 	}
 	return nil
@@ -279,8 +287,6 @@ func findPositionRelativeColumn(ctx context.Context, cols []*ColDef, pos *tree.C
 	return position, nil
 }
 
-//-----------------------------------------------------------------------------------------------------------------------------------
-
 // AddColumn will add a new column to the table.
 func DropColumn(ctx CompilerContext, alterPlan *plan.AlterTable, colName string, alterCtx *AlterTableContext) error {
 	tableDef := alterPlan.CopyTableDef
@@ -314,6 +320,11 @@ func DropColumn(ctx CompilerContext, alterPlan *plan.AlterTable, colName string,
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, col); err != nil {
 		return err
 	}
+
+	if err := handleDropColumnWithClusterBy(ctx.GetContext(), tableDef, col); err != nil {
+		return err
+	}
+
 	delete(alterCtx.alterColMap, colName)
 	return nil
 }
@@ -435,5 +446,43 @@ func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColD
 		}
 	}
 	tableDef.Cols = append(tableDef.Cols[:targetPos], tableDef.Cols[targetPos+1:]...)
+	return nil
+}
+
+// handleDropColumnWithClusterBy Process the cluster by table. If the cluster by key name is deleted, proceed with the process
+func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, originCol *ColDef) error {
+	if copyTableDef.ClusterBy != nil && copyTableDef.ClusterBy.Name != "" {
+		clusterBy := copyTableDef.ClusterBy
+		var clNames []string
+		if util.JudgeIsCompositeClusterByColumn(clusterBy.Name) {
+			clNames = util.SplitCompositeClusterByColumnName(clusterBy.Name)
+		} else {
+			clNames = []string{clusterBy.Name}
+		}
+		deleteIndex := -1
+		for j, part := range clNames {
+			if part == originCol.Name {
+				deleteIndex = j
+				break
+			}
+		}
+
+		if deleteIndex != -1 {
+			clNames = append(clNames[:deleteIndex], clNames[deleteIndex+1:]...)
+		}
+
+		if len(clNames) == 0 {
+			copyTableDef.ClusterBy = nil
+		} else if len(clNames) == 1 {
+			copyTableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clNames[0],
+			}
+		} else {
+			clusterByColName := util.BuildCompositeClusterByColumnName(clNames)
+			copyTableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clusterByColName,
+			}
+		}
+	}
 	return nil
 }

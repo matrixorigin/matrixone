@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"strconv"
 	"strings"
 
@@ -142,7 +143,7 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 		Key:   catalog.SystemRelAttr_Kind,
 		Value: catalog.SystemStreamRel,
 	})
-	//configs := make(map[string]interface{})
+	configs := make(map[string]interface{})
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.CreateStreamWithOption:
@@ -152,13 +153,12 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 				Key:   key,
 				Value: val,
 			})
-			//configs[key] = val
+			configs[key] = val
 		}
 	}
-	// TODO:
-	// if err := ValidateConfig(ctx, configs); err != nil {
-	//     return nil, err
-	// }
+	if err := mokafka.ValidateConfig(context.Background(), configs, mokafka.NewKafkaAdapter); err != nil {
+		return nil, err
+	}
 	createStream.TableDef.Defs = append(createStream.TableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Properties{
 			Properties: &plan.PropertiesDef{
@@ -730,6 +730,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
+			if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
+				if colType.GetWidth() > types.MaxArrayDimension {
+					return moerr.NewInvalidInput(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
+				}
+			}
 			var pks []string
 			var comment string
 			var auto_incr bool
@@ -744,6 +749,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
+					}
+					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
 				case *tree.AttributeComment:
@@ -1105,6 +1113,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
+			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
+			}
+
 			indexParts = append(indexParts, name)
 		}
 
@@ -1971,6 +1983,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
+
+			if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
+				if colType.GetWidth() > types.MaxArrayDimension {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
+				}
+			}
 			var pks []string
 			var comment string
 			var auto_incr bool
@@ -1985,6 +2003,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					}
 					if colType.GetId() == int32(types.T_json) {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
+					}
+					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
 					}
 					pks = append(pks, opt.Column.Name.Parts[0])
 				case *tree.AttributeComment:

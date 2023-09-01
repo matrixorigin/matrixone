@@ -1657,7 +1657,7 @@ null
 2020-02-20 00:00:00
 2020-02-20 00:00:00
 1997-01-13 00:00:00
-null
+1997-01-13 00:00:00
 select rank() over (order by col1 range interval 2 day preceding) from date02;
 rank() over (order by col1 range interval(2, day) preceding)
 1

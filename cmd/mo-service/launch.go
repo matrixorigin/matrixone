@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/backup"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -49,16 +50,25 @@ func startCluster(
 		return err
 	}
 
+	/*
+		When the mo started in local cluster, we save all config files.
+		Because we can get all config files conveniently.
+	*/
+	backup.SaveLaunchConfigPath(backup.LaunchConfig, []string{*launchFile})
+	backup.SaveLaunchConfigPath(backup.LogConfig, cfg.LogServiceConfigFiles)
+	backup.SaveLaunchConfigPath(backup.DnConfig, cfg.TNServiceConfigsFiles)
+	backup.SaveLaunchConfigPath(backup.CnConfig, cfg.CNServiceConfigsFiles)
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
-	if err := startDNServiceCluster(ctx, cfg.DNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
 	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
 		return err
 	}
 	if *withProxy {
+		backup.SaveLaunchConfigPath(backup.ProxyConfig, cfg.ProxyServiceConfigsFiles)
 		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
 			return err
 		}
@@ -90,7 +100,7 @@ func startLogServiceCluster(
 	return nil
 }
 
-func startDNServiceCluster(
+func startTNServiceCluster(
 	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
@@ -225,7 +235,7 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 			if err != nil {
 				return false, err
 			}
-			for _, store := range details.DNStores {
+			for _, store := range details.TNStores {
 				if len(store.Shards) > 0 {
 					return true, nil
 				}

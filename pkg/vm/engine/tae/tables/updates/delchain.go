@@ -45,10 +45,11 @@ func MockTxnWithStartTS(ts types.TS) *txnbase.Txn {
 type DeleteChain struct {
 	*sync.RWMutex
 	*txnbase.MVCCChain[*DeleteNode]
-	mvcc  *MVCCHandle
-	links map[uint32]*DeleteNode
-	cnt   atomic.Uint32
-	mask  *nulls.Bitmap
+	mvcc          *MVCCHandle
+	links         map[uint32]*DeleteNode
+	cnt           atomic.Uint32
+	mask          *nulls.Bitmap // in memory del mask
+	persistedMask *nulls.Bitmap // persisted del mask
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -56,17 +57,20 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		rwlocker = new(sync.RWMutex)
 	}
 	chain := &DeleteChain{
-		RWMutex:   rwlocker,
-		MVCCChain: txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
-		links:     make(map[uint32]*DeleteNode),
-		mvcc:      mvcc,
-		mask:      &nulls.Bitmap{},
+		RWMutex:       rwlocker,
+		MVCCChain:     txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
+		links:         make(map[uint32]*DeleteNode),
+		mvcc:          mvcc,
+		mask:          &nulls.Bitmap{},
+		persistedMask: &nulls.Bitmap{},
 	}
 	return chain
 }
 func (chain *DeleteChain) AddDeleteCnt(cnt uint32) {
 	chain.cnt.Add(cnt)
 }
+
+// IsEmtpy indicates whether memory deletes are empty
 func (chain *DeleteChain) IsEmpty() bool {
 	return chain.mask.IsEmpty()
 }
@@ -89,6 +93,9 @@ func (chain *DeleteChain) EstimateMemSizeLocked() int {
 	size := 0
 	if chain.mask != nil {
 		size += chain.mask.GetBitmap().Size()
+	}
+	if chain.persistedMask != nil {
+		size += chain.persistedMask.GetBitmap().Size()
 	}
 	size += int(float32(len(chain.links)*(4+8)) * 1.1) /*map size*/
 	size += chain.MVCCChain.Depth() * (DeleteNodeApproxSize + 16 /* link node overhead */)
@@ -120,12 +127,13 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 }
 
 func (chain *DeleteChain) hasOverLap(start, end uint64) bool {
-	if chain.mask == nil || chain.mask.IsEmpty() {
+	if (chain.mask == nil || chain.mask.IsEmpty()) &&
+		(chain.persistedMask == nil || chain.persistedMask.IsEmpty()) {
 		return false
 	}
 	var yes bool
 	for i := start; i < end+1; i++ {
-		if chain.mask.Contains(i) {
+		if chain.mask.Contains(i) || chain.persistedMask.Contains(i) {
 			yes = true
 			break
 		}
@@ -202,7 +210,7 @@ func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 
 func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
 	new := NewDeleteChain(chain.RWMutex, chain.mvcc)
-	new.mask = chain.mask
+	new.persistedMask = chain.persistedMask
 
 	chain.LoopChain(func(n *DeleteNode) bool {
 		if !n.IsVisibleByTS(flushed) {
@@ -214,6 +222,13 @@ func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
 			for it.HasNext() {
 				row := it.Next()
 				new.InsertInDeleteView(row, n)
+				new.mask.Add(uint64(row))
+			}
+		} else {
+			it := n.mask.Iterator()
+			for it.HasNext() {
+				row := it.Next()
+				new.persistedMask.Add(uint64(row))
 			}
 		}
 		return true
@@ -274,32 +289,41 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 func (chain *DeleteChain) CollectDeletesInRange(
 	startTs, endTs types.TS,
 	rwlocker *sync.RWMutex) (mask *nulls.Bitmap, err error) {
-	chain.LoopChain(func(n *DeleteNode) bool {
-		// Merged node is a loop breaker
-		if n.IsMerged() {
-			if n.GetCommitTSLocked().Greater(endTs) {
-				return true
+	for {
+		needWaitFound := false
+		mask = nil
+		chain.LoopChain(func(n *DeleteNode) bool {
+			// Merged node is a loop breaker
+			if n.IsMerged() {
+				if n.GetCommitTSLocked().Greater(endTs) {
+					return true
+				}
+				if mask == nil {
+					mask = nulls.NewWithSize(int(n.mask.Maximum()))
+				}
+				mergeDelete(mask, n)
+				return false
 			}
-			if mask == nil {
-				mask = nulls.NewWithSize(int(n.mask.Maximum()))
+			needWait, txnToWait := n.NeedWaitCommitting(endTs)
+			if needWait {
+				rwlocker.RUnlock()
+				txnToWait.GetTxnState(true)
+				rwlocker.RLock()
+				needWaitFound = true
+				return false
 			}
-			mergeDelete(mask, n)
-			return false
-		}
-		needWait, txnToWait := n.NeedWaitCommitting(endTs)
-		if needWait {
-			rwlocker.RUnlock()
-			txnToWait.GetTxnState(true)
-			rwlocker.RLock()
-		}
-		if n.IsVisibleByTS(endTs) && !n.IsVisibleByTS(startTs) {
-			if mask == nil {
-				mask = nulls.NewWithSize(int(n.mask.Maximum()))
+			if n.IsVisibleByTS(endTs) && !n.IsVisibleByTS(startTs) {
+				if mask == nil {
+					mask = nulls.NewWithSize(int(n.mask.Maximum()))
+				}
+				mergeDelete(mask, n)
 			}
-			mergeDelete(mask, n)
+			return true
+		})
+		if !needWaitFound {
+			break
 		}
-		return true
-	})
+	}
 	return
 }
 
@@ -341,45 +365,55 @@ func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
 func (chain *DeleteChain) CollectDeletesLocked(
 	txn txnif.TxnReader,
 	rwlocker *sync.RWMutex) (merged *nulls.Bitmap, err error) {
-	merged = chain.mask.Clone()
-	chain.LoopChain(func(n *DeleteNode) bool {
-		needWait, txnToWait := n.NeedWaitCommitting(txn.GetStartTS())
-		if needWait {
-			rwlocker.RUnlock()
-			txnToWait.GetTxnState(true)
-			rwlocker.RLock()
-		}
-		if !n.IsVisible(txn) {
-			it := n.GetDeleteMaskLocked().Iterator()
-			if n.dt != handle.DT_MergeCompact {
-				for it.HasNext() {
-					row := it.Next()
-					merged.Del(uint64(row))
-				}
-			} else {
-				ts := txn.GetStartTS()
-				rt := chain.mvcc.meta.GetBlockData().GetRuntime()
-				tsMapping := rt.TransferDelsMap.GetDelsForBlk(chain.mvcc.meta.ID).Mapping
-				if tsMapping == nil {
-					logutil.Warnf("flushtabletail check special dels for %s, no tsMapping", chain.mvcc.meta.ID.String())
-					return true
-				}
-				for it.HasNext() {
-					row := it.Next()
-					committs, ok := tsMapping[int(row)]
-					if !ok {
-						logutil.Errorf("flushtabletail check Transfer dels for %s row %d not in dels", chain.mvcc.meta.ID.String(), row)
-						continue
-					}
-					// if the ts can't see the del, then remove it from merged
-					if committs.Greater(ts) {
+	for {
+		needWaitFound := false
+		merged = chain.mask.Clone()
+		chain.LoopChain(func(n *DeleteNode) bool {
+			needWait, txnToWait := n.NeedWaitCommitting(txn.GetStartTS())
+			if needWait {
+				rwlocker.RUnlock()
+				txnToWait.GetTxnState(true)
+				rwlocker.RLock()
+				needWaitFound = true
+				return false
+			}
+			if !n.IsVisible(txn) {
+				it := n.GetDeleteMaskLocked().Iterator()
+				if n.dt != handle.DT_MergeCompact {
+					for it.HasNext() {
+						row := it.Next()
 						merged.Del(uint64(row))
+					}
+				} else {
+					ts := txn.GetStartTS()
+					rt := chain.mvcc.meta.GetBlockData().GetRuntime()
+					tsMapping := rt.TransferDelsMap.GetDelsForBlk(chain.mvcc.meta.ID).Mapping
+					if tsMapping == nil {
+						logutil.Warnf("flushtabletail check special dels for %s, no tsMapping", chain.mvcc.meta.ID.String())
+						return true
+					}
+					for it.HasNext() {
+						row := it.Next()
+						committs, ok := tsMapping[int(row)]
+						if !ok {
+							logutil.Errorf("flushtabletail check Transfer dels for %s row %d not in dels", chain.mvcc.meta.ID.String(), row)
+							continue
+						}
+						// if the ts can't see the del, then remove it from merged
+						if committs.Greater(ts) {
+							merged.Del(uint64(row))
+						}
 					}
 				}
 			}
+			return true
+		})
+
+		if !needWaitFound {
+			break
 		}
-		return true
-	})
+	}
+
 	return merged, err
 }
 
