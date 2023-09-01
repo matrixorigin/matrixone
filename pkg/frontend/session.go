@@ -1533,24 +1533,6 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	return GetPassWord(pwd)
 }
 
-func (ses *Session) AuthenticateDBName(dbName string) error {
-	txnHandler := ses.GetTxnHandler()
-	var txnCtx context.Context
-	var txn TxnOperator
-	var err error
-	//var dbMeta engine.Database
-	txnCtx, txn, err = txnHandler.GetTxn()
-	if err != nil {
-		return err
-	}
-	//TODO: check meta data
-	if _, err = ses.GetParameterUnit().StorageEngine.Database(txnCtx, dbName, txn); err != nil {
-		//echo client. no such database
-		return moerr.NewBadDB(ses.connectCtx, dbName)
-	}
-	return nil
-}
-
 func (ses *Session) InitGlobalSystemVariables() error {
 	var err error
 	var rsset []ExecResult
