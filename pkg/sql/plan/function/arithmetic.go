@@ -584,26 +584,124 @@ func decimal128SubArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) err
 	len1 := len(v1)
 	len2 := len(v2)
 	var err error
+
 	if len1 == len2 {
-		for i := 0; i < len1; i++ {
-			rs[i], _, err = v1[i].Sub(v2[i], scale1, scale2)
+		// all vector, or all constant
+		if scale1 > scale2 {
+			err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
 			if err != nil {
 				return err
 			}
-		}
-	} else {
-		if len1 == 1 {
-			for i := 0; i < len2; i++ {
-				rs[i], _, err = v1[0].Sub(v2[i], scale1, scale2)
+			for i := 0; i < len1; i++ {
+				rs[i].MinusInplace()
+				err = rs[i].AddInplace(&v1[i])
 				if err != nil {
 					return err
 				}
 			}
-		} else {
+		} else if scale1 < scale2 {
+			err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
+			if err != nil {
+				return err
+			}
 			for i := 0; i < len1; i++ {
-				rs[i], _, err = v1[i].Sub(v2[0], scale1, scale2)
+				rs[i].MinusInplace()
+				err = rs[i].AddInplace(&v2[i])
 				if err != nil {
 					return err
+				}
+				rs[i].MinusInplace()
+			}
+		} else {
+			for i := 0; i < len1; i++ {
+				rs[i] = v2[i]
+				rs[i].MinusInplace()
+				err = rs[i].AddInplace(&v2[i])
+				if err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		if len1 == 1 {
+			// v1 constant, v2 vector
+			if scale1 > scale2 {
+				err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
+				if err != nil {
+					return err
+				}
+				for i := 0; i < len2; i++ {
+					rs[i].MinusInplace()
+					err = rs[i].AddInplace(&v1[0])
+					if err != nil {
+						return err
+					}
+				}
+			} else if scale1 < scale2 {
+				err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
+				if err != nil {
+					return err
+				}
+				tmp := rs[0]
+				tmp.MinusInplace()
+				for i := 0; i < len2; i++ {
+					rs[i] = tmp
+					err = rs[i].AddInplace(&v2[i])
+					rs[i].MinusInplace()
+					if err != nil {
+						return err
+					}
+				}
+			} else {
+				tmp := v1[0]
+				tmp.MinusInplace()
+				for i := 0; i < len2; i++ {
+					rs[i] = tmp
+					err = rs[i].AddInplace(&v2[i])
+					rs[i].MinusInplace()
+					if err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			// v1 vector, v2 constant
+			if scale1 > scale2 {
+				err = decimal128ScaleArray(v2, rs, len2, scale1-scale2)
+				if err != nil {
+					return err
+				}
+				tmp := rs[0]
+				tmp.MinusInplace()
+				for i := 0; i < len1; i++ {
+					rs[i] = tmp
+					err = rs[i].AddInplace(&v1[i])
+					if err != nil {
+						return err
+					}
+				}
+			} else if scale1 < scale2 {
+				err = decimal128ScaleArray(v1, rs, len1, scale2-scale1)
+				if err != nil {
+					return err
+				}
+				for i := 0; i < len1; i++ {
+					rs[i].MinusInplace()
+					err = rs[i].AddInplace(&v2[0])
+					if err != nil {
+						return err
+					}
+					rs[i].MinusInplace()
+				}
+			} else {
+				tmp := v2[0]
+				tmp.MinusInplace()
+				for i := 0; i < len1; i++ {
+					rs[i] = tmp
+					err = rs[i].AddInplace(&v1[i])
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
