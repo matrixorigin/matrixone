@@ -92,7 +92,7 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
-		e.StmtBuilder.WriteString("\n")
+		e.StmtBuilder.WriteString(";\n")
 		e.StmtBuilder.WriteString(n.Statement)
 	}
 	e.AggrCount += 1
