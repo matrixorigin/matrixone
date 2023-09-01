@@ -303,10 +303,12 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
-		if matchNum < 1 {
-			err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("No matching function for call to %s(%s)", name, argTypeStr)))
-		} else if matchNum > 1 {
-			err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("call to %s(%s) is ambiguous", name, argTypeStr)))
+		if execResultArrayHasData(erArray) {
+			if matchNum < 1 {
+				err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("No matching function for call to %s(%s)", name, argTypeStr)))
+			} else if matchNum > 1 {
+				err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("call to %s(%s) is ambiguous", name, argTypeStr)))
+			}
 		}
 	}()
 	if err != nil {
