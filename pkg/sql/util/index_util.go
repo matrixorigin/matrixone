@@ -265,6 +265,15 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 					ps[i].EncodeTimestamp(b)
 				}
 			}
+		case types.T_enum:
+			s := vector.MustFixedCol[types.Enum](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					nulls.Add(bitMap, uint64(i))
+				} else {
+					ps[i].EncodeEnum(b)
+				}
+			}
 		case types.T_decimal64:
 			s := vector.MustFixedCol[types.Decimal64](v)
 			for i, b := range s {
@@ -455,6 +464,16 @@ func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vec
 	case types.T_timestamp:
 		s := vector.MustFixedCol[types.Timestamp](v)
 		ns := make([]types.Timestamp, 0, len(s)-nulls.Size(nsp))
+		for i, b := range s {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		vec = vector.NewVec(*v.GetType())
+		vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_enum:
+		s := vector.MustFixedCol[types.Enum](v)
+		ns := make([]types.Enum, 0, len(s)-nulls.Size(nsp))
 		for i, b := range s {
 			if !nulls.Contains(v.GetNulls(), uint64(i)) {
 				ns = append(ns, b)
