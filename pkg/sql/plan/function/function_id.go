@@ -606,5 +606,5 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 
-	"python_user_defined_function":   PYTHON_UDF,
+	"python_user_defined_function": PYTHON_UDF,
 }
