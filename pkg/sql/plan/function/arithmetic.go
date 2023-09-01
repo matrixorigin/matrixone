@@ -510,7 +510,7 @@ func decimal128AddArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) err
 				if err != nil {
 					return err
 				}
-				for i := 0; i < len1; i++ {
+				for i := 0; i < len2; i++ {
 					err = rs[i].AddInplace(&v1[0])
 					if err != nil {
 						return err
@@ -522,7 +522,7 @@ func decimal128AddArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) err
 					return err
 				}
 				tmp := rs[0]
-				for i := 0; i < len1; i++ {
+				for i := 0; i < len2; i++ {
 					rs[i] = tmp
 					err = rs[i].AddInplace(&v2[i])
 					if err != nil {
@@ -531,7 +531,7 @@ func decimal128AddArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) err
 				}
 			} else {
 				tmp := v1[0]
-				for i := 0; i < len1; i++ {
+				for i := 0; i < len2; i++ {
 					rs[i] = tmp
 					err = rs[i].AddInplace(&v2[i])
 					if err != nil {
