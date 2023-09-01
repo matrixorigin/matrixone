@@ -453,14 +453,32 @@ func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	return types.ArrayToBytes[T](r), nil
 }
 
+func decimal128ScaleArray(v []types.Decimal128, len int, n int32) error {
+	for i := 0; i < len; i++ {
+		err := v[i].ScaleInplace(n)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func decimal128AddArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) error {
 	len1 := len(v1)
 	len2 := len(v2)
 	var err error
+	if scale1 > scale2 {
+		err = decimal128ScaleArray(v2, len2, scale1-scale2)
+	} else if scale1 < scale2 {
+		err = decimal128ScaleArray(v1, len1, scale2-scale1)
+	}
+	if err != nil {
+		return err
+	}
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			rs[i] = v1[i]
-			err = rs[i].AddInplace(&v2[i], scale1, scale2)
+			err = rs[i].AddInplace(&v2[i])
 			if err != nil {
 				return err
 			}
@@ -469,7 +487,7 @@ func decimal128AddArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) err
 		if len1 == 1 {
 			for i := 0; i < len2; i++ {
 				rs[i] = v1[0]
-				err = rs[i].AddInplace(&v2[i], scale1, scale2)
+				err = rs[i].AddInplace(&v2[i])
 				if err != nil {
 					return err
 				}
@@ -477,7 +495,7 @@ func decimal128AddArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) err
 		} else {
 			for i := 0; i < len1; i++ {
 				rs[i] = v1[i]
-				err = rs[i].AddInplace(&v2[0], scale1, scale2)
+				err = rs[i].AddInplace(&v2[0])
 				if err != nil {
 					return err
 				}

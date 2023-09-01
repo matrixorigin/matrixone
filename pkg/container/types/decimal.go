@@ -934,29 +934,23 @@ func (x Decimal128) Add64(y Decimal64) (Decimal128, error) {
 	}
 }
 
-func (x *Decimal128) AddInplace(y *Decimal128, scale1, scale2 int32) (err error) {
-	if scale1 > scale2 {
-		err = y.ScaleInplace(scale1 - scale2)
-	} else if scale1 < scale2 {
-		err = x.ScaleInplace(scale2 - scale1)
-	}
-	if err == nil {
-		signx := x.Sign()
-		var carryout uint64
-		if signx == y.Sign() {
-			x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
-			x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
-			if signx != x.Sign() {
-				err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
-				return
-			}
-		} else {
-			x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
-			x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
+// for performance sake, must make sure x and y has same scale
+func (x *Decimal128) AddInplace(y *Decimal128) (err error) {
+	signx := x.Sign()
+	var carryout uint64
+	if signx == y.Sign() {
+		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
+		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
+		if signx != x.Sign() {
+			err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
+			return
 		}
+	} else {
+		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
+		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtx("Decimal128 Scales in Add overflow: %s(Scale:%d)+%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
+		err = moerr.NewInvalidInputNoCtx("Decimal128 Scales in Add overflow: %s+%s", x.Format(0), y.Format(0))
 	}
 	return
 }
