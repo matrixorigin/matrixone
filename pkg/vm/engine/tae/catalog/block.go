@@ -157,7 +157,7 @@ func (entry *BlockEntry) GetDeltaPersistedTSByTxn(txn txnif.TxnReader) types.TS 
 	defer entry.RUnlock()
 	persisted := types.TS{}
 	entry.LoopChain(func(m *MVCCNode[*MetadataMVCCNode]) bool {
-		if m.BaseNode.DeltaLoc.IsEmpty() && m.IsVisible(txn) {
+		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsVisible(txn) {
 			persisted = m.GetStart()
 			return false
 		}
@@ -171,7 +171,7 @@ func (entry *BlockEntry) GetDeltaPersistedTS() types.TS {
 	defer entry.RUnlock()
 	persisted := types.TS{}
 	entry.LoopChain(func(m *MVCCNode[*MetadataMVCCNode]) bool {
-		if m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
+		if !m.BaseNode.DeltaLoc.IsEmpty() && m.IsCommitted() {
 			persisted = m.GetStart()
 			return false
 		}
