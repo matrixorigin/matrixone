@@ -934,7 +934,7 @@ func (x Decimal128) Add64(y Decimal64) (Decimal128, error) {
 	}
 }
 
-// for performance sake, must make sure x and y has same scale
+// for performance sake, must make sure x and y has same scale, then call this function
 func (x *Decimal128) AddInplace(y *Decimal128) (err error) {
 	signx := x.Sign()
 	var carryout uint64
@@ -948,9 +948,6 @@ func (x *Decimal128) AddInplace(y *Decimal128) (err error) {
 	} else {
 		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
 		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
-	}
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtx("Decimal128 Scales in Add overflow: %s+%s", x.Format(0), y.Format(0))
 	}
 	return
 }
