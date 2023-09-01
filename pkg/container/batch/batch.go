@@ -188,6 +188,9 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 	}
 	rbat := NewWithSize(len(cols))
 	for i, col := range cols {
+		if _, ok := mp[col]; !ok {
+			panic(fmt.Sprintf("column %s not found", col))
+		}
 		rbat.Vecs[i] = bat.Vecs[mp[col]]
 	}
 	rbat.rowCount = bat.rowCount

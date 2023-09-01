@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -124,6 +125,9 @@ func (p *PartitionReader) Read(
 		b := batch.NewWithSize(len(colNames))
 		b.SetAttributes(colNames)
 		for i, name := range colNames {
+			if _, ok := p.typsMap[name]; !ok {
+				panic(fmt.Sprintf("column %s not found", name))
+			}
 			if vp == nil {
 				b.Vecs[i] = vector.NewVec(p.typsMap[name])
 			} else {
