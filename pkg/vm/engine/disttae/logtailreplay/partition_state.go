@@ -660,3 +660,39 @@ func (p *PartitionState) consumeCheckpoints(
 	p.checkpoints = p.checkpoints[:0]
 	return nil
 }
+
+func (p *PartitionState) truncate(ts types.TS) {
+	pivot := BlockIndexByTSEntry{
+		Time:     ts.Next(),
+		BlockID:  types.Blockid{},
+		IsDelete: true,
+	}
+	iter := p.blockIndexByTS.Copy().Iter()
+	for ok := iter.Seek(pivot); ok; ok = iter.Prev() {
+		entry := iter.Item()
+		if entry.Time.Greater(ts) {
+			continue
+		}
+		if entry.IsDelete {
+			p.blockIndexByTS.Delete(entry)
+			blockPivot := BlockEntry{
+				BlockInfo: catalog.BlockInfo{
+					BlockID: entry.BlockID,
+				},
+			}
+			blkEntry, ok := p.blocks.Get(blockPivot)
+			if !ok {
+				panic("blk entry not existed")
+			}
+			createEntry := BlockIndexByTSEntry{
+				Time:         blkEntry.CreateTime,
+				BlockID:      blkEntry.BlockID,
+				IsDelete:     false,
+				IsAppendable: blkEntry.EntryState,
+			}
+			p.blockIndexByTS.Delete(createEntry)
+			p.blockIndexByTS.Delete(entry)
+			p.blocks.Delete(blkEntry)
+		}
+	}
+}
