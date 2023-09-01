@@ -473,3 +473,14 @@ PREPARE s FROM 'SELECT concat(?,"")';
 
 EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
+
+--test order by clause contains placeholder
+CREATE DATABASE mocloud_meta;
+PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE ? ORDER BY SCHEMA_NAME=? DESC,SCHEMA_NAME limit 1;
+SET @dbname1 = 'mocloud_meta%';
+SET @dbname2 = 'mocloud_meta';
+EXECUTE mo_stmt_id_1 USING @dbname1, @dbname2;
+DEALLOCATE PREPARE mo_stmt_id_1;
+DROP DATABASE mocloud_meta;
+
+
