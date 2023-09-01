@@ -161,10 +161,7 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 			return r, err
 		})
 	case types.T_decimal128:
-		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
-			r, _, err := v1.Add(v2, scale1, scale2)
-			return r, err
-		})
+		return decimal128ArithArray(parameters, result, proc, length, decimal128AddArray)
 
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32])
@@ -223,10 +220,8 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return r, err
 		})
 	case types.T_decimal128:
-		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
-			r, _, err := v1.Sub(v2, scale1, scale2)
-			return r, err
-		})
+		return decimal128ArithArray(parameters, result, proc, length, decimal128SubArray)
+
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, int64](parameters, result, proc, length, func(v1, v2 types.Date) int64 {
 			return int64(v1 - v2)
@@ -456,4 +451,66 @@ func divFnArray[T types.RealNumbers](v1, v2 []byte) ([]byte, error) {
 	}
 
 	return types.ArrayToBytes[T](r), nil
+}
+
+func decimal128AddArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) error {
+	len1 := len(v1)
+	len2 := len(v2)
+	var err error
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			rs[i], _, err = v1[i].Add(v2[i], scale1, scale2)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		if len1 == 1 {
+			for i := 0; i < len2; i++ {
+				rs[i], _, err = v1[0].Add(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			for i := 0; i < len1; i++ {
+				rs[i], _, err = v1[i].Add(v2[0], scale1, scale2)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func decimal128SubArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) error {
+	len1 := len(v1)
+	len2 := len(v2)
+	var err error
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			rs[i], _, err = v1[i].Sub(v2[i], scale1, scale2)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		if len1 == 1 {
+			for i := 0; i < len2; i++ {
+				rs[i], _, err = v1[0].Sub(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			for i := 0; i < len1; i++ {
+				rs[i], _, err = v1[i].Sub(v2[0], scale1, scale2)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
