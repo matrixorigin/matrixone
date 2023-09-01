@@ -27,6 +27,9 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		return moerr.NewErrMultiplePriKey(ctx.GetContext())
 	}
+	if tableDef.ClusterBy != nil && tableDef.ClusterBy.Name != "" {
+		return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
+	}
 
 	primaryKeys := make([]string, 0)
 	pksMap := map[string]bool{}

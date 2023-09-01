@@ -320,7 +320,6 @@ SELECT * FROM t2 WHERE id IN (SELECT 1);
 create view v1 as SELECT * FROM t2 WHERE id IN (SELECT 1);
 select * from v1;
 select * from v1;
--- @bvt:issue#4354
 SELECT * FROM t2 WHERE id IN (SELECT 1 UNION SELECT 3);
 SELECT * FROM t2 WHERE id IN (SELECT 1+(select 1));
 SELECT * FROM t2 WHERE id IN (SELECT 5 UNION SELECT 3);
@@ -336,15 +335,12 @@ select * from v3;
 select * from v4;
 select * from v5;
 select * from v6;
--- @bvt:issue
 drop view v1;
--- @bvt:issue#4354
 drop view v2;
 drop view v3;
 drop view v4;
 drop view v5;
 drop view v6;
--- @bvt:issue
 
 -- @case
 -- @desc:test for [in] subquery with null

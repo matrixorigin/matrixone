@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"math"
 	"net"
 	"runtime"
@@ -1251,7 +1252,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			r.Ctx = rs.Proc.Ctx
 		}
 		rs.Proc.Reg.MergeReceivers = receivers
-		return []*Scope{rs}, nil
+		return c.compileSort(n, []*Scope{rs}), nil
 	case plan.Node_SINK:
 		receivers := c.getStepRegs(step)
 		if len(receivers) == 0 {
@@ -1264,7 +1265,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := c.newMergeScope(ss)
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, true, len(receivers) > 1, receivers),
+			Arg: constructDispatchLocal(true, true, n.RecursiveSink, receivers),
 		})
 
 		return []*Scope{rs}, nil
@@ -1324,10 +1325,20 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 func (c *Compile) compileStreamScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	_, span := trace.Start(ctx, "compileStreamScan")
 	defer span.End()
+	configs := make(map[string]interface{})
+	for _, def := range n.TableDef.Defs {
+		switch v := def.Def.(type) {
+		case *plan.TableDef_DefType_Properties:
+			for _, p := range v.Properties.Properties {
+				configs[p.Key] = p.Value
+			}
+		}
+	}
 
-	// TODO:
-	// end, err := GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, factory KafkaAdapterFactory) (int64, error)
-	end := int64(0)
+	end, err := mokafka.GetStreamCurrentSize(ctx, configs, mokafka.NewKafkaAdapter)
+	if err != nil {
+		return nil, err
+	}
 	ps := calculatePartitions(0, end, int64(ncpu))
 
 	ss := make([]*Scope, len(ps))

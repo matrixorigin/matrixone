@@ -40,6 +40,7 @@ type TestRunner interface {
 	MaxGlobalCheckpoint() *CheckpointEntry
 	MaxCheckpoint() *CheckpointEntry
 	ForceFlush(ts types.TS, ctx context.Context, duration time.Duration) (err error)
+	ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error)
 	GetDirtyCollector() logtail.Collector
 }
 
@@ -95,7 +96,7 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 	})
 	return nil
 }
-func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time.Duration) (err error) {
+func (r *runner) ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error) {
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)
 		tree.GetTree().Compact()
@@ -126,7 +127,7 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time
 	err = common.RetryWithIntervalAndTimeout(
 		op,
 		forceDuration,
-		r.options.forceFlushCheckInterval, false)
+		flushInterval, false)
 	if err != nil {
 		return moerr.NewInternalError(ctx, "force flush failed: %v", err)
 	}
@@ -135,6 +136,10 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time
 		err = moerr.NewInternalError(ctx, sarg)
 	}
 	return
+
+}
+func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time.Duration) (err error) {
+	return r.ForceFlushWithInterval(ts, ctx, forceDuration, r.options.forceFlushCheckInterval)
 }
 
 func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {

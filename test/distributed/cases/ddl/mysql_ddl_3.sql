@@ -212,9 +212,9 @@ CREATE TABLE `mysql_ddl_test_t32` (
  PARTITION hour165 VALUES IN (165) ENGINE = InnoDB,
  PARTITION hour167 VALUES IN (167) ENGINE = InnoDB) */;
 
--- @bvt:issue#11438
+
 show create table mysql_ddl_test_t32;
--- @bvt:issue
+
 
 CREATE TABLE mysql_ddl_test_t33 (
   `created_at` datetime NOT NULL COMMENT 'create time')

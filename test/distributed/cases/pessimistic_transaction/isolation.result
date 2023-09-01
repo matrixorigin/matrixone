@@ -573,7 +573,6 @@ newcccc    d
 1    1
 2    2
 5    7
-commit;
 select * from rename01;
 newcccc    d
 3    1

@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"runtime"
 	"strings"
 	"sync"
@@ -441,5 +442,6 @@ type service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	addressMgr address.AddressManager
+	addressMgr   address.AddressManager
+	connectorMgr moconnector.ConnectorManagerInterface
 }
