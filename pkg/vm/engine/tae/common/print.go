@@ -163,6 +163,9 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_Blockid:
 		val := v.(types.Blockid)
 		return val.String()
+	case types.T_enum:
+		val := v.(types.Enum)
+		return fmt.Sprintf("%v", val)
 	default:
 		return fmt.Sprintf("%v", v)
 	}
