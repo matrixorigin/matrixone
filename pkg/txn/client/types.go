@@ -42,7 +42,7 @@ type TxnClient interface {
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
-	// AbortAllRunningTxn set all running txn to be aborted.
+	// AbortAllRunningTxn rollback all running transactions. but still keep their workspace to avoid panic.
 	AbortAllRunningTxn()
 	// Close closes client.sender
 	Close() error
