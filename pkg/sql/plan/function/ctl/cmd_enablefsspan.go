@@ -1,11 +1,12 @@
 package ctl
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 func handleEnableFSSpan(proc *process.Process,

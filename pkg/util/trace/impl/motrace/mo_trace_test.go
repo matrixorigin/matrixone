@@ -24,7 +24,6 @@ package motrace
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"os"
 	"path"
@@ -36,8 +35,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-
 	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )

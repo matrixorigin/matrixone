@@ -27,12 +27,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"io"
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type TraceID [16]byte
