@@ -616,7 +616,7 @@ func decimal128SubArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) err
 			for i := 0; i < len1; i++ {
 				rs[i] = v2[i]
 				rs[i].MinusInplace()
-				err = rs[i].AddInplace(&v2[i])
+				err = rs[i].AddInplace(&v1[i])
 				if err != nil {
 					return err
 				}
