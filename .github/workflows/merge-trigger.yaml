@@ -400,7 +400,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Insert Test With 100 threads'
-          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g | tee report/oltp-insert.log
+          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-insert.log
 
       - name: Start OLTP Delete Test With 100 Threads
         if: ${{ always() && !cancelled() }}
@@ -419,7 +419,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Delete Test With 100 threads'
-          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-delete.log
+          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-delete.log
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
@@ -438,7 +438,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP UPDATE Test With 100 threads'
-          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-update.log
+          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-update.log
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
@@ -457,7 +457,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Point Select Test With 100 threads'
-          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g | tee report/oltp-select.log
+          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-select.log
      
       - name: Result Summary
         if: ${{ always() && !cancelled()  }}
