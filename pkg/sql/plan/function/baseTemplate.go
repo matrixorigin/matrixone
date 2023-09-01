@@ -371,6 +371,22 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 	scale1 := p1.GetType().Scale
 	scale2 := p2.GetType().Scale
 
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 {
+		_, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+			return nil
+		}
+	}
+	if c2 {
+		_, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+			return nil
+		}
+	}
+
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 	}
