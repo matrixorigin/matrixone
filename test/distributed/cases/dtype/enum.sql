@@ -113,7 +113,6 @@ drop table enum05;
 
 
 -- create table enum column as primary key
--- @bvt:issue#11352
 drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew') primary key);
 show create table pri01;
@@ -125,7 +124,6 @@ select * from pri01;
 show create table pri01;
 show columns from pri01;
 drop table pri01;
--- @bvt:issue
 
 
 -- alter table add primary key for enum column and duplicate exists
@@ -159,7 +157,6 @@ drop table pri03;
 
 
 -- alter table drop primary key for enum column
--- @bvt:issue#11352
 drop table if exists pri04;
 create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system') primary key);
 insert into pri04 (col1, col2) values (1, 'database');
@@ -171,7 +168,6 @@ show columns from pri04;
 select * from pri04 where col2 = 'database';
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
 drop table pri04;
--- @bvt:issue
 
 
 -- insert into table,  either use a number to represent a number or insert a specific value
@@ -260,7 +256,6 @@ drop table enum04;
 
 
 -- builtin function
--- @bvt:issue#11352
 drop table if exists builtin01;
 create table builtin01(col1 enum('  云原生数据库  ','存储引擎 TAE', 'database system') not null primary key,col2 enum(' database','engine ','index meta data'));
 insert into builtin01 values('  云原生数据库  ',' database');
@@ -286,16 +281,12 @@ select empty(col2) from builtin01;
 
 -- aggregate:count, max, min, any_value, group_concat
 select count(col1) as count_col1 from builtin01;
--- @bvt:issue
 -- @bvt:issue#11348
 select max(col1), max(col2) from builtin01;
 select min(col1), min(col2) from builtin01;
--- @bvt:issue
--- @bvt:issue
 select group_concat(col1,col2) from builtin01;
 drop table builtin01;
 -- @bvt:issue
-
 
 -- aggregate: max, min
 drop table if exists agg01;
