@@ -292,7 +292,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 
 	var err error
-	sCtx, span := trace.Start(ctx, "S3FS.Write", trace.WithKind(trace.SpanKindS3FSVis))
+	ctx, span := trace.Start(ctx, "S3FS.Write", trace.WithKind(trace.SpanKindS3FSVis))
 	// collect read info only when cache missing
 	defer func() {
 		// cover another func to catch the err returned by l.read
@@ -312,7 +312,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	key := s.pathToKey(path.File)
 	output, err := s.s3HeadObject(
-		sCtx,
+		ctx,
 		&s3.HeadObjectInput{
 			Bucket: ptrTo(s.bucket),
 			Key:    ptrTo(key),
@@ -336,7 +336,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
-	err = s.write(sCtx, vector)
+	err = s.write(ctx, vector)
 	return err
 }
 
@@ -474,7 +474,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	// collect read info only when cache missing
-	sCtx, span := trace.Start(ctx, "S3FS.Read", trace.WithKind(trace.SpanKindS3FSVis))
+	ctx, span := trace.Start(ctx, "S3FS.Read", trace.WithKind(trace.SpanKindS3FSVis))
 	defer func() {
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, func() int64 {
 			size := int64(0)
@@ -485,7 +485,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()))
 	}()
 
-	if err = s.read(sCtx, vector); err != nil {
+	if err = s.read(ctx, vector); err != nil {
 		return err
 	}
 
