@@ -1292,7 +1292,7 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 }
 
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
-func (ses *Session) AuthenticateUser(userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd, salt, auth []byte) bool) ([]byte, error) {
+func (ses *Session) AuthenticateUser(userInput string, authResponse []byte, salt []byte, checkPassword func(pwd, salt, auth []byte) bool) ([]byte, error) {
 	var defaultRoleID int64
 	var defaultRole string
 	var tenant *TenantInfo
@@ -1517,14 +1517,6 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
 	}
 
-	// If the login information contains the database name, verify if the database exists
-	if dbName != "" {
-		_, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, pu, "use "+dbName)
-		if err != nil {
-			return nil, err
-		}
-		logDebugf(sessionInfo, "check database name succeeded")
-	}
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)

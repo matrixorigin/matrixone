@@ -22,7 +22,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"math"
 	"math/rand"
 	"net"
@@ -31,6 +30,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1158,7 +1159,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	ses := mp.GetSession()
 	if !mp.SV.SkipCheckUser {
 		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
-		psw, err = ses.AuthenticateUser(mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), mp.checkPassword)
+		psw, err = ses.AuthenticateUser(mp.GetUserName(), mp.authResponse, mp.GetSalt(), mp.checkPassword)
 		if err != nil {
 			return err
 		}
