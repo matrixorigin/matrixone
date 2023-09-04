@@ -54,7 +54,9 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, err
 			}
 		} else if _, ok := expr.Expr.(*plan.Expr_P); ok {
-			return expr, nil
+			targetType := types.T_int64.ToType()
+			planTargetType := makePlan2Type(&targetType)
+			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
 		} else {
 			return nil, moerr.NewSyntaxError(b.GetContext(), "only int64 support in limit/offset clause")
 		}
