@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -190,7 +191,7 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 			return nil, err
 		}
 		taeFileList = append(taeFileList, &taeFile{
-			path:     dir + "/" + file.Name,
+			path:     dir + string(os.PathSeparator) + file.Name,
 			size:     file.Size,
 			checksum: checksum,
 		})

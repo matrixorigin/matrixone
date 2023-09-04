@@ -222,10 +222,12 @@ type Config struct {
 	Metas *Metas
 }
 
+// isValid returns true iff c != nil and c.Metas != nil and c.GeneralDir != nil
 func (c *Config) isValid() bool {
 	return !(c == nil || c.Metas == nil || c.GeneralDir == nil)
 }
 
+// isValid2 returns true iff c != nil and c.Metas != nil
 func (c *Config) isValid2() bool {
 	return !(c == nil || c.Metas == nil)
 }
