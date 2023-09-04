@@ -934,6 +934,24 @@ func (x Decimal128) Add64(y Decimal64) (Decimal128, error) {
 	}
 }
 
+// for performance sake, must make sure x and y has same scale, then call this function
+func (x *Decimal128) AddInplace(y *Decimal128) (err error) {
+	signx := x.Sign()
+	var carryout uint64
+	if signx == y.Sign() {
+		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
+		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
+		if signx != x.Sign() {
+			err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
+			return
+		}
+	} else {
+		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
+		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
+	}
+	return
+}
+
 func (x Decimal128) Add(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {
 	if scale1 > scale2 {
 		scale = scale1
@@ -1060,6 +1078,48 @@ func (x Decimal64) Mul(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 	}
 	if signx != signy {
 		z = z.Minus()
+	}
+	return
+}
+
+func (x *Decimal128) MulInplace(y *Decimal128, scale, scale1, scale2 int32) (err error) {
+	signx := x.Sign()
+	signy := y.Sign()
+	if signx {
+		x.MinusInplace()
+	}
+	if signy {
+		tmp := *y
+		tmp.MinusInplace()
+		y = &tmp
+	}
+	err = x.Mul128InPlace(y)
+	if err != nil {
+		x2 := Decimal256{x.B0_63, x.B64_127, 0, 0}
+		y2 := Decimal256{y.B0_63, y.B64_127, 0, 0}
+		x2, _ = x2.Mul256(y2)
+		x2, _ = x2.Scale(scale)
+		if x2.B128_191 != 0 || x2.B192_255 != 0 || x2.B64_127>>63 != 0 {
+			if signy {
+				y.MinusInplace()
+			}
+			err = moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s(Scale:%d)*%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
+			return
+		} else {
+			err = nil
+		}
+		x.B0_63 = x2.B0_63
+		x.B64_127 = x2.B64_127
+		if signx != signy {
+			x.MinusInplace()
+		}
+		return
+	}
+	if scale != 0 {
+		x.ScaleInplace(scale)
+	}
+	if signx != signy {
+		x.MinusInplace()
 	}
 	return
 }
