@@ -720,7 +720,7 @@ func decimal128MultiArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) e
 		}
 	} else {
 		if len1 == 1 {
-			for i := 0; i < len1; i++ {
+			for i := 0; i < len2; i++ {
 				rs[i], _, err = v1[0].Mul(v2[i], scale1, scale2)
 				if err != nil {
 					return err
