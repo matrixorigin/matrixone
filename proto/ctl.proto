@@ -55,8 +55,8 @@ enum CmdMethod {
     AddFaultPoint   = 11;
     // Backup backup data
     Backup          = 12;
-    // Enable file service span
-    EnableFSSpan    = 13;
+    // Enable or disable specified span
+    TraceSpan    = 13;
 }
 
 // TNPingRequest ping request
