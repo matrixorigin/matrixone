@@ -287,10 +287,7 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return rt, err
 		})
 	case types.T_decimal128:
-		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
-			r, _, err := v1.Mul(v2, scale1, scale2)
-			return r, err
-		})
+		return decimal128ArithArray(parameters, result, proc, length, decimal128MultiArray)
 
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32])
@@ -702,6 +699,38 @@ func decimal128SubArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) err
 					if err != nil {
 						return err
 					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func decimal128MultiArray(v1, v2, rs []types.Decimal128, scale1, scale2 int32) error {
+	len1 := len(v1)
+	len2 := len(v2)
+	var err error
+
+	if len1 == len2 {
+		for i := 0; i < len1; i++ {
+			rs[i], _, err = v1[i].Mul(v2[i], scale1, scale2)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		if len1 == 1 {
+			for i := 0; i < len1; i++ {
+				rs[i], _, err = v1[0].Mul(v2[i], scale1, scale2)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			for i := 0; i < len1; i++ {
+				rs[i], _, err = v1[i].Mul(v2[0], scale1, scale2)
+				if err != nil {
+					return err
 				}
 			}
 		}
