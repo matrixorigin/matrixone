@@ -142,6 +142,7 @@ triggers
 tables
 partitions
 views
+statistics
 engines
 routines
 parameters
