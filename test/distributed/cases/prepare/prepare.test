@@ -264,3 +264,4 @@ set @a_var = 2;
 set @b_var = 0;
 execute stmt3 using @a_var, @b_var;
 deallocate prepare stmt3;
+drop database abc;
