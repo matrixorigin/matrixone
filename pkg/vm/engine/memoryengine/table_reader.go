@@ -222,6 +222,10 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([][]byte, error) {
 	return shards, nil
 }
 
+func (t *Table) RangesForAgg(_ context.Context, _ []*plan.Expr) ([][]byte, []any, error) {
+	return nil, nil, nil
+}
+
 func (t *Table) UpdateBlockInfos(_ context.Context) error {
 	return nil
 }

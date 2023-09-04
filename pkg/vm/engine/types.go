@@ -572,6 +572,8 @@ type Relation interface {
 
 	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
 
+	RangesForAgg(context.Context, []*plan.Expr) ([][]byte, []any, error)
+
 	TableDefs(context.Context) ([]TableDef, error)
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)

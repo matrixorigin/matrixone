@@ -603,6 +603,109 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	return
 }
 
+func (tbl *txnTable) RangesForAgg(ctx context.Context, agglist []*plan.Expr) (ranges [][]byte, metaresults []any, err error) {
+	tbl.writes = tbl.writes[:0]
+	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
+
+	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
+
+	if err = tbl.UpdateBlockInfos(ctx); err != nil {
+		return
+	}
+
+	var part *logtailreplay.PartitionState
+	if part, err = tbl.getPartitionState(ctx); err != nil {
+		return
+	}
+
+	ranges = make([][]byte, 0, 1)
+	ranges = append(ranges, []byte{})
+
+	if len(tbl.blockInfos) == 0 {
+		cnblks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(cnblks) == 0 {
+			return ranges, nil, err
+		}
+	}
+
+	err = tbl.rangesOnePart(
+		ctx,
+		part,
+		tbl.getTableDef(),
+		nil,
+		tbl.blockInfos,
+		&ranges,
+		tbl.proc,
+	)
+
+	metaresults = make([]any, len(agglist))
+	for i := range agglist {
+		agg := agglist[i].Expr.(*plan.Expr_F)
+		name := agg.F.Func.ObjName
+		switch name {
+		case "count":
+			count := uint32(0)
+			var objMeta objectio.ObjectMeta
+			for _, buf := range ranges {
+				blk := catalog.DecodeBlockInfo(buf)
+				fs := tbl.proc.FileService
+				location := blk.MetaLocation()
+				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+				if err != nil {
+					return
+				}
+				objDataMeta := objMeta.MustDataMeta()
+				blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+				count += blkMeta.GetRows()
+			}
+			metaresults = append(metaresults, int64(count))
+		case "min":
+			min := make([]any, len(ranges))
+			var objMeta objectio.ObjectMeta
+			for _, buf := range ranges {
+				blk := catalog.DecodeBlockInfo(buf)
+				fs := tbl.proc.FileService
+				location := blk.MetaLocation()
+				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+				if err != nil {
+					return
+				}
+				objDataMeta := objMeta.MustDataMeta()
+				blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+				col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+				zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
+				min = append(min, zm.GetMin())
+			}
+			metaresults = append(metaresults, min)
+		case "max":
+			max := make([]any, len(ranges))
+			var objMeta objectio.ObjectMeta
+			for _, buf := range ranges {
+				blk := catalog.DecodeBlockInfo(buf)
+				fs := tbl.proc.FileService
+				location := blk.MetaLocation()
+				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+				if err != nil {
+					return
+				}
+				objDataMeta := objMeta.MustDataMeta()
+				blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+				col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+				zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
+				max = append(max, zm.GetMax())
+			}
+			metaresults = append(metaresults, max)
+
+		default:
+			metaresults = append(metaresults, nil)
+		}
+	}
+	return
+}
+
 // txn can read :
 //  1. snapshot data:
 //      1>. committed block data resides in S3.
