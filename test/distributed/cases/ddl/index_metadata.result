@@ -24,6 +24,19 @@ from
 where  `tbl`.`relname` = 't1' and `tbl`.`reldatabase` = 'db6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 deptno    UNIQUE    deptno    1    0        t1    deptno    1    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't1';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t1    0    db6    deptno    1    deptno    
 drop table if exists t2;
 create table t2(
 empno int unsigned auto_increment,
@@ -52,6 +65,19 @@ from
 where  `tbl`.`relname` = 't2' and `tbl`.`reldatabase` = 'db6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t2    empno    1    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't2';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t2    0    db6    PRIMARY    1    empno    
 drop table if exists t3;
 create table t3(
 empno int unsigned,
@@ -81,6 +107,20 @@ where  `tbl`.`relname` = 't3' and `tbl`.`reldatabase` = 'db6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 empno    UNIQUE    empno    1    0        t3    empno    1    null
 empno    UNIQUE    empno    1    0        t3    ename    2    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't3';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t3    0    db6    empno    1    empno    
+db6    t3    0    db6    empno    2    ename    
 drop table if exists t4;
 create table t4(
 empno int unsigned,
@@ -111,6 +151,21 @@ name    type    name    is_visible    hidden    comment    relname    column_nam
 empno    MULTIPLE    empno    1    0        t4    empno    1    null
 empno    MULTIPLE    empno    1    0        t4    ename    2    null
 empno    MULTIPLE    empno    1    0        t4    job    3    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't4';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t4    1    db6    empno    1    empno    
+db6    t4    1    db6    empno    2    ename    
+db6    t4    1    db6    empno    3    job    
 drop table if exists t5;
 create table t5(
 empno int unsigned,
@@ -140,6 +195,20 @@ where  `tbl`.`relname` = 't5' and `tbl`.`reldatabase` = 'db6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t5    empno    1    null
 PRIMARY    PRIMARY    PRIMARY    1    0        t5    ename    2    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't5';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t5    0    db6    PRIMARY    1    empno    
+db6    t5    0    db6    PRIMARY    2    ename    
 drop table if exists t6;
 create table t6(
 empno int unsigned,
@@ -166,6 +235,18 @@ from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't6' and `tbl`.`reldatabase` = 'db6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't6';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
 drop table if exists t7;
 create table t7(
 col1 int unsigned,
@@ -198,6 +279,22 @@ col1    UNIQUE    col1    1    0        t7    col1    1    null
 col1    UNIQUE    col1    1    0        t7    col2    2    null
 col3    UNIQUE    col3    1    0        t7    col3    1    null
 col3    UNIQUE    col3    1    0        t7    col6    2    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't7';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t7    0    db6    col1    1    col1    
+db6    t7    0    db6    col1    2    col2    
+db6    t7    0    db6    col3    1    col3    
+db6    t7    0    db6    col3    2    col6    
 drop table if exists t8;
 create table t8(
 empno int unsigned primary key,
@@ -228,6 +325,21 @@ name    type    name    is_visible    hidden    comment    relname    column_nam
 empno    UNIQUE    empno    1    0        t8    empno    1    null
 empno    UNIQUE    empno    1    0        t8    ename    2    null
 PRIMARY    PRIMARY    PRIMARY    1    0        t8    empno    1    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't8';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t8    0    db6    empno    1    empno    
+db6    t8    0    db6    empno    2    ename    
+db6    t8    0    db6    PRIMARY    1    empno    
 drop table if exists t9;
 create table t9(id int PRIMARY KEY,name VARCHAR(255),age int);
 insert into t9 values(1,"Abby", 24);
@@ -268,6 +380,20 @@ where  `tbl`.`relname` = 't9';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t9    id    1    null
 idx    UNIQUE    idx    1    0        t9    name    1    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't9';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t9    0    db6    PRIMARY    1    id    
+db6    t9    0    db6    idx    1    name    
 select * from t9;
 id    name    age
 1    Abby    24
@@ -316,6 +442,20 @@ where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t10    col1    1    null
 idx    UNIQUE    idx    1    0    create varchar index    t10    col2    1    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't10';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t10    0    db6    PRIMARY    1    col1    
+db6    t10    0    db6    idx    1    col2    create varchar index
 insert into t10 values(1,"Abby", 24,'zbcvdf');
 insert into t10 values(2,"Bob", 25,'zbcvdf');
 insert into t10 values(3,"Carol", 23,'zbcvdf');
@@ -364,6 +504,21 @@ name    type    name    is_visible    hidden    comment    relname    column_nam
 x11    MULTIPLE    x11    1    0    xxxxxxx    t11    a    1    null
 x12    MULTIPLE    x12    1    0    yyyyyyyyy    t11    b    1    null
 x12    MULTIPLE    x12    1    0    yyyyyyyyy    t11    c    2    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't11';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t11    1    db6    x11    1    a    xxxxxxx
+db6    t11    1    db6    x12    1    b    yyyyyyyyy
+db6    t11    1    db6    x12    2    c    yyyyyyyyy
 drop index x11 on t11;
 drop index x12 on t11;
 select
@@ -382,6 +537,18 @@ from
 where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 drop table t11;
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't11';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
 drop table if exists t12;
 create table t12(a int, b int,c varchar(20), primary key(a));
 create index idx_1 on t12(a, b) comment 'xxxxxxx';
@@ -403,6 +570,21 @@ name    type    name    is_visible    hidden    comment    relname    column_nam
 PRIMARY    PRIMARY    PRIMARY    1    0        t12    a    1    null
 idx_1    MULTIPLE    idx_1    1    0    xxxxxxx    t12    a    1    null
 idx_1    MULTIPLE    idx_1    1    0    xxxxxxx    t12    b    2    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't12';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t12    0    db6    PRIMARY    1    a    
+db6    t12    1    db6    idx_1    1    a    xxxxxxx
+db6    t12    1    db6    idx_1    2    b    xxxxxxx
 create index idx_1 on t12(a, b);
 duplicate key name 'idx_1'
 select
@@ -423,6 +605,21 @@ name    type    name    is_visible    hidden    comment    relname    column_nam
 PRIMARY    PRIMARY    PRIMARY    1    0        t12    a    1    null
 idx_1    MULTIPLE    idx_1    1    0    xxxxxxx    t12    a    1    null
 idx_1    MULTIPLE    idx_1    1    0    xxxxxxx    t12    b    2    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't12';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t12    0    db6    PRIMARY    1    a    
+db6    t12    1    db6    idx_1    1    a    xxxxxxx
+db6    t12    1    db6    idx_1    2    b    xxxxxxx
 drop index idx_1 on t12;
 select
 `idx`.`name`,
@@ -440,6 +637,19 @@ from
 where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t12    a    1    null
+select
+table_schema,
+table_name,
+non_unique,
+index_schema,
+index_name,
+seq_in_index,
+column_name,
+index_comment
+from
+information_schema.statistics where table_schema = 'db6' and table_name = 't12';
+table_schema    table_name    non_unique    index_schema    index_name    seq_in_index    column_name    index_comment
+db6    t12    0    db6    PRIMARY    1    a    
 drop index idx_1 on t12;
 internal error: not found index: idx_1
 drop table t12;
