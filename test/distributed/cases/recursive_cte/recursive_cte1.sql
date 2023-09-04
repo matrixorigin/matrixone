@@ -255,24 +255,17 @@ with recursive cte_ab_2(id, productID,price) as (SELECT p.id, p.p_id, p.price FR
 with recursive cte_ab_3(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, count(p.price) FROM product p JOIN cte_ab_3 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_3;
 with recursive cte_ab_4(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, max(p.price) FROM product p JOIN cte_ab_4 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_4;
 with recursive cte_ab_5(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, min(p.price) FROM product p JOIN cte_ab_5 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_5;
--- @bvt:issue#11276
 with recursive cte_ab_6(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_6 c on p.manager_id= c.id order by c.id) select * from cte_ab_6 order by id;
 -- recursive cte abnormal:  recursive_query include distinct ,limit, subquery , left join,right join,out join
 with recursive cte_ab_7(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select distinct p.id,p.manager_id,p.name from emp p join cte_ab_7 c on p.manager_id= c.id) select * from cte_ab_7;
--- @bvt:issue
--- @bvt:issue#11375
 with recursive cte_ab_8(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name,0 as level from emp p where manager_id is null union all select p.id,p.manager_id,p.name,levels+1 from emp p join cte_ab_8 c on p.manager_id= c.id limit 5) select * from cte_ab_8;
--- @bvt:issue
 -- @bvt:issue#11276
 with recursive cte_ab_9(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name,0 as level from emp p where manager_id is null union all select p.id,p.manager_id,p.name,levels+1 from emp p where p.manager_id in(select c.id from cte_ab_9 c)) select * from cte_ab_9;
+-- @bvt:issue
 -- abnormal: SELECT list and column names list have different column counts
 with recursive cte_ab_10(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_10 c on p.manager_id= c.id ) select * from cte_ab_10 order by id;
--- @bvt:issue
--- @bvt:issue#11374
 with non_cte_8(manager_id,name) as(SELECT a.manager_id, a.id,a.name AS job_name FROM emp a), non_cte_9(id,name) as(SELECT m.id, m.name FROM employees_mgr m WHERE m.name != "lucky") select * FROM non_cte_8 a JOIN non_cte_9 b ON a.manager_id = b.id ORDER BY  a.manager_id;
--- @bvt:issue
 -- recursive cte abnormal: with as update
--- @bvt:issue#11276
 WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
 (
     SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
@@ -285,4 +278,3 @@ WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
         ON e.ManagerID = d.EmployeeID
 )
 update DirectReports set Title='manager assistant' where ManagerID=273;
--- @bvt:issue
