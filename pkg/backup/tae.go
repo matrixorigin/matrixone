@@ -200,7 +200,6 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 
 // CopyFile copy file from srcFs to dstFs and return checksum of the written file.
 func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry *fileservice.DirEntry, dstDir string) ([]byte, error) {
-	var checksum []byte
 	name := dentry.Name
 	if dstDir != "" {
 		name = path.Join(dstDir, name)
@@ -223,10 +222,6 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 		FilePath:    name,
 		Entries:     make([]fileservice.IOEntry, 1),
 		CachePolicy: fileservice.SkipAll,
-		Hash: fileservice.Hash{
-			Sum: &checksum,
-			New: md5.New,
-		},
 	}
 	dstIoVec.Entries[0] = fileservice.IOEntry{
 		Offset: 0,
@@ -234,7 +229,11 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 		Size:   dentry.Size,
 	}
 	err = dstFs.Write(ctx, dstIoVec)
-	return checksum, err
+	if err != nil {
+		return nil, err
+	}
+	checksum := md5.Sum(ioVec.Entries[0].Data)
+	return checksum[:], err
 }
 
 func mergeGCFile(gcFiles []string, gcFileMap map[string]string) {

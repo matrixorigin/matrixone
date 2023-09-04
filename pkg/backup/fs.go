@@ -116,7 +116,6 @@ func etlFSDir(filepath string) string {
 
 func writeFile(ctx context.Context, fs fileservice.FileService, path string, data []byte) error {
 	var err error
-	var checksum []byte
 	//write file
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: path,
@@ -127,14 +126,12 @@ func writeFile(ctx context.Context, fs fileservice.FileService, path string, dat
 				Data:   data,
 			},
 		},
-		Hash: fileservice.Hash{
-			Sum: &checksum,
-			New: md5.New,
-		},
 	})
 	if err != nil {
 		return err
 	}
+
+	checksum := md5.Sum(data)
 
 	//write checksum file for the file
 	checksumFile := path + ".md5"
@@ -144,7 +141,7 @@ func writeFile(ctx context.Context, fs fileservice.FileService, path string, dat
 			{
 				Offset: 0,
 				Size:   int64(len(checksum)),
-				Data:   checksum,
+				Data:   checksum[:],
 			},
 		},
 	})
