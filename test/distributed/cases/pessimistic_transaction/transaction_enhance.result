@@ -422,7 +422,6 @@ col1new    col2
 4.0    b
 5.0    c
 8.0    h
-commit;
 insert into alter01 values (6,"h");
 select * from alter01;
 col1new    col2

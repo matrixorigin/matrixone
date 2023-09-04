@@ -313,6 +313,38 @@ func getUserPart(user string) string {
 	return user
 }
 
+// getLabelPart gets the label part from the full string.
+// The full string could contain CN label information which
+// is used by proxy module.
+func getLabelPart(user string) string {
+	parts := strings.Split(user, "?")
+	if len(parts) > 1 {
+		return parts[1]
+	}
+	return ""
+}
+
+// ParseLabel parses the label string. The labels are seperated by
+// ",", key and value are seperated by "=".
+func ParseLabel(labelStr string) (map[string]string, error) {
+	labelMap := make(map[string]string)
+	if len(labelStr) == 0 {
+		return labelMap, nil
+	}
+	const delimiter1 = ","
+	const delimiter2 = "="
+	kvs := strings.Split(labelStr, delimiter1)
+	for _, label := range kvs {
+		parts := strings.Split(label, delimiter2)
+		if len(parts) == 2 && len(parts[0]) != 0 && len(parts[1]) != 0 {
+			labelMap[parts[0]] = parts[1]
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx("invalid label format: should be like 'a=b'")
+		}
+	}
+	return labelMap, nil
+}
+
 // initUser for initialization or something special
 type initUser struct {
 	account  *TenantInfo
@@ -1208,7 +1240,7 @@ const (
 
 	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
 
-	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s";`
+	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
 	checkDatabaseTableFormat = `select t.rel_id from mo_catalog.mo_database d, mo_catalog.mo_tables t
 										where d.dat_id = t.reldatabase_id
@@ -1855,12 +1887,12 @@ func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) 
 	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
 }
 
-func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string) (string, error) {
+func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string, accountId int64) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName), nil
+	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName, accountId), nil
 }
 
 func getSqlForCheckDatabaseTable(ctx context.Context, dbName, tableName string) (string, error) {
@@ -3565,7 +3597,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) er
 				}
 
 				filePath = strings.Replace(filePath, stageName+":", url, 1)
-				ep.FilePath = filePath
+				ses.ep.userConfig.StageFilePath = filePath
 			}
 
 		} else {
@@ -8485,7 +8517,7 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 		}
 
 		// step1:check database exists or not and get database owner
-		sql, err = getSqlForCheckDatabaseWithOwner(ctx, dbName)
+		sql, err = getSqlForCheckDatabaseWithOwner(ctx, dbName, int64(ses.GetTenantInfo().GetTenantID()))
 		if err != nil {
 			return err
 		}

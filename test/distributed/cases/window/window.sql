@@ -1254,4 +1254,158 @@ insert into t2 values(1,1);
 insert into t2 values(5,5);
 insert into t2 values(6,6);
 select a,min(a) over (partition by a) ,sum(a+1) over (partition by a) from t2;
+drop table t2;
+
+
+-- order by
+drop table if exists int_8;
+create table int_8 (id integer, sex varchar(10));
+insert into int_8 values (-1, 'moolol');
+insert into int_8 values (-128, 'fdhsajhd');
+insert into int_8 values (32, 'fdhsajhd');
+insert into int_8 values (-1, 'fdhsajhd');
+insert into int_8 values (23, 'moolol');
+insert into int_8 values (127, null);
+insert into int_8 values (-128, null);
+select * from int_8;
+select row_number() over (partition by sex order by id rows between unbounded preceding and unbounded following) as a, id,
+       sum(id) over (partition by sex order by id rows between 1 following and 2 following) as b from int_8;
+select row_number() over (partition by sex order by id rows between 1 following and 2 following) as a, sum(id) over (partition by sex order by id
+    rows between 1 following and 2 following) as b from int_8;
+drop table int_8;
+
+drop table if exists int_16;
+create table int_16(col1 int,col2 bool,col3 datetime);
+insert into int_16 values(-32768, true, '2023-05-16 00:12:12');
+insert into int_16 values(22201, false, '1997-01-13 12:12:00');
+insert into int_16 values(-32768, true, '2000-10-10 11:11:11');
+insert into int_16 values(4, false, '1020-10-01 01:01:01');
+insert into int_16 values(32767, null, null);
+select max(col1) over (partition by col2 order by col1 rows between 2 preceding and 3 following) as col1 from int_16;
+select dense_rank() over (partition by col2 order by col1 rows between 2 preceding and 3 following) as col1 from int_16;
+drop table int_16;
+
+drop table if exists int_32;
+create table int_32(i int, j int, k int);
+insert into int_32 values (-2147483648, 1, 1);
+insert into int_32 values (-2147483648, 1, 2);
+insert into int_32 values (2147483647, 1, 2);
+insert into int_32 values (2147483647, 2, 1);
+insert into int_32 values (13289392, 2, 2);
+insert into int_32 values (23289483, 1, 1);
+insert into int_32 values (-3824, 1, 1);
+insert into int_32 values (2438294, 1, 2);
+insert into int_32 values (-3824, 2, 1);
+select * from int_32;
+select *, rank() over (order by i,j,k rows between 2 preceding and 3 following) as o_ijk,
+        min(i) over (order by j rows between 4 preceding and 5 following) as o_j,
+        rank() over (order by k,j rows between 1 preceding and 1 following) as o_kj from int_32 order by i,j,k;
+drop table int_32;
+
+drop table if exists uint_8;
+create table uint_8 (col1 int unsigned, col2 varchar(10));
+insert into uint_8 values (1, 'moolol');
+insert into uint_8 values (128, 'fdhsajhd');
+insert into uint_8 values (32, 'fdhsajhd');
+insert into uint_8 values (1, 'fdhsajhd');
+insert into uint_8 values (23, 'moolol');
+insert into uint_8 values (255, null);
+insert into uint_8 values (128, null);
+select * from uint_8;
+select row_number() over (partition by col2 order by col1 rows between unbounded preceding and unbounded following) as a,
+        sum(col1) over (partition by col2 order by col1 rows between 1 following and 2 following) as b from uint_8;
+select dense_rank() over (partition by col2 order by col1) as col1, sum(col1) over (partition by col2 order by col1) as col2 from uint_8;
+drop table uint_8;
+
+drop table if exists uint_16;
+create table uint_16(col1 int unsigned,col2 bool,col3 datetime);
+insert into uint_16 values(0, true, '2023-05-16 00:12:12');
+insert into uint_16 values(0, false, '1997-01-13 12:12:00');
+insert into uint_16 values(65535, true, '2000-10-10 11:11:11');
+insert into uint_16 values(4, false, '1020-10-01 01:01:01');
+insert into uint_16 values(null, null, null);
+insert into uint_16 values(65535, null, '1997-11-10 10:10:10');
+select * from uint_16;
+select max(col1) over (partition by col2 order by col1 rows between unbounded preceding and unbounded following) as col1 from uint_16;
+select dense_rank() over (partition by col2 order by col1 rows between unbounded preceding and unbounded following) as col1 from uint_16;
+drop table uint_16;
+
+drop table if exists uint_32;
+create table uint_32(i bigint unsigned, j int, k int);
+insert into uint_32 values (4294967295, 1, 1);
+insert into uint_32 values (4294967295, 1, 2);
+insert into uint_32 values (2147483647, 1, 2);
+insert into uint_32 values (2147483647, 2, 1);
+insert into uint_32 values (13289392, 2, 2);
+insert into uint_32 values (23289483, 1, 1);
+insert into uint_32 values (3824, 1, 1);
+insert into uint_32 values (2438294, 1, 2);
+insert into uint_32 values (3824, 2, 1);
+select * from uint_32;
+select  max(i) over (order by i,j,k rows between 1 preceding and 2 following) as o_ijk,
+        dense_rank() over (order by i rows between unbounded preceding and unbounded following) as o_j,
+        rank() over (order by k,j rows between unbounded preceding and unbounded following) as o_kj from uint_32 order by i,j,k;
+drop table uint_32;
+
+drop table if exists uint_64;
+create table uint_64(i bigint unsigned, j bigint unsigned, k decimal);
+insert into uint_64 values (18446744073709551615, 2147483647, 123213.99898);
+insert into uint_64 values (4294967295, 2147483647, 2);
+insert into uint_64 values (18446744073709551615, 1, 2);
+insert into uint_64 values (2147483647, 23289483, 123213.99898);
+insert into uint_64 values (13289392, 2, 2);
+insert into uint_64 values (18446744073709551615, 23289483, 1);
+insert into uint_64 values (3824, 13289392, 123213.99898);
+insert into uint_64 values (2438294, 1, 2);
+insert into uint_64 values (3824, 13289392, 1);
+select * from uint_64;
+select rank() over (order by i,j,k rows between unbounded preceding and unbounded following) as o_ijk,
+       max(i) over (order by i rows between 10 preceding and 2 following) as o_j,
+       rank() over (order by k,j rows between unbounded preceding and unbounded following) as o_kj from uint_64 order by i,j,k;
+drop table uint_64;
+
+drop table if exists decimal_64;
+create table decimal_64(col1 decimal(18,10), col2 char(10));
+insert into decimal_64 values (23189723.2314892238902, 'male');
+insert into decimal_64 values (23189723.2314892238902, 'female');
+insert into decimal_64 values (3278.3243214124242, 'male');
+insert into decimal_64 (col1, col2) values (32134243.2143243242142, 'male');
+insert into decimal_64 values (-23189723.2314892238902, 'male');
+insert into decimal_64 values (-3278.3243214124242, 'female');
+insert into decimal_64 (col1, col2) values (32134243.2143243242142, 'male');
+select * from decimal_64;
+select max(col1) over (order by col1 rows between 1 preceding and 0 following) as newcol1 from decimal_64;
+select min(col1) over (partition by col2 order by col1 rows between unbounded preceding and unbounded following) as newcol from decimal_64 limit 4;
+drop table decimal_64;
+
+drop table if exists decimal_128;
+create table decimal_128(col1 decimal(38,10), col2 char(10));
+insert into decimal_128 values (2318972338274832748378887878.2314892238902, 'male');
+insert into decimal_128 values (2318972338274832748378887878.23148922389, 'female');
+insert into decimal_128 values (-3278234242342349090943024982.3243214124242, 'male');
+insert into decimal_128 (col1, col2) values (32134243.2143243242142, 'male');
+insert into decimal_128 values (-23189723.2314892238902, 'male');
+insert into decimal_128 values (-3278234242342349090943024982.3243214124242, 'female');
+insert into decimal_128 (col1, col2) values (32134243.2143243242142, 'male');
+select * from decimal_128;
+select min(col1) over (order by col1 rows between 1 preceding and 0 following) as newcol1 from decimal_128;
+select dense_rank() over (order by col1 rows between 1 preceding and 2 following) as newcol2 from decimal_128;
+select row_number() over (partition by col2 order by col1 rows between unbounded preceding and unbounded following) as newcol from decimal_128;
+drop table decimal_128;
+
+drop table if exists time01;
+create table time01 (col1 time, col2 timestamp);
+insert into time01 values ('12:1b2:12', '2023-05-16 00:12:12');
+insert into time01 values ('23:23:59', '2019-05-16 23:23:59');
+insert into time01 values ('12:12:12', '1997-01-13 01:02:03');
+insert into time01 values ('23:23:59', '2023-05-16 00:12:12');
+insert into time01 values ('01:02:03', '2019-05-16 23:23:59');
+insert into time01 values (null, null);
+select * from time01;
+select rank() over (order by col1 rows between 1 preceding and 0 following) as newcol1 from time01;
+select dense_rank() over (order by col1 rows between 1 preceding and 2 following) as newcol2 from time01;
+select row_number() over (partition by col2 order by col1 rows between unbounded preceding and unbounded following) as newcol from time01;
+select rank() over (partition by col1 order by col2 rows between 0 preceding and 0 following) as newcol from time01;
+select max(col2) over (partition by col1 order by col2 rows between 3 preceding and 3 following) as newcol from time01;
+drop table time01;
 drop database test;
