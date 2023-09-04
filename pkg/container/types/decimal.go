@@ -1084,18 +1084,17 @@ func (x Decimal64) Mul(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 
 func (x *Decimal128) MulInplace(y *Decimal128, scale, scale1, scale2 int32) (err error) {
 	signx := x.Sign()
-	x1 := *x
 	signy := y.Sign()
 	y1 := *y
 	if signx {
-		x1.MinusInplace()
+		x.MinusInplace()
 	}
 	if signy {
 		y1.MinusInplace()
 	}
-	z, err := x1.Mul128(y1)
+	err = x.Mul128InPlace(&y1)
 	if err != nil {
-		x2 := Decimal256{x1.B0_63, x1.B64_127, 0, 0}
+		x2 := Decimal256{x.B0_63, x.B64_127, 0, 0}
 		y2 := Decimal256{y1.B0_63, y1.B64_127, 0, 0}
 		x2, _ = x2.Mul256(y2)
 		x2, _ = x2.Scale(scale)
@@ -1105,21 +1104,19 @@ func (x *Decimal128) MulInplace(y *Decimal128, scale, scale1, scale2 int32) (err
 		} else {
 			err = nil
 		}
-		z.B0_63 = x2.B0_63
-		z.B64_127 = x2.B64_127
+		x.B0_63 = x2.B0_63
+		x.B64_127 = x2.B64_127
 		if signx != signy {
-			z = z.Minus()
+			x.MinusInplace()
 		}
-		*x = z
 		return
 	}
 	if scale != 0 {
-		z.ScaleInplace(scale)
+		x.ScaleInplace(scale)
 	}
 	if signx != signy {
-		z.MinusInplace()
+		x.MinusInplace()
 	}
-	*x = z
 	return
 }
 
