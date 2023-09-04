@@ -358,4 +358,21 @@ set @a_var = 1;
 execute stmt1 using @a_var;
 a    b
 1    1
+prepare stmt2 from select * from t1 limit ?;
+set @b_var = '1';
+execute stmt2 using @b_var;
+a    b
+1    1
 deallocate prepare stmt1;
+deallocate prepare stmt2;
+insert into t1 values(3, 3);
+insert into t1 values(4, 4);
+insert into t1 values(5, 5);
+prepare stmt3 from select * from t1 limit ? offset ?;
+set @a_var = 2;
+set @b_var = 0;
+execute stmt3 using @a_var, @b_var;
+a    b
+1    1
+2    2
+deallocate prepare stmt3;

@@ -1268,6 +1268,16 @@ func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argu
 		panic(err)
 	}
 
+	if vec.GetType().Oid == types.T_text {
+		offsetStr := vector.MustStrCol(vec)[0]
+		offsetUint64, err := strconv.ParseUint(offsetStr, 10, 64)
+		if err != nil {
+			panic("invalid parmater for offset")
+		}
+		return &mergeoffset.Argument{
+			Offset: offsetUint64,
+		}
+	}
 	return &mergeoffset.Argument{
 		Offset: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
@@ -1288,7 +1298,7 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 		limitStr := vector.MustStrCol(vec)[0]
 		limitUint64, err := strconv.ParseUint(limitStr, 10, 64)
 		if err != nil {
-			panic("invalid parmater for limit")
+			panic("invalid parmater for merge limit")
 		}
 		return &mergelimit.Argument{
 			Limit: limitUint64,
