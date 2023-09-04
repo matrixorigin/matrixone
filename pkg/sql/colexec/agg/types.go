@@ -169,6 +169,8 @@ type UnaryAgg[T1, T2 any] struct {
 	// ityps is type list of input vectors
 	ityps []types.Type
 
+	partialresults []any
+
 	// grows used for add groups
 	grows func(int)
 	// eval used to get final aggregated value
@@ -224,6 +226,8 @@ type UnaryDistAgg[T1, T2 any] struct {
 	otyp types.Type
 	// type list of input vectors
 	ityps []types.Type
+
+	partialresults []any
 
 	// grows used for add groups
 	grows func(int)

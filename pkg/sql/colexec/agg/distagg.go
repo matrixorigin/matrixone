@@ -23,18 +23,19 @@ import (
 
 func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
 	eval func([]T2, error) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
-	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)) Agg[*UnaryDistAgg[T1, T2]] {
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error), partialresults []any) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
-		op:      op,
-		priv:    priv,
-		otyp:    otyp,
-		eval:    eval,
-		fill:    fill,
-		grows:   grows,
-		merge:   merge,
-		isCount: isCount,
-		ityps:   []types.Type{ityp},
-		err:     nil,
+		op:             op,
+		priv:           priv,
+		otyp:           otyp,
+		eval:           eval,
+		fill:           fill,
+		grows:          grows,
+		merge:          merge,
+		isCount:        isCount,
+		ityps:          []types.Type{ityp},
+		partialresults: partialresults,
+		err:            nil,
 	}
 }
 

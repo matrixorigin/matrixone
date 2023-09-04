@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -157,7 +158,7 @@ func (ctr *container) generateAggStructures(ap *Argument) error {
 	var err error
 	i := 0
 	for i < len(ap.Aggs) {
-		if ctr.bat.Aggs[i], err = agg.NewWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType(), ap.Aggs[i].Config); err != nil {
+		if ctr.bat.Aggs[i], err = agg.NewWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType(), ap.Aggs[i].Config, nil); err != nil {
 			ctr.bat = nil
 			return err
 		}
