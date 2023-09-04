@@ -450,8 +450,8 @@ func fetchEnumRows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(math.MaxUint16)
-		max := fn(0)
+		min := fn(0)
+		max := fn(math.MaxUint16)
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}

@@ -460,7 +460,12 @@ func TestMOSpan_doProfile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, s := tt.fields.tracer.Start(tt.fields.ctx, "test", tt.fields.opts...)
+			ms, _ := s.(*MOSpan)
+			t.Logf("span.LongTimeThreshold: %v", ms.LongTimeThreshold)
+			time.Sleep(time.Millisecond)
 			s.End()
+			t.Logf("span.LongTimeThreshold: %v, duration: %v, needRecord: %v, needProfile: %v, doneProfile: %v",
+				ms.LongTimeThreshold, ms.Duration, ms.needRecord, ms.NeedProfile(), ms.doneProfile)
 			require.Equal(t, tt.want, s.(*MOSpan).doneProfile)
 		})
 	}

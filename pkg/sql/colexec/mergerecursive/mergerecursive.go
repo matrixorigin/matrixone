@@ -17,8 +17,6 @@ package mergerecursive
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -41,70 +39,22 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	ctr := ap.ctr
 	var sb *batch.Batch
 
-	bat, end, err := ctr.ReceiveFromSingleRegNonBlock(1, anal)
-	if err != nil {
-		return process.ExecStop, err
-	}
-	if end {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
-	}
-	if bat != nil {
-		//b, err := bat.Dup(proc.GetMPool())
-		//if err != nil {
-		//	return process.ExecStop, err
-		//}
-		//b.Recursive = bat.Recursive
-		ctr.bats = append(ctr.bats, bat)
-		if bat.Last() {
-			ctr.last = true
-		}
-	}
-
-	switch ctr.status {
-	case SendA:
-		sb, _, err = ctr.ReceiveFromSingleReg(0, anal)
+	for !ctr.last {
+		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 		if err != nil {
 			return process.ExecStop, err
 		}
-		if sb == nil {
-			ctr.status = SendLastBatch
+		if bat == nil || bat.End() {
+			proc.SetInputBatch(nil)
+			return process.ExecStop, nil
 		}
-		//else {
-		//	sb, err = bat.Dup(proc.Mp())
-		//	if err != nil {
-		//		return process.ExecStop, err
-		//	}
-		//}
-		fallthrough
-	case SendLastBatch:
-		if ctr.status == SendLastBatch {
-			ctr.status = SendB
-			sb = makeRecursiveBatch(proc)
+		if bat.Last() {
+			ctr.last = true
 		}
-	case SendB:
-		for !ctr.last {
-			bat, _, err = ctr.ReceiveFromSingleReg(1, anal)
-			if err != nil {
-				return process.ExecStop, err
-			}
-			if bat == nil {
-				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
-			}
-			//b, err := bat.Dup(proc.Mp())
-			//if err != nil {
-			//	return process.ExecStop, err
-			//}
-			//b.Recursive = bat.Recursive
-			ctr.bats = append(ctr.bats, bat)
-			if bat.Last() {
-				ctr.last = true
-			}
-		}
-		sb = ctr.bats[0]
-		ctr.bats = ctr.bats[1:]
+		ctr.bats = append(ctr.bats, bat)
 	}
+	sb = ctr.bats[0]
+	ctr.bats = ctr.bats[1:]
 
 	if sb.Last() {
 		ctr.last = false
@@ -120,16 +70,4 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	anal.Output(sb, isLast)
 	proc.SetInputBatch(sb)
 	return process.ExecNext, nil
-}
-
-func makeRecursiveBatch(proc *process.Process) *batch.Batch {
-	b := batch.NewWithSize(1)
-	b.Attrs = []string{
-		"recursive_col",
-	}
-	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
-	batch.SetLength(b, 1)
-	b.SetLast()
-	return b
 }

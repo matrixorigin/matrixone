@@ -613,7 +613,6 @@ func TestCTESqlBuilder(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"WITH qn AS (SELECT * FROM nation) SELECT * FROM qn;",
-		"WITH qn(a, b) AS (SELECT * FROM nation) SELECT * FROM qn;",
 		"with qn0 as (select 1), qn1 as (select * from qn0), qn2 as (select 1), qn3 as (select 1 from qn1, qn2) select 1 from qn3",
 
 		`WITH qn AS (select "outer" as a)
@@ -625,6 +624,7 @@ func TestCTESqlBuilder(t *testing.T) {
 
 	// should error
 	sqls = []string{
+		"WITH qn(a, b) AS (SELECT * FROM nation) SELECT * FROM qn;",
 		`with qn1 as (with qn3 as (select * from qn2) select * from qn3),
 		qn2 as (select 1)
 		select * from qn1`,

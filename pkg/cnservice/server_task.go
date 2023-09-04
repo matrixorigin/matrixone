@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
@@ -107,6 +108,10 @@ func (s *service) initSqlWriterFactory() {
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
 	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
 	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
+}
+
+func (s *service) initMOConnectorMgr() {
+	s.connectorMgr = moconnector.NewConnectorManager(context.Background())
 }
 
 func (s *service) upgrade() {
