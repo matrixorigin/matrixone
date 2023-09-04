@@ -550,8 +550,9 @@ func (s *Scope) JoinRun(c *Compile) error {
 }
 
 func (s *Scope) isShuffle() bool {
-	if s != nil && (s.Instructions[0].Op == vm.Group) {
-		arg := s.Instructions[0].Arg.(*group.Argument)
+	// the pipeline is merge->group->xxx
+	if s != nil && len(s.Instructions) > 1 && (s.Instructions[1].Op == vm.Group) {
+		arg := s.Instructions[1].Arg.(*group.Argument)
 		return arg.IsShuffle
 	}
 	return false
