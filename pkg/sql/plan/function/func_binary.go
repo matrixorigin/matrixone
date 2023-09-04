@@ -20,10 +20,16 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
@@ -32,10 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -1606,6 +1608,11 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 		}
 	}
+	return nil
+}
+
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	logutil.Infof("6")
 	return nil
 }
 

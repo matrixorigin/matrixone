@@ -203,6 +203,7 @@ const (
 	TRANSLATE   // TRANSLATE
 	TRIM        // TRIM
 	UNIFORM     // UNIFORM
+	SHA2        //SHA2
 	UTC_TIMESTAMP
 	UNIX_TIMESTAMP
 	FROM_UNIXTIME
@@ -563,6 +564,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_max":               MO_TABLE_COL_MAX,
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
+	"sha2":                           SHA2,
 	"mo_log_date":                    MO_LOG_DATE,
 	"mo_check_level":                 MO_CHECH_LEVEL,
 	"purge_log":                      PURGE_LOG,
