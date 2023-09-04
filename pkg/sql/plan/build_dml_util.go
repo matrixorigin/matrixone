@@ -601,7 +601,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							Children:    []int32{lastNodeId},
 							ProjectList: projectProjection,
 						}, bindCtx)
-						lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+
+						lastNodeId = appendAggNodeForFkJoin(builder, bindCtx, lastNodeId)
+
 						newSourceStep := builder.appendStep(lastNodeId)
 
 						upPlanCtx := getDmlPlanCtx()
@@ -643,7 +645,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								OnList:      joinConds,
 								ProjectList: joinProjection,
 							}, bindCtx)
-							lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+							lastNodeId = appendAggNodeForFkJoin(builder, bindCtx, lastNodeId)
 							newSourceStep := builder.appendStep(lastNodeId)
 
 							upPlanCtx := getDmlPlanCtx()
@@ -703,6 +705,37 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 
 	return nil
+}
+
+// appendAggNodeForFkJoin append agg node. to deal with these case:
+// create table f (a int, b int, primary key(a,b));
+// insert into f values (1,1),(1,2),(1,3),(2,3);
+// create table c (a int primary key, f_a int, constraint fa_ck foreign key(f_a) REFERENCES f(a) on delete SET NULL on update SET NULL);
+// insert into c values (1,1),(2,1),(3,2);
+// update f set a = 10 where b=1;    we need update c only once for 2 rows. not three times for 6 rows.
+func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32) int32 {
+	groupByList := getProjectionByLastNode(builder, lastNodeId)
+	aggProject := make([]*Expr, len(groupByList))
+	for i, e := range groupByList {
+		aggProject[i] = &Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: -2,
+					ColPos: int32(i),
+				},
+			},
+		}
+	}
+	lastNodeId = builder.appendNode(&Node{
+		NodeType:    plan.Node_AGG,
+		GroupBy:     groupByList,
+		Children:    []int32{lastNodeId},
+		ProjectList: aggProject,
+	}, bindCtx)
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+
+	return lastNodeId
 }
 
 // makeInsertPlan  build insert plan for one table
@@ -2534,7 +2567,7 @@ func collectSinkAndSinkScanMeta(
 		} else {
 			sinks[nodeId].step = oldStep
 		}
-	} else if node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_CTE {
+	} else if node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_CTE || node.NodeType == plan.Node_RECURSIVE_SCAN {
 		sinkNodeId := qry.Steps[node.SourceStep[0]]
 		if _, ok := sinks[sinkNodeId]; !ok {
 			sinks[sinkNodeId] = &sinkMeta{
