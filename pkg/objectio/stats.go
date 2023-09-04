@@ -131,13 +131,13 @@ func (s *Stats) ExportString() string {
 	if wtotal != 0 {
 		wrate = float64(whit) / float64(wtotal)
 	}
-	fmt.Fprintf(&w, "SelectivityStats: BLK[%d/%d=%0.2f] ", whit, wtotal, wrate)
+	fmt.Fprintf(&w, "SelectivityStats: BLK[%d/%d=%0.4f] ", whit, wtotal, wrate)
 	whit, wtotal = s.ExportColumnSelctivity()
 	wrate = 0.0
 	if wtotal != 0 {
 		wrate = float64(whit) / float64(wtotal)
 	}
-	fmt.Fprintf(&w, "COL[%d/%d=%0.2f] ", whit, wtotal, wrate)
+	fmt.Fprintf(&w, "COL[%d/%d=%0.4f] ", whit, wtotal, wrate)
 	whit, wtotal, hit, total := s.ExportReadFilterSelectivity()
 	wrate = 0.0
 	if wtotal != 0 {
@@ -146,7 +146,7 @@ func (s *Stats) ExportString() string {
 	if total != 0 {
 		rate = float64(hit) / float64(total)
 	}
-	fmt.Fprintf(&w, "RDF[%d/%d=%0.2f,%d/%d=%0.2f]", whit, wtotal, wrate, hit, total, rate)
+	fmt.Fprintf(&w, "RDF[%d/%d=%0.4f,%d/%d=%0.4f]", whit, wtotal, wrate, hit, total, rate)
 	rtotal, rread, rbisect, rcnt := s.ExportReadDel()
 	fmt.Fprintf(&w, "RDD[%v/%v/%v/%v]", rtotal, rread, rbisect, rcnt)
 	return w.String()
