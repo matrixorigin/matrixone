@@ -1085,20 +1085,24 @@ func (x Decimal64) Mul(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 func (x *Decimal128) MulInplace(y *Decimal128, scale, scale1, scale2 int32) (err error) {
 	signx := x.Sign()
 	signy := y.Sign()
-	y1 := *y
 	if signx {
 		x.MinusInplace()
 	}
 	if signy {
-		y1.MinusInplace()
+		tmp := *y
+		tmp.MinusInplace()
+		y = &tmp
 	}
-	err = x.Mul128InPlace(&y1)
+	err = x.Mul128InPlace(y)
 	if err != nil {
 		x2 := Decimal256{x.B0_63, x.B64_127, 0, 0}
-		y2 := Decimal256{y1.B0_63, y1.B64_127, 0, 0}
+		y2 := Decimal256{y.B0_63, y.B64_127, 0, 0}
 		x2, _ = x2.Mul256(y2)
 		x2, _ = x2.Scale(scale)
 		if x2.B128_191 != 0 || x2.B192_255 != 0 || x2.B64_127>>63 != 0 {
+			if signy {
+				y.MinusInplace()
+			}
 			err = moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s(Scale:%d)*%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
 			return
 		} else {
