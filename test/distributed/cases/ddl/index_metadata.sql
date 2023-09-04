@@ -24,6 +24,19 @@ from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't1' and `tbl`.`reldatabase` = 'db6';
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't1';
+
+
 drop table if exists t2;
 create table t2(
                    empno int unsigned auto_increment,
@@ -51,6 +64,17 @@ from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't2' and `tbl`.`reldatabase` = 'db6';
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't2';
 
 drop table if exists t3;
 create table t3(
@@ -79,6 +103,17 @@ from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't3' and `tbl`.`reldatabase` = 'db6';
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't3';
 
 drop table if exists t4;
 create table t4(
@@ -107,6 +142,17 @@ from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't4' and `tbl`.`reldatabase` = 'db6';
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't4';
 
 drop table if exists t5;
 create table t5(
@@ -135,6 +181,18 @@ from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't5' and `tbl`.`reldatabase` = 'db6';
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't5';
+
 drop table if exists t6;
 create table t6(
                    empno int unsigned,
@@ -161,6 +219,17 @@ from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't6' and `tbl`.`reldatabase` = 'db6';
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't6';
 
 drop table if exists t7;
 create table t7(
@@ -190,6 +259,17 @@ from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't7' and `tbl`.`reldatabase` = 'db6';
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't7';
 
 drop table if exists t8;
 create table t8(
@@ -218,6 +298,17 @@ from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't8' and `tbl`.`reldatabase` = 'db6';
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't8';
 
 drop table if exists t9;
 create table t9(id int PRIMARY KEY,name VARCHAR(255),age int);
@@ -254,6 +345,19 @@ select
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't9';
+
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't9';
+
 select * from t9;
 drop table t9;
 
@@ -294,6 +398,19 @@ select
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6';
+
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't10';
+
 insert into t10 values(1,"Abby", 24,'zbcvdf');
 insert into t10 values(2,"Bob", 25,'zbcvdf');
 insert into t10 values(3,"Carol", 23,'zbcvdf');
@@ -333,6 +450,19 @@ select
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
+
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't11';
+
 drop index x11 on t11;
 drop index x12 on t11;
 select
@@ -351,6 +481,18 @@ from
 where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
 drop table t11;
 
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't11';
+
 drop table if exists t12;
 create table t12(a int, b int,c varchar(20), primary key(a));
 create index idx_1 on t12(a, b) comment 'xxxxxxx';
@@ -368,6 +510,19 @@ select
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't12';
+
 create index idx_1 on t12(a, b);
 select
     `idx`.`name`,
@@ -383,6 +538,19 @@ select
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't12';
+
 drop index idx_1 on t12;
 select
     `idx`.`name`,
@@ -398,6 +566,19 @@ select
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
 where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+
+select
+    table_schema,
+    table_name,
+    non_unique,
+    index_schema,
+    index_name,
+    seq_in_index,
+    column_name,
+    index_comment
+from
+    information_schema.statistics where table_schema = 'db6' and table_name = 't12';
+
 drop index idx_1 on t12;
 drop table t12;
 drop database db6;
