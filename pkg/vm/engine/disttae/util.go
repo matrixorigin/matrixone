@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1217,4 +1218,71 @@ func getConstExpr(oid int32, c *plan.Const) *plan.Expr {
 		Typ:  &plan.Type{Id: oid},
 		Expr: &plan.Expr_C{C: c},
 	}
+}
+
+func extractCompositePKValueFromEqualExprs(
+	exprs []*plan.Expr,
+	pkDef *plan.PrimaryKeyDef,
+	proc *process.Process,
+	pool *fileservice.Pool[*types.Packer],
+) (val []byte) {
+	var packer *types.Packer
+	put := pool.Get(&packer)
+	defer put.Put()
+
+	vals := make([]*plan.Const, len(pkDef.Names))
+	for _, expr := range exprs {
+		tmpVals := make([]*plan.Const, len(pkDef.Names))
+		if _, hasNull := getCompositPKVals(
+			expr, pkDef.Names, tmpVals, proc,
+		); hasNull {
+			return
+		}
+		for i := range tmpVals {
+			if tmpVals[i] == nil {
+				continue
+			}
+			vals[i] = tmpVals[i]
+		}
+	}
+
+	// check all composite pk values are exist
+	// if not, check next expr
+	cnt := getValidCompositePKCnt(vals)
+	if cnt != len(vals) {
+		return
+	}
+
+	// serialize composite pk values into bytes as the pk value
+	// and break the loop
+	for i := 0; i < cnt; i++ {
+		serialTupleByConstExpr(vals[i], packer)
+	}
+	val = packer.Bytes()
+	return
+}
+
+func extractPKValueFromEqualExprs(
+	def *plan.TableDef,
+	exprs []*plan.Expr,
+	pkIdx int,
+	proc *process.Process,
+	pool *fileservice.Pool[*types.Packer],
+) (val []byte) {
+	pk := def.Pkey
+	if pk.CompPkeyCol != nil {
+		return extractCompositePKValueFromEqualExprs(
+			exprs, pk, proc, pool,
+		)
+	}
+	column := def.Cols[pkIdx]
+	name := column.Name
+	colType := types.T(column.Typ.Id)
+	for _, expr := range exprs {
+		if ok, _, v := getPkValueByExpr(expr, name, colType, proc); ok {
+			val = types.EncodeValue(v, colType)
+			break
+		}
+	}
+	return
 }
