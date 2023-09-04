@@ -63,15 +63,23 @@ import (
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
+	var p *pipeline.Pipeline
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
+		}
+		p.Cleanup(s.Proc, err != nil)
+	}()
+
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	// DataSource == nil specify the empty scan
 	if s.DataSource == nil {
-		p := pipeline.New(nil, s.Instructions, s.Reg)
+		p = pipeline.New(nil, s.Instructions, s.Reg)
 		if _, err = p.ConstRun(nil, s.Proc); err != nil {
 			return err
 		}
 	} else {
-		p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
+		p = pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 		if s.DataSource.Bat != nil {
 			if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
 				return err
@@ -133,8 +141,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
+		p.Cleanup(s.Proc, true)
 		return err
 	}
+	p.Cleanup(s.Proc, false)
+
 	// check sub-goroutine's error
 	if errReceiveChan == nil {
 		// check sub-goroutine's error
@@ -539,8 +550,9 @@ func (s *Scope) JoinRun(c *Compile) error {
 }
 
 func (s *Scope) isShuffle() bool {
-	if s != nil && (s.Instructions[0].Op == vm.Group) {
-		arg := s.Instructions[0].Arg.(*group.Argument)
+	// the pipeline is merge->group->xxx
+	if s != nil && len(s.Instructions) > 1 && (s.Instructions[1].Op == vm.Group) {
+		arg := s.Instructions[1].Arg.(*group.Argument)
 		return arg.IsShuffle
 	}
 	return false

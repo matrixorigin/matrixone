@@ -293,3 +293,42 @@ insert into c1 values (1,2,1),(2,2,2),(3,2,3);
 delete from f1 where b=2;
 select * from f1;
 select * from c1;
+
+drop table if exists fk_02;
+drop table if exists fk_01;
+-- foreign key is one of pk,on delete /update SET NULL
+create table fk_01(col1 decimal(38,3),col2 char(25),col3 int,col4 date,primary key(col1,col3,col4));
+create table fk_02(col1 decimal(38,3),col2 char(25),col3 int,col4 date,constraint ck foreign key(col1) REFERENCES fk_01(col1) on delete SET NULL on update SET NULL);
+insert into fk_01 values(23.10,'a',20,'2022-10-01'),(23.10,'a',21,'2022-10-01'),(23.10,'a',20,'2022-10-02');
+insert into fk_02 values(23.10,'a',20,'2022-10-01'),(23.10,'a',21,'2022-10-01'),(23.10,'a',20,'2022-10-02');
+insert into fk_02 values(23.10,'a',20,'2022-10-01'),(0.1,'b',22,'2022-10-01'),(23.10,'c',30,'2022-10-02');
+insert into fk_02 values(0.001,'b',20,'2022-10-01'),(4.5,'a',21,'2022-10-01'),(56,'a',20,'2022-10-02');
+select * from fk_01;
+select * from fk_02;
+update fk_02 set col3=19 where col3=20;
+select * from fk_02;
+delete from fk_01  where col3=19;
+select * from fk_01;
+select * from fk_02;
+drop table fk_02;
+drop table fk_01;
+
+-- foreign key is one of pk and unique key,on delete /update CASCADE
+create table fk_01(col1 decimal(38,3),col2 char(25),col3 int,col4 date,primary key(col1,col2), unique key(col3));
+create table fk_02(col1 decimal(38,3),col2 char(25),col3 int,col4 date,constraint ck foreign key(col1,col3) REFERENCES fk_01(col1,col3) on delete CASCADE on update CASCADE);
+drop table fk_01;
+
+-- foreign key is one of unique key,on delete /update CASCADE
+create table fk_01(col1 decimal(38,3),col2 char(25),col3 int,col4 date, unique key(col1,col2));
+create table fk_02(col1 decimal(38,3),col2 char(25),col3 int,col4 date,constraint ck foreign key(col1) REFERENCES fk_01(col1) on delete CASCADE on update CASCADE);
+insert into fk_01 values(8.9,'a',20,'2022-10-01'),(6.0,'a',21,'2022-10-01'),(4.3,'c',20,'2022-10-02');
+insert into fk_02 values(8.9,'a',20,'2022-10-01'),(8.9,'a',21,'2022-10-01'),(6.0,'a',20,'2022-10-02');
+insert into fk_02 values(8.9,'c',20,'2022-10-01'),(null,'a',21,'2022-10-01');
+insert into fk_02 values(3.5,'e',20,'2022-10-01'),(8.9,'a',21,'2022-10-01');
+select * from fk_01;
+select * from fk_02;
+update fk_02 set col1=6.0 where col3=21;
+select * from fk_02;
+update fk_01 set col2='d' where col1=6.0;
+select * from fk_01;
+select * from fk_02;
