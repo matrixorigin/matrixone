@@ -241,7 +241,7 @@ func CurrentDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		logutil.Warn("missing timezone in session info")
 		loc = time.Local
 	}
-	ts := types.UnixNanoToTimestamp(proc.UnixTime)
+	ts := types.UnixNanoToTimestamp(time.Now().UnixNano())
 	dateTimes := make([]types.Datetime, 1)
 	dateTimes, err = types.TimestampToDatetime(loc, []types.Timestamp{ts}, dateTimes)
 	if err != nil {

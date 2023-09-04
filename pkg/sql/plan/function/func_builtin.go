@@ -71,7 +71,7 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	resultValue := types.UnixNanoToTimestamp(proc.UnixTime)
+	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano())
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err
