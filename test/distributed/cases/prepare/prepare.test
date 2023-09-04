@@ -241,3 +241,14 @@ execute stmt1;
 drop table t1;
 execute stmt1;
 deallocate prepare stmt1;
+
+create database abc;
+use abc;
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values(1, 1);
+insert into t1 values(2, 2);
+prepare stmt1 from select * from t1 limit ?;
+set @a_var = 1;
+execute stmt1 using @a_var;
+deallocate prepare stmt1;

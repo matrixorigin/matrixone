@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -952,6 +953,16 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 		panic(err)
 	}
 
+	if vec.GetType().Oid == types.T_text {
+		limitStr := vector.MustStrCol(vec)[0]
+		limitUint64, err := strconv.ParseUint(limitStr, 10, 64)
+		if err != nil {
+			panic("invalid parmater for limit")
+		}
+		return &limit.Argument{
+			Limit: limitUint64,
+		}
+	}
 	return &limit.Argument{
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
@@ -1273,6 +1284,16 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 		panic(err)
 	}
 
+	if vec.GetType().Oid == types.T_text {
+		limitStr := vector.MustStrCol(vec)[0]
+		limitUint64, err := strconv.ParseUint(limitStr, 10, 64)
+		if err != nil {
+			panic("invalid parmater for limit")
+		}
+		return &mergelimit.Argument{
+			Limit: limitUint64,
+		}
+	}
 	return &mergelimit.Argument{
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
