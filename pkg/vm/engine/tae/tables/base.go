@@ -641,7 +641,10 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 		blk.RUnlock()
 		return
 	}
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(persistedTS.Next(), end)
+	if start.Less(persistedTS) {
+		start = persistedTS
+	}
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start.Next(), end)
 	blk.RUnlock()
 	if rowID == nil {
 		return
