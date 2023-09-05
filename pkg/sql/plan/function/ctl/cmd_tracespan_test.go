@@ -60,12 +60,12 @@ func TestCanHandleServiceAndCmdWrong(t *testing.T) {
 }
 
 func initRuntime(uuids []string, queryAddress []string) {
-	var cns []metadata.CNService
+	cns := make([]metadata.CNService, len(uuids))
 	for idx := range uuids {
-		cns = append(cns, metadata.CNService{
+		cns[idx] = metadata.CNService{
 			ServiceID:    uuids[idx],
 			QueryAddress: queryAddress[idx],
-		})
+		}
 	}
 
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
