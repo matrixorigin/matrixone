@@ -631,19 +631,17 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
+	catalogPersistedTS := blk.meta.GetDeltaPersistedTS()
 	blk.RLock()
 	persistedTS = blk.mvcc.GetDeletesPersistedTSInMVCCChain()
 	if persistedTS.IsEmpty() {
-		blk.RUnlock()
-		// persitedTs is empty after restarting, fetch it from chain
-		persistedTS = blk.meta.GetDeltaPersistedTS()
-		blk.RLock()
+		persistedTS = catalogPersistedTS
 	}
 	if persistedTS.GreaterEq(end) {
 		blk.RUnlock()
 		return
 	}
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start, end)
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(persistedTS.Next(), end)
 	blk.RUnlock()
 	if rowID == nil {
 		return
