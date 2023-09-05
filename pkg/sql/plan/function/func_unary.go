@@ -20,10 +20,15 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -448,6 +453,71 @@ func MoEnableMemUsageDetail(ivecs []*vector.Vector, result vector.FunctionResult
 
 func MoDisableMemUsageDetail(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return moMemUsageCmd("disable_detail", ivecs, result, proc, length)
+}
+
+func MoMemory(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInvalidInput(proc.Ctx, "no memory command name")
+	}
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidInput(proc.Ctx, "mo memory can only take scalar input")
+	}
+	return opUnaryStrToFixedWithErrorCheck(ivecs, result, proc, length, func(v string) (int64, error) {
+		switch v {
+		case "go":
+			return int64(system.GolangMemory()), nil
+		case "total":
+			return int64(system.TotalMemory()), nil
+		case "available":
+			return int64(system.AvailableMemory()), nil
+		default:
+			return -1, moerr.NewInvalidInput(proc.Ctx, "no memory command name")
+		}
+	})
+}
+
+func MoCPU(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInvalidInput(proc.Ctx, "no cpu command name")
+	}
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidInput(proc.Ctx, "mo cpu can only take scalar input")
+	}
+	return opUnaryStrToFixedWithErrorCheck(ivecs, result, proc, length, func(v string) (int64, error) {
+		switch v {
+		case "goroutine":
+			return int64(system.GoRoutines()), nil
+		case "total":
+			return int64(system.NumCPU()), nil
+		case "available":
+			return int64(system.AvailableCPU()), nil
+		default:
+			return -1, moerr.NewInvalidInput(proc.Ctx, "no cpu command name")
+		}
+	})
+}
+
+const (
+	DefaultStackSize = 10 << 20 // 10MB
+)
+
+func MoCPUDump(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInvalidInput(proc.Ctx, "no cpu dump command name")
+	}
+	if !ivecs[0].IsConst() {
+		return moerr.NewInvalidInput(proc.Ctx, "mo cpu dump can only take scalar input")
+	}
+	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, func(v string) ([]byte, error) {
+		switch v {
+		case "goroutine":
+			buf := make([]byte, DefaultStackSize)
+			n := runtime.Stack(buf, true)
+			return buf[:n], nil
+		default:
+			return nil, moerr.NewInvalidInput(proc.Ctx, "no cpu dump command name")
+		}
+	})
 }
 
 const (
