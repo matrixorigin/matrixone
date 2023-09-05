@@ -16,7 +16,7 @@ package backup
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/csv"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -131,10 +131,10 @@ func writeFile(ctx context.Context, fs fileservice.FileService, path string, dat
 		return err
 	}
 
-	checksum := md5.Sum(data)
+	checksum := sha256.Sum256(data)
 
 	//write checksum file for the file
-	checksumFile := path + ".md5"
+	checksumFile := path + ".sha256"
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: checksumFile,
 		Entries: []fileservice.IOEntry{
@@ -189,12 +189,12 @@ func readFileAndCheck(ctx context.Context, fs fileservice.FileService, path stri
 	}
 
 	//calculate the checksum
-	hash := md5.New()
+	hash := sha256.New()
 	hash.Write(data)
 	newChecksumData = hash.Sum(nil)
 	newChecksum = hexStr(newChecksumData)
 
-	checksumFile := path + ".md5"
+	checksumFile := path + ".sha256"
 	savedChecksumData, err = readFile(ctx, fs, checksumFile)
 	if err != nil {
 		return nil, err

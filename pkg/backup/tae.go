@@ -16,7 +16,7 @@ package backup
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -233,7 +233,7 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 	if err != nil {
 		return nil, err
 	}
-	checksum := md5.Sum(ioVec.Entries[0].Data)
+	checksum := sha256.Sum256(ioVec.Entries[0].Data)
 	return checksum[:], err
 }
 
