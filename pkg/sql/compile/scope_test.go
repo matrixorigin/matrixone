@@ -17,7 +17,10 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -94,4 +97,70 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		result[i] = getScope(t, sql)
 	}
 	return result
+}
+
+func TestMessageSenderOnClientReceive(t *testing.T) {
+	sender := new(messageSenderOnClient)
+	sender.receiveCh = make(chan morpc.Message, 1)
+
+	// case 1: use source context, and source context is canceled
+	{
+		sourceCtx, sourceCancel := context.WithCancel(context.Background())
+		sender.ctx = sourceCtx
+		sender.ctxCancel = sourceCancel
+		sourceCancel()
+		v, err := sender.receiveMessage()
+		require.NoError(t, err)
+		require.Equal(t, nil, v)
+	}
+
+	// case 2: use derived context, and source context is canceled
+	{
+		sourceCtx, sourceCancel := context.WithCancel(context.Background())
+		receiveCtx, receiveCancel := context.WithTimeout(sourceCtx, 3*time.Second)
+		sender.ctx = receiveCtx
+		sender.ctxCancel = receiveCancel
+		sourceCancel()
+
+		startTime := time.Now()
+		v, err := sender.receiveMessage()
+		require.NoError(t, err)
+		require.Equal(t, nil, v)
+		require.True(t, time.Since(startTime) < 3*time.Second)
+		receiveCancel()
+	}
+
+	// case 3: receive a nil message
+	{
+		sourceCtx, sourceCancel := context.WithCancel(context.Background())
+		sender.ctx = sourceCtx
+		sender.ctxCancel = sourceCancel
+		sender.receiveCh <- nil
+		_, err := sender.receiveMessage()
+		require.NotNil(t, err)
+		sourceCancel()
+	}
+
+	// case 4: receive a message
+	{
+		sourceCtx, sourceCancel := context.WithCancel(context.Background())
+		sender.ctx = sourceCtx
+		sender.ctxCancel = sourceCancel
+		data := &pipeline.Message{}
+		sender.receiveCh <- data
+		v, err := sender.receiveMessage()
+		require.NoError(t, err)
+		require.Equal(t, data, v)
+		sourceCancel()
+	}
+
+	// case 5: channel is closed
+	{
+		sourceCtx, sourceCancel := context.WithCancel(context.Background())
+		sender.ctx = sourceCtx
+		sender.ctxCancel = sourceCancel
+		close(sender.receiveCh)
+		_, err := sender.receiveMessage()
+		require.NotNil(t, err)
+	}
 }

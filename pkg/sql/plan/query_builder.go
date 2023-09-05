@@ -1733,6 +1733,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, moerr.NewParseError(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 			} else if !isR {
 				subCtx := NewBindContext(builder, ctx)
+				subCtx.normalCTE = true
+				subCtx.cteName = table
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				cteRef.isRecursive = false
 				nodeID, err := builder.buildSelect(s, subCtx, false)
@@ -2584,6 +2586,15 @@ func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name strin
 	}
 }
 
+func getSelectTree(s *tree.Select) *tree.Select {
+	switch stmt := s.Select.(type) {
+	case *tree.ParenSelect:
+		return getSelectTree(stmt.Select)
+	default:
+		return s
+	}
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
@@ -2613,7 +2624,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			break
 		}
 
-		if len(schema) == 0 {
+		if len(schema) == 0 && ctx.normalCTE && table == ctx.cteName {
+			return 0, moerr.NewParseError(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
+		} else if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
 				if ctx.recSelect {
@@ -2624,9 +2637,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				var s *tree.Select
 				switch stmt := cteRef.ast.Stmt.(type) {
 				case *tree.Select:
-					s = stmt
+					s = getSelectTree(stmt)
 				case *tree.ParenSelect:
-					s = stmt.Select
+					s = getSelectTree(stmt.Select)
 				default:
 					err = moerr.NewParseError(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 					return
@@ -2796,7 +2809,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 					// final statement
 					ctx.finalSelect = true
-					ctx.sinkTag = builder.genNewTag()
+					ctx.sinkTag = initCtx.sinkTag
 					err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, ctx)
 					if err != nil {
 						return
