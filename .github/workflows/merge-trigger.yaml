@@ -14,7 +14,7 @@ on:
 jobs:
   docker_image_build:
     if: ${{ github.event.pull_request.merged == true }}
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     timeout-minutes: 60
     name: BUILD MO DOCKER IMAGE
     outputs:
@@ -46,7 +46,7 @@ jobs:
   setup_mo_test_env:
     if: ${{ always() && !cancelled() && needs.docker_image_build.result == 'success' }}
     needs: docker_image_build
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     timeout-minutes: 90
     name: SETUP MO TEST ENV
     outputs:
@@ -82,7 +82,7 @@ jobs:
            DOCKER_REGISTRY_SERVER=docker.io
            DOCKER_USER=${{ secrets.DOCKERHUB_USERNAME }}
            DOCKER_PASSWORD=${{ secrets.DOCKERHUB_TOKEN }}
-           aws eks --region us-west-2 update-kubeconfig --name eks-ci --kubeconfig eks-ci
+           aws eks --region us-west-2 update-kubeconfig --name eks-ci-new --kubeconfig eks-ci
            export KUBECONFIG=$(pwd)/eks-ci
            if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }} ;kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret generic aws-secret --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESSKEY_ID }} --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRETACCESS_KEY }};kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret docker-registry dockerhub --docker-server=$DOCKER_REGISTRY_SERVER --docker-username=$DOCKER_USER --docker-password=$DOCKER_PASSWORD;fi       
       - name: ECHO mo-checkin-regression.yaml
@@ -90,7 +90,7 @@ jobs:
           echo '${{ needs.docker_image_build.outputs.version }}'
           cd $GITHUB_WORKSPACE/matrixone
           sed -i 's/nsformocheckin/mo-checkin-regression-${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
-          sed -i 's/s3pathformocheckin/mo-checkin-regression\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
+          sed -i 's/s3pathformocheckin/merge-run-test\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
           sed -i "s/imagetag/${{ needs.docker_image_build.outputs.version }}/g" $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
           cat $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
       - name: Clean EKS ENV
@@ -98,7 +98,7 @@ jobs:
           export KUBECONFIG=$(pwd)/eks-ci
           if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod|grep "mo-checkin-regression-*"|wc -l)" -ne 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} delete -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml;sleep 60s;fi
           kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
-          aws s3 rm s3://mo-checkin-regression/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1                 
+          aws s3 rm s3://merge-run-test/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1                 
       - name: Create MO Cluster
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
@@ -142,7 +142,7 @@ jobs:
   bvt_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN BVT TEST
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     needs: [setup_mo_test_env,docker_image_build]
     steps:
       - name: Clone mo-tester Repo
@@ -175,7 +175,7 @@ jobs:
           sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' ./mo-tester/mo.yml
           cat ./mo-tester/mo.yml          
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e pessimistic_transaction 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e optimistic 2>&1
           rm -rf .git lib
       - name: Collect Upload files
         if: ${{ always() || cancelled() }}
@@ -192,7 +192,7 @@ jobs:
   ssb_and_tpch_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN SSB AND TPCH TEST
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -255,6 +255,7 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
+          sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/ssb_10`
           ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/ssb_10 -r -m -g | tee report/mo-load-data-ssb.log
           # start test
           cd $GITHUB_WORKSPACE/mo-ssb
@@ -273,6 +274,7 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
+          sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpch_10`
           ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
 
       - name: Start TPCH 10G Test
@@ -339,7 +341,7 @@ jobs:
   sysbench_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN SYSBENCH TEST
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     needs: [setup_mo_test_env,bvt_test]
     steps:
 
@@ -398,7 +400,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Insert Test With 100 threads'
-          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g | tee report/oltp-insert.log
+          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-insert.log
 
       - name: Start OLTP Delete Test With 100 Threads
         if: ${{ always() && !cancelled() }}
@@ -417,7 +419,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Delete Test With 100 threads'
-          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-delete.log
+          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-delete.log
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
@@ -436,7 +438,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP UPDATE Test With 100 threads'
-          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-update.log
+          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-update.log
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
@@ -455,7 +457,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Point Select Test With 100 threads'
-          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g | tee report/oltp-select.log
+          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-select.log
      
       - name: Result Summary
         if: ${{ always() && !cancelled()  }}
@@ -518,7 +520,7 @@ jobs:
   tpcc_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN TPCC TEST
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -575,6 +577,7 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
+          sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpcc_10`
           ./load.sh -u ${{ steps.account_for_tpcc.outputs.tpcc_account }} -p ${{ steps.account_for_tpcc.outputs.tpcc_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
 
       - name: Start TPCC 10 Warehouses 10 terminals Test
@@ -710,7 +713,7 @@ jobs:
   clean_up_env:
     if: ${{ always() && github.event.pull_request.merged == true }}
     name: CLEAN ENV AND NOTICE
-    runs-on: arm64-runner
+    runs-on: aws-arm64-runner
     needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test]
     steps:
       - name: Prepare AWS Tools
@@ -737,7 +740,7 @@ jobs:
       - name: Prepare Kubeconfig
         if: ${{ needs.docker_image_build.result == 'success' }}
         run: |
-          aws eks --region us-west-2 update-kubeconfig --name eks-ci --kubeconfig eks-ci
+          aws eks --region us-west-2 update-kubeconfig --name eks-ci-new --kubeconfig eks-ci
           export KUBECONFIG=$(pwd)/eks-ci
           if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};fi
       - name: Check MO Status and Clean ENV
@@ -753,9 +756,9 @@ jobs:
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
 
           # move etl/pprof to result
-          if [ "$(aws s3 ls s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl/ | grep pprof | wc -l)" -eq 1 ]; then
-            aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1;
-            aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl/pprof s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl/pprof --recursive > /dev/null 2>&1;
+          if [ "$(aws s3 ls s3://merge-run-test/${{ github.event.pull_request.number }}/etl/ | grep pprof | wc -l)" -eq 1 ]; then
+            aws s3 rm s3://merge-run-test/result/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1;
+            aws s3 mv s3://merge-run-test/${{ github.event.pull_request.number }}/etl/pprof s3://merge-run-test/result/${{ github.event.pull_request.number }}/etl/pprof --recursive > /dev/null 2>&1;
           fi
 
           #delete bucket
