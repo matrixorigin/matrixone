@@ -59,13 +59,13 @@ func setupFileservice(ctx context.Context, conf *pathConfig) (res fileservice.Fi
 			s3path := fileservice.JoinPath(s3opts, etlFSDir(conf.filepath))
 			//TODO:remove debug
 			logutil.Debugf("==>s3path: %s", s3path)
-			res, readPath, err = fileservice.GetForETL(nil, s3path)
+			res, readPath, err = fileservice.GetForETL(ctx, nil, s3path)
 			if err != nil {
 				return nil, "", err
 			}
 		} else {
 			s3path := fileservice.JoinPath(s3opts, conf.filepath)
-			res, err = fileservice.GetForBackup(s3path)
+			res, err = fileservice.GetForBackup(ctx, s3path)
 			if err != nil {
 				return nil, "", err
 			}
@@ -73,12 +73,12 @@ func setupFileservice(ctx context.Context, conf *pathConfig) (res fileservice.Fi
 		res = fileservice.SubPath(res, conf.filepath)
 	} else {
 		if conf.forETL {
-			res, readPath, err = fileservice.GetForETL(nil, etlFSDir(conf.path))
+			res, readPath, err = fileservice.GetForETL(ctx, nil, etlFSDir(conf.path))
 			if err != nil {
 				return nil, "", err
 			}
 		} else {
-			res, err = fileservice.GetForBackup(conf.path)
+			res, err = fileservice.GetForBackup(ctx, conf.path)
 			if err != nil {
 				return nil, "", err
 			}
