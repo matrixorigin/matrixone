@@ -292,10 +292,11 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 
 	var err error
+	size := vector.EntriesSize()
 	ctx, span := trace.Start(ctx, "S3FS.Write", trace.WithKind(trace.SpanKindS3FSVis))
 	defer func() {
 		// cover another func to catch the err when process Write
-		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, vector.EntriesSize()))
+		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
 	}()
 
 	// check existence
@@ -469,10 +470,16 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
+	if vector.allDone() {
+		// all cache hit
+		return nil
+	}
+
 	// collect read info only when cache missing
+	size := vector.EntriesSize()
 	ctx, span := trace.Start(ctx, "S3FS.Read", trace.WithKind(trace.SpanKindS3FSVis))
 	err = s.read(ctx, vector)
-	span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, vector.EntriesSize()))
+	span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
 
 	return err
 }
@@ -507,10 +514,6 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 }
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
-	if vector.allDone() {
-		return nil
-	}
-
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err

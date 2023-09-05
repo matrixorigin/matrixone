@@ -84,8 +84,10 @@ type IOVector struct {
 
 func (i *IOVector) EntriesSize() int64 {
 	size := int64(0)
-	for idx := range i.Entries {
-		size += i.Entries[idx].Size
+	length := len(i.Entries)
+	if length > 0 {
+		end := &i.Entries[length-1]
+		size = end.Offset + end.Size
 	}
 	return size
 }
