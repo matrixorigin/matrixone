@@ -7946,7 +7946,7 @@ func TestDeduplication(t *testing.T) {
 	t.Logf(tae.Catalog.SimplePPString(3))
 }
 
-func TestGCInMemeoryDeletesByTS(t *testing.T) {
+func TestGCInMemoryDeletesByTS(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
@@ -7978,7 +7978,9 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-				ts := tae.TxnMgr.StatMaxCommitTS()
+
+				txn, rel := tae.GetRelation()
+				ts := txn.GetStartTS()
 				batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
 				assert.NoError(t, err)
 				if batch == nil {
@@ -8000,8 +8002,6 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 					uint32(batch.Length()),
 					blocks[0].GetID(),
 				)
-
-				txn, rel := tae.GetRelation()
 				blkit := rel.MakeBlockIt()
 				blkHandle := blkit.GetBlock()
 				err = blkHandle.UpdateDeltaLoc(deltaLoc)
