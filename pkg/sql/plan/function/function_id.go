@@ -335,11 +335,6 @@ const (
 	COSINE_SIMILARITY
 	VECTOR_DIMS //VECTOR DIMENSIONS
 
-	// observation function
-	MO_CPU
-	MO_MEMORY
-	MO_CPU_DUMP
-
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -596,8 +591,4 @@ var functionIdRegister = map[string]int32{
 	"inner_product":     INNER_PRODUCT,
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
-
-	"mo_cpu":      MO_CPU,
-	"mo_memory":   MO_MEMORY,
-	"mo_cpu_dump": MO_CPU_DUMP,
 }
