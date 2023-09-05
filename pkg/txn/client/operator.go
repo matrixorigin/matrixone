@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -397,6 +398,7 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
+	logutil.Infof("+++++++++++++++++++++++ Commit")
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
 	defer task.End()
 	util.LogTxnCommit(tc.getTxnMeta(false))
@@ -419,6 +421,7 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
+	logutil.Infof("+++++++++++++++++++++++ Rollback")
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Rollback")
 	defer task.End()
 	txnMeta := tc.getTxnMeta(false)

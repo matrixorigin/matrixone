@@ -125,7 +125,7 @@ func callNonBlocking(
 		return false, nil
 	}
 
-	getLogger().Info("+++++++++++++++++++++++ callNonBlocking")
+	getLogger().Info("+++++++++++++++++++++++ callNonBlocking\n")
 
 	if err := performLock(bat, proc, arg); err != nil {
 		bat.Clean(proc.Mp())
