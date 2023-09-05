@@ -45,8 +45,9 @@ type dmlSelectInfo struct {
 	rootId         int32
 	derivedTableId int32
 
-	onDuplicateIdx  []int32
-	onDuplicateExpr map[string]*Expr
+	onDuplicateIdx     []int32
+	onDuplicateExpr    map[string]*Expr
+	onDuplicateNeedAgg bool //if table have pk & unique key, that will be true.
 }
 
 type dmlTableInfo struct {
@@ -578,9 +579,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
 		if len(uniqueCols) > 0 {
-			if len(uniqueCols) > 1 {
-				return false, nil, false, moerr.NewNYI(builder.GetContext(), "one unique constraint supported for on duplicate key clause now.")
-			}
 
 			joinCtx := NewBindContext(builder, bindCtx)
 			rightCtx := NewBindContext(builder, joinCtx)
@@ -704,6 +702,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
+			info.onDuplicateNeedAgg = len(uniqueCols) > 1
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{
