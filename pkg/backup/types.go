@@ -222,13 +222,13 @@ type Config struct {
 	Metas *Metas
 }
 
-// isValid returns true iff c != nil and c.Metas != nil and c.GeneralDir != nil
-func (c *Config) isValid() bool {
+// metasGeneralFsMustBeSet denotes metas and generalFs must be ready
+func (c *Config) metasGeneralFsMustBeSet() bool {
 	return !(c == nil || c.Metas == nil || c.GeneralDir == nil)
 }
 
-// isValid2 returns true iff c != nil and c.Metas != nil
-func (c *Config) isValid2() bool {
+// metasMustBeSet denotes metas must be ready
+func (c *Config) metasMustBeSet() bool {
 	return !(c == nil || c.Metas == nil)
 }
 

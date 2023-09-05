@@ -34,7 +34,7 @@ import (
 func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 	var err error
 	var s3Conf *s3Config
-	if !cfg.isValid2() {
+	if !cfg.metasMustBeSet() {
 		return moerr.NewInternalError(ctx, "invalid config or metas or fileservice")
 	}
 	if bs == nil {
@@ -124,7 +124,7 @@ func backupHakeeper(ctx context.Context, config *Config) error {
 		err    error
 		haData []byte
 	)
-	if !config.isValid() {
+	if !config.metasGeneralFsMustBeSet() {
 		return moerr.NewInternalError(ctx, "invalid config or metas or fileservice")
 	}
 	if config.HAkeeper == nil {
@@ -140,7 +140,7 @@ func backupHakeeper(ctx context.Context, config *Config) error {
 }
 
 func backupConfigFile(ctx context.Context, typ, configPath string, cfg *Config) error {
-	if !cfg.isValid() {
+	if !cfg.metasGeneralFsMustBeSet() {
 		return moerr.NewInternalError(ctx, "invalid config or metas or fileservice")
 	}
 	data, err := os.ReadFile(configPath)
@@ -158,7 +158,7 @@ func backupConfigFile(ctx context.Context, typ, configPath string, cfg *Config) 
 }
 
 func saveMetas(ctx context.Context, cfg *Config) error {
-	if !cfg.isValid() {
+	if !cfg.metasGeneralFsMustBeSet() {
 		return moerr.NewInternalError(ctx, "invalid config or metas or fileservice")
 	}
 	lines := cfg.Metas.CsvString()
