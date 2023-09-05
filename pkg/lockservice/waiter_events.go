@@ -25,39 +25,42 @@ import (
 type lockContext struct {
 	ctx      context.Context
 	txn      *activeTxn
+	waitTxn  pb.WaitTxn
 	rows     [][]byte
 	opts     LockOptions
 	offset   int
-	w        *waiter
 	idx      int
 	lockedTS timestamp.Timestamp
 	result   pb.Result
 	cb       func(pb.Result, error)
-	lockFunc func(lockContext, bool)
+	lockFunc func(*lockContext, bool)
+	w        *waiter
 }
 
-func newLockContext(
+func (l *localLockTable) newLockContext(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
 	opts LockOptions,
 	cb func(pb.Result, error),
-	bind pb.LockTable) lockContext {
-	return lockContext{
-		ctx:    ctx,
-		txn:    txn,
-		rows:   rows,
-		opts:   opts,
-		cb:     cb,
-		result: pb.Result{LockedOn: bind},
+	bind pb.LockTable) *lockContext {
+
+	return &lockContext{
+		ctx:     ctx,
+		txn:     txn,
+		waitTxn: txn.toWaitTxn(l.bind.ServiceID, true),
+		rows:    rows,
+		opts:    opts,
+		cb:      cb,
+		result:  pb.Result{LockedOn: bind},
 	}
 }
 
-func (c lockContext) done(err error) {
+func (c *lockContext) done(err error) {
 	c.cb(c.result, err)
 }
 
-func (c lockContext) doLock() {
+func (c *lockContext) doLock() {
 	if c.lockFunc == nil {
 		panic("missing lock")
 	}
@@ -65,8 +68,8 @@ func (c lockContext) doLock() {
 }
 
 type event struct {
-	c      lockContext
-	eventC chan lockContext
+	c      *lockContext
+	eventC chan *lockContext
 }
 
 func (e event) notified() {
@@ -79,14 +82,14 @@ func (e event) notified() {
 // to avoid too many goroutine blocked.
 type waiterEvents struct {
 	n       int
-	eventC  chan lockContext
+	eventC  chan *lockContext
 	stopper *stopper.Stopper
 }
 
 func newWaiterEvents(n int) *waiterEvents {
 	return &waiterEvents{
 		n:       n,
-		eventC:  make(chan lockContext, 10000),
+		eventC:  make(chan *lockContext, 10000),
 		stopper: stopper.NewStopper("waiter-events", stopper.WithLogger(getLogger().RawLogger())),
 	}
 }
@@ -104,7 +107,7 @@ func (mw *waiterEvents) close() {
 	close(mw.eventC)
 }
 
-func (mw *waiterEvents) add(c lockContext) {
+func (mw *waiterEvents) add(c *lockContext) {
 	c.w.event = event{
 		eventC: mw.eventC,
 		c:      c,

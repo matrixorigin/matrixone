@@ -27,7 +27,7 @@ type treeItem struct {
 
 func (item treeItem) isEmpty() bool {
 	return len(item.key) == 0 &&
-		len(item.value.txnID) == 0
+		item.value.isEmpty()
 }
 
 // Less returns true if the item key is less than the other.
