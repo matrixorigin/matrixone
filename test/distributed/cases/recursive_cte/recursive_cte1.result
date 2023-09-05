@@ -367,9 +367,9 @@ SQL parser error: not support group by in recursive cte: 'group by c.id, c.produ
 with recursive cte_ab_5(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, min(p.price) FROM product p JOIN cte_ab_5 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_5;
 SQL parser error: not support group by in recursive cte: 'group by c.id, c.productid'
 with recursive cte_ab_6(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_6 c on p.manager_id= c.id order by c.id) select * from cte_ab_6 order by id;
-Table 'c' from one of the SELECTs cannot be used in global ORDER clause
+SQL parser error: not support ORDER BY in recursive cte
 with recursive cte_ab_7(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select distinct p.id,p.manager_id,p.name from emp p join cte_ab_7 c on p.manager_id= c.id) select * from cte_ab_7;
-This version of MySQL doesn't yet support 'ORDER BY / LIMIT / SELECT DISTINCT in recursive query block of Common Table Expression'
+SQL parser error: not support DISTINCT in recursive cte
 with recursive cte_ab_8(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name,0 as level from emp p where manager_id is null union all select p.id,p.manager_id,p.name,levels+1 from emp p join cte_ab_8 c on p.manager_id= c.id limit 5) select * from cte_ab_8;
 id    manager_id    name    levels
 333    null    总经理    0
@@ -378,11 +378,11 @@ id    manager_id    name    levels
 29    198    主任1    2
 123    692    主任2    2
 with recursive cte_ab_9(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name,0 as level from emp p where manager_id is null union all select p.id,p.manager_id,p.name,levels+1 from emp p where p.manager_id in(select c.id from cte_ab_9 c)) select * from cte_ab_9;
-In recursive query block of Recursive Common Table Expression 'cte_ab_9', the recursive table must be referenced only once, and not in any subquery
+SQL parser error: In recursive query block of Recursive Common Table Expression cte_ab_9, the recursive table must be referenced only once, and not in any subquery
 with recursive cte_ab_10(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_10 c on p.manager_id= c.id ) select * from cte_ab_10 order by id;
-In definition of view, derived table or common table expression, SELECT list and column names list have different column counts
+SQL syntax error: table "cte_ab_10" has 3 columns available but 4 columns specified
 with non_cte_8(manager_id,name) as(SELECT a.manager_id, a.id,a.name AS job_name FROM emp a), non_cte_9(id,name) as(SELECT m.id, m.name FROM employees_mgr m WHERE m.name != "lucky") select * FROM non_cte_8 a JOIN non_cte_9 b ON a.manager_id = b.id ORDER BY  a.manager_id;
-In definition of view, derived table or common table expression, SELECT list and column names list have different column counts
+SQL syntax error: table "non_cte_8" has 3 columns available but 2 columns specified
 WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
 (
 SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
@@ -395,4 +395,4 @@ INNER JOIN DirectReports AS d
 ON e.ManagerID = d.EmployeeID
 )
 update DirectReports set Title='manager assistant' where ManagerID=273;
-The target table DirectReports of the UPDATE is not updatable
+internal error: column 'title' not found in table or the target table directreports of the UPDATE is not updatable
