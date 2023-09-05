@@ -1044,7 +1044,7 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 	b.Run(name, func(b *testing.B) {
 		runLockServiceTestsWithLevel(
 			b,
-			zapcore.DebugLevel,
+			zapcore.InfoLevel,
 			[]string{"s1"},
 			time.Second*10,
 			func(alloc *lockTableAllocator, s []*service) {

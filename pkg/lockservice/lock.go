@@ -18,8 +18,18 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"sync"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+)
+
+var (
+	waitQueuePool = sync.Pool{New: func() any {
+		return newWaiterQueue()
+	}}
+	holdersPool = sync.Pool{New: func() any {
+		return newHolders()
+	}}
 )
 
 const (
@@ -43,8 +53,8 @@ func newRowLock(c *lockContext) Lock {
 
 func newLock(c *lockContext) Lock {
 	l := Lock{
-		holders: newHolders(),
-		waiters: newWaiterQueue(),
+		holders: holdersPool.Get().(*holders),
+		waiters: waitQueuePool.Get().(waiterQueue),
 	}
 	l.holders.add(c.waitTxn)
 	if c.opts.Mode == pb.LockMode_Exclusive {
@@ -94,8 +104,15 @@ func (l Lock) tryHold(c *lockContext) bool {
 }
 
 func (l Lock) close(notify notifyValue) {
-	l.holders.clear()
 	l.waiters.close(notify)
+	l.release()
+}
+
+func (l Lock) release() {
+	l.holders.clear()
+	l.waiters.reset()
+	waitQueuePool.Put(l.waiters)
+	holdersPool.Put(l.holders)
 }
 
 func (l Lock) closeTxn(

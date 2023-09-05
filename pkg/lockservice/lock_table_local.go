@@ -195,6 +195,7 @@ func (l *localLockTable) unlock(
 					l.mu.store.Delete(startKey)
 					startKey = nil
 				}
+				lock.release()
 			}
 		}
 		return true

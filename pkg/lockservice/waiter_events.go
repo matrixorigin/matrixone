@@ -16,10 +16,17 @@ package lockservice
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+)
+
+var (
+	lockContextPool = sync.Pool{New: func() any {
+		return &lockContext{}
+	}}
 )
 
 type lockContext struct {
@@ -44,20 +51,21 @@ func (l *localLockTable) newLockContext(
 	opts LockOptions,
 	cb func(pb.Result, error),
 	bind pb.LockTable) *lockContext {
-
-	return &lockContext{
-		ctx:     ctx,
-		txn:     txn,
-		waitTxn: txn.toWaitTxn(l.bind.ServiceID, true),
-		rows:    rows,
-		opts:    opts,
-		cb:      cb,
-		result:  pb.Result{LockedOn: bind},
-	}
+	c := lockContextPool.Get().(*lockContext)
+	c.ctx = ctx
+	c.txn = txn
+	c.rows = rows
+	c.waitTxn = txn.toWaitTxn(l.bind.ServiceID, true)
+	c.opts = opts
+	c.cb = cb
+	c.result = pb.Result{LockedOn: bind}
+	return c
 }
 
 func (c *lockContext) done(err error) {
 	c.cb(c.result, err)
+	*c = lockContext{}
+	lockContextPool.Put(c)
 }
 
 func (c *lockContext) doLock() {
