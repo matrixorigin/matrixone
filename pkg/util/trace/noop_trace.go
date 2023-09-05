@@ -46,8 +46,10 @@ func (t NoopTracer) Start(ctx context.Context, name string, opts ...SpanStartOpt
 	if _, ok := span.(NoopSpan); !ok {
 		// span is likely already a NoopSpan, but let's be sure
 		span = NoopSpan{}
+		return ContextWithSpan(ctx, span), span
+	} else {
+		return ctx, span
 	}
-	return ContextWithSpan(ctx, span), span
 }
 
 func (t NoopTracer) Debug(ctx context.Context, name string, opts ...SpanStartOption) (context.Context, Span) {
