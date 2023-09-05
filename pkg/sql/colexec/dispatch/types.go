@@ -123,7 +123,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			for i := range arg.RemoteRegs {
 				uuids = append(uuids, arg.RemoteRegs[i].Uuid)
 			}
-			colexec.Srv.DeleteUuids(uuids)
+			colexec.Srv.DeleteUuid(uuids)
 		}
 	}
 

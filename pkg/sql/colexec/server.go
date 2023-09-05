@@ -35,8 +35,8 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	Srv = &Server{
 		mp:            make(map[uint64]*process.WaitRegister),
 		hakeeper:      client,
-		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]*process.Process)},
-		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32)},
+		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]uuidProcMapItem, 1024)},
+		cnSegmentMap:  CnSegmentMap{mp: make(map[objectio.Segmentid]int32, 1024)},
 	}
 	return Srv
 }
@@ -63,21 +63,34 @@ func (srv *Server) GetProcByUuid(u uuid.UUID) (*process.Process, bool) {
 	if !ok {
 		return nil, false
 	}
-	return p, true
+	p.referenceCount--
+	if p.referenceCount == 0 {
+		delete(srv.uuidCsChanMap.mp, u)
+		return nil, true
+	}
+	return p.proc, true
 }
 
 func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
-	srv.uuidCsChanMap.mp[u] = p
+	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, referenceCount: 2}
 	return nil
 }
 
-func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
+func (srv *Server) DeleteUuid(uuids []uuid.UUID) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	for i := range uuids {
-		delete(srv.uuidCsChanMap.mp, uuids[i])
+		uid, ok := srv.uuidCsChanMap.mp[uuids[i]]
+		if !ok {
+			continue
+		}
+
+		uid.referenceCount--
+		if uid.referenceCount == 0 {
+			delete(srv.uuidCsChanMap.mp, uuids[i])
+		}
 	}
 }
 
