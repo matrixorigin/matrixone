@@ -579,9 +579,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
 		if len(uniqueCols) > 0 {
-			// if len(uniqueCols) > 1 {
-			// 	return false, nil, false, moerr.NewNYI(builder.GetContext(), "one unique constraint supported for on duplicate key clause now.")
-			// }
 
 			joinCtx := NewBindContext(builder, bindCtx)
 			rightCtx := NewBindContext(builder, joinCtx)
