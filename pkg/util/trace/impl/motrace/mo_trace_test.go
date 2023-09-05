@@ -527,8 +527,8 @@ func TestWithFSSpan(t *testing.T) {
 	}
 	tracer.provider.enable = true
 
-	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan = true
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan = false
+	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
 
 	_, span := tracer.Start(context.Background(), "test", trace.WithKind(
 		trace.SpanKindLocalFSVis))
@@ -547,4 +547,26 @@ func TestWithFSSpan(t *testing.T) {
 	assert.True(t, ok)
 	span.End()
 
+}
+
+func BenchmarkMOTracer_Start(b *testing.B) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+
+	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
+
+	b.Run("with opts", func(b *testing.B) {
+		_, span := tracer.Start(context.Background(), "test", trace.WithKind(
+			trace.SpanKindLocalFSVis))
+		span.End(trace.WithFSReadWriteExtra("xxx", nil, 0))
+	})
+
+	b.Run("without opts", func(b *testing.B) {
+		_, span := trace.Start(context.Background(), "test")
+		span.End()
+	})
 }

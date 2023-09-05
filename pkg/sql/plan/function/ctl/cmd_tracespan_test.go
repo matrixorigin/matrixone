@@ -15,17 +15,30 @@
 package ctl
 
 import (
+	"context"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
+	uuid2 "github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/mohae/deepcopy"
 	"github.com/stretchr/testify/require"
 )
 
-func TestHandleEnableFSSpan(t *testing.T) {
-	var a1, a2, a3, a4, a5, a6 struct {
+func TestCanHandleServiceAndCmdWrong(t *testing.T) {
+	var a1, a2 struct {
 		proc      *process.Process
 		service   serviceType
 		parameter string
@@ -40,61 +53,135 @@ func TestHandleEnableFSSpan(t *testing.T) {
 
 	// testing query with wrong cmd
 	a2.service = cn
-	a2.parameter = "open:s3"
+	a2.parameter = "xxx:open:s3"
 	ret, err = handleTraceSpan(a2.proc, a2.service, a2.parameter, a2.sender)
 	require.Equal(t, ret, pb.CtlResult{})
-	require.Equal(t, err, moerr.NewInvalidArgNoCtx("parameter", "expected enable or disable"))
+	require.Equal(t, err, moerr.NewInternalErrorNoCtx("cmd invalid, expected enable or disable"))
+}
 
-	// testing query enable s3 and local
-	a3.service = cn
-	a3.parameter = "enable:s3,local"
-	ret, err = handleTraceSpan(a3.proc, a3.service, a3.parameter, a3.sender)
+func initRuntime(uuids []string, queryAddress []string) {
+	var cns []metadata.CNService
+	for idx := range uuids {
+		cns = append(cns, metadata.CNService{
+			ServiceID:    uuids[idx],
+			QueryAddress: queryAddress[idx],
+		})
+	}
+
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	moCluster := clusterservice.NewMOCluster(new(testHAKeeperClient),
+		time.Duration(time.Second),
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(cns, nil))
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, moCluster)
+}
+
+func TestCanHandleSelfCmd(t *testing.T) {
+	var a1 struct {
+		proc      *process.Process
+		service   serviceType
+		parameter string
+		sender    requestSender
+	}
+
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
+	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(false)
+
+	initRuntime(nil, nil)
+
+	uuid := uuid2.New().String()
+	service, err := queryservice.NewQueryService(uuid, "", morpc.Config{}, nil)
+	require.Nil(t, err)
+
+	a1.proc = new(process.Process)
+	a1.proc.QueryService = service
+	a1.service = cn
+	a1.parameter = fmt.Sprintf("%s:enable:s3,local", uuid)
+
+	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
+	require.Nil(t, err)
 	require.Equal(t, ret, pb.CtlResult{
 		Method: pb.CmdMethod_TraceSpan.String(),
-		Data:   "[s3 local] enabled, [] failed",
+		Data:   fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuid),
 	})
-	require.Equal(t, err, nil)
 
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableS3FSSpan)
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableLocalFSSpan)
+	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Load())
+	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load())
+}
 
-	// testing query disable local
-	a4.service = cn
-	a4.parameter = "disable:local"
-	ret, err = handleTraceSpan(a4.proc, a4.service, a4.parameter, a4.sender)
-	require.Equal(t, ret, pb.CtlResult{
-		Method: pb.CmdMethod_TraceSpan.String(),
-		Data:   "[local] disabled, [] failed",
-	})
-	require.Equal(t, err, nil)
+func TestCanTransferQuery(t *testing.T) {
+	var a1 struct {
+		proc      *process.Process
+		service   serviceType
+		parameter string
+		sender    requestSender
+	}
+	uuids := []string{
+		uuid2.New().String(),
+		uuid2.New().String(),
+	}
+	addrs := []string{
+		"127.0.0.1:7777",
+		"127.0.0.1:5555",
+	}
 
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableS3FSSpan)
-	require.Equal(t, false, trace.MOCtledSpanEnableConfig.EnableLocalFSSpan)
+	a1.proc = new(process.Process)
+	a1.service = cn
+	a1.parameter = fmt.Sprintf("%s,%s:enable:s3,local", uuids[0], uuids[1])
 
-	// testing query enable all
-	a5.service = cn
-	a5.parameter = "enable:all"
-	ret, err = handleTraceSpan(a5.proc, a5.service, a5.parameter, a5.sender)
-	require.Equal(t, ret, pb.CtlResult{
-		Method: pb.CmdMethod_TraceSpan.String(),
-		Data:   "[all] enabled, [] failed",
-	})
-	require.Equal(t, err, nil)
+	initRuntime(uuids, addrs)
 
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableS3FSSpan)
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableLocalFSSpan)
+	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{}, nil)
+	require.Nil(t, err)
+	qs2, err := queryservice.NewQueryService(uuids[1], addrs[1], morpc.Config{}, nil)
+	require.Nil(t, err)
 
-	// testing query some succeed and some failed
-	a6.service = cn
-	a6.parameter = "disable:s3,s4,local,s5"
-	ret, err = handleTraceSpan(a6.proc, a6.service, a6.parameter, a6.sender)
-	require.Equal(t, ret, pb.CtlResult{
-		Method: pb.CmdMethod_TraceSpan.String(),
-		Data:   "[s3 local] disabled, [s4 s5] failed",
-	})
-	require.Equal(t, err, nil)
+	qs1.AddHandleFunc(query.CmdMethod_TraceSpan, mockHandleTraceSpan, false)
+	qs2.AddHandleFunc(query.CmdMethod_TraceSpan, mockHandleTraceSpan, false)
 
-	require.Equal(t, false, trace.MOCtledSpanEnableConfig.EnableS3FSSpan)
-	require.Equal(t, false, trace.MOCtledSpanEnableConfig.EnableLocalFSSpan)
+	a1.proc.QueryService = qs1
 
+	err = qs1.Start()
+	require.Nil(t, err)
+	err = qs2.Start()
+	require.Nil(t, err)
+
+	defer func() {
+		qs1.Close()
+		qs2.Close()
+	}()
+
+	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
+	require.Nil(t, err)
+
+	str1 := fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuids[0])
+	str2 := fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuids[1])
+
+	require.True(t, func() bool {
+		if ret.Data == str1+str2 ||
+			ret.Data == str2+str1 {
+			return true
+		}
+		return false
+	}())
+}
+
+type testHAKeeperClient struct {
+	sync.RWMutex
+	value logpb.ClusterDetails
+	err   error
+}
+
+func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
+	c.RLock()
+	defer c.RUnlock()
+	// deep copy the cluster details to avoid data race.
+	copied := deepcopy.Copy(c.value)
+	return copied.(logpb.ClusterDetails), c.err
+}
+
+func mockHandleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response) error {
+	resp.TraceSpanResponse = new(query.TraceSpanResponse)
+	resp.TraceSpanResponse.Resp = SelfProcess(req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans)
+	return nil
 }

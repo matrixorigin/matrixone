@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -211,11 +212,12 @@ func (c *SpanConfig) Reset() {
 	c.profileCpuDur = 0
 	c.profileTraceDur = 0
 	c.hungThreshold = 0
+	c.Extra = nil
 }
 
 var MOCtledSpanEnableConfig struct {
-	EnableS3FSSpan    bool
-	EnableLocalFSSpan bool
+	EnableS3FSSpan    atomic.Bool
+	EnableLocalFSSpan atomic.Bool
 }
 
 func (c *SpanConfig) NeedRecord(duration time.Duration) bool {
@@ -224,9 +226,9 @@ func (c *SpanConfig) NeedRecord(duration time.Duration) bool {
 	// long time threshold restriction.
 	switch c.Kind {
 	case SpanKindS3FSVis:
-		return MOCtledSpanEnableConfig.EnableS3FSSpan
+		return MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
 	case SpanKindLocalFSVis:
-		return MOCtledSpanEnableConfig.EnableLocalFSSpan
+		return MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
 	default:
 		return duration >= c.LongTimeThreshold
 	}

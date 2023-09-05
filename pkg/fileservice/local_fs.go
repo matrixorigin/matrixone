@@ -149,16 +149,9 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 
 	var err error
 	ctx, span := trace.Start(ctx, "LocalFS.Write", trace.WithKind(trace.SpanKindLocalFSVis))
-	// collect read info only when cache missing
 	defer func() {
-		// cover another func to catch the err returned by l.write
-		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, func() int64 {
-			size := int64(0)
-			for idx := range vector.Entries {
-				size += vector.Entries[idx].Size
-			}
-			return size
-		}()))
+		// cover another func to catch the err when process Write
+		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, vector.EntriesSize()))
 	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
@@ -321,22 +314,10 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	// collect read info only when cache missing
 	ctx, span := trace.Start(ctx, "LocalFS.Read", trace.WithKind(trace.SpanKindLocalFSVis))
-	defer func() {
-		// cover another func to catch the err returned by l.read
-		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, func() int64 {
-			size := int64(0)
-			for idx := range vector.Entries {
-				size += vector.Entries[idx].Size
-			}
-			return size
-		}()))
-	}()
+	err = l.read(ctx, vector)
+	span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, vector.EntriesSize()))
 
-	if err = l.read(ctx, vector); err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
@@ -375,6 +356,9 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 	if vector.allDone() {
 		return nil
 	}
+
+	ctx, span := trace.Start(ctx, "LocalFS.read")
+	defer span.End()
 
 	t0 := time.Now()
 	defer func() {

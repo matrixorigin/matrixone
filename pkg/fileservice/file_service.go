@@ -82,6 +82,14 @@ type IOVector struct {
 	Hash Hash
 }
 
+func (i *IOVector) EntriesSize() int64 {
+	size := int64(0)
+	for idx := range i.Entries {
+		size += i.Entries[idx].Size
+	}
+	return size
+}
+
 type Hash struct {
 	Sum *[]byte
 	New func() hash.Hash
