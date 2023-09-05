@@ -144,8 +144,8 @@ func (sender *messageSenderOnClient) send(
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 	select {
 	case <-sender.ctx.Done():
-		logutil.Errorf("sender ctx done during receive")
 		return nil, nil
+
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
