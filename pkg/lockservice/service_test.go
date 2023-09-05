@@ -101,6 +101,87 @@ func TestRowLock(t *testing.T) {
 	}
 }
 
+func TestRowLockWithSharedAndExclusive(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					sharedOptions := newTestRowSharedOptions()
+					rows := newTestRows(1)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					// txn1 hold the lock
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+
+					// txn2 blocked by txn1
+					c := make(chan struct{})
+					go func() {
+						defer close(c)
+
+						_, err := s.Lock(ctx, table, rows, txn2, sharedOptions)
+						require.NoError(t, err)
+						defer func() {
+							assert.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+						}()
+
+						checkLock(t, lt, rows[0], [][]byte{txn2}, nil, nil)
+					}()
+
+					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					<-c
+				})
+		})
+	}
+}
+
+func TestRowLockWithSharedAndShared(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowSharedOptions()
+					rows := newTestRows(1)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+						checkLock(t, lt, rows[0], nil, nil, nil)
+					}()
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+
+					_, err = s.Lock(ctx, table, rows, txn2, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+						checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+					}()
+					checkLock(t, lt, rows[0], [][]byte{txn1, txn2}, nil, nil)
+				})
+		})
+	}
+}
+
 func TestRangeLock(t *testing.T) {
 	for name, runner := range runners {
 		t.Run(name, func(t *testing.T) {
@@ -124,6 +205,94 @@ func TestRangeLock(t *testing.T) {
 					}()
 
 					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+				})
+		})
+	}
+}
+
+func TestRangeLockWithSharedAndExclusive(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRangeExclusiveOptions()
+					sharedOptions := newTestRangeSharedOptions()
+					rows := newTestRows(1, 2)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					// txn1 hold the lock
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+
+					// txn2 blocked by txn1
+					c := make(chan struct{})
+					go func() {
+						defer close(c)
+
+						_, err := s.Lock(ctx, table, rows, txn2, sharedOptions)
+						require.NoError(t, err)
+						defer func() {
+							assert.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+						}()
+
+						checkLock(t, lt, rows[0], [][]byte{txn2}, nil, nil)
+						checkLock(t, lt, rows[1], [][]byte{txn2}, nil, nil)
+					}()
+
+					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
+					require.NoError(t, waitLocalWaiters(lt, rows[1], 1))
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					<-c
+				})
+		})
+	}
+}
+
+func TestRangeLockWithSharedAndShared(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRangeSharedOptions()
+					rows := newTestRows(1, 2)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+						checkLock(t, lt, rows[0], nil, nil, nil)
+						checkLock(t, lt, rows[1], nil, nil, nil)
+					}()
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+					checkLock(t, lt, rows[1], [][]byte{txn1}, nil, nil)
+
+					_, err = s.Lock(ctx, table, rows, txn2, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+						checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+						checkLock(t, lt, rows[1], [][]byte{txn1}, nil, nil)
+					}()
+					checkLock(t, lt, rows[0], [][]byte{txn1, txn2}, nil, nil)
+					checkLock(t, lt, rows[1], [][]byte{txn1, txn2}, nil, nil)
 				})
 		})
 	}
@@ -157,7 +326,7 @@ func TestRowLockWithConflict(t *testing.T) {
 						_, err := s.Lock(ctx, table, rows, txn2, option)
 						require.NoError(t, err)
 						defer func() {
-							assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+							assert.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 						}()
 
 						checkLock(t, lt, rows[0], [][]byte{txn2}, nil, nil)
@@ -1112,7 +1281,7 @@ func runLockServiceTests(
 	fn func(*lockTableAllocator, []*service)) {
 	runLockServiceTestsWithLevel(
 		t,
-		zapcore.FatalLevel,
+		zapcore.DebugLevel,
 		serviceIDs,
 		time.Second*10,
 		fn,
@@ -1179,6 +1348,22 @@ func newTestRowExclusiveOptions() pb.LockOptions {
 	}
 }
 
+func newTestRowSharedOptions() pb.LockOptions {
+	return pb.LockOptions{
+		Granularity: pb.Granularity_Row,
+		Mode:        pb.LockMode_Shared,
+		Policy:      pb.WaitPolicy_Wait,
+	}
+}
+
+func newTestRangeSharedOptions() pb.LockOptions {
+	return pb.LockOptions{
+		Granularity: pb.Granularity_Range,
+		Mode:        pb.LockMode_Shared,
+		Policy:      pb.WaitPolicy_Wait,
+	}
+}
+
 func newTestRangeExclusiveOptions() pb.LockOptions {
 	return pb.LockOptions{
 		Granularity: pb.Granularity_Range,
@@ -1210,7 +1395,10 @@ func checkLock(
 	defer lt.mu.RUnlock()
 
 	lock, ok := lt.mu.store.Get(key)
-	require.True(t, ok)
+	require.Equal(t, len(expectHolders) == 0, !ok)
+	if !ok {
+		return
+	}
 
 	for _, txn := range expectHolders {
 		require.True(t, lock.holders.contains(txn))

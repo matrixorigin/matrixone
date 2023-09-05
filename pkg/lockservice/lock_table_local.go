@@ -81,6 +81,9 @@ func (l *localLockTable) lock(
 		c.lockFunc = l.doLock
 	}
 	l.doLock(c, false)
+	if !opts.async {
+		c.release()
+	}
 }
 
 func (l *localLockTable) doLock(
@@ -382,6 +385,19 @@ func (l *localLockTable) addRangeLockLocked(
 	c *lockContext,
 	start, end []byte) ([]byte, Lock, error) {
 
+	if c.opts.LockOptions.Mode == pb.LockMode_Shared {
+		l1, ok1 := l.mu.store.Get(start)
+		l2, ok2 := l.mu.store.Get(end)
+		if ok1 && ok2 &&
+			l1.isShared() && l2.isShared() &&
+			l1.isLockRangeStart() && l2.isLockRangeEnd() {
+			l1.tryHold(c)
+			l2.tryHold(c)
+			c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
+			return nil, Lock{}, nil
+		}
+	}
+
 	wq := newWaiterQueue()
 	mc := newMergeContext(wq)
 	defer mc.close()
@@ -401,19 +417,7 @@ func (l *localLockTable) addRangeLockLocked(
 			func(key []byte, keyLock Lock) bool {
 				// current txn is not holder, maybe conflict
 				if !keyLock.holders.contains(c.txn.txnID) {
-					hasConflict := false
-					if keyLock.isLockRow() {
-						// row lock, start <= key <= end
-						hasConflict = bytes.Compare(key, end) <= 0
-					} else if keyLock.isLockRangeStart() {
-						// range start lock, [1, 4] + [2, any]
-						hasConflict = bytes.Compare(key, end) <= 0
-					} else {
-						// range end lock, always conflict
-						hasConflict = true
-					}
-
-					if hasConflict {
+					if hasConflictWithLock(key, keyLock, end) {
 						conflictWith = keyLock
 						conflictKey = key
 					}
@@ -613,4 +617,20 @@ func (c *mergeContext) commit(
 
 func (c *mergeContext) rollback() {
 	c.to.rollbackChange()
+}
+
+func hasConflictWithLock(
+	key []byte,
+	lock Lock,
+	end []byte) bool {
+	if lock.isLockRow() {
+		// row lock, start <= key <= end
+		return bytes.Compare(key, end) <= 0
+	}
+	if lock.isLockRangeStart() {
+		// range start lock, [1, 4] + [2, any]
+		return bytes.Compare(key, end) <= 0
+	}
+	// range end lock, always conflict
+	return true
 }

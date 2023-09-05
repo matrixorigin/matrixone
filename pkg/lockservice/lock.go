@@ -93,13 +93,24 @@ func (l Lock) tryHold(c *lockContext) bool {
 		return true
 	}
 
-	// no holders && is first waiter txn can hold.
-	if l.holders.size() == 0 &&
-		l.waiters.first().isTxn(c.txn.txnID) {
+	if l.canHold(c) {
 		l.addHolder(c)
 		return true
 	}
 
+	return false
+}
+
+// (no holders && is first waiter txn) || (both shared lock) can hold lock
+func (l Lock) canHold(c *lockContext) bool {
+	return (l.holders.size() == 0 && l.waiters.first().isTxn(c.txn.txnID)) ||
+		l.isLockModeAllowed(c)
+}
+
+func (l Lock) isLockModeAllowed(c *lockContext) bool {
+	if l.isShared() {
+		return c.opts.Mode == pb.LockMode_Shared
+	}
 	return false
 }
 
@@ -153,6 +164,10 @@ func (l Lock) isLockRangeStart() bool {
 
 func (l Lock) isLockTableDefChanged() bool {
 	return l.value&flagLockTableDefChanged != 0
+}
+
+func (l Lock) isShared() bool {
+	return l.value&flagLockSharedMode != 0
 }
 
 func (l Lock) getLockMode() pb.LockMode {

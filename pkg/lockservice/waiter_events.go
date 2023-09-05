@@ -30,18 +30,19 @@ var (
 )
 
 type lockContext struct {
-	ctx      context.Context
-	txn      *activeTxn
-	waitTxn  pb.WaitTxn
-	rows     [][]byte
-	opts     LockOptions
-	offset   int
-	idx      int
-	lockedTS timestamp.Timestamp
-	result   pb.Result
-	cb       func(pb.Result, error)
-	lockFunc func(*lockContext, bool)
-	w        *waiter
+	ctx       context.Context
+	txn       *activeTxn
+	waitTxn   pb.WaitTxn
+	rows      [][]byte
+	opts      LockOptions
+	offset    int
+	idx       int
+	lockedTS  timestamp.Timestamp
+	result    pb.Result
+	cb        func(pb.Result, error)
+	lockFunc  func(*lockContext, bool)
+	w         *waiter
+	completed bool
 }
 
 func (l *localLockTable) newLockContext(
@@ -64,6 +65,10 @@ func (l *localLockTable) newLockContext(
 
 func (c *lockContext) done(err error) {
 	c.cb(c.result, err)
+	c.completed = true
+}
+
+func (c *lockContext) release() {
 	*c = lockContext{}
 	lockContextPool.Put(c)
 }
@@ -131,6 +136,9 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 			c.txn.Lock()
 			c.doLock()
 			c.txn.Unlock()
+			if c.completed {
+				c.release()
+			}
 		}
 	}
 }
