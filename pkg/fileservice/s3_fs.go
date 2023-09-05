@@ -934,7 +934,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 			MaxIdleConns:          100,
 			IdleConnTimeout:       180 * time.Second,
 			MaxIdleConnsPerHost:   100,
-			MaxConnsPerHost:       100,
+			MaxConnsPerHost:       1000,
 			TLSHandshakeTimeout:   3 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 			ForceAttemptHTTP2:     true,
