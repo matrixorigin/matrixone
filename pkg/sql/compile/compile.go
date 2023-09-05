@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1408,9 +1409,21 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		ID2Addr[i] = mcpu - tmp
 	}
 	param := &tree.ExternParam{}
-	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
-	if err != nil {
-		return nil, err
+	if n.ExternScan.Type != tree.INLINE {
+		err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		param.ScanType = int(n.ExternScan.Type)
+		param.Data = n.ExternScan.Data
+		param.Format = n.ExternScan.Format
+		param.Tail = new(tree.TailParameter)
+		param.Tail.IgnoredLines = n.ExternScan.IgnoredLines
+		param.Tail.Fields = &tree.Fields{
+			Terminated: n.ExternScan.Terminated,
+			EnclosedBy: n.ExternScan.EnclosedBy[0],
+		}
 	}
 	if param.ScanType == tree.S3 {
 		if err := plan2.InitS3Param(param); err != nil {
@@ -1429,6 +1442,8 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				ID2Addr[i] = mcpu - tmp
 			}
 		}
+	} else if param.ScanType == tree.INLINE {
+		return c.compileExternValueScan(n, param)
 	} else {
 		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
@@ -1437,6 +1452,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
+	var err error
 	var fileList []string
 	var fileSize []int64
 	if !param.Local {
@@ -1474,7 +1490,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 		return []*Scope{ret}, nil
 	}
-
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
 		return c.compileExternScanParallel(n, param, fileList, fileSize)
 	}
@@ -1519,6 +1534,29 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		pre += count
 	}
 
+	return ss, nil
+}
+
+func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) ([]*Scope, error) {
+	ss := make([]*Scope, ncpu)
+	for i := 0; i < ncpu; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
+	s := c.constructScopeForExternal(c.addr, false)
+	s.appendInstruction(vm.Instruction{
+		Op:      vm.External,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     constructExternal(n, param, c.ctx, nil, nil, nil),
+	})
+	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
+	arg.FuncId = dispatch.SendToAnyLocalFunc
+	s.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: arg,
+	})
+	ss[0].PreScopes = append(ss[0].PreScopes, s)
+	c.anal.isFirst = false
 	return ss, nil
 }
 

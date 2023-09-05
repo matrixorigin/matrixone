@@ -71,20 +71,36 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
-	json_byte, err := json.Marshal(stmt.Param)
-	if err != nil {
-		return nil, err
+	if stmt.Param.ScanType != tree.INLINE {
+		json_byte, err := json.Marshal(stmt.Param)
+		if err != nil {
+			return nil, err
+		}
+		tableDef.Createsql = string(json_byte)
 	}
-	tableDef.Createsql = string(json_byte)
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
+	terminated := ","
+	enclosedBy := []byte{0}
+	if stmt.Param.Tail.Fields != nil {
+		enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy}
+		terminated = stmt.Param.Tail.Fields.Terminated
+	}
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
 		Stats:       &plan.Stats{},
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
+		ExternScan: &plan.ExternScan{
+			Type:         int32(stmt.Param.ScanType),
+			Data:         stmt.Param.Data,
+			Format:       stmt.Param.Format,
+			IgnoredLines: uint64(stmt.Param.Tail.IgnoredLines),
+			EnclosedBy:   enclosedBy,
+			Terminated:   terminated,
+		},
 	}
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
 
@@ -140,6 +156,9 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	if param.Local {
 		return "", nil
 	}
+	if param.ScanType == tree.INLINE {
+		return "", nil
+	}
 	param.Ctx = ctx.GetContext()
 	if param.ScanType == tree.S3 {
 		if err := InitS3Param(param); err != nil {
@@ -149,6 +168,9 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		if err := InitInfileParam(param); err != nil {
 			return "", err
 		}
+	}
+	if len(param.Filepath) == 0 {
+		return "", nil
 	}
 
 	fileList, _, err := ReadDir(param)
