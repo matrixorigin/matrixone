@@ -49,7 +49,10 @@ func openSaveQueryResult(ses *Session) bool {
 	if ses.ast == nil || ses.tStmt == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType != constant.CloudUserSql {
+	if ses.tStmt.SqlSourceType == constant.InternalSql {
+		return false
+	}
+	if ses.tStmt.StatementType == tree.QueryTypeDQL && ses.tStmt.SqlSourceType != constant.CloudUserSql {
 		return false
 	}
 	val, err := ses.GetGlobalVar("save_query_result")
