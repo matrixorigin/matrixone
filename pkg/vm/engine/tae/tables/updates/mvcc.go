@@ -102,7 +102,7 @@ func (n *MVCCHandle) EstimateMemSizeLocked() int {
 // *************** All deletes related APIs *****************
 // ==========================================================
 
-func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
+func (n *MVCCHandle) GetDeletesPersistedTSInMVCCChain() types.TS {
 	return n.persistedTS
 }
 

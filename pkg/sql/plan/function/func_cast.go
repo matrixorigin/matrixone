@@ -287,6 +287,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64,
 	},
 
 	types.T_text: {
@@ -1333,7 +1334,7 @@ func decimal64ToOthers(ctx context.Context,
 		return decimal64ToDecimal64(source, rs, length)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return decimal64ToDecimal128(source, rs, length)
+		return decimal64ToDecimal128Array(source, rs, length)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return decimal64ToTimestamp(source, rs, length)
@@ -1414,6 +1415,26 @@ func strTypeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int) error {
 	ctx := proc.Ctx
+
+	fromType := source.GetType()
+	if fromType.Oid == types.T_blob {
+		// For handling BLOB to ARRAY implicit casting.
+		// This is used for VECTOR FAST/BINARY IO.
+		// SQL: insert into t2 values(2, decode("7e98b23e9e10383b2f41133f", "hex"));
+		switch toType.Oid {
+		case types.T_array_float32:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[float32](proc.Ctx, source, rs, length, toType)
+		case types.T_array_float64:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[float64](proc.Ctx, source, rs, length, toType)
+			// NOTE 1: don't add `switch default` and panic here. If `T_blob` to `ARRAY` is not required,
+			// then continue to the `str` to `Other` code.
+			// NOTE 2: don't create a switch T_blob case in NewCast() as
+			// we only want to handle BLOB-->ARRAY condition separately and
+			// rest of the flow is similar to strTypeToOthers.
+		}
+	}
 	switch toType.Oid {
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
@@ -3223,26 +3244,22 @@ func decimal64ToDecimal64(
 	return nil
 }
 
-func decimal64ToDecimal128(
+func decimal64ToDecimal128Array(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
 	var i uint64
 	l := uint64(length)
-	var dft types.Decimal128
 	fromtype := from.GetType()
 	totype := to.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(dft, true); err != nil {
-				return err
-			}
-		} else {
-			fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
-			if v.Sign() {
-				fromdec.B64_127 = ^fromdec.B64_127
-			}
-			if totype.Width < fromtype.Width {
+
+	if !from.WithAnyNullValue() {
+		v := vector.MustFixedCol[types.Decimal64](from.GetSourceVector())
+		if totype.Width < fromtype.Width {
+			for i = 0; i < l; i++ {
+				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
+				if v[i].Sign() {
+					fromdec.B64_127 = ^fromdec.B64_127
+				}
 				dec := fromdec.Format(fromtype.Scale)
 				result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
 				if err != nil {
@@ -3251,13 +3268,67 @@ func decimal64ToDecimal128(
 				if err = to.Append(result, false); err != nil {
 					return err
 				}
+			}
+		} else {
+			if totype.Scale == fromtype.Scale {
+				for i = 0; i < l; i++ {
+					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
+					if v[i].Sign() {
+						fromdec.B64_127 = ^fromdec.B64_127
+					}
+					to.AppendMustValue(fromdec)
+				}
 			} else {
-				result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
-				if err != nil {
+				for i = 0; i < l; i++ {
+					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
+					if v[i].Sign() {
+						fromdec.B64_127 = ^fromdec.B64_127
+					}
+					result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+					if err != nil {
+						return err
+					}
+					if err = to.Append(result, false); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	} else {
+		// with any null value
+		var dft types.Decimal128
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			if null {
+				if err := to.Append(dft, true); err != nil {
 					return err
 				}
-				if err = to.Append(result, false); err != nil {
-					return err
+			} else {
+				fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+				if v.Sign() {
+					fromdec.B64_127 = ^fromdec.B64_127
+				}
+				if totype.Width < fromtype.Width {
+					dec := fromdec.Format(fromtype.Scale)
+					result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
+					if err != nil {
+						return err
+					}
+					if err = to.Append(result, false); err != nil {
+						return err
+					}
+				} else {
+					if totype.Scale == fromtype.Scale {
+						to.AppendMustValue(fromdec)
+					} else {
+						result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+						if err != nil {
+							return err
+						}
+						if err = to.Append(result, false); err != nil {
+							return err
+						}
+					}
 				}
 			}
 		}
@@ -3941,6 +4012,36 @@ func strToArray[T types.RealNumbers](
 	return nil
 }
 
+func blobToArray[T types.RealNumbers](
+	_ context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
+
+	toType := to.GetType()
+
+	var i uint64
+	var l = uint64(length)
+	for i = 0; i < l; i++ {
+
+		v, null := from.GetStrValue(i)
+		if null || len(v) == 0 {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			arr := types.BytesToArray[T](v)
+			if int(toType.Width) != len(arr) {
+				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
+			}
+
+			if err := to.AppendBytes(v, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -3957,12 +4058,17 @@ func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 			continue
 		}
 
+		// NOTE: During ARRAY --> ARRAY conversion, if you do width check
+		// `to.GetType().Width != from.GetType().Width`
+		// cases b/b and b+sqrt(b) fails.
+
 		if from.GetType().Oid == to.GetType().Oid {
-			// If Array types are same, then we don't need casting.
+			// Eg:- VECF32(3) --> VECF32(3)
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
 		} else {
+			// Eg:- VECF32(3) --> VECF64(3)
 			_v := types.BytesToArray[I](v)
 			cast := moarray.Cast[I, O](_v)
 			bytes := types.ArrayToBytes[O](cast)

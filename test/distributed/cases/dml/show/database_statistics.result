@@ -3,7 +3,7 @@ Number of tables in mo_task
 2
 show table_number from information_schema;
 Number of tables in information_schema
-15
+16
 show table_number from mysql;
 Number of tables in mysql
 5
@@ -340,7 +340,7 @@ drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
 Number of tables in information_schema
-15
+16
 show table_number from mysql;
 Number of tables in mysql
 5

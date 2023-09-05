@@ -1229,11 +1229,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
 
 		ReCalcNodeStats(rootID, builder, true, true)
+		builder.applySwapRuleByStats(rootID, true)
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
 		rootID = builder.removeRedundantJoinCond(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
+		rootID = builder.applyAssociativeLaw(rootID)
+		builder.applySwapRuleByStats(rootID, true)
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
@@ -1730,11 +1733,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, moerr.NewParseError(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 			} else if !isR {
 				subCtx := NewBindContext(builder, ctx)
+				subCtx.normalCTE = true
+				subCtx.cteName = table
 				subCtx.maskedCTEs = cteRef.maskedCTEs
 				cteRef.isRecursive = false
-				_, err := builder.buildSelect(s, subCtx, false)
+				nodeID, err := builder.buildSelect(s, subCtx, false)
 				if err != nil {
 					return 0, err
+				}
+				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[nodeID].ProjectList) {
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[nodeID].ProjectList), len(cteRef.ast.Name.Cols))
 				}
 			} else {
 
@@ -1745,6 +1753,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				initLastNodeID, err := builder.buildSelect(&tree.Select{Select: *left}, initCtx, false)
 				if err != nil {
 					return 0, err
+				}
+				if len(cteRef.ast.Name.Cols) > 0 && len(cteRef.ast.Name.Cols) != len(builder.qry.Nodes[initLastNodeID].ProjectList) {
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(builder.qry.Nodes[initLastNodeID].ProjectList), len(cteRef.ast.Name.Cols))
 				}
 				recursiveNodeId := initLastNodeID
 				for _, r := range stmts {
@@ -1931,6 +1942,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, err
 		}
 	} else {
+		if ctx.recSelect && clause.Distinct {
+			return 0, moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
+		}
 		// build FROM clause
 		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
 		if err != nil {
@@ -2572,6 +2586,15 @@ func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name strin
 	}
 }
 
+func getSelectTree(s *tree.Select) *tree.Select {
+	switch stmt := s.Select.(type) {
+	case *tree.ParenSelect:
+		return getSelectTree(stmt.Select)
+	default:
+		return s
+	}
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
@@ -2601,7 +2624,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			break
 		}
 
-		if len(schema) == 0 {
+		if len(schema) == 0 && ctx.normalCTE && table == ctx.cteName {
+			return 0, moerr.NewParseError(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
+		} else if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
 				if ctx.recSelect {
@@ -2612,9 +2637,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				var s *tree.Select
 				switch stmt := cteRef.ast.Stmt.(type) {
 				case *tree.Select:
-					s = stmt
+					s = getSelectTree(stmt)
 				case *tree.ParenSelect:
-					s = stmt.Select
+					s = getSelectTree(stmt.Select)
 				default:
 					err = moerr.NewParseError(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 					return
@@ -2658,6 +2683,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						subCtx.headings[i] = string(col)
 					}
 				} else {
+					if len(s.OrderBy) > 0 {
+						return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
+					}
 					// initial statement
 					initCtx := NewBindContext(builder, ctx)
 					initCtx.initSelect = true
@@ -2781,7 +2809,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 					// final statement
 					ctx.finalSelect = true
-					ctx.sinkTag = builder.genNewTag()
+					ctx.sinkTag = initCtx.sinkTag
 					err = builder.addBinding(initLastNodeID, *cteRef.ast.Name, ctx)
 					if err != nil {
 						return

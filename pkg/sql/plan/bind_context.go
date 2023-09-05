@@ -38,7 +38,9 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 	if parent != nil {
 		bc.defaultDatabase = parent.defaultDatabase
-		if parent.recSelect || parent.initSelect {
+		bc.normalCTE = parent.normalCTE
+		bc.cteName = parent.cteName
+		if parent.recSelect || parent.initSelect || parent.finalSelect {
 			bc.cteByName = parent.cteByName
 			bc.initSelect = parent.initSelect
 			bc.recSelect = parent.recSelect
@@ -52,9 +54,17 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 }
 
 func (bc *BindContext) rootTag() int32 {
-	if bc.initSelect || bc.recSelect || bc.finalSelect {
+	if bc.initSelect || bc.recSelect {
 		return bc.sinkTag
 	} else if bc.resultTag > 0 {
+		return bc.resultTag
+	} else {
+		return bc.projectTag
+	}
+}
+
+func (bc *BindContext) topTag() int32 {
+	if bc.resultTag > 0 {
 		return bc.resultTag
 	} else {
 		return bc.projectTag

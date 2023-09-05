@@ -974,12 +974,11 @@ func updatePartitionOfPush(
 
 	partition := e.getPartition(dbId, tblId)
 
-	select {
-	case <-partition.Lock():
-		defer partition.Unlock()
-	case <-ctx.Done():
-		return ctx.Err()
+	lockErr := partition.Lock(ctx)
+	if lockErr != nil {
+		return lockErr
 	}
+	defer partition.Unlock()
 
 	state, doneMutate := partition.MutateState()
 
