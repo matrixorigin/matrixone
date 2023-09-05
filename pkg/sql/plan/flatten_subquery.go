@@ -171,7 +171,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			Typ: subCtx.results[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: subCtx.rootTag(),
+					RelPos: subCtx.topTag(),
 					ColPos: 0,
 				},
 			},
