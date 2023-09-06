@@ -641,6 +641,8 @@ func (tbl *txnTable) RangesForAgg(ctx context.Context, agglist []*plan.Expr) (ra
 		tbl.proc,
 	)
 
+	newranges := make([][]byte, len(ranges))
+
 	metaresults = make([]any, len(agglist))
 	for i := range agglist {
 		agg := agglist[i].Expr.(*plan.Expr_F)
@@ -649,8 +651,12 @@ func (tbl *txnTable) RangesForAgg(ctx context.Context, agglist []*plan.Expr) (ra
 		case "count":
 			count := uint32(0)
 			var objMeta objectio.ObjectMeta
-			for _, buf := range ranges {
+			for j, buf := range ranges {
 				blk := catalog.DecodeBlockInfo(buf)
+				if !blk.CanRemote {
+					newranges = append(newranges, ranges[j])
+					continue
+				}
 				fs := tbl.proc.FileService
 				location := blk.MetaLocation()
 				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
@@ -665,8 +671,12 @@ func (tbl *txnTable) RangesForAgg(ctx context.Context, agglist []*plan.Expr) (ra
 		case "min":
 			min := make([]any, len(ranges))
 			var objMeta objectio.ObjectMeta
-			for _, buf := range ranges {
+			for j, buf := range ranges {
 				blk := catalog.DecodeBlockInfo(buf)
+				if !blk.CanRemote {
+					newranges = append(newranges, ranges[j])
+					continue
+				}
 				fs := tbl.proc.FileService
 				location := blk.MetaLocation()
 				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
@@ -683,8 +693,12 @@ func (tbl *txnTable) RangesForAgg(ctx context.Context, agglist []*plan.Expr) (ra
 		case "max":
 			max := make([]any, len(ranges))
 			var objMeta objectio.ObjectMeta
-			for _, buf := range ranges {
+			for j, buf := range ranges {
 				blk := catalog.DecodeBlockInfo(buf)
+				if !blk.CanRemote {
+					newranges = append(newranges, ranges[j])
+					continue
+				}
 				fs := tbl.proc.FileService
 				location := blk.MetaLocation()
 				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
@@ -703,6 +717,7 @@ func (tbl *txnTable) RangesForAgg(ctx context.Context, agglist []*plan.Expr) (ra
 			metaresults = append(metaresults, nil)
 		}
 	}
+	ranges = newranges
 	return
 }
 
