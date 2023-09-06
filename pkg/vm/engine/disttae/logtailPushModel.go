@@ -483,8 +483,7 @@ func (client *pushClient) partitionStateGCTicker(ctx context.Context, e *Engine)
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-time.Minute.Nanoseconds()*5, 0)
 			logutil.Infof("GC partition_state %v", ts.ToString())
 			for ids, part := range parts {
-				logutil.Infof("GC partition_state for table %d %v", ids[1], ts.ToString())
-				part.Truncate(ctx, ts)
+				part.Truncate(ctx, ids, ts)
 			}
 		}
 	}()

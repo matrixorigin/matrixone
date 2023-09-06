@@ -120,13 +120,13 @@ func (p *Partition) ConsumeCheckpoints(
 	return
 }
 
-func (p *Partition) Truncate(ctx context.Context, ts types.TS) error {
+func (p *Partition) Truncate(ctx context.Context,ids [2]uint64, ts types.TS) error {
 	err := p.Lock(ctx)
 	if err != nil {
 		p.Unlock()
 		return err
 	}
-	p.state.Load().truncate(ts)
+	p.state.Load().truncate(ids,ts)
 	p.Unlock()
 	return nil
 }

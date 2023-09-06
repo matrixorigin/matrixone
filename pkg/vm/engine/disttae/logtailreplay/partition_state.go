@@ -667,18 +667,25 @@ func (p *PartitionState) consumeCheckpoints(
 	return nil
 }
 
-func (p *PartitionState) truncate(ts types.TS) {
-	if p.minTS.Load().Greater(ts) {
+func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
+	minTS := p.minTS.Load()
+	if minTS != nil && minTS.Greater(ts) {
 		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.Load().ToString(), ts.ToString())
 		return
 	}
+	gced := false
 	pivot := BlockIndexByTSEntry{
 		Time:     ts.Next(),
 		BlockID:  types.Blockid{},
 		IsDelete: true,
 	}
 	iter := p.blockIndexByTS.Copy().Iter()
-	for ok := iter.Seek(pivot); ok; ok = iter.Prev() {
+	ok := iter.Seek(pivot)
+	if !ok {
+		ok = iter.Last()
+	}
+	blksToDelete := ""
+	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
 		if entry.Time.Greater(ts) {
 			continue
@@ -703,7 +710,16 @@ func (p *PartitionState) truncate(ts types.TS) {
 			p.blockIndexByTS.Delete(createEntry)
 			p.blockIndexByTS.Delete(entry)
 			p.blocks.Delete(blkEntry)
+			if gced {
+				blksToDelete = fmt.Sprintf("%s, %v", blksToDelete, entry.BlockID.ShortStringEx())
+			} else {
+				blksToDelete = fmt.Sprintf("%s%v", blksToDelete, entry.BlockID.ShortStringEx())
+			}
+			gced = true
 		}
+	}
+	if gced {
+		logutil.Infof("GC partition_state for table %d:%s", ids[1], ts.ToString(), blksToDelete)
 	}
 	p.minTS.Store(&ts)
 }

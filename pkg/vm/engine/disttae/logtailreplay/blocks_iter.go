@@ -32,7 +32,7 @@ type blocksIter struct {
 	firstCalled bool
 }
 
-func (p *PartitionState) NewBlocksIter(ts types.TS) (*blocksIter, error) {
+func (p *PartitionState) NewBlocksIter(ts types.TS, tid uint64) (*blocksIter, error) {
 	minTS := p.minTS.Load()
 	if minTS != nil {
 		if ts.Less(*minTS) {
