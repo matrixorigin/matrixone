@@ -361,6 +361,44 @@ type templateDec interface {
 	types.Decimal64 | types.Decimal128
 }
 
+func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	arithFn func(v1, v2, rs []types.Decimal128, scale1, scale2 int32) error) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
+	rs := vector.MustFunctionResult[types.Decimal128](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[types.Decimal128](rsVec)
+	scale1 := p1.GetType().Scale
+	scale2 := p2.GetType().Scale
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 {
+		_, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+			return nil
+		}
+	}
+	if c2 {
+		_, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+			return nil
+		}
+	}
+
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+	}
+	v1 := vector.MustFixedCol[types.Decimal128](p1.GetSourceVector())
+	v2 := vector.MustFixedCol[types.Decimal128](p2.GetSourceVector())
+	err := arithFn(v1, v2, rss, scale1, scale2)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func decimalArith[T templateDec](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 T, scale1, scale2 int32) (T, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])

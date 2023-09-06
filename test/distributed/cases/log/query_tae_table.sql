@@ -34,7 +34,7 @@ select account from system.statement_info where statement_id = @uuid_create_tabl
 -- hide result
 select statement from system.statement_info where statement_id in (@uuid_hide_1, @uuid_hide_2, @uuid_hide_3, @uuid_hide_4);
 
-select account, statement from system.statement_info where statement = 'insert into query_tae_table values (1)' and statement_id = @uuid_insert_table limit 1;
+select account, statement from system.statement_info where statement_id = @uuid_insert_table limit 1;
 -- @session
 
 -- case: select span_kind issue #7571

@@ -1334,7 +1334,7 @@ func decimal64ToOthers(ctx context.Context,
 		return decimal64ToDecimal64(source, rs, length)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return decimal64ToDecimal128(source, rs, length)
+		return decimal64ToDecimal128Array(source, rs, length)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return decimal64ToTimestamp(source, rs, length)
@@ -3244,26 +3244,22 @@ func decimal64ToDecimal64(
 	return nil
 }
 
-func decimal64ToDecimal128(
+func decimal64ToDecimal128Array(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int) error {
 	var i uint64
 	l := uint64(length)
-	var dft types.Decimal128
 	fromtype := from.GetType()
 	totype := to.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(dft, true); err != nil {
-				return err
-			}
-		} else {
-			fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
-			if v.Sign() {
-				fromdec.B64_127 = ^fromdec.B64_127
-			}
-			if totype.Width < fromtype.Width {
+
+	if !from.WithAnyNullValue() {
+		v := vector.MustFixedCol[types.Decimal64](from.GetSourceVector())
+		if totype.Width < fromtype.Width {
+			for i = 0; i < l; i++ {
+				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
+				if v[i].Sign() {
+					fromdec.B64_127 = ^fromdec.B64_127
+				}
 				dec := fromdec.Format(fromtype.Scale)
 				result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
 				if err != nil {
@@ -3272,16 +3268,66 @@ func decimal64ToDecimal128(
 				if err = to.Append(result, false); err != nil {
 					return err
 				}
-			} else {
-				if totype.Scale == fromtype.Scale {
+			}
+		} else {
+			if totype.Scale == fromtype.Scale {
+				for i = 0; i < l; i++ {
+					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
+					if v[i].Sign() {
+						fromdec.B64_127 = ^fromdec.B64_127
+					}
 					to.AppendMustValue(fromdec)
-				} else {
+				}
+			} else {
+				for i = 0; i < l; i++ {
+					fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
+					if v[i].Sign() {
+						fromdec.B64_127 = ^fromdec.B64_127
+					}
 					result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
 					if err != nil {
 						return err
 					}
 					if err = to.Append(result, false); err != nil {
 						return err
+					}
+				}
+			}
+		}
+	} else {
+		// with any null value
+		var dft types.Decimal128
+		for i = 0; i < l; i++ {
+			v, null := from.GetValue(i)
+			if null {
+				if err := to.Append(dft, true); err != nil {
+					return err
+				}
+			} else {
+				fromdec := types.Decimal128{B0_63: uint64(v), B64_127: 0}
+				if v.Sign() {
+					fromdec.B64_127 = ^fromdec.B64_127
+				}
+				if totype.Width < fromtype.Width {
+					dec := fromdec.Format(fromtype.Scale)
+					result, err := types.ParseDecimal128(dec, totype.Width, totype.Scale)
+					if err != nil {
+						return err
+					}
+					if err = to.Append(result, false); err != nil {
+						return err
+					}
+				} else {
+					if totype.Scale == fromtype.Scale {
+						to.AppendMustValue(fromdec)
+					} else {
+						result, err := fromdec.Scale(totype.Scale - fromtype.Scale)
+						if err != nil {
+							return err
+						}
+						if err = to.Append(result, false); err != nil {
+							return err
+						}
 					}
 				}
 			}

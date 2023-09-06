@@ -593,7 +593,7 @@ SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_nam
 name    tables    owner
 system    1    accountadmin
 system_metrics    7    accountadmin
-information_schema    15    accountadmin
+information_schema    16    accountadmin
 mysql    5    accountadmin
 mo_mo    0    accountadmin
 mo_catalog    15    -
@@ -611,6 +611,7 @@ information_schema    processlist    v    accountadmin
 information_schema    profiling    r    accountadmin
 information_schema    routines    r    accountadmin
 information_schema    schemata    v    accountadmin
+information_schema    statistics    v    accountadmin
 information_schema    tables    v    accountadmin
 information_schema    triggers    r    accountadmin
 information_schema    user_privileges    r    accountadmin
@@ -652,6 +653,7 @@ schemata    accountadmin
 tables    accountadmin
 partitions    accountadmin
 views    accountadmin
+statistics    accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mo_sample_data_tpch_sf1';
 name    owner
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mysql';
