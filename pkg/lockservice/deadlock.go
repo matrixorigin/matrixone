@@ -32,7 +32,6 @@ var (
 )
 
 type detector struct {
-	serviceID         string
 	c                 chan deadlockTxn
 	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error)
 	waitTxnAbortFunc  func(pb.WaitTxn, error)
@@ -50,11 +49,9 @@ type detector struct {
 // is found. When a deadlock is found, waitTxnAbortFunc is used to notify the external abort to drop a
 // txn.
 func newDeadlockDetector(
-	serviceID string,
 	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error),
 	waitTxnAbortFunc func(pb.WaitTxn, error)) *detector {
 	d := &detector{
-		serviceID:         serviceID,
 		c:                 make(chan deadlockTxn, maxWaitingCheckCount),
 		waitTxnsFetchFunc: waitTxnsFetchFunc,
 		waitTxnAbortFunc:  waitTxnAbortFunc,
@@ -112,11 +109,9 @@ func (d *detector) check(
 }
 
 func (d *detector) doCheck(ctx context.Context) {
-	defer getLogger().InfoAction(
-		"dead lock checker",
-		serviceIDField(d.serviceID))()
+	defer getLogger().InfoAction("dead lock checker")()
 
-	w := &waiters{ignoreTxns: &d.ignoreTxns, serviceID: d.serviceID}
+	w := &waiters{ignoreTxns: &d.ignoreTxns}
 	for {
 		select {
 		case <-ctx.Done():
@@ -150,11 +145,11 @@ func (d *detector) checkDeadlock(w *waiters) (bool, error) {
 		txn := w.getCheckTargetTxn()
 		added, err := d.waitTxnsFetchFunc(txn, w)
 		if err != nil {
-			logCheckDeadLockFailed(d.serviceID, txn, waitingTxn, err)
+			logCheckDeadLockFailed(txn, waitingTxn, err)
 			return false, err
 		}
 		if !added {
-			logDeadLockFound(d.serviceID, waitingTxn, w)
+			logDeadLockFound(waitingTxn, w)
 			return true, nil
 		}
 		w.next()
@@ -162,7 +157,6 @@ func (d *detector) checkDeadlock(w *waiters) (bool, error) {
 }
 
 type waiters struct {
-	serviceID  string
 	ignoreTxns *sync.Map
 	holdTxnID  []byte
 	waitTxns   []pb.WaitTxn

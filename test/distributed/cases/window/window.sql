@@ -1259,7 +1259,7 @@ drop table t2;
 
 -- order by
 drop table if exists int_8;
-create table int_8 (id integer, sex varchar(10));
+create table int_8 (id tinyint, sex varchar(10));
 insert into int_8 values (-1, 'moolol');
 insert into int_8 values (-128, 'fdhsajhd');
 insert into int_8 values (32, 'fdhsajhd');
@@ -1275,7 +1275,7 @@ select row_number() over (partition by sex order by id rows between 1 following 
 drop table int_8;
 
 drop table if exists int_16;
-create table int_16(col1 int,col2 bool,col3 datetime);
+create table int_16(col1 smallint,col2 bool,col3 datetime);
 insert into int_16 values(-32768, true, '2023-05-16 00:12:12');
 insert into int_16 values(22201, false, '1997-01-13 12:12:00');
 insert into int_16 values(-32768, true, '2000-10-10 11:11:11');
@@ -1302,8 +1302,22 @@ select *, rank() over (order by i,j,k rows between 2 preceding and 3 following) 
         rank() over (order by k,j rows between 1 preceding and 1 following) as o_kj from int_32 order by i,j,k;
 drop table int_32;
 
+drop table if exists int_64;
+create table int_64(i bigint unsigned, j int, k int);
+insert into int_64 values (18446744073709551614, 1, 1);
+insert into int_64 values (18446744073709551614, 1, 2);
+insert into int_64 values (2147483647, 1, 2);
+insert into int_64 values (2147483647, 2, 1);
+insert into int_64 values (0, 2, 2);
+insert into int_64 values (0, 1, 1);
+select * from int_64;
+select *, rank() over (order by i,j,k rows between 2 preceding and 3 following) as o_ijk,
+        min(i) over (order by j rows between 4 preceding and 5 following) as o_j,
+        rank() over (order by k,j rows between 1 preceding and 1 following) as o_kj from int_64 order by i,j,k;
+drop table int_64;
+
 drop table if exists uint_8;
-create table uint_8 (col1 int unsigned, col2 varchar(10));
+create table uint_8 (col1 tinyint unsigned, col2 varchar(10));
 insert into uint_8 values (1, 'moolol');
 insert into uint_8 values (128, 'fdhsajhd');
 insert into uint_8 values (32, 'fdhsajhd');
@@ -1318,7 +1332,7 @@ select dense_rank() over (partition by col2 order by col1) as col1, sum(col1) ov
 drop table uint_8;
 
 drop table if exists uint_16;
-create table uint_16(col1 int unsigned,col2 bool,col3 datetime);
+create table uint_16(col1 smallint unsigned,col2 bool,col3 datetime);
 insert into uint_16 values(0, true, '2023-05-16 00:12:12');
 insert into uint_16 values(0, false, '1997-01-13 12:12:00');
 insert into uint_16 values(65535, true, '2000-10-10 11:11:11');
@@ -1331,7 +1345,7 @@ select dense_rank() over (partition by col2 order by col1 rows between unbounded
 drop table uint_16;
 
 drop table if exists uint_32;
-create table uint_32(i bigint unsigned, j int, k int);
+create table uint_32(i int unsigned, j int, k int);
 insert into uint_32 values (4294967295, 1, 1);
 insert into uint_32 values (4294967295, 1, 2);
 insert into uint_32 values (2147483647, 1, 2);

@@ -430,7 +430,8 @@ func (h *Handle) HandleBackup(
 
 	timeout := req.FlushDuration
 
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	backupTime := time.Now().UTC()
+	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
 	if err != nil {
 		return nil, err
@@ -442,6 +443,7 @@ func (h *Handle) HandleBackup(
 	}
 	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
 	var locations string
+	locations += backupTime.Format(time.DateTime) + ";"
 	for i := range data {
 		locations += data[i].GetLocation().String()
 		locations += ":"

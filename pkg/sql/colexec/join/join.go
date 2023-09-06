@@ -83,16 +83,57 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				proc.PutBatch(bat)
 				continue
 			}
-			if ctr.mp == nil {
+
+			ctr.bats = append(ctr.bats, bat)
+
+			if ctr.cb != nil {
+				proc.PutBatch(ctr.cb)
+			}
+			ctr.cb = ctr.bats[0]
+			ctr.bats = ctr.bats[1:]
+
+			if err := ctr.prepare(ctr.cb, ap, proc); err != nil {
+				return process.ExecNext, err
+			}
+
+			rbat, state, err := ctr.eval(ctr.cb, ap, proc)
+			if err != nil {
+				return state, err
+			}
+
+			proc.SetInputBatch(rbat)
+			return state, err
+		case Find:
+			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			if err != nil {
+				return process.ExecNext, err
+			}
+
+			if bat == nil {
+				ctr.state = End
+				continue
+			}
+			if bat.Last() {
+				proc.SetInputBatch(bat)
+				return process.ExecNext, nil
+			}
+			if bat.IsEmpty() {
 				proc.PutBatch(bat)
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+
+			ctr.bats = append(ctr.bats, bat)
+
+			rbat, state, err := ctr.eval(ctr.cb, ap, proc)
+			if err != nil {
 				return process.ExecNext, err
 			}
-			return process.ExecNext, nil
-
+			proc.SetInputBatch(rbat)
+			return state, err
 		default:
+			if ctr.cb != nil {
+				proc.PutBatch(ctr.cb)
+			}
 			proc.SetInputBatch(nil)
 			return process.ExecStop, nil
 		}
@@ -113,10 +154,25 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer proc.PutBatch(bat)
+func (ctr *container) prepare(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	if err := ctr.evalJoinCondition(bat, proc); err != nil {
+		return err
+	}
+	if ctr.joinBat1 == nil {
+		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+	}
+	if ctr.joinBat2 == nil && ctr.bat.RowCount() != 0 {
+		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+	}
 
-	anal.Input(bat, isFirst)
+	ctr.itr = ctr.mp.NewIterator()
+	ctr.i = 0
+	return nil
+}
+
+const maxRowsForProbe = 8192
+
+func (ctr *container) eval(bat *batch.Batch, ap *Argument, proc *process.Process) (*batch.Batch, process.ExecStatus, error) {
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
@@ -128,29 +184,26 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 
-	if err := ctr.evalJoinCondition(bat, proc); err != nil {
-		rbat.Clean(proc.Mp())
-		return err
-	}
-	if ctr.joinBat1 == nil {
-		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
-	}
-	if ctr.joinBat2 == nil && ctr.bat.RowCount() != 0 {
-		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
-	}
+	var state process.ExecStatus = process.ExecNext
 
 	mSels := ctr.mp.Sels()
 	count := bat.RowCount()
-	itr := ctr.mp.NewIterator()
 	rowCount := 0
-	for i := 0; i < count; i += hashmap.UnitLimit {
-		n := count - i
+
+	for ; ctr.i < count; ctr.i += hashmap.UnitLimit {
+		if rowCount >= maxRowsForProbe {
+			ctr.state = Find
+			state = process.ExecHasMore
+			rbat.AddRowCount(rowCount)
+			return rbat, state, nil
+		}
+		n := count - ctr.i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
 
-		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
+		vals, zvals := ctr.itr.Find(ctr.i, n, ctr.vecs, ctr.inBuckets)
 		for k := 0; k < n; k++ {
 			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
 				continue
@@ -161,14 +214,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				if ap.HashOnPK {
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
+							if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(ctr.i+k), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								return err
+								return nil, state, err
 							}
 						} else {
 							if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(idx), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								return err
+								return nil, state, err
 							}
 						}
 					}
@@ -177,14 +230,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					sels := mSels[idx]
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
-							if err := rbat.Vecs[j].UnionMulti(bat.Vecs[rp.Pos], int64(i+k), len(sels), proc.Mp()); err != nil {
+							if err := rbat.Vecs[j].UnionMulti(bat.Vecs[rp.Pos], int64(ctr.i+k), len(sels), proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								return err
+								return nil, state, err
 							}
 						} else {
 							if err := rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
-								return err
+								return nil, state, err
 							}
 						}
 					}
@@ -192,15 +245,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			} else {
 				if ap.HashOnPK {
-					if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(i+k), int64(idx)); err != nil {
-						return err
+					if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(ctr.i+k), int64(idx)); err != nil {
+						return nil, state, err
 					}
 					rowCount++
 				} else {
 					sels := mSels[idx]
 					for _, sel := range sels {
-						if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(i+k), int64(sel)); err != nil {
-							return err
+						if err := ctr.evalApCondForOneSel(bat, rbat, ap, proc, int64(ctr.i+k), int64(sel)); err != nil {
+							return nil, state, err
 						}
 					}
 					rowCount += len(sels)
@@ -208,11 +261,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 	}
-
+	ctr.state = Probe
 	rbat.AddRowCount(rowCount)
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
-	return nil
+	return rbat, state, nil
 }
 
 func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *Argument, proc *process.Process, row, sel int64) error {
