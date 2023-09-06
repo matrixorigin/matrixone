@@ -56,7 +56,8 @@ func NewTimestampWaiter() TimestampWaiter {
 func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
 	latest := tw.latestTS.Load()
 	if latest != nil && latest.GreaterEq(ts) {
-		return latest.Next(), nil
+		//return latest.Next(), nil
+		return *latest, nil
 	}
 
 	w := tw.addToWait(ts)
@@ -67,7 +68,8 @@ func (tw *timestampWaiter) GetTimestamp(ctx context.Context, ts timestamp.Timest
 		}
 	}
 	v := tw.latestTS.Load()
-	return v.Next(), nil
+	//return v.Next(), nil
+	return *v, nil
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {

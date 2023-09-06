@@ -245,7 +245,7 @@ func performLock(
 			continue
 		}
 
-		// refreshTS is last commit ts + 1, because we need see the committed data.
+		// FIXME::refreshTS is last commit ts + 1, because we need see the committed data?
 		if proc.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
@@ -490,7 +490,8 @@ func doLock(
 	}
 
 	// forward rc's snapshot ts
-	snapshotTS = result.Timestamp.Next()
+	//snapshotTS = result.Timestamp.Next()
+	snapshotTS = result.Timestamp
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
