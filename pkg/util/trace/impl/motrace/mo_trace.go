@@ -117,15 +117,16 @@ func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 		opts[idx].ApplySpanStart(&cfg)
 	}
 
+	enable := t.provider.IsEnable()
 	// The enable state of kind, which falls within [SpanKindS3FSVis, SpanKindLocalFSVis],
 	// is managed by 'mo_ctl'
 	switch cfg.Kind {
 	case trace.SpanKindS3FSVis:
-		return trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
+		return enable && trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
 	case trace.SpanKindLocalFSVis:
-		return trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
+		return enable && trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
 	default:
-		return t.provider.IsEnable()
+		return enable
 	}
 }
 
@@ -411,7 +412,6 @@ var freeMOSpan = func(s *MOSpan) {
 
 func (s *MOSpan) AddExtraFields(fields ...zap.Field) {
 	s.ExtraFields = append(s.ExtraFields, fields...)
-	s.SpanConfig.Extra = []zap.Field{}
 }
 
 func (s *MOSpan) SpanContext() trace.SpanContext {

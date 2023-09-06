@@ -470,17 +470,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
-	if vector.allDone() {
-		// all cache hit
-		return nil
-	}
-
-	// collect read info only when cache missing
-	size := vector.EntriesSize()
-	ctx, span := trace.Start(ctx, "S3FS.Read", trace.WithKind(trace.SpanKindS3FSVis))
 	err = s.read(ctx, vector)
-	span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
-
 	return err
 }
 
@@ -513,7 +503,19 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
+func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
+	if vector.allDone() {
+		// all cache hit
+		return nil
+	}
+
+	// collect read info only when cache missing
+	size := vector.EntriesSize()
+	ctx, span := trace.Start(ctx, "S3FS.read", trace.WithKind(trace.SpanKindS3FSVis))
+	defer func() {
+		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
+	}()
+
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
@@ -652,12 +654,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		setData := true
+		var data []byte
+		var reader io.ReadCloser
 
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
 			if getContentDone {
 				// data is ready
-				data, err := getData(ctx)
+				data, err = getData(ctx)
 				if err != nil {
 					return err
 				}
@@ -668,7 +672,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 			} else {
 				// get a reader and copy
-				reader, err := getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				reader, err = getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
 				if err != nil {
 					return err
 				}
@@ -688,7 +692,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			setData = false
 			if getContentDone {
 				// data is ready
-				data, err := getData(ctx)
+				data, err = getData(ctx)
 				if err != nil {
 					return err
 				}
@@ -696,7 +700,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 			} else {
 				// get a new reader
-				reader, err := getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				reader, err = getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
 				if err != nil {
 					return err
 				}
@@ -709,7 +713,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 		// set Data field
 		if setData {
-			data, err := getData(ctx)
+			data, err = getData(ctx)
 			if err != nil {
 				return err
 			}
@@ -723,7 +727,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 		}
 
-		if err := entry.setCachedData(); err != nil {
+		if err = entry.setCachedData(); err != nil {
 			return err
 		}
 
