@@ -35,6 +35,8 @@
 /cmd/generate-config @daviszhen
 /cmd/mo-service @zhangxu19830126
 
+/pkg/backup @daviszhen @LeftHandCold @qingxinhome
+
 # subdirectory of pkg
 # pkg/catalog
 /pkg/catalog @nnsgmsone
@@ -78,7 +80,7 @@
 /pkg/fileservice @reusee
 
 # pkg/frontend @daviszhen
-/pkg/frontend @daviszhen @jianwan0214 @qingxinhome
+/pkg/frontend @daviszhen @qingxinhome
 
 # pkg/hakeeper
 /pkg/hakeeper @zhangxu19830126 @w-zr
@@ -131,7 +133,7 @@
 
 # pkg/tests
 /pkg/tests @zhangxu19830126
-/pkg/tests/service @zhangxu19830126 @cnutshell
+/pkg/tests/service @zhangxu19830126
 /pkg/tests/txn @zhangxu19830126
 
 # pkg/testutil

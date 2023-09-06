@@ -39,6 +39,8 @@ type QueryService interface {
 	Close() error
 	// AddHandleFunc add message handler.
 	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool)
+	// ServiceID return the uuid of current CN service
+	ServiceID() string
 }
 
 // queryService is a query service started in CN service.
@@ -153,4 +155,8 @@ func (s *queryService) unwrapResponseError(resp *pb.Response) (*pb.Response, err
 		return nil, err
 	}
 	return resp, nil
+}
+
+func (s *queryService) ServiceID() string {
+	return s.serviceID
 }
