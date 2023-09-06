@@ -29,6 +29,7 @@ const (
 	Build = iota
 	Probe
 	End
+	Find
 )
 
 type evalVector struct {
@@ -57,6 +58,11 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	itr  hashmap.Iterator
+	i    int
+	cb   *batch.Batch
+	bats []*batch.Batch
 }
 
 type Argument struct {
@@ -103,6 +109,14 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.joinBat2 != nil {
 		ctr.joinBat2.Clean(mp)
 		ctr.joinBat2 = nil
+	}
+	if len(ctr.bats) > 0 {
+		for i := range ctr.bats {
+			ctr.bats[i].Clean(mp)
+		}
+	}
+	if ctr.cb != nil {
+		ctr.cb.Clean(mp)
 	}
 }
 
