@@ -20,6 +20,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,7 +46,8 @@ const (
 	constMergeWaitDuration  = 1 * time.Minute
 	constMergeMinBlks       = 5
 	constHeapCapacity       = 300
-	const4GBytes            = 4 * (1 << 30)
+	const1GBytes            = 1 << 30
+	constMergeExpansionRate = 8
 	constKeyMergeWaitFactor = "MO_MERGE_WAIT" // smaller value means shorter wait, cost much more io
 )
 
@@ -194,37 +196,67 @@ func (d *deletableSegBuilder) finish() []*catalog.SegmentEntry {
 	return ret
 }
 
+type activeTaskStats map[uint64]struct {
+	blk      int
+	estBytes int
+}
+
 // mergeLimiter consider update rate and time to decide to merge or not.
 type mergeLimiter struct {
 	objectMinRows       int
 	maxRowsForBlk       int
 	tableName           string
+	estimateRowSize     int
 	memAvail            int
 	activeMergeBlkCount int32
-	mergeWaitFactor     float64
+	activeEstimateBytes int64
+	taskConsume         struct {
+		sync.Mutex
+		m activeTaskStats
+	}
+	mergeWaitFactor float64
 }
 
-func (ml *mergeLimiter) IncActiveCount(n int) {
+func (ml *mergeLimiter) AddActiveTask(id uint64, n int) {
+	size := ml.calcMergeConsume(n)
+	atomic.AddInt64(&ml.activeEstimateBytes, int64(size))
 	atomic.AddInt32(&ml.activeMergeBlkCount, int32(n))
+	ml.taskConsume.Lock()
+	if ml.taskConsume.m == nil {
+		ml.taskConsume.m = make(activeTaskStats)
+	}
+	ml.taskConsume.m[id] = struct {
+		blk      int
+		estBytes int
+	}{n, size}
+	ml.taskConsume.Unlock()
 }
 
 func (ml *mergeLimiter) OnExecDone(v any) {
 	task := v.(tasks.MScopedTask)
-	n := int32(len(task.Scopes()))
-	atomic.AddInt32(&ml.activeMergeBlkCount, -n)
+
+	ml.taskConsume.Lock()
+	stat := ml.taskConsume.m[task.ID()]
+	delete(ml.taskConsume.m, task.ID())
+	ml.taskConsume.Unlock()
+
+	atomic.AddInt32(&ml.activeMergeBlkCount, -int32(stat.blk))
+	atomic.AddInt64(&ml.activeEstimateBytes, -int64(stat.estBytes))
 }
 
 func (ml *mergeLimiter) checkMemAvail(blks int) bool {
 	if ml.maxRowsForBlk == 0 {
 		return false
 	}
-	merging := atomic.LoadInt32(&ml.activeMergeBlkCount)
-	return ml.calcQuotaBlks()-int(merging) > blks
+
+	merging := int(atomic.LoadInt64(&ml.activeEstimateBytes))
+	left := ml.memAvail - ml.calcMergeConsume(blks) - merging
+
+	return left > 2*const1GBytes
 }
 
-func (ml *mergeLimiter) calcQuotaBlks() int {
-	// by experience, it is assumed the merging 256 * 8192 rows costs 4 GB
-	return ml.memAvail / const4GBytes * 256 * 8192 / ml.maxRowsForBlk
+func (ml *mergeLimiter) calcMergeConsume(blks int) int {
+	return blks * ml.maxRowsForBlk * ml.estimateRowSize * constMergeExpansionRate
 }
 
 func (ml *mergeLimiter) determineGapIntentFactor(rowsGap float64) float64 {
@@ -329,7 +361,8 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 	hasMergeObjects := false
 
 	mergedBlks, msegs := s.checkSortedSegs(s.sortedSegBuilder.finish())
-	if len(mergedBlks) > 0 && s.limiter.checkMemAvail(len(mergedBlks)) {
+	blkCnt := len(mergedBlks)
+	if blkCnt > 0 && s.limiter.checkMemAvail(blkCnt) {
 		delSegs = append(delSegs, msegs...)
 		hasMergeObjects = true
 	}
@@ -360,7 +393,7 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 
 	// remove stale segments and mrege objects
 
-	scopes := make([]common.ID, len(mergedBlks))
+	scopes := make([]common.ID, blkCnt)
 	for i, blk := range mergedBlks {
 		scopes[i] = *blk.AsCommonID()
 	}
@@ -381,7 +414,7 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 			seg.Stat.MergeIntent = 0
 		}
 		n := len(scopes)
-		s.limiter.IncActiveCount(n)
+		s.limiter.AddActiveTask(task.ID(), blkCnt)
 		task.AddObserver(s.limiter)
 		if n > constMergeMinBlks {
 			n = constMergeMinBlks
@@ -404,6 +437,7 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 		s.limiter.objectMinRows = determineObjectMinRows(
 			int(schema.SegmentMaxBlocks), int(schema.BlockMaxRows))
 		s.limiter.tableName = schema.Name
+		s.limiter.estimateRowSize = schema.EstimateRowSize()
 	}
 	s.delSegBuilder.reset()
 	s.sortedSegBuilder.reset()
@@ -436,9 +470,10 @@ func (s *MergeTaskBuilder) PreExecute() error {
 }
 func (s *MergeTaskBuilder) PostExecute() error {
 	if cnt := atomic.LoadInt32(&s.limiter.activeMergeBlkCount); cnt > 0 {
+		mergem := float32(atomic.LoadInt64(&s.limiter.activeEstimateBytes)) / const1GBytes
 		logutil.Infof(
-			"Mergeblocks avail mem: %dG, quota blk: %d, current active blk: %d",
-			s.limiter.memAvail/(1<<30), s.limiter.calcQuotaBlks(), cnt)
+			"Mergeblocks avail mem: %dG, active mergeing size: %.2fG, current active blk: %d",
+			s.limiter.memAvail/const1GBytes, mergem, cnt)
 	}
 	logutil.Infof("mergeblocks ------------------------------------")
 	return nil
