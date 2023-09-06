@@ -361,7 +361,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
 
 // MODump
 %token <str> MODUMP
@@ -6197,6 +6197,16 @@ load_param_opt:
                 Filepath: $2,
                 CompressType: tree.AUTO,
                 Format: tree.CSV,
+            },
+        }
+    }
+|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING
+    {
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                ScanType: tree.INLINE,
+                Format: $4,
+                Data: $8,
             },
         }
     }
