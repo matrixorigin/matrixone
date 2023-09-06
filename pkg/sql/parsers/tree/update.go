@@ -131,7 +131,8 @@ const (
 )
 
 const (
-	S3 = 1
+	S3     = 1
+	INLINE = 2
 )
 
 type ExternParam struct {
@@ -147,6 +148,7 @@ type ExParamConst struct {
 	CompressType string
 	Format       string
 	Option       []string
+	Data         string
 	Tail         *TailParameter
 }
 
