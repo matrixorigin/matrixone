@@ -245,7 +245,6 @@ func performLock(
 			continue
 		}
 
-		// FIXME::refreshTS is last commit ts + 1, because we need see the committed data?
 		if proc.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
