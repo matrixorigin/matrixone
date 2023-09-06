@@ -23,10 +23,6 @@ type Rank struct {
 	Ps [][]int64
 }
 
-func RankReturnType() types.Type {
-	return types.New(types.T_int64, 0, 0)
-}
-
 func NewRank() *Rank {
 	return &Rank{}
 }

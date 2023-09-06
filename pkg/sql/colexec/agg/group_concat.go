@@ -35,15 +35,6 @@ func NewGroupConcat(separator string) *GroupConcat {
 	}
 }
 
-func GroupConcatReturnType(parameters []types.Type) types.Type {
-	for _, p := range parameters {
-		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-			return types.T_blob.ToType()
-		}
-	}
-	return types.T_text.ToType()
-}
-
 func (g *GroupConcat) Grows(cnt int) {
 	for i := 0; i < cnt; i++ {
 		buffer := bytes.Buffer{}

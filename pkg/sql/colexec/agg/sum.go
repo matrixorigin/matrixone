@@ -15,7 +15,6 @@
 package agg
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -34,22 +33,6 @@ type Decimal64Sum struct {
 }
 
 type Decimal128Sum struct {
-}
-
-func SumReturnType(typs []types.Type) types.Type {
-	switch typs[0].Oid {
-	case types.T_float32, types.T_float64:
-		return types.T_float64.ToType()
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		return types.T_int64.ToType()
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return types.T_uint64.ToType()
-	case types.T_decimal64:
-		return types.New(types.T_decimal64, 18, typs[0].Scale)
-	case types.T_decimal128:
-		return types.New(types.T_decimal128, 38, typs[0].Scale)
-	}
-	panic(moerr.NewInternalErrorNoCtx("unsupport type '%v' for sum", typs[0]))
 }
 
 func NewSum[T1 Numeric, T2 ReturnTyp]() *Sum[T1, T2] {

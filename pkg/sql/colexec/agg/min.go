@@ -37,10 +37,6 @@ type StrMin struct {
 type UuidMin struct {
 }
 
-func MinReturnType(typs []types.Type) types.Type {
-	return typs[0]
-}
-
 func NewMin[T Compare]() *Min[T] {
 	return &Min[T]{}
 }

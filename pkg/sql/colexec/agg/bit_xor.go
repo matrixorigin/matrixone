@@ -23,13 +23,6 @@ import (
 type BitXor[T1 types.Ints | types.UInts | types.Floats] struct {
 }
 
-func BitXorReturnType(typs []types.Type) types.Type {
-	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
-		return typs[0]
-	}
-	return types.New(types.T_uint64, 0, 0)
-}
-
 func NewBitXor[T1 types.Ints | types.UInts | types.Floats]() *BitXor[T1] {
 	return &BitXor[T1]{}
 }

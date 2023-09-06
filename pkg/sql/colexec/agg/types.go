@@ -79,9 +79,6 @@ type Agg[T any] interface {
 	// groupIdxes[i] is 1 means that the (offset + i)th group of agg2 matched the first group and 0 means not matched.
 	BatchMerge(agg2 Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) error
 
-	// GetInputTypes get types of aggregate's input arguments.
-	GetInputTypes() []types.Type
-
 	// GetOperatorId get types of aggregate's aggregate id.
 	GetOperatorId() int64
 

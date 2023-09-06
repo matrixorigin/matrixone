@@ -501,10 +501,6 @@ func (a *UnaryDistAgg[T1, T2]) GetOperatorId() int64 {
 	return a.op
 }
 
-func (a *UnaryDistAgg[T1, T2]) GetInputTypes() []types.Type {
-	return a.ityps
-}
-
 func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 	pData, err := a.priv.MarshalBinary()
 	if err != nil {

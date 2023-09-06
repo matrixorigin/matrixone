@@ -25,10 +25,6 @@ type ApproxCountDistic[T any] struct {
 	Sk []*hll.Sketch
 }
 
-func ApproxCountReturnType(_ []types.Type) types.Type {
-	return types.New(types.T_uint64, 0, 0)
-}
-
 func NewApproxc[T any]() *ApproxCountDistic[T] {
 	return &ApproxCountDistic[T]{}
 }

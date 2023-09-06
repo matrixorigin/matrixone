@@ -37,10 +37,6 @@ type StrMax struct {
 type UuidMax struct {
 }
 
-func MaxReturnType(typs []types.Type) types.Type {
-	return typs[0]
-}
-
 func NewMax[T Compare]() *Max[T] {
 	return &Max[T]{}
 }

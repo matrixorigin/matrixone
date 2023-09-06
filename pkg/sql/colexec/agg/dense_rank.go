@@ -23,10 +23,6 @@ type DenseRank struct {
 	Ps [][]int64
 }
 
-func DenseRankReturnType() types.Type {
-	return types.New(types.T_int64, 0, 0)
-}
-
 func NewDenseRank() *DenseRank {
 	return &DenseRank{}
 }

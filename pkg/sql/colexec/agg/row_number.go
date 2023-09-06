@@ -23,10 +23,6 @@ type RowNumber struct {
 	Ps [][]int64
 }
 
-func RowNumberReturnType() types.Type {
-	return types.New(types.T_int64, 0, 0)
-}
-
 func NewRowNumber() *RowNumber {
 	return &RowNumber{}
 }

@@ -61,19 +61,6 @@ type EncodeDecimalV struct {
 	OutOfRangeButOnlyOneRow error
 }
 
-func VarianceReturnType(typs []types.Type) types.Type {
-	switch typs[0].Oid {
-	case types.T_decimal64, types.T_decimal128:
-		s := int32(12)
-		if typs[0].Scale > s {
-			s = typs[0].Scale
-		}
-		return types.New(types.T_decimal128, 38, s)
-	default:
-		return types.New(types.T_float64, 0, 0)
-	}
-}
-
 // NewVariance is used to create a Variance which supports float,int,uint
 func NewVariance[T1 types.Floats | types.Ints | types.UInts]() *Variance[T1] {
 	return &Variance[T1]{}

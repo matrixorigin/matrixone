@@ -87,7 +87,7 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	aggInfos := make([]aggInfo, len(bat.Aggs))
 	for i := range aggInfos {
 		aggInfos[i].Op = bat.Aggs[i].GetOperatorId()
-		aggInfos[i].inputTypes = bat.Aggs[i].GetInputTypes()[0]
+		aggInfos[i].inputTypes = bat.Aggs[i].InputTypes()[0]
 		aggInfos[i].Dist = bat.Aggs[i].IsDistinct()
 		aggInfos[i].Agg = bat.Aggs[i]
 	}

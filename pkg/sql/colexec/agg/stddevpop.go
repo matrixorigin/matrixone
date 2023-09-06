@@ -34,20 +34,6 @@ type StdD128 struct {
 	Typ      types.Type
 }
 
-func StdDevPopReturnType(typs []types.Type) types.Type {
-	switch typs[0].Oid {
-	case types.T_decimal64, types.T_decimal128:
-		if typs[0].Scale > 12 {
-			return types.New(types.T_decimal128, 38, typs[0].Scale)
-		} else {
-			return types.New(types.T_decimal128, 38, 12)
-		}
-
-	default:
-		return types.New(types.T_float64, 0, 0)
-	}
-}
-
 // NewStdDevPop is used to create a StdDevPop which supports float,int,uint
 func NewStdDevPop[T1 types.Floats | types.Ints | types.UInts]() *Stddevpop[T1] {
 	return &Stddevpop[T1]{Variance: NewVariance[T1]()}
