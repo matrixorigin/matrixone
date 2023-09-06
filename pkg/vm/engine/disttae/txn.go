@@ -45,7 +45,10 @@ func (txn *Transaction) getBlockInfos(
 		return nil, err
 	}
 	var objectName objectio.ObjectNameShort
-	iter := state.NewBlocksIter(ts)
+	iter, err := state.NewBlocksIter(ts)
+	if err != nil {
+		return nil, err
+	}
 	fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err

@@ -15,6 +15,7 @@
 package logtailreplay
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/tidwall/btree"
 )
@@ -31,13 +32,19 @@ type blocksIter struct {
 	firstCalled bool
 }
 
-func (p *PartitionState) NewBlocksIter(ts types.TS) *blocksIter {
+func (p *PartitionState) NewBlocksIter(ts types.TS) (*blocksIter, error) {
+	minTS := p.minTS.Load()
+	if minTS != nil {
+		if ts.Less(*minTS) {
+			return nil, moerr.NewTxnStaleNoCtx()
+		}
+	}
 	iter := p.blocks.Copy().Iter()
 	ret := &blocksIter{
 		ts:   ts,
 		iter: iter,
 	}
-	return ret
+	return ret, nil
 }
 
 var _ BlocksIter = new(blocksIter)

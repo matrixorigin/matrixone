@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -68,6 +69,10 @@ type PartitionState struct {
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
 	shared *sharedStates
+
+	// blocks deleted before minTS is hard deleted.
+	// partition state can't serve txn with snapshotTS less than minTS
+	minTS atomic.Pointer[types.TS]
 }
 
 // sharedStates is shared among all PartitionStates
@@ -198,6 +203,7 @@ func NewPartitionState(noData bool) *PartitionState {
 		dirtyBlocks:    btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		blockIndexByTS: btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
 		shared:         new(sharedStates),
+		minTS:          atomic.Pointer[types.TS]{},
 	}
 }
 
@@ -662,6 +668,10 @@ func (p *PartitionState) consumeCheckpoints(
 }
 
 func (p *PartitionState) truncate(ts types.TS) {
+	if p.minTS.Load().Greater(ts) {
+		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.Load().ToString(), ts.ToString())
+		return
+	}
 	pivot := BlockIndexByTSEntry{
 		Time:     ts.Next(),
 		BlockID:  types.Blockid{},
@@ -695,4 +705,5 @@ func (p *PartitionState) truncate(ts types.TS) {
 			p.blocks.Delete(blkEntry)
 		}
 	}
+	p.minTS.Store(&ts)
 }
