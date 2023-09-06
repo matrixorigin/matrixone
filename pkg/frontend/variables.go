@@ -2860,18 +2860,18 @@ var gSysVarsDefs = map[string]SystemVariable{
 	},
 	"runtime_filter_limit_in": {
 		Name:              "runtime_filter_limit_in",
-		Scope:             ScopeGlobal,
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("runtime_filter_limit_in", 1, 4294967295, false),
+		Type:              InitSystemVariableUintType("runtime_filter_limit_in", 1, 4294967295),
 		Default:           uint64(10000),
 	},
 	"runtime_filter_limit_bloom_filter": {
 		Name:              "runtime_filter_limit_bloom_filter",
-		Scope:             ScopeGlobal,
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("runtime_filter_limit_bloom_filter", 1, 4294967295, false),
+		Type:              InitSystemVariableUintType("runtime_filter_limit_bloom_filter", 1, 4294967295),
 		Default:           uint64(1000000),
 	},
 	"schema_definition_cache": {
