@@ -269,6 +269,50 @@ null    1    Chief Executive Officer    0
 274    275    Sales Representative    3
 274    276    Sales Representative    3
 285    286    Sales Representative    3
+update cte_insert_table set c3= (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+)
+select title from  DirectReports where ManagerID=16) where c2=274;
+select * from cte_insert_table;
+c1    c2    c3    c4
+null    1    Chief Executive Officer    0
+1    273    Vice President of Sales    1
+16    23    Marketing Specialist    3
+273    16    Marketing Manager    2
+273    274    Marketing Specialist    2
+273    285    Pacific Sales Manager    2
+274    275    Sales Representative    3
+274    276    Sales Representative    3
+285    286    Sales Representative    3
+delete from  cte_insert_table where  c3 = (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+FROM MyEmployees
+WHERE ManagerID IS NULL
+UNION ALL
+SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+FROM MyEmployees AS e
+INNER JOIN DirectReports AS d
+ON e.ManagerID = d.EmployeeID
+)
+select Title from  DirectReports where ManagerID=16);
+select * from cte_insert_table;
+c1    c2    c3    c4
+null    1    Chief Executive Officer    0
+1    273    Vice President of Sales    1
+273    16    Marketing Manager    2
+273    285    Pacific Sales Manager    2
+274    275    Sales Representative    3
+274    276    Sales Representative    3
+285    286    Sales Representative    3
 truncate table cte_insert_table;
 begin;
 insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
@@ -297,34 +341,6 @@ null    1    Chief Executive Officer    0
 274    276    Sales Representative    3
 285    286    Sales Representative    3
 rollback;
-select * from cte_insert_table;
-c1    c2    c3    c4
-update cte_insert_table set c3= (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
-(
-SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
-FROM MyEmployees
-WHERE ManagerID IS NULL
-UNION ALL
-SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
-FROM MyEmployees AS e
-INNER JOIN DirectReports AS d
-ON e.ManagerID = d.EmployeeID
-)
-select title from  DirectReports where ManagerID=16) where c2=274;
-select * from cte_insert_table;
-c1    c2    c3    c4
-delete from  cte_insert_table where  c3 = (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
-(
-SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
-FROM MyEmployees
-WHERE ManagerID IS NULL
-UNION ALL
-SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
-FROM MyEmployees AS e
-INNER JOIN DirectReports AS d
-ON e.ManagerID = d.EmployeeID
-)
-select Title from  DirectReports where ManagerID=16);
 select * from cte_insert_table;
 c1    c2    c3    c4
 create view cte_view as(
