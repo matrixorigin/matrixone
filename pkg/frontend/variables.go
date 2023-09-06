@@ -2858,6 +2858,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemSystemEnumType("resultset_metadata", "FULL", "NONE"),
 		Default:           "FULL",
 	},
+	"runtime_filter_limit_in": {
+		Name:              "runtime_filter_limit_in",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("runtime_filter_limit_in", 1, 4294967295, false),
+		Default:           int64(10000),
+	},
+	"runtime_filter_limit_bloom_filter": {
+		Name:              "runtime_filter_limit_bloom_filter",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("runtime_filter_limit_bloom_filter", 1, 4294967295, false),
+		Default:           int64(1000000),
+	},
 	"schema_definition_cache": {
 		Name:              "schema_definition_cache",
 		Scope:             ScopeGlobal,
