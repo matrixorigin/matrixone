@@ -17,6 +17,7 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 )
 
 var supportedWindowFunctions = []FuncNew{
@@ -34,7 +35,11 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType:    winRankReturnType,
+				retType:    functionAgg.WinRankReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "rank",
+					aggNew: functionAgg.NewWinRank,
+				},
 			},
 		},
 	},
@@ -52,7 +57,11 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType:    winRowNumberReturnType,
+				retType:    functionAgg.WinRowNumberReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "row_number",
+					aggNew: functionAgg.NewWinRowNumber,
+				},
 			},
 		},
 	},
@@ -70,7 +79,11 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType:    winDenseRankReturnType,
+				retType:    functionAgg.WinDenseRankReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "dense_rank",
+					aggNew: functionAgg.NewWinDenseRank,
+				},
 			},
 		},
 	},

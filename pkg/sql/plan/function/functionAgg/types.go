@@ -243,4 +243,19 @@ var (
 		}
 		return types.T_text.ToType()
 	}
+
+	// rank() supported input type and output type.
+	WinRankReturnType = func(typs []types.Type) types.Type {
+		return types.T_int64.ToType()
+	}
+
+	// row_number() supported input type and output type.
+	WinRowNumberReturnType = func(typs []types.Type) types.Type {
+		return types.T_int64.ToType()
+	}
+
+	// dense_rank() supported input type and output type.
+	WinDenseRankReturnType = func(typs []types.Type) types.Type {
+		return types.T_int64.ToType()
+	}
 )

@@ -12,23 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package function
+package functionAgg
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
-
-var (
-	// rank() supported input type and output type.
-	winRankReturnType = func(typs []types.Type) types.Type {
-		return types.T_int64.ToType()
-	}
-
-	// row_number() supported input type and output type.
-	winRowNumberReturnType = func(typs []types.Type) types.Type {
-		return types.T_int64.ToType()
-	}
-
-	// dense_rank() supported input type and output type.
-	winDenseRankReturnType = func(typs []types.Type) types.Type {
-		return types.T_int64.ToType()
-	}
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
+
+func NewWinRank(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+	winPriv := agg.NewRank()
+	return agg.NewUnaryAgg(overloadID, winPriv, false, inputTypes[0], outputType, winPriv.Grows, winPriv.Eval, winPriv.Merge, winPriv.Fill, nil), nil
+}
