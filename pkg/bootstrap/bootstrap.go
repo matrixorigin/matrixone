@@ -145,49 +145,21 @@ func NewBootstrapper(
 func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	getLogger().Info("start to check bootstrap state")
 
-	ok, err := b.checkAlreadyBootstrapped(ctx)
-	if ok {
+	if ok, err := b.checkAlreadyBootstrapped(ctx); ok {
 		getLogger().Info("mo already boostrapped")
 		return nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return err
 	}
 
-	ok, err = b.lock.Get(ctx)
+	ok, err := b.lock.Get(ctx)
 	if err != nil {
 		return err
 	}
 
 	// current node get the bootstrap privilege
 	if ok {
-
-		opts := executor.Options{}
-		if err := b.exec.ExecTxn(ctx, execFunc(step1InitSQLs), opts); err != nil {
-			return err
-		}
-
-		getLogger().Info("bootstrap mo step 1 completed")
-
-		// make sure txn start at now, and make sure can see the data of step1
-		opts = opts.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
-		if err := b.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
-			getLogger().Error("bootstrap mo step 2 failed",
-				zap.Error(err))
-			return err
-		}
-		getLogger().Info("bootstrap mo step 2 completed")
-
-		if b.client != nil {
-			getLogger().Info("wait bootstrap logtail applied")
-
-			// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
-			// bootstrap data.
-			b.client.SyncLatestCommitTS(b.now())
-		}
-
-		getLogger().Info("successfully completed bootstrap")
-		return nil
+		return b.execBootstrap(ctx)
 	}
 
 	// otherwise, wait bootstrap completed
@@ -196,22 +168,18 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(time.Second):
-			if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
-				getLogger().Info("waiting bootstrap completed",
-					zap.Bool("result", ok),
-					zap.Error(err))
-				return err
-			}
+		}
+		if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
+			getLogger().Info("waiting bootstrap completed",
+				zap.Bool("result", ok),
+				zap.Error(err))
+			return err
 		}
 	}
 }
 
 func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
-	opts := executor.Options{}
-	res, err := b.exec.Exec(
-		ctx,
-		"show databases",
-		opts.WithMinCommittedTS(b.now()))
+	res, err := b.exec.Exec(ctx, "show databases", executor.Options{}.WithMinCommittedTS(b.now()))
 	if err != nil {
 		return false, err
 	}
@@ -228,6 +196,31 @@ func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, erro
 		}
 	}
 	return false, nil
+}
+
+func (b *bootstrapper) execBootstrap(ctx context.Context) error {
+	if err := b.exec.ExecTxn(ctx, execFunc(step1InitSQLs), executor.Options{}); err != nil {
+		return err
+	}
+	getLogger().Info("bootstrap mo step 1 completed")
+
+	// make sure txn start at now, and make sure can see the data of step1
+	opts := executor.Options{}.WithMinCommittedTS(b.now()).WithDatabase(catalog.MOTaskDB).WithWaitCommittedLogApplied()
+	if err := b.exec.ExecTxn(ctx, execFunc(step2InitSQLs), opts); err != nil {
+		return err
+	}
+	getLogger().Info("bootstrap mo step 2 completed")
+
+	if b.client != nil {
+		getLogger().Info("wait bootstrap logtail applied")
+
+		// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
+		// bootstrap data.
+		b.client.SyncLatestCommitTS(b.now())
+	}
+
+	getLogger().Info("successfully completed bootstrap")
+	return nil
 }
 
 func (b *bootstrapper) now() timestamp.Timestamp {

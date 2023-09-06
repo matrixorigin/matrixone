@@ -131,6 +131,7 @@ func NewService(
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
 	srv.pu.QueryService = srv.queryService
+	srv._txnClient = pu.TxnClient
 
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
@@ -156,7 +157,6 @@ func NewService(
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
-	srv._txnClient = pu.TxnClient
 
 	srv.requestHandler = func(ctx context.Context,
 		cnAddr string,
@@ -655,21 +655,22 @@ func (s *service) initIncrService() {
 
 func (s *service) bootstrap() error {
 	s.initIncrService()
-	return s.stopper.RunTask(func(ctx context.Context) {
-		rt := runtime.ProcessLevelRuntime()
-		v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
-		if !ok {
-			panic("missing internal sql executor")
-		}
+	rt := runtime.ProcessLevelRuntime()
+	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic("missing internal sql executor")
+	}
 
+	b := bootstrap.NewBootstrapper(
+		&locker{hakeeperClient: s._hakeeperClient},
+		rt.Clock(),
+		s._txnClient,
+		v.(executor.SQLExecutor))
+
+	return s.stopper.RunTask(func(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
-		b := bootstrap.NewBootstrapper(
-			&locker{hakeeperClient: s._hakeeperClient},
-			rt.Clock(),
-			s._txnClient,
-			v.(executor.SQLExecutor))
-		// bootstrap can not failed. We panic here to make sure the service can not start.
+		// bootstrap cannot fail. We panic here to make sure the service can not start.
 		// If bootstrap failed, need clean all data to retry.
 		if err := b.Bootstrap(ctx); err != nil {
 			panic(err)

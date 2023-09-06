@@ -16,6 +16,7 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -87,6 +89,8 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 }
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
+	backupTime := names[0]
+	names = names[1:]
 	files := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
@@ -129,11 +133,14 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			}
 		}
 	}
+
+	// record files
+	taeFileList := make([]*taeFile, 0, len(files))
 	for _, dentry := range files {
 		if dentry.IsDir {
 			panic("not support dir")
 		}
-		err := CopyFile(ctx, srcFs, dstFs, dentry, "")
+		checksum, err := CopyFile(ctx, srcFs, dstFs, dentry, "")
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
 				isGC(gcFileMap, dentry.Name) {
@@ -143,37 +150,57 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			}
 
 		}
+		taeFileList = append(taeFileList, &taeFile{
+			path:     dentry.Name,
+			size:     dentry.Size,
+			checksum: checksum,
+		})
 	}
 
-	err := CopyDir(ctx, srcFs, dstFs, "ckp")
+	sizeList, err := CopyDir(ctx, srcFs, dstFs, "ckp")
 	if err != nil {
 		return err
 	}
-	err = CopyDir(ctx, srcFs, dstFs, "gc")
+	taeFileList = append(taeFileList, sizeList...)
+	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc")
+	if err != nil {
+		return err
+	}
+	taeFileList = append(taeFileList, sizeList...)
+	//save tae files size
+	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string) error {
+func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir string) ([]*taeFile, error) {
+	var checksum []byte
 	files, err := srcFs.List(ctx, dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	taeFileList := make([]*taeFile, 0, len(files))
 	for _, file := range files {
 		if file.IsDir {
 			panic("not support dir")
 		}
-		err = CopyFile(ctx, srcFs, dstFs, &file, dir)
+		checksum, err = CopyFile(ctx, srcFs, dstFs, &file, dir)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		taeFileList = append(taeFileList, &taeFile{
+			path:     dir + string(os.PathSeparator) + file.Name,
+			size:     file.Size,
+			checksum: checksum,
+		})
 	}
-	return nil
+	return taeFileList, nil
 }
 
-func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry *fileservice.DirEntry, dstDir string) error {
+// CopyFile copy file from srcFs to dstFs and return checksum of the written file.
+func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry *fileservice.DirEntry, dstDir string) ([]byte, error) {
 	name := dentry.Name
 	if dstDir != "" {
 		name = path.Join(dstDir, name)
@@ -190,7 +217,7 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 	}
 	err := srcFs.Read(ctx, ioVec)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dstIoVec := fileservice.IOVector{
 		FilePath:    name,
@@ -203,7 +230,11 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 		Size:   dentry.Size,
 	}
 	err = dstFs.Write(ctx, dstIoVec)
-	return err
+	if err != nil {
+		return nil, err
+	}
+	checksum := sha256.Sum256(ioVec.Entries[0].Data)
+	return checksum[:], err
 }
 
 func mergeGCFile(gcFiles []string, gcFileMap map[string]string) {
