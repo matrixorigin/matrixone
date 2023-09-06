@@ -21,29 +21,29 @@ select * from result_scan(last_query_id()) as u;
 
 -- test select table result cache
 load data infile '$resources/load_data/test_1.csv' into table test_table;
-select * from test_table;
+/* cloud_user */select * from test_table;
 select * from result_scan(last_query_id()) as u;
-select col1 from test_table;
+/* cloud_user */select col1 from test_table;
 select * from result_scan(last_query_id()) as u;
-select * from test_table where col1 > 30;
+/* cloud_user */select * from test_table where col1 > 30;
 select * from result_scan(last_query_id()) as u;
-select * from test_table where col1 < 10;
+/* cloud_user *//* cloud_user */select * from test_table where col1 < 10;
 select * from result_scan(last_query_id()) as u;
-select * from test_table where col1 = 10;
+/* cloud_user */select * from test_table where col1 = 10;
 select * from result_scan(last_query_id()) as u;
-select * from test_table limit 1;
+/* cloud_user */select * from test_table limit 1;
 select * from result_scan(last_query_id()) as u;
-select * from test_table order by col1 asc;
-select * from result_scan(last_query_id()) as u;
-
-select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
-select * from result_scan(last_query_id()) as u;
-select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
-select * from result_scan(last_query_id()) as u;
-select * from test_table union select * from test_table;
+/* cloud_user */select * from test_table order by col1 asc;
 select * from result_scan(last_query_id()) as u;
 
-SELECT col1 FROM test_table where col1 < 30 MINUS SELECT col1  FROM test_table where col1 < 20;
+/* cloud_user */select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
+select * from result_scan(last_query_id()) as u;
+/* cloud_user */select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
+select * from result_scan(last_query_id()) as u;
+/* cloud_user */select * from test_table union select * from test_table;
+select * from result_scan(last_query_id()) as u;
+
+/* cloud_user */SELECT col1 FROM test_table where col1 < 30 MINUS SELECT col1  FROM test_table where col1 < 20;
 select * from result_scan(last_query_id()) as u;
 
 -- test view result cache
@@ -53,63 +53,63 @@ select * from result_scan(last_query_id()) as u;
 show create view test_view;
 select * from result_scan(last_query_id()) as u;
 
-select * from test_view;
+/* cloud_user */select * from test_view;
 select * from result_scan(last_query_id()) as u;
-select col1 from test_view;
+/* cloud_user */select col1 from test_view;
 select * from result_scan(last_query_id()) as u;
-select * from test_view where col1 > 30;
+/* cloud_user */select * from test_view where col1 > 30;
 select * from result_scan(last_query_id()) as u;
-select * from test_view where col1 < 10;
+/* cloud_user */select * from test_view where col1 < 10;
 select * from result_scan(last_query_id()) as u;
-select * from test_view where col1 = 10;
+/* cloud_user */select * from test_view where col1 = 10;
 select * from result_scan(last_query_id()) as u;
-select * from test_view limit 1;
+/* cloud_user */select * from test_view limit 1;
 select * from result_scan(last_query_id()) as u;
-select * from test_view order by col1 asc;
-select * from result_scan(last_query_id()) as u;
-
-
-select t1.col1,t2.col1 from test_view t1  left join test_view t2 on t1.col1=t2.col1;
-select * from result_scan(last_query_id()) as u;
-select t1.col1,t2.col1 from test_view t1  right join test_view t2 on t1.col1=t2.col1;
-select * from result_scan(last_query_id()) as u;
-select * from test_view union select * from test_view;
+/* cloud_user */select * from test_view order by col1 asc;
 select * from result_scan(last_query_id()) as u;
 
-SELECT col1 FROM test_view where col1 < 30 MINUS SELECT col1  FROM test_view where col1 < 20;
+
+/* cloud_user */select t1.col1,t2.col1 from test_view t1  left join test_view t2 on t1.col1=t2.col1;
+select * from result_scan(last_query_id()) as u;
+/* cloud_user */select t1.col1,t2.col1 from test_view t1  right join test_view t2 on t1.col1=t2.col1;
+select * from result_scan(last_query_id()) as u;
+/* cloud_user */select * from test_view union select * from test_view;
+select * from result_scan(last_query_id()) as u;
+
+/* cloud_user */SELECT col1 FROM test_view where col1 < 30 MINUS SELECT col1  FROM test_view where col1 < 20;
 select * from result_scan(last_query_id()) as u;
 
 
 -- test transactions result cache
 begin;
-select * from test_table;
+/* cloud_user */select * from test_table;
 select * from result_scan(last_query_id()) as u;
-select col1 from test_table;
+/* cloud_user */select col1 from test_table;
 select * from result_scan(last_query_id()) as u;
-select * from test_table where col1 > 30;
+/* cloud_user */select * from test_table where col1 > 30;
 select * from result_scan(last_query_id()) as u;
-select * from test_table where col1 < 10;
+/* cloud_user */select * from test_table where col1 < 10;
 select * from result_scan(last_query_id()) as u;
-select * from test_table where col1 = 10;
+/* cloud_user */select * from test_table where col1 = 10;
 select * from result_scan(last_query_id()) as u;
-select * from test_table limit 1;
+/* cloud_user */select * from test_table limit 1;
 select * from result_scan(last_query_id()) as u;
-select * from test_table order by col1 asc;
-select * from result_scan(last_query_id()) as u;
-
-select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
-select * from result_scan(last_query_id()) as u;
-select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
-select * from result_scan(last_query_id()) as u;
-select * from test_table union select * from test_table;
+/* cloud_user */select * from test_table order by col1 asc;
 select * from result_scan(last_query_id()) as u;
 
-SELECT col1 FROM test_view where col1 < 30 MINUS SELECT col1  FROM test_view where col1 < 20;
+/* cloud_user */select t1.col1,t2.col1 from test_table t1  left join test_table t2 on t1.col1=t2.col1;
+select * from result_scan(last_query_id()) as u;
+/* cloud_user *//* cloud_user */select t1.col1,t2.col1 from test_table t1  right join test_table t2 on t1.col1=t2.col1;
+select * from result_scan(last_query_id()) as u;
+/* cloud_user */select * from test_table union select * from test_table;
+select * from result_scan(last_query_id()) as u;
+
+/* cloud_user */SELECT col1 FROM test_view where col1 < 30 MINUS SELECT col1  FROM test_view where col1 < 20;
 select * from result_scan(last_query_id()) as u;
 rollback;
 
 begin;
-select * from test_table;
+/* cloud_user */select * from test_table;
 rollback;
 select * from result_scan(last_query_id(-2)) as u;
 
@@ -123,7 +123,7 @@ deallocate prepare s1;
 
 -- test save_query_result config
 set global save_query_result = off;
-select * from test_table;
+/* cloud_user */select * from test_table;
 select * from result_scan(last_query_id()) as u;
 set global save_query_result = on;
 
