@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"io"
 	gotrace "runtime/trace"
 	"sort"
@@ -767,6 +768,18 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 			if err != nil {
 				return err
 			}
+		} else if name == "runtime_filter_limit_in" {
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
+			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_in", value)
+		} else if name == "runtime_filter_limit_bloom_filter" {
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
+			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value)
 			if err != nil {
