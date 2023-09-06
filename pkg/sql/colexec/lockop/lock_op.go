@@ -489,8 +489,7 @@ func doLock(
 	}
 
 	// forward rc's snapshot ts
-	//snapshotTS = result.Timestamp.Next()
-	snapshotTS = result.Timestamp
+	snapshotTS = result.Timestamp.Next()
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
