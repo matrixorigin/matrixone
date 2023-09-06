@@ -754,6 +754,16 @@ message Node {
 
 	bytes uuid = 42;
 	bool recursive_sink = 43;
+    ExternScan extern_scan = 44;
+}
+
+message ExternScan {
+    int32 type = 1;
+    string data = 2;
+    string format = 3;
+    uint64 ignored_lines = 4;
+    bytes  enclosed_by = 5;
+    string terminated = 6;
 }
 
 message LockTarget {

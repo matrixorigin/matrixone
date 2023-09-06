@@ -316,6 +316,8 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 	ts, err := time.Parse("2006-01-02 15:04:05", targetDate+" 00:00:00")
 	require.Nil(t, err)
 
+	ctx := trace.Generate(context.TODO())
+
 	type args struct {
 		ctx  context.Context
 		opts []MergeOption
@@ -329,7 +331,7 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				ctx:  context.Background(),
+				ctx:  ctx,
 				opts: []MergeOption{WithFileService(fs)},
 				task: task.Task{
 					Metadata: task.TaskMetadata{
