@@ -153,7 +153,7 @@ func (tbl *txnTable) ForeachBlock(
 	fn func(block logtailreplay.BlockEntry) error,
 ) (err error) {
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	iter, err := state.NewBlocksIter(ts,tbl.tableId)
+	iter, err := state.NewBlocksIter(ts, tbl.tableId)
 	if err != nil {
 		return err
 	}
@@ -325,7 +325,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		return -1, err
 	}
 	// Calculate the block size
-	biter, err := part.NewBlocksIter(ts,tbl.tableId)
+	biter, err := part.NewBlocksIter(ts, tbl.tableId)
 	if err != nil {
 		return 0, err
 	}
