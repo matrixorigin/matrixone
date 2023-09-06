@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 )
 
 func (s *service) initQueryService() {
@@ -35,6 +36,7 @@ func (s *service) initQueryService() {
 func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_KillConn, s.handleKillConn, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_AlterAccount, s.handleAlterAccount, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_TraceSpan, s.handleTraceSpan, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -68,5 +70,11 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 	}
 
 	accountMgr.AlterRoutineStatue(req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
+	return nil
+}
+
+func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response) error {
+	resp.TraceSpanResponse = new(query.TraceSpanResponse)
+	resp.TraceSpanResponse.Resp = ctl.SelfProcess(req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans)
 	return nil
 }

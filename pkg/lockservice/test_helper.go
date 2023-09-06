@@ -90,38 +90,35 @@ func WaitWaiters(
 	ls LockService,
 	table uint64,
 	key []byte,
-	waitersCount int,
-	sameTxnCounts ...int) error {
+	waitersCount int) error {
 	s := ls.(*service)
 	v, err := s.getLockTable(table)
 	if err != nil {
 		return err
 	}
 
-	fn := func() bool {
-		lb := v.(*localLockTable)
-		lb.mu.Lock()
-		defer lb.mu.Unlock()
+	return waitLocalWaiters(v.(*localLockTable), key, waitersCount)
+}
 
-		lock, ok := lb.mu.store.Get(key)
+func waitLocalWaiters(
+	lt *localLockTable,
+	key []byte,
+	waitersCount int) error {
+	fn := func() bool {
+		lt.mu.Lock()
+		defer lt.mu.Unlock()
+
+		lock, ok := lt.mu.store.Get(key)
 		if !ok {
 			panic("missing lock")
 		}
 
 		waiters := make([]*waiter, 0)
-		lock.waiter.waiters.iter(func(w *waiter) bool {
+		lock.waiters.iter(func(w *waiter) bool {
 			waiters = append(waiters, w)
 			return true
 		})
-		if len(waiters) == waitersCount {
-			for i, n := range sameTxnCounts {
-				if len(waiters[i].sameTxnWaiters) != n {
-					return false
-				}
-			}
-			return true
-		}
-		return false
+		return len(waiters) == waitersCount
 	}
 
 	for {
