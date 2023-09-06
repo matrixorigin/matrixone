@@ -201,6 +201,17 @@ func Test_NoopTracer_Start(t1 *testing.T) {
 			want1: NoopSpan{},
 		},
 		{
+			name: "empty",
+			args: args{
+				ctx:   context.Background(),
+				name:  "NoopTracer_Start",
+				in2:   []SpanStartOption{},
+				endIn: []SpanEndOption{},
+			},
+			want:  context.Background(),
+			want1: NoopSpan{},
+		},
+		{
 			name: "NonRecording",
 			args: args{
 				ctx:   ContextWithSpan(context.Background(), &NonRecordingSpan{}),
