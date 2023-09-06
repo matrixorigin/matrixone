@@ -673,6 +673,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.Load().ToString(), ts.ToString())
 		return
 	}
+	p.minTS.Store(&ts)
 	gced := false
 	pivot := BlockIndexByTSEntry{
 		Time:     ts.Next(),
@@ -719,7 +720,6 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		}
 	}
 	if gced {
-		logutil.Infof("GC partition_state for table %d:%s", ids[1], ts.ToString(), blksToDelete)
+		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], blksToDelete)
 	}
-	p.minTS.Store(&ts)
 }
