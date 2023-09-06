@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"testing"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,12 +35,12 @@ func TestAdd(t *testing.T) {
 			s := factory()
 
 			k1 := []byte("k1")
-			s.Add(k1, Lock{txnID: k1})
+			s.Add(k1, newTestLock(k1))
 			assert.Equal(t, 1, s.Len())
 
 			v, ok := s.Get(k1)
 			assert.True(t, ok)
-			assert.Equal(t, k1, v.txnID)
+			assert.Equal(t, k1, v.holders.txns[0].TxnID)
 		})
 	}
 }
@@ -80,17 +81,17 @@ func TestSeek(t *testing.T) {
 
 			checkSeek(t, s, k1, nil, nil)
 
-			s.Add(k1, Lock{txnID: k1})
+			s.Add(k1, newTestLock(k1))
 			checkSeek(t, s, k1, k1, k1)
 			checkSeek(t, s, k2, nil, nil)
 			checkSeek(t, s, k3, nil, nil)
 
-			s.Add(k2, Lock{txnID: k2})
+			s.Add(k2, newTestLock(k2))
 			checkSeek(t, s, k1, k1, k1)
 			checkSeek(t, s, k2, k2, k2)
 			checkSeek(t, s, k3, nil, nil)
 
-			s.Add(k3, Lock{txnID: k3})
+			s.Add(k3, newTestLock(k3))
 			checkSeek(t, s, k1, k1, k1)
 			checkSeek(t, s, k2, k2, k2)
 			checkSeek(t, s, k3, k3, k3)
@@ -136,7 +137,7 @@ func BenchmarkAdd(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				s.Add(keys[i], Lock{txnID: keys[i]})
+				s.Add(keys[i], newTestLock(keys[i]))
 			}
 		})
 	}
@@ -168,7 +169,7 @@ func BenchmarkDelete(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				keys[i] = make([]byte, 4)
 				binary.BigEndian.PutUint32(keys[i], rand.Uint32())
-				s.Add(keys[i], Lock{txnID: keys[i]})
+				s.Add(keys[i], newTestLock(keys[i]))
 			}
 
 			b.ResetTimer()
@@ -188,6 +189,10 @@ func checkSeek(t *testing.T, s LockStorage, key []byte, expectKey, expectValue [
 		return
 	}
 	assert.Equal(t, expectKey, k)
-	assert.Equal(t, expectValue, v.txnID)
+	assert.Equal(t, expectValue, v.holders.txns[0].TxnID)
 	assert.True(t, ok)
+}
+
+func newTestLock(txnID []byte) Lock {
+	return newLock(&lockContext{waitTxn: pb.WaitTxn{TxnID: txnID}})
 }

@@ -78,7 +78,6 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.Database = ""
 		s.StmtBuilder.WriteString(s.Statement)
 		duration := s.Duration
-		s.Duration = windowSize
 		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
 		s.RequestAt = s.ResponseAt.Truncate(windowSize)
 		s.ResponseAt = s.RequestAt.Add(windowSize)
@@ -93,10 +92,11 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
-		e.StmtBuilder.WriteString("\n")
+		e.StmtBuilder.WriteString(";\n")
 		e.StmtBuilder.WriteString(n.Statement)
 	}
 	e.AggrCount += 1
+	e.Duration += n.Duration
 	e.RowsRead += n.RowsRead
 	e.BytesScan += n.BytesScan
 	e.ResultCount += n.ResultCount
