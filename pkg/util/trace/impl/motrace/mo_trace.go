@@ -92,8 +92,18 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
 		span.Parent = trace.NoopSpan{}
 	} else {
-		span.TraceID, span.SpanID, span.Kind = psc.TraceID, t.provider.idGenerator.NewSpanID(), psc.Kind
+		span.TraceID, span.SpanID = psc.TraceID, t.provider.idGenerator.NewSpanID()
 		span.Parent = parent
+	}
+	// in previous implementation, if parent span exists, it's span kind will
+	// be overwritten by its parent whatever its kind has been set or not by `opts`
+	//
+	// however, if there exists a special kind (controlled by mo_ctl) has been set in `span.init`, or
+	// parent span has a special kind, we hope:
+	// 	  1. this kind won't be overwritten by it parent span kind if it exists
+	//	  2. this special kind won't continue to pass down to its children span
+	if !span.HasMOCtledKind() && !psc.HasMOCtledKind() {
+		span.Kind = psc.Kind
 	}
 
 	// handle HungThreshold

@@ -100,6 +100,14 @@ type SpanContext struct {
 	Kind SpanKind `json:"span_kind"`
 }
 
+func (c *SpanContext) HasMOCtledKind() bool {
+	if c.Kind == SpanKindS3FSVis ||
+		c.Kind == SpanKindLocalFSVis {
+		return true
+	}
+	return false
+}
+
 func (c *SpanContext) Size() (n int) {
 	return 24
 }
@@ -462,10 +470,10 @@ const (
 	SpanKindSession SpanKind = 3
 	// SpanKindS3FSVis is a SpanKind for a Span that needs to collect info of
 	// S3 object operation
-	SpanKindS3FSVis = 4
+	SpanKindS3FSVis SpanKind = 4
 	// SpanKindLocalFSVis is a SpanKind for a Span that needs to collect info of
 	// local object operation
-	SpanKindLocalFSVis = 5
+	SpanKindLocalFSVis SpanKind = 5
 )
 
 func (k SpanKind) String() string {

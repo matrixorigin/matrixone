@@ -550,40 +550,57 @@ func TestWithFSSpan(t *testing.T) {
 
 }
 
-func BenchmarkMOTracer_Start(b *testing.B) {
+func TestMOCtledKindOverwrite(t *testing.T) {
 	tracer := &MOTracer{
 		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
 		provider:     defaultMOTracerProvider(),
 	}
 	tracer.provider.enable = true
 
-	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
+	ffctx, ffspan := tracer.Start(context.Background(), "test1")
+	defer ffspan.End()
+	require.Equal(t, ffspan.SpanContext().Kind, trace.SpanKindInternal)
 
-	b.Run("enable with opts", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			tracer.IsEnable(trace.WithKind(trace.SpanKindLocalFSVis))
-		}
-	})
+	// will be overwritten
+	fctx, fspan := tracer.Start(ffctx, "test2", trace.WithKind(trace.SpanKindRemote))
+	defer fspan.End()
+	require.Equal(t, fspan.SpanContext().Kind, ffspan.SpanContext().Kind)
 
-	b.Run("enable without opts", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			tracer.IsEnable()
-		}
-	})
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(true)
+	// won't be overwritten
+	_, span := tracer.Start(fctx, "test3",
+		trace.WithKind(trace.SpanKindS3FSVis))
+	defer span.End()
+	require.NotEqual(t, span.SpanContext().Kind, fspan.SpanContext().Kind)
+	require.Equal(t, span.SpanContext().Kind, trace.SpanKindS3FSVis)
 
-	b.Run("total with opts", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_, span := tracer.Start(context.Background(), "test", trace.WithKind(
-				trace.SpanKindLocalFSVis))
-			span.End(trace.WithFSReadWriteExtra("xxx", nil, 0))
-		}
-	})
+}
 
-	b.Run("total without opts", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_, span := tracer.Start(context.Background(), "test")
-			span.End()
-		}
-	})
+func TestMOCtledKindPassDown(t *testing.T) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+
+	normCtx, normSpan := tracer.Start(context.Background(), "normal span")
+	defer normSpan.End()
+	require.Equal(t, normSpan.SpanContext().Kind, trace.SpanKindInternal)
+
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(true)
+	specialCtx, specialSpan := tracer.Start(context.Background(), "special span",
+		trace.WithKind(trace.SpanKindS3FSVis))
+	defer specialSpan.End()
+	require.Equal(t, specialSpan.SpanContext().Kind, trace.SpanKindS3FSVis)
+
+	// can pass down to child span
+	_, span := tracer.Start(normCtx, "child span")
+	defer span.End()
+	require.Equal(t, span.SpanContext().Kind, normSpan.SpanContext().Kind)
+
+	// won't pass down kind to child
+	_, span = tracer.Start(specialCtx, "child span")
+	defer span.End()
+	require.NotEqual(t, span.SpanContext().Kind, specialSpan.SpanContext().Kind)
+
 }
