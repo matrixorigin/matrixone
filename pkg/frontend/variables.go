@@ -2864,7 +2864,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("runtime_filter_limit_in", 1, 4294967295, false),
-		Default:           int64(10000),
+		Default:           uint64(10000),
 	},
 	"runtime_filter_limit_bloom_filter": {
 		Name:              "runtime_filter_limit_bloom_filter",
@@ -2872,7 +2872,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("runtime_filter_limit_bloom_filter", 1, 4294967295, false),
-		Default:           int64(1000000),
+		Default:           uint64(1000000),
 	},
 	"schema_definition_cache": {
 		Name:              "schema_definition_cache",

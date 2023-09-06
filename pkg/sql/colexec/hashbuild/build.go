@@ -17,6 +17,7 @@ package hashbuild
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -347,8 +348,19 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		}
 	}
 
+	inFilterCardLimit := uint64(plan.InFilterCardLimit)
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
+	if ok {
+		inFilterCardLimit = v.(uint64)
+	}
+	bloomFilterCardLimit := uint64(plan.BloomFilterCardLimit)
+	v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
+	if ok {
+		bloomFilterCardLimit = v.(uint64)
+	}
+
 	// Composite primary key
-	if len(ctr.vecs) > 1 && hashmapCount <= plan.BloomFilterCardLimit {
+	if len(ctr.vecs) > 1 && hashmapCount <= bloomFilterCardLimit {
 		bat := batch.NewWithSize(len(ctr.vecs))
 		bat.SetRowCount(ctr.vecs[0].Length())
 		copy(bat.Vecs, ctr.vecs)
@@ -369,7 +381,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	}()
 
 	var err error
-	if hashmapCount <= plan.InFilterCardLimit {
+	if hashmapCount <= inFilterCardLimit {
 		var inList *vector.Vector
 		if ap.HashOnPK {
 			if inList, err = vec.Dup(proc.Mp()); err != nil {
@@ -392,7 +404,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			Typ:  pipeline.RuntimeFilter_IN,
 			Data: data,
 		}
-	} else if hashmapCount <= plan.BloomFilterCardLimit {
+	} else if hashmapCount <= bloomFilterCardLimit {
 		zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 		if ap.HashOnPK {
 			length := vec.Length()
