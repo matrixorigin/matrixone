@@ -207,6 +207,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
+		ExternScan:      node.ExternScan,
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 

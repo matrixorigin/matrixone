@@ -18,6 +18,7 @@ syntax = "proto3";
 package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "lock.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -754,6 +755,16 @@ message Node {
 
 	bytes uuid = 42;
 	bool recursive_sink = 43;
+    ExternScan extern_scan = 44;
+}
+
+message ExternScan {
+    int32 type = 1;
+    string data = 2;
+    string format = 3;
+    uint64 ignored_lines = 4;
+    bytes  enclosed_by = 5;
+    string terminated = 6;
 }
 
 message LockTarget {
@@ -766,6 +777,7 @@ message LockTarget {
 	bool is_partition_table = 7;
 	repeated uint64 partition_table_ids = 8;
 	bool                block   = 9;
+	lock.LockMode Mode  = 10;
 }
 
 message PreInsertUkCtx {
