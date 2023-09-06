@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	InFilterCardLimit    = 1024
-	BloomFilterCardLimit = 1000 * InFilterCardLimit
+	InFilterCardLimit    = 10000
+	BloomFilterCardLimit = 100 * InFilterCardLimit
 
 	MinProbeTableRows    = 8192 * 20 // Don't generate runtime filter for small tables
 	SelectivityThreshold = 0.5
