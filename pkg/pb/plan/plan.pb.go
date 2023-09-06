@@ -1181,6 +1181,7 @@ func (m *Type) GetEnumvalues() string {
 type Const struct {
 	Isnull bool `protobuf:"varint,1,opt,name=isnull,proto3" json:"isnull,omitempty"`
 	// Types that are valid to be assigned to Value:
+	//
 	//	*Const_I8Val
 	//	*Const_I16Val
 	//	*Const_I32Val
