@@ -175,27 +175,6 @@ FROM DirectReports
 ORDER BY ManagerID;
 select * from cte_insert_table;
 
--- transaction
-truncate table cte_insert_table;
-begin;
-insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
-(
-    SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
-    FROM MyEmployees
-    WHERE ManagerID IS NULL
-    UNION ALL
-    SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
-    FROM MyEmployees AS e
-        INNER JOIN DirectReports AS d
-        ON e.ManagerID = d.EmployeeID
-)
-SELECT ManagerID, EmployeeID, Title, EmployeeLevel
-FROM DirectReports
-ORDER BY ManagerID;
-select * from cte_insert_table;
-rollback;
-select * from cte_insert_table;
-
 -- recursive cte: update cte
 update cte_insert_table set c3= (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
 (
@@ -225,6 +204,28 @@ delete from  cte_insert_table where  c3 = (WITH RECURSIVE DirectReports(ManagerI
 )
 select Title from  DirectReports where ManagerID=16);
 select * from cte_insert_table;
+
+-- transaction
+truncate table cte_insert_table;
+begin;
+insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+    SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+    FROM MyEmployees
+    WHERE ManagerID IS NULL
+    UNION ALL
+    SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+    FROM MyEmployees AS e
+        INNER JOIN DirectReports AS d
+        ON e.ManagerID = d.EmployeeID
+)
+SELECT ManagerID, EmployeeID, Title, EmployeeLevel
+FROM DirectReports
+ORDER BY ManagerID;
+select * from cte_insert_table;
+rollback;
+select * from cte_insert_table;
+
 -- recursive cte: create view as
 create view cte_view as(
 WITH  RECURSIVE DirectReports(Name, Title, EmployeeID, EmployeeLevel)
