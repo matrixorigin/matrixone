@@ -24,6 +24,7 @@ package motrace
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 	"unsafe"
@@ -158,7 +159,7 @@ func newMOHungSpan(span *MOSpan) *MOHungSpan {
 	s.trigger = time.AfterFunc(s.HungThreshold(), func() {
 		s.mux.Lock()
 		defer s.mux.Unlock()
-		if e := s.quitCtx.Err(); e == context.Canceled || s.stopped {
+		if e := s.quitCtx.Err(); errors.Is(e, context.Canceled) || s.stopped {
 			return
 		}
 		s.doProfile()
