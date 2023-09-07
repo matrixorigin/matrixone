@@ -232,83 +232,85 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
 			c.lock.RLock()
-			ch, ok := c.runtimeFilterReceiverMap[spec.Tag]
+			receiver, ok := c.runtimeFilterReceiverMap[spec.Tag]
 			c.lock.RUnlock()
 			if !ok {
 				continue
 			}
 
-			select {
-			case <-s.Proc.Ctx.Done():
-				return nil
+			for i := 0; i < receiver.size; i++ {
+				select {
+				case <-s.Proc.Ctx.Done():
+					return nil
 
-			case filter := <-ch:
-				if filter == nil {
-					exprs = nil
-					s.NodeInfo.Data = s.NodeInfo.Data[:0]
-					break
-				}
-				switch filter.Typ {
-				case pbpipeline.RuntimeFilter_NO_FILTER:
-					continue
+				case filter := <-receiver.ch:
+					if filter == nil {
+						exprs = nil
+						s.NodeInfo.Data = s.NodeInfo.Data[:0]
+						break
+					}
+					switch filter.Typ {
+					case pbpipeline.RuntimeFilter_NO_FILTER:
+						continue
 
-				case pbpipeline.RuntimeFilter_IN:
-					inExpr := &plan.Expr{
-						Typ: &plan.Type{
-							Id:          int32(types.T_bool),
-							NotNullable: spec.Expr.Typ.NotNullable,
-						},
-						Expr: &plan.Expr_F{
-							F: &plan.Function{
-								Func: &plan.ObjectRef{
-									Obj:     function.InFunctionEncodedID,
-									ObjName: function.InFunctionName,
-								},
-								Args: []*plan.Expr{
-									spec.Expr,
-									{
-										Typ: &plan.Type{
-											Id: int32(types.T_tuple),
-										},
-										Expr: &plan.Expr_Bin{
-											Bin: &plan.BinaryData{
-												Data: filter.Data,
+					case pbpipeline.RuntimeFilter_IN:
+						inExpr := &plan.Expr{
+							Typ: &plan.Type{
+								Id:          int32(types.T_bool),
+								NotNullable: spec.Expr.Typ.NotNullable,
+							},
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{
+										Obj:     function.InFunctionEncodedID,
+										ObjName: function.InFunctionName,
+									},
+									Args: []*plan.Expr{
+										spec.Expr,
+										{
+											Typ: &plan.Type{
+												Id: int32(types.T_tuple),
+											},
+											Expr: &plan.Expr_Bin{
+												Bin: &plan.BinaryData{
+													Data: filter.Data,
+												},
 											},
 										},
 									},
 								},
 							},
-						},
-					}
+						}
 
-					if s.DataSource.Expr == nil {
-						s.DataSource.Expr = inExpr
-					} else {
-						s.DataSource.Expr = &plan.Expr{
-							Typ: &plan.Type{
-								Id:          int32(types.T_bool),
-								NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
-							},
-							Expr: &plan.Expr_F{
-								F: &plan.Function{
-									Func: &plan.ObjectRef{
-										Obj:     function.AndFunctionEncodedID,
-										ObjName: function.AndFunctionName,
-									},
-									Args: []*plan.Expr{
-										s.DataSource.Expr,
-										inExpr,
+						if s.DataSource.Expr == nil {
+							s.DataSource.Expr = inExpr
+						} else {
+							s.DataSource.Expr = &plan.Expr{
+								Typ: &plan.Type{
+									Id:          int32(types.T_bool),
+									NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
+								},
+								Expr: &plan.Expr_F{
+									F: &plan.Function{
+										Func: &plan.ObjectRef{
+											Obj:     function.AndFunctionEncodedID,
+											ObjName: function.AndFunctionName,
+										},
+										Args: []*plan.Expr{
+											s.DataSource.Expr,
+											inExpr,
+										},
 									},
 								},
-							},
+							}
 						}
+
+						// TODO: implement BETWEEN expression
 					}
 
-					// TODO: implement BETWEEN expression
+					exprs = append(exprs, spec.Expr)
+					filters = append(filters, filter)
 				}
-
-				exprs = append(exprs, spec.Expr)
-				filters = append(filters, filter)
 			}
 		}
 
