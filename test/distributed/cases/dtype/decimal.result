@@ -1319,3 +1319,23 @@ INSERT INTO decimal21 VALUES(99999999999999999999999999999999999.83293323);
 SELECT SUM(col1) from decimal21;
 invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
 DROP TABLE decimal21;
+DROP TABLE IF EXISTS decimal22;
+CREATE TABLE decimal22(col1 decimal(38,5),col2 decimal(38,25));
+INSERT INTO decimal22 VALUES('0xffffffffffffffffffffffff ',0.00000000000000000001);
+SELECT col1/(col1*col2) from decimal22;
+col1 / (col1 * col2)
+100000000000000000000.00000000000
+SELECT col1%col2 from decimal22;
+col1 % col2
+0.0000000000000000000000000
+DROP TABLE decimal22;
+DROP TABLE IF EXISTS decimal23;
+CREATE TABLE decimal23(col1 decimal(18,5),col2 decimal(18,15));
+INSERT INTO decimal23 VALUES('0xffffffffff',0.0000000000001);
+SELECT col1%col2 from decimal23;
+col1 % col2 
+0.000000000000000
+SELECT cast(col2 as double) from decimal23;
+cast(col2 as double)
+0.0000000000001
+DROP TABLE decimal23;
