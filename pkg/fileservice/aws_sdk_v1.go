@@ -25,12 +25,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/retry"
-	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -38,26 +37,39 @@ import (
 	"go.uber.org/zap"
 )
 
-type AwsSDKv2 struct {
+type AwsSDKv1 struct {
 	name            string
 	bucket          string
-	client          *s3.Client
+	client          *s3.S3
 	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int32
+	listMaxKeys     int64
 }
 
-func NewAwsSDKv2(
+func NewAwsSDKv1(
 	ctx context.Context,
 	args ObjectStorageArguments,
 	perfCounterSets []*perfcounter.CounterSet,
-) (*AwsSDKv2, error) {
+) (*AwsSDKv1, error) {
 
 	if err := args.validate(); err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
+	// configs
+	config := new(aws.Config)
+	if args.Endpoint != "" {
+		config.Endpoint = &args.Endpoint
+	}
+	if args.Region != "" {
+		config.Region = &args.Region
+	}
+
+	// for 天翼云
+	// from https://gitee.com/ctyun-xstore/ctyun-xstore-sdk-demo/blob/master/xos-go-demo/s3demo.go
+	if strings.Contains(args.Endpoint, "ctyunapi.cn") {
+		config.S3ForcePathStyle = aws.Bool(true)
+		config.DisableSSL = aws.Bool(true)
+	}
 
 	// http client
 	dialer := &net.Dialer{
@@ -76,131 +88,26 @@ func NewAwsSDKv2(
 			ForceAttemptHTTP2:     true,
 		},
 	}
+	config.HTTPClient = httpClient
 
-	// options for loading configs
-	loadConfigOptions := []func(*config.LoadOptions) error{
-		config.WithLogger(logutil.GetS3Logger()),
-		config.WithClientLogMode(
-			aws.LogSigning |
-				aws.LogRetries |
-				aws.LogRequest |
-				aws.LogResponse |
-				aws.LogDeprecatedUsage |
-				aws.LogRequestEventMessage |
-				aws.LogResponseEventMessage,
-		),
-		config.WithHTTPClient(httpClient),
-	}
-
-	// shared config profile
-	if args.SharedConfigProfile != "" {
-		loadConfigOptions = append(loadConfigOptions,
-			config.WithSharedConfigProfile(args.SharedConfigProfile),
+	// credentials
+	if args.KeyID != "" && args.KeySecret != "" {
+		config.Credentials = credentials.NewStaticCredentials(
+			args.KeyID,
+			args.KeySecret,
+			args.SessionToken,
 		)
 	}
 
-	credentialProvider := getCredentialsProvider(
-		ctx,
-		args.Endpoint,
-		args.Region,
-		args.KeyID,
-		args.KeySecret,
-		args.SessionToken,
-		args.RoleARN,
-		args.ExternalID,
-	)
-
-	// validate
-	if credentialProvider != nil {
-		_, err := credentialProvider.Retrieve(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// load configs
-	if credentialProvider != nil {
-		loadConfigOptions = append(loadConfigOptions,
-			config.WithCredentialsProvider(
-				credentialProvider,
-			),
-		)
-	}
-	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+	sess, err := session.NewSession(config)
 	if err != nil {
 		return nil, err
 	}
 
-	// options for s3 client
-	s3Options := []func(*s3.Options){
-		func(opts *s3.Options) {
-
-			opts.Retryer = retry.NewStandard(func(o *retry.StandardOptions) {
-				o.MaxAttempts = maxRetryAttemps
-				o.RateLimiter = noOpRateLimit{}
-			})
-
-		},
-	}
-
-	// credential provider for s3 client
-	if credentialProvider != nil {
-		s3Options = append(s3Options,
-			func(opt *s3.Options) {
-				opt.Credentials = credentialProvider
-			},
-		)
-	}
-
-	// endpoint for s3 client
-	if args.Endpoint != "" {
-		if args.IsMinio {
-			// special handling for MinIO
-			s3Options = append(s3Options,
-				s3.WithEndpointResolver(
-					s3.EndpointResolverFunc(
-						func(
-							region string,
-							_ s3.EndpointResolverOptions,
-						) (
-							ep aws.Endpoint,
-							err error,
-						) {
-							ep.URL = args.Endpoint
-							ep.Source = aws.EndpointSourceCustom
-							ep.HostnameImmutable = true
-							ep.SigningRegion = region
-							return
-						},
-					),
-				),
-			)
-		} else {
-			s3Options = append(s3Options,
-				s3.WithEndpointResolver(
-					s3.EndpointResolverFromURL(args.Endpoint),
-				),
-			)
-		}
-	}
-
-	// region for s3 client
-	if args.Region != "" {
-		s3Options = append(s3Options,
-			func(opt *s3.Options) {
-				opt.Region = args.Region
-			},
-		)
-	}
-
-	// new s3 client
-	client := s3.NewFromConfig(
-		config,
-		s3Options...,
-	)
+	client := s3.New(sess, config)
 
 	// head bucket to validate
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+	_, err = client.HeadBucket(&s3.HeadBucketInput{
 		Bucket: ptrTo(args.Bucket),
 	})
 	if err != nil {
@@ -208,12 +115,12 @@ func NewAwsSDKv2(
 	}
 
 	logutil.Info("new object storage",
-		zap.Any("sdk", "aws v2"),
+		zap.Any("sdk", "aws v1"),
 		zap.Any("endpoint", args.Endpoint),
 		zap.Any("bucket", args.Bucket),
 	)
 
-	return &AwsSDKv2{
+	return &AwsSDKv1{
 		name:            args.Name,
 		bucket:          args.Bucket,
 		client:          client,
@@ -222,9 +129,9 @@ func NewAwsSDKv2(
 
 }
 
-var _ ObjectStorage = new(AwsSDKv2)
+var _ ObjectStorage = new(AwsSDKv1)
 
-func (a *AwsSDKv2) List(
+func (a *AwsSDKv1) List(
 	ctx context.Context,
 	prefix string,
 	fn func(bool, string, int64) (bool, error),
@@ -236,18 +143,18 @@ func (a *AwsSDKv2) List(
 	default:
 	}
 
-	var marker *string
+	var cont *string
 
 loop1:
 	for {
 		output, err := a.listObjects(
 			ctx,
-			&s3.ListObjectsInput{
-				Bucket:    ptrTo(a.bucket),
-				Delimiter: ptrTo("/"),
-				Prefix:    ptrTo(prefix),
-				Marker:    marker,
-				MaxKeys:   a.listMaxKeys,
+			&s3.ListObjectsV2Input{
+				Bucket:            ptrTo(a.bucket),
+				Delimiter:         ptrTo("/"),
+				Prefix:            ptrTo(prefix),
+				ContinuationToken: cont,
+				MaxKeys:           ptrTo(a.listMaxKeys),
 			},
 		)
 		if err != nil {
@@ -255,7 +162,7 @@ loop1:
 		}
 
 		for _, obj := range output.Contents {
-			more, err := fn(false, *obj.Key, obj.Size)
+			more, err := fn(false, *obj.Key, *obj.Size)
 			if err != nil {
 				return err
 			}
@@ -274,16 +181,16 @@ loop1:
 			}
 		}
 
-		if !output.IsTruncated {
+		if !*output.IsTruncated {
 			break
 		}
-		marker = output.NextMarker
+		cont = output.ContinuationToken
 	}
 
 	return nil
 }
 
-func (a *AwsSDKv2) Stat(
+func (a *AwsSDKv1) Stat(
 	ctx context.Context,
 	key string,
 ) (
@@ -306,22 +213,15 @@ func (a *AwsSDKv2) Stat(
 		},
 	)
 	if err != nil {
-		var httpError *http.ResponseError
-		if errors.As(err, &httpError) {
-			if httpError.Response.StatusCode == 404 {
-				err = moerr.NewFileNotFound(ctx, key)
-				return
-			}
-		}
 		return
 	}
 
-	size = output.ContentLength
+	size = *output.ContentLength
 
 	return
 }
 
-func (a *AwsSDKv2) Exists(
+func (a *AwsSDKv1) Exists(
 	ctx context.Context,
 	key string,
 ) (
@@ -336,18 +236,15 @@ func (a *AwsSDKv2) Exists(
 		},
 	)
 	if err != nil {
-		var httpError *http.ResponseError
-		if errors.As(err, &httpError) {
-			if httpError.Response.StatusCode == 404 {
-				return false, nil
-			}
+		if a.is404(err) {
+			return false, nil
 		}
 		return false, err
 	}
 	return output != nil, nil
 }
 
-func (a *AwsSDKv2) Write(
+func (a *AwsSDKv1) Write(
 	ctx context.Context,
 	key string,
 	r io.Reader,
@@ -362,8 +259,8 @@ func (a *AwsSDKv2) Write(
 		&s3.PutObjectInput{
 			Bucket:        ptrTo(a.bucket),
 			Key:           ptrTo(key),
-			Body:          r,
-			ContentLength: size,
+			Body:          r.(io.ReadSeeker), //TODO
+			ContentLength: ptrTo(size),
 			Expires:       expire,
 		},
 	)
@@ -374,7 +271,7 @@ func (a *AwsSDKv2) Write(
 	return
 }
 
-func (a *AwsSDKv2) Read(
+func (a *AwsSDKv1) Read(
 	ctx context.Context,
 	key string,
 	min *int64,
@@ -395,7 +292,6 @@ func (a *AwsSDKv2) Read(
 				Key:    ptrTo(key),
 			},
 		)
-		err = a.mapError(err, key)
 		if err != nil {
 			return nil, err
 		}
@@ -411,7 +307,6 @@ func (a *AwsSDKv2) Read(
 			Key:    ptrTo(key),
 		},
 	)
-	err = a.mapError(err, key)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +316,7 @@ func (a *AwsSDKv2) Read(
 	}, nil
 }
 
-func (a *AwsSDKv2) Delete(
+func (a *AwsSDKv1) Delete(
 	ctx context.Context,
 	keys ...string,
 ) (
@@ -441,9 +336,9 @@ func (a *AwsSDKv2) Delete(
 		return a.deleteSingle(ctx, keys[0])
 	}
 
-	objs := make([]types.ObjectIdentifier, 0, 1000)
+	objs := make([]*s3.ObjectIdentifier, 0, 1000)
 	for _, key := range keys {
-		objs = append(objs, types.ObjectIdentifier{Key: ptrTo(key)})
+		objs = append(objs, &s3.ObjectIdentifier{Key: ptrTo(key)})
 		if len(objs) == 1000 {
 			if err := a.deleteMultiObj(ctx, objs); err != nil {
 				return err
@@ -457,8 +352,8 @@ func (a *AwsSDKv2) Delete(
 	return nil
 }
 
-func (a *AwsSDKv2) deleteSingle(ctx context.Context, key string) error {
-	ctx, span := trace.Start(ctx, "AwsSDKv2.deleteSingle")
+func (a *AwsSDKv1) deleteSingle(ctx context.Context, key string) error {
+	ctx, span := trace.Start(ctx, "AwsSDKv1.deleteSingle")
 	defer span.End()
 	_, err := a.deleteObject(
 		ctx,
@@ -474,15 +369,15 @@ func (a *AwsSDKv2) deleteSingle(ctx context.Context, key string) error {
 	return nil
 }
 
-func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdentifier) error {
-	ctx, span := trace.Start(ctx, "AwsSDKv2.deleteMultiObj")
+func (a *AwsSDKv1) deleteMultiObj(ctx context.Context, objs []*s3.ObjectIdentifier) error {
+	ctx, span := trace.Start(ctx, "AwsSDKv1.deleteMultiObj")
 	defer span.End()
 	output, err := a.deleteObjects(ctx, &s3.DeleteObjectsInput{
 		Bucket: ptrTo(a.bucket),
-		Delete: &types.Delete{
+		Delete: &s3.Delete{
 			Objects: objs,
 			// In quiet mode the response includes only keys where the delete action encountered an error.
-			Quiet: true,
+			Quiet: ptrTo(true),
 		},
 	})
 	// delete api failed
@@ -493,7 +388,7 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	message := strings.Builder{}
 	if len(output.Errors) > 0 {
 		for _, Error := range output.Errors {
-			if *Error.Code == (*types.NoSuchKey)(nil).ErrorCode() {
+			if *Error.Code == s3.ErrCodeNoSuchKey {
 				continue
 			}
 			message.WriteString(fmt.Sprintf("%s: %s, %s;", *Error.Key, *Error.Code, *Error.Message))
@@ -505,8 +400,8 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	return nil
 }
 
-func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
-	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.listObjects")
+func (a *AwsSDKv1) listObjects(ctx context.Context, params *s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error) {
+	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.listObjects")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -517,16 +412,16 @@ func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput,
 	}, a.perfCounterSets...)
 	return doWithRetry(
 		"s3 list objects",
-		func() (*s3.ListObjectsOutput, error) {
-			return a.client.ListObjects(ctx, params, optFns...)
+		func() (*s3.ListObjectsV2Output, error) {
+			return a.client.ListObjectsV2(params)
 		},
 		maxRetryAttemps,
 		isRetryableError,
 	)
 }
 
-func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
-	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.headObject")
+func (a *AwsSDKv1) headObject(ctx context.Context, params *s3.HeadObjectInput) (*s3.HeadObjectOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.headObject")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -538,15 +433,15 @@ func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, o
 	return doWithRetry(
 		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
-			return a.client.HeadObject(ctx, params, optFns...)
+			return a.client.HeadObject(params)
 		},
 		maxRetryAttemps,
 		isRetryableError,
 	)
 }
 
-func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.putObject")
+func (a *AwsSDKv1) putObject(ctx context.Context, params *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.putObject")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -556,11 +451,11 @@ func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, opt
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
 	// not retryable because Reader may be half consumed
-	return a.client.PutObject(ctx, params, optFns...)
+	return a.client.PutObject(params)
 }
 
-func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
-	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.getObject")
+func (a *AwsSDKv1) getObject(ctx context.Context, min *int64, max *int64, params *s3.GetObjectInput) (io.ReadCloser, error) {
+	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.getObject")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -581,7 +476,7 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			output, err := doWithRetry(
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
-					return a.client.GetObject(ctx, params, optFns...)
+					return a.client.GetObject(params)
 				},
 				maxRetryAttemps,
 				isRetryableError,
@@ -600,8 +495,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 	return r, nil
 }
 
-func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
-	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObject")
+func (a *AwsSDKv1) deleteObject(ctx context.Context, params *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.deleteObject")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -613,15 +508,15 @@ func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInpu
 	return doWithRetry(
 		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
-			return a.client.DeleteObject(ctx, params, optFns...)
+			return a.client.DeleteObject(params)
 		},
 		maxRetryAttemps,
 		isRetryableError,
 	)
 }
 
-func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
-	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObjects")
+func (a *AwsSDKv1) deleteObjects(ctx context.Context, params *s3.DeleteObjectsInput) (*s3.DeleteObjectsOutput, error) {
+	ctx, task := gotrace.NewTask(ctx, "AwsSDKv1.deleteObjects")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -633,31 +528,20 @@ func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsIn
 	return doWithRetry(
 		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
-			return a.client.DeleteObjects(ctx, params, optFns...)
+			return a.client.DeleteObjects(params)
 		},
 		maxRetryAttemps,
 		isRetryableError,
 	)
 }
 
-func (a *AwsSDKv2) mapError(err error, path string) error {
+func (a *AwsSDKv1) is404(err error) bool {
 	if err == nil {
-		return nil
+		return false
 	}
-	var httpError *http.ResponseError
-	if errors.As(err, &httpError) {
-		if httpError.Response.StatusCode == 404 {
-			return moerr.NewFileNotFoundNoCtx(path)
-		}
+	var awsErr awserr.Error
+	if !errors.As(err, &awsErr) {
+		return false
 	}
-	return err
+	return awsErr.Code() == "NotFound"
 }
-
-// from https://github.com/aws/aws-sdk-go-v2/issues/543
-type noOpRateLimit struct{}
-
-func (noOpRateLimit) AddTokens(uint) error { return nil }
-func (noOpRateLimit) GetToken(context.Context, uint) (func() error, error) {
-	return noOpToken, nil
-}
-func noOpToken() error { return nil }
