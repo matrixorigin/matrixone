@@ -4,7 +4,7 @@ use tpch;
 set global save_query_result = on;
 
 -- test q1
-select
+/* cloud_user */select
 	l_returnflag,
 	l_linestatus,
 	sum(l_quantity) as sum_qty,
@@ -29,7 +29,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test q2
-select
+/* cloud_user */select
 	s_acctbal,
 	s_name,
 	n_name,
@@ -77,7 +77,7 @@ limit 100
 select * from result_scan(last_query_id()) as u;
 
 -- test q3
-select
+/* cloud_user */select
 	l_orderkey,
 	sum(l_extendedprice * (1 - l_discount)) as revenue,
 	o_orderdate,
@@ -104,7 +104,7 @@ limit 10
 select * from result_scan(last_query_id()) as u;
 
 -- test sql4
-select
+/* cloud_user */select
     o_orderpriority,
     count(*) as order_count
 from
@@ -129,7 +129,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql5
-select
+/* cloud_user */select
 	n_name,
 	sum(l_extendedprice * (1 - l_discount)) as revenue
 from
@@ -157,7 +157,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql6
-select
+/* cloud_user */select
 	sum(l_extendedprice * l_discount) as revenue
 from
 	lineitem
@@ -169,7 +169,7 @@ where
 select * from result_scan(last_query_id()) as u;
 
 -- test sql7
-select
+/* cloud_user */select
     sum(l_extendedprice * l_discount) as revenue
 from
     lineitem
@@ -179,7 +179,7 @@ where
     and l_discount between 0.03 - 0.01 and 0.03 + 0.01
     and l_quantity < 24;
 
-select
+/* cloud_user */select
     supp_nation,
     cust_nation,
     l_year,
@@ -222,7 +222,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql8
-select
+/* cloud_user */select
     o_year,
     (sum(case
         when nation = 'ARGENTINA' then volume
@@ -263,7 +263,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql9
-select
+/* cloud_user */select
     nation,
     o_year,
     sum(amount) as sum_profit
@@ -299,7 +299,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql10
-select
+/* cloud_user */select
 	c_custkey,
 	c_name,
 	sum(l_extendedprice * (1 - l_discount)) as revenue,
@@ -337,7 +337,7 @@ select * from result_scan(last_query_id()) as u;
 -- @bvt:issue
 
 -- test sql11
-select
+/* cloud_user */select
     ps_partkey,
     sum(ps_supplycost * ps_availqty) as value
 from
@@ -367,7 +367,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql12
-select
+/* cloud_user */select
         l_shipmode,
         sum(case
                 when o_orderpriority = '1-URGENT'
@@ -399,7 +399,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql13
-select
+/* cloud_user */select
 	c_count,
 	count(*) as custdist
 from
@@ -423,7 +423,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql14
-select
+/* cloud_user */select
 	100.00 * sum(case
 		when p_type like 'PROMO%'
 			then l_extendedprice * (1 - l_discount)
@@ -474,7 +474,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql16
-select
+/* cloud_user */select
     p_brand,
     p_type,
     p_size,
@@ -508,7 +508,7 @@ order by
 select * from result_scan(last_query_id()) as u;
 
 -- test sql17
-select
+/* cloud_user */select
     sum(l_extendedprice) / 7.0 as avg_yearly
 from
     lineitem,
@@ -528,7 +528,7 @@ where
 select * from result_scan(last_query_id()) as u;
 
 -- test sql18
-select
+/* cloud_user */select
     c_name,
     c_custkey,
     o_orderkey,
@@ -565,7 +565,7 @@ limit 100
 select * from result_scan(last_query_id()) as u;
 
 -- test sql19
-select
+/* cloud_user */select
     sum(l_extendedprice* (1 - l_discount)) as revenue
 from
     lineitem,
@@ -603,7 +603,7 @@ where
 select * from result_scan(last_query_id()) as u;
 
 -- test sql20
-select
+/* cloud_user */select
     s_name,
     s_address
 from
@@ -643,7 +643,7 @@ order by s_name
 select * from result_scan(last_query_id()) as u;
 
 -- test sql21
-select
+/* cloud_user */select
     s_name,
     count(*) as numwait
 from
@@ -687,7 +687,7 @@ limit 100
 select * from result_scan(last_query_id()) as u;
 
 -- test sql22
-select
+/* cloud_user */select
     cntrycode,
     count(*) as numcust,
     sum(c_acctbal) as totacctbal
