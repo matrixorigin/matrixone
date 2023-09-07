@@ -43,10 +43,10 @@ func newTxnTableForTest(
 			},
 		),
 	}
-	var tnStore DNStore
+	var tnStore TNStore
 	txn := &Transaction{
 		engine:   engine,
-		tnStores: []DNStore{tnStore},
+		tnStores: []TNStore{tnStore},
 	}
 	db := &txnDatabase{
 		txn: txn,

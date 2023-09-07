@@ -38,7 +38,7 @@ func updatePartitionOfPull(
 	op client.TxnOperator,
 	engine *Engine,
 	partition *logtailreplay.Partition,
-	tn DNStore,
+	tn TNStore,
 	req api.SyncLogTailReq,
 ) error {
 	logDebugf(op.Txn(), "updatePartitionOfPull")
@@ -143,7 +143,7 @@ func genSyncLogTailReq(have, want timestamp.Timestamp, databaseId,
 	}
 }
 
-func genLogTailReq(tn DNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error) {
+func genLogTailReq(tn TNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error) {
 	payload, err := types.Encode(&req)
 	if err != nil {
 		return nil, err

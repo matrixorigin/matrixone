@@ -740,7 +740,7 @@ func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 }
 
 func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
-	mq := make(map[string]DNStore)
+	mq := make(map[string]TNStore)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByTN{})
 	for _, e := range writes {
@@ -812,7 +812,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 			ebat.Vecs = e.bat.Vecs
 			ebat.Attrs = e.bat.Attrs
 		} else {
-			//e.bat.Vecs[0] is rowid vector
+			//e.bat.Vecs[0] is rowid vector, skip it.
 			ebat.Vecs = e.bat.Vecs[1:]
 			ebat.Attrs = e.bat.Attrs[1:]
 		}

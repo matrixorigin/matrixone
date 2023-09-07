@@ -480,8 +480,8 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 	return op.GetWorkspace().(*Transaction)
 }
 
-func (e *Engine) getTNServices() []DNStore {
-	var values []DNStore
+func (e *Engine) getTNServices() []TNStore {
+	var values []TNStore
 	cluster := clusterservice.GetMOCluster()
 	cluster.GetTNService(clusterservice.NewSelector(),
 		func(d metadata.TNService) bool {

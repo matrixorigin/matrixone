@@ -79,7 +79,7 @@ var (
 
 var GcCycle = 10 * time.Second
 
-type DNStore = metadata.TNService
+type TNStore = metadata.TNService
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
@@ -126,7 +126,7 @@ type Transaction struct {
 	// txn workspace size
 	workspaceSize uint64
 
-	tnStores []DNStore
+	tnStores []TNStore
 	proc     *process.Process
 
 	idGen IDGenerator
@@ -394,7 +394,7 @@ type Entry struct {
 	fileName string
 	// update or delete tuples
 	bat       *batch.Batch
-	tnStore   DNStore
+	tnStore   TNStore
 	pkChkByTN int8
 	/*
 		if truncate is true,it denotes the Entry with typ DELETE
