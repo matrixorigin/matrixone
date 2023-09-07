@@ -61,11 +61,11 @@ func ReturnType(op int, typ types.Type) (types.Type, error) {
 	return otyp, nil
 }
 
-func New(op int, dist bool, typ types.Type, partialresults []any) (Agg[any], error) {
+func New(op int, dist bool, typ types.Type, partialresults any) (Agg[any], error) {
 	return NewWithConfig(op, dist, typ, nil, partialresults)
 }
 
-func NewWithConfig(op int, dist bool, typ types.Type, config any, partialresults []any) (Agg[any], error) {
+func NewWithConfig(op int, dist bool, typ types.Type, config any, partialresults any) (Agg[any], error) {
 	switch op {
 	case AggregateSum:
 		return newSum(typ, dist), nil
@@ -110,7 +110,7 @@ func NewWithConfig(op int, dist bool, typ types.Type, config any, partialresults
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for aggregate %s", typ, Names[op]))
 }
 
-func newCount(typ types.Type, dist bool, isStar bool, partialresults []any) Agg[any] {
+func newCount(typ types.Type, dist bool, isStar bool, partialresults any) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		return newGenericCount[bool](typ, dist, isStar, partialresults)
@@ -302,7 +302,7 @@ func newSum(typ types.Type, dist bool) Agg[any] {
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for sum", typ))
 }
 
-func newMax(typ types.Type, dist bool, partialresults []any) Agg[any] {
+func newMax(typ types.Type, dist bool, partialresults any) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		aggPriv := NewBoolMax()
@@ -398,7 +398,7 @@ func newMax(typ types.Type, dist bool, partialresults []any) Agg[any] {
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for max", typ))
 }
 
-func newMin(typ types.Type, dist bool, partialresults []any) Agg[any] {
+func newMin(typ types.Type, dist bool, partialresults any) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		aggPriv := NewBoolMin()
@@ -795,7 +795,7 @@ func newGenericAvg[T Numeric](typ types.Type, dist bool) Agg[any] {
 	return NewUnaryAgg(AggregateAvg, aggPriv, false, typ, AvgReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil, nil)
 }
 
-func newGenericMax[T Compare](typ types.Type, dist bool, partialresults []any) Agg[any] {
+func newGenericMax[T Compare](typ types.Type, dist bool, partialresults any) Agg[any] {
 	aggPriv := NewMax[T]()
 	if dist {
 		return NewUnaryDistAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresults)
@@ -803,7 +803,7 @@ func newGenericMax[T Compare](typ types.Type, dist bool, partialresults []any) A
 	return NewUnaryAgg(AggregateMax, aggPriv, false, typ, MaxReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil, partialresults)
 }
 
-func newGenericMin[T Compare](typ types.Type, dist bool, partialresults []any) Agg[any] {
+func newGenericMin[T Compare](typ types.Type, dist bool, partialresults any) Agg[any] {
 	aggPriv := NewMin[T]()
 	if dist {
 		return NewUnaryDistAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresults)
@@ -811,7 +811,7 @@ func newGenericMin[T Compare](typ types.Type, dist bool, partialresults []any) A
 	return NewUnaryAgg(AggregateMin, aggPriv, false, typ, MinReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil, partialresults)
 }
 
-func newGenericCount[T types.OrderedT | Decimal128AndString](typ types.Type, dist bool, isStar bool, partialresults []any) Agg[any] {
+func newGenericCount[T types.OrderedT | Decimal128AndString](typ types.Type, dist bool, isStar bool, partialresults any) Agg[any] {
 	aggPriv := NewCount[T](isStar)
 	if dist {
 		return NewUnaryDistAgg(AggregateCount, aggPriv, true, typ, CountReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresults)

@@ -55,7 +55,7 @@ func (a *Anyvalue[T]) Grows(size int) {
 	}
 }
 
-func (a *Anyvalue[T]) Eval(vs []T, err error) ([]T, error) {
+func (a *Anyvalue[T]) Eval(vs []T, err error, _ any) ([]T, error) {
 	return vs, nil
 }
 
@@ -104,7 +104,7 @@ func (a *StrAnyvalue) Grows(size int) {
 	}
 }
 
-func (a *StrAnyvalue) Eval(vs [][]byte, err error) ([][]byte, error) {
+func (a *StrAnyvalue) Eval(vs [][]byte, err error, _ any) ([][]byte, error) {
 	return vs, nil
 }
 

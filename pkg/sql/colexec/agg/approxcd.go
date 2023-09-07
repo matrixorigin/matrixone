@@ -43,7 +43,7 @@ func (a *ApproxCountDistic[T]) Grows(n int) {
 	}
 }
 
-func (a *ApproxCountDistic[T]) Eval(vs []uint64, err error) ([]uint64, error) {
+func (a *ApproxCountDistic[T]) Eval(vs []uint64, err error, _ any) ([]uint64, error) {
 	for i := range vs {
 		vs[i] = a.Sk[i].Estimate()
 	}

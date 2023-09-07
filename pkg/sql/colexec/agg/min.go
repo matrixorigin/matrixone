@@ -61,7 +61,14 @@ func NewMin[T Compare]() *Min[T] {
 func (m *Min[T]) Grows(_ int) {
 }
 
-func (m *Min[T]) Eval(vs []T, err error) ([]T, error) {
+func (m *Min[T]) Eval(vs []T, err error, partialresults any) ([]T, error) {
+	if partialresults != nil {
+		for _, min := range partialresults.([]T) {
+			if min < vs[0] {
+				vs[0] = min
+			}
+		}
+	}
 	return vs, nil
 }
 
@@ -99,7 +106,14 @@ func NewD64Min() *Decimal64Min {
 func (m *Decimal64Min) Grows(_ int) {
 }
 
-func (m *Decimal64Min) Eval(vs []types.Decimal64, err error) ([]types.Decimal64, error) {
+func (m *Decimal64Min) Eval(vs []types.Decimal64, err error, partialresults any) ([]types.Decimal64, error) {
+	if partialresults != nil {
+		for _, min := range partialresults.([]types.Decimal64) {
+			if min < vs[0] {
+				vs[0] = min
+			}
+		}
+	}
 	return vs, nil
 }
 
@@ -137,7 +151,14 @@ func NewD128Min() *Decimal128Min {
 func (m *Decimal128Min) Grows(_ int) {
 }
 
-func (m *Decimal128Min) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+func (m *Decimal128Min) Eval(vs []types.Decimal128, err error, partialresults any) ([]types.Decimal128, error) {
+	if partialresults != nil {
+		for _, min := range partialresults.([]types.Decimal128) {
+			if min.Compare(vs[0]) < 0 {
+				vs[0] = min
+			}
+		}
+	}
 	return vs, nil
 }
 
@@ -175,7 +196,14 @@ func NewBoolMin() *BoolMin {
 func (m *BoolMin) Grows(_ int) {
 }
 
-func (m *BoolMin) Eval(vs []bool, err error) ([]bool, error) {
+func (m *BoolMin) Eval(vs []bool, err error, partialresults any) ([]bool, error) {
+	if partialresults != nil {
+		for _, min := range partialresults.([]bool) {
+			if !min {
+				vs[0] = false
+			}
+		}
+	}
 	return vs, nil
 }
 
@@ -214,7 +242,15 @@ func NewStrMin() *StrMin {
 func (m *StrMin) Grows(_ int) {
 }
 
-func (m *StrMin) Eval(vs [][]byte, err error) ([][]byte, error) {
+func (m *StrMin) Eval(vs [][]byte, err error, partialresults any) ([][]byte, error) {
+	if partialresults != nil {
+		for _, min := range partialresults.([][]byte) {
+			if bytes.Compare(min, vs[0]) < 0 {
+				vs[0] = make([]byte, 0, len(min))
+				vs[0] = append(vs[0], min...)
+			}
+		}
+	}
 	return vs, nil
 }
 
@@ -254,7 +290,14 @@ func NewUuidMin() *UuidMin {
 func (m *UuidMin) Grows(_ int) {
 }
 
-func (m *UuidMin) Eval(vs []types.Uuid, err error) ([]types.Uuid, error) {
+func (m *UuidMin) Eval(vs []types.Uuid, err error, partialresults any) ([]types.Uuid, error) {
+	if partialresults != nil {
+		for _, min := range partialresults.([]types.Uuid) {
+			if min.Lt(vs[0]) {
+				vs[0] = min
+			}
+		}
+	}
 	return vs, nil
 }
 

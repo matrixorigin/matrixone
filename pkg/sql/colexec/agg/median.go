@@ -184,7 +184,7 @@ func (m *Median[T]) Grows(cnt int) {
 	}
 }
 
-func (m *Median[T]) Eval(vs []float64, err error) ([]float64, error) {
+func (m *Median[T]) Eval(vs []float64, err error, _ any) ([]float64, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +259,7 @@ func (m *Decimal64Median) Grows(cnt int) {
 	}
 }
 
-func (m *Decimal64Median) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+func (m *Decimal64Median) Eval(vs []types.Decimal128, err error, _ any) ([]types.Decimal128, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +352,7 @@ func (m *Decimal128Median) Grows(cnt int) {
 	}
 }
 
-func (m *Decimal128Median) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+func (m *Decimal128Median) Eval(vs []types.Decimal128, err error, _ any) ([]types.Decimal128, error) {
 	if err != nil {
 		return nil, err
 	}

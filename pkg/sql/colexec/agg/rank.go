@@ -33,7 +33,7 @@ func NewRank() *Rank {
 
 func (r *Rank) Grows(_ int) {}
 
-func (r *Rank) Eval(vs []int64, err error) ([]int64, error) {
+func (r *Rank) Eval(vs []int64, err error, _ any) ([]int64, error) {
 	idx := 0
 	for _, p := range r.Ps {
 		sn := int64(1)

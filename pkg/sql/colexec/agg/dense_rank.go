@@ -33,7 +33,7 @@ func NewDenseRank() *DenseRank {
 
 func (r *DenseRank) Grows(_ int) {}
 
-func (r *DenseRank) Eval(vs []int64, err error) ([]int64, error) {
+func (r *DenseRank) Eval(vs []int64, err error, _ any) ([]int64, error) {
 	idx := 0
 	for _, p := range r.Ps {
 		sn := int64(1)

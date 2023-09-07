@@ -64,8 +64,8 @@ func (sdp *Stddevpop[T1]) Grows(sizes int) {
 	sdp.Variance.Grows(sizes)
 }
 
-func (sdp *Stddevpop[T1]) Eval(vs []float64, err error) ([]float64, error) {
-	sdp.Variance.Eval(vs, err)
+func (sdp *Stddevpop[T1]) Eval(vs []float64, err error, _ any) ([]float64, error) {
+	sdp.Variance.Eval(vs, err, nil)
 	for i, v := range vs {
 		vs[i] = math.Sqrt(v)
 	}
@@ -101,8 +101,8 @@ func (s *StdD64) Grows(size int) {
 	s.Variance.Grows(size)
 }
 
-func (s *StdD64) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
-	vs, err = s.Variance.Eval(vs, err)
+func (s *StdD64) Eval(vs []types.Decimal128, err error, _ any) ([]types.Decimal128, error) {
+	vs, err = s.Variance.Eval(vs, err, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -146,8 +146,8 @@ func (s *StdD128) Grows(size int) {
 	s.Variance.Grows(size)
 }
 
-func (s *StdD128) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
-	vs, err = s.Variance.Eval(vs, err)
+func (s *StdD128) Eval(vs []types.Decimal128, err error, _ any) ([]types.Decimal128, error) {
+	vs, err = s.Variance.Eval(vs, err, nil)
 	if err != nil {
 		return nil, err
 	}
