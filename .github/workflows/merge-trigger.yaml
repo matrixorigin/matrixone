@@ -836,6 +836,29 @@ jobs:
           aws eks --region us-west-2 update-kubeconfig --name eks-ci-new --kubeconfig eks-ci
           export KUBECONFIG=$(pwd)/eks-ci
           if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};fi
+     
+      - name: Check MO Status and Collect Trace
+        if: ${{ needs.docker_image_build.result == 'success' }}
+        continue-on-error: true
+        run: |
+          set -x
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
+          mkdir -p $GITHUB_WORKSPACE/upload && cd $GITHUB_WORKSPACE/upload
+          dn_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=DNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}')
+          curl "http://$dn_ip:6060/debug/pprof/trace?seconds=30" -o dn_trace.out
+          cn_0_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | head -n 1)
+          curl "http://$cn_0_ip:6060/debug/pprof/trace?seconds=30" -o cn_0_trace.out
+          cn_1_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | grep -v $cn_0_ip)
+          curl "http://$cn_1_ip:6060/debug/pprof/trace?seconds=30" -o cn_1_trace.out
+      - uses: actions/upload-artifact@v3
+        if: ${{ needs.docker_image_build.result == 'success' }}
+        continue-on-error: true
+        with:
+          name: mo-cluster-trace-${{ github.event.pull_request.number }}
+          path: |
+            ${{ github.workspace }}/upload
+          retention-days: 7
+     
       - name: Check MO Status and Clean ENV
         if: ${{ needs.docker_image_build.result == 'success' }}
         run: |
