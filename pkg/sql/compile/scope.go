@@ -195,8 +195,17 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
+
 	err := s.remoteRun(c)
-	return err
+	select {
+	case <-s.Proc.Ctx.Done():
+		// if context has done, it means other pipeline stop the query normally.
+		// so there is no need to return the error again.
+		return nil
+
+	default:
+		return err
+	}
 }
 
 // ParallelRun try to execute the scope in parallel way.
