@@ -111,6 +111,57 @@ func FindFirstIndexInSortedVarlenVector(vec *Vector, v []byte) int {
 	return -1
 }
 
+// IntegerGetSum get the sum the vector if the vector type is integer.
+func IntegerGetSum[T types.Ints | types.UInts](vec *Vector) (sum T) {
+	var ok bool
+	col := MustFixedCol[T](vec)
+	if vec.HasNull() {
+		for i, v := range col {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			sum, ok = addInt(sum, v)
+			if !ok {
+				return 0
+			}
+		}
+	} else {
+		for _, v := range col {
+			sum, ok = addInt(sum, v)
+			if !ok {
+				return 0
+			}
+		}
+	}
+	return
+}
+
+func addInt[T types.Ints | types.UInts](a, b T) (T, bool) {
+	c := a + b
+	if (c > a) == (b > 0) {
+		return c, true
+	}
+	return 0, false
+}
+
+// FloatGetSum get the sum the vector if the vector type is float.
+func FloatGetSum[T types.Floats](vec *Vector) (sum T) {
+	col := MustFixedCol[T](vec)
+	if vec.HasNull() {
+		for i, v := range col {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			sum += v
+		}
+	} else {
+		for _, v := range col {
+			sum += v
+		}
+	}
+	return
+}
+
 // OrderedGetMinAndMax returns the min and max value of a vector of ordered type
 // If the vector has null, the null value will be ignored
 func OrderedGetMinAndMax[T types.OrderedT](vec *Vector) (minv, maxv T) {

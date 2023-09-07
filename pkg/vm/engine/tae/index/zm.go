@@ -1198,6 +1198,12 @@ func BatchUpdateZM(zm ZM, vec *vector.Vector) (err error) {
 	return
 }
 
+func SetZMSum(zm ZM, vec *vector.Vector) {
+	if ok, sumv := vec.GetSumValue(); ok {
+		zm.SetSum(sumv)
+	}
+}
+
 func EncodeZM(zm *ZM) []byte {
 	return *zm
 }
