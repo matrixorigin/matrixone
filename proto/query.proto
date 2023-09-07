@@ -29,6 +29,9 @@ enum CmdMethod {
   AlterAccount = 2;
   // KillConn represents the kill connection request.
   KillConn = 3;
+  // ProcessTraceSpan process the trace span cmd transferred from
+  // other cn
+  TraceSpan = 4;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -60,6 +63,8 @@ message Request {
   AlterAccountRequest AlterAccountRequest = 5;
   // KillConnRequest is the request which kills the connections.
   KillConnRequest KillConnRequest = 6;
+  // TraceSpanRequest is the request for transferred span cmd
+  TraceSpanRequest TraceSpanRequest = 7;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -81,6 +86,8 @@ message Response {
   AlterAccountResponse AlterAccountResponse = 5;
   // KillConnResponse is the response of KillConnRequest.
   KillConnResponse KillConnResponse = 6;
+  // TraceSpanResponse is the response of TraceSpanRequest
+  TraceSpanResponse TraceSpanResponse = 7;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -106,4 +113,13 @@ message KillConnRequest {
 // KillConnResponse is the response to the kill connection request.
 message KillConnResponse {
   bool Success = 1;
+}
+
+message TraceSpanRequest {
+  string Cmd = 1;
+  string Spans = 2;
+}
+
+message TraceSpanResponse {
+  string Resp = 1;
 }

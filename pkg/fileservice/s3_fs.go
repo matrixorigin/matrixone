@@ -291,8 +291,13 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
-	ctx, span := trace.Start(ctx, "S3FS.Write")
-	defer span.End()
+	var err error
+	size := vector.EntriesSize()
+	ctx, span := trace.Start(ctx, "S3FS.Write", trace.WithKind(trace.SpanKindS3FSVis))
+	defer func() {
+		// cover another func to catch the err when process Write
+		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
+	}()
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -321,15 +326,18 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	if output != nil {
 		// key existed
-		return moerr.NewFileAlreadyExistsNoCtx(path.File)
+		err = moerr.NewFileAlreadyExistsNoCtx(path.File)
+		return err
 	}
 
-	return s.write(ctx, vector)
+	err = s.write(ctx, vector)
+	return err
 }
 
 func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
+
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
@@ -462,11 +470,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
-	if err := s.read(ctx, vector); err != nil {
-		return err
-	}
-
-	return nil
+	err = s.read(ctx, vector)
+	return err
 }
 
 func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
@@ -498,13 +503,19 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
+func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	if vector.allDone() {
+		// all cache hit
 		return nil
 	}
 
-	ctx, span := trace.Start(ctx, "S3FS.read")
-	defer span.End()
+	// collect read info only when cache missing
+	size := vector.EntriesSize()
+	ctx, span := trace.Start(ctx, "S3FS.read", trace.WithKind(trace.SpanKindS3FSVis))
+	defer func() {
+		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
+	}()
+
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
@@ -643,12 +654,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		setData := true
+		var data []byte
+		var reader io.ReadCloser
 
 		if w := vector.Entries[i].WriterForRead; w != nil {
 			setData = false
 			if getContentDone {
 				// data is ready
-				data, err := getData(ctx)
+				data, err = getData(ctx)
 				if err != nil {
 					return err
 				}
@@ -659,7 +672,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 			} else {
 				// get a reader and copy
-				reader, err := getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				reader, err = getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
 				if err != nil {
 					return err
 				}
@@ -679,7 +692,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			setData = false
 			if getContentDone {
 				// data is ready
-				data, err := getData(ctx)
+				data, err = getData(ctx)
 				if err != nil {
 					return err
 				}
@@ -687,7 +700,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 			} else {
 				// get a new reader
-				reader, err := getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
+				reader, err = getReader(ctx, entry.Size < 0, entry.Offset, entry.Offset+entry.Size)
 				if err != nil {
 					return err
 				}
@@ -700,7 +713,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 		// set Data field
 		if setData {
-			data, err := getData(ctx)
+			data, err = getData(ctx)
 			if err != nil {
 				return err
 			}
@@ -714,7 +727,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 		}
 
-		if err := entry.setCachedData(); err != nil {
+		if err = entry.setCachedData(); err != nil {
 			return err
 		}
 
@@ -934,7 +947,7 @@ func newS3FS(arguments []string) (*S3FS, error) {
 			MaxIdleConns:          100,
 			IdleConnTimeout:       180 * time.Second,
 			MaxIdleConnsPerHost:   100,
-			MaxConnsPerHost:       100,
+			MaxConnsPerHost:       1000,
 			TLSHandshakeTimeout:   3 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 			ForceAttemptHTTP2:     true,
