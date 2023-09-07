@@ -451,7 +451,7 @@ with q15_revenue0 as (
     group by
         l_suppkey
     )
-select
+/* cloud_user */select
     s_suppkey,
     s_name,
     s_address,

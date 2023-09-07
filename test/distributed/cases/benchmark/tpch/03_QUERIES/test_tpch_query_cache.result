@@ -720,7 +720,7 @@ and l_shipdate < date '1995-12-01' + interval '3' month
 group by
 l_suppkey
 )
-select
+/* cloud_user */select
 s_suppkey,
 s_name,
 s_address,
