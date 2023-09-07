@@ -213,6 +213,10 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 }
 
 func TestMOSpan_End(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skip("machine's performance too low to handle time sensitive case, issue #11669")
+		return
+	}
 
 	s := gostub.Stub(&freeMOSpan, func(span *MOSpan) {})
 	defer s.Reset()
@@ -278,7 +282,6 @@ func TestMOSpan_End(t *testing.T) {
 
 	// span with deadline context (plus calling cancel2() before func return)
 	deadlineCtx2, cancel2 := context.WithTimeout(ctx, time.Millisecond)
-	defer cancel()
 	var deadlineSpan2 trace.Span
 	WG.Add(1)
 	go func() {
@@ -297,7 +300,6 @@ func TestMOSpan_End(t *testing.T) {
 
 	// span with hung option, with Deadline situation
 	caseHungOptionWithDeadline := func() {
-		defer cancel()
 		var hungSpan trace.Span
 		WG.Add(1)
 		go func() {
@@ -317,7 +319,6 @@ func TestMOSpan_End(t *testing.T) {
 
 	// span with hung option, with NO Deadline situation
 	caseHungOptionWithoutDeadline := func() {
-		defer cancel()
 		var hungSpan trace.Span
 		WG.Add(1)
 		go func() {
