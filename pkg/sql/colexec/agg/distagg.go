@@ -21,8 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func NewUnaryDistAgg[T1, T2 any](op int64, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
-	eval func([]T2, error) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
+func NewUnaryDistAgg[T1, T2 any](
+	op int64,
+	priv AggStruct,
+	isCount bool,
+	ityp, otyp types.Type,
+	grows func(int),
+	eval func([]T2, error) ([]T2, error),
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
 		op:      op,
@@ -185,7 +191,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, grou
 
 				value = (any)(storeValue).(T1)
 				for i := uint64(0); i < loopLength; i++ {
-					if groupOfRows[i] == groupNotMatch {
+					if groupOfRows[i] == GroupNotMatch {
 						continue
 					}
 					groupNumber := int64(groupOfRows[i] - 1)
@@ -207,7 +213,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, grou
 		} else {
 			nulls := inputVector.GetNulls()
 			for i := uint64(0); i < loopLength; i++ {
-				if groupOfRows[i] == groupNotMatch {
+				if groupOfRows[i] == GroupNotMatch {
 					continue
 				}
 				rowIndex := rowOffset + i
@@ -244,7 +250,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, grou
 			if !isNull {
 				value = values[0]
 				for i := uint64(0); i < loopLength; i++ {
-					if groupOfRows[i] == groupNotMatch {
+					if groupOfRows[i] == GroupNotMatch {
 						continue
 					}
 					groupNumber := int64(groupOfRows[i] - 1)
@@ -266,7 +272,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, grou
 		} else {
 			nulls := inputVector.GetNulls()
 			for i := uint64(0); i < loopLength; i++ {
-				if groupOfRows[i] == groupNotMatch {
+				if groupOfRows[i] == GroupNotMatch {
 					continue
 				}
 				rowIndex := rowOffset + i
@@ -425,7 +431,7 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus 
 
 	var ok bool
 	for i := range groupStatus {
-		if groupIdxes[i] == groupNotMatch {
+		if groupIdxes[i] == GroupNotMatch {
 			continue
 		}
 		groupIdx1 := int64(groupIdxes[i] - 1)

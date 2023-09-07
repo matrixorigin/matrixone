@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	groupNotMatch = 0
+	GroupNotMatch = 0
 )
 
 type Aggregate struct {

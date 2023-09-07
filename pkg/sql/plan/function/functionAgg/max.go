@@ -15,7 +15,9 @@
 package functionAgg
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
@@ -23,7 +25,7 @@ import (
 func NewAggMax(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_bool:
-		aggPriv := agg.NewBoolMax()
+		aggPriv := &sAggBoolMax{}
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
@@ -59,25 +61,25 @@ func NewAggMax(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 	case types.T_enum:
 		return newGenericMax[types.Enum](overloadID, inputTypes[0], outputType, dist)
 	case types.T_decimal64:
-		aggPriv := agg.NewD64Max()
+		aggPriv := &sAggDecimal64Max{}
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
 		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_decimal128:
-		aggPriv := agg.NewD128Max()
+		aggPriv := &sAggDecimal128Max{}
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
 		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_uuid:
-		aggPriv := agg.NewUuidMax()
+		aggPriv := &sAggUuidMax{}
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
 		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_binary, types.T_varbinary, types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		aggPriv := agg.NewStrMax()
+		aggPriv := &sAggStrMax{}
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
@@ -87,7 +89,7 @@ func NewAggMax(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 }
 
 func newGenericMax[T compare](overloadID int64, typ types.Type, otyp types.Type, dist bool) (agg.Agg[any], error) {
-	aggPriv := agg.NewMax[T]()
+	aggPriv := &sAggMax[T]{}
 	if dist {
 		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
@@ -101,5 +103,150 @@ type sAggDecimal128Max struct{}
 type sAggUuidMax struct{}
 type sAggStrMax struct{}
 
-func (s *sAggMax[T]) Grows(_ int) {}
-func (s *sAggMax[T]) Fill(groupNumber int64, values T, lastResult T, count int64, isEmpty bool, isNull bool)
+func (s *sAggMax[T]) Grows(_ int)         {}
+func (s *sAggMax[T]) Free(_ *mpool.MPool) {}
+func (s *sAggMax[T]) Fill(groupNumber int64, values T, lastResult T, count int64, isEmpty bool, isNull bool) (newResult T, isStillEmpty bool, err error) {
+	if !isNull {
+		if values > lastResult || isEmpty {
+			return values, false, nil
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggMax[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 T, result2 T, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult T, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		if !isEmpty1 && result1 > result2 {
+			return result1, false, nil
+		}
+		return result2, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggMax[T]) Eval(lastResult []T, _ error) (result []T, err error) { return lastResult, nil }
+func (s *sAggMax[T]) MarshalBinary() ([]byte, error)                       { return nil, nil }
+func (s *sAggMax[T]) UnmarshalBinary([]byte) error                         { return nil }
+
+func (s *sAggBoolMax) Grows(_ int)         {}
+func (s *sAggBoolMax) Free(_ *mpool.MPool) {}
+func (s *sAggBoolMax) Fill(groupNumber int64, values bool, lastResult bool, count int64, isEmpty bool, isNull bool) (newResult bool, isStillEmpty bool, err error) {
+	if !isNull {
+		if values || isEmpty {
+			return values, false, nil
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggBoolMax) Merge(groupNumber1 int64, groupNumber2 int64, result1 bool, result2 bool, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult bool, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		if !isEmpty1 && result1 {
+			return result1, false, nil
+		}
+		return result2, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggBoolMax) Eval(lastResult []bool, _ error) (result []bool, err error) {
+	return lastResult, nil
+}
+func (s *sAggBoolMax) MarshalBinary() ([]byte, error) { return nil, nil }
+func (s *sAggBoolMax) UnmarshalBinary([]byte) error   { return nil }
+
+func (s *sAggDecimal64Max) Grows(_ int)         {}
+func (s *sAggDecimal64Max) Free(_ *mpool.MPool) {}
+func (s *sAggDecimal64Max) Fill(groupNumber int64, values types.Decimal64, lastResult types.Decimal64, count int64, isEmpty bool, isNull bool) (newResult types.Decimal64, isStillEmpty bool, err error) {
+	if !isNull {
+		if values.Compare(lastResult) > 0 || isEmpty {
+			return values, false, nil
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggDecimal64Max) Merge(groupNumber1 int64, groupNumber2 int64, result1 types.Decimal64, result2 types.Decimal64, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult types.Decimal64, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		if !isEmpty1 && result1.Compare(result2) > 0 {
+			return result1, false, nil
+		}
+		return result2, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggDecimal64Max) Eval(lastResult []types.Decimal64, _ error) (result []types.Decimal64, err error) {
+	return lastResult, nil
+}
+func (s *sAggDecimal64Max) MarshalBinary() ([]byte, error) { return nil, nil }
+func (s *sAggDecimal64Max) UnmarshalBinary([]byte) error   { return nil }
+
+func (s *sAggDecimal128Max) Grows(_ int)         {}
+func (s *sAggDecimal128Max) Free(_ *mpool.MPool) {}
+func (s *sAggDecimal128Max) Fill(groupNumber int64, values types.Decimal128, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (newResult types.Decimal128, isStillEmpty bool, err error) {
+	if !isNull {
+		if values.Compare(lastResult) > 0 || isEmpty {
+			return values, false, nil
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggDecimal128Max) Merge(groupNumber1 int64, groupNumber2 int64, result1 types.Decimal128, result2 types.Decimal128, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult types.Decimal128, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		if !isEmpty1 && result1.Compare(result2) > 0 {
+			return result1, false, nil
+		}
+		return result2, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggDecimal128Max) Eval(lastResult []types.Decimal128, _ error) (result []types.Decimal128, err error) {
+	return lastResult, nil
+}
+func (s *sAggDecimal128Max) MarshalBinary() ([]byte, error) { return nil, nil }
+func (s *sAggDecimal128Max) UnmarshalBinary([]byte) error   { return nil }
+
+func (s *sAggUuidMax) Grows(_ int)         {}
+func (s *sAggUuidMax) Free(_ *mpool.MPool) {}
+func (s *sAggUuidMax) Fill(groupNumber int64, values types.Uuid, lastResult types.Uuid, count int64, isEmpty bool, isNull bool) (newResult types.Uuid, isStillEmpty bool, err error) {
+	if !isNull {
+		if values.Compare(lastResult) > 0 || isEmpty {
+			return values, false, nil
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggUuidMax) Merge(groupNumber1 int64, groupNumber2 int64, result1 types.Uuid, result2 types.Uuid, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult types.Uuid, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		if !isEmpty1 && result1.Compare(result2) > 0 {
+			return result1, false, nil
+		}
+		return result2, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggUuidMax) Eval(lastResult []types.Uuid, _ error) (result []types.Uuid, err error) {
+	return lastResult, nil
+}
+func (s *sAggUuidMax) MarshalBinary() ([]byte, error) { return nil, nil }
+func (s *sAggUuidMax) UnmarshalBinary([]byte) error   { return nil }
+
+func (s *sAggStrMax) Grows(_ int)         {}
+func (s *sAggStrMax) Free(_ *mpool.MPool) {}
+func (s *sAggStrMax) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) (newResult []byte, isStillEmpty bool, err error) {
+	if !isNull {
+		if bytes.Compare(values, lastResult) > 0 || isEmpty {
+			return values, false, nil
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggStrMax) Merge(groupNumber1 int64, groupNumber2 int64, result1 []byte, result2 []byte, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult []byte, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		if !isEmpty1 && bytes.Compare(result1, result2) > 0 {
+			return result1, false, nil
+		}
+		return result2, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggStrMax) Eval(lastResult [][]byte, _ error) (result [][]byte, err error) {
+	return lastResult, nil
+}
+func (s *sAggStrMax) MarshalBinary() ([]byte, error) { return nil, nil }
+func (s *sAggStrMax) UnmarshalBinary([]byte) error   { return nil }

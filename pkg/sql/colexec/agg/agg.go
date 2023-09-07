@@ -21,8 +21,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func NewUnaryAgg[T1, T2 any](op int64, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
-	eval func([]T2, error) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
+func NewUnaryAgg[T1, T2 any](
+	op int64,
+	priv AggStruct,
+	isCount bool,
+	ityp, otyp types.Type, grows func(int),
+	eval func([]T2, error) ([]T2, error),
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
 	batchFill func(any, any, int64, int64, []uint64, *nulls.Nulls) error) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
@@ -154,7 +159,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfR
 			}
 
 			for i := uint64(0); i < loopLength; i++ {
-				if groupOfRows[i] == groupNotMatch {
+				if groupOfRows[i] == GroupNotMatch {
 					continue
 				}
 				groupNumber := int64(groupOfRows[i] - 1)
@@ -169,7 +174,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfR
 			nulls := inputVector.GetNulls()
 
 			for i := uint64(0); i < loopLength; i++ {
-				if groupOfRows[i] == groupNotMatch {
+				if groupOfRows[i] == GroupNotMatch {
 					continue
 				}
 				groupNumber := int64(groupOfRows[i] - 1)
@@ -197,7 +202,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfR
 		}
 
 		for i := uint64(0); i < loopLength; i++ {
-			if groupOfRows[i] == groupNotMatch {
+			if groupOfRows[i] == GroupNotMatch {
 				continue
 			}
 			groupNumber := int64(groupOfRows[i] - 1)
@@ -211,7 +216,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfR
 		nulls := inputVector.GetNulls()
 
 		for i := uint64(0); i < loopLength; i++ {
-			if groupOfRows[i] == groupNotMatch {
+			if groupOfRows[i] == GroupNotMatch {
 				continue
 			}
 			groupNumber := int64(groupOfRows[i] - 1)
@@ -296,7 +301,7 @@ func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], groupIdx1, groupIdx2 int64) (err er
 func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) (err error) {
 	a2 := b.(*UnaryAgg[T1, T2])
 	for i := range groupStatus {
-		if groupIdxes[i] == groupNotMatch {
+		if groupIdxes[i] == GroupNotMatch {
 			continue
 		}
 		groupIdx1 := int64(groupIdxes[i] - 1)
