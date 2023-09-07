@@ -2,7 +2,7 @@ set global save_query_result = on;
 drop table if exists tt;
 create table tt (a int);
 insert into tt values(1), (2);
-/* save_result */select * from tt;
+/* cloud_user */select * from tt;
 a
 1
 2
@@ -10,7 +10,7 @@ select * from result_scan(last_query_id()) as u;
 a
 1
 2
-/* save_result */select * from tt;
+/* cloud_user */select * from tt;
 a
 1
 2
@@ -28,7 +28,7 @@ set global save_query_result = on;
 drop table if exists t2;
 create table t2 (a int, b int, c int);
 insert into t2 values(1, 2, 3), (1, 2, 3);
-/* save_result */select c from tt, t2 where tt.a = t2.a;
+/* cloud_user */select c from tt, t2 where tt.a = t2.a;
 c
 3
 3
@@ -36,11 +36,11 @@ select * from result_scan(last_query_id()) as u;
 c
 3
 3
-/* save_result */select c from tt, t2 where tt.a = t2.a;
+/* cloud_user */select c from tt, t2 where tt.a = t2.a;
 c
 3
 3
-/* save_result */select t2.b from result_scan(last_query_id()) as u, t2 where u.c = t2.c;
+/* cloud_user */select t2.b from result_scan(last_query_id()) as u, t2 where u.c = t2.c;
 b
 2
 2
@@ -52,7 +52,7 @@ b
 2
 2
 2
-/* save_result */select c from tt, t2 where tt.a = t2.a;
+/* cloud_user */select c from tt, t2 where tt.a = t2.a;
 c
 3
 3
@@ -61,7 +61,7 @@ c    c
 3    3
 set global save_query_result = off;
 set global save_query_result = on;
-/* save_result */select tt.a from tt, t2;
+/* cloud_user */select tt.a from tt, t2;
 a
 1
 1
@@ -71,7 +71,7 @@ select tables from meta_scan(last_query_id()) as u;
 tables
 tt, t2
 set global query_result_maxsize = 0;
-/* save_result */select tt.a from tt, t2;
+/* cloud_user */select tt.a from tt, t2;
 a
 1
 1
@@ -80,7 +80,7 @@ a
 select char_length(result_path) from meta_scan(last_query_id()) as u;
 char_length(result_path)
 0
-/* save_result */select tt.a from tt, t2;
+/* cloud_user */select tt.a from tt, t2;
 a
 1
 1
@@ -94,7 +94,7 @@ set global save_query_result = on;
 set global query_result_maxsize = 100;
 create role rrrqqq;
 grant rrrqqq to dump;
-/* save_result */select * from tt;
+/* cloud_user */select * from tt;
 a
 1
 2
@@ -108,11 +108,11 @@ insert into db111.tt1 values(1), (2);
 create table db111.tt2 (a int);
 insert into db111.tt2 values(1), (2);
 grant select on table db111.tt1 to rrrqqq;
-/* save_result */select * from db111.tt1;
+/* cloud_user */select * from db111.tt1;
 a
 1
 2
-/* save_result */select * from db111.tt2;
+/* cloud_user */select * from db111.tt2;
 a
 1
 2
@@ -136,7 +136,7 @@ use test;
 drop table if exists tt;
 create table tt (a int);
 insert into tt values(1), (2);
-/* save_result */select * from tt;
+/* cloud_user */select * from tt;
 a
 1
 2
@@ -144,7 +144,7 @@ select * from result_scan(last_query_id()) as u;
 a
 1
 2
-/* save_result */select * from tt;
+/* cloud_user */select * from tt;
 a
 1
 2

@@ -118,6 +118,7 @@ const (
 	cmdFieldListSqlLen = len(cmdFieldListSql)
 	cloudUserTag       = "cloud_user"
 	cloudNoUserTag     = "cloud_nonuser"
+	saveResultTag      = "save_result"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}
