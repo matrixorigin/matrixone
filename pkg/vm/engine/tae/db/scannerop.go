@@ -208,6 +208,7 @@ type mergeLimiter struct {
 	tableName           string
 	estimateRowSize     int
 	memAvail            int
+	memSpare            int // 15% of total memory
 	activeMergeBlkCount int32
 	activeEstimateBytes int64
 	taskConsume         struct {
@@ -217,8 +218,8 @@ type mergeLimiter struct {
 	mergeWaitFactor float64
 }
 
-func (ml *mergeLimiter) AddActiveTask(id uint64, n int) {
-	size := ml.calcMergeConsume(n)
+func (ml *mergeLimiter) AddActiveTask(id uint64, n, mergedRows int) {
+	size := ml.calcMergeConsume(n, mergedRows)
 	atomic.AddInt64(&ml.activeEstimateBytes, int64(size))
 	atomic.AddInt32(&ml.activeMergeBlkCount, int32(n))
 	ml.taskConsume.Lock()
@@ -244,19 +245,25 @@ func (ml *mergeLimiter) OnExecDone(v any) {
 	atomic.AddInt64(&ml.activeEstimateBytes, -int64(stat.estBytes))
 }
 
-func (ml *mergeLimiter) checkMemAvail(blks int) bool {
+func (ml *mergeLimiter) checkMemAvail(blks, mergedRows int) bool {
 	if ml.maxRowsForBlk == 0 {
 		return false
 	}
 
 	merging := int(atomic.LoadInt64(&ml.activeEstimateBytes))
-	left := ml.memAvail - ml.calcMergeConsume(blks) - merging
+	left := ml.memAvail - ml.calcMergeConsume(blks, mergedRows) - merging
 
-	return left > 2*const1GBytes
+	return left > ml.memSpare
 }
 
-func (ml *mergeLimiter) calcMergeConsume(blks int) int {
-	return blks * ml.maxRowsForBlk * ml.estimateRowSize * constMergeExpansionRate
+func (ml *mergeLimiter) calcMergeConsume(blks, mergedRows int) int {
+	// by test exprience, full 8192 rows batch will expand to 8x memory comsupation.
+	// the ExpansionRate will be moderated by the actual row number after applying deletes
+	rate := float64(constMergeExpansionRate*mergedRows) / float64(blks*ml.maxRowsForBlk)
+	if rate < 1.5 {
+		rate = 1.5
+	}
+	return int(float64(blks*ml.maxRowsForBlk*ml.estimateRowSize) * rate)
 }
 
 func (ml *mergeLimiter) determineGapIntentFactor(rowsGap float64) float64 {
@@ -298,7 +305,7 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 }
 
 func (s *MergeTaskBuilder) checkSortedSegs(segs []*catalog.SegmentEntry) (
-	mblks []*catalog.BlockEntry, msegs []*catalog.SegmentEntry,
+	mblks []*catalog.BlockEntry, msegs []*catalog.SegmentEntry, rows int,
 ) {
 	if len(segs) < 2 {
 		return
@@ -345,6 +352,7 @@ func (s *MergeTaskBuilder) checkSortedSegs(segs []*catalog.SegmentEntry) (
 		}
 	}
 
+	rows = r1 + r2
 	logutil.Infof("mergeblocks merge %v-%v, sorted %d and %d rows",
 		s.tid, s.limiter.tableName, r1, r2)
 	return
@@ -360,9 +368,9 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 
 	hasMergeObjects := false
 
-	mergedBlks, msegs := s.checkSortedSegs(s.sortedSegBuilder.finish())
+	mergedBlks, msegs, mergedRows := s.checkSortedSegs(s.sortedSegBuilder.finish())
 	blkCnt := len(mergedBlks)
-	if blkCnt > 0 && s.limiter.checkMemAvail(blkCnt) {
+	if blkCnt > 0 && s.limiter.checkMemAvail(blkCnt, mergedRows) {
 		delSegs = append(delSegs, msegs...)
 		hasMergeObjects = true
 	}
@@ -414,7 +422,7 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 			seg.Stat.MergeIntent = 0
 		}
 		n := len(scopes)
-		s.limiter.AddActiveTask(task.ID(), blkCnt)
+		s.limiter.AddActiveTask(task.ID(), blkCnt, mergedRows)
 		task.AddObserver(s.limiter)
 		if n > constMergeMinBlks {
 			n = constMergeMinBlks
@@ -460,7 +468,11 @@ func (s *MergeTaskBuilder) PreExecute() error {
 	// fresh mem use
 	if stats, err := mem.VirtualMemory(); err == nil {
 		s.limiter.memAvail = int(stats.Available)
+		if s.limiter.memSpare == 0 {
+			s.limiter.memSpare = int(float32(stats.Total) * 0.15)
+		}
 	}
+
 	if f := EnvOrDefaultFloat(constKeyMergeWaitFactor, 1.0); f < 0.1 {
 		s.limiter.mergeWaitFactor = 0.1
 	} else {
