@@ -46,15 +46,25 @@ func (t NoopTracer) Start(ctx context.Context, name string, opts ...SpanStartOpt
 	if _, ok := span.(NoopSpan); !ok {
 		// span is likely already a NoopSpan, but let's be sure
 		span = NoopSpan{}
+		return ContextWithSpan(ctx, span), span
+	} else if len(opts) > 0 {
+		var sc = SpanConfig{}
+		for _, opt := range opts {
+			opt.ApplySpanStart(&sc)
+		}
+		if sc.NewRoot {
+			span = NoopSpan{}
+			return ContextWithSpan(ctx, span), span
+		}
 	}
-	return ContextWithSpan(ctx, span), span
+	return ctx, span
 }
 
 func (t NoopTracer) Debug(ctx context.Context, name string, opts ...SpanStartOption) (context.Context, Span) {
 	return t.Start(ctx, name, opts...)
 }
 
-func (t NoopTracer) IsEnable() bool { return false }
+func (t NoopTracer) IsEnable(opts ...SpanStartOption) bool { return false }
 
 // NoopSpan is an implementation of Span that preforms no operations.
 type NoopSpan struct{}
