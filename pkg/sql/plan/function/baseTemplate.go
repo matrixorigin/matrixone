@@ -362,7 +362,7 @@ type templateDec interface {
 }
 
 func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2, rs []types.Decimal128, scale1, scale2 int32) error) error {
+	arithFn func(v1, v2, rs []types.Decimal128, scale1, scale2 int32, null1, null2 *nulls.Nulls) error) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
 	rs := vector.MustFunctionResult[types.Decimal128](result)
@@ -392,7 +392,7 @@ func decimal128ArithArray(parameters []*vector.Vector, result vector.FunctionRes
 	}
 	v1 := vector.MustFixedCol[types.Decimal128](p1.GetSourceVector())
 	v2 := vector.MustFixedCol[types.Decimal128](p2.GetSourceVector())
-	err := arithFn(v1, v2, rss, scale1, scale2)
+	err := arithFn(v1, v2, rss, scale1, scale2, parameters[0].GetNulls(), parameters[1].GetNulls())
 	if err != nil {
 		return err
 	}
