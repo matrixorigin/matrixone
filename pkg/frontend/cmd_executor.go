@@ -109,6 +109,8 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
 		} else if source == cloudNoUserTag {
 			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudNoUserSql)
+		} else if source == saveResultTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
 		} else {
 			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
 		}
