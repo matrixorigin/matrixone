@@ -841,6 +841,7 @@ jobs:
         if: ${{ needs.docker_image_build.result == 'success' }}
         continue-on-error: true
         run: |
+          set -x
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
           mkdir -p $GITHUB_WORKSPACE/upload && cd $GITHUB_WORKSPACE/upload
           dn_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=DNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}')
