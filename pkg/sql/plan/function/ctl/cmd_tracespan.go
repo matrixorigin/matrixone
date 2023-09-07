@@ -42,6 +42,7 @@ import (
 // mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:disable:s3, local,...")
 // mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:all")
 // mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:disable:all")
+// mo_ctl("cn", "TraceSpan", "all:enable:s3)
 
 var supportedSpans = map[string]func(state bool){
 	// enable or disable s3 file service read and write span
@@ -79,6 +80,18 @@ func handleTraceSpan(proc *process.Process,
 
 	// the uuids of cn
 	cns := strings.Split(args[0], ",")
+
+	if len(cns) == 1 {
+		if cns[0] != "all" {
+			return pb.CtlResult{},
+				moerr.NewInternalErrorNoCtx("cns uuid format wrong, expected 'all' or a list of uuids")
+		}
+		cns = make([]string, 0)
+		clusterservice.GetMOCluster().GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
+			cns = append(cns, cn.ServiceID)
+			return true
+		})
+	}
 
 	info := map[string]string{}
 	for idx := range cns {

@@ -100,14 +100,6 @@ type SpanContext struct {
 	Kind SpanKind `json:"span_kind"`
 }
 
-func (c *SpanContext) HasMOCtledKind() bool {
-	if c.Kind == SpanKindS3FSVis ||
-		c.Kind == SpanKindLocalFSVis {
-		return true
-	}
-	return false
-}
-
 func (c *SpanContext) Size() (n int) {
 	return 24
 }

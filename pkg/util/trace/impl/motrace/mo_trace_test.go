@@ -557,19 +557,13 @@ func TestMOCtledKindOverwrite(t *testing.T) {
 	}
 	tracer.provider.enable = true
 
-	ffctx, ffspan := tracer.Start(context.Background(), "test1")
-	defer ffspan.End()
-	require.Equal(t, ffspan.SpanContext().Kind, trace.SpanKindInternal)
-
-	// will be overwritten
-	fctx, fspan := tracer.Start(ffctx, "test2", trace.WithKind(trace.SpanKindRemote))
+	fctx, fspan := tracer.Start(context.Background(), "test2", trace.WithKind(trace.SpanKindRemote))
 	defer fspan.End()
-	require.Equal(t, fspan.SpanContext().Kind, ffspan.SpanContext().Kind)
+	require.Equal(t, fspan.SpanContext().Kind, trace.SpanKindRemote)
 
 	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(true)
 	// won't be overwritten
-	_, span := tracer.Start(fctx, "test3",
-		trace.WithKind(trace.SpanKindS3FSVis))
+	_, span := tracer.Start(fctx, "test3", trace.WithKind(trace.SpanKindS3FSVis))
 	defer span.End()
 	require.NotEqual(t, span.SpanContext().Kind, fspan.SpanContext().Kind)
 	require.Equal(t, span.SpanContext().Kind, trace.SpanKindS3FSVis)
@@ -583,23 +577,14 @@ func TestMOCtledKindPassDown(t *testing.T) {
 	}
 	tracer.provider.enable = true
 
-	normCtx, normSpan := tracer.Start(context.Background(), "normal span")
-	defer normSpan.End()
-	require.Equal(t, normSpan.SpanContext().Kind, trace.SpanKindInternal)
-
 	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(true)
 	specialCtx, specialSpan := tracer.Start(context.Background(), "special span",
 		trace.WithKind(trace.SpanKindS3FSVis))
 	defer specialSpan.End()
 	require.Equal(t, specialSpan.SpanContext().Kind, trace.SpanKindS3FSVis)
 
-	// can pass down to child span
-	_, span := tracer.Start(normCtx, "child span")
-	defer span.End()
-	require.Equal(t, span.SpanContext().Kind, normSpan.SpanContext().Kind)
-
 	// won't pass down kind to child
-	_, span = tracer.Start(specialCtx, "child span")
+	_, span := tracer.Start(specialCtx, "child span")
 	defer span.End()
 	require.NotEqual(t, span.SpanContext().Kind, specialSpan.SpanContext().Kind)
 
