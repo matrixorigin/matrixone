@@ -445,7 +445,11 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 		s.limiter.objectMinRows = determineObjectMinRows(
 			int(schema.SegmentMaxBlocks), int(schema.BlockMaxRows))
 		s.limiter.tableName = schema.Name
-		s.limiter.estimateRowSize = schema.EstimateRowSize()
+		if rowsize := entry.Stats.GetEstimateRowSize(); rowsize != 0 {
+			s.limiter.estimateRowSize = rowsize
+		} else {
+			s.limiter.estimateRowSize = schema.EstimateRowSize()
+		}
 	}
 	s.delSegBuilder.reset()
 	s.sortedSegBuilder.reset()
