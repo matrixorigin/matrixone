@@ -419,7 +419,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Delete Test With 100 threads'
-          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-delete.log
+          ./start.sh -c cases/sysbench/delete_pk_10_100000_rc -t 100 -d 5 -g -b sbtest | tee report/oltp-delete.log
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
@@ -438,7 +438,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP UPDATE Test With 100 threads'
-          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-update.log
+          ./start.sh -c cases/sysbench/update_pk_10_100000_rc -t 100 -d 5 -g -b sbtest | tee report/oltp-update.log
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
@@ -597,7 +597,7 @@ jobs:
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
-          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
+          sed -i '/.*expectedErrorCodes=*/d' props_10.mo
           sed -i 's/user=.*/user=${{ steps.account_for_tpcc.outputs.tpcc_account }}/g' props_10.mo
           sed -i 's/password=.*/password=${{ steps.account_for_tpcc.outputs.tpcc_password }}/g' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-10.log
@@ -620,7 +620,7 @@ jobs:
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
-          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
+          sed -i '/.*expectedErrorCodes=*/d' props_10.mo
           sed -i 's/user=.*/user=${{ steps.account_for_tpcc.outputs.tpcc_account }}/g' props_10.mo
           sed -i 's/password=.*/password=${{ steps.account_for_tpcc.outputs.tpcc_password }}/g' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-50.log
@@ -643,7 +643,7 @@ jobs:
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
-          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
+          sed -i '/.*expectedErrorCodes=*/d' props_10.mo
           sed -i 's/user=.*/user=${{ steps.account_for_tpcc.outputs.tpcc_account }}/g' props_10.mo
           sed -i 's/password=.*/password=${{ steps.account_for_tpcc.outputs.tpcc_password }}/g' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
