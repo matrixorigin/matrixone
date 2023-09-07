@@ -98,6 +98,16 @@ func (s *taeStorage) Debug(ctx context.Context,
 			})
 		}
 		return resp.Read()
+	case uint32(ctl.CmdMethod_TraceSpan):
+		_, err := handleRead(
+			ctx, s, txnMeta, data, s.taeHandler.HandleTraceSpan,
+		)
+		if err != nil {
+			return []byte(err.Error()), err
+		} else {
+			return []byte(s.shard.String()), nil
+		}
+
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
 	}

@@ -279,3 +279,16 @@ func (m *CatalogResp) MarshalBinary() ([]byte, error) {
 func (m *CatalogResp) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
+
+type TraceSpan struct {
+	Cmd   string
+	Spans []string
+}
+
+func (t *TraceSpan) MarshalBinary() ([]byte, error) {
+	return t.Marshal()
+}
+
+func (t *TraceSpan) UnmarshalBinary(data []byte) error {
+	return t.Unmarshal(data)
+}

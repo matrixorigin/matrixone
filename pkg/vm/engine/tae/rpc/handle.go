@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"os"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/google/shlex"
@@ -1043,6 +1045,22 @@ func (h *Handle) HandleAddFaultPoint(
 		return nil, nil
 	}
 	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
+}
+
+func (h *Handle) HandleTraceSpan(ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.TraceSpan,
+	resp *api.SyncLogTailResp) (func(), error) {
+	state := false
+	if req.Cmd == "enable" {
+		state = true
+	}
+
+	for _, span := range req.Spans {
+		ctl.SupportedSpans[span](state)
+	}
+
+	return nil, nil
 }
 
 func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {
