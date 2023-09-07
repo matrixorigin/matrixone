@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -208,7 +209,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of compile is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfo(ses, "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
 	}
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
@@ -225,7 +226,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of run is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
+		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 	}
 
 	_ = stmtExec.RecordExecPlan(ctx)
