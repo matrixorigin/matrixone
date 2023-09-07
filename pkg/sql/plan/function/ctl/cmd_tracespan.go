@@ -81,11 +81,7 @@ func handleTraceSpan(proc *process.Process,
 	// the uuids of cn
 	cns := strings.Split(args[0], ",")
 
-	if len(cns) == 1 {
-		if cns[0] != "all" {
-			return pb.CtlResult{},
-				moerr.NewInternalErrorNoCtx("cns uuid format wrong, expected 'all' or a list of uuids")
-		}
+	if len(cns) == 1 && strings.ToLower(cns[0]) == "all" {
 		cns = make([]string, 0)
 		clusterservice.GetMOCluster().GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
 			cns = append(cns, cn.ServiceID)
