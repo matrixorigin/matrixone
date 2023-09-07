@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -110,12 +109,10 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 
 		// chosen == 0 means the info comes from proc context.Done
 		if chosen == 0 {
-			logutil.Debugf("process context done during merge receive")
 			return nil, true, nil
 		}
 
 		if !ok {
-			logutil.Errorf("children pipeline closed unexpectedly")
 			r.RemoveChosen(chosen)
 			return nil, true, nil
 		}
