@@ -93,3 +93,13 @@ func newGenericMax[T compare](overloadID int64, typ types.Type, otyp types.Type,
 	}
 	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
+
+type sAggMax[T compare] struct{}
+type sAggBoolMax struct{}
+type sAggDecimal64Max struct{}
+type sAggDecimal128Max struct{}
+type sAggUuidMax struct{}
+type sAggStrMax struct{}
+
+func (s *sAggMax[T]) Grows(_ int) {}
+func (s *sAggMax[T]) Fill(groupNumber int64, values T, lastResult T, count int64, isEmpty bool, isNull bool)
