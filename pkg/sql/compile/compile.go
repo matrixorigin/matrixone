@@ -2882,10 +2882,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			},
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
-		// this is for shuffle join build scope
-		for _, mr := range rs.Proc.Reg.MergeReceivers {
-			mr.Ch = make(chan *batch.Batch, shuffleJoinBuildChannelBufferSize)
-		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
