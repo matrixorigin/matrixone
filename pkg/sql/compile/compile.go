@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -111,7 +112,7 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.stepRegs = make(map[int32][][2]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
-	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 	return c
 }
 
@@ -2735,6 +2736,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
 			ss[i].BuildIdx = lnum
+			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
 				rr.Ch = make(chan *batch.Batch, 16)
 			}
@@ -2854,7 +2856,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Op:      vm.HashBuild,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, ss != nil),
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil),
 	})
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
