@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -106,10 +105,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.Exec
 	}
 	defer proc.PutBatch(bat)
 	insertCtx := ap.InsertCtx
-
-	if ap.InsertCtx.TableDef.Name == "atomic_table_13" {
-		logutil.Infof("+++++++++++++++++++++++ insert atomic_table_13, %s", bat.String())
-	}
 
 	// scenario 1 for cn write s3, more in the comment of S3Writer
 	if ap.ToWriteS3 {

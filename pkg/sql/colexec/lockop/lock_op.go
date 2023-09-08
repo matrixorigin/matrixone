@@ -125,8 +125,6 @@ func callNonBlocking(
 		return false, nil
 	}
 
-	getLogger().Info("+++++++++++++++++++++++ callNonBlocking\n")
-
 	if err := performLock(bat, proc, arg); err != nil {
 		bat.Clean(proc.Mp())
 		return true, err
@@ -189,7 +187,6 @@ func callBlocking(
 			arg.rt.step = stepEnd
 		}
 
-		getLogger().Info("+++++++++++++++++++++++ callBlocking -- stepDownstream")
 		proc.SetInputBatch(bat)
 		return false, nil
 	case stepEnd:
