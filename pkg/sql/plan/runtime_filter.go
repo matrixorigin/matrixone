@@ -34,7 +34,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	// Build runtime filters only for broadcast join
-	if node.NodeType != plan.Node_JOIN || node.Stats.HashmapStats.Shuffle {
+	if node.NodeType != plan.Node_JOIN {
 		return
 	}
 
@@ -43,6 +43,24 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	if node.JoinType == plan.Node_ANTI && !node.BuildOnLeft {
+		return
+	}
+
+	if node.Stats.HashmapStats.Shuffle {
+		leftChild := builder.qry.Nodes[node.Children[0]]
+		if leftChild.NodeType != plan.Node_TABLE_SCAN {
+			return
+		}
+
+		if leftChild.NodeType > 0 {
+			return
+		}
+
+		rfTag := builder.genNewTag()
+
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{Tag: rfTag})
+		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{Tag: rfTag})
+
 		return
 	}
 

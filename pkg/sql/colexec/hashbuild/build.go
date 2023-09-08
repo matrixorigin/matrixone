@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -314,6 +315,22 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
 	if len(ap.RuntimeFilterSenders) == 0 {
 		ctr.state = Eval
+		return nil
+	}
+
+	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {
+		runtimeFilter := &pipeline.RuntimeFilter{
+			Typ: pipeline.RuntimeFilter_NO_FILTER,
+		}
+
+		select {
+		case <-proc.Ctx.Done():
+			ctr.state = End
+
+		case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
+			ctr.state = Eval
+		}
+
 		return nil
 	}
 
