@@ -1354,7 +1354,7 @@ func Test_getExplainOption(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, option.Verbose, false)
 
-	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "verbose", Value: "???"}})
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "verbose", Value: "???"}})
 	require.NotNil(t, err)
 
 	// analyze
@@ -1370,7 +1370,7 @@ func Test_getExplainOption(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, option.Analyze, false)
 
-	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "analyze", Value: "???"}})
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "analyze", Value: "???"}})
 	require.NotNil(t, err)
 
 	// format
@@ -1378,17 +1378,17 @@ func Test_getExplainOption(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, option.Format, explain.EXPLAIN_FORMAT_TEXT)
 
-	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "json"}})
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "json"}})
 	require.NotNil(t, err)
 
-	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "dot"}})
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "dot"}})
 	require.NotNil(t, err)
 
-	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "???"}})
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "???"}})
 	require.NotNil(t, err)
 
 	// other
-	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "???", Value: "???"}})
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "???", Value: "???"}})
 	require.NotNil(t, err)
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -87,7 +88,7 @@ func Test_InitServer(t *testing.T) {
 
 	var err error
 	ctx := context.TODO()
-	session := morpc.NewMockClientSession(ctrl)
+	session := mock_morpc.NewMockClientSession(ctrl)
 	msg.Cmd = pipeline.PipelineMessage
 	session.EXPECT().CreateCache(ctx, uint64(0)).Return(&testMessageCache{}, nil).Times(2)
 
