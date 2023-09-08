@@ -61,7 +61,7 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 // s3-opts,endpoint=<endpoint>,region=<region>,bucket=<bucket>,key=<key>,secret=<secret>,prefix=<prefix>,role-arn=<role arn>,external-id=<external id>
 //
 //	key value pairs can be in any order
-func GetForETL(fs FileService, path string) (res ETLFileService, readPath string, err error) {
+func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileService, readPath string, err error) {
 	fsPath, err := ParsePath(path)
 	if err != nil {
 		return nil, "", err
@@ -95,15 +95,22 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			if len(arguments) > 6 {
 				name = arguments[6]
 			}
-			res, err = newS3FS([]string{
-				"endpoint=" + endpoint,
-				"region=" + region,
-				"bucket=" + bucket,
-				"key=" + accessKey,
-				"secret=" + accessSecret,
-				"prefix=" + keyPrefix,
-				"name=" + name,
-			})
+
+			res, err = NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Endpoint:  endpoint,
+					Region:    region,
+					Bucket:    bucket,
+					KeyID:     accessKey,
+					KeySecret: accessSecret,
+					KeyPrefix: keyPrefix,
+					Name:      name,
+				},
+				DisabledCacheConfig,
+				nil,
+				true,
+			)
 			if err != nil {
 				return
 			}
@@ -121,19 +128,33 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			if len(arguments) > 4 {
 				name = arguments[4]
 			}
-			res, err = newS3FS([]string{
-				"endpoint=" + endpoint,
-				"region=" + region,
-				"bucket=" + bucket,
-				"prefix=" + keyPrefix,
-				"name=" + name,
-			})
-			if err != nil {
-				return
-			}
+
+			res, err = NewS3FS(
+				ctx,
+				ObjectStorageArguments{
+					Endpoint:  endpoint,
+					Region:    region,
+					Bucket:    bucket,
+					KeyPrefix: keyPrefix,
+					Name:      name,
+				},
+				DisabledCacheConfig,
+				nil,
+				true,
+			)
 
 		case "s3-opts":
-			res, err = newS3FS(fsPath.ServiceArguments)
+			var args ObjectStorageArguments
+			if err := args.SetFromString(fsPath.ServiceArguments); err != nil {
+				return nil, "", err
+			}
+			res, err = NewS3FS(
+				ctx,
+				args,
+				DisabledCacheConfig,
+				nil,
+				true,
+			)
 			if err != nil {
 				return
 			}
@@ -154,16 +175,22 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 			if len(arguments) > 6 {
 				name = arguments[6]
 			}
-			res, err = newS3FS([]string{
-				"endpoint=" + endpoint,
-				"region=" + region,
-				"bucket=" + bucket,
-				"prefix=" + keyPrefix,
-				"name=" + name,
-				"key=" + accessKey,
-				"secret=" + accessSecret,
-				"is-minio=true",
-			})
+
+			res, err = NewS3FSOnMinio(
+				ctx,
+				ObjectStorageArguments{
+					Endpoint:  endpoint,
+					Region:    region,
+					Bucket:    bucket,
+					KeyID:     accessKey,
+					KeySecret: accessSecret,
+					KeyPrefix: keyPrefix,
+					Name:      name,
+				},
+				DisabledCacheConfig,
+				nil,
+				true,
+			)
 			if err != nil {
 				return
 			}
@@ -191,7 +218,7 @@ func GetForETL(fs FileService, path string) (res ETLFileService, readPath string
 // if service part of path is argumented, a FileService instance will be created dynamically with those arguments
 // supported dynamic file service:
 // s3-opts,endpoint=<endpoint>,region=<region>,bucket=<bucket>,key=<key>,secret=<secret>,prefix=<prefix>,role-arn=<role arn>,external-id=<external id>,is-minio=<is-minio>
-func GetForBackup(spec string) (res FileService, err error) {
+func GetForBackup(ctx context.Context, spec string) (res FileService, err error) {
 	fsPath, err := ParsePath(spec)
 	if err != nil {
 		return nil, err
@@ -209,7 +236,17 @@ func GetForBackup(spec string) (res FileService, err error) {
 		switch fsPath.Service {
 
 		case "s3-opts":
-			res, err = newS3FS(fsPath.ServiceArguments)
+			var args ObjectStorageArguments
+			if err := args.SetFromString(fsPath.ServiceArguments); err != nil {
+				return nil, err
+			}
+			res, err = NewS3FS(
+				ctx,
+				args,
+				DisabledCacheConfig,
+				nil,
+				true,
+			)
 			if err != nil {
 				return
 			}
