@@ -45,8 +45,9 @@ type dmlSelectInfo struct {
 	rootId         int32
 	derivedTableId int32
 
-	onDuplicateIdx  []int32
-	onDuplicateExpr map[string]*Expr
+	onDuplicateIdx     []int32
+	onDuplicateExpr    map[string]*Expr
+	onDuplicateNeedAgg bool //if table have pk & unique key, that will be true.
 }
 
 type dmlTableInfo struct {
@@ -146,7 +147,16 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 					appendToTbl(alias, colName, expr)
 				}
 			}
-			if !found {
+			if !found && stmt.With != nil {
+				var str string
+				for i, c := range stmt.With.CTEs {
+					if i > 0 {
+						str += ", "
+					}
+					str += string(c.Name.Alias)
+				}
+				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", colName, str)
+			} else if !found {
 				return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' not found in table %s", colName, tblName)
 			}
 		}
@@ -569,9 +579,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
 		if len(uniqueCols) > 0 {
-			if len(uniqueCols) > 1 {
-				return false, nil, false, moerr.NewNYI(builder.GetContext(), "one unique constraint supported for on duplicate key clause now.")
-			}
 
 			joinCtx := NewBindContext(builder, bindCtx)
 			rightCtx := NewBindContext(builder, joinCtx)
@@ -695,6 +702,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
+			info.onDuplicateNeedAgg = len(uniqueCols) > 1
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{

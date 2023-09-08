@@ -203,6 +203,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAt(vec, row, v)
+	case types.T_enum:
+		v, err := strconv.ParseUint(val, 0, 16)
+		if err != nil {
+			return moerr.NewOutOfRange(ctx, "enum", "value '%v'", val)
+		}
+		return vector.SetFixedAt(vec, row, types.Enum(v))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
 	}
@@ -251,6 +257,8 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 		return setInsertValueDateTime(proc, numVal, vec)
 	case types.T_timestamp:
 		return setInsertValueTimeStamp(proc, numVal, vec)
+	case types.T_enum:
+		return setInsertValueNumber[types.Enum](proc, numVal, vec)
 	}
 
 	return false, nil
@@ -630,37 +638,23 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 					return nil, err
 				}
 
-				if len(_v) < int(typ.Width) {
-					add0 := int(typ.Width) - len(_v)
-					for ; add0 != 0; add0-- {
-						_v = append(_v, 0)
-					}
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
 				}
 
 				v = types.ArrayToBytes[float32](_v)
 
-				if len(_v) > destLen {
-					return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(_v), destLen))
-				}
 			case types.T_array_float64:
 				_v, err := types.StringToArray[float64](s)
 				if err != nil {
 					return nil, err
 				}
 
-				// zero padding from []T{1,2} to T{1,2,0}
-				if len(_v) < int(typ.Width) {
-					add0 := int(typ.Width) - len(_v)
-					for ; add0 != 0; add0-- {
-						_v = append(_v, 0)
-					}
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
 				}
 
 				v = types.ArrayToBytes[float64](_v)
-
-				if len(_v) > destLen {
-					return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(_v), destLen))
-				}
 			default:
 				return nil, moerr.NewInternalErrorNoCtx("%s is not supported array type", typ.String())
 

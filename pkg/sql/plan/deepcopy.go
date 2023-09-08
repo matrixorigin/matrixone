@@ -207,6 +207,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
+		ExternScan:      node.ExternScan,
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
@@ -849,6 +850,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			pc.Value = &plan.Const_Defaultval{Defaultval: c.Defaultval}
 		case *plan.Const_UpdateVal:
 			pc.Value = &plan.Const_UpdateVal{UpdateVal: c.UpdateVal}
+		case *plan.Const_EnumVal:
+			pc.Value = &plan.Const_EnumVal{EnumVal: c.EnumVal}
 		}
 
 		newExpr.Expr = &plan.Expr_C{

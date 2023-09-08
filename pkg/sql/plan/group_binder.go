@@ -37,6 +37,10 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, err
 	}
 
+	if isNullExpr(expr) {
+		return nil, moerr.NewInternalErrorNoCtx("Invalid GROUP BY NULL")
+	}
+
 	if isRoot {
 		astStr := tree.String(astExpr, dialect.MYSQL)
 		if _, ok := b.ctx.groupByAst[astStr]; ok {

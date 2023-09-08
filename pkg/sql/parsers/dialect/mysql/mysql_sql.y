@@ -362,7 +362,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
 
 // MODump
 %token <str> MODUMP
@@ -6216,6 +6216,16 @@ load_param_opt:
             },
         }
     }
+|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING
+    {
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                ScanType: tree.INLINE,
+                Format: $4,
+                Data: $8,
+            },
+        }
+    }
 |   INFILE '{' infile_or_s3_params '}'
     {
         $$ = &tree.ExternParam{
@@ -9450,60 +9460,60 @@ time_type:
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Time(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimeFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Time(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimeFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_TIME),
-            },
-        }
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TIME),
+                },
+            }
         }
     }
 |   TIMESTAMP timestamp_option_opt
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimestampFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimestampFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
-            },
-        }
+                Locale:  &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TIMESTAMP),
+                },
+            }
         }
     }
 |   DATETIME timestamp_option_opt
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimestampFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimestampFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
-            },
-        }
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                },
+            }
         }
     }
 |   YEAR length_opt

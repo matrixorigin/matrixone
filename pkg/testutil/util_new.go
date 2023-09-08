@@ -263,6 +263,11 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewBlockidVector(n, typ, m, random, vs)
 		}
 		return NewBlockidVector(n, typ, m, random, nil)
+	case types.T_enum:
+		if vs, ok := Values.([]uint16); ok {
+			return NewUInt16Vector(n, typ, m, random, vs)
+		}
+		return NewUInt16Vector(n, typ, m, random, nil)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("unsupport vector's type '%v", typ))
 	}

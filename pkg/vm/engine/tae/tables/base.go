@@ -119,7 +119,7 @@ func (blk *baseBlock) Rows() int {
 		return int(node.Rows())
 	}
 }
-func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
@@ -631,13 +631,20 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
+	catalogPersistedTS := blk.meta.GetDeltaPersistedTS()
 	blk.RLock()
-	persistedTS = blk.mvcc.GetDeletesPersistedTS()
+	persistedTS = blk.mvcc.GetDeletesPersistedTSInMVCCChain()
+	if persistedTS.IsEmpty() {
+		persistedTS = catalogPersistedTS
+	}
 	if persistedTS.GreaterEq(end) {
 		blk.RUnlock()
 		return
 	}
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start, end)
+	if start.Less(persistedTS) {
+		start = persistedTS
+	}
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start.Next(), end)
 	blk.RUnlock()
 	if rowID == nil {
 		return

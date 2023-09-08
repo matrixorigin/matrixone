@@ -18,10 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
-)
-
-const (
-	DimensionMismatchErrMsg = "dimension mismatch. %v != %v"
+	"math"
 )
 
 //TODO: Check on optimization.
@@ -31,7 +28,7 @@ const (
 
 func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -43,7 +40,7 @@ func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -55,7 +52,7 @@ func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -67,7 +64,7 @@ func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 
 func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
-		return nil, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 	n := len(v1)
 	r := make([]T, n)
@@ -80,22 +77,22 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	return r, nil
 }
 
+// Compare the l2_norm between 2 ARRAY's. This is more accurate than element wise comparison because
+//  1. there won't be dimension mismatch issue
+//  2. for element-wise comparison, the float32[i] value in ARRAY/VECTOR is always going
+//     to have some subtle difference between v1 and v2, resulting in full element wise comparison of v1 and v2.
+//  3. l2_norm comparison helps in ordering ARRAYs by nearness on the cartesian plane.
 func Compare[T types.RealNumbers](v1, v2 []T) int {
-	if len(v1) != len(v2) {
-		// NOTE: We will not compare Arrays with different dimension.
-		// panic is fine here as Compare is used in many places, which does not use err.
-		panic(moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2)))
+	a, _ := L2Norm[T](v1) // you can ignore the l2_norm error.
+	b, _ := L2Norm[T](v2)
+
+	if a == b {
+		return 0
 	}
-	for i := 0; i < len(v1); i++ {
-		if v1[i] == v2[i] {
-			continue
-		} else if v1[i] > v2[i] {
-			return +1
-		} else {
-			return -1
-		}
+	if a < b {
+		return -1
 	}
-	return 0
+	return +1
 }
 
 func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O) {
@@ -135,37 +132,36 @@ func Sqrt[T types.RealNumbers](v []T) (res []float64, err error) {
 
 func Summation[T types.RealNumbers](v []T) float64 {
 	n := len(v)
-	var sum float64 = 0
+	var sum T = 0
 	for i := 0; i < n; i++ {
-		sum = sum + float64(v[i])
+		sum += v[i]
 	}
-	return sum
+	return float64(sum)
 }
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	if len(v1) != len(v2) {
-		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
 	n := len(v1)
 
-	var productVal T
-	var sum float64 = 0
-
+	var sum T = 0
 	for i := 0; i < n; i++ {
-		productVal = v1[i] * v2[i]
-		sum = sum + float64(productVal)
+		sum += v1[i] * v2[i]
 	}
-	return sum, nil
+	return float64(sum), nil
 }
 
+// L1Norm returns l1 distance to origin.
+// The only time, this could throw error is when T = int8 (v[i] is -128)
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 
 	var absVal T
 	var err error
-	var sum float64 = 0
+	var sum T = 0
 
 	for i := 0; i < n; i++ {
 		absVal, err = momath.AbsSigned[T](v[i])
@@ -173,46 +169,45 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 			return 0, err
 		}
 
-		sum = sum + float64(absVal)
+		sum += absVal
 	}
-	return sum, nil
+	return float64(sum), nil
 }
 
+// L2Norm returns l2 distance to origin.
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 
 	var sqrVal T
-	var sum float64 = 0
+	var sum T = 0
 
 	for i := 0; i < n; i++ {
 		sqrVal = v[i] * v[i]
-		sum = sum + float64(sqrVal)
+		sum += sqrVal
 	}
 
-	return momath.Sqrt(sum)
+	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
+	return math.Sqrt(float64(sum)), nil
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float32, error) {
 
 	if len(v1) != len(v2) {
-		return 0, moerr.NewInvalidInputNoCtx(DimensionMismatchErrMsg, len(v1), len(v2))
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	a, err := InnerProduct[T](v1, v2)
-	if err != nil {
-		return 0, err
+	n := len(v1)
+
+	var innerProduct T = 0
+	var normV1 T = 0
+	var normV2 T = 0
+	for i := 0; i < n; i++ {
+		innerProduct += v1[i] * v2[i]
+		normV1 += v1[i] * v1[i]
+		normV2 += v2[i] * v2[i]
 	}
 
-	b, err := L2Norm[T](v1)
-	if err != nil {
-		return 0, err
-	}
-
-	c, err := L2Norm[T](v2)
-	if err != nil {
-		return 0, err
-	}
-
-	sum := a / (b * c)
-	return float32(sum), nil
+	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
+	// casting it to float32, because cosine_similarity is between 1 and -1.
+	return float32(float64(innerProduct) / math.Sqrt(float64(normV1*normV2))), nil
 }

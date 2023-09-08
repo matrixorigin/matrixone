@@ -183,8 +183,8 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	// for now, if join children is agg, do not allow shuffle
-	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG || builder.qry.Nodes[n.Children[1]].NodeType == plan.Node_AGG {
+	// for now, if join children is agg or filter, do not allow shuffle
+	if isAggOrFilter(builder.qry.Nodes[n.Children[0]], builder) || isAggOrFilter(builder.qry.Nodes[n.Children[1]], builder) {
 		return
 	}
 
@@ -232,12 +232,18 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 	}
+}
 
-	// for now, do not support hash shuffle join. will support it in the future
-	if n.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash {
-		n.Stats.HashmapStats.Shuffle = false
+// find agg or agg->filter node
+func isAggOrFilter(n *plan.Node, builder *QueryBuilder) bool {
+	if n.NodeType == plan.Node_AGG {
+		return true
+	} else if n.NodeType == plan.Node_FILTER {
+		if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+			return true
+		}
 	}
-
+	return false
 }
 
 // to determine if groupby need to go shuffle
@@ -252,8 +258,9 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
-	// for now, if agg children is agg, do not allow shuffle
-	if builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+	child := builder.qry.Nodes[n.Children[0]]
+	// for now, if agg children is agg or filter, do not allow shuffle
+	if isAggOrFilter(child, builder) {
 		return
 	}
 
@@ -289,7 +296,6 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
-	child := builder.qry.Nodes[n.Children[0]]
 	if child.NodeType == plan.Node_JOIN {
 		if n.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
 			// shuffle group can follow shuffle join

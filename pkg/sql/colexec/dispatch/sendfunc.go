@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -61,16 +60,16 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		select {
 		case <-proc.Ctx.Done():
 			handleUnsent(proc, bat, refCountAdd, int64(i))
-			logutil.Debugf("proc context done during dispatch to local")
 			return true, nil
+
 		case <-reg.Ctx.Done():
 			if ap.IsSink {
 				atomic.AddInt64(&bat.Cnt, -1)
 				continue
 			}
 			handleUnsent(proc, bat, refCountAdd, int64(i))
-			logutil.Warnf("the receiver's ctx done during dispatch to all local")
 			return true, nil
+
 		case reg.Ch <- bat:
 		}
 	}
@@ -111,11 +110,11 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 			if bat != nil && bat.RowCount() != 0 {
 				select {
 				case <-proc.Ctx.Done():
-					logutil.Warnf("proc's ctx done during shuffle dispatch a bat to local reg")
 					return nil
+
 				case <-reg.Ctx.Done():
-					logutil.Warnf("reg's ctx done during shuffle dispatch a bat to local reg")
 					return nil
+
 				case reg.Ch <- bat:
 				}
 			}
@@ -148,11 +147,11 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 			if bat != nil && bat.RowCount() != 0 {
 				select {
 				case <-proc.Ctx.Done():
-					logutil.Warnf("proc's ctx done during shuffle dispatch a bat to local reg")
 					return nil
+
 				case <-reg.Ctx.Done():
-					logutil.Warnf("reg's ctx done during shuffle dispatch a bat to local reg")
 					return nil
+
 				case reg.Ch <- bat:
 				}
 			}
@@ -171,11 +170,11 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 			if bat != nil && bat.RowCount() != 0 {
 				select {
 				case <-proc.Ctx.Done():
-					logutil.Warnf("proc's ctx done during shuffle dispatch a bat to local reg")
 					return nil
+
 				case <-reg.Ctx.Done():
-					logutil.Warnf("reg's ctx done during shuffle dispatch a bat to local reg")
 					return nil
+
 				case reg.Ch <- bat:
 				}
 			}
@@ -237,10 +236,9 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		reg := ap.LocalRegs[sendto]
 		select {
 		case <-proc.Ctx.Done():
-			logutil.Debugf("proc context done during dispatch to any")
 			return true, nil
+
 		case <-reg.Ctx.Done():
-			logutil.Debugf("reg.Ctx done during dispatch to any")
 			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 			ap.ctr.localRegsCnt--
 			ap.ctr.aliveRegCnt--
@@ -248,6 +246,7 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			if ap.ctr.localRegsCnt == 0 {
 				return true, nil
 			}
+
 		case reg.Ch <- bat:
 			proc.SetInputBatch(nil)
 			ap.ctr.sendCnt++
@@ -271,8 +270,8 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	}
 	select {
 	case <-proc.Ctx.Done():
-		logutil.Debugf("conctx done during dispatch")
 		return true, nil
+
 	default:
 	}
 

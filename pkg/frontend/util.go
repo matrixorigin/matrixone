@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,7 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -467,9 +471,9 @@ type statementStatus int
 const (
 	success statementStatus = iota
 	fail
-	session_id = "session_id"
+	sessionId = "session_id"
 
-	statement_id = "statement_id"
+	statementId = "statement_id"
 )
 
 func (s statementStatus) String() string {
@@ -508,20 +512,41 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	}
 }
 
+var logger *log.MOLogger
+var loggerOnce sync.Once
+
+func getLogger() *log.MOLogger {
+	loggerOnce.Do(initLogger)
+	return logger
+}
+
+func initLogger() {
+	rt := moruntime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = moruntime.DefaultRuntime()
+	}
+	logger = rt.Logger().Named("frontend")
+}
+
+func appendSessionField(fields []zap.Field, ses *Session) []zap.Field {
+	if ses != nil {
+		if ses.tStmt != nil {
+			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.tStmt.SessionID).String()))
+			fields = append(fields, zap.String(statementId, uuid.UUID(ses.tStmt.StatementID).String()))
+		} else {
+			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
+		}
+	}
+	return fields
+}
+
 func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	if ses != nil {
-		if ses.tStmt != nil {
-			fields = append(fields, zap.ByteString(session_id, ses.tStmt.SessionID[:]))
-			fields = append(fields, zap.ByteString(statement_id, ses.tStmt.StatementID[:]))
-		} else {
-			fields = append(fields, zap.ByteString(session_id, ses.GetUUID()))
-		}
-	}
-	logutil.Info(msg, fields...)
+	fields = appendSessionField(fields, ses)
+	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
 }
 
 func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
@@ -529,15 +554,8 @@ func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	if ses != nil {
-		if ses.tStmt != nil {
-			fields = append(fields, zap.ByteString(session_id, ses.tStmt.SessionID[:]))
-			fields = append(fields, zap.ByteString(statement_id, ses.tStmt.StatementID[:]))
-		} else {
-			fields = append(fields, zap.ByteString(session_id, ses.GetUUID()))
-		}
-	}
-	logutil.Debug(msg, fields...)
+	fields = appendSessionField(fields, ses)
+	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 }
 
 func logError(ses *Session, info string, msg string, fields ...zap.Field) {
@@ -545,15 +563,8 @@ func logError(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	if ses != nil {
-		if ses.tStmt != nil {
-			fields = append(fields, zap.ByteString(session_id, ses.tStmt.SessionID[:]))
-			fields = append(fields, zap.ByteString(statement_id, ses.tStmt.StatementID[:]))
-		} else {
-			fields = append(fields, zap.ByteString(session_id, ses.GetUUID()))
-		}
-	}
-	logutil.Error(msg, fields...)
+	fields = appendSessionField(fields, ses)
+	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
 }
 
 // todo: remove this function after all the logDebugf are replaced by logDebug

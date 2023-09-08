@@ -343,7 +343,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(fs, Filepath)
+	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
 	if fs == nil || err != nil {
 		return nil, err
 	}

@@ -212,6 +212,7 @@ func init() {
 		"in":                         IN,
 		"index":                      INDEX,
 		"indexes":                    INDEXES,
+		"inline":                     INLINE,
 		"infile":                     INFILE,
 		"inout":                      INOUT,
 		"inner":                      INNER,

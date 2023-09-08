@@ -63,15 +63,23 @@ import (
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
+	var p *pipeline.Pipeline
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
+		}
+		p.Cleanup(s.Proc, err != nil)
+	}()
+
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	// DataSource == nil specify the empty scan
 	if s.DataSource == nil {
-		p := pipeline.New(nil, s.Instructions, s.Reg)
+		p = pipeline.New(nil, s.Instructions, s.Reg)
 		if _, err = p.ConstRun(nil, s.Proc); err != nil {
 			return err
 		}
 	} else {
-		p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
+		p = pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 		if s.DataSource.Bat != nil {
 			if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
 				return err
@@ -133,8 +141,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
+		p.Cleanup(s.Proc, true)
 		return err
 	}
+	p.Cleanup(s.Proc, false)
+
 	// check sub-goroutine's error
 	if errReceiveChan == nil {
 		// check sub-goroutine's error
@@ -184,8 +195,17 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		Debug("remote run pipeline",
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
+
 	err := s.remoteRun(c)
-	return err
+	select {
+	case <-s.Proc.Ctx.Done():
+		// if context has done, it means other pipeline stop the query normally.
+		// so there is no need to return the error again.
+		return nil
+
+	default:
+		return err
+	}
 }
 
 // ParallelRun try to execute the scope in parallel way.
@@ -212,83 +232,85 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
 			c.lock.RLock()
-			ch, ok := c.runtimeFilterReceiverMap[spec.Tag]
+			receiver, ok := c.runtimeFilterReceiverMap[spec.Tag]
 			c.lock.RUnlock()
 			if !ok {
 				continue
 			}
 
-			select {
-			case <-s.Proc.Ctx.Done():
-				return nil
+			for i := 0; i < receiver.size; i++ {
+				select {
+				case <-s.Proc.Ctx.Done():
+					return nil
 
-			case filter := <-ch:
-				if filter == nil {
-					exprs = nil
-					s.NodeInfo.Data = s.NodeInfo.Data[:0]
-					break
-				}
-				switch filter.Typ {
-				case pbpipeline.RuntimeFilter_NO_FILTER:
-					continue
+				case filter := <-receiver.ch:
+					if filter == nil {
+						exprs = nil
+						s.NodeInfo.Data = s.NodeInfo.Data[:0]
+						break
+					}
+					switch filter.Typ {
+					case pbpipeline.RuntimeFilter_NO_FILTER:
+						continue
 
-				case pbpipeline.RuntimeFilter_IN:
-					inExpr := &plan.Expr{
-						Typ: &plan.Type{
-							Id:          int32(types.T_bool),
-							NotNullable: spec.Expr.Typ.NotNullable,
-						},
-						Expr: &plan.Expr_F{
-							F: &plan.Function{
-								Func: &plan.ObjectRef{
-									Obj:     function.InFunctionEncodedID,
-									ObjName: function.InFunctionName,
-								},
-								Args: []*plan.Expr{
-									spec.Expr,
-									{
-										Typ: &plan.Type{
-											Id: int32(types.T_tuple),
-										},
-										Expr: &plan.Expr_Bin{
-											Bin: &plan.BinaryData{
-												Data: filter.Data,
+					case pbpipeline.RuntimeFilter_IN:
+						inExpr := &plan.Expr{
+							Typ: &plan.Type{
+								Id:          int32(types.T_bool),
+								NotNullable: spec.Expr.Typ.NotNullable,
+							},
+							Expr: &plan.Expr_F{
+								F: &plan.Function{
+									Func: &plan.ObjectRef{
+										Obj:     function.InFunctionEncodedID,
+										ObjName: function.InFunctionName,
+									},
+									Args: []*plan.Expr{
+										spec.Expr,
+										{
+											Typ: &plan.Type{
+												Id: int32(types.T_tuple),
+											},
+											Expr: &plan.Expr_Bin{
+												Bin: &plan.BinaryData{
+													Data: filter.Data,
+												},
 											},
 										},
 									},
 								},
 							},
-						},
-					}
+						}
 
-					if s.DataSource.Expr == nil {
-						s.DataSource.Expr = inExpr
-					} else {
-						s.DataSource.Expr = &plan.Expr{
-							Typ: &plan.Type{
-								Id:          int32(types.T_bool),
-								NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
-							},
-							Expr: &plan.Expr_F{
-								F: &plan.Function{
-									Func: &plan.ObjectRef{
-										Obj:     function.AndFunctionEncodedID,
-										ObjName: function.AndFunctionName,
-									},
-									Args: []*plan.Expr{
-										s.DataSource.Expr,
-										inExpr,
+						if s.DataSource.Expr == nil {
+							s.DataSource.Expr = inExpr
+						} else {
+							s.DataSource.Expr = &plan.Expr{
+								Typ: &plan.Type{
+									Id:          int32(types.T_bool),
+									NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
+								},
+								Expr: &plan.Expr_F{
+									F: &plan.Function{
+										Func: &plan.ObjectRef{
+											Obj:     function.AndFunctionEncodedID,
+											ObjName: function.AndFunctionName,
+										},
+										Args: []*plan.Expr{
+											s.DataSource.Expr,
+											inExpr,
+										},
 									},
 								},
-							},
+							}
 						}
+
+						// TODO: implement BETWEEN expression
 					}
 
-					// TODO: implement BETWEEN expression
+					exprs = append(exprs, spec.Expr)
+					filters = append(filters, filter)
 				}
-
-				exprs = append(exprs, spec.Expr)
-				filters = append(filters, filter)
 			}
 		}
 
@@ -539,8 +561,9 @@ func (s *Scope) JoinRun(c *Compile) error {
 }
 
 func (s *Scope) isShuffle() bool {
-	if s != nil && (s.Instructions[0].Op == vm.Group) {
-		arg := s.Instructions[0].Arg.(*group.Argument)
+	// the pipeline is merge->group->xxx
+	if s != nil && len(s.Instructions) > 1 && (s.Instructions[1].Op == vm.Group) {
+		arg := s.Instructions[1].Arg.(*group.Argument)
 		return arg.IsShuffle
 	}
 	return false

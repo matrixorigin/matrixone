@@ -78,6 +78,8 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString("'" + val.Sval + "'")
 		case *plan.Const_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
+		case *plan.Const_EnumVal:
+			fmt.Fprintf(buf, "%v", types.Date(val.EnumVal))
 		case *plan.Const_Decimal64Val:
 			fmt.Fprintf(buf, "%s", types.Decimal64(val.Decimal64Val.A).Format(expr.Typ.GetScale()))
 		case *plan.Const_Decimal128Val:

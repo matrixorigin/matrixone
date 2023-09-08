@@ -64,6 +64,15 @@ func (x Decimal64) Minus() Decimal64 {
 	return ^x + 1
 }
 
+func (x *Decimal128) MinusInplace() {
+	if x.B0_63 == 0 {
+		x.B64_127 = ^x.B64_127 + 1
+	} else {
+		x.B64_127 = ^x.B64_127
+		x.B0_63 = ^x.B0_63 + 1
+	}
+}
+
 func (x Decimal128) Minus() Decimal128 {
 	if x.B0_63 == 0 {
 		x.B64_127 = ^x.B64_127 + 1
@@ -377,6 +386,50 @@ func (x Decimal64) Scale(n int32) (Decimal64, error) {
 	return x1, err
 }
 
+func (x *Decimal128) ScaleInplace(n int32) error {
+	if n == 0 {
+		return nil
+	}
+	signx := x.Sign()
+	if signx {
+		x.MinusInplace()
+	}
+	m := int32(0)
+	var err error
+	for n-m > 19 || n-m < -19 {
+		if n > 0 {
+			m += 19
+			err = x.Mul64InPlace(Decimal64(Pow10[19]))
+		} else {
+			m -= 19
+			err = x.Div128InPlace(&Decimal128{Pow10[19], 0})
+		}
+		if err != nil {
+			err = moerr.NewInvalidInputNoCtx("Decimal128 scale overflow: %s(Scale:%d)", x.Format(0), n)
+			return err
+		}
+	}
+	if n == m {
+		if signx {
+			x.MinusInplace()
+		}
+		return nil
+	}
+	if n-m > 0 {
+		err = x.Mul64InPlace(Decimal64(Pow10[n-m]))
+	} else {
+		err = x.Div128InPlace(&Decimal128{Pow10[m-n], 0})
+	}
+	if err != nil {
+		err = moerr.NewInvalidInputNoCtx("Decimal128 scale overflow: %s(Scale:%d)", x.Format(0), n)
+		return err
+	}
+	if signx {
+		x.MinusInplace()
+	}
+	return nil
+}
+
 func (x Decimal128) Scale(n int32) (Decimal128, error) {
 	if n == 0 {
 		return x, nil
@@ -550,6 +603,47 @@ func (x Decimal64) Mul64(y Decimal64) (Decimal64, error) {
 	return z, err
 }
 
+func (x *Decimal128) Mul64InPlace(y Decimal64) error {
+	z := Decimal128{0, 0}
+	z.B64_127, z.B0_63 = bits.Mul64(x.B0_63, uint64(y))
+	w := Decimal128{0, 0}
+	if x.B64_127 != 0 {
+		w.B0_63, w.B64_127 = bits.Mul64(x.B64_127, uint64(y))
+	}
+	if w.B0_63 != 0 || w.Sign() || z.Sign() {
+		return moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+	}
+	z.B64_127 += w.B64_127
+	if z.Sign() {
+		return moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+	}
+	*x = z
+	return nil
+}
+
+func (x *Decimal128) Mul128InPlace(y *Decimal128) error {
+	if x.B64_127 != 0 && y.B64_127 != 0 {
+		return moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+	}
+	z := Decimal128{0, 0}
+	z.B64_127, z.B0_63 = bits.Mul64(x.B0_63, y.B0_63)
+	w := Decimal128{0, 0}
+	if x.B64_127 == 0 {
+		w.B0_63, w.B64_127 = bits.Mul64(x.B0_63, y.B64_127)
+	} else {
+		w.B0_63, w.B64_127 = bits.Mul64(x.B64_127, y.B0_63)
+	}
+	if w.B0_63 != 0 || w.Sign() || z.Sign() {
+		return moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+	}
+	z.B64_127 += w.B64_127
+	if z.Sign() {
+		return moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
+	}
+	*x = z
+	return nil
+}
+
 func (x Decimal128) Mul128(y Decimal128) (Decimal128, error) {
 	if x.B64_127 != 0 && y.B64_127 != 0 {
 		return x, moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
@@ -652,6 +746,43 @@ func (x Decimal64) Div64(y Decimal64) (Decimal64, error) {
 		z++
 	}
 	return z, nil
+}
+
+func (x *Decimal128) Div128InPlace(y *Decimal128) error {
+	if y.B0_63 == 0 && y.B64_127 == 0 {
+		return moerr.NewInvalidInputNoCtx("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
+	}
+	if y.B64_127 == 0 {
+		x.B64_127, y.B64_127 = bits.Div64(0, x.B64_127, y.B0_63)
+		x.B0_63, y.B64_127 = bits.Div64(y.B64_127, x.B0_63, y.B0_63)
+		if y.B64_127*2 >= y.B0_63 || y.B64_127>>63 != 0 {
+			x.B0_63++
+			if x.B0_63 == 0 {
+				x.B64_127++
+			}
+		}
+	} else {
+		if x.Less(*y) {
+			x.B64_127 = 0
+			x.B0_63 = 0
+		} else {
+			n := bits.LeadingZeros64(y.B64_127)
+			v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
+			v >>= 63 - n
+			if v&1 == 0 {
+				x.B0_63 = v >> 1
+			} else {
+				z, _ := y.Mul128(Decimal128{v, 0})
+				if x.Left(1).Less(z) {
+					x.B0_63 = v >> 1
+				} else {
+					x.B0_63 = (v >> 1) + 1
+				}
+			}
+			x.B64_127 = 0
+		}
+	}
+	return nil
 }
 
 func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
@@ -765,7 +896,16 @@ func (x Decimal128) Mod128(y Decimal128) (Decimal128, error) {
 }
 
 func (x Decimal256) Mod256(y Decimal256) (Decimal256, error) {
-	return x, moerr.NewInvalidInputNoCtx("Decimal256 Mod overflow")
+	z, err := x.Div256(y)
+	if err != nil {
+		return x, err
+	}
+	z, err = z.Mul256(y)
+	if err != nil {
+		return x, err
+	}
+	z, err = x.Sub256(z)
+	return z, err
 }
 
 func (x Decimal64) Add(y Decimal64, scale1, scale2 int32) (z Decimal64, scale int32, err error) {
@@ -785,36 +925,55 @@ func (x Decimal64) Add(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 	return
 }
 
+func (x Decimal128) Add64(y Decimal64) (Decimal128, error) {
+	var err error
+	z := x
+	if x.Sign() == y.Sign() {
+		z.B0_63, z.B64_127 = bits.Add64(x.B0_63, uint64(y), 0)
+		z.B64_127, _ = bits.Add64(x.B64_127, 0, z.B64_127)
+		if x.Sign() != z.Sign() {
+			err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
+		}
+		return z, err
+	} else {
+		var carryOut uint64
+		x.B0_63, carryOut = bits.Add64(x.B0_63, uint64(y), 0)
+		x.B64_127, _ = bits.Add64(x.B64_127, 0, carryOut)
+		return x, err
+	}
+}
+
+// for performance sake, must make sure x and y has same scale, then call this function
+func (x *Decimal128) AddInplace(y *Decimal128) (err error) {
+	signx := x.Sign()
+	var carryout uint64
+	if signx == y.Sign() {
+		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
+		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
+		if signx != x.Sign() {
+			err = moerr.NewInvalidInputNoCtx("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
+			return
+		}
+	} else {
+		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
+		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
+	}
+	return
+}
+
 func (x Decimal128) Add(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {
 	if scale1 > scale2 {
 		scale = scale1
-		y, err = y.Scale(scale - scale2)
-	} else {
+		err = y.ScaleInplace(scale - scale2)
+	} else if scale1 < scale2 {
 		scale = scale2
-		x, err = x.Scale(scale - scale1)
+		err = x.ScaleInplace(scale - scale1)
 	}
 	if err == nil {
 		z, err = x.Add128(y)
 	}
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtx("Decimal128 Scales in Add overflow: %s(Scale:%d)+%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
-	}
-	return
-}
-
-func (x Decimal256) Add(y Decimal256, scale1, scale2 int32) (z Decimal256, scale int32, err error) {
-	if scale1 > scale2 {
-		scale = scale1
-		y, err = y.Scale(scale - scale2)
-	} else {
-		scale = scale2
-		x, err = x.Scale(scale - scale1)
-	}
-	if err == nil {
-		z, err = x.Add256(y)
-	}
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtx("Decimal256 Scales in Add overflow: %s(Scale:%d)+%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
 	}
 	return
 }
@@ -839,33 +998,16 @@ func (x Decimal64) Sub(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 func (x Decimal128) Sub(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {
 	if scale1 > scale2 {
 		scale = scale1
-		y, err = y.Scale(scale - scale2)
-	} else {
+		err = y.ScaleInplace(scale - scale2)
+	} else if scale1 < scale2 {
 		scale = scale2
-		x, err = x.Scale(scale - scale1)
+		err = x.ScaleInplace(scale - scale1)
 	}
 	if err == nil {
 		z, err = x.Sub128(y)
 	}
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtx("Decimal128 Scales in Sub overflow: %s(Scale:%d)-%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
-	}
-	return
-}
-
-func (x Decimal256) Sub(y Decimal256, scale1, scale2 int32) (z Decimal256, scale int32, err error) {
-	if scale1 > scale2 {
-		scale = scale1
-		y, err = y.Scale(scale - scale2)
-	} else {
-		scale = scale2
-		x, err = x.Scale(scale - scale1)
-	}
-	if err == nil {
-		z, err = x.Sub256(y)
-	}
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtx("Decimal256 Scales in Sub overflow: %s(Scale:%d)-%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
 	}
 	return
 }
@@ -915,6 +1057,48 @@ func (x Decimal64) Mul(y Decimal64, scale1, scale2 int32) (z Decimal64, scale in
 	return
 }
 
+func (x *Decimal128) MulInplace(y *Decimal128, scale, scale1, scale2 int32) (err error) {
+	signx := x.Sign()
+	signy := y.Sign()
+	if signx {
+		x.MinusInplace()
+	}
+	if signy {
+		tmp := *y
+		tmp.MinusInplace()
+		y = &tmp
+	}
+	err = x.Mul128InPlace(y)
+	if err != nil {
+		x2 := Decimal256{x.B0_63, x.B64_127, 0, 0}
+		y2 := Decimal256{y.B0_63, y.B64_127, 0, 0}
+		x2, _ = x2.Mul256(y2)
+		x2, _ = x2.Scale(scale)
+		if x2.B128_191 != 0 || x2.B192_255 != 0 || x2.B64_127>>63 != 0 {
+			if signy {
+				y.MinusInplace()
+			}
+			err = moerr.NewInvalidInputNoCtx("Decimal128 Mul overflow: %s(Scale:%d)*%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
+			return
+		} else {
+			err = nil
+		}
+		x.B0_63 = x2.B0_63
+		x.B64_127 = x2.B64_127
+		if signx != signy {
+			x.MinusInplace()
+		}
+		return
+	}
+	if scale != 0 {
+		x.ScaleInplace(scale)
+	}
+	if signx != signy {
+		x.MinusInplace()
+	}
+	return
+}
+
 func (x Decimal128) Mul(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {
 	scale = 12
 	if scale1 > scale {
@@ -931,10 +1115,10 @@ func (x Decimal128) Mul(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 	signy := y.Sign()
 	y1 := y
 	if signx {
-		x1 = x1.Minus()
+		x1.MinusInplace()
 	}
 	if signy {
-		y1 = y1.Minus()
+		y1.MinusInplace()
 	}
 	z, err = x1.Mul128(y1)
 	if err != nil {
@@ -955,42 +1139,11 @@ func (x Decimal128) Mul(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		}
 		return
 	}
-	z, _ = z.Scale(scale - scale1 - scale2)
+	if scale-scale1-scale2 != 0 {
+		z.ScaleInplace(scale - scale1 - scale2)
+	}
 	if signx != signy {
-		z = z.Minus()
-	}
-	return
-}
-
-func (x Decimal256) Mul(y Decimal256, scale1, scale2 int32) (z Decimal256, scale int32, err error) {
-	scale = 12
-	if scale1 > scale {
-		scale = scale1
-	}
-	if scale2 > scale {
-		scale = scale2
-	}
-	if scale1+scale2 < scale {
-		scale = scale1 + scale2
-	}
-	signx := x.Sign()
-	x1 := x
-	signy := y.Sign()
-	y1 := y
-	if signx {
-		x1 = x1.Minus()
-	}
-	if signy {
-		y1 = y1.Minus()
-	}
-	z, err = x1.Mul256(y1)
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtx("Decimal256 Mul overflow: %s(Scale:%d)*%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
-		return
-	}
-	z, _ = z.Scale(scale - scale1 - scale2)
-	if signx != signy {
-		z = z.Minus()
+		z.MinusInplace()
 	}
 	return
 }
@@ -1072,36 +1225,6 @@ func (x Decimal128) Div(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		return
 	}
 	z, err = z.Div128(y1)
-	if signx != signy {
-		z = z.Minus()
-	}
-	return
-}
-
-func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale int32, err error) {
-	scale = 12
-	if scale > scale1+6 {
-		scale = scale1 + 6
-	}
-	if scale < scale1 {
-		scale = scale1
-	}
-	signx := x.Sign()
-	x1 := x
-	signy := y.Sign()
-	y1 := y
-	if signx {
-		x1 = x1.Minus()
-	}
-	if signy {
-		y1 = y1.Minus()
-	}
-	z, err = x1.Scale(scale - scale1 + scale2)
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtx("Decimal256 Div overflow: %s(Scale:%d)/%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
-		return
-	}
-	z, err = z.Div256(y1)
 	if signx != signy {
 		z = z.Minus()
 	}
@@ -1195,35 +1318,6 @@ func (x Decimal128) Mod(y Decimal128, scale1, scale2 int32) (z Decimal128, scale
 		return
 	}
 	z, err = x1.Mod128(y1)
-	if signx {
-		z = z.Minus()
-	}
-	return
-}
-
-func (x Decimal256) Mod(y Decimal256, scale1, scale2 int32) (z Decimal256, scale int32, err error) {
-	signx := x.Sign()
-	x1 := x
-	signy := y.Sign()
-	y1 := y
-	if signx {
-		x1 = x1.Minus()
-	}
-	if signy {
-		y1 = y1.Minus()
-	}
-	if scale1 > scale2 {
-		scale = scale1
-		y1, err = y1.Scale(scale - scale2)
-	} else {
-		scale = scale2
-		x1, err = x1.Scale(scale - scale1)
-	}
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtx("Decimal256 Mod overflow: %s(Scale:%d)%%%s(Scale:%d)", x.Format(0), scale1, y.Format(0), scale2)
-		return
-	}
-	z, err = x1.Mod256(y1)
 	if signx {
 		z = z.Minus()
 	}
