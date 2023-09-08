@@ -11434,7 +11434,7 @@ yydefault:
 //line mysql_sql.y:2977
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				{
+				&tree.VarAssignmentExpr{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -20537,7 +20537,7 @@ yydefault:
 						Family:             tree.TimeFamily,
 						Scale:              yyDollar[2].lengthOptUnion(),
 						FamilyString:       yyDollar[1].str,
-						DisplayWith:        26,
+						DisplayWith:        yyDollar[2].lengthOptUnion(),
 						TimePrecisionIsSet: true,
 						Locale:             &locale,
 						Oid:                uint32(defines.MYSQL_TYPE_TIME),
@@ -20561,7 +20561,7 @@ yydefault:
 						Family:             tree.TimestampFamily,
 						Scale:              yyDollar[2].lengthOptUnion(),
 						FamilyString:       yyDollar[1].str,
-						DisplayWith:        26,
+						DisplayWith:        yyDollar[2].lengthOptUnion(),
 						TimePrecisionIsSet: true,
 						Locale:             &locale,
 						Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
@@ -20585,7 +20585,7 @@ yydefault:
 						Family:             tree.TimestampFamily,
 						Scale:              yyDollar[2].lengthOptUnion(),
 						FamilyString:       yyDollar[1].str,
-						DisplayWith:        26,
+						DisplayWith:        yyDollar[2].lengthOptUnion(),
 						TimePrecisionIsSet: true,
 						Locale:             &locale,
 						Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
