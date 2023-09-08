@@ -392,6 +392,8 @@ func runLockOpTest(
 		[]string{"s1"},
 		time.Second,
 		func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
+			runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, services[0])
+
 			// TODO: remove
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -399,6 +401,7 @@ func runLockOpTest(
 			s, err := rpc.NewSender(rpc.Config{}, runtime.ProcessLevelRuntime())
 			require.NoError(t, err)
 
+			opts = append(opts, client.WithLockService(services[0]))
 			c := client.NewTxnClient(s, opts...)
 			c.Resume()
 			defer func() {
@@ -406,8 +409,6 @@ func runLockOpTest(
 			}()
 			txnOp, err := c.New(ctx, timestamp.Timestamp{})
 			require.NoError(t, err)
-
-			txnOp.TxnRef().LockService = services[0].GetConfig().ServiceID
 
 			proc := process.New(
 				ctx,
