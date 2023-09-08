@@ -1419,9 +1419,9 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 			return nil, "", err
 		}
 		w.Flush()
-		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+		return fileservice.GetForETL(context.TODO(), nil, fileservice.JoinPath(buf.String(), prefix))
 	}
-	return fileservice.GetForETL(param.FileService, prefix)
+	return fileservice.GetForETL(context.TODO(), param.FileService, prefix)
 }
 
 // ReadDir support "etl:" and "/..." absolute path, NOT support relative path.

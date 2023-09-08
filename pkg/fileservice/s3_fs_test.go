@@ -98,17 +98,18 @@ func TestS3FS(t *testing.T) {
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
-				"",
-				name,
-				config.Endpoint,
-				config.Bucket,
-				time.Now().Format("2006-01-02.15:04:05.000000"),
+				ObjectStorageArguments{
+					Name:      name,
+					Endpoint:  config.Endpoint,
+					Bucket:    config.Bucket,
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+				},
 				DisabledCacheConfig,
 				nil,
 				true,
 			)
 			assert.Nil(t, err)
-			fs.listMaxKeys = 5 // to test continuation
+			fs.storage.(*AwsSDKv2).listMaxKeys = 5 // to test continuation
 			return fs
 		})
 	})
@@ -117,11 +118,11 @@ func TestS3FS(t *testing.T) {
 		ctx := context.Background()
 		fs, err := NewS3FS(
 			ctx,
-			"",
-			"s3",
-			config.Endpoint,
-			config.Bucket,
-			"",
+			ObjectStorageArguments{
+				Name:     "s3",
+				Endpoint: config.Endpoint,
+				Bucket:   config.Bucket,
+			},
 			DisabledCacheConfig,
 			nil,
 			true,
@@ -142,11 +143,12 @@ func TestS3FS(t *testing.T) {
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
-				"",
-				"s3",
-				config.Endpoint,
-				config.Bucket,
-				time.Now().Format("2006-01-02.15:04:05.000000"),
+				ObjectStorageArguments{
+					Name:      "s3",
+					Endpoint:  config.Endpoint,
+					Bucket:    config.Bucket,
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+				},
 				CacheConfig{
 					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
 				},
@@ -163,11 +165,12 @@ func TestS3FS(t *testing.T) {
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
-				"",
-				"s3",
-				config.Endpoint,
-				config.Bucket,
-				time.Now().Format("2006-01-02.15:04:05.000000"),
+				ObjectStorageArguments{
+					Name:      "s3",
+					Endpoint:  config.Endpoint,
+					Bucket:    config.Bucket,
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+				},
 				CacheConfig{
 					MemoryCapacity: ptrTo[toml.ByteSize](1),
 					DiskCapacity:   ptrTo[toml.ByteSize](128 * 1024),
@@ -184,6 +187,7 @@ func TestS3FS(t *testing.T) {
 }
 
 func TestDynamicS3(t *testing.T) {
+	ctx := context.Background()
 	config, err := loadS3TestConfig()
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
@@ -205,7 +209,7 @@ func TestDynamicS3(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(ctx, nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -216,6 +220,7 @@ func TestDynamicS3(t *testing.T) {
 }
 
 func TestDynamicS3NoKey(t *testing.T) {
+	ctx := context.Background()
 	config, err := loadS3TestConfig()
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
@@ -238,7 +243,7 @@ func TestDynamicS3NoKey(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(ctx, nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -249,6 +254,7 @@ func TestDynamicS3NoKey(t *testing.T) {
 }
 
 func TestDynamicS3Opts(t *testing.T) {
+	ctx := context.Background()
 	config, err := loadS3TestConfig()
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
@@ -271,7 +277,7 @@ func TestDynamicS3Opts(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(ctx, nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -282,6 +288,7 @@ func TestDynamicS3Opts(t *testing.T) {
 }
 
 func TestDynamicS3OptsRoleARN(t *testing.T) {
+	ctx := context.Background()
 	config, err := loadS3TestConfig()
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
@@ -304,7 +311,7 @@ func TestDynamicS3OptsRoleARN(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(ctx, nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -317,6 +324,7 @@ func TestDynamicS3OptsRoleARN(t *testing.T) {
 }
 
 func TestDynamicS3OptsNoRegion(t *testing.T) {
+	ctx := context.Background()
 	config, err := loadS3TestConfig()
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
@@ -338,7 +346,7 @@ func TestDynamicS3OptsNoRegion(t *testing.T) {
 		})
 		assert.Nil(t, err)
 		w.Flush()
-		fs, path, err := GetForETL(nil, JoinPath(
+		fs, path, err := GetForETL(ctx, nil, JoinPath(
 			buf.String(),
 			"foo/bar/baz",
 		))
@@ -421,11 +429,12 @@ func TestS3FSMinioServer(t *testing.T) {
 			ctx := context.Background()
 			fs, err := NewS3FSOnMinio(
 				ctx,
-				"",
-				name,
-				endpoint,
-				"test",
-				time.Now().Format("2006-01-02.15:04:05.000000"),
+				ObjectStorageArguments{
+					Name:      name,
+					Endpoint:  endpoint,
+					Bucket:    "test",
+					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+				},
 				CacheConfig{
 					DiskPath: ptrTo(cacheDir),
 				},
@@ -459,11 +468,12 @@ func BenchmarkS3FS(b *testing.B) {
 	benchmarkFileService(ctx, b, func() FileService {
 		fs, err := NewS3FS(
 			ctx,
-			"",
-			"s3",
-			config.Endpoint,
-			config.Bucket,
-			time.Now().Format("2006-01-02.15:04:05.000000"),
+			ObjectStorageArguments{
+				Name:      "s3",
+				Endpoint:  config.Endpoint,
+				Bucket:    config.Bucket,
+				KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+			},
 			CacheConfig{
 				DiskPath: ptrTo(cacheDir),
 			},
@@ -491,11 +501,12 @@ func TestS3FSWithSubPath(t *testing.T) {
 		ctx := context.Background()
 		fs, err := NewS3FS(
 			ctx,
-			"",
-			name,
-			config.Endpoint,
-			config.Bucket,
-			time.Now().Format("2006-01-02.15:04:05.000000"),
+			ObjectStorageArguments{
+				Name:      name,
+				Endpoint:  config.Endpoint,
+				Bucket:    config.Bucket,
+				KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+			},
 			DisabledCacheConfig,
 			nil,
 			true,
@@ -566,11 +577,12 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 
 	fs, err := NewS3FS(
 		ctx,
-		"",
-		"bench",
-		config.Endpoint,
-		config.Bucket,
-		time.Now().Format("2006-01-02.15:04:05.000000"),
+		ObjectStorageArguments{
+			Name:      "bench",
+			Endpoint:  config.Endpoint,
+			Bucket:    config.Bucket,
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
 		DisabledCacheConfig,
 		nil,
 		true,
@@ -691,11 +703,12 @@ func TestSequentialS3Read(t *testing.T) {
 
 	fs, err := NewS3FS(
 		ctx,
-		"",
-		"bench",
-		config.Endpoint,
-		config.Bucket,
-		time.Now().Format("2006-01-02.15:04:05.000000"),
+		ObjectStorageArguments{
+			Name:      "bench",
+			Endpoint:  config.Endpoint,
+			Bucket:    config.Bucket,
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
 		DisabledCacheConfig,
 		nil,
 		true,
