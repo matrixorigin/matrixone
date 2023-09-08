@@ -84,5 +84,5 @@ message FaultPoint {
 message TraceSpan {
     option (gogoproto.typedecl) = false;
     string cmd                  = 1;
-    repeated string spans       = 2;
+    string spans       = 2;
 }

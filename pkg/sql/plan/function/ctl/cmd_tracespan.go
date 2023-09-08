@@ -51,7 +51,7 @@ import (
 // mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3, local,...")
 // mo_ctl("dn", "TraceSpan", "[uuid]:enable:all")
 
-var SupportedSpans = map[string]func(state bool){
+var supportedSpans = map[string]func(state bool){
 	// enable or disable s3 file service read and write span
 	"s3": func(s bool) { trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(s) },
 	// enable or disable local file service read and write span
@@ -150,7 +150,7 @@ func SelfProcess(cmd string, spans string) string {
 	var succeed, failed []string
 	ss := strings.Split(spans, ",")
 	for _, t := range ss {
-		if fn, ok2 := SupportedSpans[t]; ok2 {
+		if fn, ok2 := supportedSpans[t]; ok2 {
 			fn(cmd2State[cmd])
 			succeed = append(succeed, t)
 		} else {
@@ -196,14 +196,14 @@ func send2TNAndWaitResp(proc *process.Process,
 
 		req := db.TraceSpan{
 			Cmd:   args[0],
-			Spans: strings.Split(args[1], ","),
+			Spans: args[1],
 		}
 
 		return req.MarshalBinary()
 	}
 
 	repsonseUnmarshaler := func(b []byte) (interface{}, error) {
-		return string(b[:]) + ": succeed", nil
+		return string(b[:]), nil
 	}
 
 	return getTNHandlerFunc(

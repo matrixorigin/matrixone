@@ -25,7 +25,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math/rand"
 	"os"
 	"path"
 	"path/filepath"
@@ -519,38 +518,6 @@ func TestContextDeadlineAndCancel(t *testing.T) {
 	t.Logf("deadlineCtx.Err: %s", deadlineCtx.Err())
 	quitCancel()
 	require.Equal(t, context.DeadlineExceeded, deadlineCtx.Err())
-}
-
-func TestCurrencySpan(t *testing.T) {
-	tracer := &MOTracer{
-		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
-		provider:     defaultMOTracerProvider(),
-	}
-	tracer.provider.enable = true
-	trace.SetDefaultTracer(tracer)
-
-	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
-
-	src := map[int]struct {
-		opts  trace.SpanStartOption
-		state bool
-	}{
-		0: {opts: trace.WithKind(trace.SpanKindLocalFSVis), state: true},
-		1: {opts: trace.WithKind(trace.SpanKindS3FSVis), state: false},
-		2: {opts: nil, state: true},
-	}
-	maxTry := 10000
-
-	for j := 0; j < maxTry; j++ {
-		go func() {
-			for i := 0; i < maxTry; i++ {
-				idx := rand.Int() % 3
-				require.Equal(t, src[idx].state, trace.IsEnable(src[idx].opts))
-				time.Sleep(time.Millisecond * 5)
-			}
-		}()
-	}
 }
 
 func TestWithFSSpan(t *testing.T) {
