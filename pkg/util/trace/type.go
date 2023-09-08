@@ -44,7 +44,7 @@ type Tracer interface {
 	// Debug creates a span only with DebugMode
 	Debug(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span)
 	// IsEnable return true, means do record
-	IsEnable() bool
+	IsEnable(opts ...SpanStartOption) bool
 }
 
 type Span interface {

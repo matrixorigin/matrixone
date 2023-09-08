@@ -1184,7 +1184,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logInfo(mp.ses, "check password succeeded", "")
+				logInfo(mp.ses, mp.ses.GetDebugString(), "check password succeeded")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
