@@ -2,105 +2,46 @@ set global save_query_result = on;
 drop table if exists tt;
 create table tt (a int);
 insert into tt values(1), (2);
-/* save_result */select * from tt;
-a
-1
-2
+/* cloud_user */select * from tt;
 select * from result_scan(last_query_id()) as u;
-a
-1
-2
-/* save_result */select * from tt;
-a
-1
-2
+/* cloud_user */select * from tt;
 select count(*) from meta_scan(last_query_id()) as u;
-count(*)
-1
 set global save_query_result = off;
+
 select * from tt;
-a
-1
-2
+-- @bvt:issue#9886
 select * from result_scan(last_query_id()) as u;
-no configure: save query result
+-- @bvt:issue
 set global save_query_result = on;
 drop table if exists t2;
 create table t2 (a int, b int, c int);
 insert into t2 values(1, 2, 3), (1, 2, 3);
-/* save_result */select c from tt, t2 where tt.a = t2.a;
-c
-3
-3
+/* cloud_user */select c from tt, t2 where tt.a = t2.a;
 select * from result_scan(last_query_id()) as u;
-c
-3
-3
-/* save_result */select c from tt, t2 where tt.a = t2.a;
-c
-3
-3
-/* save_result */select t2.b from result_scan(last_query_id()) as u, t2 where u.c = t2.c;
-b
-2
-2
-2
-2
+/* cloud_user */select c from tt, t2 where tt.a = t2.a;
+/* cloud_user */select t2.b from result_scan(last_query_id()) as u, t2 where u.c = t2.c;
 select * from result_scan(last_query_id()) as u;
-b
-2
-2
-2
-2
-/* save_result */select c from tt, t2 where tt.a = t2.a;
-c
-3
-3
+/* cloud_user */select c from tt, t2 where tt.a = t2.a;
 select * from result_scan(last_query_id()) as u, result_scan(last_query_id()) as v limit 1;
-c    c
-3    3
 set global save_query_result = off;
+
 set global save_query_result = on;
-/* save_result */select tt.a from tt, t2;
-a
-1
-1
-2
-2
+/* cloud_user */select tt.a from tt, t2;
 select tables from meta_scan(last_query_id()) as u;
-tables
-tt, t2
 set global query_result_maxsize = 0;
-/* save_result */select tt.a from tt, t2;
-a
-1
-1
-2
-2
+/* cloud_user */select tt.a from tt, t2;
 select char_length(result_path) from meta_scan(last_query_id()) as u;
-char_length(result_path)
-0
-/* save_result */select tt.a from tt, t2;
-a
-1
-1
-2
-2
+/* cloud_user */select tt.a from tt, t2;
 select result_size = 0 from meta_scan(last_query_id()) as u;
-result_size = 0
-true
 set global save_query_result = off;
+
 set global save_query_result = on;
 set global query_result_maxsize = 100;
 create role rrrqqq;
 grant rrrqqq to dump;
-/* save_result */select * from tt;
-a
-1
-2
+/* cloud_user */select * from tt;
 set role rrrqqq;
 select * from meta_scan(last_query_id(-2)) as u;
-internal error: do not have privilege to execute the statement
 set role moadmin;
 create database db111;
 create table db111.tt1 (a int);
@@ -108,48 +49,30 @@ insert into db111.tt1 values(1), (2);
 create table db111.tt2 (a int);
 insert into db111.tt2 values(1), (2);
 grant select on table db111.tt1 to rrrqqq;
-/* save_result */select * from db111.tt1;
-a
-1
-2
-/* save_result */select * from db111.tt2;
-a
-1
-2
+/* cloud_user */select * from db111.tt1;
+/* cloud_user */select * from db111.tt2;
 set role rrrqqq;
 select * from result_scan(last_query_id(-3)) as u;
-a
-1
-2
 select * from meta_scan(last_query_id(-3)) as u;
-internal error: do not have privilege to execute the statement
 set role moadmin;
 drop role rrrqqq;
 select * from result_scan('d8fb97e7-e30e-11ed-8d80-d6aeb943c8b4') as u;
-result file query_result_meta/sys_d8fb97e7-e30e-11ed-8d80-d6aeb943c8b4.blk not found
+--need to clean database db111
 drop database if exists db111;
 set global save_query_result = off;
+
 create account abc ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+-- @session:id=2&user=abc:admin&password=123456
 set global save_query_result = on;
 create database test;
 use test;
 drop table if exists tt;
 create table tt (a int);
 insert into tt values(1), (2);
-/* save_result */select * from tt;
-a
-1
-2
+/* cloud_user */select * from tt;
 select * from result_scan(last_query_id()) as u;
-a
-1
-2
-/* save_result */select * from tt;
-a
-1
-2
+/* cloud_user */select * from tt;
 select count(*) from meta_scan(last_query_id()) as u;
-count(*)
-1
 set global save_query_result = off;
+-- @session
 drop account abc;
