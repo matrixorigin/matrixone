@@ -569,7 +569,7 @@ const AVG = 57891
 const RANK = 57892
 const ROW_NUMBER = 57893
 const DENSE_RANK = 57894
-const DECODE = 57895
+const BIT_CAST = 57895
 const NEXTVAL = 57896
 const SETVAL = 57897
 const CURRVAL = 57898
@@ -1169,7 +1169,7 @@ var yyToknames = [...]string{
 	"RANK",
 	"ROW_NUMBER",
 	"DENSE_RANK",
-	"DECODE",
+	"BIT_CAST",
 	"NEXTVAL",
 	"SETVAL",
 	"CURRVAL",
@@ -11426,7 +11426,7 @@ yydefault:
 //line mysql_sql.y:2977
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				{
+				&tree.VarAssignmentExpr{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -18150,7 +18150,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:7697
 		{
-			yyLOCAL = tree.NewDecodeExpr(yyDollar[3].exprUnion(), yyDollar[5].columnTypeUnion())
+			yyLOCAL = tree.NewBitCastExpr(yyDollar[3].exprUnion(), yyDollar[5].columnTypeUnion())
 		}
 		yyVAL.union = yyLOCAL
 	case 1288:

@@ -22,11 +22,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2803,7 +2802,7 @@ func TestSleep(t *testing.T) {
 	}
 }
 
-func initDecodeTestCase() []tcTemp {
+func initBitCastTestCase() []tcTemp {
 	return []tcTemp{
 		{
 			info: "test Decode Int8",
@@ -2864,14 +2863,14 @@ func initDecodeTestCase() []tcTemp {
 	}
 }
 
-func TestDecode(t *testing.T) {
-	testCases := initDecodeTestCase()
+func TestBitCast(t *testing.T) {
+	testCases := initBitCastTestCase()
 
 	// do the test work.
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, BinaryDecode)
+			tc.inputs, tc.expect, BitCast)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

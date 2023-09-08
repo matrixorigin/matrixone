@@ -21,9 +21,6 @@ import (
 	"math"
 	"sort"
 
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"

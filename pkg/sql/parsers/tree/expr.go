@@ -1155,14 +1155,14 @@ func NewCastExpr(e Expr, t ResolvableTypeReference) *CastExpr {
 	}
 }
 
-type DecodeExpr struct {
+type BitCastExpr struct {
 	exprImpl
 	Expr Expr
 	Type ResolvableTypeReference
 }
 
-func (node *DecodeExpr) Format(ctx *FmtCtx) {
-	ctx.WriteString("decode(")
+func (node *BitCastExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("bit_cast(")
 	node.Expr.Format(ctx)
 	ctx.WriteString(" as ")
 	node.Type.(*T).InternalType.Format(ctx)
@@ -1170,12 +1170,12 @@ func (node *DecodeExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (node *DecodeExpr) Accept(v Visitor) (Expr, bool) {
+func (node *BitCastExpr) Accept(v Visitor) (Expr, bool) {
 	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	node = newNode.(*DecodeExpr)
+	node = newNode.(*BitCastExpr)
 	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
 		return node, false
@@ -1184,8 +1184,8 @@ func (node *DecodeExpr) Accept(v Visitor) (Expr, bool) {
 	return v.Exit(node)
 }
 
-func NewDecodeExpr(e Expr, t ResolvableTypeReference) *DecodeExpr {
-	return &DecodeExpr{
+func NewBitCastExpr(e Expr, t ResolvableTypeReference) *BitCastExpr {
+	return &BitCastExpr{
 		Expr: e,
 		Type: t,
 	}

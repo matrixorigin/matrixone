@@ -1801,9 +1801,9 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
-	// operator `decode`
+	// operator `bit_cast`
 	{
-		functionId: DECODE,
+		functionId: BIT_CAST,
 		class:      plan.Function_STRICT,
 		layout:     CAST_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
@@ -1826,7 +1826,7 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return BinaryDecode(parameters, result, proc, length)
+						return BitCast(parameters, result, proc, length)
 					}
 				},
 			},
