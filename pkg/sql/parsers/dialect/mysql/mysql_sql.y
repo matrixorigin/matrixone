@@ -406,7 +406,7 @@ import (
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK
+%token <str> DENSE_RANK BIT_CAST
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -7657,7 +7657,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-
+|   BIT_CAST '(' expression AS mo_cast_type ')'
+    {
+        $$ = tree.NewBitCastExpr($3, $5)
+    }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -10320,7 +10323,8 @@ not_keyword:
 |   SETVAL
 |   CURRVAL
 |   LASTVAL
-|	HEADERS
+|   HEADERS
+|   BIT_CAST
 
 //mo_keywords:
 //    PROPERTIES

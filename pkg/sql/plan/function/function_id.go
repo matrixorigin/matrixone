@@ -43,18 +43,19 @@ const (
 	XOR                       // XOR
 	NOT                       // NOT
 	CAST                      // CAST
-	IS                        //IS
-	ISNOT                     //ISNOT
-	ISNULL                    //ISNULL
-	ISNOTNULL                 //ISNOTNULL
-	ISUNKNOWN                 //ISUNKNOWN
-	ISNOTUNKNOWN              //ISNOTUNKNOWN
-	ISTRUE                    //ISTRUE
-	ISNOTTRUE                 //ISNOTTRUE
-	ISFALSE                   //ISFALSE
-	ISNOTFALSE                //ISNOTTRUE
-	ISEMPTY                   //ISEMPTY
-	NOT_IN_ROWS               //NOT_IN_ROWS
+	BIT_CAST                  // BIT_CAST
+	IS                        // IS
+	ISNOT                     // ISNOT
+	ISNULL                    // ISNULL
+	ISNOTNULL                 // ISNOTNULL
+	ISUNKNOWN                 // ISUNKNOWN
+	ISNOTUNKNOWN              // ISNOTUNKNOWN
+	ISTRUE                    // ISTRUE
+	ISNOTTRUE                 // ISNOTTRUE
+	ISFALSE                   // ISFALSE
+	ISNOTFALSE                // ISNOTTRUE
+	ISEMPTY                   // ISEMPTY
+	NOT_IN_ROWS               // NOT_IN_ROWS
 	OP_BIT_AND                // &
 	OP_BIT_OR                 // |
 	OP_BIT_XOR                // ^
@@ -362,6 +363,7 @@ var functionIdRegister = map[string]int32{
 	"case":        CASE,
 	"coalesce":    COALESCE,
 	"cast":        CAST,
+	"bit_cast":    BIT_CAST,
 	"is":          IS,
 	"is_not":      ISNOT,
 	"isnot":       ISNOT,

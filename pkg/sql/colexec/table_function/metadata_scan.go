@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -124,6 +125,8 @@ func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.Metadata
 		fillMetadataInfoBat(retBat, proc, arg, metaInfos[i])
 	}
 
+	retBat.AddRowCount(len(metaInfos))
+
 	return retBat, nil
 }
 
@@ -146,6 +149,9 @@ func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, err
 
 func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument, info *plan.MetadataScanInfo) error {
 	mp := proc.GetMPool()
+	zm := index.ZM(info.ZoneMap)
+	zmNull := !zm.IsInited()
+
 	for i, colname := range arg.Attrs {
 		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[colname]
 		if !ok {
@@ -222,17 +228,17 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendFixed(opBat.Vecs[i], info.OriginSize, false, mp)
 
 		case plan.MetadataScanInfo_MIN: // TODO: find a way to show this info
-			vector.AppendBytes(opBat.Vecs[i], info.Min, false, mp)
+			vector.AppendBytes(opBat.Vecs[i], zm.GetMinBuf(), zmNull, mp)
 
 		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
-			vector.AppendBytes(opBat.Vecs[i], info.Max, false, mp)
+			vector.AppendBytes(opBat.Vecs[i], zm.GetMaxBuf(), zmNull, mp)
 
 		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
-			vector.AppendBytes(opBat.Vecs[i], info.Sum, false, mp)
+			vector.AppendBytes(opBat.Vecs[i], zm.GetSumBuf(), zmNull, mp)
 
 		default:
 		}
 	}
-	opBat.AddRowCount(len(arg.Attrs))
+
 	return nil
 }
