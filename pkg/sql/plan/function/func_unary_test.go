@@ -17,15 +17,15 @@ package function
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/assert"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2613,6 +2613,80 @@ func TestSleep(t *testing.T) {
 	for _, tc := range testCases2 {
 		fcTC := testutil.NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Sleep[float64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initBitCastTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test Decode Int8",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"a", "s", ""},
+					[]bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{97, 115, 0},
+				[]bool{false, false, true}),
+		},
+		{
+			info: "test Decode Int16",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"as", "df", ""},
+					[]bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int16.ToType(),
+					[]int16{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int16.ToType(), false,
+				[]int16{29537, 26212, 0},
+				[]bool{false, false, true}),
+		},
+		{
+			info: "test Decode Int32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"asdf", "jkl;", ""},
+					[]bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int32.ToType(),
+					[]int32{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{1717859169, 996961130, 0},
+				[]bool{false, false, true}),
+		},
+		{
+			info: "test Decode Int64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"asdfjkl;", ""},
+					[]bool{false, true}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{4281915450451063649, 0},
+				[]bool{false, true}),
+		},
+	}
+}
+
+func TestBitCast(t *testing.T) {
+	testCases := initBitCastTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, BitCast)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
