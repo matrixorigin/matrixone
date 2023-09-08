@@ -1801,6 +1801,38 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
+	// operator `bit_cast`
+	{
+		functionId: BIT_CAST,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				tid := inputs[0].Oid
+				if tid == types.T_binary || tid == types.T_varbinary || tid == types.T_blob {
+					if inputs[1].IsFixedLen() {
+						return newCheckResultWithSuccess(0)
+					}
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(paramTypes []types.Type) types.Type {
+					return paramTypes[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						return BitCast(parameters, result, proc, length)
+					}
+				},
+			},
+		},
+	},
+
 	// operator `is`
 	{
 		functionId: IS,
