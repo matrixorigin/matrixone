@@ -787,17 +787,27 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {
 		op := &s.RemoteReceivRegInfos[i]
+
 		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
+			closeWithError := func(err error) {
+				select {
+				case <-s.Proc.Ctx.Done():
+					err = nil
+				default:
+				}
+				if reg != nil {
+					reg.Ch <- nil
+					close(reg.Ch)
+				}
+				errChan <- nil
+			}
+
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
-				close(reg.Ch)
-				errChan <- errStream
+				closeWithError(errStream)
 				return
 			}
-			defer func(streamSender morpc.Stream) {
-				close(reg.Ch)
-				_ = streamSender.Close(true)
-			}(streamSender)
+			defer streamSender.Close(true)
 
 			message := cnclient.AcquireMessage()
 			{
@@ -807,25 +817,22 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				message.Uuid = info.Uuid[:]
 			}
 			if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
-				errChan <- errSend
+				closeWithError(errSend)
 				return
 			}
 
 			messagesReceive, errReceive := streamSender.Receive()
 			if errReceive != nil {
-				errChan <- errReceive
+				closeWithError(errReceive)
 				return
 			}
 			var ch chan *batch.Batch
 			if reg != nil {
 				ch = reg.Ch
 			}
-			if err := receiveMsgAndForward(s.Proc, messagesReceive, ch); err != nil {
-				errChan <- err
-				return
-			}
-			reg.Ch <- nil
-			errChan <- nil
+			err := receiveMsgAndForward(s.Proc, messagesReceive, ch)
+			closeWithError(err)
+			return
 		}(op, s.Proc.Reg.MergeReceivers[op.Idx])
 	}
 }
