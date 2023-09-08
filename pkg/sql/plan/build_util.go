@@ -134,12 +134,12 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: int32(types.T_date)}, nil
 		case defines.MYSQL_TYPE_TIME:
-			return &plan.Type{Id: int32(types.T_time), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_time), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DATETIME:
 			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
-			return &plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			return &plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
 			if n.InternalType.DisplayWith > 16 {
 				return &plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil

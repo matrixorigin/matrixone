@@ -223,7 +223,7 @@ var (
 		input: "select password from t1",
 	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
-		output: "create table t1 (a datetime(26) on update current_timestamp(1))",
+		output: "create table t1 (a datetime on update current_timestamp(1))",
 	}, {
 		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
 		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
@@ -288,14 +288,12 @@ var (
 	}, {
 		input: "select cast(false as varchar)",
 	}, {
-		input:  "select cast(a as timestamp)",
-		output: "select cast(a as timestamp(26))",
+		input: "select cast(a as timestamp)",
 	}, {
 		input:  "select cast(\"2022-01-30\" as varchar);",
 		output: "select cast(2022-01-30 as varchar)",
 	}, {
-		input:  "select cast(b as timestamp) from t2",
-		output: "select cast(b as timestamp(26)) from t2",
+		input: "select cast(b as timestamp) from t2",
 	}, {
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
@@ -368,7 +366,7 @@ var (
 		output: "set a = b",
 	}, {
 		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
-		output: "create table t1 (datetime datetime(26), timestamp timestamp(26), date date)",
+		output: "create table t1 (datetime datetime, timestamp timestamp, date date)",
 	}, {
 		input:  "SET timestamp=DEFAULT;",
 		output: "set timestamp = default",
@@ -1092,7 +1090,7 @@ var (
 		},
 		{
 			input:  `CREATE TABLE tp10 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));`,
-			output: `create table tp10 (col1 int, col2 char(5), col3 datetime(26)) partition by hash (year(col3))`,
+			output: `create table tp10 (col1 int, col2 char(5), col3 datetime) partition by hash (year(col3))`,
 		},
 		{
 			input:  `CREATE TABLE tp11 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6`,
@@ -1447,7 +1445,7 @@ var (
 			input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
 		}, {
 			input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
-			output: "create table t1 (t time(26, 3) null, dt datetime(26, 6) null, ts timestamp(26, 1) null)",
+			output: "create table t1 (t time(3, 3) null, dt datetime(6, 6) null, ts timestamp(1, 1) null)",
 		}, {
 			input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
 			output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
