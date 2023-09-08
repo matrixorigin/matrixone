@@ -21,11 +21,9 @@ import (
 	"math"
 	"sort"
 
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -33,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -50,7 +49,7 @@ var (
 	constFType          = types.T_float32.ToType()
 	constDType          = types.T_float64.ToType()
 	constSType          = types.T_varchar.ToType()
-	constBinType        = types.T_blob.ToType()
+	constBinType        = types.T_varbinary.ToType()
 	constDateType       = types.T_date.ToType()
 	constTimeType       = types.T_time.ToType()
 	constDatetimeType   = types.T_datetime.ToType()
