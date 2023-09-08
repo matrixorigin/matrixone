@@ -157,9 +157,7 @@ select * from atomic_table_13;
 -- @session}
 commit;
 show create table atomic_table_13;
--- @bvt:issue
 
--- @bvt:issue#11334
 drop table if exists atomic_table_12_4;
 drop table if exists atomic_table_13;
 create table atomic_table_12_4(c1 int primary key,c2 varchar(25));
