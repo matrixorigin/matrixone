@@ -215,7 +215,7 @@ type Compile struct {
 
 	buildPlanFunc func() (*plan2.Plan, error)
 
-	fuzzy *fuzzyCheckInfo
+	fuzzy *fuzzyCheck
 }
 
 type RemoteReceivRegInfo struct {
@@ -224,12 +224,16 @@ type RemoteReceivRegInfo struct {
 	FromAddr string
 }
 
-// use to contains some info to run a background SQL when
-// fuzzy filter can not draw a definite conclusion for duplicate check
-type fuzzyCheckInfo struct {
+type fuzzyCheck struct {
 	db        string
 	tbl       string
-	isCpk     bool
-	attrs     []string
+	attr      string
 	condition string
+
+	// handle with primary key(a, b, ...) or unique key (a, b, ...)
+	isCompound   bool
+	col          *plan.ColDef
+	compoundCols []*plan.ColDef
+
+	cnt int
 }

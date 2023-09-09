@@ -532,14 +532,8 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	}
 }
 
-func constructFuzzyFilter(n *plan.Node) *fuzzyfilter.Argument {
-	tblName := n.TableDef.GetName()
-	dbName := n.ObjRef.GetSchemaName()
-
-	return &fuzzyfilter.Argument{
-		TblName: tblName,
-		DbName:  dbName,
-	}
+func constructFuzzyFilter() *fuzzyfilter.Argument {
+	return new(fuzzyfilter.Argument)
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
