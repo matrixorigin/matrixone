@@ -57,7 +57,11 @@ func (c *clientInfo) parse(full string) error {
 
 	// For label part.
 	if len(labelPart) > 0 {
-		c.labelInfo.Labels = parseLabel(strings.TrimSpace(labelPart))
+		labels, err := frontend.ParseLabel(strings.TrimSpace(labelPart))
+		if err != nil {
+			return err
+		}
+		c.labelInfo.Labels = labels
 	}
 	return nil
 }
