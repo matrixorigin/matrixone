@@ -291,7 +291,7 @@ func (b *Blockid) Unmarshal(data []byte) error {
 	return nil
 }
 
-// Fixed bytes.   Deciaml64/128 and Varlena are not included because they
+// Fixed bytes.   Decimal64/128 and Varlena are not included because they
 // has special meanings.  In general you cannot compare them as bytes.
 type FixedBytes interface {
 	TS | Rowid
@@ -522,7 +522,7 @@ func (t Type) DescString() string {
 	case T_decimal64:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
-		return fmt.Sprintf("DECIAML(%d,%d)", t.Width, t.Scale)
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	}
 	return t.Oid.String()
 }
