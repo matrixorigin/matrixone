@@ -797,3 +797,17 @@ func (node *ShowBackendServers) Format(ctx *FmtCtx) {
 
 func (node *ShowBackendServers) GetStatementType() string { return "Show Backend Servers" }
 func (node *ShowBackendServers) GetQueryType() string     { return QueryTypeOth }
+
+type ShowConnectors struct {
+	showImpl
+}
+
+func (node *ShowConnectors) Format(ctx *FmtCtx) {
+	ctx.WriteString("show connectors")
+}
+func (node *ShowConnectors) GetStatementType() string { return "Show Connectors" }
+func (node *ShowConnectors) GetQueryType() string     { return QueryTypeOth }
+
+func NewShowConnectors(f bool) *ShowConnectors {
+	return &ShowConnectors{}
+}
