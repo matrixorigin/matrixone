@@ -255,7 +255,8 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		streamSender: streamSender,
 	}
 	ch2 := make(chan *batch.Batch)
-	ctx2, _ := context.WithTimeout(context.Background(), time.Second)
+	ctx2, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	lastInstruction := vm.Instruction{
 		Arg: &connector.Argument{
 			Reg: &process.WaitRegister{
