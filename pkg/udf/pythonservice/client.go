@@ -16,26 +16,30 @@ package pythonservice
 
 import (
 	"context"
+	"sync"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 )
 
-type client struct {
+type Client struct {
 	cfg   ClientConfig
-	sc    PythonUdfServiceClient
+	sc    udf.ServiceClient
 	mutex sync.Mutex
 }
 
-func NewClient(cfg ClientConfig) (PythonUdfClient, error) {
+func NewClient(cfg ClientConfig) (*Client, error) {
 	err := cfg.Validate()
 	if err != nil {
 		return nil, err
 	}
-	return &client{cfg: cfg}, nil
+	return &Client{cfg: cfg}, nil
 }
 
-func (c *client) init() error {
+func (c *Client) init() error {
 	if c.sc == nil {
 		err := func() error {
 			c.mutex.Lock()
@@ -45,7 +49,7 @@ func (c *client) init() error {
 				if err != nil {
 					return err
 				}
-				c.sc = NewPythonUdfServiceClient(conn)
+				c.sc = udf.NewServiceClient(conn)
 			}
 			return nil
 		}()
@@ -56,10 +60,23 @@ func (c *client) init() error {
 	return nil
 }
 
-func (c *client) Run(ctx context.Context, request *PythonUdfRequest) (*PythonUdfResponse, error) {
+func (c *Client) Run(ctx context.Context, request *udf.Request) (*udf.Response, error) {
+	var language string
+	if request != nil {
+		language = request.Language
+	}
+	if language != udf.LanguagePython {
+		return nil, moerr.NewInvalidArg(ctx, "udf language", language)
+	}
+
 	err := c.init()
 	if err != nil {
 		return nil, err
 	}
+
 	return c.sc.Run(ctx, request)
+}
+
+func (c *Client) Language() string {
+	return udf.LanguagePython
 }

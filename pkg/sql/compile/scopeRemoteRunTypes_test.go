@@ -39,6 +39,7 @@ func Test_MessageSenderOnClient(t *testing.T) {
 	server, err := morpc.NewRPCServer("server", "127.0.0.1:9999", morpc.NewMessageCodec(func() morpc.Message {
 		return &message.ExampleMessage{}
 	}))
+	require.Nil(t, err)
 	err = server.Start()
 	require.Nil(t, err)
 

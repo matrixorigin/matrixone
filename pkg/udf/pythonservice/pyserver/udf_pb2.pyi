@@ -61,23 +61,27 @@ BINARY: DataType
 VARBINARY: DataType
 BLOB: DataType
 
-class PythonUdfRequest(_message.Message):
-    __slots__ = ["udf", "vectors", "length"]
+class Request(_message.Message):
+    __slots__ = ["udf", "vectors", "length", "language"]
     UDF_FIELD_NUMBER: _ClassVar[int]
     VECTORS_FIELD_NUMBER: _ClassVar[int]
     LENGTH_FIELD_NUMBER: _ClassVar[int]
-    udf: PythonUdf
+    LANGUAGE_FIELD_NUMBER: _ClassVar[int]
+    udf: Udf
     vectors: _containers.RepeatedCompositeFieldContainer[DataVector]
     length: int
-    def __init__(self, udf: _Optional[_Union[PythonUdf, _Mapping]] = ..., vectors: _Optional[_Iterable[_Union[DataVector, _Mapping]]] = ..., length: _Optional[int] = ...) -> None: ...
+    language: str
+    def __init__(self, udf: _Optional[_Union[Udf, _Mapping]] = ..., vectors: _Optional[_Iterable[_Union[DataVector, _Mapping]]] = ..., length: _Optional[int] = ..., language: _Optional[str] = ...) -> None: ...
 
-class PythonUdfResponse(_message.Message):
-    __slots__ = ["vector"]
+class Response(_message.Message):
+    __slots__ = ["vector", "language"]
     VECTOR_FIELD_NUMBER: _ClassVar[int]
+    LANGUAGE_FIELD_NUMBER: _ClassVar[int]
     vector: DataVector
-    def __init__(self, vector: _Optional[_Union[DataVector, _Mapping]] = ...) -> None: ...
+    language: str
+    def __init__(self, vector: _Optional[_Union[DataVector, _Mapping]] = ..., language: _Optional[str] = ...) -> None: ...
 
-class PythonUdf(_message.Message):
+class Udf(_message.Message):
     __slots__ = ["handler", "asFun", "retType"]
     HANDLER_FIELD_NUMBER: _ClassVar[int]
     ASFUN_FIELD_NUMBER: _ClassVar[int]

@@ -2,11 +2,11 @@
 """Client and server classes corresponding to protobuf-defined services."""
 import grpc
 
-import python_udf_pb2 as python__udf__pb2
+import udf_pb2 as udf__pb2
 
 
-class PythonUdfServiceStub(object):
-    """protoc --go_out=. --go-grpc_out=. ./python_udf.proto
+class ServiceStub(object):
+    """protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative ./udf.proto
 
     """
 
@@ -17,14 +17,14 @@ class PythonUdfServiceStub(object):
             channel: A grpc.Channel.
         """
         self.run = channel.unary_unary(
-                '/pythonservice.PythonUdfService/run',
-                request_serializer=python__udf__pb2.PythonUdfRequest.SerializeToString,
-                response_deserializer=python__udf__pb2.PythonUdfResponse.FromString,
+                '/udf.Service/run',
+                request_serializer=udf__pb2.Request.SerializeToString,
+                response_deserializer=udf__pb2.Response.FromString,
                 )
 
 
-class PythonUdfServiceServicer(object):
-    """protoc --go_out=. --go-grpc_out=. ./python_udf.proto
+class ServiceServicer(object):
+    """protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative ./udf.proto
 
     """
 
@@ -35,22 +35,22 @@ class PythonUdfServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
 
-def add_PythonUdfServiceServicer_to_server(servicer, server):
+def add_ServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'run': grpc.unary_unary_rpc_method_handler(
                     servicer.run,
-                    request_deserializer=python__udf__pb2.PythonUdfRequest.FromString,
-                    response_serializer=python__udf__pb2.PythonUdfResponse.SerializeToString,
+                    request_deserializer=udf__pb2.Request.FromString,
+                    response_serializer=udf__pb2.Response.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'pythonservice.PythonUdfService', rpc_method_handlers)
+            'udf.Service', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
 
 
  # This class is part of an EXPERIMENTAL API.
-class PythonUdfService(object):
-    """protoc --go_out=. --go-grpc_out=. ./python_udf.proto
+class Service(object):
+    """protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative ./udf.proto
 
     """
 
@@ -65,8 +65,8 @@ class PythonUdfService(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/pythonservice.PythonUdfService/run',
-            python__udf__pb2.PythonUdfRequest.SerializeToString,
-            python__udf__pb2.PythonUdfResponse.FromString,
+        return grpc.experimental.unary_unary(request, target, '/udf.Service/run',
+            udf__pb2.Request.SerializeToString,
+            udf__pb2.Response.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

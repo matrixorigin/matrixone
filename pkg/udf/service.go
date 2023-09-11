@@ -16,31 +16,35 @@ package udf
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 )
 
-// Service handle non-sql udf in cn
-type Service interface {
-	AddPythonUdfClient(pc pythonservice.PythonUdfClient)
-	RunPythonUdf(ctx context.Context, request *pythonservice.PythonUdfRequest) (*pythonservice.PythonUdfResponse, error)
-}
-
-func NewService() Service {
-	return &service{}
+func NewService(services ...Service) (Service, error) {
+	srv := &service{}
+	srv.mapping = make(map[string]Service, len(services))
+	for _, s := range services {
+		if srv.mapping[s.Language()] == nil {
+			srv.mapping[s.Language()] = s
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx("too many " + s.Language() + " udf service")
+		}
+	}
+	return srv, nil
 }
 
 type service struct {
-	pc pythonservice.PythonUdfClient
+	mapping map[string]Service
 }
 
-func (s *service) AddPythonUdfClient(pc pythonservice.PythonUdfClient) {
-	s.pc = pc
+func (s *service) Language() string {
+	return "multiple"
 }
 
-func (s *service) RunPythonUdf(ctx context.Context, request *pythonservice.PythonUdfRequest) (*pythonservice.PythonUdfResponse, error) {
-	if s.pc == nil {
-		return nil, moerr.NewInternalError(ctx, "missing python udf client")
+func (s *service) Run(ctx context.Context, request *Request) (*Response, error) {
+	srv := s.mapping[request.Language]
+	if srv == nil {
+		return nil, moerr.NewInternalError(ctx, "missing "+request.Language+" udf service")
 	}
-	return s.pc.Run(ctx, request)
+	return srv.Run(ctx, request)
 }

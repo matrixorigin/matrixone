@@ -22,8 +22,8 @@ import decimal
 
 import grpc
 
-import python_udf_pb2 as pb2
-import python_udf_pb2_grpc as pb2_grpc
+import udf_pb2 as pb2
+import udf_pb2_grpc as pb2_grpc
 
 DEFAULT_DECIMAL_SCALE = 16
 
@@ -32,19 +32,14 @@ DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
 DATETIME_FORMAT_WITH_PRECISION = '%Y-%m-%d %H:%M:%S.%f'
 
 
-class Server(pb2_grpc.PythonUdfService):
+class Server(pb2_grpc.ServiceServicer):
 
-    @staticmethod
-    def run(request: pb2.PythonUdfRequest,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None) -> pb2.PythonUdfResponse:
+    def run(self,
+            request: pb2.Request,
+            context) -> pb2.Response:
+
+        # check
+        assert request.language == "python", "udf language must be python"
 
         # load function
         func = loadFunction(request.udf)
@@ -69,10 +64,10 @@ class Server(pb2_grpc.PythonUdfService):
             value = func(*params)
             data = value2Data(value, result.type)
             result.data.append(data)
-        return pb2.PythonUdfResponse(vector=result)
+        return pb2.Response(vector=result, language="python")
 
 
-def loadFunction(udf: pb2.PythonUdf) -> Callable:
+def loadFunction(udf: pb2.Udf) -> Callable:
     # load function
     exec(udf.asFun, locals())
     # get function object
@@ -202,7 +197,7 @@ def value2Data(value: Any, typ: pb2.DataType) -> pb2.Data:
 
 def run():
     server = grpc.server(futures.ThreadPoolExecutor())
-    pb2_grpc.add_PythonUdfServiceServicer_to_server(Server(), server)
+    pb2_grpc.add_ServiceServicer_to_server(Server(), server)
     server.add_insecure_port(ARGS.address)
     server.start()
     server.wait_for_termination()

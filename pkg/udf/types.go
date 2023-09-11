@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package pythonservice
+package udf
 
-type PythonUdfServer interface {
-	Start() error
-	Close() error
+import "context"
+
+const (
+	LanguagePython = "python"
+)
+
+// Service handle non-sql udf in cn
+type Service interface {
+	Language() string
+	Run(ctx context.Context, request *Request) (*Response, error)
 }

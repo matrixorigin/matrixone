@@ -142,14 +142,18 @@ func NewService(
 	}
 
 	// init UdfService
-	srv.udfService = udf.NewService()
+	var udfServices []udf.Service
 	// add python client to handle python udf
 	if srv.cfg.PythonUdfClient.ServerAddress != "" {
 		pc, err := pythonservice.NewClient(srv.cfg.PythonUdfClient)
 		if err != nil {
 			panic(err)
 		}
-		srv.udfService.AddPythonUdfClient(pc)
+		udfServices = append(udfServices, pc)
+	}
+	srv.udfService, err = udf.NewService(udfServices...)
+	if err != nil {
+		panic(err)
 	}
 
 	srv.pu = pu
