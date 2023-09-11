@@ -50,6 +50,11 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	maxLSN uint64,
 	isLSNValid bool,
 	err error) {
+	defer func() {
+		if maxTs.IsEmpty() {
+			isLSNValid = true
+		}
+	}()
 	ctx := r.ctx
 	dirs, err := r.rt.Fs.ListDir(CheckpointDir)
 	if err != nil {
@@ -269,9 +274,6 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			isLSNValid = true
 			maxLSN = checkpointEntry.ckpLSN
 		}
-	}
-	if maxTs.IsEmpty() {
-		isLSNValid = true
 	}
 	applyDuration = time.Since(t0)
 	logutil.Info("open-tae", common.OperationField("replay"),
