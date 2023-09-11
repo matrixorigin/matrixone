@@ -192,6 +192,14 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
 		return r.selectFrom16Reg()
 	case 17:
 		return r.selectFrom17Reg()
+	case 33:
+		return r.selectFrom33Reg()
+	case 49:
+		return r.selectFrom49Reg()
+	case 65:
+		return r.selectFrom65Reg()
+	case 81:
+		return r.selectFrom81Reg()
 	default:
 		chosen, value, ok := reflect.Select(r.receiverListener)
 		var bat *batch.Batch
