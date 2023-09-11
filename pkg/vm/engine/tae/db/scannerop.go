@@ -47,7 +47,7 @@ const (
 	constMergeMinBlks       = 5
 	constHeapCapacity       = 300
 	const1GBytes            = 1 << 30
-	constMergeExpansionRate = 8
+	constMergeExpansionRate = 10
 	constKeyMergeWaitFactor = "MO_MERGE_WAIT" // smaller value means shorter wait, cost much more io
 )
 
@@ -260,8 +260,8 @@ func (ml *mergeLimiter) calcMergeConsume(blks, mergedRows int) int {
 	// by test exprience, full 8192 rows batch will expand to 8x memory comsupation.
 	// the ExpansionRate will be moderated by the actual row number after applying deletes
 	rate := float64(constMergeExpansionRate*mergedRows) / float64(blks*ml.maxRowsForBlk)
-	if rate < 1.5 {
-		rate = 1.5
+	if rate < 2 {
+		rate = 2
 	}
 	return int(float64(blks*ml.maxRowsForBlk*ml.estimateRowSize) * rate)
 }

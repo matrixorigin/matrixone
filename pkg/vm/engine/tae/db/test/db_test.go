@@ -5646,7 +5646,7 @@ func TestMergeMemsize(t *testing.T) {
 	t.Log(wholebat.ApproxSize())
 	batCnt := 40
 	bats := wholebat.Split(batCnt)
-	var metalocs []objectio.Location
+	metalocs := make([]objectio.Location, 0)
 	// write only one block by apply metaloc
 	objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, objName1, 0, nil)
