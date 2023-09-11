@@ -638,10 +638,6 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 		if entry.tableId != tableId {
 			continue
 		}
-		if entry.bat == nil || entry.bat.IsEmpty() {
-			continue
-		}
-		entry.bat.AddCnt(1)
 		writes = append(writes, entry)
 	}
 	return writes
