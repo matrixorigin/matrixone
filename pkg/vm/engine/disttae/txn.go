@@ -45,7 +45,7 @@ func (txn *Transaction) getBlockInfos(
 		return nil, err
 	}
 	var objectName objectio.ObjectNameShort
-	iter, err := state.NewBlocksIter(ts, tbl.tableId)
+	iter, err := state.NewBlocksIter(ts)
 	if err != nil {
 		return nil, err
 	}
