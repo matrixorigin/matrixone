@@ -18,6 +18,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
+func (r *ReceiverOperator) selectFrom1Reg() (int, *batch.Batch, bool) {
+	idx := 0
+	ok := true
+	var bat *batch.Batch
+	select {
+	case <-r.proc.Ctx.Done():
+		return 0, nil, true
+	case bat, ok = <-r.chs[0]:
+		idx = 1
+	}
+	return idx, bat, ok
+}
+
 func (r *ReceiverOperator) selectFrom2Reg() (int, *batch.Batch, bool) {
 	idx := 0
 	ok := true
@@ -453,52 +466,7 @@ func (r *ReceiverOperator) selectFrom16Reg() (int, *batch.Batch, bool) {
 	return idx, bat, ok
 }
 
-func (r *ReceiverOperator) selectFrom17Reg() (int, *batch.Batch, bool) {
-	idx := 0
-	ok := true
-	var bat *batch.Batch
-	select {
-	case <-r.proc.Ctx.Done():
-		return 0, nil, true
-	case bat, ok = <-r.chs[0]:
-		idx = 1
-	case bat, ok = <-r.chs[1]:
-		idx = 2
-	case bat, ok = <-r.chs[2]:
-		idx = 3
-	case bat, ok = <-r.chs[3]:
-		idx = 4
-	case bat, ok = <-r.chs[4]:
-		idx = 5
-	case bat, ok = <-r.chs[5]:
-		idx = 6
-	case bat, ok = <-r.chs[6]:
-		idx = 7
-	case bat, ok = <-r.chs[7]:
-		idx = 8
-	case bat, ok = <-r.chs[8]:
-		idx = 9
-	case bat, ok = <-r.chs[9]:
-		idx = 10
-	case bat, ok = <-r.chs[10]:
-		idx = 11
-	case bat, ok = <-r.chs[11]:
-		idx = 12
-	case bat, ok = <-r.chs[12]:
-		idx = 13
-	case bat, ok = <-r.chs[13]:
-		idx = 14
-	case bat, ok = <-r.chs[14]:
-		idx = 15
-	case bat, ok = <-r.chs[15]:
-		idx = 16
-	case bat, ok = <-r.chs[16]:
-		idx = 17
-	}
-	return idx, bat, ok
-}
-
-func (r *ReceiverOperator) selectFrom33Reg() (int, *batch.Batch, bool) {
+func (r *ReceiverOperator) selectFrom32Reg() (int, *batch.Batch, bool) {
 	idx := 0
 	ok := true
 	var bat *batch.Batch
@@ -569,13 +537,11 @@ func (r *ReceiverOperator) selectFrom33Reg() (int, *batch.Batch, bool) {
 		idx = 31
 	case bat, ok = <-r.chs[31]:
 		idx = 32
-	case bat, ok = <-r.chs[32]:
-		idx = 33
 	}
 	return idx, bat, ok
 }
 
-func (r *ReceiverOperator) selectFrom49Reg() (int, *batch.Batch, bool) {
+func (r *ReceiverOperator) selectFrom48Reg() (int, *batch.Batch, bool) {
 	idx := 0
 	ok := true
 	var bat *batch.Batch
@@ -678,13 +644,11 @@ func (r *ReceiverOperator) selectFrom49Reg() (int, *batch.Batch, bool) {
 		idx = 47
 	case bat, ok = <-r.chs[47]:
 		idx = 48
-	case bat, ok = <-r.chs[48]:
-		idx = 49
 	}
 	return idx, bat, ok
 }
 
-func (r *ReceiverOperator) selectFrom65Reg() (int, *batch.Batch, bool) {
+func (r *ReceiverOperator) selectFrom64Reg() (int, *batch.Batch, bool) {
 	idx := 0
 	ok := true
 	var bat *batch.Batch
@@ -819,13 +783,11 @@ func (r *ReceiverOperator) selectFrom65Reg() (int, *batch.Batch, bool) {
 		idx = 63
 	case bat, ok = <-r.chs[63]:
 		idx = 64
-	case bat, ok = <-r.chs[64]:
-		idx = 65
 	}
 	return idx, bat, ok
 }
 
-func (r *ReceiverOperator) selectFrom81Reg() (int, *batch.Batch, bool) {
+func (r *ReceiverOperator) selectFrom80Reg() (int, *batch.Batch, bool) {
 	idx := 0
 	ok := true
 	var bat *batch.Batch
@@ -992,8 +954,6 @@ func (r *ReceiverOperator) selectFrom81Reg() (int, *batch.Batch, bool) {
 		idx = 79
 	case bat, ok = <-r.chs[79]:
 		idx = 80
-	case bat, ok = <-r.chs[80]:
-		idx = 81
 	}
 	return idx, bat, ok
 }

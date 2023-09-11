@@ -172,6 +172,8 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
 	chosen := 0
 	ok := true
 	switch len(r.chs) {
+	case 1:
+		chosen, bat, ok = r.selectFrom1Reg()
 	case 2:
 		chosen, bat, ok = r.selectFrom2Reg()
 	case 3:
@@ -202,16 +204,14 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
 		chosen, bat, ok = r.selectFrom15Reg()
 	case 16:
 		chosen, bat, ok = r.selectFrom16Reg()
-	case 17:
-		chosen, bat, ok = r.selectFrom17Reg()
-	case 33:
-		chosen, bat, ok = r.selectFrom33Reg()
-	case 49:
-		chosen, bat, ok = r.selectFrom49Reg()
-	case 65:
-		chosen, bat, ok = r.selectFrom65Reg()
-	case 81:
-		chosen, bat, ok = r.selectFrom81Reg()
+	case 32:
+		chosen, bat, ok = r.selectFrom32Reg()
+	case 48:
+		chosen, bat, ok = r.selectFrom48Reg()
+	case 64:
+		chosen, bat, ok = r.selectFrom64Reg()
+	case 80:
+		chosen, bat, ok = r.selectFrom80Reg()
 	default:
 		var value reflect.Value
 		logutil.Infof("!!!!!!!!!!! len(chs) %v", len(r.chs))
