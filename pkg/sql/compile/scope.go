@@ -791,16 +791,17 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
 			// if context has done, it means other pipeline stop the query normally.
 			closeWithError := func(err error) {
-				select {
-				case <-s.Proc.Ctx.Done():
-					err = nil
-				default:
-				}
 				if reg != nil {
 					reg.Ch <- nil
 					close(reg.Ch)
 				}
-				errChan <- nil
+
+				select {
+				case <-s.Proc.Ctx.Done():
+					errChan <- nil
+				default:
+					errChan <- err
+				}
 			}
 
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
@@ -833,7 +834,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			}
 			err := receiveMsgAndForward(s.Proc, messagesReceive, ch)
 			closeWithError(err)
-			return
 		}(op, s.Proc.Reg.MergeReceivers[op.Idx])
 	}
 }
