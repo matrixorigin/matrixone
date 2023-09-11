@@ -142,7 +142,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithReserveWALEntryCount(opts.CheckpointCfg.ReservedWALEntryCount))
 
 	now := time.Now()
-	checkpointed, err := db.BGCheckpointRunner.Replay(dataFactory)
+	checkpointed, ckpLSN, valid, err := db.BGCheckpointRunner.Replay(dataFactory)
 	if err != nil {
 		panic(err)
 	}
@@ -152,7 +152,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		common.AnyField("checkpointed", checkpointed.ToString()))
 
 	now = time.Now()
-	db.Replay(dataFactory, checkpointed)
+	db.Replay(dataFactory, checkpointed, ckpLSN, valid)
 	db.Catalog.ReplayTableRows()
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),

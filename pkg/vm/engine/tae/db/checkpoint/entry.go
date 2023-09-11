@@ -70,11 +70,8 @@ func (e *CheckpointEntry) CheckPrintTime() bool {
 	return time.Since(e.lastPrint) > 4*time.Minute
 }
 func (e *CheckpointEntry) LSNString() string {
-	if e.entryType == ET_Global {
-		return "Global Checkpoint doesn't truncate"
-	}
 	if e.version < logtail.CheckpointVersion7 {
-		return fmt.Sprintf("Checkpoint Version too small %d", e.version)
+		return fmt.Sprintf("version too small: v%d", e.version)
 	}
 	return fmt.Sprintf("ckp %d, truncate %d", e.ckpLSN, e.truncateLSN)
 }

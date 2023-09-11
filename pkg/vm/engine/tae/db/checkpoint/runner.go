@@ -77,9 +77,11 @@ func (p *countBasedPolicy) Reset() {
 }
 
 type globalCheckpointContext struct {
-	force    bool
-	end      types.TS
-	interval time.Duration
+	force       bool
+	end         types.TS
+	interval    time.Duration
+	truncateLSN uint64
+	ckpLSN      uint64
 }
 
 // Q: What does runner do?
@@ -310,7 +312,7 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 		}
 		if doCheckpoint {
 			now := time.Now()
-			entry, err := r.doGlobalCheckpoint(ctx.end, ctx.interval)
+			entry, err := r.doGlobalCheckpoint(ctx.end, ctx.ckpLSN, ctx.truncateLSN, ctx.interval)
 			if err != nil {
 				logutil.Errorf("Global checkpoint %v failed: %v", entry, err)
 				continue
@@ -399,12 +401,13 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		logutil.Errorf("Do checkpoint %s: %v", entry.String(), err)
 		return
 	}
-	entry.SetState(ST_Finished)
 	lsn := r.source.GetMaxLSN(entry.start, entry.end)
 	lsnToTruncate := uint64(0)
 	if lsn > r.options.reservedWALEntryCount {
 		lsnToTruncate = lsn - r.options.reservedWALEntryCount
 	}
+	entry.SetLSN(lsn, lsnToTruncate)
+	entry.SetState(ST_Finished)
 	if err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
 		logutil.Errorf("Save checkpoint %s: %v", entry.String(), err)
 		return
@@ -422,7 +425,12 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		entry.String(), time.Since(now), lsnToTruncate, lsn, r.options.reservedWALEntryCount)
 
 	r.postCheckpointQueue.Enqueue(entry)
-	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{end: entry.end, interval: r.options.globalVersionInterval})
+	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+		end:         entry.end,
+		interval:    r.options.globalVersionInterval,
+		ckpLSN:      lsn,
+		truncateLSN: lsnToTruncate,
+	})
 }
 
 func (r *runner) DeleteIncrementalEntry(entry *CheckpointEntry) {
@@ -519,8 +527,10 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	return
 }
 
-func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry *CheckpointEntry, err error) {
+func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration) (entry *CheckpointEntry, err error) {
 	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
+	entry.ckpLSN = ckpLSN
+	entry.truncateLSN = truncateLSN
 	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval)
 	data, err := factory(r.catalog)
 	if err != nil {
