@@ -198,7 +198,7 @@ user_attributes    JSON(0)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='system_metrics' and att_relname='metric' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
 metric_name    VARCHAR(1024)    null    null
-collecttime    DATETIME(0)    null    null
+collecttime    DATETIME(6)    null    null
 value    DOUBLE(0)    null    null
 node    VARCHAR(1024)    null    null
 role    VARCHAR(1024)    null    null
@@ -506,7 +506,7 @@ user_attributes    JSON(0)    YES        null
 DESC `system_metrics`.`metric` ;
 Field    Type    Null    Key    Default    Extra    Comment
 metric_name    VARCHAR(1024)    YES        'sys'        metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...
-collecttime    DATETIME(0)    NO        null        metric data collect time
+collecttime    DATETIME(6)    NO        null        metric data collect time
 value    DOUBLE(0)    YES        '0.0'        metric value
 node    VARCHAR(1024)    YES        'monolithic'        mo node uuid
 role    VARCHAR(1024)    YES        'monolithic'        mo node role, like: CN, DN, LOG
@@ -514,21 +514,21 @@ account    VARCHAR(1024)    YES        'sys'        account name
 type    VARCHAR(1024)    NO        null        sql type, like: insert, select, ...
 DESC `system_metrics`.`server_connections` ;
 Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME(0)    NO        null        
+collecttime    DATETIME(6)    NO        null        
 value    DOUBLE(0)    YES        null        
 node    VARCHAR(1024)    YES        null        
 role    VARCHAR(1024)    YES        null        
 account    VARCHAR(1024)    YES        null        
 DESC `system_metrics`.`server_storage_usage` ;
 Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME(0)    NO        null        
+collecttime    DATETIME(6)    NO        null        
 value    DOUBLE(0)    YES        null        
 node    VARCHAR(1024)    YES        null        
 role    VARCHAR(1024)    YES        null        
 account    VARCHAR(1024)    YES        null        
 DESC `system_metrics`.`sql_statement_errors` ;
 Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME(0)    NO        null        
+collecttime    DATETIME(6)    NO        null        
 value    DOUBLE(0)    YES        null        
 node    VARCHAR(1024)    YES        null        
 role    VARCHAR(1024)    YES        null        
@@ -536,7 +536,7 @@ account    VARCHAR(1024)    YES        null
 type    VARCHAR(1024)    NO        null        
 DESC `system_metrics`.`sql_transaction_total` ;
 Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME(0)    NO        null        
+collecttime    DATETIME(6)    NO        null        
 value    DOUBLE(0)    YES        null        
 node    VARCHAR(1024)    YES        null        
 role    VARCHAR(1024)    YES        null        

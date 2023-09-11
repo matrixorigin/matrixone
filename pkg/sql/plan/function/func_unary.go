@@ -18,13 +18,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"io"
 	"math"
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -342,7 +343,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(fs, Filepath)
+	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
 	if fs == nil || err != nil {
 		return nil, err
 	}
@@ -1049,4 +1050,110 @@ func BuildVersion(_ []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return opNoneParamToFixed[types.Timestamp](result, proc, length, func() types.Timestamp {
 		return buildT
 	})
+}
+
+func bitCastBinaryToFixed[T types.FixedSizeTExceptStrType](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T],
+	byteLen int,
+	length int,
+) error {
+	var i uint64
+	var l = uint64(length)
+	var result, emptyT T
+	resultBytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), byteLen)
+
+	for i = 0; i < l; i++ {
+		v, null := from.GetStrValue(i)
+		if null {
+			if err := to.Append(result, true); err != nil {
+				return err
+			}
+		} else {
+			if len(v) > byteLen {
+				return moerr.NewOutOfRange(ctx, fmt.Sprintf("%d-byte fixed-length type", byteLen), "binary value '0x%s'", hex.EncodeToString(v))
+			}
+
+			if len(v) < byteLen {
+				result = emptyT
+			}
+			copy(resultBytes, v)
+			if err := to.Append(result, false); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func BitCast(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	toType := parameters[1].GetType()
+	ctx := proc.Ctx
+
+	switch toType.Oid {
+	case types.T_int8:
+		rs := vector.MustFunctionResult[int8](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 1, length)
+	case types.T_int16:
+		rs := vector.MustFunctionResult[int16](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 2, length)
+	case types.T_int32:
+		rs := vector.MustFunctionResult[int32](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 4, length)
+	case types.T_int64:
+		rs := vector.MustFunctionResult[int64](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
+	case types.T_uint8:
+		rs := vector.MustFunctionResult[uint8](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 1, length)
+	case types.T_uint16:
+		rs := vector.MustFunctionResult[uint16](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 2, length)
+	case types.T_uint32:
+		rs := vector.MustFunctionResult[uint32](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 4, length)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 4, length)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
+	case types.T_decimal64:
+		rs := vector.MustFunctionResult[types.Decimal64](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
+	case types.T_decimal128:
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 16, length)
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 1, length)
+	case types.T_uuid:
+		rs := vector.MustFunctionResult[types.Uuid](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 16, length)
+	case types.T_date:
+		rs := vector.MustFunctionResult[types.Date](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 4, length)
+	case types.T_datetime:
+		rs := vector.MustFunctionResult[types.Datetime](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
+	case types.T_time:
+		rs := vector.MustFunctionResult[types.Time](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
+	case types.T_timestamp:
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
+	}
+
+	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", source.GetType(), toType))
 }
