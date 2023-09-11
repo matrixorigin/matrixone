@@ -112,12 +112,10 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		}
 
 		if !ok {
-			r.RemoveChosen(chosen)
 			return nil, true, nil
 		}
 
 		if bat == nil {
-			r.RemoveChosen(chosen)
 			continue
 		}
 
@@ -156,86 +154,71 @@ func (r *ReceiverOperator) RemoveChosen(idx int) {
 	r.aliveMergeReceiver--
 }
 
+func (r *ReceiverOperator) DisableChosen(idx int) {
+	//disable idx-1 from chs
+	r.chs[idx-1] = nil
+	r.aliveMergeReceiver--
+}
+
 func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
-	switch r.aliveMergeReceiver {
-	case 1:
-		return r.selectFrom1Reg()
+	var bat *batch.Batch
+	chosen := 0
+	ok := true
+	switch len(r.chs) {
 	case 2:
-		return r.selectFrom2Reg()
+		chosen, bat, ok = r.selectFrom2Reg()
 	case 3:
-		return r.selectFrom3Reg()
+		chosen, bat, ok = r.selectFrom3Reg()
 	case 4:
-		return r.selectFrom4Reg()
+		chosen, bat, ok = r.selectFrom4Reg()
 	case 5:
-		return r.selectFrom5Reg()
+		chosen, bat, ok = r.selectFrom5Reg()
 	case 6:
-		return r.selectFrom6Reg()
+		chosen, bat, ok = r.selectFrom6Reg()
 	case 7:
-		return r.selectFrom7Reg()
+		chosen, bat, ok = r.selectFrom7Reg()
 	case 8:
-		return r.selectFrom8Reg()
+		chosen, bat, ok = r.selectFrom8Reg()
 	case 9:
-		return r.selectFrom9Reg()
+		chosen, bat, ok = r.selectFrom9Reg()
 	case 10:
-		return r.selectFrom10Reg()
+		chosen, bat, ok = r.selectFrom10Reg()
 	case 11:
-		return r.selectFrom11Reg()
+		chosen, bat, ok = r.selectFrom11Reg()
 	case 12:
-		return r.selectFrom12Reg()
+		chosen, bat, ok = r.selectFrom12Reg()
 	case 13:
-		return r.selectFrom13Reg()
+		chosen, bat, ok = r.selectFrom13Reg()
 	case 14:
-		return r.selectFrom14Reg()
+		chosen, bat, ok = r.selectFrom14Reg()
 	case 15:
-		return r.selectFrom15Reg()
+		chosen, bat, ok = r.selectFrom15Reg()
 	case 16:
-		return r.selectFrom16Reg()
+		chosen, bat, ok = r.selectFrom16Reg()
 	case 17:
-		return r.selectFrom17Reg()
+		chosen, bat, ok = r.selectFrom17Reg()
 	case 33:
-		return r.selectFrom33Reg()
+		chosen, bat, ok = r.selectFrom33Reg()
 	case 49:
-		return r.selectFrom49Reg()
-	case 50:
-		return r.selectFrom50Reg()
-	case 51:
-		return r.selectFrom51Reg()
-	case 52:
-		return r.selectFrom52Reg()
-	case 53:
-		return r.selectFrom53Reg()
-	case 54:
-		return r.selectFrom54Reg()
-	case 55:
-		return r.selectFrom55Reg()
-	case 56:
-		return r.selectFrom56Reg()
-	case 57:
-		return r.selectFrom57Reg()
-	case 58:
-		return r.selectFrom58Reg()
-	case 59:
-		return r.selectFrom59Reg()
-	case 60:
-		return r.selectFrom60Reg()
-	case 61:
-		return r.selectFrom61Reg()
-	case 62:
-		return r.selectFrom62Reg()
-	case 63:
-		return r.selectFrom63Reg()
-	case 64:
-		return r.selectFrom64Reg()
+		chosen, bat, ok = r.selectFrom49Reg()
 	case 65:
-		return r.selectFrom65Reg()
+		chosen, bat, ok = r.selectFrom65Reg()
 	case 81:
-		return r.selectFrom81Reg()
+		chosen, bat, ok = r.selectFrom81Reg()
 	default:
-		chosen, value, ok := reflect.Select(r.receiverListener)
-		var bat *batch.Batch
+		var value reflect.Value
+		chosen, value, ok = reflect.Select(r.receiverListener)
 		if chosen != 0 && ok {
 			bat = (*batch.Batch)(value.UnsafePointer())
 		}
+		if !ok || bat == nil {
+			r.RemoveChosen(chosen)
+		}
 		return chosen, bat, ok
 	}
+
+	if !ok || bat == nil {
+		r.DisableChosen(chosen)
+	}
+	return chosen, bat, ok
 }
