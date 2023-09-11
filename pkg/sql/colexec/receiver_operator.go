@@ -169,7 +169,7 @@ func (r *ReceiverOperator) DisableChosen(idx int) {
 func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
 	var bat *batch.Batch
 	chosen := 0
-	ok := true
+	var ok bool
 	switch len(r.chs) {
 	case 1:
 		chosen, bat, ok = r.selectFrom1Reg()
