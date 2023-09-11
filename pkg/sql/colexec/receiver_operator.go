@@ -196,6 +196,36 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
 		return r.selectFrom33Reg()
 	case 49:
 		return r.selectFrom49Reg()
+	case 50:
+		return r.selectFrom50Reg()
+	case 51:
+		return r.selectFrom51Reg()
+	case 52:
+		return r.selectFrom52Reg()
+	case 53:
+		return r.selectFrom53Reg()
+	case 54:
+		return r.selectFrom54Reg()
+	case 55:
+		return r.selectFrom55Reg()
+	case 56:
+		return r.selectFrom56Reg()
+	case 57:
+		return r.selectFrom57Reg()
+	case 58:
+		return r.selectFrom58Reg()
+	case 59:
+		return r.selectFrom59Reg()
+	case 60:
+		return r.selectFrom60Reg()
+	case 61:
+		return r.selectFrom61Reg()
+	case 62:
+		return r.selectFrom62Reg()
+	case 63:
+		return r.selectFrom63Reg()
+	case 64:
+		return r.selectFrom64Reg()
 	case 65:
 		return r.selectFrom65Reg()
 	case 81:
