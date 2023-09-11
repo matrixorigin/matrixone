@@ -78,7 +78,6 @@ const (
 	DistributedThreshold              uint64 = 10 * mpool.MB
 	SingleLineSizeEstimate            uint64 = 300 * mpool.B
 	shuffleJoinProbeChannelBufferSize        = 16
-	shuffleJoinBuildChannelBufferSize        = 0
 )
 
 var (
@@ -2749,6 +2748,9 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
+			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+				rr.Ch = make(chan *batch.Batch, 16)
+			}
 		}
 		children = append(children, ss...)
 		if !single {
@@ -2879,10 +2881,6 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 			},
 		})
 		s.Proc.Reg.MergeReceivers = s.Proc.Reg.MergeReceivers[:s.BuildIdx+1]
-		// this is for shuffle join build scope
-		for _, mr := range rs.Proc.Reg.MergeReceivers {
-			mr.Ch = make(chan *batch.Batch, shuffleJoinBuildChannelBufferSize)
-		}
 	} else {
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
