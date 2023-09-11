@@ -77,6 +77,7 @@ import (
 const (
 	DistributedThreshold              uint64 = 10 * mpool.MB
 	SingleLineSizeEstimate            uint64 = 300 * mpool.B
+	shuffleJoinMergeChannelBufferSize        = 4
 	shuffleJoinProbeChannelBufferSize        = 16
 )
 
@@ -2749,7 +2750,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, 16)
+				rr.Ch = make(chan *batch.Batch, shuffleJoinMergeChannelBufferSize)
 			}
 		}
 		children = append(children, ss...)
