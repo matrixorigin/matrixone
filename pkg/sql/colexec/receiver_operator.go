@@ -16,7 +16,6 @@ package colexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
 	"time"
@@ -214,7 +213,6 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
 		chosen, bat, ok = r.selectFrom80Reg()
 	default:
 		var value reflect.Value
-		logutil.Infof("!!!!!!!!!!! len(chs) %v", len(r.chs))
 		chosen, value, ok = reflect.Select(r.receiverListener)
 		if chosen != 0 && ok {
 			bat = (*batch.Batch)(value.UnsafePointer())
