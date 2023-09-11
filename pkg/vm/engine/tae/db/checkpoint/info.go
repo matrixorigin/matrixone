@@ -33,7 +33,7 @@ type RunnerReader interface {
 	MaxLSN() uint64
 }
 
-func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batch {
+func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncateLSN uint64) *containers.Batch {
 	bat := makeRespBatchFromSchema(CheckpointSchema)
 	entries := r.GetAllIncrementalCheckpoints()
 	for _, entry := range entries {
@@ -46,6 +46,8 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
 		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
 		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
+		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(ckpLSN, false)
+		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(truncateLSN, false)
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
@@ -58,6 +60,8 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS) *containers.Batc
 		bat.GetVectorByName(CheckpointAttr_EntryType).Append(false, false)
 		bat.GetVectorByName(CheckpointAttr_Version).Append(entry.version, false)
 		bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(entry.tnLocation), false)
+		bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(ckpLSN, false)
+		bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(truncateLSN, false)
 	}
 	return bat
 }

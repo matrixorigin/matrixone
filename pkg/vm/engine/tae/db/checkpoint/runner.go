@@ -315,7 +315,7 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 				logutil.Errorf("Global checkpoint %v failed: %v", entry, err)
 				continue
 			}
-			if err := r.saveCheckpoint(entry.start, entry.end); err != nil {
+			if err := r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
 				logutil.Errorf("Global checkpoint %v failed: %v", entry, err)
 				continue
 			}
@@ -405,7 +405,7 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	if lsn > r.options.reservedWALEntryCount {
 		lsnToTruncate = lsn - r.options.reservedWALEntryCount
 	}
-	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+	if err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
 		logutil.Errorf("Save checkpoint %s: %v", entry.String(), err)
 		return
 	}
@@ -484,8 +484,8 @@ func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.
 	return
 }
 
-func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
-	bat := r.collectCheckpointMetadata(start, end)
+func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (err error) {
+	bat := r.collectCheckpointMetadata(start, end, ckpLSN, truncateLSN)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
 	if err != nil {

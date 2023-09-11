@@ -126,14 +126,21 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		} else {
 			tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
 		}
+		var ckpLSN, truncateLSN uint64
+		if version >= logtail.CheckpointVersion7 {
+			ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
+			truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
+		}
 		checkpointEntry := &CheckpointEntry{
-			start:      start,
-			end:        end,
-			cnLocation: cnLoc,
-			tnLocation: tnLoc,
-			state:      ST_Finished,
-			entryType:  typ,
-			version:    version,
+			start:       start,
+			end:         end,
+			cnLocation:  cnLoc,
+			tnLocation:  tnLoc,
+			state:       ST_Finished,
+			entryType:   typ,
+			version:     version,
+			ckpLSN:      ckpLSN,
+			truncateLSN: truncateLSN,
 		}
 		var err2 error
 		if readType == PrefetchData {
