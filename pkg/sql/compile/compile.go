@@ -78,7 +78,7 @@ const (
 	DistributedThreshold              uint64 = 10 * mpool.MB
 	SingleLineSizeEstimate            uint64 = 300 * mpool.B
 	shuffleJoinProbeChannelBufferSize        = 16
-	shuffleJoinBuildChannelBufferSize        = 2
+	shuffleJoinBuildChannelBufferSize        = 1
 )
 
 var (
