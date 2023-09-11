@@ -15,11 +15,10 @@
 package colexec
 
 import (
-	"reflect"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"reflect"
+	"time"
 )
 
 // isMergeType means the receiver operator receive batch from all regs or single by some order
@@ -104,7 +103,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		}
 
 		start := time.Now()
-		chosen, value, ok := reflect.Select(r.receiverListener)
+		chosen, bat, ok := r.selectFromAllReg()
 		analyze.WaitStop(start)
 
 		// chosen == 0 means the info comes from proc context.Done
@@ -117,7 +116,6 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 			return nil, true, nil
 		}
 
-		bat := (*batch.Batch)(value.UnsafePointer())
 		if bat == nil {
 			r.RemoveChosen(chosen)
 			continue
@@ -153,5 +151,53 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 
 func (r *ReceiverOperator) RemoveChosen(idx int) {
 	r.receiverListener = append(r.receiverListener[:idx], r.receiverListener[idx+1:]...)
+	//remove idx-1 from chs
+	r.chs = append(r.chs[:idx-1], r.chs[idx:]...)
 	r.aliveMergeReceiver--
+}
+
+func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
+	switch r.aliveMergeReceiver {
+	case 1:
+		return r.selectFrom1Reg()
+	case 2:
+		return r.selectFrom2Reg()
+	case 3:
+		return r.selectFrom3Reg()
+	case 4:
+		return r.selectFrom4Reg()
+	case 5:
+		return r.selectFrom5Reg()
+	case 6:
+		return r.selectFrom6Reg()
+	case 7:
+		return r.selectFrom7Reg()
+	case 8:
+		return r.selectFrom8Reg()
+	case 9:
+		return r.selectFrom9Reg()
+	case 10:
+		return r.selectFrom10Reg()
+	case 11:
+		return r.selectFrom11Reg()
+	case 12:
+		return r.selectFrom12Reg()
+	case 13:
+		return r.selectFrom13Reg()
+	case 14:
+		return r.selectFrom14Reg()
+	case 15:
+		return r.selectFrom15Reg()
+	case 16:
+		return r.selectFrom16Reg()
+	case 17:
+		return r.selectFrom17Reg()
+	default:
+		chosen, value, ok := reflect.Select(r.receiverListener)
+		var bat *batch.Batch
+		if chosen != 0 && ok {
+			bat = (*batch.Batch)(value.UnsafePointer())
+		}
+		return chosen, bat, ok
+	}
 }
