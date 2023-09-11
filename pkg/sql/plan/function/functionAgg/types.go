@@ -32,47 +32,11 @@ type maxScaleNumeric interface {
 	int64 | uint64 | float64
 }
 
+type allTypes interface {
+	types.OrderedT | types.Decimal | []byte | bool | types.Uuid
+}
+
 var (
-	// count() supported input type and output type.
-	AggCountReturnType = func(typs []types.Type) types.Type {
-		return types.T_int64.ToType()
-	}
-
-	// bit_and() supported input type and output type.
-	AggBitAndSupportedParameters = []types.T{
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
-		types.T_binary, types.T_varbinary,
-	}
-	AggBitAndReturnType = func(typs []types.Type) types.Type {
-		if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
-			return typs[0]
-		}
-		return types.New(types.T_uint64, 0, 0)
-	}
-
-	// bit_or() supported input type and output type.
-	AggBitOrSupportedParameters = []types.T{
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
-		types.T_binary, types.T_varbinary,
-	}
-	AggBitOrReturnType = AggBitAndReturnType
-
-	// bit_xor() supported input type and output type.
-	AggBitXorSupportedParameters = []types.T{
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
-		types.T_binary, types.T_varbinary,
-	}
-	AggBitXorReturnType = AggBitAndReturnType
-
 	// variance() supported input type and output type.
 	AggVarianceSupportedParameters = []types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -99,23 +63,6 @@ var (
 		types.T_decimal64, types.T_decimal128,
 	}
 	AggStdDevReturnType = AggVarianceReturnType
-
-	// any_value() supported input type and output type.
-	AggAnyValueSupportedParameters = []types.T{
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_float32, types.T_float64,
-		types.T_date, types.T_datetime,
-		types.T_timestamp, types.T_time,
-		types.T_decimal64, types.T_decimal128,
-		types.T_bool,
-		types.T_varchar, types.T_char, types.T_blob, types.T_text,
-		types.T_uuid,
-		types.T_binary, types.T_varbinary,
-	}
-	AggAnyValueReturnType = func(typs []types.Type) types.Type {
-		return typs[0]
-	}
 
 	// median() supported input type and output type.
 	AggMedianSupportedParameters = []types.T{

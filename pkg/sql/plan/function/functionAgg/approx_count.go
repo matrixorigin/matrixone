@@ -15,7 +15,10 @@
 package functionAgg
 
 import (
+	"bytes"
+	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
@@ -66,10 +69,128 @@ func NewAggApproxCount(overloadID int64, dist bool, inputTypes []types.Type, out
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for approx_count", inputTypes[0])
 }
 
-func newGenericApprox[T any](overloadID int64, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
-	aggPriv := agg.NewApproxc[T]()
+func newGenericApprox[T allTypes](overloadID int64, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
+	aggPriv := &sAggApproxCountDistinct[T]{}
 	if dist {
-		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryDistAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+}
+
+type sAggApproxCountDistinct[T any] struct {
+	sk []*hll.Sketch
+}
+
+func (s *sAggApproxCountDistinct[T]) Grows(cnt int) {
+	oldLength := len(s.sk)
+	if len(s.sk) < cnt {
+		s.sk = append(s.sk, make([]*hll.Sketch, cnt)...)
+	}
+	for i := oldLength; i < cnt; i++ {
+		s.sk[i] = hll.New()
+	}
+}
+func (s *sAggApproxCountDistinct[T]) Free(_ *mpool.MPool) {}
+func (s *sAggApproxCountDistinct[T]) Fill(groupNumber int64, values T, lastResult uint64, count int64, isEmpty bool, isNull bool) (newResult uint64, isStillEmpty bool, err error) {
+	if !isNull {
+		data := getTheBytes(values)
+		s.sk[groupNumber].Insert(data)
+		return lastResult, false, nil
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggApproxCountDistinct[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 uint64, result2 uint64, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult uint64, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		s2 := priv2.(*sAggApproxCountDistinct[T])
+		if !isEmpty1 {
+			err = s.sk[groupNumber1].Merge(s2.sk[groupNumber2])
+		} else {
+			s.sk[groupNumber1] = s2.sk[groupNumber2]
+			s2.sk[groupNumber2] = nil
+		}
+	}
+	return result1, isEmpty1 && isEmpty2, err
+}
+func (s *sAggApproxCountDistinct[T]) Eval(lastResult []uint64, _ error) ([]uint64, error) {
+	for i := range lastResult {
+		lastResult[i] = s.sk[i].Estimate()
+	}
+	return lastResult, nil
+}
+func (s *sAggApproxCountDistinct[T]) MarshalBinary() ([]byte, error) {
+	if len(s.sk) == 0 {
+		return nil, nil
+	}
+	var buf bytes.Buffer
+
+	l := int32(len(s.sk))
+	buf.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		data, err := s.sk[i].MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		size := int32(len(data))
+		buf.Write(types.EncodeInt32(&size))
+		buf.Write(data)
+	}
+
+	return buf.Bytes(), nil
+}
+func (s *sAggApproxCountDistinct[T]) UnmarshalBinary(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	l := types.DecodeInt32(data[:4])
+	data = data[4:]
+	sks := make([]*hll.Sketch, l)
+	for i := 0; i < int(l); i++ {
+		size := types.DecodeInt32(data[:4])
+		data = data[4:]
+
+		sk := new(hll.Sketch)
+		if err := sk.UnmarshalBinary(data[:size]); err != nil {
+			return err
+		}
+		data = data[size:]
+		sks[i] = sk
+	}
+	s.sk = sks
+	return nil
+}
+
+func getTheBytes(value any) []byte {
+	var data []byte
+	switch v := value.(type) {
+	case uint8:
+		data = append(data, types.EncodeFixed(v)...)
+	case uint16:
+		data = append(data, types.EncodeFixed(v)...)
+	case uint32:
+		data = append(data, types.EncodeFixed(v)...)
+	case uint64:
+		data = append(data, types.EncodeFixed(v)...)
+	case int8:
+		data = append(data, types.EncodeFixed(v)...)
+	case int16:
+		data = append(data, types.EncodeFixed(v)...)
+	case int32:
+		data = append(data, types.EncodeFixed(v)...)
+	case int64:
+		data = append(data, types.EncodeFixed(v)...)
+	case float32:
+		data = append(data, types.EncodeFixed(v)...)
+	case float64:
+		data = append(data, types.EncodeFixed(v)...)
+	case []byte:
+		data = append(data, v...)
+	case types.Decimal64:
+		data = append(data, types.EncodeFixed(v)...)
+	case types.Decimal128:
+		data = append(data, types.EncodeFixed(v)...)
+	default:
+		panic("not support for type")
+	}
+	return data
 }

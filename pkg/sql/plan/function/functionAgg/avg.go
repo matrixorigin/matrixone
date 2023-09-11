@@ -17,6 +17,7 @@ package functionAgg
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
@@ -82,32 +83,44 @@ func NewAggAvg(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 	case types.T_float64:
 		return newGenericAvg[float64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_decimal64:
-		aggPriv := agg.NewD64Avg(inputTypes[0])
+		aggPriv := &sAggDecimal64Avg{typ: inputTypes[0]}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+			return agg.NewUnaryDistAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_decimal128:
-		aggPriv := agg.NewD64Avg(inputTypes[0])
+		aggPriv := &sAggDecimal128Avg{typ: inputTypes[0]}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+			return agg.NewUnaryDistAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for avg", inputTypes[0])
 }
 
 func newGenericAvg[T numeric](overloadID int64, typ types.Type, otyp types.Type, dist bool) (agg.Agg[any], error) {
-	aggPriv := agg.NewAvg[T]()
+	aggPriv := &sAggAvg[T]{}
 	if dist {
-		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryDistAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 
-type sAggAvg[T numeric] struct { cnts []int64}
-type sAggDecimal64Avg struct { cnts []int64, typ types.Type}
-type sAggDecimal128Avg struct { cnts []int64, typ types.Type}
+type sAggAvg[T numeric] struct{ cnts []int64 }
+type sAggDecimal64Avg struct {
+	cnts []int64
+	typ  types.Type
+
+	x, y      types.Decimal128
+	tmpResult types.Decimal128
+}
+type sAggDecimal128Avg struct {
+	cnts []int64
+	typ  types.Type
+
+	x, y      types.Decimal128
+	tmpResult types.Decimal128
+}
 
 func (s *sAggAvg[T]) Grows(cnt int) {
 	for i := 0; i < cnt; i++ {
@@ -118,11 +131,11 @@ func (s *sAggAvg[T]) Free(_ *mpool.MPool) {}
 func (s *sAggAvg[T]) Fill(groupNumber int64, values T, lastResult float64, count int64, isEmpty bool, isNull bool) (newResult float64, isStillEmpty bool, err error) {
 	if !isNull {
 		s.cnts[groupNumber] += count
-		return lastResult + float64(values) * float64(count), false, nil
+		return lastResult + float64(values)*float64(count), false, nil
 	}
 	return lastResult, isEmpty, nil
 }
-func (s *sAggAvg[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 types.Decimal64, result2 types.Decimal64, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult types.Decimal64, isStillEmpty bool, err error) {
+func (s *sAggAvg[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 float64, result2 float64, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult float64, isStillEmpty bool, err error) {
 	if !isEmpty2 {
 		bPriv := priv2.(*sAggAvg[T])
 		s.cnts[groupNumber1] += bPriv.cnts[groupNumber2]
@@ -133,17 +146,141 @@ func (s *sAggAvg[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 types
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggAvg[T]) Eval(lastResult []T, _ error) ([]T, error) {
+func (s *sAggAvg[T]) Eval(lastResult []float64, _ error) ([]float64, error) {
 	for i := range lastResult {
 		if s.cnts[i] == 0 {
 			continue
 		}
-		lastResult[i] = lastResult[i] / T(s.cnts[i])
+		lastResult[i] = lastResult[i] / float64(s.cnts[i])
 	}
 	return lastResult, nil
 }
 func (s *sAggAvg[T]) MarshalBinary() ([]byte, error) { return types.EncodeSlice[int64](s.cnts), nil }
-func (s *sAggAvg[T]) UnmarshalBinary(data []byte) error   {
+func (s *sAggAvg[T]) UnmarshalBinary(data []byte) error {
+	// avoid rpc reusing the buffer.
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	s.cnts = types.DecodeSlice[int64](copyData)
+	return nil
+}
+
+func (s *sAggDecimal64Avg) Grows(cnt int) {
+	for i := 0; i < cnt; i++ {
+		s.cnts = append(s.cnts, 0)
+	}
+}
+func (s *sAggDecimal64Avg) Free(_ *mpool.MPool) {}
+func (s *sAggDecimal64Avg) Fill(groupNumber int64, values types.Decimal64, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (newResult types.Decimal128, isStillEmpty bool, err error) {
+	if !isNull {
+		s.cnts[groupNumber] += count
+		if count == 1 {
+			lastResult, err = lastResult.Add64(values)
+			return lastResult, false, err
+		}
+		s.x.B0_63 = uint64(count)
+		s.y.B0_63 = uint64(values)
+		if values>>63 != 0 {
+			s.y.B64_127 = ^s.y.B64_127
+		}
+		s.tmpResult, _, err = s.y.Mul(s.x, s.typ.Scale, 0)
+		if err == nil {
+			lastResult, err = lastResult.Add128(s.tmpResult)
+		}
+		return lastResult, false, err
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggDecimal64Avg) BatchFill(results []types.Decimal128, values []types.Decimal64, offset int, length int, groupIndexs []uint64, nsp *nulls.Nulls) (err error) {
+	var groupIndex uint64
+	if nsp == nil || nsp.IsEmpty() {
+		for i := 0; i < length; i++ {
+			if groupIndexs[i] == agg.GroupNotMatch {
+				continue
+			}
+			groupIndex = groupIndexs[i] - 1
+			results[groupIndex], err = results[groupIndex].Add64(values[i+offset])
+			if err != nil {
+				return err
+			}
+			s.cnts[groupIndex]++
+		}
+	} else {
+		var rowIndex int
+		for i := 0; i < length; i++ {
+			rowIndex = offset + i
+			if groupIndexs[i] == agg.GroupNotMatch || nsp.Contains(uint64(rowIndex)) {
+				continue
+			}
+
+			groupIndex = groupIndexs[i] - 1
+			results[groupIndex], err = results[groupIndex].Add64(values[rowIndex])
+			if err != nil {
+				return err
+			}
+			s.cnts[rowIndex]++
+		}
+	}
+	return nil
+}
+func (s *sAggDecimal64Avg) Merge(groupNumber1 int64, groupNumber2 int64, result1 types.Decimal128, result2 types.Decimal128, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult types.Decimal128, isStillEmpty bool, err error) {
+	if !isEmpty2 {
+		bPriv := priv2.(*sAggDecimal64Avg)
+		s.cnts[groupNumber1] += bPriv.cnts[groupNumber2]
+		if !isEmpty1 {
+			s.x, err = result1.Add128(result2)
+			return s.x, false, err
+		}
+		return result2, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggDecimal64Avg) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
+	var err error
+	for i := range lastResult {
+		if s.cnts[i] == 0 {
+			continue
+		}
+		s.x.B0_63 = uint64(s.cnts[i])
+		lastResult[i], _, err = lastResult[i].Div(s.x, s.typ.Scale, 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return lastResult, nil
+}
+func (s *sAggDecimal64Avg) MarshalBinary() ([]byte, error) {
+	return types.EncodeSlice[int64](s.cnts), nil
+}
+func (s *sAggDecimal64Avg) UnmarshalBinary(data []byte) error {
+	// avoid rpc reusing the buffer.
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	s.cnts = types.DecodeSlice[int64](copyData)
+	return nil
+}
+
+func (s *sAggDecimal128Avg) Grows(cnt int) {
+	for i := 0; i < cnt; i++ {
+		s.cnts = append(s.cnts, 0)
+	}
+}
+func (s *sAggDecimal128Avg) Free(_ *mpool.MPool) {}
+func (s *sAggDecimal128Avg) Fill(groupNumber int64, values types.Decimal128, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (newResult types.Decimal128, isStillEmpty bool, err error) {
+	return lastResult, isEmpty, nil
+}
+func (s *sAggDecimal128Avg) BatchFill(results []types.Decimal128, values []types.Decimal128, offset int, length int, groupIndexs []uint64, nsp *nulls.Nulls) (err error) {
+	return nil
+}
+func (s *sAggDecimal128Avg) Merge(groupNumber1 int64, groupNumber2 int64, result1 types.Decimal128, result2 types.Decimal128, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult types.Decimal128, isStillEmpty bool, err error) {
+	return result1, isEmpty1, nil
+}
+func (s *sAggDecimal128Avg) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
+	return lastResult, nil
+}
+func (s *sAggDecimal128Avg) MarshalBinary() ([]byte, error) {
+	return types.EncodeSlice[int64](s.cnts), nil
+}
+func (s *sAggDecimal128Avg) UnmarshalBinary(data []byte) error {
 	// avoid rpc reusing the buffer.
 	copyData := make([]byte, len(data))
 	copy(copyData, data)

@@ -16,8 +16,17 @@ package functionAgg
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+)
+
+var (
+	// count() supported input type and output type.
+	AggCountReturnType = func(typs []types.Type) types.Type {
+		return types.T_int64.ToType()
+	}
 )
 
 func NewAggCount(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
@@ -74,11 +83,59 @@ func newCount(overloadID int64, isCountStart bool, inputType types.Type, outputT
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for count", inputType)
 }
 
-func newGenericCount[T types.OrderedT | types.Decimal | bool | types.Uuid | []byte](
+func newGenericCount[T allTypes](
 	overloadID int64, isCountStart bool, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
-	aggPriv := agg.NewCount[T](isCountStart)
+	aggPriv := &sAggCount[T]{isCountStar: isCountStart}
 	if dist {
-		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryDistAgg[T, int64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg[T, int64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+}
+
+type sAggCount[T allTypes] struct {
+	isCountStar bool
+}
+
+func (s *sAggCount[T]) Grows(_ int)         {}
+func (s *sAggCount[T]) Free(_ *mpool.MPool) {}
+func (s *sAggCount[T]) Fill(groupNumber int64, value T, lastResult int64, count int64, isEmpty bool, isNull bool) (int64, bool, error) {
+	if s.isCountStar {
+		return lastResult + count, false, nil
+	}
+	if isNull {
+		return lastResult, isEmpty, nil
+	}
+	return lastResult + count, false, nil
+}
+func (s *sAggCount[T]) BatchFill(results []int64, values []T, offset int, length int, groupIndexs []uint64, nsp *nulls.Nulls) (err error) {
+	if s.isCountStar || nsp.IsEmpty() {
+		for i := 0; i < length; i++ {
+			if groupIndexs[i] == agg.GroupNotMatch {
+				continue
+			}
+			results[groupIndexs[i]-1]++
+		}
+	} else {
+		for i := 0; i < length; i++ {
+			if groupIndexs[i] == agg.GroupNotMatch || nsp.Contains(uint64(i+offset)) {
+				continue
+			}
+			results[groupIndexs[i]-1]++
+		}
+	}
+	return nil
+}
+func (s *sAggCount[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1, result2 int64, isEmpty1, isEmpty2 bool, _ any) (int64, bool, error) {
+	return result1 + result2, isEmpty1 && isEmpty2, nil
+}
+func (s *sAggCount[T]) Eval(vs []int64, _ error) ([]int64, error) {
+	return vs, nil
+}
+func (s *sAggCount[T]) MarshalBinary() ([]byte, error) {
+	return types.EncodeBool(&s.isCountStar), nil
+}
+func (s *sAggCount[T]) UnmarshalBinary(data []byte) error {
+	b := types.DecodeBool(data)
+	s.isCountStar = b
+	return nil
 }
