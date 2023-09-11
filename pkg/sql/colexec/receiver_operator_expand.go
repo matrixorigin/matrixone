@@ -584,8 +584,6 @@ func (r *ReceiverOperator) selectFrom33Reg() (int, *batch.Batch, bool) {
 		idx = 32
 	case bat, ok = <-r.chs[32]:
 		idx = 33
-	case bat, ok = <-r.chs[33]:
-		idx = 34
 	}
 	return idx, bat, ok
 }
@@ -695,8 +693,6 @@ func (r *ReceiverOperator) selectFrom49Reg() (int, *batch.Batch, bool) {
 		idx = 48
 	case bat, ok = <-r.chs[48]:
 		idx = 49
-	case bat, ok = <-r.chs[49]:
-		idx = 50
 	}
 	return idx, bat, ok
 }
