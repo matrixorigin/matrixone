@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
 	"time"
@@ -148,6 +149,9 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 }
 
 func (r *ReceiverOperator) RemoveChosen(idx int) {
+	if idx == 0 {
+		return
+	}
 	r.receiverListener = append(r.receiverListener[:idx], r.receiverListener[idx+1:]...)
 	//remove idx-1 from chs
 	r.chs = append(r.chs[:idx-1], r.chs[idx:]...)
@@ -155,6 +159,9 @@ func (r *ReceiverOperator) RemoveChosen(idx int) {
 }
 
 func (r *ReceiverOperator) DisableChosen(idx int) {
+	if idx == 0 {
+		return
+	}
 	//disable idx-1 from chs
 	r.chs[idx-1] = nil
 	r.aliveMergeReceiver--
@@ -207,6 +214,7 @@ func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
 		chosen, bat, ok = r.selectFrom81Reg()
 	default:
 		var value reflect.Value
+		logutil.Infof("!!!!!!!!!!! len(chs) %v", len(r.chs))
 		chosen, value, ok = reflect.Select(r.receiverListener)
 		if chosen != 0 && ok {
 			bat = (*batch.Batch)(value.UnsafePointer())
