@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -83,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -454,6 +454,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
 	p.BuildIdx = int32(s.BuildIdx)
+	p.ShuffleCnt = int32(s.ShuffleCnt)
 
 	// Plan
 	if ctxId == 1 {
@@ -579,13 +580,14 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s := &Scope{
-		Magic:    magicType(p.GetPipelineType()),
-		IsEnd:    p.IsEnd,
-		IsJoin:   p.IsJoin,
-		IsLoad:   p.IsLoad,
-		Plan:     ctx.plan,
-		IsRemote: isRemote,
-		BuildIdx: int(p.BuildIdx),
+		Magic:      magicType(p.GetPipelineType()),
+		IsEnd:      p.IsEnd,
+		IsJoin:     p.IsJoin,
+		IsLoad:     p.IsLoad,
+		Plan:       ctx.plan,
+		IsRemote:   isRemote,
+		BuildIdx:   int(p.BuildIdx),
+		ShuffleCnt: int(p.ShuffleCnt),
 	}
 	if err := convertPipelineUuid(p, s); err != nil {
 		return s, err

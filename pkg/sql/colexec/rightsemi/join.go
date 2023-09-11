@@ -161,7 +161,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
 	}
 
-	count := ctr.bat.RowCount() - ctr.matched.Count()
+	count := ctr.matched.Count()
 	sels := make([]int32, 0, count)
 	itr := ctr.matched.Iterator()
 	for itr.HasNext() {

@@ -18,6 +18,7 @@ syntax = "proto3";
 package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "lock.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -754,6 +755,16 @@ message Node {
 
 	bytes uuid = 42;
 	bool recursive_sink = 43;
+    ExternScan extern_scan = 44;
+}
+
+message ExternScan {
+    int32 type = 1;
+    string data = 2;
+    string format = 3;
+    uint64 ignored_lines = 4;
+    bytes  enclosed_by = 5;
+    string terminated = 6;
 }
 
 message LockTarget {
@@ -766,6 +777,7 @@ message LockTarget {
 	bool is_partition_table = 7;
 	repeated uint64 partition_table_ids = 8;
 	bool                block   = 9;
+	lock.LockMode Mode  = 10;
 }
 
 message PreInsertUkCtx {
@@ -1253,41 +1265,39 @@ message MetadataScanInfo {
 	enum MetadataScanInfoType {
 		COL_NAME      = 0;
 		BLOCK_ID      = 1;
-		OBJECT_NAME = 2;
+		OBJECT_NAME   = 2;
 		ENTRY_STATE   = 3;
 		SORTED        = 4;
-		IS_HIDDEN = 5;
+		IS_HIDDEN     = 5;
 		META_LOC      = 6;
 		DELTA_LOC     = 7;
 		COMMIT_TS     = 8;
 		CREATE_TS     = 9;
 		DELETE_TS     = 10;
-		SEG_ID         = 11;
+		SEG_ID        = 11;
 		ROWS_CNT      = 12;
 		NULL_CNT      = 13;
 		COMPRESS_SIZE = 14;
 		ORIGIN_SIZE   = 15;
 		MIN           = 16;
 		MAX           = 17;
-		SUM						= 18;
+		SUM           = 18;
 	}
-	string ColName  = 1;
-	bytes BlockId = 2;
-	string ObjectName = 3;
-	bool EntryState= 4;
-	bool Sorted     = 5;
-	bool IsHidden = 6;
-	bytes MetaLoc     = 7;
-	bytes DelLoc      = 8;
-	bytes CommitTs    = 9;
-	bytes CreateTs    = 10;
-	bytes DeleteTs    = 11;
-	bytes SegId        = 12;
-	int64 RowCnt      = 13;
-	int64 NullCnt     = 14;
-	int64 CompressSize = 15;
-	int64 OriginSize  = 16;
-	bytes Min          = 17;
-	bytes Max          = 18;
-	bytes Sum					 = 19;
+	string col_name     = 1;
+	bytes block_id      = 2;
+	string object_name  = 3;
+	bool entry_state    = 4;
+	bool sorted         = 5;
+	bool is_hidden      = 6;
+	bytes meta_loc      = 7;
+	bytes del_loc       = 8;
+	bytes commit_ts     = 9;
+	bytes create_ts     = 10;
+	bytes delete_ts     = 11;
+	bytes seg_id        = 12;
+	int64 row_cnt       = 13;
+	int64 null_cnt      = 14;
+	int64 compress_size = 15;
+	int64 origin_size   = 16;
+	bytes zone_map      = 17;
 }

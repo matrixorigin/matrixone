@@ -16,7 +16,10 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
@@ -56,13 +59,13 @@ func setupFileservice(ctx context.Context, conf *pathConfig) (res fileservice.Fi
 			s3path := fileservice.JoinPath(s3opts, etlFSDir(conf.filepath))
 			//TODO:remove debug
 			logutil.Debugf("==>s3path: %s", s3path)
-			res, readPath, err = fileservice.GetForETL(nil, s3path)
+			res, readPath, err = fileservice.GetForETL(ctx, nil, s3path)
 			if err != nil {
 				return nil, "", err
 			}
 		} else {
 			s3path := fileservice.JoinPath(s3opts, conf.filepath)
-			res, err = fileservice.GetForBackup(s3path)
+			res, err = fileservice.GetForBackup(ctx, s3path)
 			if err != nil {
 				return nil, "", err
 			}
@@ -70,12 +73,12 @@ func setupFileservice(ctx context.Context, conf *pathConfig) (res fileservice.Fi
 		res = fileservice.SubPath(res, conf.filepath)
 	} else {
 		if conf.forETL {
-			res, readPath, err = fileservice.GetForETL(nil, etlFSDir(conf.path))
+			res, readPath, err = fileservice.GetForETL(ctx, nil, etlFSDir(conf.path))
 			if err != nil {
 				return nil, "", err
 			}
 		} else {
-			res, err = fileservice.GetForBackup(conf.path)
+			res, err = fileservice.GetForBackup(ctx, conf.path)
 			if err != nil {
 				return nil, "", err
 			}
@@ -112,7 +115,9 @@ func etlFSDir(filepath string) string {
 }
 
 func writeFile(ctx context.Context, fs fileservice.FileService, path string, data []byte) error {
-	return fs.Write(ctx, fileservice.IOVector{
+	var err error
+	//write file
+	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: path,
 		Entries: []fileservice.IOEntry{
 			{
@@ -122,4 +127,86 @@ func writeFile(ctx context.Context, fs fileservice.FileService, path string, dat
 			},
 		},
 	})
+	if err != nil {
+		return err
+	}
+
+	checksum := sha256.Sum256(data)
+
+	//write checksum file for the file
+	checksumFile := path + ".sha256"
+	err = fs.Write(ctx, fileservice.IOVector{
+		FilePath: checksumFile,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   int64(len(checksum)),
+				Data:   checksum[:],
+			},
+		},
+	})
+	return err
+}
+
+func readFile(ctx context.Context, fs fileservice.FileService, path string) ([]byte, error) {
+	var (
+		err error
+	)
+	iov := &fileservice.IOVector{
+		FilePath: path,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   -1,
+			},
+		},
+	}
+	err = fs.Read(ctx, iov)
+	if err != nil {
+		return nil, err
+	}
+	return iov.Entries[0].Data, err
+}
+
+func hexStr(d []byte) string {
+	return fmt.Sprintf("%x", d)
+}
+
+// readFileAndCheck reads data and compare the checksum with the one in checksum file.
+// if the checksum is equal, it returns the data of the file.
+func readFileAndCheck(ctx context.Context, fs fileservice.FileService, path string) ([]byte, error) {
+	var (
+		err               error
+		data              []byte
+		savedChecksumData []byte
+		newChecksumData   []byte
+		savedChecksum     string
+		newChecksum       string
+	)
+	data, err = readFile(ctx, fs, path)
+	if err != nil {
+		return nil, err
+	}
+
+	//calculate the checksum
+	hash := sha256.New()
+	hash.Write(data)
+	newChecksumData = hash.Sum(nil)
+	newChecksum = hexStr(newChecksumData)
+
+	checksumFile := path + ".sha256"
+	savedChecksumData, err = readFile(ctx, fs, checksumFile)
+	if err != nil {
+		return nil, err
+	}
+	savedChecksum = hexStr(savedChecksumData)
+	//3. compare the checksum
+	if strings.Compare(savedChecksum, newChecksum) != 0 {
+		return nil, moerr.NewInternalError(ctx, checksumErrorInfo(newChecksum, savedChecksum, path))
+	}
+	return data, err
+}
+
+func checksumErrorInfo(newChecksum, savedChecksum, path string) string {
+	return fmt.Sprintf("checksum %s of %s is not equal to %s ", newChecksum, path, savedChecksum)
 }

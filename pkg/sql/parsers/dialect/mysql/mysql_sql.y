@@ -362,7 +362,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
 
 // MODump
 %token <str> MODUMP
@@ -407,7 +407,7 @@ import (
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK
+%token <str> DENSE_RANK BIT_CAST
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -6216,6 +6216,16 @@ load_param_opt:
             },
         }
     }
+|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING
+    {
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                ScanType: tree.INLINE,
+                Format: $4,
+                Data: $8,
+            },
+        }
+    }
 |   INFILE '{' infile_or_s3_params '}'
     {
         $$ = &tree.ExternParam{
@@ -7683,7 +7693,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-
+|   BIT_CAST '(' expression AS mo_cast_type ')'
+    {
+        $$ = tree.NewBitCastExpr($3, $5)
+    }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -9447,60 +9460,60 @@ time_type:
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Time(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimeFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Time(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimeFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_TIME),
-            },
-        }
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TIME),
+                },
+            }
         }
     }
 |   TIMESTAMP timestamp_option_opt
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimestampFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimestampFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
-            },
-        }
+                Locale:  &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TIMESTAMP),
+                },
+            }
         }
     }
 |   DATETIME timestamp_option_opt
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimestampFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimestampFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
-            },
-        }
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                },
+            }
         }
     }
 |   YEAR length_opt
@@ -10375,7 +10388,8 @@ not_keyword:
 |   SETVAL
 |   CURRVAL
 |   LASTVAL
-|	HEADERS
+|   HEADERS
+|   BIT_CAST
 
 //mo_keywords:
 //    PROPERTIES

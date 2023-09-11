@@ -15,14 +15,16 @@
 package fileservice
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGetForBackup(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
-	fs, err := GetForBackup(dir)
+	fs, err := GetForBackup(ctx, dir)
 	assert.Nil(t, err)
 	localFS, ok := fs.(*LocalFS)
 	assert.True(t, ok)

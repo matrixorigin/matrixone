@@ -222,6 +222,8 @@ func newAnyValue(typ types.Type, dist bool) Agg[any] {
 		return newGenericAnyValue[types.Decimal128](typ, dist)
 	case types.T_uuid:
 		return newGenericAnyValue[types.Uuid](typ, dist)
+	case types.T_Rowid:
+		return newGenericAnyValue[types.Rowid](typ, dist)
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for anyvalue", typ))
 }

@@ -410,10 +410,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 			newInfo.CompressSize = int64(colmeta.Location().Length())
 			newInfo.OriginSize = int64(colmeta.Location().OriginSize())
 
-			zm := colmeta.ZoneMap()
-			newInfo.Max = zm.GetMaxBuf()
-			newInfo.Min = zm.GetMinBuf()
-			newInfo.Sum = zm.GetSumBuf()
+			newInfo.ZoneMap = colmeta.ZoneMap()
 
 			infoList = append(infoList, newInfo)
 		}
@@ -822,22 +819,19 @@ func (tbl *txnTable) tryFastRanges(
 		done = false
 		return
 	}
-	pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-	pkName := pkColumn.Name
-	pkType := types.T(pkColumn.Typ.Id)
-	var pkVal any
-	for _, expr := range exprs {
-		ok, _, v := getPkValueByExpr(expr, pkName, pkType, tbl.proc)
-		if ok {
-			pkVal = v
-			break
-		}
-	}
-	if pkVal == nil {
+
+	val := extractPKValueFromEqualExprs(
+		tbl.tableDef,
+		exprs,
+		tbl.primaryIdx,
+		tbl.proc,
+		tbl.db.txn.engine.packerPool,
+	)
+	if len(val) == 0 {
 		done = false
 		return
 	}
-	val := types.EncodeValue(pkVal, pkType)
+
 	hasDeletes := len(dirtyBlks) > 0
 
 	var (
