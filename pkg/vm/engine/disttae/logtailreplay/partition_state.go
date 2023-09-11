@@ -72,7 +72,7 @@ type PartitionState struct {
 
 	// blocks deleted before minTS is hard deleted.
 	// partition state can't serve txn with snapshotTS less than minTS
-	minTS atomic.Pointer[types.TS]
+	minTS types.TS
 }
 
 // sharedStates is shared among all PartitionStates
@@ -203,7 +203,6 @@ func NewPartitionState(noData bool) *PartitionState {
 		dirtyBlocks:    btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		blockIndexByTS: btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
 		shared:         new(sharedStates),
-		minTS:          atomic.Pointer[types.TS]{},
 	}
 }
 
@@ -668,12 +667,11 @@ func (p *PartitionState) consumeCheckpoints(
 }
 
 func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
-	minTS := p.minTS.Load()
-	if minTS != nil && minTS.Greater(ts) {
-		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.Load().ToString(), ts.ToString())
+	if p.minTS.Greater(ts) {
+		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
 		return
 	}
-	p.minTS.Store(&ts)
+	p.minTS = ts
 	gced := false
 	pivot := BlockIndexByTSEntry{
 		Time:     ts.Next(),

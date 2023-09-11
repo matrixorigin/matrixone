@@ -123,10 +123,18 @@ func (p *Partition) ConsumeCheckpoints(
 func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) error {
 	err := p.Lock(ctx)
 	if err != nil {
-		p.Unlock()
 		return err
 	}
-	p.state.Load().truncate(ids, ts)
-	p.Unlock()
+	defer p.Unlock()
+	curState := p.state.Load()
+
+	state := curState.Copy()
+
+	state.truncate(ids, ts)
+
+	if !p.state.CompareAndSwap(curState, state) {
+		panic("concurrent mutation")
+	}
+
 	return nil
 }
