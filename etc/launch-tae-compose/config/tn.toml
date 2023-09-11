@@ -56,6 +56,7 @@ min-count = 100
 scan-interval = "5s"
 incremental-interval = "180s"
 global-min-count = 60
+reserved-WAL-entry-count = 5000
 
 [tn.LogtailServer]
 rpc-max-message-size = "16KiB"

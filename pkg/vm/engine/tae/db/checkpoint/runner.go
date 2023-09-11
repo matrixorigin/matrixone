@@ -188,6 +188,8 @@ type runner struct {
 		checkpointQueueSize int
 
 		checkpointBlockRows int
+
+		reservedWALEntryCount uint64
 	}
 
 	ctx context.Context
@@ -398,13 +400,17 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		return
 	}
 	entry.SetState(ST_Finished)
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	lsnToTruncate := uint64(0)
+	if lsn > r.options.reservedWALEntryCount {
+		lsnToTruncate = lsn - r.options.reservedWALEntryCount
+	}
 	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
 		logutil.Errorf("Save checkpoint %s: %v", entry.String(), err)
 		return
 	}
 
-	lsn := r.source.GetMaxLSN(entry.start, entry.end)
-	e, err := r.wal.RangeCheckpoint(1, lsn)
+	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate)
 	if err != nil {
 		panic(err)
 	}
@@ -412,7 +418,8 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		panic(err)
 	}
 
-	logutil.Infof("%s is done, takes %s, truncate %d", entry.String(), time.Since(now), lsn)
+	logutil.Infof("%s is done, takes %s, truncate %d, checkpoint %d, reserve %d",
+		entry.String(), time.Since(now), lsnToTruncate, lsn, r.options.reservedWALEntryCount)
 
 	r.postCheckpointQueue.Enqueue(entry)
 	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{end: entry.end, interval: r.options.globalVersionInterval})
