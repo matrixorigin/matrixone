@@ -15,12 +15,34 @@
 package functionAgg
 
 import (
+	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"unsafe"
 )
 
-const defaultSeparator = ","
+// todo: reimplement this agg function after we support multi-column agg ?
+// 	but isn't it should be implemented in the function layer?
+
+const (
+	defaultSeparator  = ","
+	groupConcatMaxLen = 1024
+)
+
+var (
+	// group_concat() supported input type and output type.
+	AggGroupConcatReturnType = func(typs []types.Type) types.Type {
+		for _, p := range typs {
+			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+				return types.T_blob.ToType()
+			}
+		}
+		return types.T_text.ToType()
+	}
+)
 
 func NewAggGroupConcat(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error) {
 	var aggPriv *agg.GroupConcat
@@ -41,4 +63,99 @@ func NewAggGroupConcat(overloadID int64, dist bool, inputTypes []types.Type, out
 	}
 
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for group_concat", inputTypes[0])
+}
+
+type sAggGroupConcat struct {
+	result    []bytes.Buffer
+	separator string
+}
+
+func (s *sAggGroupConcat) Grows(cnt int) {
+	oldLen := len(s.result)
+	s.result = append(s.result, make([]bytes.Buffer, cnt)...)
+	for i := oldLen; i < len(s.result); i++ {
+		s.result[i].Grow(groupConcatMaxLen)
+	}
+}
+func (s *sAggGroupConcat) Free(_ *mpool.MPool) {}
+func (s *sAggGroupConcat) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
+	if isNull || s.result[groupNumber].Len() > groupConcatMaxLen {
+		return nil, isEmpty, nil
+	}
+
+	tuple, err := types.Unpack(values)
+	if err != nil {
+		return nil, isEmpty, err
+	}
+	tupleStr := tupleToString(tuple)
+	if !isEmpty {
+		s.result[groupNumber].WriteString(s.separator)
+	}
+	s.result[groupNumber].WriteString(tupleStr)
+
+	return nil, false, nil
+}
+func (s *sAggGroupConcat) Merge(groupNumber1 int64, groupNumber2 int64, result1 []byte, result2 []byte, isEmpty1 bool, isEmpty2 bool, priv2 any) ([]byte, bool, error) {
+	if isEmpty2 || s.result[groupNumber1].Len() > groupConcatMaxLen {
+		return nil, isEmpty1 && isEmpty2, nil
+	}
+
+	if !isEmpty1 {
+		s.result[groupNumber1].WriteString(s.separator)
+	}
+	s2 := priv2.(*sAggGroupConcat)
+	s.result[groupNumber1].Write(s2.result[groupNumber2].Bytes())
+
+	return nil, isEmpty1 && isEmpty2, nil
+}
+func (s *sAggGroupConcat) Eval(lastResult [][]byte, _ error) ([][]byte, error) {
+	result := make([][]byte, 0, len(s.result))
+
+	for i := 0; i < len(s.result); i++ {
+		result = append(result, s.result[i].Bytes())
+	}
+
+	return result, nil
+}
+func (s *sAggGroupConcat) MarshalBinary() ([]byte, error) {
+	strList := make([]string, 0, len(s.result))
+	for i := range s.result {
+		strList = append(strList, s.result[i].String())
+	}
+	return types.EncodeStringSlice(strList), nil
+}
+func (s *sAggGroupConcat) UnmarshalBinary(originData []byte) error {
+	strList := types.DecodeStringSlice(originData)
+	s.result = make([]bytes.Buffer, len(strList))
+	for i := range s.result {
+		s.result[i].WriteString(strList[i])
+	}
+	return nil
+}
+
+func tupleToString(tp types.Tuple) string {
+	res := ""
+	for _, t := range tp {
+		switch t := t.(type) {
+		case bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
+			res += fmt.Sprintf("%v", t)
+		case []byte:
+			res += *(*string)(unsafe.Pointer(&t))
+		case types.Date:
+			res += fmt.Sprintf("%v", t.String())
+		case types.Time:
+			res += fmt.Sprintf("%v", t.String())
+		case types.Datetime:
+			res += fmt.Sprintf("%v", t.String())
+		case types.Timestamp:
+			res += fmt.Sprintf("%v", t.String())
+		case types.Decimal64:
+			res += fmt.Sprintf("%v", t.Format(0))
+		case types.Decimal128:
+			res += fmt.Sprintf("%v", t.Format(0))
+		default:
+			res += fmt.Sprintf("%v", t)
+		}
+	}
+	return res
 }

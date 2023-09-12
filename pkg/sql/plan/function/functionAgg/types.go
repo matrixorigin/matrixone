@@ -15,7 +15,6 @@
 package functionAgg
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
@@ -34,6 +33,42 @@ type maxScaleNumeric interface {
 
 type allTypes interface {
 	types.OrderedT | types.Decimal | []byte | bool | types.Uuid
+}
+
+type numericSlice[T numeric] []T
+
+func (s numericSlice[T]) Len() int {
+	return len(s)
+}
+func (s numericSlice[T]) Less(i, j int) bool {
+	return s[i] < s[j]
+}
+func (s numericSlice[T]) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
+}
+
+type decimal64Slice []types.Decimal64
+
+func (s decimal64Slice) Len() int {
+	return len(s)
+}
+func (s decimal64Slice) Less(i, j int) bool {
+	return s[i].Compare(s[j]) < 0
+}
+func (s decimal64Slice) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
+}
+
+type decimal128Slice []types.Decimal128
+
+func (s decimal128Slice) Len() int {
+	return len(s)
+}
+func (s decimal128Slice) Less(i, j int) bool {
+	return s[i].Compare(s[j]) < 0
+}
+func (s decimal128Slice) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
 }
 
 var (
@@ -63,39 +98,6 @@ var (
 		types.T_decimal64, types.T_decimal128,
 	}
 	AggStdDevReturnType = AggVarianceReturnType
-
-	// median() supported input type and output type.
-	AggMedianSupportedParameters = []types.T{
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
-	}
-	AggMedianReturnType = func(typs []types.Type) types.Type {
-		switch typs[0].Oid {
-		case types.T_decimal64:
-			return types.New(types.T_decimal128, 38, typs[0].Scale+1)
-		case types.T_decimal128:
-			return types.New(types.T_decimal128, 38, typs[0].Scale+1)
-		case types.T_float32, types.T_float64:
-			return types.New(types.T_float64, 0, 0)
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-			return types.New(types.T_float64, 0, 0)
-		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			return types.New(types.T_float64, 0, 0)
-		}
-		panic(moerr.NewInternalErrorNoCtx("unsupported type '%v' for median", typs[0]))
-	}
-
-	// group_concat() supported input type and output type.
-	AggGroupConcatReturnType = func(typs []types.Type) types.Type {
-		for _, p := range typs {
-			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-				return types.T_blob.ToType()
-			}
-		}
-		return types.T_text.ToType()
-	}
 
 	// rank() supported input type and output type.
 	WinRankReturnType = func(typs []types.Type) types.Type {

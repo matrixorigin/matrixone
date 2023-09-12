@@ -20,6 +20,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
+var (
+	// median() supported input type and output type.
+	AggMedianSupportedParameters = []types.T{
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+	}
+	AggMedianReturnType = func(typs []types.Type) types.Type {
+		switch typs[0].Oid {
+		case types.T_decimal64:
+			return types.New(types.T_decimal128, 38, typs[0].Scale+1)
+		case types.T_decimal128:
+			return types.New(types.T_decimal128, 38, typs[0].Scale+1)
+		case types.T_float32, types.T_float64:
+			return types.New(types.T_float64, 0, 0)
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			return types.New(types.T_float64, 0, 0)
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			return types.New(types.T_float64, 0, 0)
+		}
+		panic(moerr.NewInternalErrorNoCtx("unsupported type '%v' for median", typs[0]))
+	}
+)
+
 func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_int8:
@@ -65,3 +90,7 @@ func newGenericMedian[T numeric](overloadID int64, inputType types.Type, outputT
 	}
 	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
+
+type sAggMedian[T numeric] struct{}
+type sAggDecimal64Median struct{}
+type sAggDecimal128Median struct{}
