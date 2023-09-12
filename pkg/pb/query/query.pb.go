@@ -35,6 +35,9 @@ const (
 	CmdMethod_AlterAccount CmdMethod = 2
 	// KillConn represents the kill connection request.
 	CmdMethod_KillConn CmdMethod = 3
+	// ProcessTraceSpan process the trace span cmd transferred from
+	// other cn
+	CmdMethod_TraceSpan CmdMethod = 4
 )
 
 var CmdMethod_name = map[int32]string{
@@ -42,6 +45,7 @@ var CmdMethod_name = map[int32]string{
 	1: "ShowProcessList",
 	2: "AlterAccount",
 	3: "KillConn",
+	4: "TraceSpan",
 }
 
 var CmdMethod_value = map[string]int32{
@@ -49,6 +53,7 @@ var CmdMethod_value = map[string]int32{
 	"ShowProcessList": 1,
 	"AlterAccount":    2,
 	"KillConn":        3,
+	"TraceSpan":       4,
 }
 
 func (x CmdMethod) String() string {
@@ -180,10 +185,12 @@ type Request struct {
 	// AlterAccountRequest is the request for alter account restricted
 	AlterAccountRequest *AlterAccountRequest `protobuf:"bytes,5,opt,name=AlterAccountRequest,proto3" json:"AlterAccountRequest,omitempty"`
 	// KillConnRequest is the request which kills the connections.
-	KillConnRequest      *KillConnRequest `protobuf:"bytes,6,opt,name=KillConnRequest,proto3" json:"KillConnRequest,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
-	XXX_unrecognized     []byte           `json:"-"`
-	XXX_sizecache        int32            `json:"-"`
+	KillConnRequest *KillConnRequest `protobuf:"bytes,6,opt,name=KillConnRequest,proto3" json:"KillConnRequest,omitempty"`
+	// TraceSpanRequest is the request for transferred span cmd
+	TraceSpanRequest     *TraceSpanRequest `protobuf:"bytes,7,opt,name=TraceSpanRequest,proto3" json:"TraceSpanRequest,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
+	XXX_unrecognized     []byte            `json:"-"`
+	XXX_sizecache        int32             `json:"-"`
 }
 
 func (m *Request) Reset()         { *m = Request{} }
@@ -261,6 +268,13 @@ func (m *Request) GetKillConnRequest() *KillConnRequest {
 	return nil
 }
 
+func (m *Request) GetTraceSpanRequest() *TraceSpanRequest {
+	if m != nil {
+		return m.TraceSpanRequest
+	}
+	return nil
+}
+
 // ShowProcessListResponse is the response of command ShowProcessList.
 type ShowProcessListResponse struct {
 	Sessions             []*status.Session `protobuf:"bytes,1,rep,name=Sessions,proto3" json:"Sessions,omitempty"`
@@ -322,10 +336,12 @@ type Response struct {
 	// AlterAccountResponse is the response of AlterAccount.
 	AlterAccountResponse *AlterAccountResponse `protobuf:"bytes,5,opt,name=AlterAccountResponse,proto3" json:"AlterAccountResponse,omitempty"`
 	// KillConnResponse is the response of KillConnRequest.
-	KillConnResponse     *KillConnResponse `protobuf:"bytes,6,opt,name=KillConnResponse,proto3" json:"KillConnResponse,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
-	XXX_unrecognized     []byte            `json:"-"`
-	XXX_sizecache        int32             `json:"-"`
+	KillConnResponse *KillConnResponse `protobuf:"bytes,6,opt,name=KillConnResponse,proto3" json:"KillConnResponse,omitempty"`
+	// TraceSpanResponse is the response of TraceSpanRequest
+	TraceSpanResponse    *TraceSpanResponse `protobuf:"bytes,7,opt,name=TraceSpanResponse,proto3" json:"TraceSpanResponse,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
+	XXX_unrecognized     []byte             `json:"-"`
+	XXX_sizecache        int32              `json:"-"`
 }
 
 func (m *Response) Reset()         { *m = Response{} }
@@ -399,6 +415,13 @@ func (m *Response) GetAlterAccountResponse() *AlterAccountResponse {
 func (m *Response) GetKillConnResponse() *KillConnResponse {
 	if m != nil {
 		return m.KillConnResponse
+	}
+	return nil
+}
+
+func (m *Response) GetTraceSpanResponse() *TraceSpanResponse {
+	if m != nil {
+		return m.TraceSpanResponse
 	}
 	return nil
 }
@@ -614,6 +637,108 @@ func (m *KillConnResponse) GetSuccess() bool {
 	return false
 }
 
+type TraceSpanRequest struct {
+	Cmd                  string   `protobuf:"bytes,1,opt,name=Cmd,proto3" json:"Cmd,omitempty"`
+	Spans                string   `protobuf:"bytes,2,opt,name=Spans,proto3" json:"Spans,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *TraceSpanRequest) Reset()         { *m = TraceSpanRequest{} }
+func (m *TraceSpanRequest) String() string { return proto.CompactTextString(m) }
+func (*TraceSpanRequest) ProtoMessage()    {}
+func (*TraceSpanRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{9}
+}
+func (m *TraceSpanRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TraceSpanRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TraceSpanRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TraceSpanRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TraceSpanRequest.Merge(m, src)
+}
+func (m *TraceSpanRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *TraceSpanRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_TraceSpanRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TraceSpanRequest proto.InternalMessageInfo
+
+func (m *TraceSpanRequest) GetCmd() string {
+	if m != nil {
+		return m.Cmd
+	}
+	return ""
+}
+
+func (m *TraceSpanRequest) GetSpans() string {
+	if m != nil {
+		return m.Spans
+	}
+	return ""
+}
+
+type TraceSpanResponse struct {
+	Resp                 string   `protobuf:"bytes,1,opt,name=Resp,proto3" json:"Resp,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *TraceSpanResponse) Reset()         { *m = TraceSpanResponse{} }
+func (m *TraceSpanResponse) String() string { return proto.CompactTextString(m) }
+func (*TraceSpanResponse) ProtoMessage()    {}
+func (*TraceSpanResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_5c6ac9b241082464, []int{10}
+}
+func (m *TraceSpanResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TraceSpanResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TraceSpanResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TraceSpanResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TraceSpanResponse.Merge(m, src)
+}
+func (m *TraceSpanResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *TraceSpanResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_TraceSpanResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TraceSpanResponse proto.InternalMessageInfo
+
+func (m *TraceSpanResponse) GetResp() string {
+	if m != nil {
+		return m.Resp
+	}
+	return ""
+}
+
 func init() {
 	proto.RegisterEnum("query.CmdMethod", CmdMethod_name, CmdMethod_value)
 	proto.RegisterType((*QueryRequest)(nil), "query.QueryRequest")
@@ -625,46 +750,53 @@ func init() {
 	proto.RegisterType((*AlterAccountResponse)(nil), "query.AlterAccountResponse")
 	proto.RegisterType((*KillConnRequest)(nil), "query.KillConnRequest")
 	proto.RegisterType((*KillConnResponse)(nil), "query.KillConnResponse")
+	proto.RegisterType((*TraceSpanRequest)(nil), "query.TraceSpanRequest")
+	proto.RegisterType((*TraceSpanResponse)(nil), "query.TraceSpanResponse")
 }
 
 func init() { proto.RegisterFile("query.proto", fileDescriptor_5c6ac9b241082464) }
 
 var fileDescriptor_5c6ac9b241082464 = []byte{
-	// 544 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x94, 0x4d, 0x8f, 0xd3, 0x3c,
-	0x10, 0xc7, 0x9f, 0xf4, 0x6d, 0x93, 0x69, 0xf4, 0x34, 0x72, 0xab, 0x6e, 0x55, 0x96, 0xaa, 0xb2,
-	0x38, 0x54, 0x80, 0x52, 0xa9, 0x1c, 0x90, 0x10, 0x07, 0x96, 0x02, 0x52, 0xb5, 0xcb, 0x9b, 0x0b,
-	0x08, 0x71, 0xeb, 0x8b, 0xd5, 0x46, 0xb4, 0x71, 0xd7, 0x76, 0x04, 0xfb, 0x0d, 0x39, 0xf2, 0x09,
-	0x10, 0xea, 0x97, 0xe0, 0x8a, 0xe2, 0x38, 0x4d, 0xd3, 0x24, 0x37, 0x6e, 0xf9, 0x8f, 0x67, 0x7e,
-	0xc9, 0xcc, 0x7f, 0x62, 0xa8, 0xdf, 0x04, 0x94, 0xdf, 0xba, 0x3b, 0xce, 0x24, 0x43, 0x55, 0x25,
-	0xba, 0xb6, 0x90, 0x33, 0x19, 0x88, 0x28, 0x88, 0xef, 0x81, 0xfd, 0x3e, 0x0c, 0x13, 0x7a, 0x13,
-	0x50, 0x21, 0x51, 0x0b, 0xaa, 0x4a, 0x77, 0x8c, 0xbe, 0x31, 0xb0, 0x48, 0x24, 0xf0, 0x1b, 0x68,
-	0x4f, 0xd7, 0xec, 0xdb, 0x3b, 0xce, 0x16, 0x54, 0x88, 0x6b, 0x4f, 0xc8, 0x38, 0xbf, 0x0d, 0xb5,
-	0x0f, 0xd4, 0x9f, 0xf9, 0x52, 0x17, 0x68, 0x85, 0x2e, 0xc0, 0x9a, 0xde, 0x0a, 0x7d, 0x54, 0xea,
-	0x1b, 0x03, 0x93, 0x24, 0x01, 0xfc, 0xa7, 0x04, 0x67, 0x31, 0xe1, 0x02, 0x2c, 0xfd, 0x38, 0x79,
-	0xa1, 0x20, 0x15, 0x92, 0x04, 0x90, 0x0b, 0xd6, 0x78, 0xbb, 0x7c, 0x4d, 0xe5, 0x9a, 0x2d, 0x15,
-	0xe7, 0xff, 0x91, 0xe3, 0x46, 0x5d, 0x1d, 0xe2, 0x24, 0x49, 0x41, 0x8f, 0xd3, 0xfd, 0x74, 0xca,
-	0x7d, 0x63, 0x50, 0x1f, 0x35, 0x75, 0xc9, 0xf1, 0x11, 0x49, 0x37, 0xfe, 0xb1, 0xa8, 0xc5, 0x4e,
-	0x45, 0x21, 0xee, 0x6a, 0x44, 0x7e, 0x12, 0x29, 0x9a, 0xcf, 0x35, 0x34, 0x2f, 0x37, 0x92, 0xf2,
-	0xcb, 0xc5, 0x82, 0x05, 0xfe, 0x81, 0x59, 0x55, 0xcc, 0xae, 0x66, 0xe6, 0x64, 0x90, 0xbc, 0x32,
-	0xf4, 0x0c, 0x1a, 0x57, 0xde, 0x66, 0x33, 0x66, 0xbe, 0x1f, 0x93, 0x6a, 0x8a, 0xd4, 0xd6, 0xa4,
-	0x93, 0x53, 0x72, 0x9a, 0x8e, 0x5f, 0xc1, 0x79, 0xe6, 0x4b, 0xc5, 0x8e, 0xf9, 0x82, 0xa2, 0x07,
-	0x60, 0x4e, 0xa9, 0x10, 0x1e, 0xf3, 0x45, 0xc7, 0xe8, 0x97, 0x07, 0xf5, 0x51, 0xc3, 0xd5, 0xbb,
-	0xa2, 0xe3, 0xe4, 0x90, 0x80, 0x7f, 0x95, 0xc0, 0x3c, 0x54, 0xfe, 0x5b, 0x0b, 0x5b, 0x50, 0x7d,
-	0xc9, 0x39, 0xe3, 0xca, 0x3b, 0x9b, 0x44, 0x02, 0x7d, 0x2e, 0xfc, 0x70, 0x6d, 0x50, 0xaf, 0xc8,
-	0xa0, 0x28, 0x8b, 0x14, 0xf6, 0xfd, 0x16, 0x5a, 0xe9, 0x59, 0x6b, 0x6c, 0xe4, 0xd1, 0x9d, 0x5c,
-	0x8f, 0x34, 0x33, 0xb7, 0x10, 0x8d, 0xc1, 0x49, 0xc6, 0xae, 0x61, 0x91, 0x4d, 0xe7, 0x19, 0x9b,
-	0x34, 0x28, 0x53, 0x80, 0x27, 0xb9, 0x8b, 0x83, 0xba, 0x60, 0x46, 0xff, 0xd0, 0x64, 0xa9, 0x26,
-	0x5d, 0x26, 0x07, 0x1d, 0xfe, 0x8b, 0x53, 0xe5, 0x97, 0x9a, 0x9c, 0x45, 0xb4, 0xc2, 0x4f, 0xf2,
-	0x1b, 0x44, 0x18, 0xec, 0x59, 0x18, 0x9f, 0x06, 0x8b, 0x70, 0x28, 0x8a, 0x67, 0x92, 0x54, 0x0c,
-	0x4f, 0x32, 0x1b, 0x17, 0xba, 0xad, 0x49, 0xda, 0xed, 0x32, 0x49, 0x02, 0xa8, 0x03, 0x67, 0x9f,
-	0x28, 0x0f, 0x97, 0x44, 0x79, 0x5d, 0x21, 0xb1, 0xc4, 0x0f, 0xb3, 0x63, 0x09, 0xb3, 0xd3, 0x6f,
-	0x8f, 0xe5, 0xfd, 0xab, 0xa3, 0xad, 0x41, 0x96, 0xbe, 0x95, 0x9c, 0xff, 0x50, 0x13, 0x1a, 0x27,
-	0x46, 0x3a, 0x06, 0x72, 0xc0, 0x3e, 0xee, 0xd0, 0x29, 0x21, 0x1b, 0xcc, 0xf8, 0x65, 0x4e, 0xf9,
-	0xf9, 0xd3, 0x1f, 0xfb, 0x9e, 0xf1, 0x73, 0xdf, 0x33, 0x7e, 0xef, 0x7b, 0xc6, 0x17, 0x77, 0xe5,
-	0xc9, 0x75, 0x30, 0x77, 0x17, 0x6c, 0x3b, 0xdc, 0xce, 0x24, 0xf7, 0xbe, 0x33, 0xee, 0xad, 0x3c,
-	0x3f, 0x16, 0x3e, 0x1d, 0xee, 0xbe, 0xae, 0x86, 0xbb, 0xf9, 0x50, 0xb9, 0x35, 0xaf, 0xa9, 0xab,
-	0xf2, 0xd1, 0xdf, 0x00, 0x00, 0x00, 0xff, 0xff, 0xbf, 0x9f, 0xcc, 0xed, 0x4e, 0x05, 0x00, 0x00,
+	// 624 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x95, 0xdf, 0x6e, 0xd3, 0x3e,
+	0x14, 0xc7, 0x7f, 0x59, 0xda, 0x2e, 0x39, 0xcb, 0x8f, 0x05, 0x6f, 0xda, 0xa2, 0x31, 0xaa, 0xca,
+	0x42, 0xa2, 0x02, 0x94, 0x4a, 0xe5, 0x02, 0x69, 0xe2, 0x82, 0x51, 0x98, 0x54, 0x31, 0xfe, 0x39,
+	0x03, 0xa1, 0xdd, 0xa5, 0xa9, 0xd5, 0x46, 0xb4, 0x71, 0x17, 0x27, 0x82, 0xbd, 0x10, 0x4f, 0xc1,
+	0x03, 0x70, 0xc9, 0x23, 0xa0, 0x3e, 0x09, 0xb2, 0xe3, 0xa4, 0x4d, 0x93, 0xde, 0x71, 0xe7, 0x73,
+	0x7c, 0xce, 0xc7, 0x3d, 0xfe, 0x7e, 0xe3, 0xc2, 0xde, 0x4d, 0x4a, 0xe3, 0x5b, 0x77, 0x11, 0xb3,
+	0x84, 0xa1, 0xa6, 0x0c, 0x4e, 0x2c, 0x9e, 0xf8, 0x49, 0xca, 0xb3, 0x24, 0x7e, 0x00, 0xd6, 0x47,
+	0x91, 0x26, 0xf4, 0x26, 0xa5, 0x3c, 0x41, 0x87, 0xd0, 0x94, 0xb1, 0xa3, 0x75, 0xb4, 0xae, 0x49,
+	0xb2, 0x00, 0xbf, 0x83, 0x23, 0x6f, 0xca, 0xbe, 0x7d, 0x88, 0x59, 0x40, 0x39, 0xbf, 0x0c, 0x79,
+	0x92, 0xd7, 0x1f, 0x41, 0xeb, 0x8a, 0x46, 0x7e, 0x94, 0xa8, 0x06, 0x15, 0xa1, 0x53, 0x30, 0xbd,
+	0x5b, 0xae, 0xb6, 0x76, 0x3a, 0x5a, 0xd7, 0x20, 0xab, 0x04, 0xfe, 0xa9, 0xc3, 0x6e, 0x4e, 0x38,
+	0x05, 0x53, 0x2d, 0x87, 0xaf, 0x24, 0xa4, 0x41, 0x56, 0x09, 0xe4, 0x82, 0x39, 0x98, 0x8f, 0xdf,
+	0xd2, 0x64, 0xca, 0xc6, 0x92, 0x73, 0xa7, 0x6f, 0xbb, 0xd9, 0x54, 0x45, 0x9e, 0xac, 0x4a, 0xd0,
+	0xb3, 0xf2, 0x3c, 0x8e, 0xde, 0xd1, 0xba, 0x7b, 0xfd, 0x03, 0xd5, 0xb2, 0xbe, 0x45, 0xca, 0x83,
+	0x7f, 0xda, 0x36, 0xa2, 0xd3, 0x90, 0x88, 0xfb, 0x0a, 0x51, 0x5f, 0x44, 0xb6, 0xdd, 0xcf, 0x25,
+	0x1c, 0x9c, 0xcf, 0x12, 0x1a, 0x9f, 0x07, 0x01, 0x4b, 0xa3, 0x82, 0xd9, 0x94, 0xcc, 0x13, 0xc5,
+	0xac, 0xa9, 0x20, 0x75, 0x6d, 0xe8, 0x05, 0xec, 0xbf, 0x09, 0x67, 0xb3, 0x01, 0x8b, 0xa2, 0x9c,
+	0xd4, 0x92, 0xa4, 0x23, 0x45, 0xda, 0xd8, 0x25, 0x9b, 0xe5, 0x68, 0x00, 0xf6, 0x55, 0xec, 0x07,
+	0xd4, 0x5b, 0xf8, 0x05, 0x62, 0x57, 0x22, 0x8e, 0x15, 0x62, 0x73, 0x9b, 0x54, 0x1a, 0xf0, 0x05,
+	0x1c, 0x57, 0xc6, 0xe5, 0x0b, 0x16, 0x71, 0x8a, 0x1e, 0x83, 0xe1, 0x51, 0xce, 0x43, 0x16, 0x71,
+	0x47, 0xeb, 0xe8, 0xdd, 0xbd, 0xfe, 0xbe, 0xab, 0x0c, 0xa7, 0xf2, 0xa4, 0x28, 0xc0, 0x3f, 0x74,
+	0x30, 0x8a, 0xce, 0x7f, 0xeb, 0x83, 0x43, 0x68, 0xbe, 0x8e, 0x63, 0x16, 0x4b, 0x03, 0x58, 0x24,
+	0x0b, 0xd0, 0x97, 0xad, 0x3f, 0x5c, 0xa9, 0xdc, 0xde, 0xa6, 0x72, 0x56, 0x45, 0xb6, 0xce, 0xfd,
+	0x1e, 0x0e, 0xcb, 0x82, 0x29, 0x6c, 0x26, 0xf4, 0xbd, 0x5a, 0xa1, 0x15, 0xb3, 0xb6, 0x51, 0x08,
+	0xb5, 0xd2, 0x4e, 0xc1, 0x5a, 0x25, 0xa1, 0x36, 0xb7, 0x49, 0xa5, 0x01, 0x5d, 0xc0, 0xdd, 0x35,
+	0xf1, 0x14, 0x25, 0x93, 0xdb, 0xa9, 0xca, 0xad, 0x30, 0xd5, 0x16, 0x3c, 0xac, 0x75, 0x31, 0x3a,
+	0x01, 0x23, 0xfb, 0xa0, 0x87, 0x63, 0xa9, 0x98, 0x4e, 0x8a, 0x58, 0x3c, 0x0c, 0x9e, 0xd4, 0x5d,
+	0x2a, 0x60, 0x12, 0x15, 0xe1, 0xb3, 0xfa, 0x8b, 0x42, 0x18, 0x2c, 0x5f, 0xe4, 0xbd, 0x34, 0x10,
+	0x97, 0x2b, 0x79, 0x06, 0x29, 0xe5, 0xf0, 0xb0, 0x62, 0x7f, 0xe1, 0x1a, 0x45, 0x52, 0xae, 0xd1,
+	0xc9, 0x2a, 0x81, 0x1c, 0xd8, 0xfd, 0x4c, 0x63, 0x61, 0x36, 0xe9, 0x99, 0x06, 0xc9, 0x43, 0xfc,
+	0xa4, 0x7a, 0xbd, 0xa2, 0xba, 0x7c, 0x7a, 0x1e, 0xe2, 0xb3, 0xea, 0x57, 0x83, 0x6c, 0xd0, 0x07,
+	0xf3, 0xb1, 0x7a, 0xf6, 0xc4, 0x52, 0x78, 0x4e, 0x14, 0x70, 0x79, 0x96, 0x49, 0xb2, 0x00, 0x3f,
+	0xac, 0xd1, 0x00, 0x21, 0x68, 0x88, 0xb5, 0xea, 0x96, 0xeb, 0x47, 0xd7, 0x6b, 0x16, 0x47, 0xa6,
+	0x7a, 0x87, 0xed, 0xff, 0xd0, 0x01, 0xec, 0x6f, 0xb8, 0xce, 0xd6, 0x90, 0x0d, 0xd6, 0xfa, 0x35,
+	0xda, 0x3b, 0xc8, 0x02, 0x23, 0x9f, 0xc8, 0xd6, 0xd1, 0xff, 0x60, 0x16, 0xa7, 0xda, 0x8d, 0x97,
+	0xcf, 0x7f, 0x2d, 0xdb, 0xda, 0xef, 0x65, 0x5b, 0xfb, 0xb3, 0x6c, 0x6b, 0xd7, 0xee, 0x24, 0x4c,
+	0xa6, 0xe9, 0xc8, 0x0d, 0xd8, 0xbc, 0x37, 0xf7, 0x93, 0x38, 0xfc, 0xce, 0xe2, 0x70, 0x12, 0x46,
+	0x79, 0x10, 0xd1, 0xde, 0xe2, 0xeb, 0xa4, 0xb7, 0x18, 0xf5, 0xa4, 0x47, 0x46, 0x2d, 0xf9, 0x5f,
+	0xf1, 0xf4, 0x6f, 0x00, 0x00, 0x00, 0xff, 0xff, 0x32, 0x17, 0xaf, 0xd7, 0x4f, 0x06, 0x00, 0x00,
 }
 
 func (m *QueryRequest) Marshal() (dAtA []byte, err error) {
@@ -768,6 +900,18 @@ func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.TraceSpanRequest != nil {
+		{
+			size, err := m.TraceSpanRequest.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3a
 	}
 	if m.KillConnRequest != nil {
 		{
@@ -894,6 +1038,18 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.TraceSpanResponse != nil {
+		{
+			size, err := m.TraceSpanResponse.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x3a
 	}
 	if m.KillConnResponse != nil {
 		{
@@ -1101,6 +1257,81 @@ func (m *KillConnResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *TraceSpanRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TraceSpanRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TraceSpanRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Spans) > 0 {
+		i -= len(m.Spans)
+		copy(dAtA[i:], m.Spans)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.Spans)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.Cmd) > 0 {
+		i -= len(m.Cmd)
+		copy(dAtA[i:], m.Cmd)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.Cmd)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *TraceSpanResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TraceSpanResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TraceSpanResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Resp) > 0 {
+		i -= len(m.Resp)
+		copy(dAtA[i:], m.Resp)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.Resp)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintQuery(dAtA []byte, offset int, v uint64) int {
 	offset -= sovQuery(v)
 	base := offset
@@ -1175,6 +1406,10 @@ func (m *Request) Size() (n int) {
 		l = m.KillConnRequest.Size()
 		n += 1 + l + sovQuery(uint64(l))
 	}
+	if m.TraceSpanRequest != nil {
+		l = m.TraceSpanRequest.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -1225,6 +1460,10 @@ func (m *Response) Size() (n int) {
 	}
 	if m.KillConnResponse != nil {
 		l = m.KillConnResponse.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.TraceSpanResponse != nil {
+		l = m.TraceSpanResponse.Size()
 		n += 1 + l + sovQuery(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
@@ -1293,6 +1532,42 @@ func (m *KillConnResponse) Size() (n int) {
 	_ = l
 	if m.Success {
 		n += 2
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TraceSpanRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Cmd)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	l = len(m.Spans)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TraceSpanResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Resp)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -1703,6 +1978,42 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TraceSpanRequest", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.TraceSpanRequest == nil {
+				m.TraceSpanRequest = &TraceSpanRequest{}
+			}
+			if err := m.TraceSpanRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipQuery(dAtA[iNdEx:])
@@ -2016,6 +2327,42 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 				m.KillConnResponse = &KillConnResponse{}
 			}
 			if err := m.KillConnResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TraceSpanResponse", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.TraceSpanResponse == nil {
+				m.TraceSpanResponse = &TraceSpanResponse{}
+			}
+			if err := m.TraceSpanResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -2352,6 +2699,204 @@ func (m *KillConnResponse) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.Success = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TraceSpanRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TraceSpanRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TraceSpanRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Cmd", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Cmd = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Spans", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Spans = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TraceSpanResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TraceSpanResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TraceSpanResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Resp", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Resp = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipQuery(dAtA[iNdEx:])

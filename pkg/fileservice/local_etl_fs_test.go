@@ -44,6 +44,7 @@ func TestLocalETLFS(t *testing.T) {
 	})
 
 	t.Run("symlink to dir", func(t *testing.T) {
+		ctx := context.Background()
 		dir := t.TempDir()
 
 		aPath := filepath.Join(dir, "a")
@@ -63,10 +64,9 @@ func TestLocalETLFS(t *testing.T) {
 		assert.Nil(t, err)
 
 		filePathInB := filepath.Join(bPath, "foo")
-		fs, readPath, err := GetForETL(nil, filePathInB)
+		fs, readPath, err := GetForETL(ctx, nil, filePathInB)
 		assert.Nil(t, err)
 
-		ctx := context.Background()
 		vec := IOVector{
 			FilePath: readPath,
 			Entries: []IOEntry{

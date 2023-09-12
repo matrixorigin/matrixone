@@ -16,15 +16,16 @@ package function
 
 import (
 	"fmt"
+	"math"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
-	"time"
 )
 
 func initAddFaultPointTestCase() []tcTemp {
