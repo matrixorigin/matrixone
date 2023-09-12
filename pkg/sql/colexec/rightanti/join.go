@@ -50,6 +50,8 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	if ap.Cond != nil {
 		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
 	}
+
+	ap.ctr.tmpBatches = make([]*batch.Batch, 2)
 	return err
 }
 
@@ -222,14 +224,19 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						1, ctr.cfs2); err != nil {
 						return err
 					}
-					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+					ctr.tmpBatches[0] = ctr.joinBat1
+					ctr.tmpBatches[1] = ctr.joinBat2
+					vec, err := ctr.expr.Eval(proc, ctr.tmpBatches)
 					if err != nil {
 						return err
 					}
 
-					result := vector.GenerateFunctionFixedTypeParameter[bool](vec)
-					b, null := result.GetValue(0)
-					if null || !b {
+					if vec.GetNulls().IsEmpty() {
+						vcol := vector.MustFixedCol[bool](vec)
+						if !vcol[0] {
+							continue
+						}
+					} else if vec.GetNulls().Contains(0) {
 						continue
 					}
 				}
