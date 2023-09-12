@@ -129,8 +129,9 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	BuildIdx   int
-	ShuffleCnt int
+	BuildIdx       int
+	ShuffleCnt     int
+	PartialResults []any
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.

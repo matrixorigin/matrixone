@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -156,12 +157,22 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 func (ctr *container) generateAggStructures(ap *Argument) error {
 	var err error
 	i := 0
-	for i < len(ap.Aggs) {
-		if ctr.bat.Aggs[i], err = agg.NewWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType(), ap.Aggs[i].Config); err != nil {
-			ctr.bat = nil
-			return err
+	if ap.PartialResults == nil {
+		for i < len(ap.Aggs) {
+			if ctr.bat.Aggs[i], err = agg.NewWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType(), ap.Aggs[i].Config, nil); err != nil {
+				ctr.bat = nil
+				return err
+			}
+			i++
 		}
-		i++
+	} else {
+		for i < len(ap.Aggs) {
+			if ctr.bat.Aggs[i], err = agg.NewWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType(), ap.Aggs[i].Config, ap.PartialResults[i]); err != nil {
+				ctr.bat = nil
+				return err
+			}
+			i++
+		}
 	}
 
 	return nil

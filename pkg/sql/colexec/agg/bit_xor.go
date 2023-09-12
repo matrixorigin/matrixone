@@ -45,7 +45,7 @@ func NewBitXor[T1 types.Ints | types.UInts | types.Floats]() *BitXor[T1] {
 func (bx *BitXor[T1]) Grows(_ int) {
 }
 
-func (bx *BitXor[T1]) Eval(vs []uint64, err error) ([]uint64, error) {
+func (bx *BitXor[T1]) Eval(vs []uint64, err error, _ any) ([]uint64, error) {
 	return vs, nil
 }
 
@@ -108,7 +108,7 @@ func NewBitXorBinary() *BitXorBinary {
 func (bab *BitXorBinary) Grows(_ int) {
 }
 
-func (bab *BitXorBinary) Eval(vs [][]byte, err error) ([][]byte, error) {
+func (bab *BitXorBinary) Eval(vs [][]byte, err error, _ any) ([][]byte, error) {
 	return vs, nil
 }
 

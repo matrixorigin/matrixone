@@ -33,7 +33,7 @@ func NewRowNumber() *RowNumber {
 
 func (r *RowNumber) Grows(_ int) {}
 
-func (r *RowNumber) Eval(vs []int64, err error) ([]int64, error) {
+func (r *RowNumber) Eval(vs []int64, err error, _ any) ([]int64, error) {
 	idx := 0
 	for _, p := range r.Ps {
 		n := p[len(p)-1] - p[0]

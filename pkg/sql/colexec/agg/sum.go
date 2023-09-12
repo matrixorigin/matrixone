@@ -66,7 +66,7 @@ func NewSum[T1 Numeric, T2 ReturnTyp]() *Sum[T1, T2] {
 func (s *Sum[T1, T2]) Grows(_ int) {
 }
 
-func (s *Sum[T1, T2]) Eval(vs []T2, err error) ([]T2, error) {
+func (s *Sum[T1, T2]) Eval(vs []T2, err error, _ any) ([]T2, error) {
 	return vs, nil
 }
 
@@ -103,7 +103,7 @@ func NewD64Sum() *Decimal64Sum {
 func (s *Decimal64Sum) Grows(_ int) {
 }
 
-func (s *Decimal64Sum) Eval(vs []types.Decimal64, err error) ([]types.Decimal64, error) {
+func (s *Decimal64Sum) Eval(vs []types.Decimal64, err error, _ any) ([]types.Decimal64, error) {
 	return vs, err
 }
 
@@ -167,7 +167,7 @@ func NewD128Sum() *Decimal128Sum {
 func (s *Decimal128Sum) Grows(_ int) {
 }
 
-func (s *Decimal128Sum) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+func (s *Decimal128Sum) Eval(vs []types.Decimal128, err error, _ any) ([]types.Decimal128, error) {
 	return vs, err
 }
 

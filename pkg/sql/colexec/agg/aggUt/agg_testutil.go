@@ -73,7 +73,7 @@ func RunBaseTest(t *testing.T, c *testCase) {
 	// Grows(), Fill() and Eval() test
 	{
 		// New()
-		agg0, newErr := agg.New(c.op, c.isDistinct, c.inputTyp)
+		agg0, newErr := agg.New(c.op, c.isDistinct, c.inputTyp, nil)
 		require.NoError(t, newErr)
 
 		// Grows()
@@ -101,7 +101,7 @@ func RunBaseTest(t *testing.T, c *testCase) {
 	// Merge() Test
 	if c.mergeInput != nil {
 		// New()
-		agg0, newErr := agg.New(c.op, c.isDistinct, c.inputTyp)
+		agg0, newErr := agg.New(c.op, c.isDistinct, c.inputTyp, nil)
 		require.NoError(t, newErr)
 
 		// Grows()
@@ -117,7 +117,7 @@ func RunBaseTest(t *testing.T, c *testCase) {
 		}
 
 		// create another agg for merge
-		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
+		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp, nil)
 		agg1.Grows(1, m)
 		vec2, l2 := GetVector(c.inputTyp, c.mergeInput, c.inputNsp)
 		if l2 > 0 && vec2 != nil {
@@ -151,7 +151,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 	m := mpool.MustNewZeroNoFixed()
 	{
 		// New()
-		agg0, newErr := agg.New(c.op, c.isDistinct, c.inputTyp)
+		agg0, newErr := agg.New(c.op, c.isDistinct, c.inputTyp, nil)
 		require.NoError(t, newErr)
 
 		// Grows()
@@ -171,7 +171,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
 		agg0.Free(m)
-		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
+		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp, nil)
 		unmarshalErr := agg1.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
 		agg1.WildAggReAlloc(m)
@@ -197,7 +197,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 	// Merge() Test
 	if c.mergeInput != nil {
 		// create an agg for marshal and unmarshal
-		agg0, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
+		agg0, _ := agg.New(c.op, c.isDistinct, c.inputTyp, nil)
 		agg0.Grows(1, m)
 		vec, l := GetVector(c.inputTyp, c.input, c.inputNsp)
 		if l != 0 && vec != nil {
@@ -207,7 +207,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		}
 
 		// create another agg for merge
-		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
+		agg1, _ := agg.New(c.op, c.isDistinct, c.inputTyp, nil)
 		agg1.Grows(1, m)
 		vec2, l2 := GetVector(c.inputTyp, c.mergeInput, c.mergeNsp)
 		if l2 != 0 && vec2 != nil {
@@ -220,7 +220,7 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		d, marshalErr := agg0.MarshalBinary()
 		require.NoError(t, marshalErr)
 		agg0.Free(m)
-		mAgg, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
+		mAgg, _ := agg.New(c.op, c.isDistinct, c.inputTyp, nil)
 		unmarshalErr := mAgg.UnmarshalBinary(d)
 		require.NoError(t, unmarshalErr)
 		mAgg.WildAggReAlloc(m)

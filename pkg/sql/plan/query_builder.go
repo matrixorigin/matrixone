@@ -555,6 +555,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		if node.WinSpecList != nil {
 			increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
 		}
+		/*
+			child := builder.qry.Nodes[node.Children[0]]
+			if len(node.GroupBy) == 0 && child.NodeType == plan.Node_TABLE_SCAN {
+				child.AggList = make([]*plan.Expr, len(node.AggList))
+				child.AggList = append(child.AggList, node.AggList...)
+			}*/
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {

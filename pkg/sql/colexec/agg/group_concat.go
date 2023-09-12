@@ -51,7 +51,7 @@ func (g *GroupConcat) Grows(cnt int) {
 	}
 }
 
-func (g *GroupConcat) Eval(vs [][]byte, err error) ([][]byte, error) {
+func (g *GroupConcat) Eval(vs [][]byte, err error, _ any) ([][]byte, error) {
 	result := make([][]byte, 0, len(g.result))
 
 	for i := 0; i < len(g.result); i++ {

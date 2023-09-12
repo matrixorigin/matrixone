@@ -1609,7 +1609,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
-	nodes, err := c.generateNodes(n)
+	nodes, partialresults, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
 	}
@@ -1626,6 +1626,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	for i := range nodes {
 		ss = append(ss, c.compileTableScanWithNode(n, nodes[i], filterExpr))
 	}
+	ss[0].PartialResults = partialresults
 	return ss, nil
 }
 
@@ -2971,11 +2972,12 @@ func (c *Compile) fillAnalyzeInfo() {
 	}
 }
 
-func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
+func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 	var err error
 	var db engine.Database
 	var rel engine.Relation
 	var ranges [][]byte
+	var partialresults []any
 	var nodes engine.Nodes
 	isPartitionTable := false
 
@@ -2991,20 +2993,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 	if err != nil {
 		var e error // avoid contamination of error messages
 		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
 		if e != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// if temporary table, just scan at local cn.
 		rel, e = db.Relation(ctx, engine.GetTempTableName(n.ObjRef.SchemaName, n.TableDef.Name), c.proc)
 		if e != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		c.cnList = engine.Nodes{
 			engine.Node{
@@ -3015,9 +3017,16 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
-	if err != nil {
-		return nil, err
+	if n.AggList == nil || n.BlockFilterList != nil {
+		ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		ranges, partialresults, err = rel.RangesForAgg(ctx, n.AggList)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	if n.TableDef.Partition != nil {
@@ -3029,19 +3038,41 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			partTableName := partitionTableNames[i]
 			subrelation, err := db.Relation(ctx, partTableName, c.proc)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
-			if err != nil {
-				return nil, err
+			if n.AggList == nil || n.BlockFilterList != nil {
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				if err != nil {
+					return nil, nil, err
+				}
+				//add partition number into catalog.BlockInfo.
+				for _, r := range subranges[1:] {
+					blkInfo := catalog.DecodeBlockInfo(r)
+					blkInfo.PartitionNum = i
+					ranges = append(ranges, r)
+				}
+				//ranges = append(ranges, subranges[1:]...)
+			} else {
+				subranges, subresults, err := subrelation.RangesForAgg(ctx, n.AggList)
+				if err != nil {
+					return nil, nil, err
+				}
+				for _, r := range subranges[1:] {
+					blkInfo := catalog.DecodeBlockInfo(r)
+					blkInfo.PartitionNum = i
+					ranges = append(ranges, r)
+				}
+				for j := range n.AggList {
+					agg := n.AggList[j].Expr.(*plan.Expr_F)
+					switch agg.F.Func.ObjName {
+					case "count":
+						partialresults[j] = partialresults[j].(int64) + subresults[j].(int64)
+					case "min", "max":
+						partialresults[j] = append(partialresults[j].([]any), subresults[j].([]any)...)
+					}
+				}
 			}
-			//add partition number into catalog.BlockInfo.
-			for _, r := range subranges[1:] {
-				blkInfo := catalog.DecodeBlockInfo(r)
-				blkInfo.PartitionNum = i
-				ranges = append(ranges, r)
-			}
-			//ranges = append(ranges, subranges[1:]...)
+
 		}
 	}
 
@@ -3069,7 +3100,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 				}
 			}
 		}
-		return nodes, nil
+		return nodes, partialresults, nil
 	}
 
 	engineType := rel.GetEngineType()
@@ -3079,14 +3110,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// for multi cn in launch mode, put all payloads in current CN
 	// maybe delete this in the future
 	if isLaunchMode(c.cnList) {
-		return putBlocksInCurrentCN(c, ranges, rel, n), nil
+		return putBlocksInCurrentCN(c, ranges, rel, n), partialresults, nil
 	}
 	// disttae engine
 	if engineType == engine.Disttae {
-		return shuffleBlocksToMultiCN(c, ranges, rel, n)
+		nodes, err := shuffleBlocksToMultiCN(c, ranges, rel, n)
+		return nodes, partialresults, err
 	}
 	// maybe temp table on memengine , just put payloads in average
-	return putBlocksInAverage(c, ranges, rel, n), nil
+	return putBlocksInAverage(c, ranges, rel, n), partialresults, nil
 }
 
 func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {

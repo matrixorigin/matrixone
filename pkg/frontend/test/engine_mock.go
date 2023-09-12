@@ -419,6 +419,11 @@ func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr) ([][]byte
 	return ret0, ret1
 }
 
+func (m *MockRelation) RangesForAgg(arg0 context.Context, arg1 []*plan.Expr) ([][]byte,[]any, error) {
+	ret0,ret2:=m.Ranges(arg0,nil)
+	return ret0,nil, ret2
+}
+
 // Ranges indicates an expected call of Ranges.
 func (mr *MockRelationMockRecorder) Ranges(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()

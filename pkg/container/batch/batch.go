@@ -76,7 +76,7 @@ func (info *aggInfo) UnmarshalBinary(data []byte) error {
 	data = data[1:]
 	info.inputTypes = types.DecodeType(data[:types.TSize])
 	data = data[types.TSize:]
-	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes)
+	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes, nil)
 	if err != nil {
 		return err
 	}
