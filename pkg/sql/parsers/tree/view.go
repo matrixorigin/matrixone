@@ -16,6 +16,7 @@ package tree
 
 type CreateView struct {
 	statementImpl
+	Replace     bool
 	Name        *TableName
 	ColNames    IdentifierList
 	AsSource    *Select
