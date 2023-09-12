@@ -119,4 +119,11 @@ var STATISTICSView = &table.Table{
 		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)",
 }
 
-var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView}
+var MoSessionsView = &table.Table{
+	Account:       table.AccountAll,
+	Database:      sysview.InformationDBConst,
+	Table:         "mo_sessions",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
+}
+
+var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView}
