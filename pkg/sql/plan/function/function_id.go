@@ -43,18 +43,19 @@ const (
 	XOR                       // XOR
 	NOT                       // NOT
 	CAST                      // CAST
-	IS                        //IS
-	ISNOT                     //ISNOT
-	ISNULL                    //ISNULL
-	ISNOTNULL                 //ISNOTNULL
-	ISUNKNOWN                 //ISUNKNOWN
-	ISNOTUNKNOWN              //ISNOTUNKNOWN
-	ISTRUE                    //ISTRUE
-	ISNOTTRUE                 //ISNOTTRUE
-	ISFALSE                   //ISFALSE
-	ISNOTFALSE                //ISNOTTRUE
-	ISEMPTY                   //ISEMPTY
-	NOT_IN_ROWS               //NOT_IN_ROWS
+	BIT_CAST                  // BIT_CAST
+	IS                        // IS
+	ISNOT                     // ISNOT
+	ISNULL                    // ISNULL
+	ISNOTNULL                 // ISNOTNULL
+	ISUNKNOWN                 // ISUNKNOWN
+	ISNOTUNKNOWN              // ISNOTUNKNOWN
+	ISTRUE                    // ISTRUE
+	ISNOTTRUE                 // ISNOTTRUE
+	ISFALSE                   // ISFALSE
+	ISNOTFALSE                // ISNOTTRUE
+	ISEMPTY                   // ISEMPTY
+	NOT_IN_ROWS               // NOT_IN_ROWS
 	OP_BIT_AND                // &
 	OP_BIT_OR                 // |
 	OP_BIT_XOR                // ^
@@ -372,6 +373,7 @@ var functionIdRegister = map[string]int32{
 	"case":        CASE,
 	"coalesce":    COALESCE,
 	"cast":        CAST,
+	"bit_cast":    BIT_CAST,
 	"is":          IS,
 	"is_not":      ISNOT,
 	"isnot":       ISNOT,
@@ -392,6 +394,7 @@ var functionIdRegister = map[string]int32{
 	"^":          OP_BIT_XOR,
 	"<<":         OP_BIT_SHIFT_LEFT,
 	">>":         OP_BIT_SHIFT_RIGHT,
+	"decode":     DECODE,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
@@ -440,7 +443,6 @@ var functionIdRegister = map[string]int32{
 	"substring":         SUBSTRING,
 	"mid":               SUBSTRING,
 	"encode":            ENCODE,
-	"decode":            DECODE,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,
