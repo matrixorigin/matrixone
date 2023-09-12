@@ -93,8 +93,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanAggVectors()
 		ctr.cleanGroupVectors()
 		ctr.cleanMultiAggVecs()
+		ctr.tmpVecs = nil
 	}
-	ctr.tmpVecs = nil
 }
 
 func (ctr *container) ToInputType(idx int) (t []types.Type) {
