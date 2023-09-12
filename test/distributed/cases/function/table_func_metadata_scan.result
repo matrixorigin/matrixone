@@ -42,7 +42,7 @@ sum(origin_size)
 230496
 select min(bit_cast(`min` as int)), max(bit_cast(`max` as int)), sum(bit_cast(`sum` as int)) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 min(bit_cast(min as int))    max(bit_cast(max as int))    sum(bit_cast(sum as int))
-1    2    0
+1    2    12288
 select approx_count(*) from t;
 approx_count(*)
 8192
