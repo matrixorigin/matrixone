@@ -229,13 +229,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					if err != nil {
 						return err
 					}
-					if vec.GetNulls().IsEmpty() {
+					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+						continue
+					} else {
 						vcol := vector.MustFixedCol[bool](vec)
 						if !vcol[0] {
 							continue
 						}
-					} else if vec.GetNulls().Contains(0) {
-						continue
 					}
 				}
 				ctr.matched.Add(uint64(sel))
