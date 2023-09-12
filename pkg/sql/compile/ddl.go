@@ -550,7 +550,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-		return moerr.NewTableAlreadyExists(c.ctx, tblName)
+		if qry.GetReplace() {
+			_, err := c.runSqlWithResult(fmt.Sprintf("drop view if exists %s", tblName))
+			if err != nil {
+				return err
+			}
+		} else {
+			return moerr.NewTableAlreadyExists(c.ctx, tblName)
+		}
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
