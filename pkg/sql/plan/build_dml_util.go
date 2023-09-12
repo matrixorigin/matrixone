@@ -1427,26 +1427,26 @@ func makeOneDeletePlan(
 	delNodeInfo *deleteNodeInfo,
 ) (int32, error) {
 	// append lock
-	lockTarget := &plan.LockTarget{
-		TableId:            delNodeInfo.tableDef.TblId,
-		PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
-		PrimaryColTyp:      delNodeInfo.pkTyp,
-		RefreshTsIdxInBat:  -1, //unsupport now
-		FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
-		LockTable:          delNodeInfo.lockTable,
-	}
+	// lockTarget := &plan.LockTarget{
+	// 	TableId:            delNodeInfo.tableDef.TblId,
+	// 	PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
+	// 	PrimaryColTyp:      delNodeInfo.pkTyp,
+	// 	RefreshTsIdxInBat:  -1, //unsupport now
+	// 	FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
+	// 	LockTable:          delNodeInfo.lockTable,
+	// }
 
-	if delNodeInfo.tableDef.Partition != nil {
-		lockTarget.IsPartitionTable = true
-		lockTarget.PartitionTableIds = delNodeInfo.partTableIDs
-	}
+	// if delNodeInfo.tableDef.Partition != nil {
+	// 	lockTarget.IsPartitionTable = true
+	// 	lockTarget.PartitionTableIds = delNodeInfo.partTableIDs
+	// }
 
-	lockNode := &Node{
-		NodeType:    plan.Node_LOCK_OP,
-		Children:    []int32{lastNodeId},
-		LockTargets: []*plan.LockTarget{lockTarget},
-	}
-	lastNodeId = builder.appendNode(lockNode, bindCtx)
+	// lockNode := &Node{
+	// 	NodeType:    plan.Node_LOCK_OP,
+	// 	Children:    []int32{lastNodeId},
+	// 	LockTargets: []*plan.LockTarget{lockTarget},
+	// }
+	// lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	// append delete node
 	deleteNode := &Node{
@@ -2404,6 +2404,48 @@ func makePreUpdateDeletePlan(
 
 	// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	// nextSourceStep := builder.appendStep(lastNodeId)
+
+	partExprIdx := -1
+	var resetProjectList []*Expr
+	if delCtx.tableDef.Partition != nil {
+		partExprIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
+		lastNodeId = appendPreDeleteNode(builder, bindCtx, delCtx.objRef, delCtx.tableDef, lastNodeId)
+		resetProjectList = getProjectionByLastNode(builder, lastNodeId)
+		resetProjectList = resetProjectList[0 : len(resetProjectList)-1]
+	}
+	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
+	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp, delCtx.lockTable)
+
+	// append lock
+	lockTarget := &plan.LockTarget{
+		TableId:            delNodeInfo.tableDef.TblId,
+		PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
+		PrimaryColTyp:      delNodeInfo.pkTyp,
+		RefreshTsIdxInBat:  -1, //unsupport now
+		FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
+		LockTable:          delNodeInfo.lockTable,
+	}
+
+	if delNodeInfo.tableDef.Partition != nil {
+		lockTarget.IsPartitionTable = true
+		lockTarget.PartitionTableIds = delNodeInfo.partTableIDs
+	}
+
+	lockNode := &Node{
+		NodeType:    plan.Node_LOCK_OP,
+		Children:    []int32{lastNodeId},
+		LockTargets: []*plan.LockTarget{lockTarget},
+	}
+	lastNodeId = builder.appendNode(lockNode, bindCtx)
+
+	if len(resetProjectList) > 0 {
+		projNode := &Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeId},
+			ProjectList: resetProjectList,
+		}
+		lastNodeId = builder.appendNode(projNode, bindCtx)
+	}
 
 	return lastNodeId, nil
 }
