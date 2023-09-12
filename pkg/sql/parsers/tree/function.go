@@ -99,6 +99,7 @@ func (l FunctionLanguage) String() string {
 
 type CreateFunction struct {
 	statementImpl
+	Replace    bool
 	Name       *FunctionName
 	Args       FunctionArgs
 	ReturnType *ReturnType

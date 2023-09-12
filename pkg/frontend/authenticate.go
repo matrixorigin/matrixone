@@ -1102,6 +1102,22 @@ var (
 			collation_connection,
 			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
+	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
+			set owner = %d, 
+			    args = '%s',
+			    retType = '%s',
+			    body = '%s',
+			    language = '%s',
+			    definer = '%s',
+			    modified_time = '%s',
+			    type = '%s',
+			    security_type = '%s',
+			    comment = '%s',
+			    character_set_client = '%s',
+			    collation_connection = '%s',
+			    database_collation = '%s'
+			where function_id = %d;`
+
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
 		args,
@@ -8414,7 +8430,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return err
 	}
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) && cf.Replace == false {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
 
@@ -8429,12 +8445,27 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	body := strconv.Quote(cf.Body)
 	body = body[1 : len(body)-1]
 
-	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
-		string(cf.Name.Name.ObjectName),
-		ses.GetTenantInfo().GetDefaultRoleID(),
-		string(argsJson),
-		retTypeStr, body, cf.Language, dbName,
-		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	if execResultArrayHasData(erArray) { // replace
+		var id int64
+		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+		initMoUdf = fmt.Sprintf(updateMoUserDefinedFunctionFormat,
+			ses.GetTenantInfo().GetDefaultRoleID(),
+			string(argsJson),
+			retTypeStr, body, cf.Language,
+			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			int32(id))
+	} else { // create
+		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
+			string(cf.Name.Name.ObjectName),
+			ses.GetTenantInfo().GetDefaultRoleID(),
+			string(argsJson),
+			retTypeStr, body, cf.Language, dbName,
+			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	}
+
 	err = bh.Exec(ctx, initMoUdf)
 	if err != nil {
 		return err

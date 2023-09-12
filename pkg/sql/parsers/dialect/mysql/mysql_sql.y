@@ -5333,24 +5333,25 @@ proc_arg_in_out_type:
 
 
 create_function_stmt:
-    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING func_handler_opt
+    CREATE replace_opt FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING func_handler_opt
     {
         fun := &tree.CreateFunction{
-            Name: $3,
-            Args: $5,
-            ReturnType: $8,
-            Language: $10,
-            Body: $12,
+            Replace: $2,
+            Name: $4,
+            Args: $6,
+            ReturnType: $9,
+            Language: $11,
+            Body: $13,
         }
 
-        if $10 == "python" {
-            if $13 == "" {
+        if $11 == "python" {
+            if $14 == "" {
             	yylex.Error("no handler error")
             	return 1
             }
             body := &tree.PythonFunctionBody{
-            	Handler: $13,
-            	As: $12,
+            	Handler: $14,
+            	As: $13,
             }
             bytes, _ := json.Marshal(body)
             fun.Body = string(bytes)
