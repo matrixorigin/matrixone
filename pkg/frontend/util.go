@@ -639,3 +639,23 @@ func copyBytes(src []byte, needCopy bool) []byte {
 	}
 	return src
 }
+
+//getUserProfile returns the account, user, role of the account
+func getUserProfile(account *TenantInfo) (string, string, string) {
+	var (
+		accountName string
+		userName    string
+		roleName    string
+	)
+
+	if account != nil {
+		accountName = account.GetTenant()
+		userName = account.GetUser()
+		roleName = account.GetDefaultRole()
+	} else {
+		accountName = sysAccountName
+		userName = rootName
+		roleName = moAdminRoleName
+	}
+	return accountName, userName, roleName
+}
