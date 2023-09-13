@@ -120,10 +120,33 @@ var STATISTICSView = &table.Table{
 }
 
 var MoSessionsView = &table.Table{
-	Account:       table.AccountAll,
-	Database:      sysview.InformationDBConst,
-	Table:         "mo_sessions",
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_sessions",
+	Columns: []table.Column{
+		table.StringColumn("account", "the account name"),
+		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("command", "the COMMAND send by client"),
+		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
+		table.StringColumn("db", "the database be used"),
+		table.StringColumn("host", "the ip:port of the mo-server"),
+		table.StringColumn("info", "the sql"),
+		table.StringColumn("node_id", "the id of the cn"),
+		table.StringColumn("query_start", "the start time of the statement"),
+		table.StringColumn("query_type", "the kind of the statement. DQL,TCL,etc"),
+		table.StringColumn("role", "the role of the user"),
+		table.StringColumn("session_id", "the id of the session"),
+		table.StringColumn("session_start", "the start time of the session"),
+		table.StringColumn("sql_source_type", "where does the sql come from. internal,external, etc"),
+		table.StringColumn("statement_id", "the id of the statement"),
+		table.StringColumn("statement_type", "the type of the statement.Select,Delete,Insert,etc"),
+		table.StringColumn("txn_id", "the id of the transaction"),
+		table.StringColumn("user", "the user name"),
+	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
+	//add Alter view here
+	CreateTableSql: "ALTER VIEW `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
 }
 
 var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView}
+var registeredViews = []*table.Table{MoSessionsView}
