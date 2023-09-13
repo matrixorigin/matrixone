@@ -105,6 +105,7 @@ func (l *localLockTable) doLock(
 			if err != nil {
 				logLocalLockFailed(c.txn, table, c.rows, c.opts, err)
 				if c.w != nil {
+					c.w.disableNotify()
 					c.w.close()
 				}
 				c.done(err)
@@ -286,6 +287,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			hold, newHolder := lock.tryHold(c)
 			if hold {
 				if c.w != nil {
+					c.w.disableNotify()
 					c.w.close()
 					c.w = nil
 				}
