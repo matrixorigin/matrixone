@@ -119,6 +119,35 @@ var STATISTICSView = &table.Table{
 		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)",
 }
 
+var processlistView = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "processlist",
+	Columns: []table.Column{
+		table.StringColumn("account", "the account name"),
+		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("command", "the COMMAND send by client"),
+		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
+		table.StringColumn("db", "the database be used"),
+		table.StringColumn("host", "the ip:port of the mo-server"),
+		table.StringColumn("info", "the sql"),
+		table.StringColumn("node_id", "the id of the cn"),
+		table.StringColumn("query_start", "the start time of the statement"),
+		table.StringColumn("query_type", "the kind of the statement. DQL,TCL,etc"),
+		table.StringColumn("role", "the role of the user"),
+		table.StringColumn("session_id", "the id of the session"),
+		table.StringColumn("session_start", "the start time of the session"),
+		table.StringColumn("sql_source_type", "where does the sql come from. internal,external, etc"),
+		table.StringColumn("statement_id", "the id of the statement"),
+		table.StringColumn("statement_type", "the type of the statement.Select,Delete,Insert,etc"),
+		table.StringColumn("txn_id", "the id of the transaction"),
+		table.StringColumn("user", "the user name"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
+	//actually drop view here
+	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
+}
+
 var MoSessionsView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_CATALOG,
@@ -144,9 +173,9 @@ var MoSessionsView = &table.Table{
 		table.StringColumn("user", "the user name"),
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
-	//add Alter view here
-	CreateTableSql: "ALTER VIEW `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
+	//actually drop view here
+	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
 }
 
 var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView}
-var registeredViews = []*table.Table{MoSessionsView}
+var registeredViews = []*table.Table{processlistView}

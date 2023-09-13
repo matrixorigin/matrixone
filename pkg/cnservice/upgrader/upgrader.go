@@ -56,6 +56,8 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 		return table.TBytes, nil
 	case strings.Contains(strings.ToLower(dataType), "uuid"):
 		return table.TUuid, nil
+	case strings.Contains(strings.ToLower(dataType), "int unsigned"):
+		return table.TUint64, nil
 	default:
 		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type")
 	}
@@ -227,8 +229,16 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) error {
 			continue
 		}
 
+		//
+		stmt := []string{
+			"begin;",
+			appendSemicolon(tbl.CreateTableSql), //drop view
+			appendSemicolon(tbl.CreateViewSql),  //create view
+			"commit;",
+		}
+
 		//alter view
-		upgradeSQL := tbl.CreateTableSql
+		upgradeSQL := strings.Join(stmt, "\n")
 
 		// Execute upgrade SQL
 		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
@@ -456,4 +466,11 @@ func attachAccount(ctx context.Context, tenant *frontend.TenantInfo) context.Con
 
 func makeOptions(tenant *frontend.TenantInfo) *ie.OptsBuilder {
 	return ie.NewOptsBuilder().AccountId(tenant.GetTenantID()).UserId(tenant.GetUserID()).DefaultRoleId(tenant.GetDefaultRoleID())
+}
+
+func appendSemicolon(s string) string {
+	if !strings.HasSuffix(s, ";") {
+		return s + ";"
+	}
+	return s
 }
