@@ -173,6 +173,7 @@ func (ctr *container) generateAggStructures(ap *Argument) error {
 			}
 			i++
 		}
+		ap.PartialResults = nil
 	}
 
 	return nil

@@ -854,6 +854,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_AGG:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		child := ns[n.Children[0]]
+		if child.NodeType == plan.Node_TABLE_SCAN {
+			child.AggList = n.AggList
+		}
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
@@ -2307,11 +2311,15 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
+		arg := constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc)
+		if i == 0 {
+			arg.PartialResults = ss[0].PartialResults
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
+			Arg:     arg,
 		})
 	}
 	c.anal.isFirst = false
@@ -3017,16 +3025,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 		}
 	}
 
-	if n.AggList == nil || n.BlockFilterList != nil {
-		ranges, err = rel.Ranges(ctx, n.BlockFilterList)
-		if err != nil {
-			return nil, nil, err
-		}
-	} else {
-		ranges, partialresults, err = rel.RangesForAgg(ctx, n.AggList)
-		if err != nil {
-			return nil, nil, err
-		}
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	if n.TableDef.Partition != nil {
@@ -3040,41 +3041,71 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			if n.AggList == nil || n.BlockFilterList != nil {
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
-				if err != nil {
-					return nil, nil, err
-				}
-				//add partition number into catalog.BlockInfo.
-				for _, r := range subranges[1:] {
-					blkInfo := catalog.DecodeBlockInfo(r)
-					blkInfo.PartitionNum = i
-					ranges = append(ranges, r)
-				}
-				//ranges = append(ranges, subranges[1:]...)
-			} else {
-				subranges, subresults, err := subrelation.RangesForAgg(ctx, n.AggList)
-				if err != nil {
-					return nil, nil, err
-				}
-				for _, r := range subranges[1:] {
-					blkInfo := catalog.DecodeBlockInfo(r)
-					blkInfo.PartitionNum = i
-					ranges = append(ranges, r)
-				}
-				for j := range n.AggList {
-					agg := n.AggList[j].Expr.(*plan.Expr_F)
-					switch agg.F.Func.ObjName {
-					case "count":
-						partialresults[j] = partialresults[j].(int64) + subresults[j].(int64)
-					case "min", "max":
-						partialresults[j] = append(partialresults[j].([]any), subresults[j].([]any)...)
-					}
-				}
+			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+			if err != nil {
+				return nil, nil, err
 			}
+			//add partition number into catalog.BlockInfo.
+			for _, r := range subranges[1:] {
+				blkInfo := catalog.DecodeBlockInfo(r)
+				blkInfo.PartitionNum = i
+				ranges = append(ranges, r)
+			}
+			//ranges = append(ranges, subranges[1:]...)
 
 		}
 	}
+
+	if n.AggList != nil && n.BlockFilterList == nil {
+		newranges := make([][]byte, len(ranges))
+		partialresults = make([]any, len(n.AggList))
+		for i := range n.AggList {
+			agg := n.AggList[i].Expr.(*plan.Expr_F)
+			name := agg.F.Func.ObjName
+			switch name {
+			case "count":
+				partialresults = append(partialresults, int64(0))
+			case "min", "max":
+				partialresults = append(partialresults, make([]any, len(ranges)))
+			default:
+				partialresults = append(partialresults, nil)
+			}
+		}
+		for _, buf := range ranges {
+			blk := catalog.DecodeBlockInfo(buf)
+			if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
+				newranges = append(newranges, buf)
+			}
+			var objMeta objectio.ObjectMeta
+			location := blk.MetaLocation()
+			fs := c.proc.FileService
+			objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+			if err != nil {
+				return nil, nil, err
+			}
+			objDataMeta := objMeta.MustDataMeta()
+			blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+			for i := range n.AggList {
+				agg := n.AggList[i].Expr.(*plan.Expr_F)
+				name := agg.F.Func.ObjName
+				switch name {
+				case "count":
+					partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
+				case "min":
+					col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+					zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
+					partialresults[i] = append(partialresults[i].([]any), zm.GetMin())
+				case "max":
+					col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+					zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
+					partialresults[i] = append(partialresults[i].([]any), zm.GetMax())
+				default:
+				}
+			}
+		}
+		ranges = newranges
+	}
+	n.AggList = nil
 
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)

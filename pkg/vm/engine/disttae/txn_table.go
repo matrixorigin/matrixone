@@ -600,15 +600,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	return
 }
 
-func (tbl *txnTable) RangesForAgg(ctx context.Context, agglist []*plan.Expr) (ranges [][]byte, metaresults []any, err error) {
-	ranges, err = tbl.Ranges(ctx, nil)
-	metaresults = make([]any, len(agglist))
-	for i := 0; i < len(agglist); i++ {
-		metaresults = append(metaresults, nil)
-	}
-	return
-}
-
 // txn can read :
 //  1. snapshot data:
 //      1>. committed block data resides in S3.
