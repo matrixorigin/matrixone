@@ -192,6 +192,10 @@ func (l *localLockTable) unlock(
 				return true
 			}
 
+			if !lock.holders.contains(txn.txnID) {
+				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn")
+			}
+
 			lock.closeTxn(
 				txn,
 				notifyValue{ts: commitTS})
@@ -280,13 +284,18 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 		if ok &&
 			(bytes.Equal(key, row) ||
 				lock.isLockRangeEnd()) {
-			if lock.tryHold(c) {
+			hold, newHolder := lock.tryHold(c)
+			if hold {
 				if c.w != nil {
 					c.w.disableNotify()
 					c.w.close()
 					c.w = nil
 				}
-				c.txn.lockAdded(l.bind.Table, [][]byte{key})
+				// only new holder can added lock into txn.
+				// newHolder is false means prev op of txn has already added lock into txn
+				if newHolder {
+					c.txn.lockAdded(l.bind.Table, [][]byte{key})
+				}
 				continue
 			}
 
@@ -463,8 +472,13 @@ func (l *localLockTable) addRangeLockLocked(
 		}
 
 		if len(conflictKey) > 0 {
-			if conflictWith.tryHold(c) {
-				c.txn.lockAdded(l.bind.Table, [][]byte{conflictKey})
+			hold, newHolder := conflictWith.tryHold(c)
+			if hold {
+				// only new holder can added lock into txn.
+				// newHolder is false means prev op of txn has already added lock into txn
+				if newHolder {
+					c.txn.lockAdded(l.bind.Table, [][]byte{conflictKey})
+				}
 				conflictWith = Lock{}
 				conflictKey = nil
 				rangeStartEncountered = false
