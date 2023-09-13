@@ -3072,10 +3072,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				partialresults = append(partialresults, nil)
 			}
 		}
-		for k := 1; k < len(ranges); k++ {
-			blk := catalog.DecodeBlockInfo(ranges[k])
+		for _, buf := range ranges {
+			if len(buf) == 0 {
+				continue
+			}
+			blk := catalog.DecodeBlockInfo(buf)
 			if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
-				newranges = append(newranges, ranges[k])
+				newranges = append(newranges, buf)
 			}
 			var objMeta objectio.ObjectMeta
 			location := blk.MetaLocation()
