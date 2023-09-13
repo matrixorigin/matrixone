@@ -123,6 +123,16 @@ func (s *sAggNumericVarPop[T]) Eval(lastResult []float64, _ error) ([]float64, e
 	}
 	return lastResult, nil
 }
+func (s *sAggNumericVarPop[T]) EvalStdDevPop(lastResult []float64, _ error) ([]float64, error) {
+	var err error
+	lastResult, err = s.Eval(lastResult, nil)
+	if err == nil {
+		for i := range lastResult {
+			lastResult[i] = math.Sqrt(lastResult[i])
+		}
+	}
+	return lastResult, err
+}
 func (s *sAggNumericVarPop[T]) MarshalBinary() ([]byte, error) {
 	encodeV := EncodeVariance{
 		Sum:    s.sum,
@@ -286,6 +296,20 @@ func (s *VarianceDecimal) Eval(lastResult []types.Decimal128, _ error) ([]types.
 		}
 	}
 	return lastResult, nil
+}
+func (s *VarianceDecimal) EvalStdDevPop(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
+	var err error
+	lastResult, err = s.Eval(lastResult, nil)
+	if err == nil {
+		for i := range lastResult {
+			tmp := math.Sqrt(types.Decimal128ToFloat64(lastResult[i], s.ScaleDivMul))
+			lastResult[i], err = types.Decimal128FromFloat64(tmp, 38, s.ScaleDivMul)
+			if err != nil {
+				break
+			}
+		}
+	}
+	return lastResult, err
 }
 func (s *VarianceDecimal) MarshalBinary() ([]byte, error) {
 	encodeV := EncodeDecimalV{
