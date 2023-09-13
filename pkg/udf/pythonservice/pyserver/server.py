@@ -69,7 +69,10 @@ class Server(pb2_grpc.ServiceServicer):
 
 def loadFunction(udf: pb2.Udf) -> Callable:
     # load function
-    exec(udf.asFun, locals())
+    if not udf.isImport:
+        exec(udf.body, locals())
+    else:
+        raise NotImplementedError()
     # get function object
     return locals()[udf.handler]
 

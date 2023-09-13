@@ -79,23 +79,12 @@ type FunctionName struct {
 	Name objName
 }
 
-type FunctionLanguage int
+type FunctionLanguage string
 
 const (
-	SQL FunctionLanguage = iota
-	PYTHON
+	SQL    FunctionLanguage = "sql"
+	PYTHON FunctionLanguage = "python"
 )
-
-func (l FunctionLanguage) String() string {
-	switch l {
-	case SQL:
-		return "sql"
-	case PYTHON:
-		return "python"
-	default:
-		return "unknown"
-	}
-}
 
 type CreateFunction struct {
 	statementImpl
@@ -103,13 +92,10 @@ type CreateFunction struct {
 	Name       *FunctionName
 	Args       FunctionArgs
 	ReturnType *ReturnType
-	Body       string
 	Language   string
-}
-
-type PythonFunctionBody struct {
-	Handler string `json:"handler"`
-	As      string `json:"as"`
+	Import     bool
+	Body       string
+	Handler    string
 }
 
 type DropFunction struct {
@@ -137,9 +123,12 @@ func (node *FunctionName) HasNoNameQualifier() bool {
 func (node *CreateFunction) Valid() error {
 	node.Language = strings.ToLower(node.Language)
 	switch node.Language {
-	case SQL.String():
-		return nil // TODO
-	case PYTHON.String():
+	case string(SQL):
+		if node.Import {
+			return moerr.NewInvalidInputNoCtx("import")
+		}
+		return nil
+	case string(PYTHON):
 		return nil // TODO
 	default:
 		return moerr.NewInvalidArgNoCtx("function language", node.Language)
@@ -147,12 +136,16 @@ func (node *CreateFunction) Valid() error {
 }
 
 func (node *CreateFunction) Format(ctx *FmtCtx) {
-	ctx.WriteString("create function ")
+	// create or replace
+	ctx.WriteString("create ")
+	if node.Replace {
+		ctx.WriteString("or replace ")
+	}
+	ctx.WriteString("function ")
 
+	// func_name (args)
 	node.Name.Format(ctx)
-
 	ctx.WriteString(" (")
-
 	for i, def := range node.Args {
 		if i != 0 {
 			ctx.WriteString(",")
@@ -160,19 +153,31 @@ func (node *CreateFunction) Format(ctx *FmtCtx) {
 		}
 		def.Format(ctx)
 	}
-
 	ctx.WriteString(")")
-	ctx.WriteString(" returns ")
 
+	// returns type
+	ctx.WriteString(" returns ")
 	node.ReturnType.Format(ctx)
 
+	// language lang
 	ctx.WriteString(" language ")
 	ctx.WriteString(node.Language)
 
-	ctx.WriteString(" as '")
-
+	// as 'body', or import 'body'
+	if !node.Import {
+		ctx.WriteString(" as '")
+	} else {
+		ctx.WriteString(" import '")
+	}
 	ctx.WriteString(node.Body)
 	ctx.WriteString("'")
+
+	// handler 'handler'
+	if node.Handler != "" {
+		ctx.WriteString(" handler '")
+		ctx.WriteString(node.Handler)
+		ctx.WriteString("'")
+	}
 }
 
 func (node *DropFunction) Format(ctx *FmtCtx) {

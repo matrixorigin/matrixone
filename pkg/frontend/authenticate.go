@@ -8442,8 +8442,23 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return err
 	}
 
-	body := strconv.Quote(cf.Body)
-	body = body[1 : len(body)-1]
+	var body string
+	if cf.Language == string(tree.SQL) {
+		body = cf.Body
+	} else {
+		nb := function.NonSqlUdfBody{
+			Handler: cf.Handler,
+			Import:  cf.Import,
+			Body:    cf.Body,
+		}
+		var byt []byte
+		byt, err = json.Marshal(nb)
+		if err != nil {
+			return err
+		}
+		body = strconv.Quote(string(byt))
+		body = body[1 : len(body)-1]
+	}
 
 	if execResultArrayHasData(erArray) { // replace
 		var id int64

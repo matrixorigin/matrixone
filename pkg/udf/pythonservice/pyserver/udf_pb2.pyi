@@ -82,14 +82,16 @@ class Response(_message.Message):
     def __init__(self, vector: _Optional[_Union[DataVector, _Mapping]] = ..., language: _Optional[str] = ...) -> None: ...
 
 class Udf(_message.Message):
-    __slots__ = ["handler", "asFun", "retType"]
+    __slots__ = ["handler", "isImport", "body", "retType"]
     HANDLER_FIELD_NUMBER: _ClassVar[int]
-    ASFUN_FIELD_NUMBER: _ClassVar[int]
+    ISIMPORT_FIELD_NUMBER: _ClassVar[int]
+    BODY_FIELD_NUMBER: _ClassVar[int]
     RETTYPE_FIELD_NUMBER: _ClassVar[int]
     handler: str
-    asFun: str
+    isImport: bool
+    body: str
     retType: DataType
-    def __init__(self, handler: _Optional[str] = ..., asFun: _Optional[str] = ..., retType: _Optional[_Union[DataType, str]] = ...) -> None: ...
+    def __init__(self, handler: _Optional[str] = ..., isImport: bool = ..., body: _Optional[str] = ..., retType: _Optional[_Union[DataType, str]] = ...) -> None: ...
 
 class DataVector(_message.Message):
     __slots__ = ["data", "const", "length", "type", "scale"]

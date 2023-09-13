@@ -38,8 +38,9 @@ message Response {
 
 message Udf {
   string handler = 1;
-  string asFun = 2;
-  DataType retType = 3;
+  bool isImport = 2;
+  string body = 3;
+  DataType retType = 4;
 }
 
 message DataVector {

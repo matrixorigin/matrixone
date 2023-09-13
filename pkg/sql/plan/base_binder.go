@@ -1099,7 +1099,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 	}
 
 	switch udf.Language {
-	case tree.SQL.String():
+	case string(tree.SQL):
 		sql := udf.Body
 		// replace sql with actual arg value
 		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
@@ -1136,7 +1136,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 			}
 		}
 		return expr, nil
-	case tree.PYTHON.String():
+	case string(tree.PYTHON):
 		expr, err := b.bindPythonUdf(udf, args, depth)
 		if err != nil {
 			return nil, err

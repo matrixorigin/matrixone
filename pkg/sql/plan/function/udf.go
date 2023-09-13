@@ -27,12 +27,19 @@ import (
 )
 
 type Udf struct {
+	// sql string, or json string of NonSqlUdfBody
 	Body     string `json:"body"`
 	Language string `json:"language"`
 	RetType  string `json:"rettype"`
 	Args     []*Arg `json:"args"`
 
 	ArgsType []types.Type `json:"-"`
+}
+
+type NonSqlUdfBody struct {
+	Handler string `json:"handler"`
+	Import  bool   `json:"import"`
+	Body    string `json:"body"`
 }
 
 // Arg of Udf

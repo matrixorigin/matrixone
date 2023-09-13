@@ -20,6 +20,7 @@ import (
 )
 
 type Config struct {
+	UUID    string `toml:"uuid"`
 	Address string `toml:"address"`
 	// Path code path
 	Path string `toml:"path"`

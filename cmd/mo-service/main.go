@@ -411,6 +411,8 @@ func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUI
 		UUID = cfg.getTNServiceConfig().UUID
 	case metadata.ServiceType_LOG:
 		UUID = cfg.LogService.UUID
+	case metadata.ServiceType_PYTHON_UDF:
+		UUID = cfg.PythonUdfServerConfig.UUID
 	}
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 	return

@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -81,16 +80,17 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 
 	// request
-	body := &tree.PythonFunctionBody{}
+	body := &NonSqlUdfBody{}
 	err = json.Unmarshal([]byte(u.Body), body)
 	if err != nil {
 		return err
 	}
 	request := &udf.Request{
 		Udf: &udf.Udf{
-			Handler: body.Handler,
-			AsFun:   body.As,
-			RetType: t2DataType[u.GetRetType().Oid],
+			Handler:  body.Handler,
+			IsImport: body.Import,
+			Body:     body.Body,
+			RetType:  t2DataType[u.GetRetType().Oid],
 		},
 		Vectors:  make([]*udf.DataVector, len(parameters)-1),
 		Length:   int64(length),

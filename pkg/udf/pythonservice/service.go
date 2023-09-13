@@ -18,7 +18,9 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 type service struct {
@@ -35,6 +37,8 @@ func NewService(cfg Config) (PythonUdfServer, error) {
 	return &service{cfg: cfg}, nil
 }
 
+var severNo int32 = 0
+
 func (s *service) Start() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -44,9 +48,10 @@ func (s *service) Start() error {
 		if err != nil {
 			return err
 		}
+		no := strconv.Itoa(int(atomic.AddInt32(&severNo, 1)))
 		cmd := exec.Command(
 			"/bin/bash", "-c",
-			"python -u "+file+" --address="+s.cfg.Address+" >> server.log 2>&1 &",
+			"python -u "+file+" --address="+s.cfg.Address+" >> server"+no+".log 2>&1 &",
 		)
 		err = cmd.Run()
 		if err != nil {
