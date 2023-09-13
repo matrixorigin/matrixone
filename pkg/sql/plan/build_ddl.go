@@ -401,6 +401,46 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 	}, nil
 }
 
+func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, error) {
+	createSequence := &plan.CreateSequence{
+		IfNotExists: stmt.IfNotExists,
+		TableDef: &TableDef{
+			Name: string(stmt.Name.ObjectName),
+		},
+	}
+	// Get database name.
+	if len(stmt.Name.SchemaName) == 0 {
+		createSequence.Database = ctx.DefaultDatabase()
+	} else {
+		createSequence.Database = string(stmt.Name.SchemaName)
+	}
+
+	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
+		return nil, err
+	} else if sub != nil {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
+	}
+
+	err := buildSequenceTableDef(stmt, ctx, createSequence)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_SEQUENCE,
+				Definition: &plan.DataDefinition_CreateSequence{
+					CreateSequence: createSequence,
+				},
+			},
+		},
+	}, nil
+}
+
 func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan, error) {
 	createSequence := &plan.CreateSequence{
 		IfNotExists: stmt.IfNotExists,

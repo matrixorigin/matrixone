@@ -94,6 +94,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildCreateSequence(stmt, ctx)
 	case *tree.DropSequence:
 		return buildDropSequence(stmt, ctx)
+	case *tree.AlterSequence:
+		return buildAlterSequence(stmt, ctx)
 	case *tree.DropView:
 		return buildDropView(stmt, ctx)
 	case *tree.CreateView:
