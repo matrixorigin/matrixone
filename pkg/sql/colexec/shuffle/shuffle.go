@@ -366,7 +366,7 @@ func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (proces
 	}
 
 	sels := getShuffledSelsByRange(ap, bat)
-	for i, _ := range sels {
+	for i := range sels {
 		if len(sels[i]) == bat.RowCount() {
 			bat.ShuffleIDX = i
 			proc.SetInputBatch(bat)
