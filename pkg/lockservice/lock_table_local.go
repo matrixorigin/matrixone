@@ -305,9 +305,6 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			}
 
 			c.offset = idx
-			if c.opts.async {
-				l.events.add(c)
-			}
 			return l.handleLockConflictLocked(c, key, lock)
 		}
 		l.addRowLockLocked(c, row)
@@ -337,12 +334,8 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 		}
 		if len(conflict) > 0 {
 			c.w = acquireWaiter(c.waitTxn)
-			if c.opts.async {
-				l.events.add(c)
-			}
-			err := l.handleLockConflictLocked(c, conflict, conflictWith)
 			c.offset = i
-			return err
+			return l.handleLockConflictLocked(c, conflict, conflictWith)
 		}
 
 		// lock added, need create new waiter next time
@@ -368,10 +361,6 @@ func (l *localLockTable) handleLockConflictLocked(
 	c *lockContext,
 	key []byte,
 	conflictWith Lock) error {
-	// find conflict, and wait prev txn completed, and a new
-	// waiter added, we need to active deadlock check.
-	c.txn.setBlocked(c.txn.txnID, c.w)
-
 	var err error
 	conflictWith.waiters.beginChange()
 	defer func() {
@@ -379,8 +368,14 @@ func (l *localLockTable) handleLockConflictLocked(
 			conflictWith.waiters.rollbackChange()
 			return
 		}
-
 		conflictWith.waiters.commitChange()
+
+		if c.opts.async {
+			l.events.add(c)
+		}
+		// find conflict, and wait prev txn completed, and a new
+		// waiter added, we need to active deadlock check.
+		c.txn.setBlocked(c.txn.txnID, c.w)
 		logLocalLockWaitOn(c.txn, l.bind.Table, c.w, key, conflictWith)
 	}()
 
