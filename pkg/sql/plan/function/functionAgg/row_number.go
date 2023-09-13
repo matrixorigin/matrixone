@@ -23,3 +23,15 @@ func NewWinRowNumber(overloadID int64, dist bool, inputTypes []types.Type, outpu
 	winPriv := agg.NewRowNumber()
 	return agg.NewUnaryAgg(overloadID, winPriv, false, inputTypes[0], outputType, winPriv.Grows, winPriv.Eval, winPriv.Merge, winPriv.Fill, nil), nil
 }
+
+func (s *sWindowBase) EvalRowNumber(result []int64, _ error) ([]int64, error) {
+	idx := 0
+	for _, p := range s.ps {
+		n := p[len(p)-1] - p[0]
+		for i := int64(1); i <= n; i++ {
+			result[idx] = i
+			idx++
+		}
+	}
+	return result, nil
+}
