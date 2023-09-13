@@ -640,7 +640,7 @@ func copyBytes(src []byte, needCopy bool) []byte {
 	return src
 }
 
-//getUserProfile returns the account, user, role of the account
+// getUserProfile returns the account, user, role of the account
 func getUserProfile(account *TenantInfo) (string, string, string) {
 	var (
 		accountName string
