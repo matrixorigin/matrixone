@@ -37,6 +37,7 @@ func TestCheckWithDeadlock(t *testing.T) {
 	defer close(abortC)
 
 	d := newDeadlockDetector(
+		"s1",
 		func(txn pb.WaitTxn, w *waiters) (bool, error) {
 			for _, v := range m[string(txn.TxnID)] {
 				if !w.add(v) {
@@ -82,6 +83,7 @@ func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 	defer close(abortC)
 
 	d := newDeadlockDetector(
+		"s1",
 		func(txn pb.WaitTxn, w *waiters) (bool, error) {
 			for _, v := range depends[string(txn.TxnID)] {
 				if !w.add(v) {
