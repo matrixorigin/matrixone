@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -352,15 +353,27 @@ type initUser struct {
 }
 
 var (
-	specialUsers atomic.Value
+	specialUsers struct {
+		sync.RWMutex
+		users map[string]*initUser
+	}
 )
+
+func setSpecialUser(userName string, user *initUser) {
+	specialUsers.Lock()
+	if specialUsers.users == nil {
+		specialUsers.users = make(map[string]*initUser)
+	}
+	specialUsers.users[userName] = user
+	specialUsers.Unlock()
+}
 
 // SetSpecialUser saves the user for initialization
 // !!!NOTE: userName must not contain Colon ':'
-func SetSpecialUser(userName string, password []byte) {
+func SetSpecialUser(username string, password []byte) {
 	acc := &TenantInfo{
 		Tenant:        sysAccountName,
-		User:          userName,
+		User:          username,
 		DefaultRole:   moAdminRoleName,
 		TenantID:      sysAccountID,
 		UserID:        math.MaxUint32,
@@ -371,32 +384,18 @@ func SetSpecialUser(userName string, password []byte) {
 		account:  acc,
 		password: password,
 	}
-	users := getSpecialUsers()
-	if users == nil {
-		users = make(map[string]*initUser)
-	}
-	users[userName] = user
-
-	specialUsers.Store(users)
+	setSpecialUser(username, user)
 }
 
 // isSpecialUser checks the user is the one for initialization
 func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
-	users := getSpecialUsers()
+	specialUsers.RLock()
+	defer specialUsers.RUnlock()
 
-	if len(users) > 0 && users[userName] != nil {
-		return true, users[userName].password, users[userName].account
+	if user, ok := specialUsers.users[userName]; ok {
+		return true, user.password, user.account
 	}
 	return false, nil, nil
-}
-
-// getSpecialUsers loads the user for initialization
-func getSpecialUsers() map[string]*initUser {
-	value := specialUsers.Load()
-	if value == nil {
-		return nil
-	}
-	return value.(map[string]*initUser)
 }
 
 const (
