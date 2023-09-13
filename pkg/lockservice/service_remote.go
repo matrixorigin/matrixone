@@ -180,13 +180,13 @@ func (s *service) handleRemoteGetLock(
 	}
 
 	l.getLock(
+		req.GetTxnLock.TxnID,
 		req.GetTxnLock.Row,
-		pb.WaitTxn{TxnID: req.GetTxnLock.TxnID},
 		func(lock Lock) {
 			resp.GetTxnLock.Value = int32(lock.value)
 			values := make([]pb.WaitTxn, 0)
-			lock.waiters.iter(func(w *waiter) bool {
-				values = append(values, w.txn)
+			lock.waiter.waiters.iter(func(w *waiter) bool {
+				values = append(values, w.belongTo)
 				return true
 			})
 			resp.GetTxnLock.WaitingList = values
