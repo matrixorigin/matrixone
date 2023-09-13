@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,6 +41,7 @@ type sqlExecutor struct {
 	addr      string
 	eng       engine.Engine
 	mp        *mpool.MPool
+	buf       *buffer.Buffer
 	txnClient client.TxnClient
 	fs        fileservice.FileService
 	ls        lockservice.LockService
@@ -69,6 +71,7 @@ func NewSQLExecutor(
 		qs:        qs,
 		aicm:      aicm,
 		mp:        mp,
+		buf:       buffer.New(defines.DefaultSessionBufferSize),
 	}
 }
 
@@ -207,6 +210,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.aicm,
 	)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.SessionInfo.Buf = exec.s.buf
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),

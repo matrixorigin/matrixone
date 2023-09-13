@@ -159,6 +159,10 @@ const (
 	MinInt24  = -1 << 23
 )
 
+const (
+	DefaultSessionBufferSize = 1 << 20
+)
+
 // use TenantIDKey{} UserIDKey{} RoleIDKey{} to get uint32 value from Context
 
 type TenantIDKey struct{}

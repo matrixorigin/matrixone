@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -230,6 +231,8 @@ type Session struct {
 	//  nextval internally will derive two sql (a select and an update). the two sql are executed
 	//	in the same transaction.
 	derivedStmt bool
+
+	buf *buffer.Buffer
 }
 
 func (ses *Session) IsDerivedStmt() bool {
@@ -433,6 +436,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
 	ses.SetAutoIncrCacheManager(aicm)
+	ses.buf = buffer.New(defines.DefaultSessionBufferSize)
 
 	var err error
 	if ses.mp == nil {
@@ -511,6 +515,9 @@ func (ses *Session) Close() {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(nil)
+	}
+	if ses.buf != nil {
+		ses.buf.Free()
 	}
 }
 
@@ -1085,6 +1092,12 @@ func (ses *Session) GetGlobalSysVars() *GlobalSystemVariables {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.gSysVars
+}
+
+func (ses *Session) GetBuffer() *buffer.Buffer {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.buf
 }
 
 // SetGlobalVar sets the value of system variable in global.
