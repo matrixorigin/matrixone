@@ -1255,6 +1255,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		determineHashOnPK(rootID, builder)
 		builder.pushdownRuntimeFilters(rootID)
 
+		//-----------------------------------------------------------------
+		builder.partitionPrune(rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
+		//-----------------------------------------------------------------
+
 		builder.rewriteStarApproxCount(rootID)
 
 		rootNode := builder.qry.Nodes[rootID]

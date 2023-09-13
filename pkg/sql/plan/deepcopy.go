@@ -208,6 +208,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
 		ExternScan:      node.ExternScan,
+		PartitionPrune:  DeepCopyPartitionPrune(node.PartitionPrune),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
@@ -384,6 +385,28 @@ func DeepCopyTableDefList(src []*plan.TableDef) []*plan.TableDef {
 		ret[i] = DeepCopyTableDef(def)
 	}
 	return ret
+}
+
+func DeepCopyPartitionPrune(partitionPrune *plan.PartitionPrune) *plan.PartitionPrune {
+	if partitionPrune == nil {
+		return nil
+	}
+	newPartitionPrune := &plan.PartitionPrune{
+		IsPruned:           partitionPrune.IsPruned,
+		SelectedPartitions: make([]*plan.PartitionItem, len(partitionPrune.SelectedPartitions)),
+	}
+	for i, e := range partitionPrune.SelectedPartitions {
+		newPartitionPrune.SelectedPartitions[i] = &plan.PartitionItem{
+			PartitionName:      e.PartitionName,
+			OrdinalPosition:    e.OrdinalPosition,
+			Description:        e.Description,
+			Comment:            e.Comment,
+			LessThan:           DeepCopyExprList(e.LessThan),
+			InValues:           DeepCopyExprList(e.InValues),
+			PartitionTableName: e.PartitionTableName,
+		}
+	}
+	return newPartitionPrune
 }
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
