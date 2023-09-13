@@ -104,6 +104,9 @@ func (l *localLockTable) doLock(
 			err = l.doAcquireLock(c)
 			if err != nil {
 				logLocalLockFailed(c.txn, table, c.rows, c.opts, err)
+				if c.w != nil {
+					c.w.close()
+				}
 				c.done(err)
 				return
 			}
@@ -303,8 +306,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			if c.opts.async {
 				l.events.add(c)
 			}
-			l.handleLockConflictLocked(c, key, lock)
-			return nil
+			return l.handleLockConflictLocked(c, key, lock)
 		}
 		l.addRowLockLocked(c, row)
 		// lock added, need create new waiter next time
@@ -336,9 +338,9 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 			if c.opts.async {
 				l.events.add(c)
 			}
-			l.handleLockConflictLocked(c, conflict, conflictWith)
+			err := l.handleLockConflictLocked(c, conflict, conflictWith)
 			c.offset = i
-			return nil
+			return err
 		}
 
 		// lock added, need create new waiter next time

@@ -41,6 +41,7 @@ type detector struct {
 		sync.Mutex
 		closed         bool
 		activeCheckTxn map[string]struct{}
+		preCheckFunc   func(holdTxnID []byte, txn pb.WaitTxn) error
 	}
 }
 
@@ -88,6 +89,12 @@ func (d *detector) check(
 	defer d.mu.Unlock()
 	if d.mu.closed {
 		return ErrDeadlockDetectorClosed
+	}
+
+	if d.mu.preCheckFunc != nil {
+		if err := d.mu.preCheckFunc(holdTxnID, txn); err != nil {
+			return err
+		}
 	}
 
 	key := util.UnsafeBytesToString(txn.TxnID)
