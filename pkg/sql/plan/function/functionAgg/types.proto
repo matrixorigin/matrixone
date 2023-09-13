@@ -33,12 +33,13 @@ message EncodeVariance {
 }
 
 message EncodeDecimalV {
-  option (gogoproto.typedecl) = false;
+  option (gogoproto.typedecl) = true;
   repeated bytes sum          = 1 [
     (gogoproto.customtype) =
         "github.com/matrixorigin/matrixone/pkg/container/types.Decimal128"
   ];
   repeated int64 Counts = 2;
+  repeated bool ErrOne  = 3;
 }
 
 message VariancePB {
@@ -47,7 +48,7 @@ message VariancePB {
   repeated double Counts      = 2;
 }
 
-message VD64 {
+message VarianceDecimal {
   option (gogoproto.typedecl) = false;
   repeated bytes Sum          = 1 [
     (gogoproto.customtype) =
@@ -64,55 +65,7 @@ message VD64 {
   int32 ScaleDiv    = 5;
   int32 ScaleMulDiv = 6;
   int32 ScaleDivMul = 7;
-}
-
-message VD128 {
-  option (gogoproto.typedecl) = false;
-  repeated bytes Sum          = 1 [
-    (gogoproto.customtype) =
-        "github.com/matrixorigin/matrixone/pkg/container/types.Decimal128",
-    (gogoproto.nullable) = false
-  ];
-  repeated int64 Counts = 2;
-  bytes Typ             = 3 [
-    (gogoproto.customtype) =
-        "github.com/matrixorigin/matrixone/pkg/container/types.Type",
-    (gogoproto.nullable) = false
-  ];
-  int32 ScaleMul    = 4;
-  int32 ScaleDiv    = 5;
-  int32 ScaleMulDiv = 6;
-  int32 ScaleDivMul = 7;
-}
-
-message EncodeAgg {
-  option (gogoproto.typedecl) = false;
-  int64 Op                    = 1 [(gogoproto.casttype) = "int64"];
-  bytes Private               = 2;
-  repeated bool Es            = 3;
-  bytes Da                    = 4;
-  bytes InputTypes            = 5;
-  bytes OutputType            = 6;
-  bool IsCount                = 7;
-}
-
-message EncodeAggDistinctPB {
-  option (gogoproto.typedecl) = true;
-  int64 Op                    = 1 [(gogoproto.casttype) = "int64"];
-  bytes Private               = 2;
-  repeated bool Es            = 3;
-  bytes Da                    = 4;
-  repeated bytes InputTypes   = 5 [
-    (gogoproto.customtype) =
-        "github.com/matrixorigin/matrixone/pkg/container/types.Type",
-    (gogoproto.nullable) = false
-  ];
-  bytes OutputType = 6 [
-    (gogoproto.customtype) =
-        "github.com/matrixorigin/matrixone/pkg/container/types.Type",
-    (gogoproto.nullable) = false
-  ];
-  bool IsCount = 7;
+  repeated bool ErrOne       = 8;
 }
 
 message Decimal64SlicePB {
@@ -134,7 +87,7 @@ message Decimal128SlicePB {
 }
 
 message Decimal64Median {
-  option (gogoproto.typedecl) = false;
+  option (gogoproto.typedecl) = true;
   repeated bytes Vals         = 1 [
     (gogoproto.nullable)   = false,
     (gogoproto.customtype) = "decimal64Slice"
@@ -142,7 +95,7 @@ message Decimal64Median {
 }
 
 message Decimal128Median {
-  option (gogoproto.typedecl) = false;
+  option (gogoproto.typedecl) = true;
   repeated bytes Vals         = 1 [
     (gogoproto.nullable)   = false,
     (gogoproto.customtype) = "decimal128Slice"

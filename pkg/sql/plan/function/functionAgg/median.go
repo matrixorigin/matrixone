@@ -15,9 +15,12 @@
 package functionAgg
 
 import (
+	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"sort"
 )
 
 var (
@@ -91,6 +94,305 @@ func newGenericMedian[T numeric](overloadID int64, inputType types.Type, outputT
 	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 
-type sAggMedian[T numeric] struct{}
-type sAggDecimal64Median struct{}
-type sAggDecimal128Median struct{}
+type sAggMedian[T numeric] struct{ values []numericSlice[T] }
+type sAggDecimal64Median struct{ values []decimal64Slice }
+type sAggDecimal128Median struct{ values []decimal128Slice }
+
+func (s *sAggMedian[T]) Grows(cnt int) {
+	oldLen := len(s.values)
+	s.values = append(s.values, make([]numericSlice[T], cnt)...)
+	for i := oldLen; i < len(s.values); i++ {
+		s.values[i] = numericSlice[T]{}
+	}
+}
+func (s *sAggMedian[T]) Free(*mpool.MPool) {}
+func (s *sAggMedian[T]) Fill(groupNumber int64, values T, lastResult float64, count int64, isEmpty bool, isNull bool) (float64, bool, error) {
+	if !isNull {
+		for i := int64(0); i < count; i++ {
+			s.values[groupNumber] = append(s.values[groupNumber], values)
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggMedian[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 float64, result2 float64, isEmpty1 bool, isEmpty2 bool, priv2 any) (float64, bool, error) {
+	if !isEmpty2 {
+		s2 := priv2.(*sAggMedian[T])
+		if !sort.IsSorted(s2.values[groupNumber2]) {
+			sort.Sort(s2.values[groupNumber2])
+		}
+
+		if isEmpty1 {
+			s.values[groupNumber1] = s2.values[groupNumber2]
+			s2.values[groupNumber2] = nil
+			return 0, false, nil
+		}
+		// do merge run.
+		if !sort.IsSorted(s.values[groupNumber1]) {
+			sort.Sort(s.values[groupNumber1])
+		}
+		sumCount := len(s.values[groupNumber1]) + len(s2.values[groupNumber2])
+		result := make(numericSlice[T], sumCount)
+		mergeNumeric(s.values[groupNumber1], s2.values[groupNumber2], result)
+		return 0, false, nil
+	}
+	return 0, isEmpty1, nil
+}
+func (s *sAggMedian[T]) Eval(lastResult []float64, _ error) ([]float64, error) {
+	for i := range s.values {
+		count := len(s.values[i])
+		if count == 0 {
+			continue
+		}
+		if !sort.IsSorted(s.values[i]) {
+			sort.Sort(s.values[i])
+		}
+		if count&1 == 1 {
+			lastResult[i] = float64(s.values[i][count>>1])
+		} else {
+			lastResult[i] = float64(s.values[i][count>>1]+s.values[i][count>>1-1]) / 2
+		}
+	}
+	return lastResult, nil
+}
+func (s *sAggMedian[T]) MarshalBinary() ([]byte, error) {
+	return json.Marshal(s)
+}
+func (s *sAggMedian[T]) UnmarshalBinary(data []byte) error {
+	return json.Unmarshal(data, s)
+}
+
+func (s *sAggDecimal64Median) Grows(cnt int) {
+	oldLen := len(s.values)
+	s.values = append(s.values, make([]decimal64Slice, cnt)...)
+	for i := oldLen; i < len(s.values); i++ {
+		s.values[i] = decimal64Slice{}
+	}
+}
+func (s *sAggDecimal64Median) Free(*mpool.MPool) {}
+func (s *sAggDecimal64Median) Fill(groupNumber int64, values types.Decimal64, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
+	if !isNull {
+		for i := int64(0); i < count; i++ {
+			s.values[groupNumber] = append(s.values[groupNumber], values)
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggDecimal64Median) Merge(groupNumber1 int64, groupNumber2 int64, result1 types.Decimal128, result2 types.Decimal128, isEmpty1 bool, isEmpty2 bool, priv2 any) (types.Decimal128, bool, error) {
+	if !isEmpty2 {
+		s2 := priv2.(*sAggDecimal64Median)
+		if !sort.IsSorted(s2.values[groupNumber2]) {
+			sort.Sort(s2.values[groupNumber2])
+		}
+
+		if isEmpty1 {
+			s.values[groupNumber1] = s2.values[groupNumber2]
+			s2.values[groupNumber2] = nil
+			return result1, false, nil
+		}
+		// do merge run.
+		if !sort.IsSorted(s.values[groupNumber1]) {
+			sort.Sort(s.values[groupNumber1])
+		}
+		sumCount := len(s.values[groupNumber1]) + len(s2.values[groupNumber2])
+		result := make(decimal64Slice, sumCount)
+		mergeD64(s.values[groupNumber1], s2.values[groupNumber2], result)
+		return result1, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggDecimal64Median) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
+	var err error
+	for i := range s.values {
+		count := len(s.values[i])
+		if count == 0 {
+			continue
+		}
+		if !sort.IsSorted(s.values[i]) {
+			sort.Sort(s.values[i])
+		}
+		if count&1 == 1 {
+			lastResult[i], err = types.Decimal128{B0_63: uint64(s.values[i][count>>1]), B64_127: 0}.Scale(1)
+		} else {
+			a := types.Decimal128{B0_63: uint64(s.values[i][count>>1]), B64_127: 0}
+			b := types.Decimal128{B0_63: uint64(s.values[i][count>>1-1]), B64_127: 0}
+			lastResult[i], err = a.Add128(b)
+			if err == nil {
+				if lastResult[i].Sign() {
+					lastResult[i] = lastResult[i].Minus()
+					lastResult[i], err = lastResult[i].Scale(1)
+					lastResult[i] = lastResult[i].Right(1).Minus()
+				} else {
+					lastResult[i], err = lastResult[i].Scale(1)
+					lastResult[i] = lastResult[i].Right(1)
+				}
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return lastResult, nil
+}
+func (s *sAggDecimal64Median) MarshalBinary() ([]byte, error) {
+	ss := Decimal64Median{Vals: s.values}
+	return ss.Marshal()
+}
+func (s *sAggDecimal64Median) UnmarshalBinary(data []byte) error {
+	ss := &Decimal64Median{}
+	err := ss.Unmarshal(data)
+	if err != nil {
+		return err
+	}
+	s.values = ss.Vals
+	return nil
+}
+
+func (s *sAggDecimal128Median) Grows(cnt int) {
+	oldLen := len(s.values)
+	s.values = append(s.values, make([]decimal128Slice, cnt)...)
+	for i := oldLen; i < len(s.values); i++ {
+		s.values[i] = decimal128Slice{}
+	}
+}
+func (s *sAggDecimal128Median) Free(*mpool.MPool) {}
+func (s *sAggDecimal128Median) Fill(groupNumber int64, values types.Decimal128, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
+	if !isNull {
+		for i := int64(0); i < count; i++ {
+			s.values[groupNumber] = append(s.values[groupNumber], values)
+		}
+	}
+	return lastResult, isEmpty, nil
+}
+func (s *sAggDecimal128Median) Merge(groupNumber1 int64, groupNumber2 int64, result1 types.Decimal128, result2 types.Decimal128, isEmpty1 bool, isEmpty2 bool, priv2 any) (types.Decimal128, bool, error) {
+	if !isEmpty2 {
+		s2 := priv2.(*sAggDecimal128Median)
+		if !sort.IsSorted(s2.values[groupNumber2]) {
+			sort.Sort(s2.values[groupNumber2])
+		}
+
+		if isEmpty1 {
+			s.values[groupNumber1] = s2.values[groupNumber2]
+			s2.values[groupNumber2] = nil
+			return result1, false, nil
+		}
+		// do merge run.
+		if !sort.IsSorted(s.values[groupNumber1]) {
+			sort.Sort(s.values[groupNumber1])
+		}
+		sumCount := len(s.values[groupNumber1]) + len(s2.values[groupNumber2])
+		result := make(decimal128Slice, sumCount)
+		mergeD128(s.values[groupNumber1], s2.values[groupNumber2], result)
+		return result1, false, nil
+	}
+	return result1, isEmpty1, nil
+}
+func (s *sAggDecimal128Median) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
+	var err error
+	for i := range s.values {
+		count := len(s.values[i])
+		if count == 0 {
+			continue
+		}
+		if !sort.IsSorted(s.values[i]) {
+			sort.Sort(s.values[i])
+		}
+		if count&1 == 1 {
+			lastResult[i], err = s.values[i][count>>1].Scale(1)
+		} else {
+			lastResult[i], err = s.values[i][count>>1].Add128(s.values[i][count>>1-1])
+			if err == nil {
+				if lastResult[i].Sign() {
+					lastResult[i] = lastResult[i].Minus()
+					lastResult[i], err = lastResult[i].Scale(1)
+					lastResult[i] = lastResult[i].Right(1).Minus()
+				} else {
+					lastResult[i], err = lastResult[i].Scale(1)
+					lastResult[i] = lastResult[i].Right(1)
+				}
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return lastResult, nil
+}
+func (s *sAggDecimal128Median) MarshalBinary() ([]byte, error) {
+	ss := Decimal128Median{Vals: s.values}
+	return ss.Marshal()
+}
+func (s *sAggDecimal128Median) UnmarshalBinary(data []byte) error {
+	ss := &Decimal128Median{}
+	err := ss.Unmarshal(data)
+	if err != nil {
+		return err
+	}
+	s.values = ss.Vals
+	return nil
+}
+
+func mergeNumeric[T numeric](s1, s2, rs []T) {
+	i, j, cnt := 0, 0, 0
+	for i < len(s1) && j < len(s2) {
+		if s1[i] < s2[j] {
+			rs[cnt] = s1[i]
+			i++
+		} else {
+			rs[cnt] = s2[j]
+			j++
+		}
+		cnt++
+	}
+	for ; i < len(s1); i++ {
+		rs[cnt] = s1[i]
+		cnt++
+	}
+	for ; j < len(s2); j++ {
+		rs[cnt] = s2[j]
+		cnt++
+	}
+}
+
+func mergeD64(s1, s2, rs decimal64Slice) {
+	i, j, cnt := 0, 0, 0
+	for i < len(s1) && j < len(s2) {
+		if s1[i].Compare(s2[j]) < 0 {
+			rs[cnt] = s1[i]
+			i++
+		} else {
+			rs[cnt] = s2[j]
+			j++
+		}
+		cnt++
+	}
+	for ; i < len(s1); i++ {
+		rs[cnt] = s1[i]
+		cnt++
+	}
+	for ; j < len(s2); j++ {
+		rs[cnt] = s2[j]
+		cnt++
+	}
+}
+
+func mergeD128(s1, s2, rs decimal128Slice) {
+	i, j, cnt := 0, 0, 0
+	for i < len(s1) && j < len(s2) {
+		if s1[i].Compare(s2[j]) < 0 {
+			rs[cnt] = s1[i]
+			i++
+		} else {
+			rs[cnt] = s2[j]
+			j++
+		}
+		cnt++
+	}
+	for ; i < len(s1); i++ {
+		rs[cnt] = s1[i]
+		cnt++
+	}
+	for ; j < len(s2); j++ {
+		rs[cnt] = s2[j]
+		cnt++
+	}
+}
