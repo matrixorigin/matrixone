@@ -390,9 +390,17 @@ func (l *localLockTable) addRangeLockLocked(
 		if ok1 && ok2 &&
 			l1.isShared() && l2.isShared() &&
 			l1.isLockRangeStart() && l2.isLockRangeEnd() {
-			l1.tryHold(c)
-			l2.tryHold(c)
-			c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
+			hold, newHolder := l1.tryHold(c)
+			if !hold {
+				panic("BUG: must get shared lock")
+			}
+			hold, _ = l2.tryHold(c)
+			if !hold {
+				panic("BUG: must get shared lock")
+			}
+			if newHolder {
+				c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
+			}
 			return nil, Lock{}, nil
 		}
 	}
