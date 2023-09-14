@@ -5272,13 +5272,14 @@ create_view_stmt:
             IfNotExists: $4,
         }
     }
-|   CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
         $$ = &tree.CreateView{
-            Name: $4,
-            ColNames: $5,
-            AsSource: $7,
-            IfNotExists: $3,
+            Replace: $2,
+            Name: $5,
+            ColNames: $6,
+            AsSource: $8,
+            IfNotExists: $4,
         }
     }
 
@@ -5305,11 +5306,7 @@ view_list_opt:
     }
 
 view_opt:
-    OR REPLACE
-    {
-        $$ = "OR REPLACE"
-    }
-|   ALGORITHM '=' algorithm_type_2
+    ALGORITHM '=' algorithm_type_2
     {
         $$ = "ALGORITHM = " + $3
     }
