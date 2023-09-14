@@ -17,10 +17,12 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -60,6 +62,10 @@ const (
 	// unsubscribe process scan the table every 20 minutes, and unsubscribe table which was unused for 1 hour.
 	unsubscribeProcessTicker = 20 * time.Minute
 	unsubscribeTimer         = 1 * time.Hour
+
+	// gc blocks and BlockIndexByTSEntry in partition state
+	gcPartitionStateTicker = 20 * time.Minute
+	gcPartitionStateTimer  = 1 * time.Hour
 
 	// log tail consumer related constants.
 	// if buffer is almost full (percent > consumerWarningPercent, we will send a message to log.
@@ -451,6 +457,39 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 	}()
 }
 
+func (client *pushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
+	go func() {
+		ticker := time.NewTicker(gcPartitionStateTicker)
+		for {
+			select {
+			case <-ctx.Done():
+				logutil.Infof("GC partition_state process exit.")
+				ticker.Stop()
+				return
+
+			case <-ticker.C:
+				if !client.receivedLogTailTime.ready.Load() {
+					continue
+				}
+				if client.subscriber == nil {
+					continue
+				}
+			}
+			parts := make(map[[2]uint64]*logtailreplay.Partition)
+			e.Lock()
+			for ids, part := range e.partitions {
+				parts[ids] = part
+			}
+			e.Unlock()
+			ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*5, 0)
+			logutil.Infof("GC partition_state %v", ts.ToString())
+			for ids, part := range parts {
+				part.Truncate(ctx, ids, ts)
+			}
+		}
+	}()
+}
+
 type subscribeID struct {
 	db  uint64
 	tbl uint64
@@ -713,6 +752,7 @@ func (e *Engine) InitLogTailPushModel(
 
 	e.pClient.receiveTableLogTailContinuously(ctx, e, mp)
 	e.pClient.unusedTableGCTicker(ctx)
+	e.pClient.partitionStateGCTicker(ctx, e)
 	return nil
 }
 
