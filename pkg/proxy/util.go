@@ -18,6 +18,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -192,4 +193,14 @@ func rawHash(t any) string {
 	}
 	hash := md5.Sum(sortBytes)
 	return hex.EncodeToString(hash[:])
+}
+
+// containIP returns if the list of net.IPNet contains the IP address.
+func containIP(ipNetList []*net.IPNet, ip net.IP) bool {
+	for _, ipNet := range ipNetList {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
