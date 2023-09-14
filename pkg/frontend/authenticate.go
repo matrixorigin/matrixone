@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -352,15 +353,27 @@ type initUser struct {
 }
 
 var (
-	specialUsers atomic.Value
+	specialUsers struct {
+		sync.RWMutex
+		users map[string]*initUser
+	}
 )
+
+func setSpecialUser(userName string, user *initUser) {
+	specialUsers.Lock()
+	if specialUsers.users == nil {
+		specialUsers.users = make(map[string]*initUser)
+	}
+	specialUsers.users[userName] = user
+	specialUsers.Unlock()
+}
 
 // SetSpecialUser saves the user for initialization
 // !!!NOTE: userName must not contain Colon ':'
-func SetSpecialUser(userName string, password []byte) {
+func SetSpecialUser(username string, password []byte) {
 	acc := &TenantInfo{
 		Tenant:        sysAccountName,
-		User:          userName,
+		User:          username,
 		DefaultRole:   moAdminRoleName,
 		TenantID:      sysAccountID,
 		UserID:        math.MaxUint32,
@@ -371,32 +384,18 @@ func SetSpecialUser(userName string, password []byte) {
 		account:  acc,
 		password: password,
 	}
-	users := getSpecialUsers()
-	if users == nil {
-		users = make(map[string]*initUser)
-	}
-	users[userName] = user
-
-	specialUsers.Store(users)
+	setSpecialUser(username, user)
 }
 
 // isSpecialUser checks the user is the one for initialization
 func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
-	users := getSpecialUsers()
+	specialUsers.RLock()
+	defer specialUsers.RUnlock()
 
-	if len(users) > 0 && users[userName] != nil {
-		return true, users[userName].password, users[userName].account
+	if user, ok := specialUsers.users[userName]; ok {
+		return true, user.password, user.account
 	}
 	return false, nil, nil
-}
-
-// getSpecialUsers loads the user for initialization
-func getSpecialUsers() map[string]*initUser {
-	value := specialUsers.Load()
-	if value == nil {
-		return nil
-	}
-	return value.(map[string]*initUser)
 }
 
 const (
@@ -816,6 +815,7 @@ var (
 		"mo_mysql_compatibility_mode": 0,
 		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
+		"mo_sessions":                 0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -842,6 +842,7 @@ var (
 		"mo_table_partitions":         0,
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
+		"mo_sessions":                 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1016,6 +1017,7 @@ var (
 				comment text,
 				primary key(stage_id)
 			);`,
+		`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
 	}
 
 	//drop tables for the tenant
@@ -1029,6 +1031,7 @@ var (
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 		`drop table if exists mo_catalog.mo_stages;`,
+		`drop view if exists mo_catalog.mo_sessions;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql       = `delete from mo_catalog.mo_pubs;`
