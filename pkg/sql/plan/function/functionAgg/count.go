@@ -105,7 +105,7 @@ func (s *sAggCount[T]) Fill(groupNumber int64, value T, lastResult int64, count 
 		return lastResult + count, false, nil
 	}
 	if isNull {
-		return lastResult, isEmpty, nil
+		return lastResult, false, nil
 	}
 	return lastResult + count, false, nil
 }
