@@ -639,6 +639,10 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 		if entry.tableId != tableId {
 			continue
 		}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+		entry.bat.AddCnt(1)
 		writes = append(writes, entry)
 	}
 	return writes
@@ -704,7 +708,13 @@ func (txn *Transaction) delTransaction() {
 	if txn.removed {
 		return
 	}
-
+	for _, table := range txn.tables {
+		for _, e := range table.writes {
+			if e.bat != nil && !e.bat.IsEmpty() {
+				e.bat.AddCnt(-1)
+			}
+		}
+	}
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue

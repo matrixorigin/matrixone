@@ -362,6 +362,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		databaseMap:     new(sync.Map),
 		createMap:       new(sync.Map),
 		deletedTableMap: new(sync.Map),
+		tables:          make(map[uint64]*txnTable),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
