@@ -232,7 +232,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 						row := it.Next()
 						rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 						commitTSVec.Append(node.GetEnd(), false)
-						pkVec.Append(node.rowid2PK[row], false)
+						pkVec.Append(node.rowid2PK[row].Get(0), false)
 					}
 				}
 				return !before

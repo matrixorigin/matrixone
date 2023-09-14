@@ -178,6 +178,8 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vecto
 		for ; begin < end+1; begin++ {
 			node.rowid2PK[begin] = pk.Window(int(begin-start), 1)
 		}
+	} else {
+		panic("pk vector is empty")
 	}
 	node.chain.Load().insertInMaskByRange(start, end)
 	for i := start; i < end+1; i++ {
@@ -234,7 +236,6 @@ func (node *DeleteNode) ApplyCommit() (err error) {
 	case NT_Normal, NT_Merge:
 		node.chain.Load().AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	}
-	node.rowid2PK = nil
 	return node.OnApply()
 }
 
@@ -243,7 +244,6 @@ func (node *DeleteNode) ApplyRollback() (err error) {
 	defer node.chain.Load().mvcc.Unlock()
 	_, err = node.TxnMVCCNode.ApplyRollback()
 	node.chain.Load().mvcc.DecChangeIntentionCnt()
-	node.rowid2PK = nil
 	return
 }
 
