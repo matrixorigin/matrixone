@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	moctl "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 )
 
@@ -98,6 +99,17 @@ func (s *taeStorage) Debug(ctx context.Context,
 			})
 		}
 		return resp.Read()
+	case uint32(ctl.CmdMethod_TraceSpan):
+		handleRead(
+			ctx, s, txnMeta, data, s.taeHandler.HandleTraceSpan,
+		)
+		req := db.TraceSpan{}
+		if err := req.Unmarshal(data); err != nil {
+			return nil, err
+		}
+		ret := moctl.SelfProcess(req.Cmd, req.Spans)
+		return []byte(ret), nil
+
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
 	}

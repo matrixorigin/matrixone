@@ -74,7 +74,6 @@ type lockTarget struct {
 	filterColIndexInBatch        int32
 	lockTable                    bool
 	changeDef                    bool
-	mode                         lock.LockMode
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.

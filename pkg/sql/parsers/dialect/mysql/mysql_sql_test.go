@@ -2552,19 +2552,7 @@ var (
 			output: "alter table t1 alter CONSTRAINT not enforce",
 		}, {
 			input:  "create or replace VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = UNDEFINED VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = MERGE VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = TEMPTABLE VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = TEMPTABLE DEFINER = `ucl360`@`%` VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
+			output: "create or replace view t2 as select * from t1",
 		}, {
 			input:  "create SQL SECURITY DEFINER VIEW t2 as select * from t1",
 			output: "create view t2 as select * from t1",
