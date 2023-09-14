@@ -251,6 +251,10 @@ func NewTAENeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTAENeedRetry)
 }
 
+func NewTxnStaleNoCtx() *Error {
+	return newError(Context(), ErrTxnStale)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }
