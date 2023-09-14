@@ -143,8 +143,6 @@ type Transaction struct {
 	databaseMap *sync.Map
 	// use to cache created table
 	createMap *sync.Map
-	//opened tables
-	tables map[uint64]*txnTable
 	/*
 		for deleted table
 		CORNER CASE
@@ -174,6 +172,7 @@ type Transaction struct {
 	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
+	toFreeBatches   map[[2]string][]*batch.Batch
 
 	rollbackCount int
 	statementID   int

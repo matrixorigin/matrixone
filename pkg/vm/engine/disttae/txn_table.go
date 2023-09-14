@@ -97,11 +97,6 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
-	defer func() {
-		for i := range writes {
-			writes[i].bat.AddCnt(-1)
-		}
-	}()
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
@@ -263,11 +258,6 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
-	defer func() {
-		for i := range writes {
-			writes[i].bat.AddCnt(-1)
-		}
-	}()
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
 		if entry.typ == INSERT {
@@ -559,7 +549,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
 	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
-	tbl.db.txn.tables[tbl.tableId] = tbl
 
 	// make sure we have the block infos snapshot
 	if err = tbl.UpdateBlockInfos(ctx); err != nil {

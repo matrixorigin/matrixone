@@ -362,7 +362,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		databaseMap:     new(sync.Map),
 		createMap:       new(sync.Map),
 		deletedTableMap: new(sync.Map),
-		tables:          make(map[uint64]*txnTable),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -379,6 +378,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
+		toFreeBatches:                   make(map[[2]string][]*batch.Batch),
 		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
 	}
 	txn.readOnly.Store(true)

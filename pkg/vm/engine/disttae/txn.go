@@ -146,7 +146,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 	txn.hasS3Op.Store(true)
 	mp := make(map[[2]string][]*batch.Batch)
-	toFree := make(map[[2]string][]*batch.Batch)
+	//toFree := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 			txn.writes[i].tableId == catalog.MO_TABLES_ID ||
@@ -172,7 +172,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			newBat.Vecs = bat.Vecs[1:]
 			newBat.SetRowCount(bat.Vecs[0].Length())
 			mp[key] = append(mp[key], newBat)
-			toFree[key] = append(toFree[key], bat)
+			txn.toFreeBatches[key] = append(txn.toFreeBatches[key], bat)
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
 			// maybe this will cause that the log increments unlimitedly
@@ -228,17 +228,13 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		// free batches
-		//for _, bat := range mp[key] {
-		//	txn.proc.PutBatch(bat)
-		//}
 	}
 	//free batches
-	for key := range toFree {
-		for _, bat := range toFree[key] {
-			txn.proc.PutBatch(bat)
-		}
-	}
+	//for key := range toFree {
+	//	for _, bat := range toFree[key] {
+	//		txn.proc.PutBatch(bat)
+	//	}
+	//}
 	if offset == 0 {
 		txn.workspaceSize = 0
 		writes := txn.writes[:0]
@@ -639,10 +635,6 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 		if entry.tableId != tableId {
 			continue
 		}
-		if entry.bat == nil || entry.bat.IsEmpty() {
-			continue
-		}
-		entry.bat.AddCnt(1)
 		writes = append(writes, entry)
 	}
 	return writes
@@ -708,12 +700,10 @@ func (txn *Transaction) delTransaction() {
 	if txn.removed {
 		return
 	}
-	for _, table := range txn.tables {
-		for _, e := range table.writes {
-			if e.bat != nil && !e.bat.IsEmpty() {
-				//e.bat.AddCnt(-1)
-				txn.proc.PutBatch(e.bat)
-			}
+	//free batches
+	for key := range txn.toFreeBatches {
+		for _, bat := range txn.toFreeBatches[key] {
+			txn.proc.PutBatch(bat)
 		}
 	}
 	for i := range txn.writes {
@@ -725,7 +715,6 @@ func (txn *Transaction) delTransaction() {
 	txn.tableCache.cachedIndex = -1
 	txn.tableCache.tableMap = nil
 	txn.createMap = nil
-	txn.tables = nil
 	txn.databaseMap = nil
 	txn.deletedTableMap = nil
 	txn.blockId_tn_delete_metaLoc_batch = nil
