@@ -462,10 +462,10 @@ const (
 	SpanKindSession SpanKind = 3
 	// SpanKindS3FSVis is a SpanKind for a Span that needs to collect info of
 	// S3 object operation
-	SpanKindS3FSVis = 4
+	SpanKindS3FSVis SpanKind = 4
 	// SpanKindLocalFSVis is a SpanKind for a Span that needs to collect info of
 	// local object operation
-	SpanKindLocalFSVis = 5
+	SpanKindLocalFSVis SpanKind = 5
 )
 
 func (k SpanKind) String() string {
