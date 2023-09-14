@@ -79,8 +79,10 @@ func (txn *activeTxn) lockRemoved(
 }
 
 func (txn *activeTxn) lockAdded(
+	serviceID string,
 	table uint64,
-	locks [][]byte) {
+	locks [][]byte,
+	w *waiter) {
 
 	// only in the lockservice node where the transaction was
 	// initiated will it be holds all locks. A remote transaction
@@ -98,7 +100,7 @@ func (txn *activeTxn) lockAdded(
 	//    between the deadlock detection module to query, it will miss
 	//    the lock information. We use mutex to solve it.
 
-	defer logTxnLockAdded(txn, locks)
+	defer logTxnLockAdded(serviceID, txn, locks, w)
 	v, ok := txn.holdLocks[table]
 	if ok {
 		v.append(locks)
@@ -113,10 +115,6 @@ func (txn *activeTxn) close(
 	commitTS timestamp.Timestamp,
 	lockTableFunc func(uint64) (lockTable, error)) error {
 	logTxnReadyToClose(serviceID, txn)
-
-	// cancel all blocked waiters
-	txn.cancelBlocks()
-
 	// TODO(fagongzi): parallel unlock
 	for table, cs := range txn.holdLocks {
 		l, err := lockTableFunc(table)
@@ -159,7 +157,7 @@ func (txn *activeTxn) abort(
 	txn.Lock()
 	defer txn.Unlock()
 
-	logAbortDeadLock(waitTxn, txn)
+	logAbortDeadLock(serviceID, waitTxn, txn)
 
 	// txn already closed
 	if !bytes.Equal(txn.txnID, waitTxn.TxnID) {
@@ -171,13 +169,7 @@ func (txn *activeTxn) abort(
 		return
 	}
 	for _, w := range txn.blockedWaiters {
-		w.notify(notifyValue{err: err})
-	}
-}
-
-func (txn *activeTxn) cancelBlocks() {
-	for _, w := range txn.blockedWaiters {
-		w.notify(notifyValue{err: ErrTxnNotFound})
+		w.notify(serviceID, notifyValue{err: err})
 	}
 }
 
@@ -189,7 +181,7 @@ func (txn *activeTxn) setBlocked(txnID []byte, w *waiter) {
 	if w == nil {
 		panic("invalid waiter")
 	}
-	if !w.casStatus(ready, blocking) {
+	if !w.casStatus("", ready, blocking) {
 		panic(fmt.Sprintf("invalid waiter status %d, %s", w.getStatus(), w))
 	}
 	txn.blockedWaiters = append(txn.blockedWaiters, w)
@@ -228,7 +220,6 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		tables = append(tables, table)
 		lockKeys = append(lockKeys, cs.slice())
 	}
-	wt := txn.toWaitTxn(serviceID, true)
 	txn.RUnlock()
 
 	defer func() {
@@ -251,11 +242,20 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 		hasDeadLock := false
 		locks.iter(func(lockKey []byte) bool {
 			l.getLock(
+				txnID,
 				lockKey,
-				wt,
 				func(lock Lock) {
-					lock.waiters.iter(func(w *waiter) bool {
-						hasDeadLock = !waiters(w.txn)
+					lock.waiter.waiters.iter(func(w *waiter) bool {
+						wt := w.waitTxn
+						if len(wt.TxnID) == 0 {
+							if txn := holder.getActiveTxn(w.txnID, false, ""); txn != nil {
+								wt = txn.toWaitTxn(serviceID, bytes.Equal(txn.txnID, w.txnID))
+							}
+						}
+						if len(wt.TxnID) == 0 {
+							return true
+						}
+						hasDeadLock = !waiters(wt)
 						return !hasDeadLock
 					})
 				})
