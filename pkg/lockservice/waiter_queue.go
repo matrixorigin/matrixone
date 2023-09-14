@@ -15,31 +15,22 @@
 package lockservice
 
 import (
+	"bytes"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 type waiterQueue interface {
-	close(notify notifyValue)
 	reset()
-
-	// writes methods, only can used in local_lock_table locked methods
-	moveTo(to waiterQueue)
+	moveToFirst(serviceID string) *waiter
 	put(...*waiter)
-	notify(value notifyValue)
-	first() *waiter
-	removeByTxnID(txnID []byte)
+	iter(func(*waiter) bool)
+
 	beginChange()
 	commitChange()
 	rollbackChange()
-
-	// read methods, can used any where
-	iter(func(*waiter) bool)
-	size() int
 }
 
-func newWaiterQueue() waiterQueue {
+func newWaiterQueue() *sliceBasedWaiterQueue {
 	return &sliceBasedWaiterQueue{beginChangeIdx: -1}
 }
 
@@ -47,90 +38,67 @@ type sliceBasedWaiterQueue struct {
 	sync.RWMutex
 	beginChangeIdx int
 	waiters        []*waiter
-	keyCommittedAt timestamp.Timestamp
 }
 
-func (q *sliceBasedWaiterQueue) moveTo(to waiterQueue) {
-	q.iter(func(w *waiter) bool {
-		to.put(w)
-		w.close()
-		return true
-	})
+func (q *sliceBasedWaiterQueue) moveToFirst(serviceID string) *waiter {
+	q.Lock()
+	defer q.Unlock()
+	if len(q.waiters) == 0 {
+		return nil
+	}
+	v := q.waiters[0]
+	v.add(serviceID, false, q.waiters[1:]...)
+	q.clearWaitersLocked()
+	return v
 }
 
 func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 	q.Lock()
 	defer q.Unlock()
-	for _, w := range ws {
-		w.ref()
-	}
-	q.waiters = append(q.waiters, ws...)
-}
 
-func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
-	q.Lock()
-	defer q.Unlock()
-	if len(q.waiters) == 0 {
+	// no new waiter added, moved from other waiter's waiter queue.
+	if len(ws) > 1 {
+		q.waiters = append(q.waiters, ws...)
 		return
 	}
 
-	if q.beginChangeIdx != -1 {
-		panic("BUG: cannot call notify in changing waiter queue")
-	}
-
-	// save the max committed ts
-	if value.ts.Less(q.keyCommittedAt) {
-		value.ts = q.keyCommittedAt
-	} else {
-		q.keyCommittedAt = value.ts
-	}
-
-	skipAt := -1
-	for i, w := range q.waiters {
-		if w.notify(value) {
-			break
-		}
-		// already completed
-		w.close()
-		skipAt = i
-	}
-	q.waiters = append(q.waiters[:0], q.waiters[skipAt+1:]...)
-}
-
-func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
-	q.Lock()
-	defer q.Unlock()
-	if len(q.waiters) == 0 {
-		return
-	}
-	newWaiters := q.waiters[:0]
+	// if a new waiter added, need to check if the current txn has a waiter in the queue.
 	for _, w := range q.waiters {
-		if w.isTxn(txnID) {
-			w.notify(notifyValue{})
-			w.close()
-			continue
+		if bytes.Equal(w.txnID, ws[0].txnID) {
+			w.sameTxnWaiters = append(w.sameTxnWaiters, ws[0])
+			return
 		}
-		newWaiters = append(newWaiters, w)
 	}
-	q.waiters = newWaiters
+	q.waiters = append(q.waiters, ws[0])
 }
 
-func (q *sliceBasedWaiterQueue) first() *waiter {
-	var w *waiter
-	q.iter(func(v *waiter) bool {
-		w = v
-		return false
-	})
-	return w
+func (q *sliceBasedWaiterQueue) iter(fn func(*waiter) bool) {
+	q.RLock()
+	defer q.RUnlock()
+	for _, w := range q.waiters {
+		if !fn(w) {
+			return
+		}
+	}
+}
+
+func (q *sliceBasedWaiterQueue) reset() {
+	q.Lock()
+	defer q.Unlock()
+	q.clearWaitersLocked()
+	q.beginChangeIdx = -1
+}
+
+func (q *sliceBasedWaiterQueue) clearWaitersLocked() {
+	for i := range q.waiters {
+		q.waiters[i] = nil
+	}
+	q.waiters = q.waiters[:0]
 }
 
 func (q *sliceBasedWaiterQueue) beginChange() {
 	q.Lock()
 	defer q.Unlock()
-
-	if q.beginChangeIdx != -1 {
-		panic("BUG: begin change multiple times")
-	}
 
 	if q.beginChangeIdx == -1 {
 		q.beginChangeIdx = len(q.waiters)
@@ -140,10 +108,6 @@ func (q *sliceBasedWaiterQueue) beginChange() {
 func (q *sliceBasedWaiterQueue) commitChange() {
 	q.Lock()
 	defer q.Unlock()
-	if q.beginChangeIdx == -1 {
-		panic("BUG: invalid beginChangeIdx")
-	}
-
 	q.beginChangeIdx = -1
 }
 
@@ -151,68 +115,12 @@ func (q *sliceBasedWaiterQueue) rollbackChange() {
 	q.Lock()
 	defer q.Unlock()
 
-	if q.beginChangeIdx == -1 {
-		panic("BUG: invalid beginChangeIdx")
-	}
-
-	n := len(q.waiters)
-	for i := q.beginChangeIdx; i < n; i++ {
-		q.waiters[i].close()
-		q.waiters[i] = nil
-	}
-	q.waiters = q.waiters[:q.beginChangeIdx]
-	q.beginChangeIdx = -1
-}
-
-func (q *sliceBasedWaiterQueue) getCommittedIdx() int {
-	i := len(q.waiters)
-	if q.beginChangeIdx != -1 {
-		i = q.beginChangeIdx
-	}
-	return i
-}
-
-func (q *sliceBasedWaiterQueue) iter(fn func(*waiter) bool) {
-	q.RLock()
-	defer q.RUnlock()
-
-	idx := q.getCommittedIdx()
-	for i := 0; i < idx; i++ {
-		if !fn(q.waiters[i]) {
-			return
+	if q.beginChangeIdx > -1 {
+		n := len(q.waiters)
+		for i := q.beginChangeIdx; i < n; i++ {
+			q.waiters[i] = nil
 		}
+		q.waiters = q.waiters[:q.beginChangeIdx]
+		q.beginChangeIdx = -1
 	}
-}
-
-func (q *sliceBasedWaiterQueue) size() int {
-	q.RLock()
-	defer q.RUnlock()
-	return q.getCommittedIdx()
-}
-
-func (q *sliceBasedWaiterQueue) reset() {
-	q.Lock()
-	defer q.Unlock()
-	q.doResetLocked()
-}
-
-func (q *sliceBasedWaiterQueue) close(value notifyValue) {
-	q.Lock()
-	defer q.Unlock()
-	idx := q.getCommittedIdx()
-	for i := 0; i < idx; i++ {
-		w := q.waiters[i]
-		w.notify(value)
-		w.close()
-	}
-	q.doResetLocked()
-}
-
-func (q *sliceBasedWaiterQueue) doResetLocked() {
-	for i := range q.waiters {
-		q.waiters[i] = nil
-	}
-	q.waiters = q.waiters[:0]
-	q.beginChangeIdx = -1
-	q.keyCommittedAt = timestamp.Timestamp{}
 }

@@ -46,7 +46,7 @@ func TestGetWithNoBind(t *testing.T) {
 		})
 }
 
-func TestGetWithAlreadyBind(t *testing.T) {
+func TestGetWithBinded(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
