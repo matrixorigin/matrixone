@@ -585,30 +585,14 @@ func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
 			FilterColIdxInBat:  target.filterColIndexInBatch,
 			LockTable:          target.lockTable,
 			ChangeDef:          target.changeDef,
-			Mode:               target.mode,
 		}
 	}
 	return targets
 }
 
-// AddLockTarget add lock target, LockMode_Exclusive will used
+// AddLockTarget add lock targets
 func (arg *Argument) AddLockTarget(
 	tableID uint64,
-	primaryColumnIndexInBatch int32,
-	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *Argument {
-	return arg.AddLockTargetWithMode(
-		tableID,
-		lock.LockMode_Exclusive,
-		primaryColumnIndexInBatch,
-		primaryColumnType,
-		refreshTimestampIndexInBatch)
-}
-
-// AddLockTargetWithMode add lock target with lock mode
-func (arg *Argument) AddLockTargetWithMode(
-	tableID uint64,
-	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32) *Argument {
@@ -617,32 +601,16 @@ func (arg *Argument) AddLockTargetWithMode(
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
-		mode:                         mode,
 	})
 	return arg
 }
 
 // LockTable lock all table, used for delete, truncate and drop table
-func (arg *Argument) LockTable(
-	tableID uint64,
-	changeDef bool) *Argument {
-	return arg.LockTableWithMode(
-		tableID,
-		lock.LockMode_Exclusive,
-		changeDef)
-}
-
-// LockTableWithMode is similar to LockTable, but with specify
-// lock mode
-func (arg *Argument) LockTableWithMode(
-	tableID uint64,
-	mode lock.LockMode,
-	changeDef bool) *Argument {
+func (arg *Argument) LockTable(tableID uint64, changeDef bool) *Argument {
 	for idx := range arg.targets {
 		if arg.targets[idx].tableID == tableID {
 			arg.targets[idx].lockTable = true
 			arg.targets[idx].changeDef = changeDef
-			arg.targets[idx].mode = mode
 			break
 		}
 	}
@@ -660,24 +628,6 @@ func (arg *Argument) LockTableWithMode(
 // partitionTableIDMappingInBatch: the ID index of the sub-table corresponding to the data. Index of tableIDs
 func (arg *Argument) AddLockTargetWithPartition(
 	tableIDs []uint64,
-	primaryColumnIndexInBatch int32,
-	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32,
-	partitionTableIDMappingInBatch int32) *Argument {
-	return arg.AddLockTargetWithPartitionAndMode(
-		tableIDs,
-		lock.LockMode_Exclusive,
-		primaryColumnIndexInBatch,
-		primaryColumnType,
-		refreshTimestampIndexInBatch,
-		partitionTableIDMappingInBatch)
-}
-
-// AddLockTargetWithPartitionAndMode is similar to AddLockTargetWithPartition, but you can specify
-// the lock mode
-func (arg *Argument) AddLockTargetWithPartitionAndMode(
-	tableIDs []uint64,
-	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
@@ -703,7 +653,6 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 			refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 			filter:                       getRowsFilter(tableID, tableIDs),
 			filterColIndexInBatch:        partitionTableIDMappingInBatch,
-			mode:                         mode,
 		})
 	}
 	return arg
