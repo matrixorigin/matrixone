@@ -46,10 +46,10 @@ func TestCanHandleServiceAndCmdWrong(t *testing.T) {
 	}
 
 	// testing query with wrong serviceType
-	a1.service = tn
+	a1.service = serviceType("log")
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
 	require.Equal(t, ret, pb.CtlResult{})
-	require.Equal(t, err, moerr.NewWrongServiceNoCtx("CN", string(a1.service)))
+	require.Equal(t, err, moerr.NewWrongServiceNoCtx("CN or DN", string(a1.service)))
 
 	// testing query with wrong cmd
 	a2.service = cn
