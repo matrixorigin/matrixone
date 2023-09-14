@@ -439,14 +439,7 @@ func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, option
 				buf.WriteString(v.PartitionName)
 			}
 		} else {
-			first := true
-			for _, v := range ndesc.Node.TableDef.Partition.Partitions {
-				if !first {
-					buf.WriteString(", ")
-				}
-				first = false
-				buf.WriteString(v.PartitionName)
-			}
+			buf.WriteString("all partitions")
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")

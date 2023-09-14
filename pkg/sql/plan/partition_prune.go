@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -56,32 +55,14 @@ func analyzePartKeyAndFilters(process *process.Process, node *Node) {
 			node:    node,
 			process: process,
 		}
-		pruner.init()
-		if !pruner.collectConditions() {
-			return
-		}
-		if !pruner.checkPartitionPruneMatch() {
-			return
-		}
-		if !pruner.tryPrunePartition() {
-			return
-		}
+		pruner.prune()
 	case plan.PartitionType_HASH, plan.PartitionType_LINEAR_HASH:
 		//partitionPruneCondExactMatch(process, node.FilterList, node)
 		pruner := &HashPartitionPruner{
 			node:    node,
 			process: process,
 		}
-		pruner.init()
-		if !pruner.collectConditions() {
-			return
-		}
-		if !pruner.checkPartitionPruneMatch() {
-			return
-		}
-		if !pruner.tryPrunePartition() {
-			return
-		}
+		pruner.prune()
 	case plan.PartitionType_LIST:
 		// XXX unimplement
 	case plan.PartitionType_LIST_COLUMNS:
@@ -176,8 +157,6 @@ func extractColumnsFromExpression(expr *plan.Expr, usedColumns map[string]int) {
 	return
 }
 
-// -----------------------------------------------new design--------------------------------------------------
-
 type KeyPartitionPruner struct {
 	conditions       []*Expr
 	colEqValMap      map[string]*plan.Expr
@@ -211,9 +190,6 @@ func (p *KeyPartitionPruner) collectConditions() bool {
 		extractCol2ValFromEqualExpr(filter, colEqValMap)
 	}
 
-	for col := range colEqValMap {
-		fmt.Println("+++>colFromFilter ", col)
-	}
 	p.colEqValMap = colEqValMap
 	return true
 }
@@ -259,11 +235,9 @@ func (p *KeyPartitionPruner) tryPrunePartition() bool {
 	// 3. prune the partition
 	var partitionId int32
 	if resVec.IsConstNull() {
-		fmt.Println("***> partitionId is null")
 		return false
 	} else {
 		partitionId = vector.MustFixedCol[int32](resVec)[0]
-		fmt.Println("***> partitionId ", partitionId)
 
 		p.node.PartitionPrune = &plan.PartitionPrune{
 			IsPruned: true,
@@ -283,6 +257,20 @@ func (p *KeyPartitionPruner) tryPrunePartition() bool {
 		}
 		return true
 	}
+}
+
+func (p *KeyPartitionPruner) prune() bool {
+	p.init()
+	if !p.collectConditions() {
+		return false
+	}
+	if !p.checkPartitionPruneMatch() {
+		return false
+	}
+	if !p.tryPrunePartition() {
+		return false
+	}
+	return true
 }
 
 type HashPartitionPruner struct {
@@ -312,10 +300,6 @@ func (p *HashPartitionPruner) collectConditions() bool {
 	colEqValMap := make(map[string]*plan.Expr)
 	for _, filter := range p.node.FilterList {
 		extractCol2ValFromEqualExpr(filter, colEqValMap)
-	}
-
-	for col := range colEqValMap {
-		fmt.Println("+++>colFromFilter ", col)
 	}
 	p.colEqValMap = colEqValMap
 	return true
@@ -358,12 +342,9 @@ func (p *HashPartitionPruner) tryPrunePartition() bool {
 	defer resVec.Free(p.process.Mp())
 
 	if resVec.IsConstNull() {
-		fmt.Println("***> partitionId is null")
 		return false
 	} else {
 		partitionId := vector.GetFixedAt[int32](resVec, 0)
-		fmt.Println("***> partitionId ", partitionId)
-
 		p.node.PartitionPrune = &plan.PartitionPrune{
 			IsPruned: true,
 		}
@@ -383,4 +364,18 @@ func (p *HashPartitionPruner) tryPrunePartition() bool {
 		}
 		return true
 	}
+}
+
+func (p *HashPartitionPruner) prune() bool {
+	p.init()
+	if !p.collectConditions() {
+		return false
+	}
+	if !p.checkPartitionPruneMatch() {
+		return false
+	}
+	if !p.tryPrunePartition() {
+		return false
+	}
+	return true
 }
