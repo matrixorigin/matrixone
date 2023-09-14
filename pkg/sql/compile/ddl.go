@@ -215,8 +215,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		// 2. lock origin table
 		var partitionTableNames []string
 		if tableDef.Partition != nil {
-			partitionTableNames = make([]string, len(tableDef.Partition.PartitionTableNames))
-			copy(partitionTableNames, tableDef.Partition.PartitionTableNames)
+			partitionTableNames = tableDef.Partition.PartitionTableNames
 		}
 		if err = lockTable(c.ctx, c.e, c.proc, rel, dbName, partitionTableNames, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&

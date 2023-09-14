@@ -53,8 +53,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		var partitionTableNames []string
 		tableDef := qry.GetTableDef()
 		if tableDef.Partition != nil {
-			partitionTableNames = make([]string, len(tableDef.Partition.PartitionTableNames))
-			copy(partitionTableNames, tableDef.Partition.PartitionTableNames)
+			partitionTableNames = tableDef.Partition.PartitionTableNames
 		}
 		if err = lockTable(c.ctx, c.e, c.proc, originRel, dbName, partitionTableNames, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
