@@ -49,159 +49,38 @@ func (builder *QueryBuilder) partitionPrune(nodeID int32) {
 
 // Analyze partition expressions and filter conditions, and perform partition pruning
 func analyzePartKeyAndFilters(process *process.Process, node *Node) {
-	partitionPruneCondExactMatch(process, node.FilterList, node)
-	return
-}
-
-func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, node *Node) (bool, error) {
-	// 1. Check if the components of the conjunctive normal form are simple equivalent expressions
-	for _, expr := range filterList {
-		isEqualValueComp := isExprColRefEqualConst(expr)
-		if isEqualValueComp {
-			continue
-		} else {
-			return false, nil
-		}
-	}
-	// 2. extract all colRef from filters
-	// ColumnEqualvalue
-	colEqValMap := make(map[string]*plan.Expr)
-	for _, filter := range node.FilterList {
-		extractCol2ValFromEqualExpr(filter, colEqValMap)
-	}
-
-	for col := range colEqValMap {
-		fmt.Println("+++>colFromFilter ", col)
-	}
-
 	partitionByDef := node.TableDef.Partition
-
 	switch partitionByDef.Type {
 	case plan.PartitionType_KEY, plan.PartitionType_LINEAR_KEY:
-		partitionColumns := partitionByDef.PartitionColumns.GetPartitionColumns()
-		partitionKeys := make(map[string]int)
-		stringSliceToMap(partitionColumns, partitionKeys)
-
-		if len(partitionKeys) > len(colEqValMap) {
-			return false, nil
-		} else {
-			if !exprColsIncludePartKey(partitionKeys, colEqValMap) {
-				return false, nil
-			}
-
-			//--------------------------------------------------------------------------------
-			//step 5: evaluate the partition expr where the colRef assigned with const
-			inputBat := batch.NewWithSize(len(node.TableDef.GetCols()))
-			inputBat.SetRowCount(1)
-			defer inputBat.Clean(proc.Mp())
-
-			for i, colDef := range node.TableDef.GetCols() {
-				if valueExpr, ok := colEqValMap[colDef.GetName()]; ok {
-					colVec, err := colexec.EvalExpressionOnce(proc, valueExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
-					if err != nil {
-						return false, nil
-					}
-					inputBat.SetVector(int32(i), colVec)
-				} else {
-					typ := types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale)
-					colVec := vector.NewConstNull(typ, 1, proc.Mp())
-					inputBat.SetVector(int32(i), colVec)
-				}
-			}
-
-			resVec, err := colexec.EvalExpressionOnce(proc, partitionByDef.PartitionExpression, []*batch.Batch{inputBat})
-			if err != nil {
-				return false, nil
-			}
-			defer resVec.Free(proc.Mp())
-
-			//step 7: prune the partition
-			var partitionId int32
-			if resVec.IsConstNull() {
-				fmt.Println("***> partitionId is null")
-				return false, err
-			} else {
-				partitionId = vector.MustFixedCol[int32](resVec)[0]
-				fmt.Println("***> partitionId ", partitionId)
-
-				node.PartitionPrune = &plan.PartitionPrune{
-					IsPruned: true,
-				}
-				if partitionId != -1 {
-					node.PartitionPrune.SelectedPartitions = make([]*plan.PartitionItem, 1)
-					partitionItem := partitionByDef.Partitions[partitionId]
-					node.PartitionPrune.SelectedPartitions[0] = &plan.PartitionItem{
-						PartitionName:      partitionItem.PartitionName,
-						OrdinalPosition:    partitionItem.OrdinalPosition,
-						Description:        partitionItem.Description,
-						Comment:            partitionItem.Comment,
-						LessThan:           DeepCopyExprList(partitionItem.LessThan),
-						InValues:           DeepCopyExprList(partitionItem.InValues),
-						PartitionTableName: partitionItem.PartitionTableName,
-					}
-				}
-			}
+		pruner := &KeyPartitionPruner{
+			node:    node,
+			process: process,
+		}
+		pruner.init()
+		if !pruner.collectConditions() {
+			return
+		}
+		if !pruner.checkPartitionPruneMatch() {
+			return
+		}
+		if !pruner.tryPrunePartition() {
+			return
 		}
 	case plan.PartitionType_HASH, plan.PartitionType_LINEAR_HASH:
-		//extractColumnsFromExpression
-		partitionKeys := make(map[string]int)
-		extractColumnsFromExpression(partitionByDef.PartitionExpr.Expr, partitionKeys)
-		if len(partitionKeys) > len(colEqValMap) {
-			return false, nil
-		} else {
-			if !exprColsIncludePartKey(partitionKeys, colEqValMap) {
-				return false, nil
-			}
-
-			inputBat := batch.NewWithSize(len(node.TableDef.GetCols()))
-			inputBat.SetRowCount(1)
-			defer inputBat.Clean(proc.Mp())
-
-			for i, colDef := range node.TableDef.GetCols() {
-				if valueExpr, ok := colEqValMap[colDef.GetName()]; ok {
-					colVec, err := colexec.EvalExpressionOnce(proc, valueExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
-					if err != nil {
-						return false, nil
-					}
-					inputBat.SetVector(int32(i), colVec)
-				} else {
-					typ := types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale)
-					colVec := vector.NewConstNull(typ, 1, proc.Mp())
-					inputBat.SetVector(int32(i), colVec)
-				}
-			}
-
-			resVec, err := colexec.EvalExpressionOnce(proc, partitionByDef.PartitionExpression, []*batch.Batch{inputBat})
-			if err != nil {
-				return false, nil
-			}
-			defer resVec.Free(proc.Mp())
-
-			if resVec.IsConstNull() {
-				fmt.Println("***> partitionId is null")
-				return false, err
-			} else {
-				partitionId := vector.GetFixedAt[int32](resVec, 0)
-				fmt.Println("***> partitionId ", partitionId)
-
-				node.PartitionPrune = &plan.PartitionPrune{
-					IsPruned: true,
-				}
-
-				if partitionId != -1 {
-					node.PartitionPrune.SelectedPartitions = make([]*plan.PartitionItem, 1)
-					partitionItem := partitionByDef.Partitions[partitionId]
-					node.PartitionPrune.SelectedPartitions[0] = &plan.PartitionItem{
-						PartitionName:      partitionItem.PartitionName,
-						OrdinalPosition:    partitionItem.OrdinalPosition,
-						Description:        partitionItem.Description,
-						Comment:            partitionItem.Comment,
-						LessThan:           DeepCopyExprList(partitionItem.LessThan),
-						InValues:           DeepCopyExprList(partitionItem.InValues),
-						PartitionTableName: partitionItem.PartitionTableName,
-					}
-				}
-			}
+		//partitionPruneCondExactMatch(process, node.FilterList, node)
+		pruner := &HashPartitionPruner{
+			node:    node,
+			process: process,
+		}
+		pruner.init()
+		if !pruner.collectConditions() {
+			return
+		}
+		if !pruner.checkPartitionPruneMatch() {
+			return
+		}
+		if !pruner.tryPrunePartition() {
+			return
 		}
 	case plan.PartitionType_LIST:
 		// XXX unimplement
@@ -212,7 +91,7 @@ func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, nod
 	case plan.PartitionType_RANGE_COLUMNS:
 		// XXX unimplement
 	}
-	return true, nil
+	return
 }
 
 // isExprColRefEqualConst
@@ -295,4 +174,213 @@ func extractColumnsFromExpression(expr *plan.Expr, usedColumns map[string]int) {
 		}
 	}
 	return
+}
+
+// -----------------------------------------------new design--------------------------------------------------
+
+type KeyPartitionPruner struct {
+	conditions       []*Expr
+	colEqValMap      map[string]*plan.Expr
+	partitionKeysMap map[string]int
+	partitionByDef   *plan.PartitionByDef
+	node             *Node
+	process          *process.Process
+}
+
+func (p *KeyPartitionPruner) init() {
+	partitionByDef := p.node.TableDef.Partition
+	p.partitionByDef = partitionByDef
+	p.partitionKeysMap = make(map[string]int)
+	for _, partitionCol := range partitionByDef.PartitionColumns.PartitionColumns {
+		if _, ok := p.partitionKeysMap[partitionCol]; !ok {
+			p.partitionKeysMap[partitionCol] = 1
+		}
+	}
+}
+
+func (p *KeyPartitionPruner) collectConditions() bool {
+	// 1. Check if the components of the conjunctive normal form are simple equivalent expressions
+	for _, expr := range p.node.GetFilterList() {
+		if !isExprColRefEqualConst(expr) {
+			return false
+		}
+	}
+	// 2. extract all colRef to const value from filters
+	colEqValMap := make(map[string]*plan.Expr)
+	for _, filter := range p.node.FilterList {
+		extractCol2ValFromEqualExpr(filter, colEqValMap)
+	}
+
+	for col := range colEqValMap {
+		fmt.Println("+++>colFromFilter ", col)
+	}
+	p.colEqValMap = colEqValMap
+	return true
+}
+
+func (p *KeyPartitionPruner) checkPartitionPruneMatch() bool {
+	if len(p.partitionKeysMap) > len(p.colEqValMap) {
+		return false
+	} else {
+		if !exprColsIncludePartKey(p.partitionKeysMap, p.colEqValMap) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *KeyPartitionPruner) tryPrunePartition() bool {
+	// 1.evaluate the partition expr where the colRef assigned with const
+	inputBat := batch.NewWithSize(len(p.node.TableDef.GetCols()))
+	inputBat.SetRowCount(1)
+	defer inputBat.Clean(p.process.Mp())
+
+	for i, colDef := range p.node.TableDef.GetCols() {
+		if valueExpr, ok := p.colEqValMap[colDef.GetName()]; ok {
+			colVec, err := colexec.EvalExpressionOnce(p.process, valueExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if err != nil {
+				return false
+			}
+			inputBat.SetVector(int32(i), colVec)
+		} else {
+			typ := types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale)
+			colVec := vector.NewConstNull(typ, 1, p.process.Mp())
+			inputBat.SetVector(int32(i), colVec)
+		}
+	}
+
+	// 2. calculate partition expression
+	resVec, err := colexec.EvalExpressionOnce(p.process, p.partitionByDef.PartitionExpression, []*batch.Batch{inputBat})
+	if err != nil {
+		return false
+	}
+	defer resVec.Free(p.process.Mp())
+
+	// 3. prune the partition
+	var partitionId int32
+	if resVec.IsConstNull() {
+		fmt.Println("***> partitionId is null")
+		return false
+	} else {
+		partitionId = vector.MustFixedCol[int32](resVec)[0]
+		fmt.Println("***> partitionId ", partitionId)
+
+		p.node.PartitionPrune = &plan.PartitionPrune{
+			IsPruned: true,
+		}
+		if partitionId != -1 {
+			p.node.PartitionPrune.SelectedPartitions = make([]*plan.PartitionItem, 1)
+			partitionItem := p.partitionByDef.Partitions[partitionId]
+			p.node.PartitionPrune.SelectedPartitions[0] = &plan.PartitionItem{
+				PartitionName:      partitionItem.PartitionName,
+				OrdinalPosition:    partitionItem.OrdinalPosition,
+				Description:        partitionItem.Description,
+				Comment:            partitionItem.Comment,
+				LessThan:           DeepCopyExprList(partitionItem.LessThan),
+				InValues:           DeepCopyExprList(partitionItem.InValues),
+				PartitionTableName: partitionItem.PartitionTableName,
+			}
+		}
+		return true
+	}
+}
+
+type HashPartitionPruner struct {
+	conditions       []*Expr
+	colEqValMap      map[string]*plan.Expr
+	partitionKeysMap map[string]int
+	partitionByDef   *plan.PartitionByDef
+	node             *Node
+	process          *process.Process
+}
+
+func (p *HashPartitionPruner) init() {
+	partitionByDef := p.node.TableDef.Partition
+	p.partitionByDef = partitionByDef
+	p.partitionKeysMap = make(map[string]int)
+	extractColumnsFromExpression(partitionByDef.PartitionExpr.Expr, p.partitionKeysMap)
+}
+
+func (p *HashPartitionPruner) collectConditions() bool {
+	// 1. Check if the components of the conjunctive normal form are simple equivalent expressions
+	for _, expr := range p.node.GetFilterList() {
+		if !isExprColRefEqualConst(expr) {
+			return false
+		}
+	}
+	// 2. extract all colRef to const value from filters
+	colEqValMap := make(map[string]*plan.Expr)
+	for _, filter := range p.node.FilterList {
+		extractCol2ValFromEqualExpr(filter, colEqValMap)
+	}
+
+	for col := range colEqValMap {
+		fmt.Println("+++>colFromFilter ", col)
+	}
+	p.colEqValMap = colEqValMap
+	return true
+}
+
+func (p *HashPartitionPruner) checkPartitionPruneMatch() bool {
+	if len(p.partitionKeysMap) > len(p.colEqValMap) {
+		return false
+	} else {
+		if !exprColsIncludePartKey(p.partitionKeysMap, p.colEqValMap) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *HashPartitionPruner) tryPrunePartition() bool {
+	inputBat := batch.NewWithSize(len(p.node.TableDef.GetCols()))
+	inputBat.SetRowCount(1)
+	defer inputBat.Clean(p.process.Mp())
+
+	for i, colDef := range p.node.TableDef.GetCols() {
+		if valueExpr, ok := p.colEqValMap[colDef.GetName()]; ok {
+			colVec, err := colexec.EvalExpressionOnce(p.process, valueExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if err != nil {
+				return false
+			}
+			inputBat.SetVector(int32(i), colVec)
+		} else {
+			typ := types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale)
+			colVec := vector.NewConstNull(typ, 1, p.process.Mp())
+			inputBat.SetVector(int32(i), colVec)
+		}
+	}
+
+	resVec, err := colexec.EvalExpressionOnce(p.process, p.partitionByDef.PartitionExpression, []*batch.Batch{inputBat})
+	if err != nil {
+		return false
+	}
+	defer resVec.Free(p.process.Mp())
+
+	if resVec.IsConstNull() {
+		fmt.Println("***> partitionId is null")
+		return false
+	} else {
+		partitionId := vector.GetFixedAt[int32](resVec, 0)
+		fmt.Println("***> partitionId ", partitionId)
+
+		p.node.PartitionPrune = &plan.PartitionPrune{
+			IsPruned: true,
+		}
+
+		if partitionId != -1 {
+			p.node.PartitionPrune.SelectedPartitions = make([]*plan.PartitionItem, 1)
+			partitionItem := p.partitionByDef.Partitions[partitionId]
+			p.node.PartitionPrune.SelectedPartitions[0] = &plan.PartitionItem{
+				PartitionName:      partitionItem.PartitionName,
+				OrdinalPosition:    partitionItem.OrdinalPosition,
+				Description:        partitionItem.Description,
+				Comment:            partitionItem.Comment,
+				LessThan:           DeepCopyExprList(partitionItem.LessThan),
+				InValues:           DeepCopyExprList(partitionItem.InValues),
+				PartitionTableName: partitionItem.PartitionTableName,
+			}
+		}
+		return true
+	}
 }
