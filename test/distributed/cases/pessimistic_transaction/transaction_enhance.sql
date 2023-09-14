@@ -381,7 +381,7 @@ show create table atomic_table_12_5;
 
 
 -- alter table change primary key column
--- @bvt:issue#11217
+-- @bvt:issue#11334
 drop table if exists alter01;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
