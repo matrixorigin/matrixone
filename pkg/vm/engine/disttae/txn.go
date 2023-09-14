@@ -711,7 +711,8 @@ func (txn *Transaction) delTransaction() {
 	for _, table := range txn.tables {
 		for _, e := range table.writes {
 			if e.bat != nil && !e.bat.IsEmpty() {
-				e.bat.AddCnt(-1)
+				//e.bat.AddCnt(-1)
+				txn.proc.PutBatch(e.bat)
 			}
 		}
 	}
@@ -724,6 +725,7 @@ func (txn *Transaction) delTransaction() {
 	txn.tableCache.cachedIndex = -1
 	txn.tableCache.tableMap = nil
 	txn.createMap = nil
+	txn.tables = nil
 	txn.databaseMap = nil
 	txn.deletedTableMap = nil
 	txn.blockId_tn_delete_metaLoc_batch = nil
