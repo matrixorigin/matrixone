@@ -17,6 +17,7 @@ package ctl
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"strings"
 	"time"
 
@@ -29,19 +30,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// handleEnableSpan enable or disable spans for some  specified operation.
-// the cmd format:
-// mo_ctl("cn", "TranceSpan" "uuids of cn:enable/disable:kinds of span")
+// handleEnableSpan enable or disable spans for some specified operation in TN service
+// or/and CN service.
 //
+// the cmd format for CN service:
+// 		mo_ctl("cn", "TranceSpan" "uuids of cn:enable/disable:kinds of span")
 // examples as below:
-// mo_ctl("cn", "TraceSpan", "cn_uuid1:enable:s3")
-// mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:disable:s3")
-// mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:local")
-// mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:disable:local")
-// mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:s3,local,...")
-// mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:disable:s3, local,...")
-// mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:all")
-// mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:disable:all")
+// 		mo_ctl("cn", "TraceSpan", "cn_uuid1:enable:s3")
+// 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:s3,local,...")
+// 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:all")
+// 		mo_ctl("cn", "TraceSpan", "all:enable:all)
+//
+// the cmd format for TN service:
+// 		mo_ctl("dn", "TraceSpan", "enable/disable:kinds of span")
+// (because there only exist one dn service, so we don't need to specify the uuid,
+// 		but, the uuid will be ignored and will not check its validation even through it is specified.)
+// examples as below:
+// mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3")
+// mo_ctl("dn", "TraceSpan", "[uuid]:disable:local")
+// mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3, local,...")
+// mo_ctl("dn", "TraceSpan", "[uuid]:enable:all")
 
 var supportedSpans = map[string]func(state bool){
 	// enable or disable s3 file service read and write span
@@ -60,25 +68,55 @@ var cmd2State = map[string]bool{
 	"disable": false,
 }
 
+func checkParameter(param string, ignoreUUID bool) (args []string, err error) {
+	param = strings.ToLower(param)
+	// [uuids], enable/disable, spans
+	args = strings.Split(param, ":")
+
+	if (ignoreUUID && len(args) < 2) ||
+		(!ignoreUUID && len(args) != 3) {
+		return nil, moerr.NewInternalErrorNoCtx("parameter invalid")
+	}
+
+	cmdIdx := 0
+	if !ignoreUUID { // contains uuids
+		cmdIdx = 1
+	}
+	_, ok := cmd2State[args[cmdIdx]]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("cmd invalid, expected enable or disable")
+	}
+
+	return args, nil
+}
+
 func handleTraceSpan(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (pb.CtlResult, error) {
-	if service != cn {
-		return pb.CtlResult{}, moerr.NewWrongServiceNoCtx("CN", string(service))
+	if service != cn && service != tn {
+		return pb.CtlResult{}, moerr.NewWrongServiceNoCtx("CN or DN", string(service))
 	}
 
-	parameter = strings.ToLower(parameter)
-	// uuids, enable/disable, spans
-	args := strings.Split(parameter, ":")
+	if service == tn {
+		return send2TNAndWaitResp(proc, service, parameter, sender)
+	}
 
-	_, ok := cmd2State[args[1]]
-	if !ok {
-		return pb.CtlResult{}, moerr.NewInternalErrorNoCtx("cmd invalid, expected enable or disable")
+	args, err := checkParameter(parameter, false)
+	if err != nil {
+		return pb.CtlResult{}, err
 	}
 
 	// the uuids of cn
 	cns := strings.Split(args[0], ",")
+
+	if len(cns) == 1 && strings.ToLower(cns[0]) == "all" {
+		cns = make([]string, 0)
+		clusterservice.GetMOCluster().GetCNService(clusterservice.Selector{}, func(cn metadata.CNService) bool {
+			cns = append(cns, cn.ServiceID)
+			return true
+		})
+	}
 
 	info := map[string]string{}
 	for idx := range cns {
@@ -138,4 +176,38 @@ func transferRequest(proc *process.Process, uuid string, cmd string, spans strin
 			return true
 		})
 	return
+}
+
+func send2TNAndWaitResp(proc *process.Process,
+	service serviceType,
+	parameter string,
+	sender requestSender) (pb.CtlResult, error) {
+
+	whichTN := func(string) ([]uint64, error) { return nil, nil }
+	payloadFn := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+		args, err := checkParameter(parameter, true)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(args) == 3 {
+			args = args[1:]
+		}
+
+		req := db.TraceSpan{
+			Cmd:   args[0],
+			Spans: args[1],
+		}
+
+		return req.MarshalBinary()
+	}
+
+	repsonseUnmarshaler := func(b []byte) (interface{}, error) {
+		return string(b[:]), nil
+	}
+
+	return getTNHandlerFunc(
+		pb.CmdMethod_TraceSpan, whichTN, payloadFn, repsonseUnmarshaler,
+	)(proc, service, parameter, sender)
+
 }
