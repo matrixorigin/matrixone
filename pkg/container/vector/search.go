@@ -68,6 +68,9 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
 	return func(vec *Vector) []int32 {
 		var sels []int32
 		n1 := vec.Length()
+		if n1 == 0 {
+			return sels
+		}
 
 		if len(vals) <= kMaxLenForBinarySearch {
 			offset := 0
@@ -90,15 +93,21 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
 			i1, i2 := 0, 0
 			varlenas := MustFixedCol[types.Varlena](vec)
 			s1 := varlenas[0].GetByteSlice(vec.GetArea())
-			for i1 < n1 && i2 < n2 {
+			for i2 < n2 {
 				ord := bytes.Compare(s1, vals[i2])
 				if ord == 0 {
 					sels = append(sels, int32(i1))
 					i1++
+					if i1 == n1 {
+						break
+					}
 					i2++
 					s1 = varlenas[i1].GetByteSlice(vec.GetArea())
 				} else if ord < 0 {
 					i1++
+					if i1 == n1 {
+						break
+					}
 					s1 = varlenas[i1].GetByteSlice(vec.GetArea())
 				} else {
 					i2++
