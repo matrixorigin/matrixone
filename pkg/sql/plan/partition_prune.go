@@ -72,7 +72,6 @@ func analyzePartKeyAndFilters(process *process.Process, node *Node) {
 	case plan.PartitionType_RANGE_COLUMNS:
 		// XXX unimplement
 	}
-	return
 }
 
 // isExprColRefEqualConst
@@ -154,11 +153,9 @@ func extractColumnsFromExpression(expr *plan.Expr, usedColumns map[string]int) {
 			extractColumnsFromExpression(args, usedColumns)
 		}
 	}
-	return
 }
 
 type KeyPartitionPruner struct {
-	conditions       []*Expr
 	colEqValMap      map[string]*plan.Expr
 	partitionKeysMap map[string]int
 	partitionByDef   *plan.PartitionByDef
@@ -274,7 +271,6 @@ func (p *KeyPartitionPruner) prune() bool {
 }
 
 type HashPartitionPruner struct {
-	conditions       []*Expr
 	colEqValMap      map[string]*plan.Expr
 	partitionKeysMap map[string]int
 	partitionByDef   *plan.PartitionByDef
