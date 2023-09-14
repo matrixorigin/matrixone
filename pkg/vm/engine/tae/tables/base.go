@@ -644,24 +644,18 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	if start.Less(persistedTS) {
 		start = persistedTS
 	}
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start.Next(), end)
+	schema := blk.meta.GetSchema()
+	pkDef := schema.GetPrimaryKey()
+	rowID, ts, pk, abort, abortedMap := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type)
 	blk.RUnlock()
 	if rowID == nil {
 		return
 	}
-	schema := blk.meta.GetSchema()
-	pkDef := schema.GetPrimaryKey()
-	pkVec := containers.MakeVector(pkDef.Type)
-	pkIdx := pkDef.Idx
-	blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
-		pkVec.Append(v, false)
-		return nil
-	}, deletes)
 	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
-	bat.AddVector(pkDef.Name, pkVec)
+	bat.AddVector(pkDef.Name, pk)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {
