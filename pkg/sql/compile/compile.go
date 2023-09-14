@@ -1396,7 +1396,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		if err != nil {
 			return nil, err
 		}
-		err = lockTable(c.e, c.proc, rel, false)
+		err = lockTable(c.ctx, c.e, c.proc, rel, n.ObjRef.SchemaName, nil, false)
 		if err != nil {
 			return nil, err
 		}
