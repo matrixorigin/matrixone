@@ -363,19 +363,40 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn)
+
 	switch node.nt {
 	case NT_Merge, NT_Normal:
+		var sn2 int
+		length := uint32(len(node.rowid2PK))
+		if sn2, err = w.Write(types.EncodeUint32(&length)); err != nil {
+			return
+		}
+		n += int64(sn2)
+		for row, pk := range node.rowid2PK {
+			if sn2, err = w.Write(types.EncodeUint32(&row)); err != nil {
+				return
+			}
+			n += int64(sn2)
+			if sn2, err = w.Write(types.EncodeType(pk.GetType())); err != nil {
+				return
+			}
+			n += int64(sn2)
+			if sn, err = pk.WriteTo(w); err != nil {
+				return
+			}
+			n += int64(sn2)
+		}
 	case NT_Persisted:
 		if sn, err = objectio.WriteBytes(node.deltaloc, w); err != nil {
 			return
 		}
 		n += int64(sn)
 	}
-	var sn2 int64
-	if sn2, err = node.TxnMVCCNode.WriteTo(w); err != nil {
+	var sn3 int64
+	if sn3, err = node.TxnMVCCNode.WriteTo(w); err != nil {
 		return
 	}
-	n += sn2
+	n += sn3
 	return
 }
 
@@ -401,6 +422,30 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	switch node.nt {
 	case NT_Merge, NT_Normal:
+		var sn3 int
+		length := uint32(0)
+		if sn3, err = r.Read(types.EncodeUint32(&length)); err != nil {
+			return
+		}
+		n += int64(sn3)
+		node.rowid2PK = make(map[uint32]containers.Vector)
+		for i := 0; i < int(length); i++ {
+			row := uint32(0)
+			if sn3, err = r.Read(types.EncodeUint32(&row)); err != nil {
+				return
+			}
+			n += int64(sn3)
+			typ := &types.Type{}
+			if sn3, err = r.Read(types.EncodeType(typ)); err != nil {
+				return
+			}
+			n += int64(sn3)
+			pk := containers.MakeVector(*typ)
+			if sn2, err = pk.ReadFrom(r); err != nil {
+				return
+			}
+			node.rowid2PK[row]=pk
+		}
 	case NT_Persisted:
 		if buf, sn2, err = objectio.ReadBytes(r); err != nil {
 			return

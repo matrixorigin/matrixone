@@ -34,10 +34,11 @@ const (
 
 	IOET_WALTxnCommand_AppendNode_V1          uint16 = 1
 	IOET_WALTxnCommand_DeleteNode_V1          uint16 = 1
+	IOET_WALTxnCommand_DeleteNode_V2          uint16 = 2
 	IOET_WALTxnCommand_PersistedDeleteNode_V1 uint16 = 1
 
 	IOET_WALTxnCommand_AppendNode_CurrVer          = IOET_WALTxnCommand_AppendNode_V1
-	IOET_WALTxnCommand_DeleteNode_CurrVer          = IOET_WALTxnCommand_DeleteNode_V1
+	IOET_WALTxnCommand_DeleteNode_CurrVer          = IOET_WALTxnCommand_DeleteNode_V2
 	IOET_WALTxnCommand_PersistedDeleteNode_CurrVer = IOET_WALTxnCommand_PersistedDeleteNode_V1
 )
 
@@ -58,6 +59,18 @@ func init() {
 		objectio.IOEntryHeader{
 			Type:    IOET_WALTxnCommand_DeleteNode,
 			Version: IOET_WALTxnCommand_DeleteNode_V1,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			txnCmd := NewEmptyCmd(IOET_WALTxnCommand_DeleteNode)
+			err := txnCmd.UnmarshalBinary(b)
+			return txnCmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_DeleteNode,
+			Version: IOET_WALTxnCommand_DeleteNode_V2,
 		},
 		nil,
 		func(b []byte) (any, error) {

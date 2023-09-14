@@ -217,6 +217,7 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		assert.NoError(e.t, err)
 		defer view.Close()
+		view.ApplyDeletes()
 		pkView, err := blk.GetColumnDataByName(context.Background(), pkName)
 		assert.NoError(e.t, err)
 		defer pkView.Close()
