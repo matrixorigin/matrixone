@@ -63,6 +63,8 @@ func newCount(overloadID int64, isCountStart bool, inputType types.Type, outputT
 		return newGenericCount[float64](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
 		return newGenericCount[[]byte](overloadID, isCountStart, inputType, outputType, dist)
+	case types.T_array_float32, types.T_array_float64:
+		return newGenericCount[[]byte](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_date:
 		return newGenericCount[types.Date](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_datetime:
@@ -87,9 +89,9 @@ func newGenericCount[T allTypes](
 	overloadID int64, isCountStart bool, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := &sAggCount[T]{isCountStar: isCountStart}
 	if dist {
-		return agg.NewUnaryDistAgg[T, int64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryDistAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg[T, int64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 
 type sAggCount[T allTypes] struct {

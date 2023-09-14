@@ -73,13 +73,13 @@ func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 	case types.T_decimal64:
 		aggPriv := agg.NewD64Median()
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+			return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 		}
 		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_decimal128:
 		aggPriv := agg.NewD128Median()
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+			return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 		}
 		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	}
@@ -89,7 +89,7 @@ func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 func newGenericMedian[T numeric](overloadID int64, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := agg.NewMedian[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 	}
 	return agg.NewUnaryAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }

@@ -92,7 +92,7 @@ func (s *sAggBitAnd[T]) Fill(groupNumber int64, value T, lastResult uint64, coun
 
 		vv := float64(value)
 		if vv > math.MaxUint64 {
-			return math.MaxUint64 & lastResult, false, nil
+			return math.MaxInt64 & lastResult, false, nil
 		}
 		if vv < 0 {
 			return uint64(int64(value)) & lastResult, false, nil
@@ -125,7 +125,9 @@ func (s *sAggBinaryBitAnd) Free(_ *mpool.MPool) {}
 func (s *sAggBinaryBitAnd) Fill(groupNumber int64, value []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
 	if !isNull {
 		if isEmpty {
-			return value, false, nil
+			result := make([]byte, len(value))
+			copy(result, value)
+			return result, false, nil
 		}
 
 		types.BitAnd(lastResult, lastResult, value)
@@ -135,10 +137,10 @@ func (s *sAggBinaryBitAnd) Fill(groupNumber int64, value []byte, lastResult []by
 }
 func (s *sAggBinaryBitAnd) Merge(groupNumber1 int64, groupNumber2 int64, result1, result2 []byte, isEmpty1, isEmpty2 bool, _ any) ([]byte, bool, error) {
 	if isEmpty1 {
-		return result2, false, nil
+		return result2, isEmpty2, nil
 	}
 	if isEmpty2 {
-		return result1, false, nil
+		return result1, isEmpty1, nil
 	}
 	types.BitAnd(result1, result1, result2)
 	return result1, false, nil

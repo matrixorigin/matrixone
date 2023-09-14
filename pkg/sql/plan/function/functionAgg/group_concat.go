@@ -48,7 +48,7 @@ func NewAggGroupConcat(overloadID int64, dist bool, inputTypes []types.Type, out
 	var aggPriv *agg.GroupConcat
 
 	bytes, ok := config.([]byte)
-	if ok && len(bytes) > 0 {
+	if ok && bytes != nil {
 		aggPriv = agg.NewGroupConcat(string(bytes))
 	} else {
 		aggPriv = agg.NewGroupConcat(defaultSeparator)

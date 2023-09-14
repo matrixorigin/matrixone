@@ -35,6 +35,7 @@ var (
 		types.T_varchar, types.T_char, types.T_blob, types.T_text,
 		types.T_uuid,
 		types.T_binary, types.T_varbinary,
+		types.T_Rowid,
 	}
 	AggAnyValueReturnType = func(typs []types.Type) types.Type {
 		return typs[0]
@@ -83,6 +84,8 @@ func NewAggAnyValue(overloadID int64, dist bool, inputTypes []types.Type, output
 		return newGenericAnyValue[types.Uuid](overloadID, inputTypes[0], outputType, dist)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
 		return newGenericAnyValue[[]byte](overloadID, inputTypes[0], outputType, dist)
+	case types.T_Rowid:
+		return newGenericAnyValue[types.Rowid](overloadID, inputTypes[0], outputType, dist)
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for any_value", inputTypes[0])
 }
