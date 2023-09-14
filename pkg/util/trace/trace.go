@@ -40,8 +40,8 @@ func Generate(ctx context.Context) context.Context {
 	return ctx
 }
 
-func IsEnable() bool {
-	return DefaultTracer().IsEnable()
+func IsEnable(opts ...SpanStartOption) bool {
+	return DefaultTracer().IsEnable(opts...)
 }
 
 var gTracerHolder atomic.Value

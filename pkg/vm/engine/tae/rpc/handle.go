@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"os"
 	"strings"
 	"sync"
@@ -1043,6 +1044,14 @@ func (h *Handle) HandleAddFaultPoint(
 		return nil, nil
 	}
 	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
+}
+
+func (h *Handle) HandleTraceSpan(ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.TraceSpan,
+	resp *api.SyncLogTailResp) (func(), error) {
+
+	return nil, nil
 }
 
 func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {
