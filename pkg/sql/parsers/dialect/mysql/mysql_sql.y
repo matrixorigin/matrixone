@@ -438,7 +438,7 @@ import (
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
+%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
@@ -2612,7 +2612,24 @@ alter_stmt:
 |   alter_table_stmt
 |   alter_publication_stmt
 |   alter_stage_stmt
+|   alter_sequence_stmt
 // |    alter_ddl_stmt
+
+alter_sequence_stmt:
+    ALTER SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
+    {
+        $$ = &tree.AlterSequence{
+            IfNotExists: $3,
+            Name: $4,
+            Type: $5,
+            IncrementBy: $6,
+            MinValue: $7,
+            MaxValue: $8,
+            StartWith: $9,
+            Cycle: $10,
+        }
+    }
+
 
 alter_view_stmt:
     ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
