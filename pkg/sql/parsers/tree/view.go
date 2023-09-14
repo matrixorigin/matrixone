@@ -16,6 +16,7 @@ package tree
 
 type CreateView struct {
 	statementImpl
+	Replace     bool
 	Name        *TableName
 	ColNames    IdentifierList
 	AsSource    *Select
@@ -24,6 +25,10 @@ type CreateView struct {
 
 func (node *CreateView) Format(ctx *FmtCtx) {
 	ctx.WriteString("create ")
+
+	if node.Replace {
+		ctx.WriteString("or replace ")
+	}
 
 	ctx.WriteString("view ")
 
