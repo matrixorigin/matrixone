@@ -68,6 +68,7 @@ func NewLockService(cfg Config) LockService {
 	s.mu.allocating = make(map[uint64]chan struct{})
 	s.activeTxnHolder = newMapBasedTxnHandler(s.cfg.ServiceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
+		s.cfg.ServiceID,
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
 	s.clock = runtime.ProcessLevelRuntime().Clock()
@@ -407,7 +408,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 
 		}
 	}
-	logTxnCreated(txn)
+	logTxnCreated(h.serviceID, txn)
 	return txn
 }
 
