@@ -92,7 +92,7 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanSta
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
 		span.Parent = trace.NoopSpan{}
 	} else {
-		span.TraceID, span.SpanID, span.Kind = psc.TraceID, t.provider.idGenerator.NewSpanID(), psc.Kind
+		span.TraceID, span.SpanID = psc.TraceID, t.provider.idGenerator.NewSpanID()
 		span.Parent = parent
 	}
 
