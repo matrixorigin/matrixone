@@ -407,7 +407,7 @@ import (
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK
+%token <str> DENSE_RANK BIT_CAST
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -5272,13 +5272,14 @@ create_view_stmt:
             IfNotExists: $4,
         }
     }
-|   CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
         $$ = &tree.CreateView{
-            Name: $4,
-            ColNames: $5,
-            AsSource: $7,
-            IfNotExists: $3,
+            Replace: $2,
+            Name: $5,
+            ColNames: $6,
+            AsSource: $8,
+            IfNotExists: $4,
         }
     }
 
@@ -5305,11 +5306,7 @@ view_list_opt:
     }
 
 view_opt:
-    OR REPLACE
-    {
-        $$ = "OR REPLACE"
-    }
-|   ALGORITHM '=' algorithm_type_2
+    ALGORITHM '=' algorithm_type_2
     {
         $$ = "ALGORITHM = " + $3
     }
@@ -7693,7 +7690,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-
+|   BIT_CAST '(' expression AS mo_cast_type ')'
+    {
+        $$ = tree.NewBitCastExpr($3, $5)
+    }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -10385,7 +10385,8 @@ not_keyword:
 |   SETVAL
 |   CURRVAL
 |   LASTVAL
-|	HEADERS
+|   HEADERS
+|   BIT_CAST
 
 //mo_keywords:
 //    PROPERTIES
