@@ -854,10 +854,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_AGG:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+
 		child := ns[n.Children[0]]
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.AggList = n.AggList
 		}
+
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
@@ -3057,8 +3059,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 	}
 
 	if n.AggList != nil && n.BlockFilterList == nil {
-		newranges := make([][]byte, len(ranges))
-		newranges = append(newranges, []byte{})
+		newranges := make([][]byte, 0, len(ranges))
 		partialresults = make([]any, len(n.AggList))
 		for i := range n.AggList {
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
@@ -3074,11 +3075,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 		}
 		for _, buf := range ranges {
 			if len(buf) == 0 {
+				newranges = append(newranges, buf)
 				continue
 			}
 			blk := catalog.DecodeBlockInfo(buf)
 			if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 				newranges = append(newranges, buf)
+				continue
 			}
 			var objMeta objectio.ObjectMeta
 			location := blk.MetaLocation()
