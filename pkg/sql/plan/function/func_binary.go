@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
@@ -38,6 +37,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
+
+	"crypto/sha256"
+	"crypto/sha512"
 )
 
 func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -1611,11 +1613,6 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	logutil.Infof("6")
-	return nil
-}
-
 // Cut the slice with length from left to right, starting from 0
 func getSliceFromLeftWithLength(s string, offset int64, length int64) string {
 	if offset < 0 {
@@ -1796,6 +1793,55 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, isEqualSuffix)
+}
+
+// https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	res := vector.MustFunctionResult[types.Varlena](result)
+	strs := vector.GenerateFunctionStrParameter(args[0])
+
+	//224 256 384 512 0
+	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		str, isnull1 := strs.GetStrValue(i)
+		shaType, isnull2 := shaTypes.GetValue(i)
+
+		if isnull1 || isnull2 || isSha2Family(shaType) {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var checksum []byte
+
+			switch shaType {
+			case 0, 256:
+				sum256 := sha256.Sum256(str)
+				checksum = sum256[:]
+			case 224:
+				sum224 := sha256.Sum224(str)
+				checksum = sum224[:]
+			case 384:
+				sum384 := sha512.Sum384(str)
+				checksum = sum384[:]
+			case 512:
+				sum512 := sha512.Sum512(str)
+				checksum = sum512[:]
+			default:
+				panic("unexpected err happened in sha2 function")
+			}
+			if err = res.AppendBytes(checksum, false); err != nil {
+				return err
+			}
+		}
+
+	}
+
+	return nil
+}
+
+func isSha2Family(len int64) bool {
+	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
 }
 
 // Encode convert binary data into a textual representation. Supported formats are: base64 and hex. return type types.T_text

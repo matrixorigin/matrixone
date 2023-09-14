@@ -1534,9 +1534,9 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_int64},
+				args:       []types.T{types.T_text, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return SHA2Func
