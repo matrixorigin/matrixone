@@ -53,6 +53,7 @@ func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, 
 const (
 	stripCloudUser    = "/* cloud_user */"
 	stripCloudNonUser = "/* cloud_nonuser */"
+	stripSaveQuery    = "/* save_result */"
 )
 
 var HandleSqlForRecord = func(sql string) []string {
@@ -70,6 +71,12 @@ var HandleSqlForRecord = func(sql string) []string {
 
 		// remove /* cloud_nonuser */ prefix
 		p0 = strings.Index(split[i], stripCloudNonUser)
+		if p0 >= 0 {
+			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
+		}
+
+		// remove /* save_query */ prefix
+		p0 = strings.Index(split[i], stripSaveQuery)
 		if p0 >= 0 {
 			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
 		}

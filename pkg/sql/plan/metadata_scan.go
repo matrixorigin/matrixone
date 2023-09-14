@@ -71,11 +71,11 @@ func init() {
 		case plan.MetadataScanInfo_ORIGIN_SIZE:
 			tp = types.New(types.T_int64, 0, 0)
 		case plan.MetadataScanInfo_MIN: // TODO: find a way to show this info
-			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+			tp = types.New(types.T_varbinary, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
-			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+			tp = types.New(types.T_varbinary, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
-			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+			tp = types.New(types.T_varbinary, types.MaxVarcharLen, 0)
 		default:
 			panic("unknow types when gen metadata scan info")
 		}

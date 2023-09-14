@@ -188,6 +188,12 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService,
 		response.AlterAccountResponse = &pb.AlterAccountResponse{AlterSuccess: true}
 		return nil
 	}, false)
+	qs.AddHandleFunc(pb.CmdMethod_TraceSpan, func(ctx context.Context, request *pb.Request, resp *pb.Response) error {
+		resp.TraceSpanResponse = &pb.TraceSpanResponse{
+			Resp: "echo",
+		}
+		return nil
+	}, false)
 	err = qs.Start()
 	assert.NoError(t, err)
 
@@ -212,5 +218,23 @@ func TestQueryServiceAlterAccount(t *testing.T) {
 		defer svc.Release(resp)
 		assert.NotNil(t, resp.AlterAccountResponse)
 		assert.Equal(t, true, resp.AlterAccountResponse.AlterSuccess)
+	})
+}
+
+func TestQueryServiceTraceSpan(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1"}
+	runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		defer cancel()
+		req := svc.NewRequest(pb.CmdMethod_TraceSpan)
+		req.TraceSpanRequest = &pb.TraceSpanRequest{
+			Cmd:   "cmd",
+			Spans: "spans",
+		}
+		resp, err := svc.SendMessage(ctx, addr, req)
+		assert.NoError(t, err)
+		defer svc.Release(resp)
+		assert.NotNil(t, resp.TraceSpanResponse)
+		assert.Equal(t, "echo", resp.TraceSpanResponse.Resp)
 	})
 }

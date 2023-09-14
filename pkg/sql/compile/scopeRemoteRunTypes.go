@@ -296,7 +296,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		return receiver.sendBatch(b)
 	}
 
-	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 
 	return c
 }

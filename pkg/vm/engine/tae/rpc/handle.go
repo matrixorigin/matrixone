@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"os"
 	"strings"
 	"sync"
@@ -430,7 +431,8 @@ func (h *Handle) HandleBackup(
 
 	timeout := req.FlushDuration
 
-	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	backupTime := time.Now().UTC()
+	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
 	if err != nil {
 		return nil, err
@@ -442,6 +444,7 @@ func (h *Handle) HandleBackup(
 	}
 	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
 	var locations string
+	locations += backupTime.Format(time.DateTime) + ";"
 	for i := range data {
 		locations += data[i].GetLocation().String()
 		locations += ":"
@@ -1041,6 +1044,14 @@ func (h *Handle) HandleAddFaultPoint(
 		return nil, nil
 	}
 	return nil, h.db.AddFaultPoint(ctx, req.Name, req.Freq, req.Action, req.Iarg, req.Sarg)
+}
+
+func (h *Handle) HandleTraceSpan(ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.TraceSpan,
+	resp *api.SyncLogTailResp) (func(), error) {
+
+	return nil, nil
 }
 
 func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {

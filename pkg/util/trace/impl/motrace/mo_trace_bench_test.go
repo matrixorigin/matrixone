@@ -16,6 +16,7 @@ package motrace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"math/rand"
 	"sync"
 	"testing"
@@ -385,4 +386,42 @@ func BenchmarkMOSpan_if_vs_for(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkMOTracer_WithOpts_vs_WithoutOpts(b *testing.B) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+
+	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
+
+	b.Run("enable with opts", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tracer.IsEnable(trace.WithKind(trace.SpanKindLocalFSVis))
+		}
+	})
+
+	b.Run("enable without opts", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tracer.IsEnable()
+		}
+	})
+
+	b.Run("total with opts", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, span := tracer.Start(context.Background(), "test", trace.WithKind(
+				trace.SpanKindLocalFSVis))
+			span.End(trace.WithFSReadWriteExtra("xxx", nil, 0))
+		}
+	})
+
+	b.Run("total without opts", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_, span := tracer.Start(context.Background(), "test")
+			span.End()
+		}
+	})
 }
