@@ -33,20 +33,22 @@ func (builder *QueryBuilder) partitionPrune(nodeID int32) {
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
-		analyzeFilters(builder.compCtx.GetProcess(), node)
+		// if target table does not has partition, return
+		if node.TableDef.GetPartition() == nil || len(node.TableDef.GetPartition().Partitions) == 0 {
+			return
+		}
+		if node.FilterList == nil || len(node.FilterList) == 0 {
+			return
+		}
+		// Analysis of Matching Partitioning and Filtering Conditions
+		analyzePartKeyAndFilters(builder.compCtx.GetProcess(), node)
 	default:
 		return
 	}
 }
 
-func analyzeFilters(process *process.Process, node *Node) {
-	// if target table does not has partition, return
-	if node.TableDef.GetPartition() == nil || len(node.TableDef.GetPartition().Partitions) == 0 {
-		return
-	}
-	if node.FilterList == nil || len(node.FilterList) == 0 {
-		return
-	}
+// Analyze partition expressions and filter conditions, and perform partition pruning
+func analyzePartKeyAndFilters(process *process.Process, node *Node) {
 	partitionPruneCondExactMatch(process, node.FilterList, node)
 	return
 }
@@ -54,7 +56,7 @@ func analyzeFilters(process *process.Process, node *Node) {
 func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, node *Node) (bool, error) {
 	// 1. Check if the components of the conjunctive normal form are simple equivalent expressions
 	for _, expr := range filterList {
-		isEqualValueComp := isExprWithOneColRefOneConst(expr)
+		isEqualValueComp := isExprColRefEqualConst(expr)
 		if isEqualValueComp {
 			continue
 		} else {
@@ -62,12 +64,13 @@ func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, nod
 		}
 	}
 	// 2. extract all colRef from filters
-	cols := make(map[string]*plan.Expr)
+	// ColumnEqualvalue
+	colEqValMap := make(map[string]*plan.Expr)
 	for _, filter := range node.FilterList {
-		getAllCols(filter, cols)
+		extractCol2ValFromEqualExpr(filter, colEqValMap)
 	}
 
-	for col := range cols {
+	for col := range colEqValMap {
 		fmt.Println("+++>colFromFilter ", col)
 	}
 
@@ -79,10 +82,10 @@ func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, nod
 		partitionKeys := make(map[string]int)
 		stringSliceToMap(partitionColumns, partitionKeys)
 
-		if len(partitionKeys) != len(cols) {
+		if len(partitionKeys) > len(colEqValMap) {
 			return false, nil
 		} else {
-			if !exprColsIncludePartKey(partitionKeys, cols) {
+			if !exprColsIncludePartKey(partitionKeys, colEqValMap) {
 				return false, nil
 			}
 
@@ -93,7 +96,7 @@ func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, nod
 			defer inputBat.Clean(proc.Mp())
 
 			for i, colDef := range node.TableDef.GetCols() {
-				if valueExpr, ok := cols[colDef.GetName()]; ok {
+				if valueExpr, ok := colEqValMap[colDef.GetName()]; ok {
 					colVec, err := colexec.EvalExpressionOnce(proc, valueExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 					if err != nil {
 						return false, nil
@@ -143,10 +146,10 @@ func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, nod
 		//extractColumnsFromExpression
 		partitionKeys := make(map[string]int)
 		extractColumnsFromExpression(partitionByDef.PartitionExpr.Expr, partitionKeys)
-		if len(partitionKeys) > len(cols) {
+		if len(partitionKeys) > len(colEqValMap) {
 			return false, nil
 		} else {
-			if !exprColsIncludePartKey(partitionKeys, cols) {
+			if !exprColsIncludePartKey(partitionKeys, colEqValMap) {
 				return false, nil
 			}
 
@@ -155,7 +158,7 @@ func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, nod
 			defer inputBat.Clean(proc.Mp())
 
 			for i, colDef := range node.TableDef.GetCols() {
-				if valueExpr, ok := cols[colDef.GetName()]; ok {
+				if valueExpr, ok := colEqValMap[colDef.GetName()]; ok {
 					colVec, err := colexec.EvalExpressionOnce(proc, valueExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 					if err != nil {
 						return false, nil
@@ -200,30 +203,20 @@ func partitionPruneCondExactMatch(proc *process.Process, filterList []*Expr, nod
 				}
 			}
 		}
-
 	case plan.PartitionType_LIST:
+		// XXX unimplement
 	case plan.PartitionType_LIST_COLUMNS:
+		// XXX unimplement
 	case plan.PartitionType_RANGE:
+		// XXX unimplement
 	case plan.PartitionType_RANGE_COLUMNS:
+		// XXX unimplement
 	}
-
 	return true, nil
 }
 
-func partitionPruneCondRangeMatch(filterList []*Expr, partitionByDef *PartitionByDef) bool {
-	return false
-}
-
-func partitionPruneCondListMatch(filterList []*Expr, partitionByDef *PartitionByDef) bool {
-	return false
-}
-
-func partitionPruneCondCompositeConditions(filterList []*Expr, partitionByDef *PartitionByDef) bool {
-	return false
-}
-
-// isExprWithOneColRefOneConst
-func isExprWithOneColRefOneConst(expr *plan.Expr) bool {
+// isExprColRefEqualConst
+func isExprColRefEqualConst(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "=" {
@@ -252,21 +245,17 @@ func isConst(expr *plan.Expr) bool {
 	return false
 }
 
-func saveCol(expr *plan.Expr, value *plan.Expr, colRefs map[string]*plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		colRefs[exprImpl.Col.Name] = value
-	}
-}
-
-func getAllCols(expr *plan.Expr, colRefs map[string]*plan.Expr) {
+// Extracting Column Information from Equivalent Expressions
+func extractCol2ValFromEqualExpr(expr *plan.Expr, colEqValMap map[string]*plan.Expr) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "=" {
 			if isColRef(exprImpl.F.Args[0]) {
-				saveCol(exprImpl.F.Args[0], exprImpl.F.Args[1], colRefs)
+				exprCol := exprImpl.F.Args[0].Expr.(*plan.Expr_Col)
+				colEqValMap[exprCol.Col.Name] = exprImpl.F.Args[1]
 			} else if isColRef(exprImpl.F.Args[1]) {
-				saveCol(exprImpl.F.Args[1], exprImpl.F.Args[0], colRefs)
+				exprCol := exprImpl.F.Args[1].Expr.(*plan.Expr_Col)
+				colEqValMap[exprCol.Col.Name] = exprImpl.F.Args[0]
 			}
 		}
 	}
