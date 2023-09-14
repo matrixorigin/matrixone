@@ -50,7 +50,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 
 		// 2. lock origin table
-		if err = lockTable(c.e, c.proc, originRel, true); err != nil {
+		if err = lockTable(c.ctx, c.e, c.proc, originRel, dbName, nil, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err

@@ -213,7 +213,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 
 		// 2. lock origin table
-		if err = lockTable(c.e, c.proc, rel, true); err != nil {
+		if err = lockTable(c.ctx, c.e, c.proc, rel, dbName, nil, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
@@ -1095,7 +1095,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.e, c.proc, rel, false); e != nil {
+		partitionTableNames := tqry.PartitionTableNames
+		fmt.Printf("%+v", partitionTableNames)
+		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1288,7 +1290,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.e, c.proc, rel, false); e != nil {
+		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, qry.PartitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1838,7 +1840,7 @@ func getValue[T constraints.Integer](minus bool, num any) T {
 	return v
 }
 
-func lockTable(
+func doLockTable(
 	eng engine.Engine,
 	proc *process.Process,
 	rel engine.Relation,
@@ -1848,6 +1850,7 @@ func lockTable(
 	if err != nil {
 		return err
 	}
+
 	if len(defs) != 1 {
 		panic("invalid primary keys")
 	}
@@ -1858,7 +1861,39 @@ func lockTable(
 		id,
 		defs[0].Type,
 		defChanged)
+
 	return err
+}
+
+func lockTable(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	dbName string,
+	partitionTableNames []string,
+	defChanged bool) error {
+
+	if len(partitionTableNames) == 0 {
+		return doLockTable(eng, proc, rel, defChanged)
+	}
+
+	dbSource, err := eng.Database(ctx, dbName, proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+
+	for _, tableName := range partitionTableNames {
+		pRel, pErr := dbSource.Relation(ctx, tableName, nil)
+		if pErr != nil {
+			return pErr
+		}
+		err = doLockTable(eng, proc, pRel, defChanged)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func lockRows(
