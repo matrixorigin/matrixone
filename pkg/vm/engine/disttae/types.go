@@ -270,12 +270,22 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	//Here is so tricky to fix issue-11443 and issue-11437.
 	//Add reference count for the writes of the previous statement,
 	//since reader will reference the txn.writes[i].bat.
-	if preID > 0 && !commit {
-		start := txn.statements[preID-1]
-		for i := start; i < len(txn.writes); i++ {
-			txn.writes[i].bat.AddCnt(1)
+	if !commit {
+		if preID > 0 {
+			start := txn.statements[preID-1]
+			for i := start; i < len(txn.writes); i++ {
+				txn.writes[i].bat.AddCnt(1)
+			}
+			//Sub reference count for the writes of the previous statement of previous statement
+			prepreID := preID - 1
+			if prepreID > 0 {
+				start := txn.statements[prepreID-1]
+				for i := start; i < txn.statements[preID-1]; i++ {
+					txn.writes[i].bat.SubCnt(1)
+				}
+			}
 		}
-		//Sub reference count for the writes of the previous statement of previous statement
+	} else {
 		prepreID := preID - 1
 		if prepreID > 0 {
 			start := txn.statements[prepreID-1]
