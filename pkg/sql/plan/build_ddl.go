@@ -365,6 +365,89 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 	return nil
 }
 
+func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, as *plan.AlterSequence) error {
+	// Sequence table got 1 row and 7 col
+	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
+	cols := make([]*plan.ColDef, len(Sequence_cols_name))
+
+	typ, err := getTypeFromAst(ctx.GetContext(), stmt.Type)
+	if err != nil {
+		return err
+	}
+	for i := range cols {
+		if i == 4 {
+			break
+		}
+		cols[i] = &plan.ColDef{
+			Name: Sequence_cols_name[i],
+			Alg:  plan.CompressType_Lz4,
+			Typ:  typ,
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+	cols[4] = &plan.ColDef{
+		Name: Sequence_cols_name[4],
+		Alg:  plan.CompressType_Lz4,
+		Typ: &plan.Type{
+			Id:    int32(types.T_int64),
+			Width: 0,
+			Scale: 0,
+		},
+		Primary: true,
+		Default: &plan.Default{
+			NullAbility:  true,
+			Expr:         nil,
+			OriginString: "",
+		},
+	}
+	as.TableDef.Pkey = &PrimaryKeyDef{
+		Names:       []string{Sequence_cols_name[4]},
+		PkeyColName: Sequence_cols_name[4],
+	}
+	for i := 5; i <= 6; i++ {
+		cols[i] = &plan.ColDef{
+			Name: Sequence_cols_name[i],
+			Alg:  plan.CompressType_Lz4,
+			Typ: &plan.Type{
+				Id:    int32(types.T_bool),
+				Width: 0,
+				Scale: 0,
+			},
+			Default: &plan.Default{
+				NullAbility:  true,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+	}
+
+	as.TableDef.Cols = cols
+
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemSequenceRel,
+		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: ctx.GetRootSql(),
+		},
+	}
+
+	as.TableDef.Defs = append(as.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
+			},
+		},
+	})
+	return nil
+}
+
 func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, error) {
 	dropSequence := &plan.DropSequence{
 		IfExists: stmt.IfExists,
@@ -402,7 +485,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 }
 
 func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, error) {
-	createSequence := &plan.CreateSequence{
+	alterSequence := &plan.AlterSequence{
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
 			Name: string(stmt.Name.ObjectName),
@@ -410,12 +493,12 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 	}
 	// Get database name.
 	if len(stmt.Name.SchemaName) == 0 {
-		createSequence.Database = ctx.DefaultDatabase()
+		alterSequence.Database = ctx.DefaultDatabase()
 	} else {
-		createSequence.Database = string(stmt.Name.SchemaName)
+		alterSequence.Database = string(stmt.Name.SchemaName)
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(alterSequence.Database); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil, moerr.NewNoDB(ctx.GetContext())
 		}
@@ -424,7 +507,7 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
 	}
 
-	err := buildSequenceTableDef(stmt, ctx, createSequence)
+	err := buildAlterSequenceTableDef(stmt, ctx, alterSequence)
 	if err != nil {
 		return nil, err
 	}
@@ -432,9 +515,9 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
-				DdlType: plan.DataDefinition_CREATE_SEQUENCE,
-				Definition: &plan.DataDefinition_CreateSequence{
-					CreateSequence: createSequence,
+				DdlType: plan.DataDefinition_ALTER_SEQUENCE,
+				Definition: &plan.DataDefinition_AlterSequence{
+					AlterSequence: alterSequence,
 				},
 			},
 		},
