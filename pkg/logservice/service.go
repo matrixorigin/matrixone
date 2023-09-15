@@ -83,6 +83,8 @@ type Service struct {
 		holder         taskservice.TaskServiceHolder
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	configData map[string]*pb.ConfigItem
 }
 
 func NewService(
@@ -95,7 +97,9 @@ func NewService(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-
+	configKVMap, _ := dumpLogConfig(cfg)
+	opts = append(opts, WithConfigData(configKVMap))
+	
 	service := &Service{
 		cfg:         cfg,
 		stopper:     stopper.NewStopper("log-service"),

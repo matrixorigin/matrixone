@@ -74,6 +74,9 @@ func (s *service) heartbeat(ctx context.Context) {
 		TaskServiceCreated: s.GetTaskRunner() != nil,
 		QueryAddress:       s.queryServiceServiceAddr(),
 		InitWorkState:      s.cfg.InitWorkState,
+		ConfigData: &logservicepb.ConfigData{
+			Content: s.configData,
+		},
 	}
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {

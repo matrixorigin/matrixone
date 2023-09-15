@@ -16,6 +16,8 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -54,10 +56,21 @@ func WithMessageHandle(f func(ctx context.Context,
 	fs fileservice.FileService,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	mAcquirer func() morpc.Message) error) Option {
 	return func(s *service) {
 		s.requestHandler = f
+	}
+}
+
+// WithConfigData saves the data from the config file
+func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
+	return func(s *service) {
+		s.configData = make(map[string]*logservicepb.ConfigItem, len(data))
+		for k, v := range data {
+			s.configData[k] = v
+		}
 	}
 }

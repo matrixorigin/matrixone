@@ -126,6 +126,14 @@ func WithTLSKeyFile(f string) Option {
 	}
 }
 
+// WithConfigData saves the data from the config file
+func WithConfigData(data []byte) Option {
+	return func(s *Server) {
+		s.configData = make([]byte, len(data))
+		copy(s.configData, data)
+	}
+}
+
 // FillDefault fill the default config values of proxy server.
 func (c *Config) FillDefault() {
 	if c.ListenAddress == "" {

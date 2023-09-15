@@ -16,6 +16,8 @@ package tnservice
 
 import (
 	"context"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"path/filepath"
 	"strings"
 	"time"
@@ -270,4 +272,110 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (c *Config) SetDefaultValue() {
+	foundMachineHost := ""
+	if c.DataDir == "" {
+		c.DataDir = defaultDataDir
+	}
+	c.Txn.Storage.dataDir = filepath.Join(c.DataDir, storageDir)
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultListenAddress
+	}
+	if c.ServiceAddress == "" {
+		c.ServiceAddress = defaultServiceAddress
+	} else {
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
+	}
+	if c.LockService.ListenAddress == "" {
+		c.LockService.ListenAddress = defaultLockListenAddress
+	}
+	if c.LockService.ServiceAddress == "" {
+		c.LockService.ServiceAddress = defaultLockServiceAddress
+	}
+	if c.Txn.Storage.Backend == "" {
+		c.Txn.Storage.Backend = StorageTAE
+	}
+
+	if c.Txn.ZombieTimeout.Duration == 0 {
+		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout
+	}
+	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
+		c.HAKeeper.DiscoveryTimeout.Duration = defaultDiscoveryTimeout
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = defaultHeatbeatInterval
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = defaultHeatbeatTimeout
+	}
+	if c.LogService.ConnectTimeout.Duration == 0 {
+		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
+	}
+	if c.Ckp.ScanInterval.Duration == 0 {
+		c.Ckp.ScanInterval.Duration = defaultScanInterval
+	}
+	if c.Ckp.FlushInterval.Duration == 0 {
+		c.Ckp.FlushInterval.Duration = defaultFlushInterval
+	}
+	if c.Ckp.MinCount == 0 {
+		c.Ckp.MinCount = defaultMinCount
+	}
+	if c.Ckp.IncrementalInterval.Duration == 0 {
+		c.Ckp.IncrementalInterval.Duration = defaultIncrementalInterval
+	}
+	if c.Ckp.GlobalMinCount == 0 {
+		c.Ckp.GlobalMinCount = defaultGlobalMinCount
+	}
+	if c.LogtailServer.ListenAddress == "" {
+		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
+	}
+	if c.LogtailServer.ServiceAddress == "" {
+		c.LogtailServer.ServiceAddress = defaultLogtailServiceAddress
+	}
+	if c.LogtailServer.RpcMaxMessageSize <= 0 {
+		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
+	}
+	if c.LogtailServer.LogtailCollectInterval.Duration <= 0 {
+		c.LogtailServer.LogtailCollectInterval.Duration = defaultLogtailCollectInterval
+	}
+	if c.LogtailServer.LogtailResponseSendTimeout.Duration <= 0 {
+		c.LogtailServer.LogtailResponseSendTimeout.Duration = defaultLogtailResponseSendTimeout
+	}
+	if c.Cluster.RefreshInterval.Duration == 0 {
+		c.Cluster.RefreshInterval.Duration = time.Second * 10
+	}
+
+	if c.Txn.Mode == "" {
+		c.Txn.Mode = defaultTxnMode.String()
+	}
+
+	if c.Txn.IncrementalDedup == "" {
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+			c.Txn.IncrementalDedup = "true"
+		} else {
+			c.Txn.IncrementalDedup = "false"
+		}
+	} else {
+		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
+	}
+
+	c.RPC.Adjust()
+	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
+	c.LockService.ServiceID = "tmp"
+	c.LockService.Validate()
+	c.LockService.ServiceID = c.UUID
+
+	if c.PortBase != 0 {
+		if c.ServiceHost == "" {
+			c.ServiceHost = defaultServiceHost
+		}
+	}
+}
+
+func dumpTnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	defCfg.SetDefaultValue()
+	return util.DumpConfig(cfg, defCfg)
 }

@@ -164,6 +164,9 @@ func (s *Service) heartbeat(ctx context.Context) {
 
 	hb := s.store.getHeartbeatMessage()
 	hb.TaskServiceCreated = s.taskServiceCreated()
+	hb.ConfigData = &pb.ConfigData{
+		Content: s.configData,
+	}
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
 		s.runtime.Logger().Error("failed to send log service heartbeat", zap.Error(err))

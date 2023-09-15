@@ -62,6 +62,9 @@ func (s *store) heartbeat(ctx context.Context) {
 		LogtailServerAddress: s.logtailServiceServiceAddr(),
 		LockServiceAddress:   s.lockServiceServiceAddr(),
 		CtlAddress:           s.ctlServiceServiceAddr(),
+		ConfigData: &logservicepb.ConfigData{
+			Content: s.configData,
+		},
 	}
 	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
 	if err != nil {

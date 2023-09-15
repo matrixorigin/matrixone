@@ -16,7 +16,9 @@ package cnservice
 
 import (
 	"context"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"runtime"
 	"strings"
 	"sync"
@@ -239,6 +241,27 @@ type Config struct {
 	InitWorkState string `toml:"init-work-state"`
 }
 
+type abc struct {
+	A string
+	B string
+}
+
+type kkk struct {
+	kk string
+	jj string
+}
+
+type def struct {
+	DDD []kkk
+	ABC []abc `toml:"abc"`
+	EEE [3]abc
+	MMM map[string]string
+	NNN map[string]abc
+	PPP *abc
+	QQQ *abc
+	RRR map[string]string
+}
+
 func (c *Config) Validate() error {
 	foundMachineHost := ""
 	if c.UUID == "" {
@@ -387,6 +410,140 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func (c *Config) SetDefaultValue() {
+	foundMachineHost := ""
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultListenAddress
+	}
+	if c.ServiceAddress == "" {
+		c.ServiceAddress = c.ListenAddress
+	} else {
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
+	}
+	if c.Role == "" {
+		c.Role = metadata.CNRole_TP.String()
+	}
+	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
+		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = time.Second
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
+	}
+	if c.TaskRunner.Parallelism == 0 {
+		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
+		if c.TaskRunner.Parallelism <= ReservedTasks {
+			c.TaskRunner.Parallelism = 1 + ReservedTasks
+		}
+	}
+	if c.TaskRunner.FetchInterval.Duration == 0 {
+		c.TaskRunner.FetchInterval.Duration = time.Second * 10
+	}
+	if c.TaskRunner.FetchTimeout.Duration == 0 {
+		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
+	}
+	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
+		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
+	}
+	if c.TaskRunner.MaxWaitTasks == 0 {
+		c.TaskRunner.MaxWaitTasks = 256
+	}
+	if c.TaskRunner.QueryLimit == 0 {
+		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
+	}
+	if c.TaskRunner.RetryInterval.Duration == 0 {
+		c.TaskRunner.RetryInterval.Duration = time.Second
+	}
+	if c.Engine.Type == "" {
+		c.Engine.Type = EngineDistributedTAE
+	}
+	if c.Engine.Logstore == "" {
+		c.Engine.Logstore = options.LogstoreLogservice
+	}
+	if c.Cluster.RefreshInterval.Duration == 0 {
+		c.Cluster.RefreshInterval.Duration = time.Second * 10
+	}
+
+	if c.Txn.Mode == "" {
+		c.Txn.Mode = defaultTxnMode.String()
+	}
+
+	if c.Txn.Isolation == "" {
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+			c.Txn.Isolation = txn.TxnIsolation_RC.String()
+		} else {
+			c.Txn.Isolation = txn.TxnIsolation_SI.String()
+		}
+	}
+	// Fix txn mode various config, simply override
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = 1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = -1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	} else {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = 1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = 1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	}
+
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
+	if c.Txn.MaxActive == 0 {
+		c.Txn.MaxActive = runtime.NumCPU() * 4
+	}
+	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
+	c.LockService.ServiceID = "temp"
+	c.LockService.Validate()
+	c.LockService.ServiceID = c.UUID
+
+	// pessimistic mode implies primary key check
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
+		plan.CNPrimaryCheck = true
+	} else {
+		plan.CNPrimaryCheck = false
+	}
+
+	if c.MaxPreparedStmtCount > 0 {
+		if c.MaxPreparedStmtCount > maxForMaxPreparedStmtCount {
+			frontend.MaxPrepareNumberInOneSession = maxForMaxPreparedStmtCount
+		} else {
+			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
+		}
+	} else {
+		frontend.MaxPrepareNumberInOneSession = 100000
+	}
+	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
+
+	if c.PortBase != 0 {
+		if c.ServiceHost == "" {
+			c.ServiceHost = defaultServiceHost
+		}
+	}
+
+	if !metadata.ValidStateString(c.InitWorkState) {
+		c.InitWorkState = metadata.WorkState_Working.String()
+	}
+}
+
 func (s *service) getLockServiceConfig() lockservice.Config {
 	s.cfg.LockService.ServiceID = s.cfg.UUID
 	s.cfg.LockService.RPC = s.cfg.RPC
@@ -408,6 +565,7 @@ type service struct {
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
 		queryService queryservice.QueryService,
+		hakeeper logservice.CNHAKeeperClient,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
@@ -444,4 +602,13 @@ type service struct {
 
 	addressMgr   address.AddressManager
 	connectorMgr moconnector.ConnectorManagerInterface
+
+	//data from cn config file
+	configData map[string]*logservicepb.ConfigItem
+}
+
+func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	defCfg.SetDefaultValue()
+	return util.DumpConfig(cfg, defCfg)
 }

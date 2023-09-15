@@ -82,6 +82,16 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 	}
 }
 
+// WithConfigData saves the data from the config file
+func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
+	return func(s *store) {
+		s.configData = make(map[string]*logservicepb.ConfigItem, len(data))
+		for k, v := range data {
+			s.configData[k] = v
+		}
+	}
+}
+
 type store struct {
 	perfCounter         *perfcounter.CounterSet
 	cfg                 *Config
@@ -118,6 +128,7 @@ type store struct {
 	}
 
 	addressMgr address.AddressManager
+	configData map[string]*logservicepb.ConfigItem
 }
 
 // NewService create TN Service
@@ -131,6 +142,9 @@ func NewService(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+
+	configKVMap, _ := dumpTnConfig(*cfg)
+	opts = append(opts, WithConfigData(configKVMap))
 
 	// start common stuff
 	common.InitTAEMPool()

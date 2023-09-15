@@ -3476,6 +3476,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.FileService,
 		pu.LockService,
 		pu.QueryService,
+		pu.HAKeeperClient,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -3652,6 +3653,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		pu.FileService,
 		pu.LockService,
 		pu.QueryService,
+		pu.HAKeeperClient,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)

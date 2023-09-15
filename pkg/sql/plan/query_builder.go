@@ -3318,6 +3318,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
 	case "processlist":
 		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, childId)
+	case "mo_configurations":
+		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

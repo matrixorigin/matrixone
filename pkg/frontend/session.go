@@ -456,6 +456,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		pu.FileService,
 		pu.LockService,
 		pu.QueryService,
+		pu.HAKeeperClient,
 		ses.GetAutoIncrCacheManager())
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
