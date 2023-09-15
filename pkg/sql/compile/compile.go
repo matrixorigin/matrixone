@@ -29,7 +29,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -64,6 +63,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -76,8 +76,10 @@ import (
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold   uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate uint64 = 300 * mpool.B
+	DistributedThreshold              uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate            uint64 = 300 * mpool.B
+	shuffleJoinMergeChannelBufferSize        = 4
+	shuffleJoinProbeChannelBufferSize        = 16
 )
 
 var (
@@ -113,7 +115,7 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.stepRegs = make(map[int32][][2]int32)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
-	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 	return c
 }
 
@@ -1424,7 +1426,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		if err != nil {
 			return nil, err
 		}
-		err = lockTable(c.e, c.proc, rel, false)
+		err = lockTable(c.ctx, c.e, c.proc, rel, n.ObjRef.SchemaName, nil, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1438,9 +1440,21 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		ID2Addr[i] = mcpu - tmp
 	}
 	param := &tree.ExternParam{}
-	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
-	if err != nil {
-		return nil, err
+	if n.ExternScan == nil || n.ExternScan.Type != tree.INLINE {
+		err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		param.ScanType = int(n.ExternScan.Type)
+		param.Data = n.ExternScan.Data
+		param.Format = n.ExternScan.Format
+		param.Tail = new(tree.TailParameter)
+		param.Tail.IgnoredLines = n.ExternScan.IgnoredLines
+		param.Tail.Fields = &tree.Fields{
+			Terminated: n.ExternScan.Terminated,
+			EnclosedBy: n.ExternScan.EnclosedBy[0],
+		}
 	}
 	if param.ScanType == tree.S3 {
 		if err := plan2.InitS3Param(param); err != nil {
@@ -1459,6 +1473,8 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 				ID2Addr[i] = mcpu - tmp
 			}
 		}
+	} else if param.ScanType == tree.INLINE {
+		return c.compileExternValueScan(n, param)
 	} else {
 		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
@@ -1467,6 +1483,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 	param.FileService = c.proc.FileService
 	param.Ctx = c.ctx
+	var err error
 	var fileList []string
 	var fileSize []int64
 	if !param.Local {
@@ -1504,7 +1521,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 
 		return []*Scope{ret}, nil
 	}
-
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
 		return c.compileExternScanParallel(n, param, fileList, fileSize)
 	}
@@ -1549,6 +1565,29 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		pre += count
 	}
 
+	return ss, nil
+}
+
+func (c *Compile) compileExternValueScan(n *plan.Node, param *tree.ExternParam) ([]*Scope, error) {
+	ss := make([]*Scope, ncpu)
+	for i := 0; i < ncpu; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
+	s := c.constructScopeForExternal(c.addr, false)
+	s.appendInstruction(vm.Instruction{
+		Op:      vm.External,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     constructExternal(n, param, c.ctx, nil, nil, nil),
+	})
+	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
+	arg.FuncId = dispatch.SendToAnyLocalFunc
+	s.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: arg,
+	})
+	ss[0].PreScopes = append(ss[0].PreScopes, s)
+	c.anal.isFirst = false
 	return ss, nil
 }
 
@@ -2780,8 +2819,9 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].NodeInfo.Mcpu = 1
 			ss[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, sum, c.anal.Nodes())
 			ss[i].BuildIdx = lnum
+			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, 16)
+				rr.Ch = make(chan *batch.Batch, shuffleJoinMergeChannelBufferSize)
 			}
 		}
 		children = append(children, ss...)
@@ -2864,7 +2904,6 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
-			Ch:  make(chan *batch.Batch, 16),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -2899,7 +2938,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Op:      vm.HashBuild,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, ss != nil),
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil),
 	})
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly

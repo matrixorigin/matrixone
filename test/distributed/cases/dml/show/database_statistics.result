@@ -3,13 +3,13 @@ Number of tables in mo_task
 2
 show table_number from information_schema;
 Number of tables in information_schema
-15
+16
 show table_number from mysql;
 Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-16
+17
 show table_number from system_metrics;
 Number of tables in system_metrics
 20
@@ -35,7 +35,7 @@ Number of columns in profiling
 18
 show column_number from processlist;
 Number of columns in processlist
-16
+18
 show column_number from schemata;
 Number of columns in schemata
 6
@@ -340,13 +340,13 @@ drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
 Number of tables in information_schema
-15
+16
 show table_number from mysql;
 Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-15
+16
 show table_number from system_metrics;
 Number of tables in system_metrics
 7
@@ -365,7 +365,7 @@ Number of columns in profiling
 18
 show column_number from processlist;
 Number of columns in processlist
-16
+18
 show column_number from schemata;
 Number of columns in schemata
 6

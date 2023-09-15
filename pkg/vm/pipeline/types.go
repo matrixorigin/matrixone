@@ -86,8 +86,8 @@ type Pipeline struct {
 	reg          *process.WaitRegister
 }
 
-// cleanup do memory release work for whole pipeline.
-func (p *Pipeline) cleanup(proc *process.Process, pipelineFailed bool) {
+// Cleanup do memory release work for whole pipeline.
+func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool) {
 	// should cancel the context before clean the pipeline to avoid more batch inputting while cleaning.
 	proc.Cancel()
 

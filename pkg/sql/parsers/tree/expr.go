@@ -1155,6 +1155,42 @@ func NewCastExpr(e Expr, t ResolvableTypeReference) *CastExpr {
 	}
 }
 
+type BitCastExpr struct {
+	exprImpl
+	Expr Expr
+	Type ResolvableTypeReference
+}
+
+func (node *BitCastExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("bit_cast(")
+	node.Expr.Format(ctx)
+	ctx.WriteString(" as ")
+	node.Type.(*T).InternalType.Format(ctx)
+	ctx.WriteByte(')')
+}
+
+// Accept implements NodeChecker interface
+func (node *BitCastExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*BitCastExpr)
+	tmpNode, ok := node.Expr.Accept(v)
+	if !ok {
+		return node, false
+	}
+	node.Expr = tmpNode
+	return v.Exit(node)
+}
+
+func NewBitCastExpr(e Expr, t ResolvableTypeReference) *BitCastExpr {
+	return &BitCastExpr{
+		Expr: e,
+		Type: t,
+	}
+}
+
 // the parenthesized list of expressions.
 type Tuple struct {
 	exprImpl

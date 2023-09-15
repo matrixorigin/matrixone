@@ -1377,7 +1377,36 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, isDup bool) *hashbuild.Argument {
+func registerRuntimeFilters(arg *hashbuild.Argument, c *Compile, specs []*plan.RuntimeFilterSpec, shuffleCnt int) {
+	if specs == nil {
+		return
+	}
+
+	arg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(specs))
+	for _, rfSpec := range specs {
+		c.lock.Lock()
+		receiver, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
+		if !ok {
+			if shuffleCnt == 0 {
+				shuffleCnt = 1
+			}
+			receiver = &runtimeFilterReceiver{
+				size: shuffleCnt,
+				ch:   make(chan *pipeline.RuntimeFilter),
+			}
+			c.runtimeFilterReceiverMap[rfSpec.Tag] = receiver
+		}
+		c.lock.Unlock()
+
+		arg.RuntimeFilterSenders = append(arg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+			Spec: rfSpec,
+			Chan: receiver.ch,
+		})
+	}
+
+}
+
+func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 
@@ -1425,19 +1454,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 		}
 		retArg.NeedMergedBatch = needMergedBatch
 
-		if arg.RuntimeFilterSpecs != nil {
-			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
-				c.lock.Lock()
-				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				c.lock.Unlock()
-				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				})
-			}
-		}
+		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 		return retArg
 
@@ -1451,19 +1468,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			NeedMergedBatch: true,
 		}
 
-		if arg.RuntimeFilterSpecs != nil {
-			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
-				c.lock.Lock()
-				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				c.lock.Unlock()
-				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				})
-			}
-		}
+		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 		return retArg
 
@@ -1479,19 +1484,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			NeedMergedBatch: true,
 		}
 
-		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
-			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
-				c.lock.Lock()
-				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				c.lock.Unlock()
-				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				})
-			}
-		}
+		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 		return retArg
 
@@ -1507,19 +1500,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			NeedMergedBatch: true,
 		}
 
-		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
-			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
-				c.lock.Lock()
-				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				c.lock.Unlock()
-				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				})
-			}
-		}
+		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 		return retArg
 
@@ -1535,19 +1516,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			NeedMergedBatch: true,
 		}
 
-		if len(c.cnList) == 1 && arg.RuntimeFilterSpecs != nil {
-			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
-				c.lock.Lock()
-				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				c.lock.Unlock()
-				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				})
-			}
-		}
+		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 		return retArg
 
@@ -1561,19 +1530,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			NeedMergedBatch: true,
 		}
 
-		if arg.RuntimeFilterSpecs != nil {
-			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
-				c.lock.Lock()
-				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				c.lock.Unlock()
-				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				})
-			}
-		}
+		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 		return retArg
 
@@ -1587,19 +1544,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, is
 			NeedMergedBatch: true,
 		}
 
-		if arg.RuntimeFilterSpecs != nil {
-			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, rfSpec := range arg.RuntimeFilterSpecs {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
-				c.lock.Lock()
-				c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-				c.lock.Unlock()
-				retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				})
-			}
-		}
+		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
 
 		return retArg
 

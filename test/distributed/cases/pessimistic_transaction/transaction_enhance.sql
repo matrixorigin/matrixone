@@ -177,7 +177,7 @@ rollback ;
 show create table atomic_table_13;
 -- @bvt:issue
 
--- @bvt:issue#11334
+
 drop table if exists atomic_table_12_5;
 drop table if exists atomic_table_13;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -192,7 +192,7 @@ select * from atomic_table_12_5;
 -- @session}
 commit;
 show index from atomic_table_12_5;
--- @bvt:issue
+
 
 -- w-w conflict
 drop table if exists atomic_table_14;
@@ -323,8 +323,6 @@ commit;
 select * from atomic_table_18;
 set autocommit=1;
 drop account if exists trans_acc1;
--- @bvt:issue#9852
-
 
 -- alter table modify column primary key
 drop table if exists alter01;
@@ -383,7 +381,7 @@ show create table atomic_table_12_5;
 
 
 -- alter table change primary key column
--- @bvt:issue#11217
+-- @bvt:issue#11334
 drop table if exists alter01;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");

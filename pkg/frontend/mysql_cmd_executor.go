@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"io"
 	gotrace "runtime/trace"
 	"sort"
@@ -221,7 +222,13 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	ses.sqlType.Store(sqlType)
+	ses.SetStmtId(stmID)
+	ses.SetStmtType(getStatementType(statement).GetStatementType())
+	ses.SetQueryType(getStatementType(statement).GetQueryType())
+	ses.SetSqlSourceType(sqlType)
+	ses.SetSqlOfStmt(text)
+
+	//note: txn id here may be empty
 	if sqlType != constant.InternalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -335,7 +342,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 			} else {
 				stm.SetTxnID(txn.Txn().ID)
 			}
-
+			ses.SetTxnId(txn.Txn().ID)
 		}
 		stm.Report(ctx)
 	}
@@ -767,6 +774,18 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 			if err != nil {
 				return err
 			}
+		} else if name == "runtime_filter_limit_in" {
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
+			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_in", value)
+		} else if name == "runtime_filter_limit_bloom_filter" {
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
+			runtime.ProcessLevelRuntime().SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value)
 			if err != nil {
@@ -2541,6 +2560,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
 
+	ses.SetQueryStart(time.Now())
+
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
 	if endStmtProfile != nil {
@@ -3156,7 +3177,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	// only log if build time is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfo(ses, "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
 	}
 
 	mrs = ses.GetMysqlResultSet()
@@ -3252,7 +3273,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 		}
 
 		/*
@@ -3334,7 +3355,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 		}
 
 		if runResult == nil {
@@ -3344,7 +3365,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 		echoTime := time.Now()
 
-		logDebug(ses, "time of SendResponse %s", time.Since(echoTime).String())
+		logDebug(ses, ses.GetDebugString(), fmt.Sprintf("time of SendResponse %s", time.Since(echoTime).String()))
 
 		/*
 			Step 4: Serialize the execution plan by json
@@ -3403,7 +3424,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
+			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 		}
 
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {

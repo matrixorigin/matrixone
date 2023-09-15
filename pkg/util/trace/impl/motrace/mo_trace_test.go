@@ -35,8 +35,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-
 	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -213,6 +213,10 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 }
 
 func TestMOSpan_End(t *testing.T) {
+	if runtime.NumCPU() < 4 {
+		t.Skip("machine's performance too low to handle time sensitive case, issue #11669")
+		return
+	}
 
 	s := gostub.Stub(&freeMOSpan, func(span *MOSpan) {})
 	defer s.Reset()
@@ -278,7 +282,6 @@ func TestMOSpan_End(t *testing.T) {
 
 	// span with deadline context (plus calling cancel2() before func return)
 	deadlineCtx2, cancel2 := context.WithTimeout(ctx, time.Millisecond)
-	defer cancel()
 	var deadlineSpan2 trace.Span
 	WG.Add(1)
 	go func() {
@@ -297,7 +300,6 @@ func TestMOSpan_End(t *testing.T) {
 
 	// span with hung option, with Deadline situation
 	caseHungOptionWithDeadline := func() {
-		defer cancel()
 		var hungSpan trace.Span
 		WG.Add(1)
 		go func() {
@@ -317,7 +319,6 @@ func TestMOSpan_End(t *testing.T) {
 
 	// span with hung option, with NO Deadline situation
 	caseHungOptionWithoutDeadline := func() {
-		defer cancel()
 		var hungSpan trace.Span
 		WG.Add(1)
 		go func() {
@@ -460,7 +461,12 @@ func TestMOSpan_doProfile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, s := tt.fields.tracer.Start(tt.fields.ctx, "test", tt.fields.opts...)
+			ms, _ := s.(*MOSpan)
+			t.Logf("span.LongTimeThreshold: %v", ms.LongTimeThreshold)
+			time.Sleep(time.Millisecond)
 			s.End()
+			t.Logf("span.LongTimeThreshold: %v, duration: %v, needRecord: %v, needProfile: %v, doneProfile: %v",
+				ms.LongTimeThreshold, ms.Duration, ms.needRecord, ms.NeedProfile(), ms.doneProfile)
 			require.Equal(t, tt.want, s.(*MOSpan).doneProfile)
 		})
 	}
@@ -512,4 +518,74 @@ func TestContextDeadlineAndCancel(t *testing.T) {
 	t.Logf("deadlineCtx.Err: %s", deadlineCtx.Err())
 	quitCancel()
 	require.Equal(t, context.DeadlineExceeded, deadlineCtx.Err())
+}
+
+func TestWithFSSpan(t *testing.T) {
+
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+
+	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
+
+	_, span := tracer.Start(context.Background(), "test", trace.WithKind(
+		trace.SpanKindLocalFSVis))
+
+	_, ok := span.(trace.NoopSpan)
+
+	assert.True(t, tracer.IsEnable(trace.WithKind(trace.SpanKindLocalFSVis)))
+	assert.False(t, ok)
+	assert.True(t, span.(*MOSpan).NeedRecord(0))
+	span.End()
+
+	_, span = tracer.Start(context.Background(), "test", trace.WithKind(
+		trace.SpanKindS3FSVis))
+	_, ok = span.(trace.NoopSpan)
+	assert.False(t, tracer.IsEnable(trace.WithKind(trace.SpanKindS3FSVis)))
+	assert.True(t, ok)
+	span.End()
+
+}
+
+func TestMOCtledKindOverwrite(t *testing.T) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+
+	fctx, fspan := tracer.Start(context.Background(), "test2", trace.WithKind(trace.SpanKindRemote))
+	defer fspan.End()
+	require.Equal(t, fspan.SpanContext().Kind, trace.SpanKindRemote)
+
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(true)
+	// won't be overwritten
+	_, span := tracer.Start(fctx, "test3", trace.WithKind(trace.SpanKindS3FSVis))
+	defer span.End()
+	require.NotEqual(t, span.SpanContext().Kind, fspan.SpanContext().Kind)
+	require.Equal(t, span.SpanContext().Kind, trace.SpanKindS3FSVis)
+
+}
+
+func TestMOCtledKindPassDown(t *testing.T) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+	tracer.provider.enable = true
+
+	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(true)
+	specialCtx, specialSpan := tracer.Start(context.Background(), "special span",
+		trace.WithKind(trace.SpanKindS3FSVis))
+	defer specialSpan.End()
+	require.Equal(t, specialSpan.SpanContext().Kind, trace.SpanKindS3FSVis)
+
+	// won't pass down kind to child
+	_, span := tracer.Start(specialCtx, "child span")
+	defer span.End()
+	require.NotEqual(t, span.SpanContext().Kind, specialSpan.SpanContext().Kind)
+
 }

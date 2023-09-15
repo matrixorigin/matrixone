@@ -128,7 +128,9 @@ type Scope struct {
 	Reg *process.WaitRegister
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
-	BuildIdx             int
+
+	BuildIdx   int
+	ShuffleCnt int
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -204,7 +206,7 @@ type Compile struct {
 	nodeRegs map[[2]int32]*process.WaitRegister
 	stepRegs map[int32][][2]int32
 
-	runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
+	runtimeFilterReceiverMap map[int32]*runtimeFilterReceiver
 
 	lock sync.RWMutex
 
@@ -216,6 +218,11 @@ type Compile struct {
 	buildPlanFunc func() (*plan2.Plan, error)
 
 	fuzzy *fuzzyCheck
+}
+
+type runtimeFilterReceiver struct {
+	size int
+	ch   chan *pipeline.RuntimeFilter
 }
 
 type RemoteReceivRegInfo struct {

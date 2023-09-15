@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -68,6 +69,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_uuid:
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
+	case types.T_enum:
 	default:
 		return false
 	}
@@ -181,6 +183,10 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.Equal(b)
+		})
+	case types.T_enum:
+		return opBinaryFixedFixedToFixed[types.Enum, types.Enum, bool](parameters, rs, proc, length, func(a, b types.Enum) bool {
+			return a == b
 		})
 	}
 	panic("unreached code")

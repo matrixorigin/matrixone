@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create stream s(a varchar, b varchar) with (\"type\"='kafka', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
-		output: "create stream s (a varchar, b varchar) with (type = kafka, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
+		input:  "create connector s with (\"type\"='kafkamo', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
+		output: "create connector s with (type = kafkamo, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
 	}
 )
 
@@ -226,7 +226,7 @@ var (
 		input: "select password from t1",
 	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
-		output: "create table t1 (a datetime(26) on update current_timestamp(1))",
+		output: "create table t1 (a datetime on update current_timestamp(1))",
 	}, {
 		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
 		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
@@ -291,14 +291,12 @@ var (
 	}, {
 		input: "select cast(false as varchar)",
 	}, {
-		input:  "select cast(a as timestamp)",
-		output: "select cast(a as timestamp(26))",
+		input: "select cast(a as timestamp)",
 	}, {
 		input:  "select cast(\"2022-01-30\" as varchar);",
 		output: "select cast(2022-01-30 as varchar)",
 	}, {
-		input:  "select cast(b as timestamp) from t2",
-		output: "select cast(b as timestamp(26)) from t2",
+		input: "select cast(b as timestamp) from t2",
 	}, {
 		input:  "select cast(\"2022-01-01 01:23:34\" as varchar)",
 		output: "select cast(2022-01-01 01:23:34 as varchar)",
@@ -371,7 +369,7 @@ var (
 		output: "set a = b",
 	}, {
 		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
-		output: "create table t1 (datetime datetime(26), timestamp timestamp(26), date date)",
+		output: "create table t1 (datetime datetime, timestamp timestamp, date date)",
 	}, {
 		input:  "SET timestamp=DEFAULT;",
 		output: "set timestamp = default",
@@ -1095,7 +1093,7 @@ var (
 		},
 		{
 			input:  `CREATE TABLE tp10 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));`,
-			output: `create table tp10 (col1 int, col2 char(5), col3 datetime(26)) partition by hash (year(col3))`,
+			output: `create table tp10 (col1 int, col2 char(5), col3 datetime) partition by hash (year(col3))`,
 		},
 		{
 			input:  `CREATE TABLE tp11 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6`,
@@ -1450,7 +1448,7 @@ var (
 			input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
 		}, {
 			input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
-			output: "create table t1 (t time(26, 3) null, dt datetime(26, 6) null, ts timestamp(26, 1) null)",
+			output: "create table t1 (t time(3, 3) null, dt datetime(6, 6) null, ts timestamp(1, 1) null)",
 		}, {
 			input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
 			output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
@@ -2084,6 +2082,22 @@ var (
 			output: "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
 		},
 		{
+			input:  "ALTER SEQUENCE my_sequence START WITH 100;",
+			output: "alter sequence my_sequence as bigint start with 100 no cycle",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence INCREMENT BY 5;",
+			output: "alter sequence my_sequence as bigint increment by 5 no cycle",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence MINVALUE 1 MAXVALUE 1000;",
+			output: "alter sequence my_sequence as bigint minvalue 1 maxvalue 1000 no cycle",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence CYCLE;",
+			output: "alter sequence my_sequence as bigint cycle",
+		},
+		{
 			input:  "alter table t1 modify column b int",
 			output: "alter table t1 modify column b int",
 		},
@@ -2552,21 +2566,6 @@ var (
 		}, {
 			input:  "alter table t1 alter CONSTRAINT a NOT ENFORCED",
 			output: "alter table t1 alter CONSTRAINT not enforce",
-		}, {
-			input:  "create or replace VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = UNDEFINED VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = MERGE VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = TEMPTABLE VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = TEMPTABLE DEFINER = `ucl360`@`%` VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
 		}, {
 			input:  "create SQL SECURITY DEFINER VIEW t2 as select * from t1",
 			output: "create view t2 as select * from t1",

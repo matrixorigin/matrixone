@@ -16,7 +16,6 @@ package pipeline
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -63,7 +62,6 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		}
 	}
 	if err = vm.Prepare(p.instructions, proc); err != nil {
-		p.cleanup(proc, true)
 		return false, err
 	}
 
@@ -73,13 +71,11 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		select {
 		case <-proc.Ctx.Done():
 			proc.SetInputBatch(nil)
-			p.cleanup(proc, false)
 			return true, nil
 		default:
 		}
 		// read data from storage engine
 		if bat, err = r.Read(proc.Ctx, p.attrs, nil, proc.Mp(), proc); err != nil {
-			p.cleanup(proc, true)
 			return false, err
 		}
 		if bat != nil {
@@ -92,12 +88,10 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		proc.SetInputBatch(bat)
 		end, err = vm.Run(p.instructions, proc)
 		if err != nil {
-			p.cleanup(proc, true)
 			return end, err
 		}
 		if end {
 			// end is true means pipeline successfully completed
-			p.cleanup(proc, false)
 			return end, nil
 		}
 	}
@@ -113,7 +107,6 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 	}
 
 	if err = vm.Prepare(p.instructions, proc); err != nil {
-		p.cleanup(proc, true)
 		return false, err
 	}
 	pipelineInputBatches := []*batch.Batch{bat, nil}
@@ -122,11 +115,9 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 			proc.SetInputBatch(pipelineInputBatches[i])
 			end, err = vm.Run(p.instructions, proc)
 			if err != nil {
-				p.cleanup(proc, true)
 				return end, err
 			}
 			if end {
-				p.cleanup(proc, false)
 				return end, nil
 			}
 		}
@@ -143,17 +134,14 @@ func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
 	}
 
 	if err = vm.Prepare(p.instructions, proc); err != nil {
-		p.cleanup(proc, true)
 		return false, err
 	}
 	for {
 		end, err = vm.Run(p.instructions, proc)
 		if err != nil {
-			p.cleanup(proc, true)
 			return end, err
 		}
 		if end {
-			p.cleanup(proc, false)
 			return end, nil
 		}
 	}

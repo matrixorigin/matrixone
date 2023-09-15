@@ -179,6 +179,8 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		return generalCaseFn[types.Decimal64](parameters, result, proc, length)
 	case types.T_decimal128:
 		return generalCaseFn[types.Decimal128](parameters, result, proc, length)
+	case types.T_enum:
+		return generalCaseFn[types.Enum](parameters, result, proc, length)
 
 	case types.T_char:
 		return strCaseFn(parameters, result, proc, length)
@@ -189,8 +191,6 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	case types.T_text:
 		return strCaseFn(parameters, result, proc, length)
 	case types.T_json:
-		return strCaseFn(parameters, result, proc, length)
-	case types.T_enum:
 		return strCaseFn(parameters, result, proc, length)
 	}
 	panic("unreached code")

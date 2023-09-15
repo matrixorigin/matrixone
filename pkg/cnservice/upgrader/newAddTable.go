@@ -91,4 +91,91 @@ var PARTITIONSView = &table.Table{
 		"WHERE `tbl`.`partitioned` = 1;",
 }
 
-var needUpgradNewView = []*table.Table{PARTITIONSView}
+var STATISTICSView = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "STATISTICS",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`STATISTICS` AS " +
+		"select 'def' AS `TABLE_CATALOG`," +
+		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
+		"`tbl`.`relname` AS `TABLE_NAME`," +
+		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),0,1) AS `NON_UNIQUE`," +
+		"`tbl`.`reldatabase` AS `INDEX_SCHEMA`," +
+		"`idx`.`name` AS `INDEX_NAME`," +
+		"`idx`.`ordinal_position` AS `SEQ_IN_INDEX`," +
+		"`idx`.`column_name` AS `COLUMN_NAME`," +
+		"'A' AS `COLLATION`," +
+		"0 AS `CARDINALITY`," +
+		"NULL AS `SUB_PART`," +
+		"NULL AS `PACKED`," +
+		"if((`tcl`.`attnotnull` = 0),'YES','') AS `NULLABLE`," +
+		"NULL AS `INDEX_TYPE`," +
+		"if(((`idx`.`type` = 'PRIMARY') or (`idx`.`type` = 'UNIQUE')),'','') AS `COMMENT`," +
+		"`idx`.`comment` AS `INDEX_COMMENT`," +
+		"if(`idx`.`is_visible`,'YES','NO') AS `IS_VISIBLE`," +
+		"NULL AS `EXPRESSION`" +
+		"from (`mo_catalog`.`mo_indexes` `idx` " +
+		"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`))" +
+		"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)",
+}
+
+var processlistView = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "processlist",
+	Columns: []table.Column{
+		table.StringColumn("account", "the account name"),
+		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("command", "the COMMAND send by client"),
+		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
+		table.StringColumn("db", "the database be used"),
+		table.StringColumn("host", "the ip:port of the mo-server"),
+		table.StringColumn("info", "the sql"),
+		table.StringColumn("node_id", "the id of the cn"),
+		table.StringColumn("query_start", "the start time of the statement"),
+		table.StringColumn("query_type", "the kind of the statement. DQL,TCL,etc"),
+		table.StringColumn("role", "the role of the user"),
+		table.StringColumn("session_id", "the id of the session"),
+		table.StringColumn("session_start", "the start time of the session"),
+		table.StringColumn("sql_source_type", "where does the sql come from. internal,external, etc"),
+		table.StringColumn("statement_id", "the id of the statement"),
+		table.StringColumn("statement_type", "the type of the statement.Select,Delete,Insert,etc"),
+		table.StringColumn("txn_id", "the id of the transaction"),
+		table.StringColumn("user", "the user name"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
+	//actually drop view here
+	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
+}
+
+var MoSessionsView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_sessions",
+	Columns: []table.Column{
+		table.StringColumn("account", "the account name"),
+		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("command", "the COMMAND send by client"),
+		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
+		table.StringColumn("db", "the database be used"),
+		table.StringColumn("host", "the ip:port of the mo-server"),
+		table.StringColumn("info", "the sql"),
+		table.StringColumn("node_id", "the id of the cn"),
+		table.StringColumn("query_start", "the start time of the statement"),
+		table.StringColumn("query_type", "the kind of the statement. DQL,TCL,etc"),
+		table.StringColumn("role", "the role of the user"),
+		table.StringColumn("session_id", "the id of the session"),
+		table.StringColumn("session_start", "the start time of the session"),
+		table.StringColumn("sql_source_type", "where does the sql come from. internal,external, etc"),
+		table.StringColumn("statement_id", "the id of the statement"),
+		table.StringColumn("statement_type", "the type of the statement.Select,Delete,Insert,etc"),
+		table.StringColumn("txn_id", "the id of the transaction"),
+		table.StringColumn("user", "the user name"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
+	//actually drop view here
+	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
+}
+
+var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView}
+var registeredViews = []*table.Table{processlistView}

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
@@ -45,7 +46,10 @@ func (txn *Transaction) getBlockInfos(
 		return nil, err
 	}
 	var objectName objectio.ObjectNameShort
-	iter := state.NewBlocksIter(ts)
+	iter, err := state.NewBlocksIter(ts)
+	if err != nil {
+		return nil, err
+	}
 	fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
@@ -632,21 +636,25 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 func (txn *Transaction) getCachedTable(
 	ctx context.Context, k tableKey, snapshotTS timestamp.Timestamp,
 ) *txnTable {
-	if txn.meta.IsRCIsolation() {
-		oldIdx := txn.tableCache.cachedIndex
-		newIdx := txn.engine.catalog.GetDeletedTableIndex()
-		if oldIdx < newIdx {
-			deleteTables := txn.engine.catalog.GetDeletedTables(oldIdx, snapshotTS)
-			for _, item := range deleteTables {
-				txn.tableCache.tableMap.Delete(genTableKey(ctx, item.Name, item.DatabaseId))
-				txn.tableCache.cachedIndex++
+	var tbl *txnTable
+	if v, ok := txn.tableCache.tableMap.Load(k); ok {
+		tbl = v.(*txnTable)
+
+		tblKey := cache.TableKey{
+			AccountId:  k.accountId,
+			DatabaseId: k.databaseId,
+			Name:       k.name,
+		}
+		val := txn.engine.catalog.GetSchemaVersion(tblKey)
+		if val != nil {
+			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
+				txn.tableCache.tableMap.Delete(genTableKey(ctx, k.name, k.databaseId))
+				return nil
 			}
 		}
+
 	}
-	if v, ok := txn.tableCache.tableMap.Load(k); ok {
-		return v.(*txnTable)
-	}
-	return nil
+	return tbl
 }
 
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
