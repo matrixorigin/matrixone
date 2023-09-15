@@ -323,12 +323,10 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 	return sels
 }
 
-func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, proc *process.Process) error {
+func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, sels [][]int32, proc *process.Process) error {
 	//release old bats
 	defer proc.PutBatch(bat)
-
 	shuffledBats := ap.ctr.shuffledBats
-	sels := getShuffledSelsByRange(ap, bat)
 
 	//generate new shuffled bats
 	for regIndex := range shuffledBats {
@@ -367,7 +365,16 @@ func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (proces
 		}
 	}
 
-	err := genShuffledBatsByRange(ap, bat, proc)
+	sels := getShuffledSelsByRange(ap, bat)
+	for i := range sels {
+		if len(sels[i]) == bat.RowCount() {
+			bat.ShuffleIDX = i
+			proc.SetInputBatch(bat)
+			return process.ExecNext, nil
+		}
+	}
+
+	err := genShuffledBatsByRange(ap, bat, sels, proc)
 	if err != nil {
 		return process.ExecNext, err
 	}
