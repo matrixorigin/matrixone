@@ -56,7 +56,7 @@ create account test_account2 admin_name = 'test_user' identified by '111';
 
 insert into cluster_table_1 values(0,0,0),(1,1,0);
 insert into cluster_table_1 values(0,0,1),(1,1,1);
-insert into cluster_table_1 values(0,0,2),(1,1,2);
+insert into cluster_table_1 values(0,0,2),(1,1,2) on duplicate key update b=b;
 update cluster_table_1 set account_id=(select account_id from mo_account where account_name="test_account1") where account_id=1;
 update cluster_table_1 set account_id=(select account_id from mo_account where account_name="test_account2") where account_id=2;
 select a,b from cluster_table_1;
