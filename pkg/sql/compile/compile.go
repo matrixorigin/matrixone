@@ -3071,44 +3071,50 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 			case "min", "max":
 				partialresults = append(partialresults, make([]any, 0, len(ranges)))
 			default:
-				partialresults = append(partialresults, nil)
+				partialresults = nil
+			}
+			if partialresults == nil {
+				break
 			}
 		}
-		for _, buf := range ranges[1:] {
-			fmt.Println(len(buf))
-			blk := catalog.DecodeBlockInfo(buf)
-			if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
-				newranges = append(newranges, buf)
-				continue
-			}
-			var objMeta objectio.ObjectMeta
-			location := blk.MetaLocation()
-			fs := c.proc.FileService
-			objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
-			if err != nil {
-				return nil, nil, err
-			}
-			objDataMeta := objMeta.MustDataMeta()
-			blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-			for i := range n.AggList {
-				agg := n.AggList[i].Expr.(*plan.Expr_F)
-				name := agg.F.Func.ObjName
-				switch name {
-				case "count":
-					partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
-				case "min":
-					col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-					zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
-					partialresults[i] = append(partialresults[i].([]any), zm.GetMin())
-				case "max":
-					col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-					zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
-					partialresults[i] = append(partialresults[i].([]any), zm.GetMax())
-				default:
+		if partialresults != nil {
+			for _, buf := range ranges[1:] {
+				fmt.Println(len(buf))
+				blk := catalog.DecodeBlockInfo(buf)
+				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
+					newranges = append(newranges, buf)
+					continue
+				}
+				var objMeta objectio.ObjectMeta
+				location := blk.MetaLocation()
+				fs := c.proc.FileService
+				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+				if err != nil {
+					return nil, nil, err
+				}
+				objDataMeta := objMeta.MustDataMeta()
+				blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+				for i := range n.AggList {
+					agg := n.AggList[i].Expr.(*plan.Expr_F)
+					name := agg.F.Func.ObjName
+					switch name {
+					case "count":
+						partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
+					case "min":
+						col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+						zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
+						partialresults[i] = append(partialresults[i].([]any), zm.GetMin())
+					case "max":
+						col := agg.F.Args[0].Expr.(*plan.Expr_Col)
+						zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
+						partialresults[i] = append(partialresults[i].([]any), zm.GetMax())
+					default:
+					}
 				}
 			}
+			ranges = newranges
 		}
-		ranges = newranges
+
 	}
 	n.AggList = nil
 
