@@ -363,7 +363,6 @@ col1    col2
 5.0    c
 8.0    h
 6.0    h
-drop table alter01;
 drop table if exists alter01;
 drop table if exists alter02;
 create table alter01(col1 int not null ,col2 varchar(25));
@@ -387,7 +386,6 @@ col1    col2
 5.0    c
 8.0    h
 6.0    h
-drop table alter01;
 drop table if exists atomic_table_12_5;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
 insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
@@ -408,7 +406,6 @@ clnew    c2
 show create table atomic_table_12_5;
 Table    Create Table
 atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` DOUBLE DEFAULT null,\n`c2` VARCHAR(25) DEFAULT null,\nKEY `key1` (`clnew`)\n)
-drop table atomic_table_12_5;
 drop table if exists alter01;
 [unknown result because it is related to issue#11774]
 create table alter01(col1 int primary key,col2 varchar(25));
@@ -428,8 +425,6 @@ select * from alter01;
 insert into alter01 values (6,"h");
 [unknown result because it is related to issue#11774]
 select * from alter01;
-[unknown result because it is related to issue#11774]
-drop table alter01;
 [unknown result because it is related to issue#11774]
 drop table if exists atomic_table_12_5;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
@@ -451,7 +446,6 @@ clnew    c2
 show create table atomic_table_12_5;
 Table    Create Table
 atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` INT DEFAULT null,\n`c2` VARCHAR(25) DEFAULT null,\nKEY `key1` (`clnew`)\n)
-drop table atomic_table_12_5;
 drop table if exists alter01;
 [unknown result because it is related to issue#11774]
 create table alter01(col1 int primary key,col2 varchar(25));
@@ -471,8 +465,6 @@ select * from alter01;
 insert into alter01 values (6,"h");
 [unknown result because it is related to issue#11774]
 select * from alter01;
-[unknown result because it is related to issue#11774]
-drop table alter01;
 [unknown result because it is related to issue#11774]
 drop table if exists alter01;
 create table alter01(col1 int,col2 varchar(25));
@@ -494,7 +486,6 @@ col1    col2
 4    b
 5    c
 6    h
-drop table alter01;
 drop table if exists alter01;
 [unknown result because it is related to issue#11213]
 create table alter01(col1 int primary key,col2 varchar(25));
@@ -515,8 +506,4 @@ insert into alter01 values (6,"h");
 [unknown result because it is related to issue#11213]
 select * from alter01;
 [unknown result because it is related to issue#11213]
-drop table alter01;
-[unknown result because it is related to issue#11213]
-
-
 

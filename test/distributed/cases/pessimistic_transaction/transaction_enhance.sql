@@ -334,7 +334,6 @@ select * from alter01;
 insert into alter01 values (6,"h");
 commit;
 select * from alter01;
-drop table alter01;
 
 -- alter table modify column
 drop table if exists alter01;
@@ -352,7 +351,6 @@ select * from alter01;
 insert into alter01 values (6,"h");
 commit;
 select * from alter01;
-drop table alter01;
 
 -- alter table change column
 drop table if exists atomic_table_12_5;
@@ -369,7 +367,6 @@ show create table atomic_table_12_5;
 select * from atomic_table_12_5;
 -- @session}
 show create table atomic_table_12_5;
-drop table atomic_table_12_5;
 
 -- alter table change primary key column
 -- @bvt:issue#11774
@@ -386,7 +383,6 @@ select * from alter01;
 -- @session
 insert into alter01 values (6,"h");
 select * from alter01;
-drop table alter01;
 -- @bvt:issue
 
 -- alter table rename column
@@ -404,7 +400,6 @@ show create table atomic_table_12_5;
 select * from atomic_table_12_5;
 -- @session}
 show create table atomic_table_12_5;
-drop table atomic_table_12_5;
 
 -- alter table rename primary key column
 -- @bvt:issue#11774
@@ -421,7 +416,6 @@ select * from alter01;
 -- @session
 insert into alter01 values (6,"h");
 select * from alter01;
-drop table alter01;
 -- @bvt:issue
 
 ----------------------------------------------------------
@@ -439,7 +433,6 @@ select * from alter01;
 -- @session
 insert into alter01 values (6,"h");
 select * from alter01;
-drop table alter01;
 
 ----------------------------------------------------------
 -- alter table drop primary key column
@@ -457,5 +450,4 @@ select * from alter01;
 -- @session
 insert into alter01 values (6,"h");
 select * from alter01;
-drop table alter01;
 -- @bvt:issue
