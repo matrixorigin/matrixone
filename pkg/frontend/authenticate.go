@@ -7583,7 +7583,6 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
 	var mp *mpool.MPool
-	var needCreate bool
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
@@ -7631,43 +7630,34 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		return err
 	}
 
-	createNewAccount := func() (bool, error) {
+	createNewAccount := func() error {
 		err = bh.Exec(ctx, "begin;")
 		defer func() {
 			err = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
-			return false, err
+			return err
 		}
 
+		// check account exists or not
 		exists, err = checkTenantExistsOrNot(ctx, bh, ca.Name)
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				return false, moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
 			}
-			return false, err
+			return err
 		} else {
 			newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 			if err != nil {
-				return false, err
+				return err
 			}
 		}
-		return true, err
-	}
 
-	needCreate, err = createNewAccount()
-	if err != nil {
-		return err
-	}
-	if !needCreate {
-		return err
-	}
-
-	{
+		// create some tables and databases for new account
 		err = bh.Exec(newTenantCtx, createMoIndexesSql)
 		if err != nil {
 			return err
@@ -7696,16 +7686,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 				return err
 			}
 		}
-	}
 
-	createTablesForNewAccount := func() error {
-		err = bh.Exec(ctx, "begin;")
-		defer func() {
-			err = finishTxn(ctx, bh, err)
-		}()
-		if err != nil {
-			return err
-		}
+		// create tables for new account
 		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, ses.pu)
 		if err != nil {
 			return err
@@ -7718,10 +7700,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			return err
 		}
+
 		return err
 	}
 
-	err = createTablesForNewAccount()
+	err = createNewAccount()
 	if err != nil {
 		return err
 	}
