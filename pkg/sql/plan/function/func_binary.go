@@ -1799,15 +1799,13 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
-
-	//224 256 384 512 0
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		str, isnull1 := strs.GetStrValue(i)
 		shaType, isnull2 := shaTypes.GetValue(i)
 
-		if isnull1 || isnull2 || isSha2Family(shaType) {
+		if isnull1 || isnull2 || !isSha2Family(shaType) {
 			if err = res.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -1830,6 +1828,7 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			default:
 				panic("unexpected err happened in sha2 function")
 			}
+			checksum = []byte(hex.EncodeToString(checksum))
 			if err = res.AppendBytes(checksum, false); err != nil {
 				return err
 			}
@@ -1840,6 +1839,7 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	return nil
 }
 
+// any one of 224 256 384 512 0 is valid
 func isSha2Family(len int64) bool {
 	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
 }
