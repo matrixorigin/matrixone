@@ -351,6 +351,9 @@ func (l *localLockTable) addRowLockLocked(
 	row []byte) {
 	lock := newRowLock(c)
 
+	// new lock added, use last committed ts to update keys last commit ts.
+	lock.waiters.resetCommittedAt(l.mu.tableCommittedAt)
+
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
 	c.txn.lockAdded(l.bind.Table, [][]byte{row})
@@ -506,11 +509,14 @@ func (l *localLockTable) addRangeLockLocked(
 
 	mc.commit(l.bind, c.txn, l.mu.store)
 	startLock, endLock := newRangeLock(c)
+
+	wq.resetCommittedAt(l.mu.tableCommittedAt)
 	startLock.waiters = wq
 	endLock.waiters = wq
 
 	// similar to row lock
 	c.txn.lockAdded(l.bind.Table, [][]byte{start, end})
+
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
 	return nil, Lock{}, nil
