@@ -460,6 +460,7 @@ func doLock(
 			return false, false, timestamp.Timestamp{}, err
 		}
 		if changed {
+			//FIXME::
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}

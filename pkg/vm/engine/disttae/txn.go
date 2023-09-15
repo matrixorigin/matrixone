@@ -163,16 +163,18 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 			// skip rowid
 			//It's dangerous to modify the bat directly, because the bat may be used by readers.
-			//bat.Attrs = bat.Attrs[1:]
-			//bat.Vecs = bat.Vecs[1:]
+			bat.Attrs = bat.Attrs[1:]
+			bat.Vecs = bat.Vecs[1:]
+			mp[key] = append(mp[key], bat)
 
 			//skip rowid
-			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
-			newBat.SetAttributes(bat.Attrs[1:])
-			newBat.Vecs = bat.Vecs[1:]
-			newBat.SetRowCount(bat.Vecs[0].Length())
-			mp[key] = append(mp[key], newBat)
-			txn.toFreeBatches[key] = append(txn.toFreeBatches[key], bat)
+			//newBat := batch.NewWithSize(len(bat.Vecs) - 1)
+			//newBat.SetAttributes(bat.Attrs[1:])
+			//newBat.Vecs = bat.Vecs[1:]
+			//newBat.SetRowCount(bat.Vecs[0].Length())
+			//mp[key] = append(mp[key], newBat)
+			//txn.toFreeBatches[key] = append(txn.toFreeBatches[key], bat)
+
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
 			// maybe this will cause that the log increments unlimitedly
@@ -180,6 +182,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			// i--
 			txn.writes[i].bat = nil
 		}
+
 	}
 
 	for key := range mp {
@@ -228,13 +231,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
+		//free batches
+		for _, bat := range mp[key] {
+			txn.proc.PutBatch(bat)
+		}
 	}
-	//free batches
-	//for key := range toFree {
-	//	for _, bat := range toFree[key] {
-	//		txn.proc.PutBatch(bat)
-	//	}
-	//}
 	if offset == 0 {
 		txn.workspaceSize = 0
 		writes := txn.writes[:0]
@@ -701,11 +702,11 @@ func (txn *Transaction) delTransaction() {
 		return
 	}
 	//free batches
-	for key := range txn.toFreeBatches {
-		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
-		}
-	}
+	//for key := range txn.toFreeBatches {
+	//	for _, bat := range txn.toFreeBatches[key] {
+	//		txn.proc.PutBatch(bat)
+	//	}
+	//}
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue
