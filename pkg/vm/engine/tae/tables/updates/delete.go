@@ -56,6 +56,7 @@ type DeleteNode struct {
 	nt       NodeType
 	id       *common.ID
 	dt       handle.DeleteType
+	version  uint16
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -74,16 +75,18 @@ func NewEmptyDeleteNode() *DeleteNode {
 		rowid2PK:    make(map[uint32]containers.Vector),
 		nt:          NT_Normal,
 		id:          &common.ID{},
+		version:     IOET_WALTxnCommand_DeleteNode_CurrVer,
 	}
 	return n
 }
-func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
+func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType, version uint16) *DeleteNode {
 	n := &DeleteNode{
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		mask:        roaring.New(),
 		rowid2PK:    make(map[uint32]containers.Vector),
 		nt:          NT_Normal,
 		dt:          dt,
+		version:     version,
 	}
 	if n.dt == handle.DT_MergeCompact {
 		_, err := n.TxnMVCCNode.PrepareCommit()
@@ -422,29 +425,31 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	switch node.nt {
 	case NT_Merge, NT_Normal:
-		var sn3 int
-		length := uint32(0)
-		if sn3, err = r.Read(types.EncodeUint32(&length)); err != nil {
-			return
-		}
-		n += int64(sn3)
-		node.rowid2PK = make(map[uint32]containers.Vector)
-		for i := 0; i < int(length); i++ {
-			row := uint32(0)
-			if sn3, err = r.Read(types.EncodeUint32(&row)); err != nil {
+		if node.version >= IOET_WALTxnCommand_DeleteNode_V2 {
+			var sn3 int
+			length := uint32(0)
+			if sn3, err = r.Read(types.EncodeUint32(&length)); err != nil {
 				return
 			}
 			n += int64(sn3)
-			typ := &types.Type{}
-			if sn3, err = r.Read(types.EncodeType(typ)); err != nil {
-				return
+			node.rowid2PK = make(map[uint32]containers.Vector)
+			for i := 0; i < int(length); i++ {
+				row := uint32(0)
+				if sn3, err = r.Read(types.EncodeUint32(&row)); err != nil {
+					return
+				}
+				n += int64(sn3)
+				typ := &types.Type{}
+				if sn3, err = r.Read(types.EncodeType(typ)); err != nil {
+					return
+				}
+				n += int64(sn3)
+				pk := containers.MakeVector(*typ)
+				if sn2, err = pk.ReadFrom(r); err != nil {
+					return
+				}
+				node.rowid2PK[row] = pk
 			}
-			n += int64(sn3)
-			pk := containers.MakeVector(*typ)
-			if sn2, err = pk.ReadFrom(r); err != nil {
-				return
-			}
-			node.rowid2PK[row]=pk
 		}
 	case NT_Persisted:
 		if buf, sn2, err = objectio.ReadBytes(r); err != nil {

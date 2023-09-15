@@ -179,7 +179,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS, pkType types.Type,
 ) (
 	rowIDVec, commitTSVec, pkVec, abortVec containers.Vector,
-	aborts *nulls.Bitmap,
+	aborts *nulls.Bitmap, deletes []uint32,
 ) {
 	if n.deletes.Load().IsEmpty() {
 		return
@@ -232,7 +232,15 @@ func (n *MVCCHandle) CollectDeleteLocked(
 						row := it.Next()
 						rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 						commitTSVec.Append(node.GetEnd(), false)
-						pkVec.Append(node.rowid2PK[row].Get(0), false)
+						// for deleteNode V1，rowid2PK is nil after restart
+						if node.rowid2PK == nil && node.version < IOET_WALTxnCommand_DeleteNode_V2 {
+							if deletes == nil {
+								deletes = make([]uint32, 0)
+							}
+							deletes = append(deletes, row)
+						} else {
+							pkVec.Append(node.rowid2PK[row].Get(0), false)
+						}
 					}
 				}
 				return !before

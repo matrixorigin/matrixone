@@ -646,10 +646,20 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	}
 	schema := blk.meta.GetSchema()
 	pkDef := schema.GetPrimaryKey()
-	rowID, ts, pk, abort, abortedMap := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type)
+	rowID, ts, pk, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type)
 	blk.RUnlock()
 	if rowID == nil {
 		return
+	}
+	// for deleteNode version less than 2, pk doesn't exist in memory
+	// collect pk by block.Foreach
+	if len(deletes) != 0 {
+		pk = containers.MakeVector(pkDef.Type)
+		pkIdx := pkDef.Idx
+		blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
+			pk.Append(v, false)
+			return nil
+		}, deletes)
 	}
 	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
