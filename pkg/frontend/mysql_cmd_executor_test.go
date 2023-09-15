@@ -316,6 +316,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
