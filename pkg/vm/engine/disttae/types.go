@@ -267,6 +267,12 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.Lock()
 	defer txn.Unlock()
+	//free batches
+	for key := range txn.toFreeBatches {
+		for _, bat := range txn.toFreeBatches[key] {
+			txn.proc.PutBatch(bat)
+		}
+	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}

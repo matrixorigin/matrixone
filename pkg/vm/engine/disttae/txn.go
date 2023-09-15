@@ -230,10 +230,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		// free batches
-		//for _, bat := range mp[key] {
-		//	txn.proc.PutBatch(bat)
-		//}
 	}
 	if offset == 0 {
 		txn.workspaceSize = 0
@@ -698,12 +694,6 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 func (txn *Transaction) delTransaction() {
 	if txn.removed {
 		return
-	}
-	//free batches
-	for key := range txn.toFreeBatches {
-		for _, bat := range txn.toFreeBatches[key] {
-			txn.proc.PutBatch(bat)
-		}
 	}
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
