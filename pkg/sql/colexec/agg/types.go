@@ -33,7 +33,7 @@ const (
 )
 
 type Aggregate struct {
-	Op     int
+	Op     int64
 	Dist   bool
 	E      *plan.Expr
 	Config []byte
