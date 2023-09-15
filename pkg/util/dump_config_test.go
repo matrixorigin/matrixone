@@ -67,7 +67,10 @@ func Test_flatten(t *testing.T) {
 	err = flatten(&cf1, "", "", exp)
 	assert.NoError(t, err)
 
-	k := kkk{}
+	k := kkk{
+		"abc",
+		"def",
+	}
 	err = flatten(k, "", "", exp)
 	assert.NoError(t, err)
 }
