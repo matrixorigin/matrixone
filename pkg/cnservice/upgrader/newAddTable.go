@@ -16,9 +16,11 @@ package upgrader
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 var (
@@ -175,6 +177,26 @@ var MoSessionsView = &table.Table{
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
 	//actually drop view here
 	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
+}
+
+var SqlStatementHotspot = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_SYSTEM,
+	Table:    "sql_statement_hotspot",
+	Columns:  []table.Column{},
+	CreateViewSql: fmt.Sprintf(`CREATE VIEW IF NOT EXISTS system.sql_statement_hotspot AS
+select statement_id, statement, duration / 1e6 as timeconsumed,
+cast(json_unquote(json_extract(stats, '$[%d]')) / 1048576.00 as decimal(38,3)) as memory_size,
+response_at as collecttime,
+node_uuid as node,
+account,
+user,
+statement_type as type
+ from system.statement_info
+ where response_at > date_sub(now(), interval 10 minute) and response_at < now()
+and aggr_count = 0 order by duration desc limit 10;`, statistic.StatsArrayIndexMemorySize),
+	//actually drop view here
+	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
 
 var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView}
