@@ -28,9 +28,7 @@ show columns from `PROFILING`;
 show columns from `USER_PRIVILEGES`;
 show columns from `SCHEMATA`;
 show columns from `CHARACTER_SETS`;
--- @bvt:issue#9032
 show columns from `TRIGGERS`;
--- @bvt:issue
 show columns from `TABLES`;
 show columns from `PARTITIONS`;
 drop database if exists test;

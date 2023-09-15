@@ -109,7 +109,15 @@ func TestS3FS(t *testing.T) {
 				true,
 			)
 			assert.Nil(t, err)
-			fs.storage.(*AwsSDKv2).listMaxKeys = 5 // to test continuation
+
+			// to test continuation
+			switch storage := fs.storage.(type) {
+			case *AwsSDKv2:
+				storage.listMaxKeys = 5
+			case *AwsSDKv1:
+				storage.listMaxKeys = 5
+			}
+
 			return fs
 		})
 	})
