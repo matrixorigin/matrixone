@@ -272,6 +272,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 		for _, bat := range txn.toFreeBatches[key] {
 			txn.proc.PutBatch(bat)
 		}
+		delete(txn.toFreeBatches, key)
 	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
