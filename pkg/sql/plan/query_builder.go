@@ -3316,7 +3316,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
 	case "metadata_scan":
 		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
-	case "processlist":
+	case "processlist", "mo_sessions":
 		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, childId)
 	case "mo_configurations":
 		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, childId)

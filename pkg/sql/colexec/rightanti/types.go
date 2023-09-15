@@ -63,6 +63,8 @@ type container struct {
 	matched *bitmap.Bitmap
 
 	handledLast bool
+
+	tmpBatches []*batch.Batch // for reuse
 }
 
 type Argument struct {
@@ -102,6 +104,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+		ctr.tmpBatches = nil
 	}
 }
 

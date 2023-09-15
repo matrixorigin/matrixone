@@ -338,7 +338,7 @@ func (s *service) handleFetchWhoWaitingMe(ctx context.Context) {
 				"")
 			if txn == nil {
 				writeResponse(w.ctx, w.cancel, w.resp, nil, w.cs)
-				return
+				continue
 			}
 			txn.fetchWhoWaitingMe(
 				s.cfg.ServiceID,

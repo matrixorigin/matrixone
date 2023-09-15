@@ -21,11 +21,11 @@ import (
 )
 
 type ObjectStorage interface {
-	// List lists entries in a dir
+	// List lists objects with specified prefix
 	List(
 		ctx context.Context,
-		path string,
-		fn func(DirEntry) (bool, error),
+		prefix string,
+		fn func(isPrefix bool, key string, size int64) (bool, error),
 	) (
 		err error,
 	)
@@ -33,16 +33,16 @@ type ObjectStorage interface {
 	// Stat returns informations about an object
 	Stat(
 		ctx context.Context,
-		path string,
+		key string,
 	) (
-		entry *DirEntry,
+		size int64,
 		err error,
 	)
 
 	// Exists reports whether specified object exists
 	Exists(
 		ctx context.Context,
-		path string,
+		key string,
 	) (
 		bool,
 		error,
@@ -51,7 +51,7 @@ type ObjectStorage interface {
 	// Write writes an object
 	Write(
 		ctx context.Context,
-		path string,
+		key string,
 		r io.Reader,
 		size int64,
 		expire *time.Time,
@@ -62,7 +62,7 @@ type ObjectStorage interface {
 	// Read returns an io.Reader for specified object range
 	Read(
 		ctx context.Context,
-		path string,
+		key string,
 		min *int64,
 		max *int64,
 	) (
@@ -73,7 +73,7 @@ type ObjectStorage interface {
 	// Delete deletes objects
 	Delete(
 		ctx context.Context,
-		paths ...string,
+		keys ...string,
 	) (
 		err error,
 	)
