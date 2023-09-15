@@ -77,6 +77,10 @@ type vft struct {
 	fnString  func(*Instruction, *bytes.Buffer)
 	fnPrepare func(*Instruction, *process.Process) error
 	fnCall    func(*Instruction, *process.Process) (*batch.Batch, error)
+	// I think we are mssing a fnStart call.  For NestedLoopJoin, for example,
+	// we want to call fnStart for next iteration of the inner loop.  This is
+	// For index nestloop join, restart is the right place to set
+	// next index range.
 }
 
 var InstructionVFT = [...]vft{

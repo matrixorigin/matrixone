@@ -19,55 +19,48 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	n := arg.(*Argument)
+func String(ins *vm.Instruction, buf *bytes.Buffer) {
+	n := ins.Arg.(*Argument)
 	buf.WriteString(fmt.Sprintf("limit(%v)", n.Limit))
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func Prepare(*vm.Instruction, *process.Process) error {
 	return nil
 }
 
 // Call returning only the first n tuples from its input
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	bat := proc.InputBatch()
-
-	if bat == nil {
-		return process.ExecStop, nil
-	}
-	if bat.Last() {
-		proc.SetInputBatch(bat)
-		return process.ExecNext, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
-	}
-	ap := arg.(*Argument)
-	anal := proc.GetAnalyze(idx)
+func Call(ins *vm.Instruction, proc *process.Process) (*batch.Batch, error) {
+	ap := ins.Arg.(*Argument)
+	child := ins.Children[0]
+	anal := proc.GetAnalyze(ins.Idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat, isFirst)
+
+	// done
 	if ap.Seen >= ap.Limit {
-		proc.SetInputBatch(nil)
-		proc.PutBatch(bat)
-		return process.ExecStop, nil
+		return nil, nil
 	}
+
+	bat, err := vm.InstructionCall(child, proc)
+	if err != nil {
+		return nil, err
+	}
+	if bat == nil {
+		return nil, nil
+	}
+
 	length := bat.RowCount()
 	newSeen := ap.Seen + uint64(length)
+	isLast := false
 	if newSeen >= ap.Limit { // limit - seen
 		batch.SetLength(bat, int(ap.Limit-ap.Seen))
-		ap.Seen = newSeen
-		anal.Output(bat, isLast)
-
-		proc.SetInputBatch(bat)
-		return process.ExecStop, nil
+		isLast = true
 	}
-	anal.Output(bat, isLast)
 	ap.Seen = newSeen
-	return process.ExecNext, nil
+	anal.Output(bat, isLast)
+	return bat, nil
 }
