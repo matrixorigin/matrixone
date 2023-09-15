@@ -82,3 +82,8 @@ func TestService_RegisterServices(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("%s:%d", serviceHost, port2+3), s.queryServiceServiceAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port2+3), s.queryServiceListenAddr())
 }
+
+func TestDefaultCnConfig(t *testing.T) {
+	cfg := Config{}
+	cfg.SetDefaultValue()
+}

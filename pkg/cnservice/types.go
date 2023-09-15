@@ -241,27 +241,6 @@ type Config struct {
 	InitWorkState string `toml:"init-work-state"`
 }
 
-type abc struct {
-	A string
-	B string
-}
-
-type kkk struct {
-	kk string
-	jj string
-}
-
-type def struct {
-	DDD []kkk
-	ABC []abc `toml:"abc"`
-	EEE [3]abc
-	MMM map[string]string
-	NNN map[string]abc
-	PPP *abc
-	QQQ *abc
-	RRR map[string]string
-}
-
 func (c *Config) Validate() error {
 	foundMachineHost := ""
 	if c.UUID == "" {

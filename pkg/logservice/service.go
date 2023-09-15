@@ -99,7 +99,7 @@ func NewService(
 	}
 	configKVMap, _ := dumpLogConfig(cfg)
 	opts = append(opts, WithConfigData(configKVMap))
-	
+
 	service := &Service{
 		cfg:         cfg,
 		stopper:     stopper.NewStopper("log-service"),
