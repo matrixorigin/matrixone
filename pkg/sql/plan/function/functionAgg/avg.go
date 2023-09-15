@@ -131,10 +131,11 @@ func (s *sAggAvg[T]) Fill(groupNumber int64, values T, lastResult float64, count
 func (s *sAggAvg[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 float64, result2 float64, isEmpty1 bool, isEmpty2 bool, priv2 any) (newResult float64, isStillEmpty bool, err error) {
 	if !isEmpty2 {
 		bPriv := priv2.(*sAggAvg[T])
-		s.cnts[groupNumber1] += bPriv.cnts[groupNumber2]
 		if !isEmpty1 {
+			s.cnts[groupNumber1] += bPriv.cnts[groupNumber2]
 			return result1 + result2, false, nil
 		}
+		s.cnts[groupNumber1] = bPriv.cnts[groupNumber2]
 		return result2, false, nil
 	}
 	return result1, isEmpty1, nil
