@@ -233,7 +233,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 						rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 						commitTSVec.Append(node.GetEnd(), false)
 						// for deleteNode V1，rowid2PK is nil after restart
-						if node.rowid2PK == nil && node.version < IOET_WALTxnCommand_DeleteNode_V2 {
+						if node.version < IOET_WALTxnCommand_DeleteNode_V2 {
 							if deletes == nil {
 								deletes = make([]uint32, 0)
 							}

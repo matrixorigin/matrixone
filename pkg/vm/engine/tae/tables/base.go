@@ -654,7 +654,6 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	// for deleteNode version less than 2, pk doesn't exist in memory
 	// collect pk by block.Foreach
 	if len(deletes) != 0 {
-		pk = containers.MakeVector(pkDef.Type)
 		pkIdx := pkDef.Idx
 		blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
 			pk.Append(v, false)
