@@ -227,11 +227,11 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 	}
 
 	res, err := c.runSqlWithResult(duplicateCheckSql)
-	defer res.Close()
 	if err != nil {
 		logutil.Errorf("The sql that caused the fuzzy check background SQL failed is %s, and generated background sql is %s", c.sql, duplicateCheckSql)
 		return err
 	}
+	defer res.Close()
 
 	if res.Batches != nil {
 		vs := res.Batches[0].Vecs
@@ -239,11 +239,11 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 			toCheck := vs[0]
 			if !f.isCompound {
 				f.adjustDecimalScale(toCheck)
-				dupKey, e := f.formatNonCompound(toCheck, true)
-				if e != nil {
+				if dupKey, e := f.formatNonCompound(toCheck, true); e != nil {
 					err = e
+				} else {
+					err = moerr.NewDuplicateEntry(c.ctx, dupKey[0], f.attr)
 				}
-				err = moerr.NewDuplicateEntry(c.ctx, dupKey[0], f.attr)
 			} else {
 				if t, e := types.Unpack(toCheck.GetBytesAt(0)); e != nil {
 					err = e
