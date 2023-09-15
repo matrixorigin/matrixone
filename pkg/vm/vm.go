@@ -35,14 +35,14 @@ func String(ins Instructions, buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(" -> ")
 		}
-		stringFunc[in.Op](in.Arg, buf)
+		instructionVFT[in.Op].fnString(&in, buf)
 	}
 }
 
 // Prepare range instructions and do init work for each operator's argument by calling its prepare function
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
-		if err := prepareFunc[in.Op](proc, in.Arg); err != nil {
+		if err := instructionVFT[in.Op].fnPrepare(&in, proc); err != nil {
 			return err
 		}
 	}
@@ -56,31 +56,21 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}()
 
-	return fubarRun(ins, proc, 0)
-}
-
-func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
-	var fubarStack []int
-	var ok process.ExecStatus
-
-	for i := start; i < len(ins); i++ {
-		if ok, err = execFunc[ins[i].Op](ins[i].Idx, proc, ins[i].Arg, ins[i].IsFirst, ins[i].IsLast); err != nil {
-			return ok == process.ExecStop || end, err
-		}
-
-		if ok == process.ExecStop {
-			end = true
-		} else if ok == process.ExecHasMore {
-			fubarStack = append(fubarStack, i)
-		}
+	// XXX Instructions is linearized.  This is simply wrong.
+	// Wait for people to unscrew this.
+	for i := 1; i < len(ins); i++ {
+		ins[i].Children = append(ins[i].Children, &ins[i-1])
 	}
 
-	// run the stack backwards.
-	for i := len(fubarStack) - 1; i >= 0; i-- {
-		end, err = fubarRun(ins, proc, fubarStack[i])
-		if end || err != nil {
-			return end, err
+	rootIdx := len(ins) - 1
+	root := &ins[rootIdx]
+	end = false
+	for !end {
+		bat, err := InstructionCall(root, proc)
+		if err != nil {
+			return false, err
 		}
+		end = (bat == nil)
 	}
 	return end, err
 }

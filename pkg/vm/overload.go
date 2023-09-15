@@ -16,6 +16,8 @@ package vm
 
 import (
 	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -71,186 +73,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var stringFunc = [...]func(any, *bytes.Buffer){
-	Top:         top.String,
-	Join:        join.String,
-	Semi:        semi.String,
-	RightSemi:   rightsemi.String,
-	RightAnti:   rightanti.String,
-	Left:        left.String,
-	Right:       right.String,
-	Single:      single.String,
-	Limit:       limit.String,
-	Order:       order.String,
-	Group:       group.String,
-	Window:      window.String,
-	Merge:       merge.String,
-	Output:      output.String,
-	Offset:      offset.String,
-	Product:     product.String,
-	Restrict:    restrict.String,
-	Dispatch:    dispatch.String,
-	Connector:   connector.String,
-	Projection:  projection.String,
-	Anti:        anti.String,
-	Mark:        mark.String,
-	MergeBlock:  mergeblock.String,
-	MergeDelete: mergedelete.String,
-	LoopJoin:    loopjoin.String,
-	LoopLeft:    loopleft.String,
-	LoopSingle:  loopsingle.String,
-	LoopSemi:    loopsemi.String,
-	LoopAnti:    loopanti.String,
-	LoopMark:    loopmark.String,
-
-	MergeTop:       mergetop.String,
-	MergeLimit:     mergelimit.String,
-	MergeOrder:     mergeorder.String,
-	MergeGroup:     mergegroup.String,
-	MergeOffset:    mergeoffset.String,
-	MergeRecursive: mergerecursive.String,
-	MergeCTE:       mergecte.String,
-
-	Deletion:        deletion.String,
-	Insert:          insert.String,
-	OnDuplicateKey:  onduplicatekey.String,
-	PreInsert:       preinsert.String,
-	PreInsertUnique: preinsertunique.String,
-	External:        external.String,
-
-	Minus:        minus.String,
-	Intersect:    intersect.String,
-	IntersectAll: intersectall.String,
-
-	HashBuild: hashbuild.String,
-
-	TableFunction: table_function.String,
-
-	LockOp: lockop.String,
-
-	Shuffle: shuffle.String,
-	Stream:  stream.String,
+type vft struct {
+	fnString  func(*Instruction, *bytes.Buffer)
+	fnPrepare func(*Instruction, *process.Process) error
+	fnCall    func(*Instruction, *process.Process) (*batch.Batch, error)
 }
 
-var prepareFunc = [...]func(*process.Process, any) error{
-	Top:         top.Prepare,
-	Join:        join.Prepare,
-	Semi:        semi.Prepare,
-	RightSemi:   rightsemi.Prepare,
-	RightAnti:   rightanti.Prepare,
-	Left:        left.Prepare,
-	Right:       right.Prepare,
-	Single:      single.Prepare,
-	Limit:       limit.Prepare,
-	Order:       order.Prepare,
-	Group:       group.Prepare,
-	Window:      window.Prepare,
-	Merge:       merge.Prepare,
-	Output:      output.Prepare,
-	Offset:      offset.Prepare,
-	Product:     product.Prepare,
-	Restrict:    restrict.Prepare,
-	Dispatch:    dispatch.Prepare,
-	Connector:   connector.Prepare,
-	Projection:  projection.Prepare,
-	Anti:        anti.Prepare,
-	Mark:        mark.Prepare,
-	MergeBlock:  mergeblock.Prepare,
-	MergeDelete: mergedelete.Prepare,
-	LoopJoin:    loopjoin.Prepare,
-	LoopLeft:    loopleft.Prepare,
-	LoopSingle:  loopsingle.Prepare,
-	LoopSemi:    loopsemi.Prepare,
-	LoopAnti:    loopanti.Prepare,
-	LoopMark:    loopmark.Prepare,
+var InstructionVFT = [...]vft{
+	Top:         {top.String, top.Prepare, top.Call},
+	Join:        {join.String, join.Prepare, join.Call},
+	Semi:        {semi.String, semi.Prepare, semi.Call},
+	RightSemi:   {rightsemi.String, rightsemi.Prepare, rightsemi.Call},
+	RightAnti:   {rightanti.String, rightanti.Prepare, rightanti.Call},
+	Left:        {left.String, left.Prepare, left.Call},
+	Right:       {right.String, right.Prepare, right.Call},
+	Single:      {single.String, single.Prepare, single.Call},
+	Limit:       {limit.String, limit.Prepare, limit.Call},
+	Order:       {order.String, order.Prepare, order.Call},
+	Group:       {group.String, group.Prepare, group.Call},
+	Window:      {window.String, window.Prepare, window.Call},
+	Merge:       {merge.String, merge.Prepare, merge.Call},
+	Output:      {output.String, output.Prepare, output.Call},
+	Offset:      {offset.String, offset.Prepare, offset.Call},
+	Product:     {product.String, product.Prepare, product.Call},
+	Restrict:    {restrict.String, restrict.Prepare, restrict.Call},
+	Dispatch:    {dispatch.String, dispatch.Prepare, dispatch.Call},
+	Connector:   {connector.String, connector.Prepare, connector.Call},
+	Projection:  {projection.String, projection.Prepare, projection.Call},
+	Anti:        {anti.String, anti.Prepare, anti.Call},
+	Mark:        {mark.String, mark.Prepare, mark.Call},
+	MergeBlock:  {mergeblock.String, mergeblock.Prepare, mergeblock.Call},
+	MergeDelete: {mergedelete.String, mergedelete.Prepare, mergedelete.Call},
+	LoopJoin:    {loopjoin.String, loopjoin.Prepare, loopjoin.Call},
+	LoopLeft:    {loopleft.String, loopleft.Prepare, loopleft.Call},
+	LoopSingle:  {loopsingle.String, loopsingle.Prepare, loopsingle.Call},
+	LoopSemi:    {loopsemi.String, loopsemi.Prepare, loopsemi.Call},
+	LoopAnti:    {loopanti.String, loopanti.Prepare, loopanti.Call},
+	LoopMark:    {loopmark.String, loopmark.Prepare, loopmark.Call},
 
-	MergeTop:       mergetop.Prepare,
-	MergeLimit:     mergelimit.Prepare,
-	MergeOrder:     mergeorder.Prepare,
-	MergeGroup:     mergegroup.Prepare,
-	MergeOffset:    mergeoffset.Prepare,
-	MergeRecursive: mergerecursive.Prepare,
-	MergeCTE:       mergecte.Prepare,
+	MergeTop:       {mergetop.String, mergetop.Prepare, mergetop.Call},
+	MergeLimit:     {mergelimit.String, mergelimit.Prepare, mergelimit.Call},
+	MergeOrder:     {mergeorder.String, mergeorder.Prepare, mergeorder.Call},
+	MergeGroup:     {mergegroup.String, mergegroup.Prepare, mergegroup.Call},
+	MergeOffset:    {mergeoffset.String, mergeoffset.Prepare, mergeoffset.Call},
+	MergeRecursive: {mergerecursive.String, mergerecursive.Prepare, mergerecursive.Call},
+	MergeCTE:       {mergecte.String, mergecte.Prepare, mergecte.Call},
 
-	Deletion:        deletion.Prepare,
-	Insert:          insert.Prepare,
-	OnDuplicateKey:  onduplicatekey.Prepare,
-	PreInsert:       preinsert.Prepare,
-	PreInsertUnique: preinsertunique.Prepare,
-	External:        external.Prepare,
+	Deletion:        {deletion.String, deletion.Prepare, deletion.Call},
+	Insert:          {insert.String, insert.Prepare, insert.Call},
+	OnDuplicateKey:  {onduplicatekey.String, onduplicatekey.Prepare, onduplicatekey.Call},
+	PreInsert:       {preinsert.String, preinsert.Prepare, preinsert.Call},
+	PreInsertUnique: {preinsertunique.String, preinsertunique.Prepare, preinsertunique.Call},
+	External:        {external.String, external.Prepare, external.Call},
 
-	Minus:        minus.Prepare,
-	Intersect:    intersect.Prepare,
-	IntersectAll: intersectall.Prepare,
+	Minus:        {minus.String, minus.Prepare, minus.Call},
+	Intersect:    {intersect.String, intersect.Prepare, intersect.Call},
+	IntersectAll: {intersectall.String, intersectall.Prepare, intersectall.Call},
 
-	HashBuild: hashbuild.Prepare,
+	HashBuild: {hashbuild.String, hashbuild.Prepare, hashbuild.Call},
 
-	TableFunction: table_function.Prepare,
+	TableFunction: {table_function.String, table_function.Prepare, table_function.Call},
 
-	LockOp: lockop.Prepare,
+	LockOp: {lockop.String, lockop.Prepare, lockop.Call},
 
-	Shuffle: shuffle.Prepare,
-	Stream:  stream.Prepare,
+	Shuffle: {shuffle.String, shuffle.Prepare, shuffle.Call},
+	Stream:  {stream.String, stream.Prepare, stream.Call},
 }
 
-var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecStatus, error){
-	Top:         top.Call,
-	Join:        join.Call,
-	Semi:        semi.Call,
-	RightSemi:   rightsemi.Call,
-	RightAnti:   rightanti.Call,
-	Left:        left.Call,
-	Right:       right.Call,
-	Single:      single.Call,
-	Limit:       limit.Call,
-	Order:       order.Call,
-	Group:       group.Call,
-	Window:      window.Call,
-	Merge:       merge.Call,
-	Output:      output.Call,
-	Offset:      offset.Call,
-	Product:     product.Call,
-	Restrict:    restrict.Call,
-	Dispatch:    dispatch.Call,
-	Connector:   connector.Call,
-	Projection:  projection.Call,
-	Anti:        anti.Call,
-	Mark:        mark.Call,
-	MergeBlock:  mergeblock.Call,
-	MergeDelete: mergedelete.Call,
-	LoopJoin:    loopjoin.Call,
-	LoopLeft:    loopleft.Call,
-	LoopSingle:  loopsingle.Call,
-	LoopSemi:    loopsemi.Call,
-	LoopAnti:    loopanti.Call,
-	LoopMark:    loopmark.Call,
-
-	MergeTop:       mergetop.Call,
-	MergeLimit:     mergelimit.Call,
-	MergeOrder:     mergeorder.Call,
-	MergeGroup:     mergegroup.Call,
-	MergeOffset:    mergeoffset.Call,
-	MergeRecursive: mergerecursive.Call,
-	MergeCTE:       mergecte.Call,
-
-	Deletion: deletion.Call,
-	Insert:   insert.Call,
-	External: external.Call,
-
-	OnDuplicateKey:  onduplicatekey.Call,
-	PreInsert:       preinsert.Call,
-	PreInsertUnique: preinsertunique.Call,
-
-	Minus:        minus.Call,
-	Intersect:    intersect.Call,
-	IntersectAll: intersectall.Call,
-
-	HashBuild: hashbuild.Call,
-
-	TableFunction: table_function.Call,
-
-	LockOp: lockop.Call,
-
-	Shuffle: shuffle.Call,
-	Stream:  stream.Call,
+func InstructionCall(ins *Instruction, proc *process.Process) (*batch.Batch, error) {
+	return InstructionVFT[ins.Op].fnCall(ins, proc)
 }

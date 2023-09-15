@@ -14,7 +14,9 @@
 
 package vm
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 type OpType int
 
@@ -102,6 +104,8 @@ type Instruction struct {
 	// flag for analyzeInfo record the row information
 	IsFirst bool
 	IsLast  bool
+
+	Children []*Instruction
 }
 
 type InstructionArgument interface {

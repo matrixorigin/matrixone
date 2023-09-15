@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,8 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
+func String(ins *vm.Instruction, buf *bytes.Buffer) {
+	ap := ins.Arg.(*Argument)
 	buf.WriteString("top([")
 	for i, f := range ap.Fs {
 		if i > 0 {
@@ -40,8 +41,8 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func Prepare(ins *vm.Instruction, proc *process.Process) (err error) {
+	ap := ins.Arg.(*Argument)
 	ap.ctr = new(container)
 	if ap.Limit > 1024 {
 		ap.ctr.sels = make([]int64, 0, 1024)
@@ -61,47 +62,46 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func Call(ins *vm.Instruction, proc *process.Process) (*batch.Batch, error) {
+	child := ins.Children[0]
+	ap := ins.Arg.(*Argument)
 	ctr := ap.ctr
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(ins.Idx)
 	anal.Start()
 	defer anal.Stop()
+
+	// special: limit == 0, return empty batch
+	if ap.Limit == 0 {
+		return nil, nil
+	}
+
+	// operator processing loop
 	for {
 		switch ctr.state {
 		case Build:
-			bat := proc.InputBatch()
-			if bat == nil {
-				ctr.state = Eval
-				continue
+			bat, err := vm.InstructionCall(child, proc)
+			if err == nil {
+				if bat == nil {
+					ctr.state = Eval
+					continue
+				}
+				err = ctr.build(ap, bat, proc, anal)
 			}
-			if bat.IsEmpty() {
-				proc.PutBatch(bat)
-				proc.SetInputBatch(batch.EmptyBatch)
-				return process.ExecNext, nil
-			}
-			if ap.Limit == 0 {
-				proc.PutBatch(bat)
-				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
-			}
-			err := ctr.build(ap, bat, proc, anal)
+
+			// recheck err, because it comes from ctr.build
 			if err != nil {
 				ap.Free(proc, true)
 			}
-			return process.ExecNext, err
 
 		case Eval:
 			if ctr.bat == nil {
-				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
+				return nil, nil
 			}
-			err := ctr.eval(ap.Limit, proc)
+
+			bat, err := ctr.eval(ap.Limit, proc)
+			// WTF is this?
 			ap.Free(proc, err != nil)
-			if err == nil {
-				return process.ExecStop, nil
-			}
-			return process.ExecNext, err
+			return bat, err
 		}
 	}
 }
@@ -158,8 +158,9 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		}
 	}
 	err := ctr.processBatch(ap.Limit, bat, proc)
-	proc.PutBatch(bat)
-	proc.SetInputBatch(batch.EmptyBatch)
+	// WTF is going on?
+	// proc.PutBatch(bat)
+	// proc.SetInputBatch(batch.EmptyBatch)
 	return err
 }
 
@@ -208,7 +209,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *container) eval(limit int64, proc *process.Process) error {
+func (ctr *container) eval(limit int64, proc *process.Process) (*batch.Batch, error) {
 	if int64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
@@ -220,15 +221,15 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
 	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
-		return err
+		return nil, err
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	proc.SetInputBatch(ctr.bat)
+	ret := ctr.bat
 	ctr.bat = nil
-	return nil
+	return ret, nil
 }
 
 // do sort work for heap, and result order will be set in container.sels
