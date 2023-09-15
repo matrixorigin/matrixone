@@ -46,30 +46,35 @@ var (
 func init() {
 	tcs = []fuzzyTestCase{
 		{
+			arg: new(Argument),
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
 		},
 		{
+			arg: new(Argument),
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_date.ToType(),
 			},
 		},
 		{
+			arg: new(Argument),
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_float32.ToType(),
 			},
 		},
 		{
+			arg: new(Argument),
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_varchar.ToType(),
 			},
 		},
 		{
+			arg: new(Argument),
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_binary.ToType(),
