@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"reflect"
+	"sync/atomic"
 )
 
 type exporter struct {
@@ -224,4 +225,36 @@ func DumpConfig(cfg any, defCfg any) (map[string]*logservicepb.ConfigItem, error
 		ret[name] = item
 	}
 	return ret, err
+}
+
+type ConfigData struct {
+	count      atomic.Int32
+	configData map[string]*logservicepb.ConfigItem
+}
+
+func NewConfigData(data map[string]*logservicepb.ConfigItem) *ConfigData {
+	ret := &ConfigData{
+		count:      atomic.Int32{},
+		configData: make(map[string]*logservicepb.ConfigItem, len(data)),
+	}
+	for k, v := range data {
+		ret.configData[k] = v
+	}
+	ret.count.Store(10)
+	return ret
+}
+
+func (cd *ConfigData) GetData() *logservicepb.ConfigData {
+	if cd.count.Load() > 0 {
+		return &logservicepb.ConfigData{
+			Content: cd.configData,
+		}
+	}
+	return nil
+}
+
+func (cd *ConfigData) DecrCount() {
+	if cd.count.Load() > 0 {
+		cd.count.Add(-1)
+	}
 }

@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -50,11 +51,7 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*pb.ConfigItem) Option {
 	return func(s *Service) {
-		s.config.configData = make(map[string]*pb.ConfigItem, len(data))
-		for k, v := range data {
-			s.config.configData[k] = v
-		}
-		s.config.count.Store(10)
+		s.config = util.NewConfigData(data)
 	}
 }
 

@@ -164,14 +164,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 
 	hb := s.store.getHeartbeatMessage()
 	hb.TaskServiceCreated = s.taskServiceCreated()
-
-	//send config data
-	curVal := s.config.count.Load()
-	if curVal > 0 {
-		hb.ConfigData = &pb.ConfigData{
-			Content: s.config.configData,
-		}
-	}
+	hb.ConfigData = s.config.GetData()
 
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
@@ -179,9 +172,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 		return
 	}
 
-	if curVal > 0 {
-		s.config.count.Add(-1)
-	}
+	s.config.DecrCount()
 
 	s.handleCommands(cb.Commands)
 }

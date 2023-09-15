@@ -17,8 +17,8 @@ package tnservice
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -86,11 +86,7 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *store) {
-		s.config.configData = make(map[string]*logservicepb.ConfigItem, len(data))
-		for k, v := range data {
-			s.config.configData[k] = v
-		}
-		s.config.count.Store(10)
+		s.config = util.NewConfigData(data)
 	}
 }
 
@@ -131,10 +127,7 @@ type store struct {
 
 	addressMgr address.AddressManager
 
-	config struct {
-		count      atomic.Int32
-		configData map[string]*logservicepb.ConfigItem
-	}
+	config *util.ConfigData
 }
 
 // NewService create TN Service

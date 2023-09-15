@@ -20,6 +20,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
 	"sync/atomic"
 
@@ -84,10 +85,7 @@ type Service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	config struct {
-		count      atomic.Int32
-		configData map[string]*pb.ConfigItem
-	}
+	config *util.ConfigData
 }
 
 func NewService(

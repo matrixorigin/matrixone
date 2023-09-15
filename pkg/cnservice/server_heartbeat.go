@@ -74,24 +74,16 @@ func (s *service) heartbeat(ctx context.Context) {
 		TaskServiceCreated: s.GetTaskRunner() != nil,
 		QueryAddress:       s.queryServiceServiceAddr(),
 		InitWorkState:      s.cfg.InitWorkState,
+		ConfigData:         s.config.GetData(),
 	}
 
-	//send config data
-	curVal := s.config.count.Load()
-	if curVal > 0 {
-		hb.ConfigData = &logservicepb.ConfigData{
-			Content: s.config.configData,
-		}
-	}
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return
 	}
 
-	if curVal > 0 {
-		s.config.count.Add(-1)
-	}
+	s.config.DecrCount()
 
 	s.handleCommands(cb.Commands)
 }

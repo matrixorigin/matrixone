@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -67,10 +68,6 @@ func WithMessageHandle(f func(ctx context.Context,
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *service) {
-		s.config.configData = make(map[string]*logservicepb.ConfigItem, len(data))
-		for k, v := range data {
-			s.config.configData[k] = v
-		}
-		s.config.count.Store(10)
+		s.config = util.NewConfigData(data)
 	}
 }
