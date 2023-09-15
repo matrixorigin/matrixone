@@ -939,7 +939,8 @@ func makeInsertPlan(
 	isUpdate := updateColLength > 0
 	checkCondition := !hasOnDup && !isInsertWithoutAutoPkCol && !isUpdate && updatePkCol && !builder.qry.LoadTag
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
-		if isUpdate && updatePkCol {
+		// !CNPrimaryCheck handle Optimistic txn mode 
+		if isUpdate && updatePkCol || !CNPrimaryCheck {
 			// this case only needs to check insert rows if is duplicate, same as origin
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			pkColExpr := &plan.Expr{

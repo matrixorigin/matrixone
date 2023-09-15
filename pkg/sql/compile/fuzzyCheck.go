@@ -330,12 +330,23 @@ func (f *fuzzyCheck) formatNonCompound(toCheck *vector.Vector, useInErr bool) ([
 			return ss, nil
 
 		// string family but not include binary
-		case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid:
+		case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary:
 			for i, str := range ss {
 				ss[i] = "'" + str + "'"
 			}
 			return ss, nil
 
+		// case types.T_enum:
+		// 	enumValues := strings.Split(f.col.Typ.Enumvalues, ",")
+		// 	f.isEnum = true
+		// 	for i, str := range ss {
+		// 		num, err := strconv.Atoi(str)
+		// 		if err != nil {
+		// 			return nil, err
+		// 		}
+		// 		ss[i] = fmt.Sprintf("'%s'", enumValues[num-1])
+		// 	}
+		// 	return ss, nil
 		// decimal
 		case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 			return ss, nil
