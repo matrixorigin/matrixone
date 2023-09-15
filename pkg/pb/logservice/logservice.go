@@ -91,7 +91,9 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Role = hb.Role
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	storeInfo.QueryAddress = hb.QueryAddress
-	storeInfo.ConfigData = hb.ConfigData
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -161,7 +163,9 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo.LockServiceAddress = hb.LockServiceAddress
 	storeInfo.CtlAddress = hb.CtlAddress
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
-	storeInfo.ConfigData = hb.ConfigData
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -191,7 +195,9 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.GossipAddress = hb.GossipAddress
 	storeInfo.Replicas = hb.Replicas
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
-	storeInfo.ConfigData = hb.ConfigData
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
 	s.Stores[hb.UUID] = storeInfo
 }
 

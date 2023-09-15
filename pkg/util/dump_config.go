@@ -227,6 +227,10 @@ func DumpConfig(cfg any, defCfg any) (map[string]*logservicepb.ConfigItem, error
 	return ret, err
 }
 
+const (
+	count = 50
+)
+
 type ConfigData struct {
 	count      atomic.Int32
 	configData map[string]*logservicepb.ConfigItem
@@ -240,7 +244,7 @@ func NewConfigData(data map[string]*logservicepb.ConfigItem) *ConfigData {
 	for k, v := range data {
 		ret.configData[k] = v
 	}
-	ret.count.Store(10)
+	ret.count.Store(count)
 	return ret
 }
 
