@@ -3058,8 +3058,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 		}
 	}
 
-	if n.AggList != nil && n.BlockFilterList == nil && len(ranges) != 0 {
+	if n.AggList != nil && n.BlockFilterList == nil && len(ranges) > 1 {
 		newranges := make([][]byte, 0, len(ranges))
+		newranges = append(newranges, ranges[0])
 		partialresults = make([]any, len(n.AggList))
 		for i := range n.AggList {
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
@@ -3073,7 +3074,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				partialresults = append(partialresults, nil)
 			}
 		}
-		for _, buf := range ranges {
+		for _, buf := range ranges[1:] {
 			fmt.Println(len(buf))
 			blk := catalog.DecodeBlockInfo(buf)
 			if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
