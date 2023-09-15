@@ -50,10 +50,11 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*pb.ConfigItem) Option {
 	return func(s *Service) {
-		s.configData = make(map[string]*pb.ConfigItem, len(data))
+		s.config.configData = make(map[string]*pb.ConfigItem, len(data))
 		for k, v := range data {
-			s.configData[k] = v
+			s.config.configData[k] = v
 		}
+		s.config.count.Store(10)
 	}
 }
 

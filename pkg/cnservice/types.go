@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -582,8 +583,12 @@ type service struct {
 	addressMgr   address.AddressManager
 	connectorMgr moconnector.ConnectorManagerInterface
 
-	//data from cn config file
-	configData map[string]*logservicepb.ConfigItem
+	config struct {
+		//the max count for sending the config data in heartbeat
+		count atomic.Int32
+		//data from cn config file
+		configData map[string]*logservicepb.ConfigItem
+	}
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

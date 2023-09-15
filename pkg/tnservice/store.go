@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -85,10 +86,11 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *store) {
-		s.configData = make(map[string]*logservicepb.ConfigItem, len(data))
+		s.config.configData = make(map[string]*logservicepb.ConfigItem, len(data))
 		for k, v := range data {
-			s.configData[k] = v
+			s.config.configData[k] = v
 		}
+		s.config.count.Store(10)
 	}
 }
 
@@ -128,7 +130,11 @@ type store struct {
 	}
 
 	addressMgr address.AddressManager
-	configData map[string]*logservicepb.ConfigItem
+
+	config struct {
+		count      atomic.Int32
+		configData map[string]*logservicepb.ConfigItem
+	}
 }
 
 // NewService create TN Service

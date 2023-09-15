@@ -84,7 +84,10 @@ type Service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	configData map[string]*pb.ConfigItem
+	config struct {
+		count      atomic.Int32
+		configData map[string]*pb.ConfigItem
+	}
 }
 
 func NewService(
