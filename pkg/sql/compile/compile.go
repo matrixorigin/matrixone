@@ -3061,7 +3061,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 	if n.AggList != nil && n.BlockFilterList == nil && len(ranges) > 1 {
 		newranges := make([][]byte, 0, len(ranges))
 		newranges = append(newranges, ranges[0])
-		partialresults = make([]any, len(n.AggList))
+		partialresults = make([]any, 0, len(n.AggList))
 		for i := range n.AggList {
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
 			name := agg.F.Func.ObjName
@@ -3069,7 +3069,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 			case "count":
 				partialresults = append(partialresults, int64(0))
 			case "min", "max":
-				partialresults = append(partialresults, make([]any, len(ranges)))
+				partialresults = append(partialresults, make([]any, 0, len(ranges)))
 			default:
 				partialresults = append(partialresults, nil)
 			}
