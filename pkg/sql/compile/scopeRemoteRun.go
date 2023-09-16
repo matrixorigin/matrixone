@@ -149,9 +149,9 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		case <-putCtx.Done():
 			return moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
 		case <-receiver.ctx.Done():
-			logutil.Errorf("receiver conctx done during send notify to dispatch operator")
+			//logutil.Errorf("receiver conctx done during send notify to dispatch operator")
 		case <-opProc.Ctx.Done():
-			logutil.Errorf("dispatch operator context done")
+			//logutil.Errorf("dispatch operator context done")
 		case opProc.DispatchNotifyCh <- info:
 			// TODO: need fix. It may hung here if dispatch operator receive the info but
 			// end without close doneCh
@@ -161,22 +161,17 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 	case pipeline.PipelineMessage:
 		c := receiver.newCompile()
-		defer c.proc.FreeVectors()
 
 		// decode and rewrite the scope.
-		// insert operator needs to fill the engine info.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
 		if err != nil {
 			return err
 		}
-		s = refactorScope(c, s)
+		s = appendWriteBackOperator(c, s)
 		s.SetContextRecursively(c.ctx)
 
 		err = s.ParallelRun(c, s.IsRemote)
-		if err != nil {
-			return err
-		}
-		defer func() {
+		if err == nil {
 			// record the number of s3 requests
 			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
 			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
@@ -184,9 +179,12 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
-		}()
-		receiver.finalAnalysisInfo = c.proc.AnalInfos
-		return nil
+
+			receiver.finalAnalysisInfo = c.proc.AnalInfos
+		}
+		c.proc.FreeVectors()
+		return err
+
 	default:
 		return moerr.NewInternalError(receiver.ctx, "unknown message type")
 	}
@@ -414,7 +412,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	return procInfo.Marshal()
 }
 
-func refactorScope(c *Compile, s *Scope) *Scope {
+func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
