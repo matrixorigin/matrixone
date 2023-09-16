@@ -20,6 +20,7 @@ account_id    relname    relkind
 0    mo_role_grant    r
 0    mo_role_privs    r
 0    mo_sessions    v
+0    mo_configurations    v
 0    mo_stages    r
 0    mo_stored_procedure    r
 0    mo_table_partitions    r

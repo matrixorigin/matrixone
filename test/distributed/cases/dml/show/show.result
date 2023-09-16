@@ -232,6 +232,7 @@ mo_role_grant
 mo_role_privs
 mo_user_defined_function
 mo_sessions
+mo_configurations
 mo_stored_procedure
 mo_stages
 mo_mysql_compatibility_mode

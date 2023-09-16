@@ -177,5 +177,22 @@ var MoSessionsView = &table.Table{
 	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
 }
 
-var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView}
+var MoConfigurationsView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_configurations",
+	Columns: []table.Column{
+		table.StringColumn("node_type", "the type of the node. cn,tn,log,proxy."),
+		table.StringColumn("node_id", "the id of the node"),
+		table.StringColumn("name", "the name of the configuration item"),
+		table.UInt64Column("current_value", "the current value of the configuration item"),
+		table.StringColumn("default_value", "the default value of the configuration item"),
+		table.StringColumn("internal", "the configuration item is internal or external"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_configurations` AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;",
+	//actually drop view here
+	CreateTableSql: "drop view `mo_catalog`.`mo_configurations`;",
+}
+
+var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, MoConfigurationsView}
 var registeredViews = []*table.Table{processlistView}
