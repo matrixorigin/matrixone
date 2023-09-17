@@ -60,7 +60,7 @@ func ArraysToString[T RealNumbers](input [][]T) string {
 }
 
 func StringToArray[T RealNumbers](str string) ([]T, error) {
-	input := strings.TrimSpace(str)
+	input := strings.ReplaceAll(str, " ", "")
 
 	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
 		return nil, moerr.NewInternalErrorNoCtx("malformed vector input: %s", str)
