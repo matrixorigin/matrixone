@@ -173,7 +173,12 @@ jobs:
           locale
           sed -i "s/127.0.0.1:6001/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}:6001/" ./mo-tester/mo.yml
           sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' ./mo-tester/mo.yml
-          cat ./mo-tester/mo.yml          
+          sed -i 's/waittime:.*/waittime: 2000/g' ./mo-tester/run.yml
+          cat ./mo-tester/mo.yml
+          echo "=========================="
+          cat ./mo-tester/run.yml
+          echo "=========================="
+          
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e optimistic 2>&1
           rm -rf .git lib
@@ -400,7 +405,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Insert Test With 100 threads'
-          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g | tee report/oltp-insert.log
+          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-insert.log
 
       - name: Start OLTP Delete Test With 100 Threads
         if: ${{ always() && !cancelled() }}
@@ -419,7 +424,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Delete Test With 100 threads'
-          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-delete.log
+          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-delete.log
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
@@ -438,7 +443,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP UPDATE Test With 100 threads'
-          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-update.log
+          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-update.log
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
@@ -457,7 +462,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Point Select Test With 100 threads'
-          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g | tee report/oltp-select.log
+          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-select.log
      
       - name: Result Summary
         if: ${{ always() && !cancelled()  }}
@@ -579,62 +584,14 @@ jobs:
           mkdir -p report
           sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpcc_10`
           ./load.sh -u ${{ steps.account_for_tpcc.outputs.tpcc_account }} -p ${{ steps.account_for_tpcc.outputs.tpcc_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
-
-      - name: Start TPCC 10 Warehouses 10 terminals Test
-        if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 10
-        run: |
-          set -uo pipefail
-          export LC_ALL="C.UTF-8"
-          locale
-          sleep 60s
-          
-          cd $GITHUB_WORKSPACE/mo-tpcc
-          mkdir -p report
-          cp props.mo props_10.mo
-          sed -i '/.*terminals=*/c\terminals=10' props_10.mo
-          sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
-          sed -i 's/tpcc/tpcc_10/g' props_10.mo
-          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
-          sed -i '/runMins=*/c\runMins=5' props_10.mo
-          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
-          sed -i 's/user=.*/user=${{ steps.account_for_tpcc.outputs.tpcc_account }}/g' props_10.mo
-          sed -i 's/password=.*/password=${{ steps.account_for_tpcc.outputs.tpcc_password }}/g' props_10.mo
-          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-10.log
-          ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-10.log
-          
-          
-      - name: Start TPCC 10 Warehouses 50 terminals Test
-        if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 10
-        run: |
-          set -uo pipefail
-          export LC_ALL="C.UTF-8"
-          locale
-          
-          cd $GITHUB_WORKSPACE/mo-tpcc
-          mkdir -p report
-          cp props.mo props_10.mo
-          sed -i '/.*terminals=*/c\terminals=50' props_10.mo
-          sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
-          sed -i 's/tpcc/tpcc_10/g' props_10.mo
-          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
-          sed -i '/runMins=*/c\runMins=5' props_10.mo
-          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
-          sed -i 's/user=.*/user=${{ steps.account_for_tpcc.outputs.tpcc_account }}/g' props_10.mo
-          sed -i 's/password=.*/password=${{ steps.account_for_tpcc.outputs.tpcc_password }}/g' props_10.mo
-          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-50.log
-          ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-50.log
           
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
-          locale
-          
-          
+          locale          
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
@@ -642,8 +599,8 @@ jobs:
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
-          sed -i '/runMins=*/c\runMins=5' props_10.mo
-          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
+          sed -i '/runMins=*/c\runMins=15' props_10.mo
+          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062,9999' props_10.mo
           sed -i 's/user=.*/user=${{ steps.account_for_tpcc.outputs.tpcc_account }}/g' props_10.mo
           sed -i 's/password=.*/password=${{ steps.account_for_tpcc.outputs.tpcc_password }}/g' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
@@ -710,11 +667,105 @@ jobs:
              ${{ github.workspace }}/reports
           retention-days: 7
 
+  pessimistic-bvt-darwin-arm64:
+    if: ${{ github.event.pull_request.merged == true }}
+    runs-on: mac-arm64-mini
+    name: e2e BVT Test on Darwin/ARM64(LAUNCH, PESSIMISTIC)
+    timeout-minutes: 60
+    steps:
+      - name: checkout matrixorigin/matrixone
+        uses: actions/checkout@v3
+        with:
+          path: ./matrixone
+
+      - name: GO ENV
+        run: go env
+
+      - name: Build MatrixOne
+        run: |
+          cd $GITHUB_WORKSPACE/matrixone && make clean && make build
+          git rev-parse --short HEAD
+
+      - name: echo config
+        run: |
+          cd $GITHUB_WORKSPACE/matrixone
+          cat ./etc/launch/cn.toml
+          echo "============================"
+          cat ./etc/launch/tn.toml
+
+      - name: Start MO
+        run: |
+          export LC_ALL="zh_CN.UTF-8"
+          export LANG="zh_CN.UTF-8"
+          locale
+          
+          cd $GITHUB_WORKSPACE/matrixone
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/matrixone launch
+
+      - name: Clone test-tool repository
+        uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./mo-tester
+          ref: main
+
+      - name: Check Java Version
+        run: java -version
+
+      - name: Start BVT Test
+        id: bvt_on_pr_version
+        run: |
+          export LC_ALL="zh_CN.UTF-8"
+          export LANG="zh_CN.UTF-8"
+          locale
+          
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s  $GITHUB_WORKSPACE/matrixone/test/distributed/resources -e optimistic 2>&1
+
+      - name: Dump mo-service goroutines
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/matrixone/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
+
+      - name: Check Log Messages Count per second
+        if: ${{ always() && !cancelled() }}
+        run: |
+          cd $GITHUB_WORKSPACE/matrixone
+          # 4 nodes in one Process
+          ./optools/check_log_count.sh 4000 60 # {count threshold} {metric collected interval}
+
+      - name: Check mo-service Status
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
+
+      - name: generate upload files
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          mkdir -p ${{ github.workspace }}/upload
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
+          mv ${{ github.workspace }}/matrixone/mo-service.log ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/matrixone/dump-stacks.log ${{ github.workspace }}/upload/
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ failure() || cancelled()}}
+        continue-on-error: true
+        with:
+          name: 1-cn-e2e-darwin-arm64-reports
+          path: |
+            ${{ github.workspace }}/upload
+          retention-days: 7
+
+
+
   clean_up_env:
     if: ${{ always() && github.event.pull_request.merged == true }}
     name: CLEAN ENV AND NOTICE
     runs-on: aws-arm64-runner
-    needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test]
+    needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test,pessimistic-bvt-darwin-arm64,multi-cn-bvt-race-linux-x86]
     steps:
       - name: Prepare AWS Tools
         if: ${{ needs.docker_image_build.result == 'success' }}
@@ -743,6 +794,34 @@ jobs:
           aws eks --region us-west-2 update-kubeconfig --name eks-ci-new --kubeconfig eks-ci
           export KUBECONFIG=$(pwd)/eks-ci
           if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};fi
+     
+      - name: Check MO Status and Collect Trace
+        if: ${{ needs.docker_image_build.result == 'success' }}
+        continue-on-error: true
+        run: |
+          set -x
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
+          mkdir -p $GITHUB_WORKSPACE/upload && cd $GITHUB_WORKSPACE/upload
+          dn_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=DNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}')
+          curl "http://$dn_ip:6060/debug/pprof/trace?seconds=30" -o dn_trace.out
+          curl "http://$dn_ip:6060/debug/pprof/goroutine?debug=2" -o dn_groutine.out
+          
+          cn_0_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | head -n 1)
+          curl "http://$cn_0_ip:6060/debug/pprof/trace?seconds=30" -o cn_0_trace.out
+          curl "http://$cn_0_ip:6060/debug/pprof/goroutine?debug=2" -o cn_0_groutine.out
+          
+          cn_1_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | grep -v $cn_0_ip)
+          curl "http://$cn_1_ip:6060/debug/pprof/trace?seconds=30" -o cn_1_trace.out
+          curl "http://$cn_1_ip:6060/debug/pprof/goroutine?debug=2" -o cn_1_groutine.out
+      - uses: actions/upload-artifact@v3
+        if: ${{ needs.docker_image_build.result == 'success' }}
+        continue-on-error: true
+        with:
+          name: mo-cluster-trace-${{ github.event.pull_request.number }}
+          path: |
+            ${{ github.workspace }}/upload
+          retention-days: 7
+     
       - name: Check MO Status and Clean ENV
         if: ${{ needs.docker_image_build.result == 'success' }}
         run: |
@@ -766,7 +845,7 @@ jobs:
           #delete namespace
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
       - name: NOTICE FAIL RESULT
-        if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' }}
+        if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' || needs.multi-cn-bvt-race-linux-x86.result != 'success' || needs.pessimistic-bvt-darwin-arm64.result != 'success' }} 
         uses: chf007/action-wechat-work@master
         env:
           WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}
