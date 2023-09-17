@@ -157,11 +157,6 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		})
 	case types.T_decimal128:
 		return decimal128ArithArray(parameters, result, proc, length, decimal128AddArray)
-
-	case types.T_array_float32:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float32])
-	case types.T_array_float64:
-		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, plusFnArray[float64])
 	}
 	panic("unreached code")
 }
