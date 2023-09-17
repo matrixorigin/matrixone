@@ -29,8 +29,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
