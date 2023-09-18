@@ -603,6 +603,11 @@ message AnalyzeInfo {
 	int64 insertTime = 14;
 }
 
+message PartitionPrune {
+	bool isPruned = 1;
+	repeated PartitionItem selected_partitions = 2;
+}
+
 message Node {
 	enum NodeType {
 		UNKNOWN = 0;
@@ -758,7 +763,8 @@ message Node {
 
 	bytes uuid = 42;
 	bool recursive_sink = 43;
-    ExternScan extern_scan = 44;
+	ExternScan extern_scan = 44;
+	PartitionPrune partition_prune = 45;
 }
 
 message ExternScan {
