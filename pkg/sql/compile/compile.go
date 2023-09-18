@@ -3103,10 +3103,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				break
 			}
 		}
-		columnMap := make(map[int]int)
-		plan2.GetColumnMapByExprs(n.AggList, n.TableDef, &columnMap)
 
 		if partialresults != nil {
+			columnMap := make(map[int]int)
+			plan2.GetColumnMapByExprs(n.AggList, n.TableDef, &columnMap)
 			for _, buf := range ranges[1:] {
 				blk := catalog.DecodeBlockInfo(buf)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
@@ -3141,6 +3141,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				}
 			}
 			ranges = newranges
+			columnMap = nil
+			newranges = nil
 		}
 
 	}
