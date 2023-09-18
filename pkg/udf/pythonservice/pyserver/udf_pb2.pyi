@@ -6,6 +6,18 @@ from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Map
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class RequestType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = []
+    UnknownRequest: _ClassVar[RequestType]
+    DataRequest: _ClassVar[RequestType]
+    PkgResponse: _ClassVar[RequestType]
+
+class ResponseType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = []
+    UnknownResponse: _ClassVar[ResponseType]
+    DataResponse: _ClassVar[ResponseType]
+    PkgRequest: _ClassVar[ResponseType]
+
 class DataType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = []
     UNKNOWN: _ClassVar[DataType]
@@ -34,6 +46,12 @@ class DataType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BINARY: _ClassVar[DataType]
     VARBINARY: _ClassVar[DataType]
     BLOB: _ClassVar[DataType]
+UnknownRequest: RequestType
+DataRequest: RequestType
+PkgResponse: RequestType
+UnknownResponse: ResponseType
+DataResponse: ResponseType
+PkgRequest: ResponseType
 UNKNOWN: DataType
 BOOL: DataType
 INT8: DataType
@@ -62,36 +80,44 @@ VARBINARY: DataType
 BLOB: DataType
 
 class Request(_message.Message):
-    __slots__ = ["udf", "vectors", "length", "language"]
+    __slots__ = ["udf", "vectors", "length", "type"]
     UDF_FIELD_NUMBER: _ClassVar[int]
     VECTORS_FIELD_NUMBER: _ClassVar[int]
     LENGTH_FIELD_NUMBER: _ClassVar[int]
-    LANGUAGE_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
     udf: Udf
     vectors: _containers.RepeatedCompositeFieldContainer[DataVector]
     length: int
-    language: str
-    def __init__(self, udf: _Optional[_Union[Udf, _Mapping]] = ..., vectors: _Optional[_Iterable[_Union[DataVector, _Mapping]]] = ..., length: _Optional[int] = ..., language: _Optional[str] = ...) -> None: ...
+    type: RequestType
+    def __init__(self, udf: _Optional[_Union[Udf, _Mapping]] = ..., vectors: _Optional[_Iterable[_Union[DataVector, _Mapping]]] = ..., length: _Optional[int] = ..., type: _Optional[_Union[RequestType, str]] = ...) -> None: ...
 
 class Response(_message.Message):
-    __slots__ = ["vector", "language"]
+    __slots__ = ["vector", "type"]
     VECTOR_FIELD_NUMBER: _ClassVar[int]
-    LANGUAGE_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
     vector: DataVector
-    language: str
-    def __init__(self, vector: _Optional[_Union[DataVector, _Mapping]] = ..., language: _Optional[str] = ...) -> None: ...
+    type: ResponseType
+    def __init__(self, vector: _Optional[_Union[DataVector, _Mapping]] = ..., type: _Optional[_Union[ResponseType, str]] = ...) -> None: ...
 
 class Udf(_message.Message):
-    __slots__ = ["handler", "isImport", "body", "retType"]
+    __slots__ = ["handler", "isImport", "body", "importPkg", "retType", "language", "modifiedTime", "db"]
     HANDLER_FIELD_NUMBER: _ClassVar[int]
     ISIMPORT_FIELD_NUMBER: _ClassVar[int]
     BODY_FIELD_NUMBER: _ClassVar[int]
+    IMPORTPKG_FIELD_NUMBER: _ClassVar[int]
     RETTYPE_FIELD_NUMBER: _ClassVar[int]
+    LANGUAGE_FIELD_NUMBER: _ClassVar[int]
+    MODIFIEDTIME_FIELD_NUMBER: _ClassVar[int]
+    DB_FIELD_NUMBER: _ClassVar[int]
     handler: str
     isImport: bool
     body: str
+    importPkg: bytes
     retType: DataType
-    def __init__(self, handler: _Optional[str] = ..., isImport: bool = ..., body: _Optional[str] = ..., retType: _Optional[_Union[DataType, str]] = ...) -> None: ...
+    language: str
+    modifiedTime: str
+    db: str
+    def __init__(self, handler: _Optional[str] = ..., isImport: bool = ..., body: _Optional[str] = ..., importPkg: _Optional[bytes] = ..., retType: _Optional[_Union[DataType, str]] = ..., language: _Optional[str] = ..., modifiedTime: _Optional[str] = ..., db: _Optional[str] = ...) -> None: ...
 
 class DataVector(_message.Message):
     __slots__ = ["data", "const", "length", "type", "scale"]

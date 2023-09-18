@@ -60,13 +60,13 @@ func (c *Client) init() error {
 	return nil
 }
 
-func (c *Client) Run(ctx context.Context, request *udf.Request) (*udf.Response, error) {
-	var language string
-	if request != nil {
-		language = request.Language
+func (c *Client) Run(ctx context.Context, request *udf.Request, getPkg udf.GetPkgFunc) (*udf.Response, error) {
+	if request.Udf.Language != udf.LanguagePython {
+		return nil, moerr.NewInvalidArg(ctx, "udf language", request.Udf.Language)
 	}
-	if language != udf.LanguagePython {
-		return nil, moerr.NewInvalidArg(ctx, "udf language", language)
+
+	if request.Type != udf.RequestType_DataRequest {
+		return nil, moerr.NewInvalidInput(ctx, "type of the first udf request must be 'DataRequest'")
 	}
 
 	err := c.init()
@@ -74,7 +74,43 @@ func (c *Client) Run(ctx context.Context, request *udf.Request) (*udf.Response, 
 		return nil, err
 	}
 
-	return c.sc.Run(ctx, request)
+	stream, err := c.sc.Run(ctx)
+	defer stream.CloseSend()
+	if err != nil {
+		return nil, err
+	}
+	err = stream.Send(request)
+	if err != nil {
+		return nil, err
+	}
+	response, err := stream.Recv()
+	if err != nil {
+		return nil, err
+	}
+	switch response.Type {
+	case udf.ResponseType_DataResponse:
+		return response, nil
+	case udf.ResponseType_PkgRequest:
+		request.Udf.ImportPkg, err = getPkg()
+		if err != nil {
+			return nil, err
+		}
+		pkgRequest := &udf.Request{
+			Udf:  request.Udf,
+			Type: udf.RequestType_PkgResponse,
+		}
+		err = stream.Send(pkgRequest)
+		if err != nil {
+			return nil, err
+		}
+		response, err = stream.Recv()
+		if err != nil {
+			return nil, err
+		}
+		return response, nil
+	default:
+		return nil, moerr.NewInternalError(ctx, "error udf response type")
+	}
 }
 
 func (c *Client) Language() string {

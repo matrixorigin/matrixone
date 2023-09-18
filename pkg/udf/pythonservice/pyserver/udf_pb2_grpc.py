@@ -16,7 +16,7 @@ class ServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.run = channel.unary_unary(
+        self.run = channel.stream_stream(
                 '/udf.Service/run',
                 request_serializer=udf__pb2.Request.SerializeToString,
                 response_deserializer=udf__pb2.Response.FromString,
@@ -28,7 +28,7 @@ class ServiceServicer(object):
 
     """
 
-    def run(self, request, context):
+    def run(self, request_iterator, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -37,7 +37,7 @@ class ServiceServicer(object):
 
 def add_ServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'run': grpc.unary_unary_rpc_method_handler(
+            'run': grpc.stream_stream_rpc_method_handler(
                     servicer.run,
                     request_deserializer=udf__pb2.Request.FromString,
                     response_serializer=udf__pb2.Response.SerializeToString,
@@ -55,7 +55,7 @@ class Service(object):
     """
 
     @staticmethod
-    def run(request,
+    def run(request_iterator,
             target,
             options=(),
             channel_credentials=None,
@@ -65,7 +65,7 @@ class Service(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/udf.Service/run',
+        return grpc.experimental.stream_stream(request_iterator, target, '/udf.Service/run',
             udf__pb2.Request.SerializeToString,
             udf__pb2.Response.FromString,
             options, channel_credentials,

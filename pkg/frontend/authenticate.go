@@ -8357,7 +8357,9 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+type uploadPkg = func(localPath string, storageDir string) (storagePath string, err error)
+
+func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction, upload uploadPkg) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
@@ -8446,6 +8448,28 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	if cf.Language == string(tree.SQL) {
 		body = cf.Body
 	} else {
+		if cf.Import {
+			// check
+			if cf.Language == string(tree.PYTHON) {
+				if !strings.HasSuffix(cf.Body, ".py") &&
+					!strings.HasSuffix(cf.Body, ".whl") {
+					return moerr.NewInvalidInput(ctx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
+				}
+				if strings.HasSuffix(cf.Body, ".whl") {
+					dotIdx := strings.LastIndex(cf.Handler, ".")
+					if dotIdx < 1 {
+						return moerr.NewInvalidInput(ctx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
+					}
+				}
+			}
+			// upload
+			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
+			cf.Body, err = upload(cf.Body, storageDir)
+			if err != nil {
+				return err
+			}
+		}
+
 		nb := function.NonSqlUdfBody{
 			Handler: cf.Handler,
 			Import:  cf.Import,

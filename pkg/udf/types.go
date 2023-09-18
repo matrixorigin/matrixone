@@ -14,7 +14,9 @@
 
 package udf
 
-import "context"
+import (
+	"context"
+)
 
 const (
 	LanguagePython = "python"
@@ -23,5 +25,7 @@ const (
 // Service handle non-sql udf in cn
 type Service interface {
 	Language() string
-	Run(ctx context.Context, request *Request) (*Response, error)
+	Run(ctx context.Context, request *Request, getPkg GetPkgFunc) (*Response, error)
 }
+
+type GetPkgFunc func() (pkg []byte, err error)

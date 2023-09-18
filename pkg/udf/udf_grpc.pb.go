@@ -22,7 +22,7 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ServiceClient interface {
-	Run(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
+	Run(ctx context.Context, opts ...grpc.CallOption) (Service_RunClient, error)
 }
 
 type serviceClient struct {
@@ -33,20 +33,42 @@ func NewServiceClient(cc grpc.ClientConnInterface) ServiceClient {
 	return &serviceClient{cc}
 }
 
-func (c *serviceClient) Run(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error) {
-	out := new(Response)
-	err := c.cc.Invoke(ctx, "/udf.Service/run", in, out, opts...)
+func (c *serviceClient) Run(ctx context.Context, opts ...grpc.CallOption) (Service_RunClient, error) {
+	stream, err := c.cc.NewStream(ctx, &Service_ServiceDesc.Streams[0], "/udf.Service/run", opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &serviceRunClient{stream}
+	return x, nil
+}
+
+type Service_RunClient interface {
+	Send(*Request) error
+	Recv() (*Response, error)
+	grpc.ClientStream
+}
+
+type serviceRunClient struct {
+	grpc.ClientStream
+}
+
+func (x *serviceRunClient) Send(m *Request) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *serviceRunClient) Recv() (*Response, error) {
+	m := new(Response)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // ServiceServer is the server API for Service service.
 // All implementations must embed UnimplementedServiceServer
 // for forward compatibility
 type ServiceServer interface {
-	Run(context.Context, *Request) (*Response, error)
+	Run(Service_RunServer) error
 	mustEmbedUnimplementedServiceServer()
 }
 
@@ -54,8 +76,8 @@ type ServiceServer interface {
 type UnimplementedServiceServer struct {
 }
 
-func (UnimplementedServiceServer) Run(context.Context, *Request) (*Response, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Run not implemented")
+func (UnimplementedServiceServer) Run(Service_RunServer) error {
+	return status.Errorf(codes.Unimplemented, "method Run not implemented")
 }
 func (UnimplementedServiceServer) mustEmbedUnimplementedServiceServer() {}
 
@@ -70,22 +92,30 @@ func RegisterServiceServer(s grpc.ServiceRegistrar, srv ServiceServer) {
 	s.RegisterService(&Service_ServiceDesc, srv)
 }
 
-func _Service_Run_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Request)
-	if err := dec(in); err != nil {
+func _Service_Run_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ServiceServer).Run(&serviceRunServer{stream})
+}
+
+type Service_RunServer interface {
+	Send(*Response) error
+	Recv() (*Request, error)
+	grpc.ServerStream
+}
+
+type serviceRunServer struct {
+	grpc.ServerStream
+}
+
+func (x *serviceRunServer) Send(m *Response) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *serviceRunServer) Recv() (*Request, error) {
+	m := new(Request)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	if interceptor == nil {
-		return srv.(ServiceServer).Run(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/udf.Service/run",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ServiceServer).Run(ctx, req.(*Request))
-	}
-	return interceptor(ctx, in, info, handler)
+	return m, nil
 }
 
 // Service_ServiceDesc is the grpc.ServiceDesc for Service service.
@@ -94,12 +124,14 @@ func _Service_Run_Handler(srv interface{}, ctx context.Context, dec func(interfa
 var Service_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "udf.Service",
 	HandlerType: (*ServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "run",
-			Handler:    _Service_Run_Handler,
+			StreamName:    "run",
+			Handler:       _Service_Run_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "udf.proto",
 }

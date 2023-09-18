@@ -13,12 +13,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import json
 import argparse
 import datetime
-from concurrent import futures
-from typing import Any, Callable, Optional
 import decimal
+import enum
+import importlib
+import json
+import os
+import shutil
+import threading
+import subprocess
+from concurrent import futures
+from typing import Any, Callable, Optional, Iterator, Dict
 
 import grpc
 
@@ -31,18 +37,84 @@ DATE_FORMAT = '%Y-%m-%d'
 DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
 DATETIME_FORMAT_WITH_PRECISION = '%Y-%m-%d %H:%M:%S.%f'
 
+ROOT_PATH = os.path.dirname(os.path.abspath(__file__))
+INSTALLED_LABEL = 'installed'
+
 
 class Server(pb2_grpc.ServiceServicer):
 
-    def run(self,
-            request: pb2.Request,
-            context) -> pb2.Response:
+    def run(self, requestIterator: Iterator[pb2.Request], context) -> pb2.Response:
+        firstRequest: pb2.Request
+        path: str
+        filename: str
+        item: InstallingItem
 
-        # check
-        assert request.language == "python", "udf language must be python"
+        for request in requestIterator:
+            # check
+            udfCheck(request.udf)
 
+            if request.type == pb2.DataRequest:
+
+                if request.udf.isImport:
+                    path, filename, item, status = functionStatus(request.udf)
+
+                    if status == FunctionStatus.NotExist:
+                        firstRequest = request
+                        yield pb2.Response(type=pb2.PkgRequest)
+
+                    elif status == FunctionStatus.Installing:
+                        with item.condition:
+                            # block and waiting
+                            if not item.installed:
+                                item.condition.wait()
+                        yield self.calculate(request, path, filename)
+
+                    else:
+                        yield self.calculate(request, path, filename)
+
+                else:
+                    yield self.calculate(request, "", "")
+
+            elif request.type == pb2.PkgResponse:
+                # install pkg, do not need write lock
+                absPath = os.path.join(ROOT_PATH, path)
+                try:
+                    if os.path.exists(absPath):
+                        shutil.rmtree(absPath)
+                    os.makedirs(absPath, exist_ok=True)
+
+                    file = os.path.join(absPath, filename)
+
+                    with open(file, 'wb') as f:
+                        f.write(request.udf.importPkg)
+
+                    if request.udf.body.endswith('.whl'):
+                        subprocess.check_call(['pip', 'install', file, '-t', absPath])
+                        os.remove(file)
+
+                    # mark the pkg is installed without error
+                    open(os.path.join(absPath, INSTALLED_LABEL), 'w').close()
+
+                except Exception as e:
+                    shutil.rmtree(absPath, ignore_errors=True)
+                    raise e
+
+                finally:
+                    with item.condition:
+                        item.installed = True
+                        item.condition.notifyAll()
+
+                    with INSTALLING_MAP_LOCK:
+                        INSTALLING_MAP[path] = None
+
+                yield self.calculate(firstRequest, path, filename)
+
+            else:
+                raise Exception('error udf request type')
+
+    def calculate(self, request: pb2.Request, filepath: str, filename: str) -> pb2.Response:
         # load function
-        func = loadFunction(request.udf)
+        func = loadFunction(request.udf, filepath, filename)
 
         # set precision
         decimal.getcontext().prec = DEFAULT_DECIMAL_SCALE
@@ -64,17 +136,69 @@ class Server(pb2_grpc.ServiceServicer):
             value = func(*params)
             data = value2Data(value, result.type)
             result.data.append(data)
-        return pb2.Response(vector=result, language="python")
+        return pb2.Response(vector=result, type=pb2.DataResponse)
 
 
-def loadFunction(udf: pb2.Udf) -> Callable:
+def udfCheck(udf: pb2.Udf):
+    assert udf.handler != "", "udf handler should not be null"
+    assert udf.body != "", "udf body should not be null"
+    assert udf.language == "python", "udf language should be python"
+    assert udf.modifiedTime != "", "udf modifiedTime should not be null"
+    assert udf.db != "", "udf db should not be null"
+
+
+class FunctionStatus(enum.Enum):
+    NotExist = 0
+    Installing = 1
+    Installed = 2
+
+
+class InstallingItem:
+    condition = threading.Condition()
+    installed = False
+
+
+# key: db/func/modified_time, value: InstallingItem
+INSTALLING_MAP: Dict[str, Optional[InstallingItem]] = {}
+INSTALLING_MAP_LOCK = threading.RLock()
+
+
+def functionStatus(udf: pb2.Udf) -> (str, str, Optional[InstallingItem], FunctionStatus):
+    with INSTALLING_MAP_LOCK:
+        filepath, filename = os.path.split(udf.body)
+        path = os.path.join('udf', udf.db, filepath[filepath.rfind('/')+1:], udf.modifiedTime)
+        item = INSTALLING_MAP.get(path)
+        if item is None:
+            if os.path.isfile(os.path.join(ROOT_PATH, path, INSTALLED_LABEL)):
+                return path, filename, item, FunctionStatus.Installed
+            else:
+                item = InstallingItem()
+                item.installed = False
+                INSTALLING_MAP[path] = item
+                return path, filename, item, FunctionStatus.NotExist
+        else:
+            if item.installed:
+                return path, filename, item, FunctionStatus.Installed
+            else:
+                return path, filename, item, FunctionStatus.Installing
+
+
+def loadFunction(udf: pb2.Udf, filepath: str, filename: str) -> Callable:
     # load function
     if not udf.isImport:
         exec(udf.body, locals())
+        # get function object
+        return locals()[udf.handler]
     else:
-        raise NotImplementedError()
-    # get function object
-    return locals()[udf.handler]
+        if udf.body.endswith('.py'):
+            file = importlib.import_module(f'.{filename[:-3]}', package=filepath.replace("/", "."))
+            return getattr(file, udf.handler)
+        elif udf.body.endswith('.whl'):
+            i = udf.handler.rfind('.')
+            if i < 1:
+                raise Exception("when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
+            file = importlib.import_module(f'.{udf.handler[:i]}', package=filepath.replace("/", "."))
+            return getattr(file, udf.handler[i+1:])
 
 
 def getDataFromDataVector(v: pb2.DataVector, i: int) -> pb2.Data:
@@ -171,7 +295,8 @@ def value2Data(value: Any, typ: pb2.DataType) -> pb2.Data:
     if typ == pb2.JSON:
         return pb2.Data(stringVal=json.dumps(value, ensure_ascii=False))
     if typ == pb2.TIME:
-        assert type(value) is datetime.timedelta, f'return type error, required {datetime.timedelta}, received {type(value)}'
+        assert type(
+            value) is datetime.timedelta, f'return type error, required {datetime.timedelta}, received {type(value)}'
         r = ''
         t: datetime.timedelta = value
         if t.days < 0:
@@ -186,7 +311,8 @@ def value2Data(value: Any, typ: pb2.DataType) -> pb2.Data:
         assert type(value) is datetime.date, f'return type error, required {datetime.date}, received {type(value)}'
         return pb2.Data(stringVal=str(value))
     if typ in [pb2.DATETIME, pb2.TIMESTAMP]:
-        assert type(value) is datetime.datetime, f'return type error, required {datetime.datetime}, received {type(value)}'
+        assert type(
+            value) is datetime.datetime, f'return type error, required {datetime.datetime}, received {type(value)}'
         return pb2.Data(stringVal=str(value))
     if typ in [pb2.DECIMAL64, pb2.DECIMAL128]:
         assert type(value) is decimal.Decimal, f'return type error, required {decimal.Decimal}, received {type(value)}'

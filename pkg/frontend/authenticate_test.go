@@ -387,7 +387,7 @@ func Test_initFunction(t *testing.T) {
 		}
 
 		ses := &Session{tenant: tenant}
-		err := InitFunction(ctx, ses, tenant, cu)
+		err := InitFunction(ctx, ses, tenant, cu, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

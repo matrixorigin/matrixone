@@ -15,6 +15,7 @@
 package pythonservice
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -26,6 +27,7 @@ import (
 type service struct {
 	cfg     Config
 	process *os.Process
+	log     io.WriteCloser
 	mutex   sync.Mutex
 }
 
@@ -42,29 +44,49 @@ var severNo int32 = 0
 func (s *service) Start() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+
 	if s.process == nil {
+		var err error
 		file := path.Join(s.cfg.Path, "server.py")
-		_, err := os.Stat(file)
+		_, err = os.Stat(file)
 		if err != nil {
 			return err
 		}
+
 		no := strconv.Itoa(int(atomic.AddInt32(&severNo, 1)))
-		cmd := exec.Command(
-			"/bin/bash", "-c",
-			"python -u "+file+" --address="+s.cfg.Address+" >> server"+no+".log 2>&1 &",
-		)
-		err = cmd.Run()
+		s.log, err = os.OpenFile("server"+no+".log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			return err
 		}
+		defer func() {
+			if err != nil {
+				s.log.Close()
+			}
+		}()
+
+		cmd := exec.Command("python", "-u", file, "--address="+s.cfg.Address)
+		cmd.Stdout = s.log
+		cmd.Stderr = s.log
+		err = cmd.Start()
+		if err != nil {
+			return err
+		}
+
 		s.process = cmd.Process
 	}
+
 	return nil
 }
 
 func (s *service) Close() error {
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	defer func() {
+		s.mutex.Unlock()
+		if s.log != nil {
+			s.log.Close()
+		}
+	}()
+
 	if s.process != nil {
 		err := s.process.Kill()
 		if err != nil {
@@ -72,5 +94,6 @@ func (s *service) Close() error {
 		}
 		s.process = nil
 	}
+
 	return nil
 }

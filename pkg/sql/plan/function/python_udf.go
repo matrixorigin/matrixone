@@ -15,8 +15,8 @@
 package function
 
 import (
-	"context"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -87,22 +87,40 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 	request := &udf.Request{
 		Udf: &udf.Udf{
-			Handler:  body.Handler,
-			IsImport: body.Import,
-			Body:     body.Body,
-			RetType:  t2DataType[u.GetRetType().Oid],
+			Handler:      body.Handler,
+			IsImport:     body.Import,
+			Body:         body.Body,
+			RetType:      t2DataType[u.GetRetType().Oid],
+			Language:     udf.LanguagePython,
+			Db:           u.Db,
+			ModifiedTime: u.ModifiedTime,
 		},
-		Vectors:  make([]*udf.DataVector, len(parameters)-1),
-		Length:   int64(length),
-		Language: udf.LanguagePython,
+		Vectors: make([]*udf.DataVector, len(parameters)-1),
+		Length:  int64(length),
+		Type:    udf.RequestType_DataRequest,
 	}
 	for i := 1; i < len(parameters); i++ {
 		dataVector, _ := vector2DataVector(parameters[i])
 		request.Vectors[i-1] = dataVector
 	}
 
+	// getPkg
+	getPkg := func() (pkg []byte, err error) {
+		ioVector := &fileservice.IOVector{
+			FilePath: request.Udf.Body,
+			Entries: []fileservice.IOEntry{
+				{
+					Offset: 0,
+					Size:   -1,
+				},
+			},
+		}
+		err = proc.FileService.Read(proc.Ctx, ioVector)
+		return ioVector.Entries[0].Data, err
+	}
+
 	// run
-	response, err := proc.UdfService.Run(context.Background(), request)
+	response, err := proc.UdfService.Run(proc.Ctx, request, getPkg)
 	if err != nil {
 		return err
 	}

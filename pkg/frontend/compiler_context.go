@@ -315,7 +315,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	sql = fmt.Sprintf(`select args, body, language, rettype from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -368,6 +368,16 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			if err != nil {
 				return nil, err
 			}
+			udf.Db, err = erArray[0].GetString(ctx, i, 4)
+			if err != nil {
+				return nil, err
+			}
+			udf.ModifiedTime, err = erArray[0].GetString(ctx, i, 5)
+			if err != nil {
+				return nil, err
+			}
+			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, " ", "_")
+			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, ":", "-")
 			// arg type check
 			argList := make([]*function.Arg, 0)
 			err = json.Unmarshal([]byte(argstr), &argList)

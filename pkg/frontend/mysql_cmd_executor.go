@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	gotrace "runtime/trace"
 	"sort"
 	"strconv"
@@ -1293,11 +1294,64 @@ func (mce *MysqlCmdExecutor) handleDropRole(ctx context.Context, dr *tree.DropRo
 	return doDropRole(ctx, mce.GetSession(), dr)
 }
 
-func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.CreateFunction) error {
+func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.CreateFunction, proc *process.Process) error {
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
 
-	return InitFunction(ctx, ses, tenant, cf)
+	return InitFunction(ctx, ses, tenant, cf, func(localPath string, storageDir string) (string, error) {
+		loadLocalReader, loadLocalWriter := io.Pipe()
+
+		// write to pipe
+		loadLocalErrGroup := new(errgroup.Group)
+		loadLocalErrGroup.Go(func() error {
+			param := &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{
+					Filepath: localPath,
+				},
+			}
+			return mce.processLoadLocal(proc.Ctx, param, loadLocalWriter)
+		})
+
+		// read from pipe
+		defer loadLocalReader.Close()
+		var err error
+		var offset int64
+		buffer := make([]byte, 4096)
+		ioVector := fileservice.IOVector{
+			FilePath: path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:]),
+		}
+		for {
+			var n int
+			n, err = loadLocalReader.Read(buffer)
+			if err != nil {
+				if err == io.EOF {
+					err = nil
+				}
+				break
+			}
+			data := make([]byte, n)
+			copy(data, buffer[:n])
+			ioVector.Entries = append(ioVector.Entries, fileservice.IOEntry{
+				Offset: offset,
+				Size:   int64(n),
+				Data:   data,
+			})
+			offset += int64(n)
+		}
+		err = errors.Join(err, loadLocalErrGroup.Wait())
+		if err != nil {
+			return "", err
+		}
+
+		// upload
+		_ = proc.FileService.Delete(ctx, ioVector.FilePath)
+		err = proc.FileService.Write(ctx, ioVector)
+		if err != nil {
+			return "", err
+		}
+
+		return ioVector.FilePath, nil
+	})
 }
 
 func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction) error {
@@ -3132,7 +3186,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = st.Valid(); err != nil {
 			return err
 		}
-		if err = mce.handleCreateFunction(requestCtx, st); err != nil {
+		if err = mce.handleCreateFunction(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.DropFunction:
