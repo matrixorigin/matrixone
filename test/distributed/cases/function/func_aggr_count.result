@@ -410,10 +410,12 @@ count(*)
 DELETE FROM t1 WHERE a%2=1;
 DELETE FROM t1 WHERE a>50000;
 SELECT COUNT(*) FROM t1;
+count(*)
 25000
 SELECT mo_ctl('dn', 'flush', 'func_aggr_count.t1');
 mo_ctl(dn, flush, func_aggr_count.t1)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 SELECT COUNT(*) FROM t1;
+count(*)
 25000
 DROP TABLE t1;
