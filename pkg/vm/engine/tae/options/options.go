@@ -118,6 +118,12 @@ func WithDisableGCCatalog() func(*Options) {
 	}
 }
 
+func WithReserveWALEntryCount(count uint64) func(*Options) {
+	return func(r *Options) {
+		r.CheckpointCfg.ReservedWALEntryCount = count
+	}
+}
+
 func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
