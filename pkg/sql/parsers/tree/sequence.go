@@ -111,9 +111,9 @@ type CycleOption struct {
 
 func (node *CycleOption) Format(ctx *FmtCtx) {
 	if node.Cycle {
-		ctx.WriteString("Cycle  ")
+		ctx.WriteString("cycle")
 	} else {
-		ctx.WriteString("No Cycle  ")
+		ctx.WriteString("no cycle")
 	}
 }
 

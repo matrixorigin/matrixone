@@ -2083,15 +2083,15 @@ var (
 		},
 		{
 			input:  "ALTER SEQUENCE my_sequence START WITH 100;",
-			output: "alter sequence my_sequence as bigint start with 100",
+			output: "alter sequence my_sequence as bigint start with 100 ",
 		},
 		{
 			input:  "ALTER SEQUENCE my_sequence INCREMENT BY 5;",
-			output: "alter sequence my_sequence as bigint increment by 5",
+			output: "alter sequence my_sequence as bigint increment by 5 ",
 		},
 		{
 			input:  "ALTER SEQUENCE my_sequence MINVALUE 1 MAXVALUE 1000;",
-			output: "alter sequence my_sequence as bigint minvalue 1 maxvalue 1000",
+			output: "alter sequence my_sequence as bigint minvalue 1 maxvalue 1000 ",
 		},
 		{
 			input:  "ALTER SEQUENCE my_sequence CYCLE;",
