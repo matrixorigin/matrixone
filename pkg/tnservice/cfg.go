@@ -46,11 +46,12 @@ var (
 	defaultConnectTimeout        = time.Second * 30
 	defaultHeatbeatTimeout       = time.Second * 3
 
-	defaultFlushInterval       = time.Second * 60
-	defaultScanInterval        = time.Second * 5
-	defaultIncrementalInterval = time.Minute
-	defaultGlobalMinCount      = int64(60)
-	defaultMinCount            = int64(100)
+	defaultFlushInterval         = time.Second * 60
+	defaultScanInterval          = time.Second * 5
+	defaultIncrementalInterval   = time.Minute
+	defaultGlobalMinCount        = int64(60)
+	defaultMinCount              = int64(100)
+	defaultReservedWALEntryCount = uint64(5000)
 
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
 	defaultLogtailCollectInterval     = 2 * time.Millisecond
@@ -109,11 +110,12 @@ type Config struct {
 	RPC rpc.Config `toml:"rpc"`
 
 	Ckp struct {
-		FlushInterval       toml.Duration `toml:"flush-interval"`
-		ScanInterval        toml.Duration `toml:"scan-interval"`
-		MinCount            int64         `toml:"min-count"`
-		IncrementalInterval toml.Duration `toml:"incremental-interval"`
-		GlobalMinCount      int64         `toml:"global-min-count"`
+		FlushInterval         toml.Duration `toml:"flush-interval"`
+		ScanInterval          toml.Duration `toml:"scan-interval"`
+		MinCount              int64         `toml:"min-count"`
+		IncrementalInterval   toml.Duration `toml:"incremental-interval"`
+		GlobalMinCount        int64         `toml:"global-min-count"`
+		ReservedWALEntryCount uint64        `toml:"reserved-WAL-entry-count"`
 	}
 
 	LogtailServer struct {
@@ -220,6 +222,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
+	}
+	if c.Ckp.ReservedWALEntryCount == 0 {
+		c.Ckp.ReservedWALEntryCount = defaultReservedWALEntryCount
 	}
 	if c.LogtailServer.ListenAddress == "" {
 		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
