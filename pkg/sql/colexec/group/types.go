@@ -67,6 +67,8 @@ type container struct {
 	bat *batch.Batch
 
 	hasAggResult bool
+
+	tmpVecs []*vector.Vector // for reuse
 }
 
 type Argument struct {
@@ -91,6 +93,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanAggVectors()
 		ctr.cleanGroupVectors()
 		ctr.cleanMultiAggVecs()
+		ctr.tmpVecs = nil
 	}
 }
 
