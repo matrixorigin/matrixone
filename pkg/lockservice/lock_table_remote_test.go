@@ -203,7 +203,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 			l.unlock(txn, nil, timestamp.Timestamp{})
 			assert.Equal(t, newBind, <-c)
 
-			l.getLock(txnID, []byte{1}, nil)
+			l.getLock(txnID, pb.WaitTxn{TxnID: []byte{1}}, nil)
 			assert.Equal(t, newBind, <-c)
 		},
 		func(bind pb.LockTable) {
