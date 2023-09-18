@@ -365,7 +365,7 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) > 0 && inputs[0].Oid == types.T_varchar {
+			if len(inputs) > 0 {
 				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedAggParametersWrong)

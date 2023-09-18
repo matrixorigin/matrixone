@@ -45,13 +45,13 @@ var (
 )
 
 func NewAggGroupConcat(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error) {
-	var aggPriv *agg.GroupConcat
+	aggPriv := &sAggGroupConcat{}
 
-	bytes, ok := config.([]byte)
-	if ok && bytes != nil {
-		aggPriv = agg.NewGroupConcat(string(bytes))
+	bts, ok := config.([]byte)
+	if ok && bts != nil {
+		aggPriv.separator = string(bts)
 	} else {
-		aggPriv = agg.NewGroupConcat(defaultSeparator)
+		aggPriv.separator = defaultSeparator
 	}
 
 	switch inputTypes[0].Oid {
