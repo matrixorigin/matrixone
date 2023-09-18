@@ -77,9 +77,11 @@ func (p *countBasedPolicy) Reset() {
 }
 
 type globalCheckpointContext struct {
-	force    bool
-	end      types.TS
-	interval time.Duration
+	force       bool
+	end         types.TS
+	interval    time.Duration
+	truncateLSN uint64
+	ckpLSN      uint64
 }
 
 // Q: What does runner do?
@@ -188,6 +190,8 @@ type runner struct {
 		checkpointQueueSize int
 
 		checkpointBlockRows int
+
+		reservedWALEntryCount uint64
 	}
 
 	ctx context.Context
@@ -308,12 +312,12 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 		}
 		if doCheckpoint {
 			now := time.Now()
-			entry, err := r.doGlobalCheckpoint(ctx.end, ctx.interval)
+			entry, err := r.doGlobalCheckpoint(ctx.end, ctx.ckpLSN, ctx.truncateLSN, ctx.interval)
 			if err != nil {
 				logutil.Errorf("Global checkpoint %v failed: %v", entry, err)
 				continue
 			}
-			if err := r.saveCheckpoint(entry.start, entry.end); err != nil {
+			if err := r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
 				logutil.Errorf("Global checkpoint %v failed: %v", entry, err)
 				continue
 			}
@@ -397,14 +401,19 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		logutil.Errorf("Do checkpoint %s: %v", entry.String(), err)
 		return
 	}
+	lsn := r.source.GetMaxLSN(entry.start, entry.end)
+	lsnToTruncate := uint64(0)
+	if lsn > r.options.reservedWALEntryCount {
+		lsnToTruncate = lsn - r.options.reservedWALEntryCount
+	}
+	entry.SetLSN(lsn, lsnToTruncate)
 	entry.SetState(ST_Finished)
-	if err = r.saveCheckpoint(entry.start, entry.end); err != nil {
+	if err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
 		logutil.Errorf("Save checkpoint %s: %v", entry.String(), err)
 		return
 	}
 
-	lsn := r.source.GetMaxLSN(entry.start, entry.end)
-	e, err := r.wal.RangeCheckpoint(1, lsn)
+	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate)
 	if err != nil {
 		panic(err)
 	}
@@ -412,10 +421,16 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 		panic(err)
 	}
 
-	logutil.Infof("%s is done, takes %s, truncate %d", entry.String(), time.Since(now), lsn)
+	logutil.Infof("%s is done, takes %s, truncate %d, checkpoint %d, reserve %d",
+		entry.String(), time.Since(now), lsnToTruncate, lsn, r.options.reservedWALEntryCount)
 
 	r.postCheckpointQueue.Enqueue(entry)
-	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{end: entry.end, interval: r.options.globalVersionInterval})
+	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
+		end:         entry.end,
+		interval:    r.options.globalVersionInterval,
+		ckpLSN:      lsn,
+		truncateLSN: lsnToTruncate,
+	})
 }
 
 func (r *runner) DeleteIncrementalEntry(entry *CheckpointEntry) {
@@ -477,8 +492,8 @@ func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.
 	return
 }
 
-func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
-	bat := r.collectCheckpointMetadata(start, end)
+func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64) (err error) {
+	bat := r.collectCheckpointMetadata(start, end, ckpLSN, truncateLSN)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
 	if err != nil {
@@ -512,8 +527,10 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	return
 }
 
-func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry *CheckpointEntry, err error) {
+func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration) (entry *CheckpointEntry, err error) {
 	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
+	entry.ckpLSN = ckpLSN
+	entry.truncateLSN = truncateLSN
 	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval)
 	data, err := factory(r.catalog)
 	if err != nil {
