@@ -158,10 +158,9 @@ func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 					txn2,
 					option)
 				require.NoError(t, err)
-				assert.Equal(
+				assert.True(
 					t,
-					timestamp.Timestamp{PhysicalTime: 1},
-					res.Timestamp)
+					!res.Timestamp.IsEmpty())
 			}()
 			waitWaiters(t, l1, 1, row1, 1)
 			require.NoError(t, l1.Unlock(

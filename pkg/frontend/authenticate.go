@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -352,15 +353,27 @@ type initUser struct {
 }
 
 var (
-	specialUsers atomic.Value
+	specialUsers struct {
+		sync.RWMutex
+		users map[string]*initUser
+	}
 )
+
+func setSpecialUser(userName string, user *initUser) {
+	specialUsers.Lock()
+	if specialUsers.users == nil {
+		specialUsers.users = make(map[string]*initUser)
+	}
+	specialUsers.users[userName] = user
+	specialUsers.Unlock()
+}
 
 // SetSpecialUser saves the user for initialization
 // !!!NOTE: userName must not contain Colon ':'
-func SetSpecialUser(userName string, password []byte) {
+func SetSpecialUser(username string, password []byte) {
 	acc := &TenantInfo{
 		Tenant:        sysAccountName,
-		User:          userName,
+		User:          username,
 		DefaultRole:   moAdminRoleName,
 		TenantID:      sysAccountID,
 		UserID:        math.MaxUint32,
@@ -371,32 +384,18 @@ func SetSpecialUser(userName string, password []byte) {
 		account:  acc,
 		password: password,
 	}
-	users := getSpecialUsers()
-	if users == nil {
-		users = make(map[string]*initUser)
-	}
-	users[userName] = user
-
-	specialUsers.Store(users)
+	setSpecialUser(username, user)
 }
 
 // isSpecialUser checks the user is the one for initialization
 func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
-	users := getSpecialUsers()
+	specialUsers.RLock()
+	defer specialUsers.RUnlock()
 
-	if len(users) > 0 && users[userName] != nil {
-		return true, users[userName].password, users[userName].account
+	if user, ok := specialUsers.users[userName]; ok {
+		return true, user.password, user.account
 	}
 	return false, nil, nil
-}
-
-// getSpecialUsers loads the user for initialization
-func getSpecialUsers() map[string]*initUser {
-	value := specialUsers.Load()
-	if value == nil {
-		return nil
-	}
-	return value.(map[string]*initUser)
 }
 
 const (
@@ -816,6 +815,7 @@ var (
 		"mo_mysql_compatibility_mode": 0,
 		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
+		"mo_sessions":                 0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -842,6 +842,7 @@ var (
 		"mo_table_partitions":         0,
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
+		"mo_sessions":                 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1016,6 +1017,7 @@ var (
 				comment text,
 				primary key(stage_id)
 			);`,
+		`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
 	}
 
 	//drop tables for the tenant
@@ -1029,6 +1031,7 @@ var (
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 		`drop table if exists mo_catalog.mo_stages;`,
+		`drop view if exists mo_catalog.mo_sessions;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql       = `delete from mo_catalog.mo_pubs;`
@@ -7583,7 +7586,6 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
 	var mp *mpool.MPool
-	var needCreate bool
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
@@ -7631,43 +7633,34 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		return err
 	}
 
-	createNewAccount := func() (bool, error) {
+	createNewAccount := func() error {
 		err = bh.Exec(ctx, "begin;")
 		defer func() {
 			err = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
-			return false, err
+			return err
 		}
 
+		// check account exists or not
 		exists, err = checkTenantExistsOrNot(ctx, bh, ca.Name)
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				return false, moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
 			}
-			return false, err
+			return err
 		} else {
 			newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 			if err != nil {
-				return false, err
+				return err
 			}
 		}
-		return true, err
-	}
 
-	needCreate, err = createNewAccount()
-	if err != nil {
-		return err
-	}
-	if !needCreate {
-		return err
-	}
-
-	{
+		// create some tables and databases for new account
 		err = bh.Exec(newTenantCtx, createMoIndexesSql)
 		if err != nil {
 			return err
@@ -7696,16 +7689,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 				return err
 			}
 		}
-	}
 
-	createTablesForNewAccount := func() error {
-		err = bh.Exec(ctx, "begin;")
-		defer func() {
-			err = finishTxn(ctx, bh, err)
-		}()
-		if err != nil {
-			return err
-		}
+		// create tables for new account
 		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, ses.pu)
 		if err != nil {
 			return err
@@ -7718,10 +7703,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			return err
 		}
+
 		return err
 	}
 
-	err = createTablesForNewAccount()
+	err = createNewAccount()
 	if err != nil {
 		return err
 	}

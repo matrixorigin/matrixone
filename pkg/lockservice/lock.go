@@ -83,22 +83,22 @@ func (l Lock) isEmpty() bool {
 		(l.waiters == nil || l.waiters.size() == 0)
 }
 
-func (l Lock) tryHold(c *lockContext) bool {
+func (l Lock) tryHold(c *lockContext) (bool, bool) {
 	if l.isEmpty() {
 		panic("BUG: try hold on empty lock")
 	}
 
 	// txn already hold the lock
 	if l.holders.contains(c.txn.txnID) {
-		return true
+		return true, false
 	}
 
 	if l.canHold(c) {
 		l.addHolder(c)
-		return true
+		return true, true
 	}
 
-	return false
+	return false, false
 }
 
 // (no holders && is first waiter txn) || (both shared lock) can hold lock

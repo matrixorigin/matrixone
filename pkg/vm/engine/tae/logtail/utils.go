@@ -48,8 +48,9 @@ const (
 	CheckpointVersion4 uint32 = 4
 	CheckpointVersion5 uint32 = 5
 	CheckpointVersion6 uint32 = 6
+	CheckpointVersion7 uint32 = 7
 
-	CheckpointCurrentVersion = CheckpointVersion6
+	CheckpointCurrentVersion = CheckpointVersion7
 )
 
 const (
@@ -119,6 +120,7 @@ var checkpointDataSchemas_V3 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V4 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V5 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V6 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V7 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
@@ -287,6 +289,8 @@ func init() {
 		BlkMetaSchema, // 23
 		TNMetaSchema,
 	}
+	// Checkpoint V7 update checkpoint metadata
+	checkpointDataSchemas_V7 = checkpointDataSchemas_V6
 
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 
@@ -296,7 +300,8 @@ func init() {
 	registerCheckpointDataReferVersion(CheckpointVersion4, checkpointDataSchemas_V4[:])
 	registerCheckpointDataReferVersion(CheckpointVersion5, checkpointDataSchemas_V5[:])
 	registerCheckpointDataReferVersion(CheckpointVersion6, checkpointDataSchemas_V6[:])
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V6
+	registerCheckpointDataReferVersion(CheckpointVersion7, checkpointDataSchemas_V6[:])
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V7
 }
 
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
