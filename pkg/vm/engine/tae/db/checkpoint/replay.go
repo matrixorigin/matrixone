@@ -15,6 +15,7 @@
 package checkpoint
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -44,7 +45,16 @@ type metaFile struct {
 	end   types.TS
 }
 
-func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err error) {
+func (r *runner) Replay(dataFactory catalog.DataFactory) (
+	maxTs types.TS,
+	maxLSN uint64,
+	isLSNValid bool,
+	err error) {
+	defer func() {
+		if maxTs.IsEmpty() {
+			isLSNValid = true
+		}
+	}()
 	ctx := r.ctx
 	dirs, err := r.rt.Fs.ListDir(CheckpointDir)
 	if err != nil {
@@ -126,14 +136,21 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		} else {
 			tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
 		}
+		var ckpLSN, truncateLSN uint64
+		if version >= logtail.CheckpointVersion7 {
+			ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
+			truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
+		}
 		checkpointEntry := &CheckpointEntry{
-			start:      start,
-			end:        end,
-			cnLocation: cnLoc,
-			tnLocation: tnLoc,
-			state:      ST_Finished,
-			entryType:  typ,
-			version:    version,
+			start:       start,
+			end:         end,
+			cnLocation:  cnLoc,
+			tnLocation:  tnLoc,
+			state:       ST_Finished,
+			entryType:   typ,
+			version:     version,
+			ckpLSN:      ckpLSN,
+			truncateLSN: truncateLSN,
 		}
 		var err2 error
 		if readType == PrefetchData {
@@ -216,10 +233,18 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		if maxTs.Less(maxGlobal.end) {
 			maxTs = maxGlobal.end
 		}
+		// for force checkpoint, ckpLSN is 0.
+		if maxGlobal.version >= logtail.CheckpointVersion7 && maxGlobal.ckpLSN > 0 {
+			if maxGlobal.ckpLSN < maxLSN {
+				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, maxGlobal.ckpLSN))
+			}
+			isLSNValid = true
+			maxLSN = maxGlobal.ckpLSN
+		}
 	}
 	for _, e := range emptyFile {
 		if e.end.GreaterEq(maxTs) {
-			return types.TS{},
+			return types.TS{}, 0, false,
 				moerr.NewInternalError(ctx,
 					"read checkpoint %v failed",
 					e.String())
@@ -240,6 +265,14 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err er
 		}
 		if maxTs.Less(checkpointEntry.end) {
 			maxTs = checkpointEntry.end
+		}
+		// for force checkpoint, ckpLSN is 0.
+		if checkpointEntry.version >= logtail.CheckpointVersion7 && checkpointEntry.ckpLSN > 0 {
+			if checkpointEntry.ckpLSN < maxLSN {
+				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, checkpointEntry.ckpLSN))
+			}
+			isLSNValid = true
+			maxLSN = checkpointEntry.ckpLSN
 		}
 	}
 	applyDuration = time.Since(t0)
