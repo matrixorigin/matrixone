@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"net"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -43,6 +44,8 @@ type handler struct {
 	counterSet *counterSet
 	// haKeeperClient is the client to communicate with HAKeeper.
 	haKeeperClient logservice.ClusterHAKeeperClient
+	// ipNetList is the list of ip net, which is parsed from CIDRs.
+	ipNetList []*net.IPNet
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -96,6 +99,18 @@ func newProxyHandler(
 		}
 		ru = newPluginRouter(ru, p)
 	}
+
+	var ipNetList []*net.IPNet
+	for _, cidr := range cfg.InternalCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			rt.Logger().Error("failed to parse CIDR",
+				zap.String("CIDR", cidr),
+				zap.Error(err))
+		} else {
+			ipNetList = append(ipNetList, ipNet)
+		}
+	}
 	return &handler{
 		ctx:            context.Background(),
 		logger:         rt.Logger(),
@@ -105,6 +120,7 @@ func newProxyHandler(
 		counterSet:     cs,
 		router:         ru,
 		haKeeperClient: c,
+		ipNetList:      ipNetList,
 	}, nil
 }
 
@@ -123,7 +139,16 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}()
 
 	cc, err := newClientConn(
-		h.ctx, &h.config, h.logger, h.counterSet, c, h.haKeeperClient, h.moCluster, h.router, t,
+		h.ctx,
+		&h.config,
+		h.logger,
+		h.counterSet,
+		c,
+		h.haKeeperClient,
+		h.moCluster,
+		h.router,
+		t,
+		h.ipNetList,
 	)
 	if err != nil {
 		h.logger.Error("failed to create client conn", zap.Error(err))
