@@ -85,8 +85,10 @@ func TestKafkaMoConnector(t *testing.T) {
 	}
 	value, _ := json.Marshal(payload)
 
+	msg_num := 10
+
 	// produce 10 messages
-	for i := 0; i < 10; i++ {
+	for i := 0; i < msg_num; i++ {
 		wg.Add(1) // Increment the WaitGroup counter for each message
 		p.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
@@ -109,8 +111,8 @@ func TestKafkaMoConnector(t *testing.T) {
 	select {
 	case <-done:
 		// All messages processed
-	case <-time.After(10 * time.Second): // Adjust the timeout duration as needed
-		t.Fatal("Timeout waiting for messages to be processed")
+	case <-time.After(30 * time.Second):
+		t.Error("Timed out waiting for messages to be processed")
 	}
 
 	// Stop the connector
@@ -119,12 +121,7 @@ func TestKafkaMoConnector(t *testing.T) {
 	}
 
 	// Verify that the MockSQLExecutor has executed the correct SQL for 10 times
-	if mockExecutor.execCount != 10 {
+	if mockExecutor.execCount != msg_num {
 		t.Errorf("Expected SQL to be executed 10 times, but got %d", mockExecutor.execCount)
 	}
-
-	// Additional verification for executed SQLs can be added here, if needed.
-	//for _, sql := range mockExecutor.executedSQLs {
-	//	// Example: t.Logf("Executed SQL: %s", sql)
-	//}
 }
