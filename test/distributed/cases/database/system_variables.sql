@@ -113,9 +113,7 @@ desc schemata;
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 desc character_sets;
 select character_set_name, description, maxlen from character_sets limit 5;
--- @bvt:issue#9032
 desc triggers;
--- @bvt:issue
 select trigger_name, action_order from triggers limit 3;
 
 use mysql;

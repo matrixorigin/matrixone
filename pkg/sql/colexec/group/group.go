@@ -137,6 +137,9 @@ func Prepare(proc *process.Process, arg any) (err error) {
 			}
 		}
 	}
+
+	ctr.tmpVecs = make([]*vector.Vector, 1)
+
 	return nil
 }
 
@@ -490,7 +493,8 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 		return nil
 	}
 	for j, ag := range ctr.bat.Aggs {
-		err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, []*vector.Vector{ctr.aggVecs[j].vec})
+		ctr.tmpVecs[0] = ctr.aggVecs[j].vec
+		err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, ctr.tmpVecs)
 		if err != nil {
 			return err
 		}
