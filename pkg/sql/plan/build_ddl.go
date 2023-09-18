@@ -486,7 +486,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 
 func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, error) {
 	alterSequence := &plan.AlterSequence{
-		IfNotExists: stmt.IfNotExists,
+		IfExists: stmt.IfExists,
 		TableDef: &TableDef{
 			Name: string(stmt.Name.ObjectName),
 		},

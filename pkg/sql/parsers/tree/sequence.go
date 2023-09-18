@@ -105,6 +105,18 @@ func (node *StartWithOption) Format(ctx *FmtCtx) {
 	formatAny(node.Minus, node.Num, ctx)
 }
 
+type CycleOption struct {
+	Cycle bool
+}
+
+func (node *CycleOption) Format(ctx *FmtCtx) {
+	if node.Cycle {
+		ctx.WriteString("Cycle  ")
+	} else {
+		ctx.WriteString("No Cycle  ")
+	}
+}
+
 func formatAny(minus bool, num any, ctx *FmtCtx) {
 	switch num := num.(type) {
 	case uint64:
@@ -143,19 +155,19 @@ type AlterSequence struct {
 
 	Name        *TableName
 	Type        ResolvableTypeReference
-	IfNotExists bool
+	IfExists    bool
 	IncrementBy *IncrementByOption
 	MinValue    *MinValueOption
 	MaxValue    *MaxValueOption
 	StartWith   *StartWithOption
-	Cycle       bool
+	Cycle       *CycleOption
 }
 
 func (node *AlterSequence) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter sequence ")
 
-	if node.IfNotExists {
-		ctx.WriteString("if not exists ")
+	if node.IfExists {
+		ctx.WriteString("if exists ")
 	}
 
 	node.Name.Format(ctx)
@@ -175,10 +187,8 @@ func (node *AlterSequence) Format(ctx *FmtCtx) {
 	if node.StartWith != nil {
 		node.StartWith.Format(ctx)
 	}
-	if node.Cycle {
-		ctx.WriteString("cycle")
-	} else {
-		ctx.WriteString("no cycle")
+	if node.Cycle != nil {
+		node.Cycle.Format(ctx)
 	}
 }
 
