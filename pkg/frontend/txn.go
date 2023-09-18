@@ -226,6 +226,7 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	//	txnOp.GetWorkspace().StartStatement()
 	//	th.enableStartStmt()
 	//}
+	th.ses.SetTxnId(txnOp.Txn().ID)
 	return txnCtx, txnOp, err
 }
 
@@ -316,6 +317,7 @@ func (th *TxnHandler) CommitTxn() error {
 		}()
 	}
 	if txnOp != nil {
+		th.ses.SetTxnId(txnOp.Txn().ID)
 		err = txnOp.Commit(ctx2)
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
@@ -376,6 +378,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		}()
 	}
 	if txnOp != nil {
+		th.ses.SetTxnId(txnOp.Txn().ID)
 		err = txnOp.Rollback(ctx2)
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()

@@ -38,6 +38,8 @@ enum SessionField {
 	QUERY_TYPE = 13;
 	SQL_SOURCE_TYPE = 14;
 	QUERY_START = 15;
+	CLIENT_HOST = 16;
+	ROLE = 17;
 }
 
 // Session is the information of a session.
@@ -76,4 +78,8 @@ message Session {
 	// QueryStart is the start time of query.
 	google.protobuf.Timestamp QueryStart = 16
 		[ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+	// ClientHost is the ip:port of client.
+	string ClientHost = 17;
+	// Role of the user
+	string Role = 18;
 }

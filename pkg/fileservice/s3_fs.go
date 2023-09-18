@@ -19,7 +19,9 @@ import (
 	"context"
 	"io"
 	"math"
+	pathpkg "path"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,8 +33,9 @@ import (
 
 // S3FS is a FileService implementation backed by S3
 type S3FS struct {
-	name    string
-	storage ObjectStorage
+	name      string
+	storage   ObjectStorage
+	keyPrefix string
 
 	memCache              *MemCache
 	diskCache             *DiskCache
@@ -57,16 +60,34 @@ func NewS3FS(
 	noCache bool,
 ) (*S3FS, error) {
 
-	storage, err := NewAwsSDKv2(args, perfCounterSets)
-	if err != nil {
-		return nil, err
-	}
-
 	fs := &S3FS{
 		name:            args.Name,
-		storage:         storage,
+		keyPrefix:       args.KeyPrefix,
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
+	}
+
+	var err error
+	switch {
+
+	case strings.Contains(args.Endpoint, "ctyunapi.cn"):
+		fs.storage, err = NewMinioSDK(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
+	case strings.Contains(args.Endpoint, "aliyuncs.com"):
+		fs.storage, err = NewAliyunSDK(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
+	default:
+		fs.storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
 	}
 
 	if !noCache {
@@ -133,12 +154,51 @@ func (s *S3FS) Name() string {
 	return s.name
 }
 
+func (s *S3FS) pathToKey(filePath string) string {
+	return pathpkg.Join(s.keyPrefix, filePath)
+}
+
+func (s *S3FS) keyToPath(key string) string {
+	path := strings.TrimPrefix(key, s.keyPrefix)
+	path = strings.TrimLeft(path, "/")
+	return path
+}
+
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 	ctx, span := trace.Start(ctx, "S3FS.List")
 	defer span.End()
 
-	if err := s.storage.List(ctx, dirPath, func(dirEntry DirEntry) (bool, error) {
-		entries = append(entries, dirEntry)
+	path, err := ParsePathAtService(dirPath, s.name)
+	if err != nil {
+		return nil, err
+	}
+	prefix := s.pathToKey(path.File)
+	if prefix != "" {
+		prefix += "/"
+	}
+
+	if err := s.storage.List(ctx, prefix, func(isPrefix bool, key string, size int64) (bool, error) {
+
+		if isPrefix {
+			filePath := s.keyToPath(key)
+			filePath = strings.TrimRight(filePath, "/")
+			_, name := pathpkg.Split(filePath)
+			entries = append(entries, DirEntry{
+				Name:  name,
+				IsDir: true,
+			})
+
+		} else {
+			filePath := s.keyToPath(key)
+			filePath = strings.TrimRight(filePath, "/")
+			_, name := pathpkg.Split(filePath)
+			entries = append(entries, DirEntry{
+				Name:  name,
+				IsDir: false,
+				Size:  size,
+			})
+		}
+
 		return true, nil
 	}); err != nil {
 		return nil, err
@@ -151,7 +211,22 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	ctx, span := trace.Start(ctx, "S3FS.StatFile")
 	defer span.End()
 
-	return s.storage.Stat(ctx, filePath)
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return nil, err
+	}
+	key := s.pathToKey(path.File)
+
+	size, err := s.storage.Stat(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DirEntry{
+		Name:  pathpkg.Base(filePath),
+		IsDir: false,
+		Size:  size,
+	}, nil
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
@@ -170,7 +245,12 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}()
 
 	// check existence
-	exists, err := s.storage.Exists(ctx, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, s.name)
+	if err != nil {
+		return err
+	}
+	key := s.pathToKey(path.File)
+	exists, err := s.storage.Exists(ctx, key)
 	if err != nil {
 		return err
 	}
@@ -241,21 +321,21 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		}
 	}
 
-	var r io.Reader
-	r = bytes.NewReader(content)
 	if vector.Hash.Sum != nil && vector.Hash.New != nil {
 		h := vector.Hash.New()
-		r = io.TeeReader(r, h)
-		defer func() {
-			*vector.Hash.Sum = h.Sum(nil)
-		}()
+		if _, err := h.Write(content); err != nil {
+			return err
+		}
+		*vector.Hash.Sum = h.Sum(nil)
 	}
 
+	r := bytes.NewReader(content)
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
 		expire = &vector.ExpireAt
 	}
-	if err := s.storage.Write(ctx, path.File, r, size, expire); err != nil {
+	key := s.pathToKey(path.File)
+	if err := s.storage.Write(ctx, key, r, size, expire); err != nil {
 		return err
 	}
 
@@ -385,7 +465,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
-		return s.storage.Read(ctx, path.File, min, max)
+		key := s.pathToKey(path.File)
+		return s.storage.Read(ctx, key, min, max)
 	}
 
 	// a function to get data lazily
@@ -554,7 +635,16 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 	ctx, span := trace.Start(ctx, "S3FS.Delete")
 	defer span.End()
 
-	return s.storage.Delete(ctx, filePaths...)
+	keys := make([]string, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		path, err := ParsePathAtService(filePath, s.name)
+		if err != nil {
+			return err
+		}
+		keys = append(keys, s.pathToKey(path.File))
+	}
+
+	return s.storage.Delete(ctx, keys...)
 }
 
 var _ ETLFileService = new(S3FS)
