@@ -2316,14 +2316,17 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+	partialresults := ss[0].PartialResults
+	ss[0].PartialResults = nil
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
 			ss[i] = c.newMergeScope([]*Scope{ss[i]})
 		}
 		arg := constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc)
-		if i == 0 {
-			arg.PartialResults = ss[0].PartialResults
+		if partialresults != nil {
+			arg.PartialResults = partialresults
+			partialresults = nil
 		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Group,
@@ -3092,7 +3095,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
 			name := agg.F.Func.ObjName
 			switch name {
-			case "count":
+			case "starcount":
 				partialresults = append(partialresults, int64(0))
 			case "min", "max":
 				partialresults = append(partialresults, make([]any, 0, len(ranges)))
@@ -3106,7 +3109,15 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 
 		if partialresults != nil {
 			columnMap := make(map[int]int)
-			plan2.GetColumnMapByExprs(n.AggList, n.TableDef, &columnMap)
+			for i := range n.AggList {
+				agg := n.AggList[i].Expr.(*plan.Expr_F)
+				if agg.F.Func.ObjName == "starcount" {
+					continue
+				}
+				args := agg.F.Args[0]
+				col := args.Expr.(*plan.Expr_Col)
+				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
+			}
 			for _, buf := range ranges[1:] {
 				blk := catalog.DecodeBlockInfo(buf)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
@@ -3126,7 +3137,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 					agg := n.AggList[i].Expr.(*plan.Expr_F)
 					name := agg.F.Func.ObjName
 					switch name {
-					case "count":
+					case "starcount":
 						partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
 					case "min":
 						col := agg.F.Args[0].Expr.(*plan.Expr_Col)
@@ -3140,7 +3151,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 					}
 				}
 			}
-			ranges = newranges
+			if len(ranges) == len(newranges) {
+				partialresults = nil
+			} else {
+				ranges = newranges
+			}
 		}
 
 	}
