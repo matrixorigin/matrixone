@@ -15,6 +15,7 @@
 package upgrader
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -185,7 +186,7 @@ var SqlStatementHotspotView = &table.Table{
 	Table:    motrace.SqlStatementHotspotTbl,
 	Columns:  []table.Column{},
 	// CreateViewSql get sql from original View define.
-	CreateViewSql: motrace.SqlStatementHotspotView.ToCreateSql(nil, true),
+	CreateViewSql: motrace.SqlStatementHotspotView.ToCreateSql(context.Background(), true),
 	//actually drop view here
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }

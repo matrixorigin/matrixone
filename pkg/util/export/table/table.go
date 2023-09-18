@@ -17,7 +17,6 @@ package table
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -712,10 +711,7 @@ func (r *Row) ToStrings() []string {
 			}
 		case types.T_json:
 			switch r.Columns[idx].Type {
-			case TJson:
-				buf, _ := json.Marshal(r.Columns[idx].Interface)
-				col[idx] = string(buf)
-			case TVarchar, TText:
+			case TJson, TVarchar, TText:
 				val := r.Columns[idx].String
 				if len(val) == 0 {
 					val = typ.Default
@@ -758,6 +754,8 @@ func (r *Row) ParseRow(cols []string) error {
 	return nil
 }
 
+// CsvPrimaryKey return string = concat($CsvCol[PrimaryKeyColumnIdx], '-')
+// Deprecated
 func (r *Row) CsvPrimaryKey() string {
 	if len(r.Table.PrimaryKeyColumn) == 0 {
 		return ""
