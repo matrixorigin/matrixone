@@ -3058,10 +3058,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 		}
 	}
 
-	if n.AggList != nil && n.BlockFilterList == nil && len(ranges) > 1 {
+	if len(n.AggList) > 0 && len(n.FilterList) == 0 && len(n.GroupBy) == 0 && len(ranges) > 1 {
 		newranges := make([][]byte, 0, len(ranges))
 		newranges = append(newranges, ranges[0])
 		partialresults = make([]any, 0, len(n.AggList))
+
 		for i := range n.AggList {
 			agg := n.AggList[i].Expr.(*plan.Expr_F)
 			name := agg.F.Func.ObjName
@@ -3077,6 +3078,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				break
 			}
 		}
+		columnMap := make(map[int]int)
+		plan2.GetColumnMapByExprs(n.AggList, n.TableDef, &columnMap)
+
 		if partialresults != nil {
 			for _, buf := range ranges[1:] {
 				fmt.Println(len(buf))
@@ -3102,11 +3106,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 						partialresults[i] = partialresults[i].(int64) + int64(blkMeta.GetRows())
 					case "min":
 						col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-						zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
+						zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
 						partialresults[i] = append(partialresults[i].([]any), zm.GetMin())
 					case "max":
 						col := agg.F.Args[0].Expr.(*plan.Expr_Col)
-						zm := blkMeta.ColumnMeta(uint16(col.Col.ColPos)).ZoneMap()
+						zm := blkMeta.ColumnMeta(uint16(columnMap[int(col.Col.ColPos)])).ZoneMap()
 						partialresults[i] = append(partialresults[i].([]any), zm.GetMax())
 					default:
 					}
