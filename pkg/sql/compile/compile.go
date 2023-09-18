@@ -3130,6 +3130,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 				if err != nil {
 					partialresults = nil
+					break
 				} else {
 					objDataMeta := objMeta.MustDataMeta()
 					blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
@@ -3154,7 +3155,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 			}
 			if len(ranges) == len(newranges) {
 				partialresults = nil
-			} else {
+			} else if partialresults != nil {
 				ranges = newranges
 			}
 		}
