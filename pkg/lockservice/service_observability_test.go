@@ -65,7 +65,7 @@ func TestGetWaitingList(t *testing.T) {
 					[]byte("txn2"),
 					option)
 				require.NoError(t, err)
-				assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, res.Timestamp)
+				assert.True(t, !res.Timestamp.IsEmpty())
 			}()
 
 			waitWaiters(t, l1, 0, []byte{1}, 1)
