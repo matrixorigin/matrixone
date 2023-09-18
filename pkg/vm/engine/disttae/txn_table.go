@@ -486,7 +486,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 }
 
 // LoadDeletesForBlockIn loads deletes for volatile blocks in PartitionState.
-func (tbl *txnTable) LoadDeletesForVolatileBlocksIn(
+func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	state *logtailreplay.PartitionState,
 	deletesRowId map[types.Rowid]uint8) error {
 
