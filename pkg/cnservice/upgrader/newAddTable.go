@@ -179,7 +179,7 @@ var MoSessionsView = &table.Table{
 	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
 }
 
-var SqlStatementHotspot = &table.Table{
+var SqlStatementHotspotView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_SYSTEM,
 	Table:    "sql_statement_hotspot",
@@ -199,5 +199,5 @@ and aggr_count = 0 order by duration desc limit 10;`, statistic.StatsArrayIndexM
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
 
-var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView}
+var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView}
 var registeredViews = []*table.Table{processlistView}
