@@ -22,6 +22,26 @@ import (
 	"math"
 )
 
+var (
+	// variance() supported input type and output type.
+	AggVarianceSupportedParameters = []types.T{
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+	}
+	AggVarianceReturnType = func(typs []types.Type) types.Type {
+		if typs[0].IsDecimal() {
+			s := int32(12)
+			if typs[0].Scale > s {
+				s = typs[0].Scale
+			}
+			return types.New(types.T_decimal128, 38, s)
+		}
+		return types.New(types.T_float64, 0, 0)
+	}
+)
+
 func NewAggVarPop(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_uint8:
@@ -61,14 +81,14 @@ func NewAggVarPop(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 }
 
 func newGenericVarPop[T numeric](overloadID int64, typ types.Type, otyp types.Type, dist bool) (agg.Agg[any], error) {
-	aggPriv := &sAggNumericVarPop[T]{}
+	aggPriv := &sAggVarPop[T]{}
 	if dist {
 		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
 	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 
-type sAggNumericVarPop[T numeric] struct {
+type sAggVarPop[T numeric] struct {
 	sum, counts []float64
 }
 type EncodeVariance struct {
@@ -92,12 +112,12 @@ type VarianceDecimal struct {
 	x, y types.Decimal128
 }
 
-func (s *sAggNumericVarPop[T]) Grows(cnt int) {
+func (s *sAggVarPop[T]) Grows(cnt int) {
 	s.sum = append(s.sum, make([]float64, cnt)...)
 	s.counts = append(s.counts, make([]float64, cnt)...)
 }
-func (s *sAggNumericVarPop[T]) Free(_ *mpool.MPool) {}
-func (s *sAggNumericVarPop[T]) Fill(groupNumber int64, v T, lastResult float64, count int64, isEmpty bool, isNull bool) (float64, bool, error) {
+func (s *sAggVarPop[T]) Free(_ *mpool.MPool) {}
+func (s *sAggVarPop[T]) Fill(groupNumber int64, v T, lastResult float64, count int64, isEmpty bool, isNull bool) (float64, bool, error) {
 	if isNull {
 		return lastResult, isEmpty, nil
 	}
@@ -107,14 +127,14 @@ func (s *sAggNumericVarPop[T]) Fill(groupNumber int64, v T, lastResult float64, 
 	s.counts[groupNumber] += fCount
 	return lastResult + math.Pow(value, 2)*fCount, false, nil
 }
-func (s *sAggNumericVarPop[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 float64, result2 float64, isEmpty1 bool, isEmpty2 bool, priv2 any) (float64, bool, error) {
-	s2 := priv2.(*sAggNumericVarPop[T])
+func (s *sAggVarPop[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 float64, result2 float64, isEmpty1 bool, isEmpty2 bool, priv2 any) (float64, bool, error) {
+	s2 := priv2.(*sAggVarPop[T])
 	s.sum[groupNumber1] += s2.sum[groupNumber2]
 	s.counts[groupNumber1] += s2.counts[groupNumber2]
 	return result1 + result2, isEmpty1 && isEmpty2, nil
 }
-func (s *sAggNumericVarPop[T]) Eval(lastResult []float64, _ error) ([]float64, error) {
-	for i := 0; i < len(s.sum); i++ {
+func (s *sAggVarPop[T]) Eval(lastResult []float64, _ error) ([]float64, error) {
+	for i := range lastResult {
 		if s.counts[i] == 0 {
 			continue
 		}
@@ -123,7 +143,7 @@ func (s *sAggNumericVarPop[T]) Eval(lastResult []float64, _ error) ([]float64, e
 	}
 	return lastResult, nil
 }
-func (s *sAggNumericVarPop[T]) EvalStdDevPop(lastResult []float64, _ error) ([]float64, error) {
+func (s *sAggVarPop[T]) EvalStdDevPop(lastResult []float64, _ error) ([]float64, error) {
 	var err error
 	lastResult, err = s.Eval(lastResult, nil)
 	if err == nil {
@@ -133,14 +153,14 @@ func (s *sAggNumericVarPop[T]) EvalStdDevPop(lastResult []float64, _ error) ([]f
 	}
 	return lastResult, err
 }
-func (s *sAggNumericVarPop[T]) MarshalBinary() ([]byte, error) {
+func (s *sAggVarPop[T]) MarshalBinary() ([]byte, error) {
 	encodeV := EncodeVariance{
 		Sum:    s.sum,
 		Counts: s.counts,
 	}
 	return encodeV.Marshal()
 }
-func (s *sAggNumericVarPop[T]) UnmarshalBinary(data []byte) error {
+func (s *sAggVarPop[T]) UnmarshalBinary(data []byte) error {
 	encodeV := EncodeVariance{}
 	if err := encodeV.Unmarshal(data); err != nil {
 		return err

@@ -19,6 +19,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
+var (
+	// rank() supported input type and output type.
+	WinRankReturnType = func(typs []types.Type) types.Type {
+		return types.T_int64.ToType()
+	}
+)
+
 func NewWinRank(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	winPriv := &sWindowBase{}
 	return agg.NewUnaryAgg(overloadID, winPriv, false, inputTypes[0], outputType, winPriv.Grows, winPriv.EvalRank, winPriv.Merge, winPriv.Fill, nil), nil

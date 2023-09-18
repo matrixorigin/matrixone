@@ -23,6 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
+var (
+	// approx_count() supported input type and output type.
+	AggApproxCountReturnType = func(typs []types.Type) types.Type {
+		return types.T_uint64.ToType()
+	}
+)
+
 func NewAggApproxCount(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_bool:
@@ -71,9 +78,10 @@ func NewAggApproxCount(overloadID int64, dist bool, inputTypes []types.Type, out
 
 func newGenericApprox[T allTypes](overloadID int64, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := &sAggApproxCountDistinct[T]{}
-	if dist {
-		return agg.NewUnaryDistAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
-	}
+	// TODO: bad agg. what is the difference between dist and non-dist?
+	//if dist {
+	//	return agg.NewUnaryDistAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	//}
 	return agg.NewUnaryAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 

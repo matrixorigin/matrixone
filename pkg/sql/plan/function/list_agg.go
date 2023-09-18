@@ -177,7 +177,7 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    functionAgg.AggCountReturnType,
+				retType:    functionAgg.AggApproxCountReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:    "approx_count",
 					aggNew: functionAgg.NewAggApproxCount,
@@ -309,7 +309,7 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    functionAgg.AggCountReturnType,
+				retType:    functionAgg.AggApproxCountReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:    "approx_count_distinct",
 					aggNew: functionAgg.NewAggApproxCount,
@@ -365,7 +365,10 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return newCheckResultWithSuccess(0)
+			if len(inputs) > 0 && inputs[0].Oid == types.T_varchar {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
 		},
 
 		Overloads: []overload{

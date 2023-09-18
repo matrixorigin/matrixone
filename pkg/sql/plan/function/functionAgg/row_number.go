@@ -19,6 +19,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
+var (
+	// row_number() supported input type and output type.
+	WinRowNumberReturnType = func(typs []types.Type) types.Type {
+		return types.T_int64.ToType()
+	}
+)
+
 func NewWinRowNumber(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	winPriv := agg.NewRowNumber()
 	return agg.NewUnaryAgg(overloadID, winPriv, false, inputTypes[0], outputType, winPriv.Grows, winPriv.Eval, winPriv.Merge, winPriv.Fill, nil), nil

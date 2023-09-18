@@ -20,6 +20,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
+var (
+	// stddev_pop() supported input type and output type.
+	AggStdDevSupportedParameters = []types.T{
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+	}
+	AggStdDevReturnType = AggVarianceReturnType
+)
+
 func NewAggStdDevPop(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_uint8:
@@ -59,7 +70,7 @@ func NewAggStdDevPop(overloadID int64, dist bool, inputTypes []types.Type, outpu
 }
 
 func newGenericStdDevPop[T numeric](overloadID int64, typ types.Type, otyp types.Type, dist bool) (agg.Agg[any], error) {
-	aggPriv := &sAggNumericVarPop[T]{}
+	aggPriv := &sAggVarPop[T]{}
 	if dist {
 		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.Fill), nil
 	}

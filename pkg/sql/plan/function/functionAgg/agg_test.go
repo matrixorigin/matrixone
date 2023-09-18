@@ -15,12 +15,14 @@
 package functionAgg
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/stretchr/testify/require"
+	"math"
 	"testing"
 )
 
@@ -50,11 +52,16 @@ type simpleAggTester[inputT, outputT any] struct {
 }
 
 // please make sure the inputValues is not empty. and make sure its length is not less than inputNsp.Length().
+// todo: need to handle the batch-fill method next time.
 func (tr *simpleAggTester[in, out]) testUnaryAgg(
 	inputValues []in, inputNsp *nulls.Nulls,
-	check func(results out, isEmpty bool) bool) error {
+	check func(results out, isEmpty bool) bool) (err error) {
 
-	var err error
+	// basic completeness check.
+	if tr.grow == nil || tr.free == nil || tr.fill == nil || tr.merge == nil || tr.eval == nil {
+		return moerr.NewInternalErrorNoCtx("agg test failed. basic completeness check failed.")
+	}
+
 	mp := mpool.MustNewZero()
 	results := make([]out, 2)
 	empties := make([]bool, 2)
@@ -73,7 +80,8 @@ func (tr *simpleAggTester[in, out]) testUnaryAgg(
 			results[0], empties[0], err = tr.fill(0, inputValues[i], results[0], 1, empties[0], false)
 		}
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("agg test failed. fill failed.")
+			return moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("agg test failed. fill failed. err is %s", err))
 		}
 	}
 
@@ -84,19 +92,25 @@ func (tr *simpleAggTester[in, out]) testUnaryAgg(
 			results[1], empties[1], err = tr.fill(1, inputValues[i], results[1], 1, empties[1], false)
 		}
 		if err != nil {
-			return moerr.NewInternalErrorNoCtx("agg test failed. fill failed.")
+			return moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("agg test failed. fill failed. err is %s", err))
 		}
 	}
 
+	// in fact, it's bad to use only one agg to test the merge method.
+	// because some memory will not be released.
+	// it requires its eval function should use the results' length. but can't use its own struct.
 	results[0], empties[0], err = tr.merge(0, 1, results[0], results[1], empties[0], empties[1], tr.source)
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx("agg test failed. merge failed.")
+		return moerr.NewInternalErrorNoCtx(
+			fmt.Sprintf("agg test failed. merge failed. err is %s", err))
 	}
 
 	results = results[:1]
 	results, err = tr.eval(results, nil)
 	if err != nil {
-		return moerr.NewInternalErrorNoCtx("agg test failed. eval failed.")
+		return moerr.NewInternalErrorNoCtx(
+			fmt.Sprintf("agg test failed. eval failed. err is %s", err))
 	}
 
 	checkSucceed := check(results[0], empties[0])
@@ -110,6 +124,43 @@ func (tr *simpleAggTester[in, out]) testUnaryAgg(
 		return moerr.NewInternalErrorNoCtx("aggregation's memory leak test failed. pool is not 0 after free.")
 	}
 	return nil
+}
+
+func generateBytesList(str ...string) [][]byte {
+	list := make([][]byte, len(str))
+	for i, s := range str {
+		list[i] = []byte(s)
+	}
+	return list
+}
+
+func f64equal(a, b float64) bool {
+	return a-b < 1e-6 && b-a < 1e-6
+}
+
+var testMoAllTypes = []types.T{
+	types.T_bool,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_float32, types.T_float64,
+	types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary,
+	types.T_array_float32, types.T_array_float64,
+	types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+	types.T_enum,
+	types.T_decimal64, types.T_decimal128,
+	types.T_uuid,
+}
+
+var testMoAllTypesWithoutArray = []types.T{
+	types.T_bool,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_float32, types.T_float64,
+	types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary,
+	types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
+	types.T_enum,
+	types.T_decimal64, types.T_decimal128,
+	types.T_uuid,
 }
 
 func TestAnyValue(t *testing.T) {
@@ -284,6 +335,352 @@ func TestAvg(t *testing.T) {
 		require.Equal(t, len(s.cnts), len(s2.cnts))
 		for i := range s.cnts {
 			require.Equal(t, s.cnts[i], s2.cnts[i])
+		}
+	}
+}
+
+func TestBitAnd(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggBitAnd, AggBitAndSupportedParameters, AggBitAndReturnType))
+
+	s := &sAggBitAnd[int64]{}
+	{
+		tr := &simpleAggTester[int64, uint64]{
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.Eval,
+		}
+		// 010 & 011 && 111 = 010
+		nsp := nulls.NewWithSize(4)
+		nsp.Add(3)
+		err := tr.testUnaryAgg([]int64{2, 3, 7, 0}, nsp, func(result uint64, isEmpty bool) bool {
+			return result == 2 && !isEmpty
+		})
+		require.NoError(t, err)
+	}
+
+	s2 := &sAggBinaryBitAnd{}
+	{
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s2,
+			grow:   s2.Grows,
+			free:   s2.Free,
+			fill:   s2.Fill,
+			merge:  s2.Merge,
+			eval:   s2.Eval,
+		}
+		err := tr.testUnaryAgg(generateBytesList("010", "011", "111"), nil, func(result []byte, isEmpty bool) bool {
+			return string(result) == "010" && !isEmpty
+		})
+		require.NoError(t, err)
+	}
+	{
+		data, err := s.MarshalBinary()
+		require.NoError(t, err)
+		s3 := new(sAggBitXor[int64])
+		err = s3.UnmarshalBinary(data)
+		require.NoError(t, err)
+	}
+}
+
+func TestBitOr(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggBitOr, AggBitOrSupportedParameters, AggBitOrReturnType))
+
+	s1 := &sAggBitOr[int64]{}
+	{
+		tr := &simpleAggTester[int64, uint64]{
+			source: s1,
+			grow:   s1.Grows,
+			free:   s1.Free,
+			fill:   s1.Fill,
+			merge:  s1.Merge,
+			eval:   s1.Eval,
+		}
+		// 010 | 011 | 111 = 111
+		nsp := nulls.NewWithSize(4)
+		nsp.Add(3)
+		err := tr.testUnaryAgg([]int64{2, 3, 7, 0}, nsp, func(result uint64, isEmpty bool) bool {
+			return result == 7 && !isEmpty
+		})
+		require.NoError(t, err)
+	}
+
+	s2 := &sAggBinaryBitOr{}
+	{
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s2,
+			grow:   s2.Grows,
+			free:   s2.Free,
+			fill:   s2.Fill,
+			merge:  s2.Merge,
+			eval:   s2.Eval,
+		}
+		err := tr.testUnaryAgg(generateBytesList("010", "011", "111"), nil, func(result []byte, isEmpty bool) bool {
+			return string(result) == "111" && !isEmpty
+		})
+		require.NoError(t, err)
+	}
+	{
+		data, err := s1.MarshalBinary()
+		require.NoError(t, err)
+		s3 := new(sAggBitXor[int64])
+		err = s3.UnmarshalBinary(data)
+		require.NoError(t, err)
+	}
+}
+
+func TestBitXor(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggBitXor, AggBitXorSupportedParameters, AggBitXorReturnType))
+
+	s1 := &sAggBitXor[int64]{}
+	{
+		tr := &simpleAggTester[int64, uint64]{
+			source: s1,
+			grow:   s1.Grows,
+			free:   s1.Free,
+			fill:   s1.Fill,
+			merge:  s1.Merge,
+			eval:   s1.Eval,
+		}
+		// 010 ^ 011 ^ 111 = 110
+		nsp := nulls.NewWithSize(4)
+		nsp.Add(3)
+		err := tr.testUnaryAgg([]int64{2, 3, 7, 0}, nsp, func(result uint64, isEmpty bool) bool {
+			return result == 6 && !isEmpty
+		})
+		require.NoError(t, err)
+	}
+	s2 := &sAggBinaryBitXor{}
+	{
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s2,
+			grow:   s2.Grows,
+			free:   s2.Free,
+			fill:   s2.Fill,
+			merge:  s2.Merge,
+			eval:   s2.Eval,
+		}
+		err := tr.testUnaryAgg(generateBytesList("010", "011", "111"), nil, func(result []byte, isEmpty bool) bool {
+			return string(result) == "110" && !isEmpty
+		})
+		require.NoError(t, err)
+	}
+
+	{
+		data, err := s1.MarshalBinary()
+		require.NoError(t, err)
+		s3 := new(sAggBitXor[int64])
+		err = s3.UnmarshalBinary(data)
+		require.NoError(t, err)
+	}
+}
+
+func TestCount(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggCount, testMoAllTypes, AggCountReturnType))
+
+	s := &sAggCount[int64]{isCountStar: false}
+	{
+		tr := &simpleAggTester[int64, int64]{
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.Eval,
+		}
+		nsp := nulls.NewWithSize(10)
+		nsp.Add(0)
+		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nsp, func(result int64, isEmpty bool) bool {
+			return !isEmpty && result == 9
+		})
+		require.NoError(t, err)
+	}
+
+	s2 := &sAggCount[int64]{isCountStar: true}
+	{
+		tr := &simpleAggTester[int64, int64]{
+			source: s2,
+			grow:   s2.Grows,
+			free:   s2.Free,
+			fill:   s2.Fill,
+			merge:  s2.Merge,
+			eval:   s2.Eval,
+		}
+		nsp := nulls.NewWithSize(10)
+		nsp.Add(0)
+		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nsp, func(result int64, isEmpty bool) bool {
+			return !isEmpty && result == 10
+		})
+		require.NoError(t, err)
+	}
+
+	{
+		data, err := s.MarshalBinary()
+		require.NoError(t, err)
+		s3 := new(sAggCount[int64])
+		err = s3.UnmarshalBinary(data)
+		require.NoError(t, err)
+		require.Equal(t, s.isCountStar, s3.isCountStar)
+	}
+}
+
+// what's the agg function.
+func TestApproxCount(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggApproxCount, testMoAllTypesWithoutArray, AggApproxCountReturnType))
+
+	s := &sAggApproxCountDistinct[int64]{}
+	{
+		tr := &simpleAggTester[int64, uint64]{
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.Eval,
+		}
+		nsp := nulls.NewWithSize(10)
+		nsp.Add(0)
+		err := tr.testUnaryAgg([]int64{1, 2, 2, 3, 3, 4, 4, 5, 5, 6}, nsp, func(result uint64, isEmpty bool) bool {
+			return !isEmpty && result == 5
+		})
+		require.NoError(t, err)
+	}
+	{
+		data, err := s.MarshalBinary()
+		require.NoError(t, err)
+		s2 := new(sAggApproxCountDistinct[int64])
+		err = s2.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		require.Equal(t, len(s.sk), len(s2.sk))
+		for i := range s.sk {
+			require.Equal(t, s.sk[i].Estimate(), s2.sk[i].Estimate())
+		}
+	}
+}
+
+func TestMedian(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggMedian, AggMedianSupportedParameters, AggMedianReturnType))
+
+	s := &sAggMedian[int64]{}
+	{
+		tr := &simpleAggTester[int64, float64]{
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.Eval,
+		}
+		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, func(result float64, isEmpty bool) bool {
+			return !isEmpty && result == 5
+		})
+		require.NoError(t, err)
+
+		s.values = nil
+		err = tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8}, nil, func(result float64, isEmpty bool) bool {
+			return !isEmpty && result == 4.5
+		})
+		require.NoError(t, err)
+	}
+	{
+		data, err := s.MarshalBinary()
+		require.NoError(t, err)
+		s2 := new(sAggMedian[int64])
+		err = s2.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		require.Equal(t, len(s.values), len(s2.values))
+		for i := range s.values {
+			require.Equal(t, s.values[i], s2.values[i])
+		}
+	}
+}
+
+func TestVarPop(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggVarPop, AggVarianceSupportedParameters, AggVarianceReturnType))
+
+	s := &sAggVarPop[int64]{}
+	{
+		tr := &simpleAggTester[int64, float64]{
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.Eval,
+		}
+		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, func(result float64, isEmpty bool) bool {
+			return !isEmpty && f64equal(result, 6.666666666666667)
+		})
+		require.NoError(t, err)
+
+		s.sum, s.counts = nil, nil
+		nsp := nulls.NewWithSize(10)
+		nsp.Add(9)
+		err = tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 0}, nsp, func(result float64, isEmpty bool) bool {
+			return !isEmpty && f64equal(result, 6.666666666666667)
+		})
+		require.NoError(t, err)
+	}
+	{
+		data, err := s.MarshalBinary()
+		require.NoError(t, err)
+		s2 := new(sAggVarPop[int64])
+		err = s2.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		require.Equal(t, len(s.counts), len(s2.counts))
+		for i := range s.counts {
+			require.Equal(t, s.counts[i], s2.counts[i])
+		}
+		require.Equal(t, len(s.sum), len(s2.sum))
+		for i := range s.sum {
+			require.Equal(t, s.sum[i], s2.sum[i])
+		}
+	}
+}
+
+func TestStdDevPop(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggStdDevPop, AggStdDevSupportedParameters, AggStdDevReturnType))
+
+	s := &sAggVarPop[int64]{}
+	{
+		tr := &simpleAggTester[int64, float64]{
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.EvalStdDevPop,
+		}
+		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, func(result float64, isEmpty bool) bool {
+			return !isEmpty && f64equal(result, math.Sqrt(6.666666666666667))
+		})
+		require.NoError(t, err)
+	}
+}
+
+// todo: there is not a good way to test the multi-agg function.
+//
+//	should implement the multi-agg function in the future.
+func TestGroupConcat(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggGroupConcat, []types.T{types.T_varchar}, AggGroupConcatReturnType))
+
+	s := &sAggGroupConcat{}
+	{
+		data, err := s.MarshalBinary()
+		require.NoError(t, err)
+		s2 := new(sAggGroupConcat)
+		err = s2.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		require.Equal(t, s.separator, s2.separator)
+		require.Equal(t, len(s.result), len(s2.result))
+		for i := range s.result {
+			require.Equal(t, s.result[i], s2.result[i])
 		}
 	}
 }

@@ -111,6 +111,7 @@ func (s *sAggMedian[T]) Fill(groupNumber int64, values T, lastResult float64, co
 		for i := int64(0); i < count; i++ {
 			s.values[groupNumber] = append(s.values[groupNumber], values)
 		}
+		return lastResult, false, nil
 	}
 	return lastResult, isEmpty, nil
 }
@@ -133,12 +134,13 @@ func (s *sAggMedian[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 fl
 		sumCount := len(s.values[groupNumber1]) + len(s2.values[groupNumber2])
 		result := make(numericSlice[T], sumCount)
 		mergeNumeric(s.values[groupNumber1], s2.values[groupNumber2], result)
+		s.values[groupNumber1] = result
 		return 0, false, nil
 	}
 	return 0, isEmpty1, nil
 }
 func (s *sAggMedian[T]) Eval(lastResult []float64, _ error) ([]float64, error) {
-	for i := range s.values {
+	for i := range lastResult {
 		count := len(s.values[i])
 		if count == 0 {
 			continue
@@ -155,10 +157,21 @@ func (s *sAggMedian[T]) Eval(lastResult []float64, _ error) ([]float64, error) {
 	return lastResult, nil
 }
 func (s *sAggMedian[T]) MarshalBinary() ([]byte, error) {
-	return json.Marshal(s)
+	nm := NumericMedian[T]{Vals: s.values}
+	return json.Marshal(nm)
 }
 func (s *sAggMedian[T]) UnmarshalBinary(data []byte) error {
-	return json.Unmarshal(data, s)
+	nm := NumericMedian[T]{}
+	err := json.Unmarshal(data, &nm)
+	if err != nil {
+		return err
+	}
+	s.values = nm.Vals
+	return nil
+}
+
+type NumericMedian[T numeric] struct {
+	Vals []numericSlice[T]
 }
 
 func (s *sAggDecimal64Median) Grows(cnt int) {
@@ -174,6 +187,7 @@ func (s *sAggDecimal64Median) Fill(groupNumber int64, values types.Decimal64, la
 		for i := int64(0); i < count; i++ {
 			s.values[groupNumber] = append(s.values[groupNumber], values)
 		}
+		return lastResult, false, nil
 	}
 	return lastResult, isEmpty, nil
 }
@@ -202,7 +216,7 @@ func (s *sAggDecimal64Median) Merge(groupNumber1 int64, groupNumber2 int64, resu
 }
 func (s *sAggDecimal64Median) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
 	var err error
-	for i := range s.values {
+	for i := range lastResult {
 		count := len(s.values[i])
 		if count == 0 {
 			continue
@@ -260,6 +274,7 @@ func (s *sAggDecimal128Median) Fill(groupNumber int64, values types.Decimal128, 
 		for i := int64(0); i < count; i++ {
 			s.values[groupNumber] = append(s.values[groupNumber], values)
 		}
+		return lastResult, false, nil
 	}
 	return lastResult, isEmpty, nil
 }
@@ -288,7 +303,7 @@ func (s *sAggDecimal128Median) Merge(groupNumber1 int64, groupNumber2 int64, res
 }
 func (s *sAggDecimal128Median) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
 	var err error
-	for i := range s.values {
+	for i := range lastResult {
 		count := len(s.values[i])
 		if count == 0 {
 			continue

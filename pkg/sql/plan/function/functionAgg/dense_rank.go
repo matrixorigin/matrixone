@@ -20,6 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
+var (
+	// dense_rank() supported input type and output type.
+	WinDenseRankReturnType = func(typs []types.Type) types.Type {
+		return types.T_int64.ToType()
+	}
+)
+
 func NewWinDenseRank(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	winPriv := &sWindowBase{}
 	return agg.NewUnaryAgg(overloadID, winPriv, false, inputTypes[0], outputType, winPriv.Grows, winPriv.EvalDenseRank, winPriv.Merge, winPriv.Fill, nil), nil

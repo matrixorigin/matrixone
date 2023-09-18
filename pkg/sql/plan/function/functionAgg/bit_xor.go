@@ -28,7 +28,6 @@ var (
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
 	}
 	AggBitXorReturnType = AggBitAndReturnType
@@ -57,7 +56,7 @@ func NewAggBitXor(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 	case types.T_float64:
 		return newGenericBitXor[float64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_binary, types.T_varbinary:
-		aggPriv := agg.NewBitXorBinary()
+		aggPriv := &sAggBinaryBitXor{}
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
@@ -67,7 +66,7 @@ func NewAggBitXor(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 }
 
 func newGenericBitXor[T numeric](overloadID int64, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
-	aggPriv := agg.NewBitXor[T]()
+	aggPriv := &sAggBitXor[T]{}
 	if dist {
 		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
@@ -75,7 +74,7 @@ func newGenericBitXor[T numeric](overloadID int64, inputType types.Type, outputT
 }
 
 type sAggBitXor[T numeric] struct{}
-type sAggBinaryXor struct{}
+type sAggBinaryBitXor struct{}
 
 func (s *sAggBitXor[T]) Grows(_ int)         {}
 func (s *sAggBitXor[T]) Free(_ *mpool.MPool) {}
@@ -118,9 +117,9 @@ func (s *sAggBitXor[T]) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 
-func (s *sAggBinaryXor) Grows(_ int)         {}
-func (s *sAggBinaryXor) Free(_ *mpool.MPool) {}
-func (s *sAggBinaryXor) Fill(groupNumber int64, value []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
+func (s *sAggBinaryBitXor) Grows(_ int)         {}
+func (s *sAggBinaryBitXor) Free(_ *mpool.MPool) {}
+func (s *sAggBinaryBitXor) Fill(groupNumber int64, value []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
 	if !isNull {
 		if isEmpty {
 			result := make([]byte, len(value))
@@ -133,7 +132,7 @@ func (s *sAggBinaryXor) Fill(groupNumber int64, value []byte, lastResult []byte,
 	}
 	return lastResult, isEmpty, nil
 }
-func (s *sAggBinaryXor) Merge(groupNumber1 int64, groupNumber2 int64, result1, result2 []byte, isEmpty1, isEmpty2 bool, _ any) ([]byte, bool, error) {
+func (s *sAggBinaryBitXor) Merge(groupNumber1 int64, groupNumber2 int64, result1, result2 []byte, isEmpty1, isEmpty2 bool, _ any) ([]byte, bool, error) {
 	if isEmpty1 {
 		return result2, isEmpty2, nil
 	}
@@ -143,8 +142,8 @@ func (s *sAggBinaryXor) Merge(groupNumber1 int64, groupNumber2 int64, result1, r
 	types.BitXor(result1, result1, result2)
 	return result1, false, nil
 }
-func (s *sAggBinaryXor) Eval(lastResult [][]byte, _ error) ([][]byte, error) {
+func (s *sAggBinaryBitXor) Eval(lastResult [][]byte, _ error) ([][]byte, error) {
 	return lastResult, nil
 }
-func (s *sAggBinaryXor) MarshalBinary() ([]byte, error) { return nil, nil }
-func (s *sAggBinaryXor) UnmarshalBinary(_ []byte) error { return nil }
+func (s *sAggBinaryBitXor) MarshalBinary() ([]byte, error) { return nil, nil }
+func (s *sAggBinaryBitXor) UnmarshalBinary(_ []byte) error { return nil }
