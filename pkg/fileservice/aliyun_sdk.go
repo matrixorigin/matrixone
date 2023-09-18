@@ -17,168 +17,80 @@ package fileservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	gotrace "runtime/trace"
-	"strings"
+	"strconv"
 	"time"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 	"go.uber.org/zap"
 )
 
-type MinioSDK struct {
+type AliyunSDK struct {
 	name            string
-	bucket          string
-	core            *minio.Core
-	client          *minio.Client
+	bucket          *oss.Bucket
+	client          *oss.Client
 	perfCounterSets []*perfcounter.CounterSet
 	listMaxKeys     int
 }
 
-func NewMinioSDK(
+func NewAliyunSDK(
 	ctx context.Context,
 	args ObjectStorageArguments,
 	perfCounterSets []*perfcounter.CounterSet,
-) (*MinioSDK, error) {
+) (*AliyunSDK, error) {
 
 	if err := args.validate(); err != nil {
 		return nil, err
 	}
 
-	options := new(minio.Options)
+	//TODO role arn
 
-	// credentials
-	credentialProviders := []credentials.Provider{
-		// aws env
-		new(credentials.EnvAWS),
-		// minio env
-		new(credentials.EnvMinio),
-	}
-	if args.KeyID != "" && args.KeySecret != "" {
-		// static
-		credentialProviders = append(credentialProviders, &credentials.Static{
-			Value: credentials.Value{
-				AccessKeyID:     args.KeyID,
-				SecretAccessKey: args.KeySecret,
-				SessionToken:    args.SessionToken,
-				SignerType:      credentials.SignatureV4,
-			},
-		})
-	}
-	if args.RoleARN != "" {
-		// assume role
-		credentialProviders = append(credentialProviders, &credentials.STSAssumeRole{
-			Options: credentials.STSAssumeRoleOptions{
-				AccessKey:       args.KeyID,
-				SecretKey:       args.KeySecret,
-				RoleARN:         args.RoleARN,
-				RoleSessionName: args.ExternalID,
-			},
-		})
-	}
-
-	// special treatments for 天翼云
-	if strings.Contains(args.Endpoint, "ctyunapi.cn") {
-		if args.KeyID == "" {
-			// try to fetch one
-			creds := credentials.NewChainCredentials(credentialProviders)
-			value, err := creds.Get()
-			if err != nil {
-				return nil, err
-			}
-			args.KeyID = value.AccessKeyID
-			args.KeySecret = value.SecretAccessKey
-			args.SessionToken = value.SessionToken
-		}
-		credentialProviders = []credentials.Provider{
-			&credentials.Static{
-				Value: credentials.Value{
-					AccessKeyID:     args.KeyID,
-					SecretAccessKey: args.KeySecret,
-					SessionToken:    args.SessionToken,
-					SignerType:      credentials.SignatureV2,
-				},
-			},
-		}
-	}
-
-	options.Creds = credentials.NewChainCredentials(credentialProviders)
-
-	// region
+	opts := []oss.ClientOption{}
 	if args.Region != "" {
-		options.Region = args.Region
+		opts = append(opts, oss.Region(args.Region))
 	}
-
-	// transport
-	dialer := &net.Dialer{
-		KeepAlive: 5 * time.Second,
+	if args.SecurityToken != "" {
+		opts = append(opts, oss.SecurityToken(args.SecurityToken))
 	}
-	options.Transport = &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       180 * time.Second,
-		MaxIdleConnsPerHost:   100,
-		MaxConnsPerHost:       1000,
-		TLSHandshakeTimeout:   3 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-
-	// endpoint
-	isSecure, err := minioValidateEndpoint(&args)
-	if err != nil {
-		return nil, err
-	}
-	options.Secure = isSecure
-
-	client, err := minio.New(args.Endpoint, options)
-	if err != nil {
-		return nil, err
-	}
-	core, err := minio.NewCore(args.Endpoint, options)
+	client, err := oss.New(
+		args.Endpoint,
+		args.KeyID,
+		args.KeySecret,
+		opts...,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	// validate
-	ok, err := client.BucketExists(ctx, args.Bucket)
+	bucket, err := client.Bucket(args.Bucket)
 	if err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx(
-			"bad s3 config, no such bucket or no permissions: %v",
-			args.Bucket,
-		)
 	}
 
 	logutil.Info("new object storage",
-		zap.Any("sdk", "minio"),
+		zap.Any("sdk", "aliyun"),
 		zap.Any("endpoint", args.Endpoint),
 		zap.Any("bucket", args.Bucket),
 	)
 
-	return &MinioSDK{
+	return &AliyunSDK{
 		name:            args.Name,
-		bucket:          args.Bucket,
 		client:          client,
-		core:            core,
+		bucket:          bucket,
 		perfCounterSets: perfCounterSets,
 	}, nil
 }
 
-var _ ObjectStorage = new(MinioSDK)
+var _ ObjectStorage = new(AliyunSDK)
 
-func (a *MinioSDK) List(
+func (a *AliyunSDK) List(
 	ctx context.Context,
 	prefix string,
 	fn func(bool, string, int64) (bool, error),
@@ -188,16 +100,16 @@ func (a *MinioSDK) List(
 		return err
 	}
 
-	var marker string
+	var cont string
 
 loop1:
 	for {
-		result, err := a.listObjects(ctx, prefix, marker)
+		result, err := a.listObjects(ctx, prefix, cont)
 		if err != nil {
 			return err
 		}
 
-		for _, obj := range result.Contents {
+		for _, obj := range result.Objects {
 			more, err := fn(false, obj.Key, obj.Size)
 			if err != nil {
 				return err
@@ -208,7 +120,7 @@ loop1:
 		}
 
 		for _, prefix := range result.CommonPrefixes {
-			more, err := fn(true, prefix.Prefix, 0)
+			more, err := fn(true, prefix, 0)
 			if err != nil {
 				return err
 			}
@@ -220,13 +132,13 @@ loop1:
 		if !result.IsTruncated {
 			break
 		}
-		marker = result.Marker
+		cont = result.NextContinuationToken
 	}
 
 	return nil
 }
 
-func (a *MinioSDK) Stat(
+func (a *AliyunSDK) Stat(
 	ctx context.Context,
 	key string,
 ) (
@@ -246,12 +158,17 @@ func (a *MinioSDK) Stat(
 		return
 	}
 
-	size = info.Size
+	if str := info.Get(oss.HTTPHeaderContentLength); str != "" {
+		size, err = strconv.ParseInt(str, 10, 64)
+		if err != nil {
+			return
+		}
+	}
 
 	return
 }
 
-func (a *MinioSDK) Exists(
+func (a *AliyunSDK) Exists(
 	ctx context.Context,
 	key string,
 ) (
@@ -277,7 +194,7 @@ func (a *MinioSDK) Exists(
 	return true, nil
 }
 
-func (a *MinioSDK) Write(
+func (a *AliyunSDK) Write(
 	ctx context.Context,
 	key string,
 	r io.Reader,
@@ -301,7 +218,7 @@ func (a *MinioSDK) Write(
 	return
 }
 
-func (a *MinioSDK) Read(
+func (a *AliyunSDK) Read(
 	ctx context.Context,
 	key string,
 	min *int64,
@@ -346,7 +263,7 @@ func (a *MinioSDK) Read(
 	}, nil
 }
 
-func (a *MinioSDK) Delete(
+func (a *AliyunSDK) Delete(
 	ctx context.Context,
 	keys ...string,
 ) (
@@ -377,8 +294,8 @@ func (a *MinioSDK) Delete(
 	return nil
 }
 
-func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
-	ctx, span := trace.Start(ctx, "MinioSDK.deleteSingle")
+func (a *AliyunSDK) deleteSingle(ctx context.Context, key string) error {
+	ctx, span := trace.Start(ctx, "AliyunSDK.deleteSingle")
 	defer span.End()
 
 	_, err := a.deleteObject(
@@ -392,8 +309,8 @@ func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
 	return nil
 }
 
-func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string) (minio.ListBucketResult, error) {
-	ctx, task := gotrace.NewTask(ctx, "MinioSDK.listObjects")
+func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string) (oss.ListObjectsResultV2, error) {
+	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.listObjects")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -402,24 +319,31 @@ func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, a.perfCounterSets...)
+	opts := []oss.Option{
+		oss.WithContext(ctx),
+		oss.Delimiter("/"),
+	}
+	if prefix != "" {
+		opts = append(opts, oss.Prefix(prefix))
+	}
+	if cont != "" {
+		opts = append(opts, oss.ContinuationToken(cont))
+	}
+	if a.listMaxKeys > 0 {
+		opts = append(opts, oss.MaxKeys(a.listMaxKeys))
+	}
 	return doWithRetry(
 		"s3 list objects",
-		func() (minio.ListBucketResult, error) {
-			return a.core.ListObjects(
-				a.bucket,
-				prefix,
-				marker,
-				"/",
-				a.listMaxKeys,
-			)
+		func() (oss.ListObjectsResultV2, error) {
+			return a.bucket.ListObjectsV2(opts...)
 		},
 		maxRetryAttemps,
 		isRetryableError,
 	)
 }
 
-func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo, error) {
-	ctx, task := gotrace.NewTask(ctx, "MinioSDK.statObject")
+func (a *AliyunSDK) statObject(ctx context.Context, key string) (http.Header, error) {
+	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.statObject")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -430,12 +354,10 @@ func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo
 	}, a.perfCounterSets...)
 	return doWithRetry(
 		"s3 head object",
-		func() (minio.ObjectInfo, error) {
-			return a.client.StatObject(
-				ctx,
-				a.bucket,
+		func() (http.Header, error) {
+			return a.bucket.GetObjectMeta(
 				key,
-				minio.StatObjectOptions{},
+				oss.WithContext(ctx),
 			)
 		},
 		maxRetryAttemps,
@@ -443,14 +365,14 @@ func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo
 	)
 }
 
-func (a *MinioSDK) putObject(
+func (a *AliyunSDK) putObject(
 	ctx context.Context,
 	key string,
 	r io.Reader,
 	size int64,
 	expire *time.Time,
-) (minio.UploadInfo, error) {
-	ctx, task := gotrace.NewTask(ctx, "MinioSDK.putObject")
+) (any, error) {
+	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.putObject")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -460,19 +382,21 @@ func (a *MinioSDK) putObject(
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
 	// not retryable because Reader may be half consumed
-	//TODO set expire
-	return a.client.PutObject(
-		ctx,
-		a.bucket,
+	opts := []oss.Option{
+		oss.WithContext(ctx),
+	}
+	if expire != nil {
+		opts = append(opts, oss.Expires(*expire))
+	}
+	return a.bucket.PutObject(
 		key,
 		r,
-		size,
-		minio.PutObjectOptions{},
-	)
+		opts...,
+	), nil
 }
 
-func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
-	ctx, task := gotrace.NewTask(ctx, "MinioSDK.getObject")
+func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.getObject")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -483,10 +407,24 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 	}, a.perfCounterSets...)
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
-			obj, err := doWithRetry(
+			opts := []oss.Option{
+				oss.WithContext(ctx),
+			}
+			var rang string
+			if max != nil {
+				rang = fmt.Sprintf("%d-%d", offset, *max)
+			} else {
+				rang = fmt.Sprintf("%d-", offset)
+			}
+			opts = append(opts, oss.NormalizedRange(rang))
+			opts = append(opts, oss.RangeBehavior("standard"))
+			r, err := doWithRetry(
 				"s3 get object",
-				func() (*minio.Object, error) {
-					return a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
+				func() (io.ReadCloser, error) {
+					return a.bucket.GetObject(
+						key,
+						opts...,
+					)
 				},
 				maxRetryAttemps,
 				isRetryableError,
@@ -494,12 +432,7 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 			if err != nil {
 				return nil, err
 			}
-			if offset > 0 {
-				if _, err := obj.Seek(offset, 0); err != nil {
-					return nil, err
-				}
-			}
-			return obj, nil
+			return r, nil
 		},
 		*min,
 		isRetryableError,
@@ -510,8 +443,8 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 	return r, nil
 }
 
-func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
-	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObject")
+func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (any, error) {
+	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObject")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -523,7 +456,10 @@ func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	return doWithRetry(
 		"s3 delete object",
 		func() (any, error) {
-			if err := a.client.RemoveObject(ctx, a.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+			if err := a.bucket.DeleteObject(
+				key,
+				oss.WithContext(ctx),
+			); err != nil {
 				return nil, err
 			}
 			return nil, nil
@@ -533,8 +469,8 @@ func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	)
 }
 
-func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
-	ctx, task := gotrace.NewTask(ctx, "MinioSDK.deleteObjects")
+func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
+	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObjects")
 	defer task.End()
 	t0 := time.Now()
 	defer func() {
@@ -546,15 +482,12 @@ func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, erro
 	return doWithRetry(
 		"s3 delete objects",
 		func() (any, error) {
-			objsCh := make(chan minio.ObjectInfo)
-			errCh := a.client.RemoveObjects(ctx, a.bucket, objsCh, minio.RemoveObjectsOptions{})
-			for _, key := range keys {
-				objsCh <- minio.ObjectInfo{
-					Key: key,
-				}
-			}
-			for err := range errCh {
-				return nil, err.Err
+			_, err := a.bucket.DeleteObjects(
+				keys,
+				oss.WithContext(ctx),
+			)
+			if err != nil {
+				return nil, err
 			}
 			return nil, nil
 		},
@@ -563,30 +496,15 @@ func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, erro
 	)
 }
 
-func (a *MinioSDK) is404(err error) bool {
+func (a *AliyunSDK) is404(err error) bool {
 	if err == nil {
 		return false
 	}
-	var resp minio.ErrorResponse
-	if !errors.As(err, &resp) {
-		return false
+	var ossErr oss.ServiceError
+	if errors.As(err, &ossErr) {
+		if ossErr.Code == "NoSuchKey" {
+			return true
+		}
 	}
-	return resp.Code == "NoSuchKey"
-}
-
-func minioValidateEndpoint(args *ObjectStorageArguments) (isSecure bool, err error) {
-	if args.Endpoint == "" {
-		return false, nil
-	}
-
-	endpointURL, err := url.Parse(args.Endpoint)
-	if err != nil {
-		return false, err
-	}
-	isSecure = endpointURL.Scheme == "https"
-	endpointURL.Scheme = ""
-	args.Endpoint = endpointURL.String()
-	args.Endpoint = strings.TrimLeft(args.Endpoint, "/")
-
-	return
+	return false
 }
