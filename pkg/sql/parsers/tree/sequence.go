@@ -117,6 +117,15 @@ func (node *CycleOption) Format(ctx *FmtCtx) {
 	}
 }
 
+type TypeOption struct {
+	Type ResolvableTypeReference
+}
+
+func (node *TypeOption) Format(ctx *FmtCtx) {
+	ctx.WriteString(" as ")
+	node.Type.(*T).InternalType.Format(ctx)
+}
+
 func formatAny(minus bool, num any, ctx *FmtCtx) {
 	switch num := num.(type) {
 	case uint64:
@@ -154,7 +163,7 @@ type AlterSequence struct {
 	statementImpl
 
 	Name        *TableName
-	Type        ResolvableTypeReference
+	Type        *TypeOption
 	IfExists    bool
 	IncrementBy *IncrementByOption
 	MinValue    *MinValueOption
@@ -172,8 +181,9 @@ func (node *AlterSequence) Format(ctx *FmtCtx) {
 
 	node.Name.Format(ctx)
 
-	ctx.WriteString(" as ")
-	node.Type.(*T).InternalType.Format(ctx)
+	if node.Type != nil {
+		node.Type.Format(ctx)
+	}
 	ctx.WriteString(" ")
 	if node.IncrementBy != nil {
 		node.IncrementBy.Format(ctx)

@@ -1665,7 +1665,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 
 	switch typ.Oid {
 	case types.T_int16:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int16](ctx, stmt, result)
+		incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int16](ctx, stmt, result)
 		if err != nil {
 			return nil, err
 		}
@@ -1673,12 +1673,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, lastV, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, cycle)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_int32:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int32](ctx, stmt, result)
+		incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int32](ctx, stmt, result)
 		if err != nil {
 			return nil, err
 		}
@@ -1686,12 +1686,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, lastV, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, cycle)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_int64:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int64](ctx, stmt, result)
+		incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int64](ctx, stmt, result)
 		if err != nil {
 			return nil, err
 		}
@@ -1699,12 +1699,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, lastV, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, cycle)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_uint16:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint16](ctx, stmt, result)
+		incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint16](ctx, stmt, result)
 		if err != nil {
 			return nil, err
 		}
@@ -1712,12 +1712,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, lastV, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, cycle)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_uint32:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint32](ctx, stmt, result)
+		incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint32](ctx, stmt, result)
 		if err != nil {
 			return nil, err
 		}
@@ -1725,12 +1725,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, lastV, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, cycle)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_uint64:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint64](ctx, stmt, result)
+		incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint64](ctx, stmt, result)
 		if err != nil {
 			return nil, err
 		}
@@ -1738,7 +1738,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, lastV, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, minV, maxV, startN, cycle)
 		if err != nil {
 			return nil, err
 		}
@@ -1957,8 +1957,8 @@ func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.C
 	return nil
 }
 
-func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN, lastV T, cycle bool) error {
-	vecs[0] = vector.NewConstFixed(typ, lastV, 1, proc.Mp())
+func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T, cycle bool) error {
+	vecs[0] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
 	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
 	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
 	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
@@ -2016,12 +2016,10 @@ func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.Cr
 	return incrNum, minValue, maxValue, startNum, nil
 }
 
-func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}) (T, int64, T, T, T, bool, error) {
-	var minValue, maxValue, startNum, lastNum T
+func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}) (int64, T, T, T, bool, error) {
+	var minValue, maxValue, startNum T
 	var incrNum int64
 	var cycle bool
-
-	lastNum = getInterfaceValue[T](result[0])
 
 	if incr, ok := result[4].(int64); ok {
 		incrNum = incr
@@ -2031,12 +2029,12 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	if stmt.IncrementBy != nil {
 		switch stmt.IncrementBy.Num.(type) {
 		case uint64:
-			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
+			return 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
 		}
 		incrNum = getValue[int64](stmt.IncrementBy.Minus, stmt.IncrementBy.Num)
 	}
 	if incrNum == 0 {
-		return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
+		return 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
 	}
 
 	// if alter minValue of sequence
@@ -2073,7 +2071,7 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		}
 	}
 
-	return lastNum, incrNum, minValue, maxValue, startNum, cycle, nil
+	return incrNum, minValue, maxValue, startNum, cycle, nil
 }
 
 // Checkout values.

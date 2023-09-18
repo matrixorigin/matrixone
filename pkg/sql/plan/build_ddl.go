@@ -370,10 +370,22 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
 	cols := make([]*plan.ColDef, len(Sequence_cols_name))
 
-	typ, err := getTypeFromAst(ctx.GetContext(), stmt.Type)
-	if err != nil {
-		return err
+	var typ *plan.Type
+	var err error
+	if stmt.Type == nil {
+		_, tableDef := ctx.Resolve(as.GetDatabase(), as.TableDef.Name)
+		if tableDef == nil {
+			return moerr.NewInvalidArg(ctx.GetContext(), "no such sequence %s", as.TableDef.Name)
+		} else {
+			typ = tableDef.Cols[0].GetTyp()
+		}
+	} else {
+		typ, err = getTypeFromAst(ctx.GetContext(), stmt.Type)
+		if err != nil {
+			return err
+		}
 	}
+
 	for i := range cols {
 		if i == 4 {
 			break
@@ -446,6 +458,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 		},
 	})
 	return nil
+
 }
 
 func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, error) {
