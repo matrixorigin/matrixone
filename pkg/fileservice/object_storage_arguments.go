@@ -30,6 +30,7 @@ type ObjectStorageArguments struct {
 	KeyID               string
 	KeySecret           string
 	SessionToken        string
+	SecurityToken       string
 	KeyPrefix           string
 	RoleARN             string
 	ExternalID          string

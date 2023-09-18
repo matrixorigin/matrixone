@@ -77,6 +77,12 @@ func NewS3FS(
 			return nil, err
 		}
 
+	case strings.Contains(args.Endpoint, "aliyuncs.com"):
+		fs.storage, err = NewAliyunSDK(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
 	default:
 		fs.storage, err = NewAwsSDKv2(ctx, args, perfCounterSets)
 		if err != nil {
