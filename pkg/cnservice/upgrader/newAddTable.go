@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 var (
@@ -182,29 +182,10 @@ var MoSessionsView = &table.Table{
 var SqlStatementHotspotView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_SYSTEM,
-	Table:    "sql_statement_hotspot",
-	Columns: []table.Column{
-		table.StringColumn("statement_id", "the statement's uuid"),
-		table.StringColumn("statement", "query's statement"),
-		table.ValueColumn("timeconsumed", "query's exec time (unit: ms)"),
-		table.ValueColumn("memorysize", "query's consume mem size (unit: MiB)"),
-		table.DatetimeColumn("collecttime", "collected time, same as query's response time"),
-		table.StringColumn("node", "cn node uuid"),
-		table.StringColumn("account", "account id "),
-		table.StringColumn("user", "user name"),
-		table.StringColumn("type", "statement type, like: [Insert, Delete, Update, Select, ...]"),
-	},
-	CreateViewSql: fmt.Sprintf(`CREATE VIEW IF NOT EXISTS system.sql_statement_hotspot AS
-select statement_id, statement, duration / 1e6 as timeconsumed,
-cast(json_unquote(json_extract(stats, '$[%d]')) / 1048576.00 as decimal(38,3)) as memorysize,
-response_at as collecttime,
-node_uuid as node,
-account,
-user,
-statement_type as type
- from system.statement_info
- where response_at > date_sub(now(), interval 10 minute) and response_at < now()
-and aggr_count = 0 order by duration desc limit 10;`, statistic.StatsArrayIndexMemorySize),
+	Table:    motrace.SqlStatementHotspotTbl,
+	Columns:  []table.Column{},
+	// CreateViewSql get sql from original View define.
+	CreateViewSql: motrace.SqlStatementHotspotView.ToCreateSql(nil, true),
 	//actually drop view here
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
