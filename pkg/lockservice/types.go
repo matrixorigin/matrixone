@@ -110,6 +110,9 @@ type LockService interface {
 	ForceRefreshLockTableBinds()
 	// GetLockTableBind returns lock table bind
 	GetLockTableBind(tableID uint64) (pb.LockTable, error)
+	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
+	// len(keys) == 1 if is row lock. And keys only valid in current iter func call.
+	IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool)
 }
 
 // lockTable is used to manage all locks of a Table. LockTable can be local or remote, as determined
