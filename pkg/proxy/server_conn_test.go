@@ -251,15 +251,10 @@ func (s *testCNServer) Start() error {
 }
 
 func testHandle(h *testHandler) {
-	// read salt from proxy.
-	data := make([]byte, 20)
-	_, _ = h.conn.RawConn().Read(data)
-	// read label info.
-	label := &proxy.RequestLabel{}
+	// read extra info from proxy.
+	extraInfo := &proxy.ExtraInfo{}
 	reader := bufio.NewReader(h.conn.RawConn())
-	if err := label.Decode(reader); err != nil {
-		h.labels = label.Labels
-	}
+	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
 	// server reads auth information from client.

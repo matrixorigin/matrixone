@@ -67,9 +67,7 @@ func (k *lockTableKeeper) Close() error {
 }
 
 func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
-	defer getLogger().InfoAction(
-		"keep lock table bind task",
-		serviceIDField(k.serviceID))()
+	defer getLogger().InfoAction("keep lock table bind task")()
 
 	timer := time.NewTimer(k.keepLockTableBindInterval)
 	defer timer.Stop()
@@ -86,9 +84,7 @@ func (k *lockTableKeeper) keepLockTableBind(ctx context.Context) {
 }
 
 func (k *lockTableKeeper) keepRemoteLock(ctx context.Context) {
-	defer getLogger().InfoAction(
-		"keep remote locks task",
-		serviceIDField(k.serviceID))()
+	defer getLogger().InfoAction("keep remote locks task")()
 
 	timer := time.NewTimer(k.keepRemoteLockInterval)
 	defer timer.Stop()
@@ -150,7 +146,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			binds = append(binds, bind)
 			continue
 		}
-		logKeepRemoteLocksFailed(k.serviceID, bind, err)
+		logKeepRemoteLocksFailed(bind, err)
 	}
 
 	for idx, f := range futures {
@@ -158,7 +154,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		if err == nil {
 			releaseResponse(v.(*pb.Response))
 		} else {
-			logKeepRemoteLocksFailed(k.serviceID, binds[idx], err)
+			logKeepRemoteLocksFailed(binds[idx], err)
 		}
 		f.Close()
 		futures[idx] = nil // gc
@@ -191,7 +187,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
 	if err != nil {
-		logKeepBindFailed(k.serviceID, err)
+		logKeepBindFailed(err)
 		return
 	}
 	defer releaseResponse(resp)
@@ -212,9 +208,9 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		return true
 	})
 	if n > 0 {
-		// Keep bind receiving an explicit failure means that all the bings of the local
+		// Keep bind receiving an explicit failure means that all the binds of the local
 		// locktable are invalid. We just need to remove it from the map, and the next
 		// time we access it, we will automatically get the latest bind from allocate.
-		logLocalBindsInvalid(k.serviceID)
+		logLocalBindsInvalid()
 	}
 }
