@@ -7,6 +7,7 @@ desc system.sql_statement_hotspot;
 -- @session
 
 desc system.sql_statement_hotspot;
+select count(1) >= 0 as checked from system.sql_statement_hotspot;
 
 -- clean
 drop account `sql_statement_hotspot`;

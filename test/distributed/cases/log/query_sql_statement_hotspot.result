@@ -12,4 +12,7 @@ node    VARCHAR(36)    NO        null
 account    VARCHAR(1024)    NO        null
 user    VARCHAR(1024)    NO        null
 type    VARCHAR(1024)    NO        null
+select count(1) >= 0 as checked from system.sql_statement_hotspot;
+checked
+true
 drop account `sql_statement_hotspot`;
