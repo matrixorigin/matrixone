@@ -3083,7 +3083,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 
 		if partialresults != nil {
 			for _, buf := range ranges[1:] {
-				fmt.Println(len(buf))
 				blk := catalog.DecodeBlockInfo(buf)
 				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
 					newranges = append(newranges, buf)
