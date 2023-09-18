@@ -23,22 +23,32 @@ import (
 )
 
 func TestRequestLabel(t *testing.T) {
-	reqLabel := &RequestLabel{
-		Labels: map[string]string{
-			"account": "a1",
-			"k1":      "v1",
-			"k2":      "v2",
+	salt := make([]byte, 20)
+	for i := 0; i < 20; i++ {
+		salt[i] = byte(i)
+	}
+	extraInfo := &ExtraInfo{
+		Salt:         salt,
+		InternalConn: true,
+		Label: RequestLabel{
+			Labels: map[string]string{
+				"account": "a1",
+				"k1":      "v1",
+				"k2":      "v2",
+			},
 		},
 	}
-	data, err := reqLabel.Encode()
+	data, err := extraInfo.Encode()
 	require.NoError(t, err)
 
-	l := &RequestLabel{}
+	e := &ExtraInfo{}
 	reader := bufio.NewReader(bytes.NewReader(data))
-	err = l.Decode(reader)
+	err = e.Decode(reader)
 	require.NoError(t, err)
-	require.Equal(t, 3, len(l.Labels))
-	require.Equal(t, "a1", l.Labels["account"])
-	require.Equal(t, "v1", l.Labels["k1"])
-	require.Equal(t, "v2", l.Labels["k2"])
+	require.Equal(t, 3, len(e.Label.Labels))
+	require.Equal(t, "a1", e.Label.Labels["account"])
+	require.Equal(t, "v1", e.Label.Labels["k1"])
+	require.Equal(t, "v2", e.Label.Labels["k2"])
+	require.Equal(t, true, e.InternalConn)
+	require.Equal(t, salt, e.Salt)
 }
