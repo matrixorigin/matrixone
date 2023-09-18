@@ -3141,8 +3141,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				}
 			}
 			ranges = newranges
-			columnMap = nil
-			newranges = nil
 		}
 
 	}
