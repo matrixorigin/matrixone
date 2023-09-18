@@ -78,6 +78,8 @@ type CNServer struct {
 	uuid string
 	// addr is the net address of CN server.
 	addr string
+	// internalConn indicates the connection is from internal network. Default is false,
+	internalConn bool
 }
 
 // Connect connects to backend server and returns IOSession.
@@ -90,20 +92,19 @@ func (s *CNServer) Connect() (goetty.IOSession, error) {
 	if len(s.salt) != 20 {
 		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
 	}
-	// When build connection with backend server, proxy send its salt
-	// to make sure the backend server uses the same salt to do authentication.
-	if err := c.Write(s.salt, goetty.WriteOptions{Flush: true}); err != nil {
-		return nil, err
+	info := &pb.ExtraInfo{
+		Salt: s.salt,
+		Label: pb.RequestLabel{
+			Labels: s.reqLabel.allLabels(),
+		},
+		InternalConn: s.internalConn,
 	}
-
-	// Send labels information.
-	reqLabel := &pb.RequestLabel{
-		Labels: s.reqLabel.allLabels(),
-	}
-	data, err := reqLabel.Encode()
+	data, err := info.Encode()
 	if err != nil {
 		return nil, err
 	}
+	// When build connection with backend server, proxy send its salt, request
+	// labels and other information to the backend server.
 	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
 		return nil, err
 	}
