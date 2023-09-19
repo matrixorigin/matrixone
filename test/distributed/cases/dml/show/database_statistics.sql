@@ -75,6 +75,7 @@ show column_number from rawlog;
 show column_number from log_info;
 show column_number from error_info;
 show column_number from span_info;
+show column_number from sql_statement_hotspot;
 
 
 -- test max nad min values of the data in the table
