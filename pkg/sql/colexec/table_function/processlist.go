@@ -226,6 +226,7 @@ func fetchSessions(ctx context.Context, tenant string, user string, qs queryserv
 				queryResp, ok := res.response.(*query.Response)
 				if ok && queryResp.ShowProcessListResponse != nil {
 					sessions = append(sessions, queryResp.ShowProcessListResponse.Sessions...)
+					qs.Release(queryResp)
 				}
 			}
 		case <-ctx.Done():

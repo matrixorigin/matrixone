@@ -110,6 +110,8 @@ message CNStoreHeartbeat {
   bool            TaskServiceCreated = 7;
   string          QueryAddress       = 8;
   string          InitWorkState      = 9;
+  string          GossipAddress      = 10;
+  bool            GossipJoined       = 11;
 }
 
 
@@ -425,6 +427,11 @@ message ScheduleCommand {
   ShutdownStore     ShutdownStore   = 5;
   CreateTaskService CreateTaskService = 6;
   DeleteCNStore     DeleteCNStore     = 7;
+  JoinGossipCluster JoinGossipCluster = 8;
+}
+
+message JoinGossipCluster {
+  repeated string Existing = 1;
 }
 
 // CreateTaskService start task service at current node
@@ -457,6 +464,8 @@ message CNStoreInfo {
   map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
   metadata.WorkState WorkState       = 9;
   string          QueryAddress       = 10;
+  string          GossipAddress      = 11;
+  bool            GossipJoined       = 12;
 }
 
 // CNState contains all CN details known to the HAKeeper.
