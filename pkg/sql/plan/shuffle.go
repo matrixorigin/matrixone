@@ -369,5 +369,30 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		determinShuffleForJoin(node, builder)
 	default:
 	}
+}
 
+// second pass of determine shuffle
+func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			determineShuffleMethod2(child, nodeID, builder)
+		}
+	}
+	if parentID == -1 {
+		return
+	}
+	parent := builder.qry.Nodes[parentID]
+
+	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Complex {
+		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			return
+		}
+		if node.Stats.HashmapStats.HashmapSize <= HashMapSizeForShuffle*64 {
+			node.Stats.HashmapStats.Shuffle = false
+			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			}
+		}
+	}
 }

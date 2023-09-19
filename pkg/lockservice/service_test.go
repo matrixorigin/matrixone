@@ -53,7 +53,6 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 				defer cancel()
 
 				option := newTestRowExclusiveOptions()
-				table := uint64(0)
 				rows := newTestRows(1)
 				txn1 := newTestTxnID(1)
 				_, err := s1.Lock(ctx, table, rows, txn1, option)
