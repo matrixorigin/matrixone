@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -91,12 +92,6 @@ var pool = sync.Pool{
 	},
 }
 
-var analPool = sync.Pool{
-	New: func() any {
-		return new(process.AnalyzeInfo)
-	},
-}
-
 // New is used to new an object of compile
 func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
@@ -124,9 +119,13 @@ func putCompile(c *Compile) {
 	}
 	if c.anal != nil {
 		for i := range c.anal.analInfos {
-			analPool.Put(c.anal.analInfos[i])
+			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
 		}
 		c.anal.analInfos = nil
+	}
+	if c.scope != nil {
+		buffer.FreeSlice(c.proc.SessionInfo.Buf, c.scope)
+		c.scope = nil
 	}
 
 	c.proc.CleanValueScanBatchs()
@@ -440,7 +439,6 @@ func (c *Compile) runOnce() error {
 		})
 	}
 	wg.Wait()
-	c.scope = nil
 	close(errC)
 	for e := range errC {
 		if e != nil {
@@ -455,10 +453,12 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 	case *plan.Plan_Query:
 		switch qry.Query.StmtType {
 		case plan.Query_REPLACE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: Replace,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		}
 		scopes, err := c.compileQuery(ctx, qry.Query)
 		if err != nil {
@@ -471,60 +471,81 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 	case *plan.Plan_Ddl:
 		switch qry.Ddl.DdlType {
 		case plan.DataDefinition_CREATE_DATABASE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: CreateDatabase,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: DropDatabase,
 				Plan:  pn,
-			}}, nil
+			}
 		case plan.DataDefinition_CREATE_TABLE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: CreateTable,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_ALTER_VIEW:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: AlterView,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: AlterTable,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_DROP_TABLE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: DropTable,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: DropSequence,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: TruncateTable,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_CREATE_SEQUENCE:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: CreateSequence,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_CREATE_INDEX:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: CreateIndex,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_DROP_INDEX:
-			return []*Scope{{
+			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
+			scopes[0] = &Scope{
 				Magic: DropIndex,
 				Plan:  pn,
-			}}, nil
+			}
+			return scopes, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
 			plan.DataDefinition_SHOW_COLUMNS,
@@ -684,7 +705,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 	}
 
-	steps := make([]*Scope, 0, len(qry.Steps))
+	steps := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 0, len(qry.Steps))
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
@@ -2933,9 +2954,7 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 func (c *Compile) initAnalyze(qry *plan.Query) {
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		//anals[i] = new(process.AnalyzeInfo)
-		anals[i] = analPool.Get().(*process.AnalyzeInfo)
-		anals[i].Reset()
+		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
 	}
 	c.anal = &anaylze{
 		qry:       qry,
