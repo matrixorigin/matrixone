@@ -15,10 +15,13 @@
 package upgrader
 
 import (
+	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
 var (
@@ -195,5 +198,16 @@ var MoLocksView = &table.Table{
 	CreateTableSql: "drop view `mo_catalog`.`mo_locks`;",
 }
 
-var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, MoLocksView}
+var SqlStatementHotspotView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_SYSTEM,
+	Table:    motrace.SqlStatementHotspotTbl,
+	Columns:  []table.Column{},
+	// CreateViewSql get sql from original View define.
+	CreateViewSql: motrace.SqlStatementHotspotView.ToCreateSql(context.Background(), true),
+	//actually drop view here
+	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
+}
+
+var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView}
 var registeredViews = []*table.Table{processlistView}
