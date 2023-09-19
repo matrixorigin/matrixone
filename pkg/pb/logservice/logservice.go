@@ -91,6 +91,8 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Role = hb.Role
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	storeInfo.QueryAddress = hb.QueryAddress
+	storeInfo.GossipAddress = hb.GossipAddress
+	storeInfo.GossipJoined = hb.GossipJoined
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
 	}
