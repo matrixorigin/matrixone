@@ -22,6 +22,8 @@ const (
 	LockService
 	CtlService
 	QueryService
+	Gossip
+	CacheService
 	MaxService
 )
 
@@ -36,6 +38,10 @@ func (s PortSlot) String() string {
 		return "Ctl service"
 	case QueryService:
 		return "Query service"
+	case Gossip:
+		return "Gossip"
+	case CacheService:
+		return "Cache service"
 	default:
 		return "Unknown service"
 	}
@@ -109,4 +115,32 @@ func (s *service) queryServiceListenAddr() string {
 		return s.addressMgr.ListenAddress(int(QueryService))
 	}
 	return s.cfg.QueryServiceConfig.Address.ListenAddress
+}
+
+func (s *service) gossipServiceAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ServiceAddress(int(Gossip))
+	}
+	return ""
+}
+
+func (s *service) gossipListenAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ListenAddress(int(Gossip))
+	}
+	return ""
+}
+
+func (s *service) cacheServiceServiceAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ServiceAddress(int(CacheService))
+	}
+	return ""
+}
+
+func (s *service) cacheServiceListenAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ListenAddress(int(CacheService))
+	}
+	return ""
 }

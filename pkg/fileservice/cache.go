@@ -16,8 +16,13 @@ package fileservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/cache"
+	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -27,8 +32,14 @@ type CacheConfig struct {
 	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
 	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
 	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
+	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
+	RPC                  morpc.Config   `toml:"rpc"`
 
-	CacheCallbacks
+	CacheClient      client.CacheClient `json:"-"`
+	KeyRouterFactory KeyRouterFactory   `json:"-"`
+	KeyRouter        KeyRouter          `json:"-"`
+	InitKeyRouter    *sync.Once         `json:"-"`
+	CacheCallbacks   `json:"-"`
 
 	enableDiskCacheForLocalFS bool // for testing only
 }
@@ -59,6 +70,36 @@ func (c *CacheConfig) setDefaults() {
 		target := 0.8
 		c.DiskEvictTarget = &target
 	}
+	c.RPC.Adjust()
+}
+
+func (c *CacheConfig) SetRemoteCacheCallback() {
+	if c.KeyRouterFactory == nil {
+		return
+	}
+	c.InitKeyRouter = &sync.Once{}
+	c.CacheCallbacks.PostSet = append(c.CacheCallbacks.PostSet,
+		func(key CacheKey, data CacheData) {
+			c.InitKeyRouter.Do(func() {
+				c.KeyRouter = c.KeyRouterFactory()
+			})
+			if c.KeyRouter == nil {
+				return
+			}
+			c.KeyRouter.AddItem(key, gossip.Operation_Set)
+		},
+	)
+	c.CacheCallbacks.PostEvict = append(c.CacheCallbacks.PostEvict,
+		func(key CacheKey, data CacheData) {
+			c.InitKeyRouter.Do(func() {
+				c.KeyRouter = c.KeyRouterFactory()
+			})
+			if c.KeyRouter == nil {
+				return
+			}
+			c.KeyRouter.AddItem(key, gossip.Operation_Delete)
+		},
+	)
 }
 
 var DisabledCacheConfig = CacheConfig{
@@ -85,11 +126,7 @@ type IOVectorCache interface {
 	Flush()
 }
 
-type CacheKey struct {
-	Path   string
-	Offset int64
-	Size   int64
-}
+type CacheKey = pb.CacheKey
 
 // DataCache caches IOEntry.CachedData
 type DataCache interface {
