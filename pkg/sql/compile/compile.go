@@ -856,12 +856,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_AGG:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-
-		child := ns[n.Children[0]]
-		if child.NodeType == plan.Node_TABLE_SCAN {
-			child.AggList = n.AggList
-		}
-
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
 			return nil, err
@@ -3086,7 +3080,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 		}
 	}
 
-	if len(n.AggList) > 0 && len(n.FilterList) == 0 && len(n.GroupBy) == 0 && len(ranges) > 1 {
+	if len(n.AggList) > 0 && len(ranges) > 1 {
 		newranges := make([][]byte, 0, len(ranges))
 		newranges = append(newranges, ranges[0])
 		partialresults = make([]any, 0, len(n.AggList))
@@ -3161,7 +3155,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 		}
 
 	}
-	n.AggList = nil
+	//n.AggList = nil
 
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
