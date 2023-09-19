@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,7 +45,6 @@ type sqlExecutor struct {
 	ls        lockservice.LockService
 	qs        queryservice.QueryService
 	aicm      *defines.AutoIncrCacheManager
-	buf       *buffer.Buffer
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -71,7 +69,6 @@ func NewSQLExecutor(
 		qs:        qs,
 		aicm:      aicm,
 		mp:        mp,
-		buf:       buffer.New(),
 	}
 }
 
@@ -210,7 +207,6 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.aicm,
 	)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
-	proc.SessionInfo.Buf = exec.s.buf
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
