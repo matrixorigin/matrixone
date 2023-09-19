@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 
+	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -235,6 +237,7 @@ func buildStreamDefs(stmt *tree.CreateStream, ctx CompilerContext, createStream 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
 	viewName := stmt.Name.ObjectName
 	createTable := &plan.CreateTable{
+		Replace:     stmt.Replace,
 		IfNotExists: stmt.IfNotExists,
 		TableDef: &TableDef{
 			Name: string(viewName),
