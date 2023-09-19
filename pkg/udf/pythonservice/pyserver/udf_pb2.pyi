@@ -80,16 +80,25 @@ VARBINARY: DataType
 BLOB: DataType
 
 class Request(_message.Message):
-    __slots__ = ["udf", "vectors", "length", "type"]
+    __slots__ = ["udf", "vectors", "length", "type", "context"]
+    class ContextEntry(_message.Message):
+        __slots__ = ["key", "value"]
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     UDF_FIELD_NUMBER: _ClassVar[int]
     VECTORS_FIELD_NUMBER: _ClassVar[int]
     LENGTH_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_FIELD_NUMBER: _ClassVar[int]
     udf: Udf
     vectors: _containers.RepeatedCompositeFieldContainer[DataVector]
     length: int
     type: RequestType
-    def __init__(self, udf: _Optional[_Union[Udf, _Mapping]] = ..., vectors: _Optional[_Iterable[_Union[DataVector, _Mapping]]] = ..., length: _Optional[int] = ..., type: _Optional[_Union[RequestType, str]] = ...) -> None: ...
+    context: _containers.ScalarMap[str, str]
+    def __init__(self, udf: _Optional[_Union[Udf, _Mapping]] = ..., vectors: _Optional[_Iterable[_Union[DataVector, _Mapping]]] = ..., length: _Optional[int] = ..., type: _Optional[_Union[RequestType, str]] = ..., context: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class Response(_message.Message):
     __slots__ = ["vector", "type"]

@@ -35,6 +35,7 @@ message Request {
   repeated DataVector vectors = 2;
   int64 length = 3;
   RequestType type = 4;
+  map<string, string> context = 5; // currently just transfer, not used
 }
 
 enum ResponseType {

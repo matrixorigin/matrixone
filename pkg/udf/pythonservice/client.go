@@ -96,8 +96,9 @@ func (c *Client) Run(ctx context.Context, request *udf.Request, getPkg udf.GetPk
 			return nil, err
 		}
 		pkgRequest := &udf.Request{
-			Udf:  request.Udf,
-			Type: udf.RequestType_PkgResponse,
+			Udf:     request.Udf,
+			Type:    udf.RequestType_PkgResponse,
+			Context: request.Context,
 		}
 		err = stream.Send(pkgRequest)
 		if err != nil {

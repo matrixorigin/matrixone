@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,6 +40,11 @@ type Udf struct {
 	ArgsType []types.Type `json:"-"`
 }
 
+type UdfWithContext struct {
+	*Udf    `json:"udf"`
+	Context map[string]string `json:"context"` // context map
+}
+
 type NonSqlUdfBody struct {
 	Handler string `json:"handler"`
 	Import  bool   `json:"import"`
@@ -51,7 +58,12 @@ type Arg struct {
 }
 
 func (u *Udf) GetPlanExpr() *plan.Expr {
-	bytes, _ := json.Marshal(u)
+	bytes, _ := json.Marshal(&UdfWithContext{
+		Udf: u,
+		Context: map[string]string{
+			"queryId": uuid.NewString(),
+		},
+	})
 	return &plan.Expr{
 		Typ: type2PlanType(types.T_text.ToType()),
 		Expr: &plan.Expr_C{

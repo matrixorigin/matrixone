@@ -1150,7 +1150,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
 	args := make([]*Expr, 2*len(astArgs)+2)
 
-	// python udf self info
+	// python udf self info and query context
 	args[0] = udf.GetPlanExpr()
 
 	// bind ast function's args

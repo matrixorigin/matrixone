@@ -72,8 +72,8 @@ func pythonUdfRetType(parameters []types.Type) types.Type {
 //  1. parameters[0]: const vector udf
 //  2. parameters[1:]: data vectors
 func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	// udf
-	u := &Udf{}
+	// udf with context
+	u := &UdfWithContext{}
 	bytes, _ := vector.GenerateFunctionStrParameter(parameters[0]).GetStrValue(0)
 	err := json.Unmarshal(bytes, u)
 	if err != nil {
@@ -99,6 +99,7 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		Vectors: make([]*udf.DataVector, len(parameters)-1),
 		Length:  int64(length),
 		Type:    udf.RequestType_DataRequest,
+		Context: u.Context,
 	}
 	for i := 1; i < len(parameters); i++ {
 		dataVector, _ := vector2DataVector(parameters[i])
