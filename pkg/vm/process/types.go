@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -114,6 +115,7 @@ type SessionInfo struct {
 	SeqAddValues   map[uint64]string
 	SeqLastValue   []string
 	SqlHelper      sqlHelper
+	Buf            *buffer.Buffer
 }
 
 // AnalyzeInfo  analyze information for query
