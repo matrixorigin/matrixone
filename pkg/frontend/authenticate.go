@@ -133,7 +133,10 @@ func (ti *TenantInfo) SetDefaultRoleID(id uint32) {
 }
 
 func (ti *TenantInfo) IsSysTenant() bool {
-	return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+	if ti != nil {
+		return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+	}
+	return false
 }
 
 func (ti *TenantInfo) IsDefaultRole() bool {
