@@ -87,13 +87,13 @@ func NewAggAvg(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 		if dist {
 			return agg.NewUnaryDistAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal64), nil
 		}
-		return agg.NewUnaryAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal64, nil), nil
+		return agg.NewUnaryAgg[types.Decimal64, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal64), nil
 	case types.T_decimal128:
 		aggPriv := &sAggDecimalAvg{typ: inputTypes[0]}
 		if dist {
 			return agg.NewUnaryDistAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal128), nil
 		}
-		return agg.NewUnaryAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal128, nil), nil
+		return agg.NewUnaryAgg[types.Decimal128, types.Decimal128](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillDecimal128), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for avg", inputTypes[0])
 }
@@ -103,7 +103,7 @@ func newGenericAvg[T numeric](overloadID int64, typ types.Type, otyp types.Type,
 	if dist {
 		return agg.NewUnaryDistAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg[T, float64](overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggAvg[T numeric] struct{ cnts []int64 }

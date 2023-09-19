@@ -58,13 +58,13 @@ func NewAggStdDevPop(overloadID int64, dist bool, inputTypes []types.Type, outpu
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.FillD64), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.FillD64, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.FillD64), nil
 	case types.T_decimal128:
 		aggPriv := newVarianceDecimal(inputTypes[0])
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.FillD128), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.FillD128, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.FillD128), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for std_dev_pop", inputTypes[0])
 }
@@ -74,5 +74,5 @@ func newGenericStdDevPop[T numeric](overloadID int64, typ types.Type, otyp types
 	if dist {
 		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.EvalStdDevPop, aggPriv.Merge, aggPriv.Fill), nil
 }

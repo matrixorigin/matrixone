@@ -31,15 +31,15 @@ func NewUnaryDistAgg[T1, T2 any](
 	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
-		op:      op,
-		priv:    priv,
-		otyp:    otyp,
-		eval:    eval,
-		fill:    fill,
-		grows:   grows,
-		merge:   merge,
-		isCount: isCount,
-		ityps:   []types.Type{ityp},
+		op:         op,
+		priv:       priv,
+		outputType: otyp,
+		eval:       eval,
+		fill:       fill,
+		grows:      grows,
+		merge:      merge,
+		isCount:    isCount,
+		inputTypes: []types.Type{ityp},
 	}
 }
 
@@ -50,7 +50,7 @@ func (a *UnaryDistAgg[T1, T2]) Free(pool *mpool.MPool) {
 			mp = nil
 		}
 	}
-	if a.otyp.IsVarlen() {
+	if a.outputType.IsVarlen() {
 		return
 	}
 	if a.da != nil {
@@ -60,18 +60,18 @@ func (a *UnaryDistAgg[T1, T2]) Free(pool *mpool.MPool) {
 }
 
 func (a *UnaryDistAgg[T1, T2]) OutputType() types.Type {
-	return a.otyp
+	return a.outputType
 }
 
 func (a *UnaryDistAgg[T1, T2]) InputTypes() []types.Type {
-	return a.ityps
+	return a.inputTypes
 }
 
 func (a *UnaryDistAgg[T1, T2]) Grows(count int, pool *mpool.MPool) (err error) {
 	a.grows(count)
 
 	finalCount := len(a.es) + count
-	if a.otyp.IsVarlen() {
+	if a.outputType.IsVarlen() {
 		if len(a.es) == 0 {
 			a.es = make([]bool, count)
 			a.vs = make([]T2, count)
@@ -102,7 +102,7 @@ func (a *UnaryDistAgg[T1, T2]) Grows(count int, pool *mpool.MPool) (err error) {
 		}
 
 	} else {
-		itemSize := a.otyp.TypeSize()
+		itemSize := a.outputType.TypeSize()
 		if len(a.es) == 0 {
 			data, err1 := pool.Alloc(count * itemSize)
 			if err1 != nil {
@@ -468,8 +468,8 @@ func (a *UnaryDistAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err 
 		nullList = nil
 	}
 
-	vec = vector.NewVec(a.otyp)
-	if a.otyp.IsVarlen() {
+	vec = vector.NewVec(a.outputType)
+	if a.outputType.IsVarlen() {
 		vs := (any)(a.vs).([][]byte)
 		if err = vector.AppendBytesList(vec, vs, nullList, pool); err != nil {
 			vec.Free(pool)
@@ -495,7 +495,7 @@ func (a *UnaryDistAgg[T1, T2]) WildAggReAlloc(m *mpool.MPool) error {
 	}
 	copy(d, a.da)
 	a.da = d
-	setDistAggValues[T1, T2](a, a.otyp)
+	setDistAggValues[T1, T2](a, a.outputType)
 	return nil
 }
 
@@ -517,12 +517,12 @@ func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		Private:    pData,
 		Es:         a.es,
 		IsCount:    a.isCount,
-		InputTypes: a.ityps,
-		OutputType: a.otyp,
+		InputTypes: a.inputTypes,
+		OutputType: a.outputType,
 		Srcs:       a.srcs,
 	}
 	switch {
-	case a.otyp.Oid.IsMySQLString():
+	case a.outputType.Oid.IsMySQLString():
 		source.Da = types.EncodeStringSlice(getDistAggStrVs(a))
 	default:
 		source.Da = a.da
@@ -551,13 +551,13 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 
 	// Recover data
 	a.op = decode.Op
-	a.ityps = decode.InputTypes
-	a.otyp = decode.OutputType
+	a.inputTypes = decode.InputTypes
+	a.outputType = decode.OutputType
 	a.es = decode.Es
 	data = make([]byte, len(decode.Da))
 	copy(data, decode.Da)
 	a.da = data
-	setDistAggValues[T1, T2](a, a.otyp)
+	setDistAggValues[T1, T2](a, a.outputType)
 	a.srcs = decode.Srcs
 	a.maps = make([]*hashmap.StrHashMap, len(a.srcs))
 	m := mpool.MustNewZeroNoFixed()

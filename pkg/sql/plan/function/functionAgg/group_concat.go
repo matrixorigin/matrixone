@@ -59,7 +59,7 @@ func NewAggGroupConcat(overloadID int64, dist bool, inputTypes []types.Type, out
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
 
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for group_concat", inputTypes[0])

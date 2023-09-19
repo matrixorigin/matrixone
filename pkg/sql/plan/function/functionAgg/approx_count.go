@@ -82,7 +82,7 @@ func newGenericApprox[T allTypes](overloadID int64, inputType types.Type, output
 	//if dist {
 	//	return agg.NewUnaryDistAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	//}
-	return agg.NewUnaryAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggApproxCountDistinct[T any] struct {

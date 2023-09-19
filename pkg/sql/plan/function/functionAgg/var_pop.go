@@ -69,13 +69,13 @@ func NewAggVarPop(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD64), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD64, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD64), nil
 	case types.T_decimal128:
 		aggPriv := newVarianceDecimal(inputTypes[0])
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD128), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD128, nil), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillD128), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for var_pop", inputTypes[0])
 }
@@ -85,7 +85,7 @@ func newGenericVarPop[T numeric](overloadID int64, typ types.Type, otyp types.Ty
 	if dist {
 		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggVarPop[T numeric] struct {

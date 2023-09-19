@@ -91,7 +91,7 @@ func newGenericCount[T allTypes](
 	if dist {
 		return agg.NewUnaryDistAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
+	return agg.NewUnaryAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggCount[T allTypes] struct {
