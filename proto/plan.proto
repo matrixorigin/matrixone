@@ -459,7 +459,7 @@ enum ShuffleMethod {
 
 enum ShuffleTypeForMultiCN {
 	Simple = 0;
-	Complex = 1;
+	Hybrid = 1;
 }
 
 message HashMapStats{
