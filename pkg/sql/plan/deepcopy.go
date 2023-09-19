@@ -646,6 +646,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	case *plan.DataDefinition_CreateTable:
 		CreateTable := &plan.CreateTable{
+			Replace:         df.CreateTable.Replace,
 			IfNotExists:     df.CreateTable.IfNotExists,
 			Temporary:       df.CreateTable.Temporary,
 			Database:        df.CreateTable.Database,
