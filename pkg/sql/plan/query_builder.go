@@ -556,12 +556,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
 		}
 
-		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_TABLE_SCAN && len(child.GroupBy) == 0 && len(child.FilterList) == 0 {
-			child.AggList = make([]*Expr, 0, len(node.AggList))
-			child.AggList = append(child.AggList, node.AggList...)
-		}
-
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
@@ -674,6 +668,46 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				})
 			}
+		}
+
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 && len(node.GroupBy) == 0 {
+			child.AggList = make([]*Expr, 0, len(node.AggList))
+			for _, agg := range node.AggList {
+				switch agg.Expr.(*plan.Expr_F).F.Func.ObjName {
+				case "starcount":
+				default:
+					child.AggList = nil
+				}
+				if child.AggList == nil {
+					break
+				}
+				expr := agg.Expr.(*plan.Expr_F)
+				col := expr.F.Args[0].Expr.(*plan.Expr_Col)
+				child.AggList = append(child.AggList, &plan.Expr{
+					Typ: agg.Typ,
+					Expr: &plan.Expr_F{
+						F: &plan.Function{
+							Func: &plan.ObjectRef{
+								ObjName: expr.F.Func.ObjName,
+							},
+							Args: []*Expr{
+								&plan.Expr{
+									Typ: expr.F.Args[0].Typ,
+									Expr: &plan.Expr_Col{
+										Col: &plan.ColRef{
+											RelPos: col.Col.RelPos,
+											ColPos: col.Col.ColPos,
+											Name:   col.Col.Name,
+										},
+									},
+								},
+							},
+						},
+					},
+				})
+			}
+
 		}
 
 	case plan.Node_WINDOW:
