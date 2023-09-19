@@ -321,7 +321,6 @@ func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err erro
 		return nil, err
 	}
 
-	// TODO: it's a bad hack here. I will remove it later. and change it to a better way like `a.IsOrderedWindow()`
 	nullList := a.es
 	if IsWinOrderFun(a.op) {
 		nullList = nil

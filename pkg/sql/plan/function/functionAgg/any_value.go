@@ -83,7 +83,11 @@ func NewAggAnyValue(overloadID int64, dist bool, inputTypes []types.Type, output
 	case types.T_uuid:
 		return newGenericAnyValue[types.Uuid](overloadID, inputTypes[0], outputType, dist)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
-		return newGenericAnyValue[[]byte](overloadID, inputTypes[0], outputType, dist)
+		aggPriv := &sAggAnyValue[[]byte]{}
+		if dist {
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillBytes), nil
+		}
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.FillBytes, nil), nil
 	case types.T_Rowid:
 		return newGenericAnyValue[types.Rowid](overloadID, inputTypes[0], outputType, dist)
 	}
@@ -108,6 +112,14 @@ func (s *sAggAnyValue[T]) Fill(groupNumber int64, value T, lastResult T, count i
 	}
 	return lastResult, isEmpty, nil
 }
+func (s *sAggAnyValue[T]) FillBytes(groupNumber int64, value []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
+	if !isNull && isEmpty {
+		result := make([]byte, len(value))
+		copy(result, value)
+		return result, false, nil
+	}
+	return lastResult, isEmpty, nil
+}
 func (s *sAggAnyValue[T]) BatchFill(results []T, values []T, offset int, length int, groupIndexs []uint64, nsp *nulls.Nulls) (err error) {
 	if nsp == nil || nsp.IsEmpty() {
 		for i := 0; i < length; i++ {
@@ -122,6 +134,26 @@ func (s *sAggAnyValue[T]) BatchFill(results []T, values []T, offset int, length 
 				continue
 			}
 			results[groupIndexs[i]-1] = values[i+offset]
+		}
+	}
+	return nil
+}
+func (s *sAggAnyValue[T]) BatchFillBytes(results [][]byte, values [][]byte, offset int, length int, groupIndexs []uint64, nsp *nulls.Nulls) (err error) {
+	if nsp == nil || nsp.IsEmpty() {
+		for i := 0; i < length; i++ {
+			if groupIndexs[i] == agg.GroupNotMatch || len(results[groupIndexs[i]-1]) > 0 {
+				continue
+			}
+			results[groupIndexs[i]-1] = make([]byte, len(values[i+offset]))
+			copy(results[groupIndexs[i]-1], values[i+offset])
+		}
+	} else {
+		for i := 0; i < length; i++ {
+			if groupIndexs[i] == agg.GroupNotMatch || nsp.Contains(uint64(i)) || len(results[groupIndexs[i]-1]) > 0 {
+				continue
+			}
+			results[groupIndexs[i]-1] = make([]byte, len(values[i+offset]))
+			copy(results[groupIndexs[i]-1], values[i+offset])
 		}
 	}
 	return nil
