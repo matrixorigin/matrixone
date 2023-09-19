@@ -21,8 +21,8 @@ import importlib
 import json
 import os
 import shutil
-import threading
 import subprocess
+import threading
 from concurrent import futures
 from typing import Any, Callable, Optional, Iterator, Dict
 
@@ -40,6 +40,9 @@ DATETIME_FORMAT_WITH_PRECISION = '%Y-%m-%d %H:%M:%S.%f'
 ROOT_PATH = os.path.dirname(os.path.abspath(__file__))
 INSTALLED_LABEL = 'installed'
 
+OPTION_VECTOR = 'vector'
+OPTION_DECIMAL_PRECISION = 'decimal_precision'
+
 
 class Server(pb2_grpc.ServiceServicer):
 
@@ -51,7 +54,7 @@ class Server(pb2_grpc.ServiceServicer):
 
         for request in requestIterator:
             # check
-            udfCheck(request.udf)
+            checkUdf(request.udf)
 
             if request.type == pb2.DataRequest:
 
@@ -117,7 +120,19 @@ class Server(pb2_grpc.ServiceServicer):
         func = loadFunction(request.udf, filepath, filename)
 
         # set precision
-        decimal.getcontext().prec = DEFAULT_DECIMAL_SCALE
+        if hasattr(func, OPTION_DECIMAL_PRECISION):
+            prec = getattr(func, OPTION_DECIMAL_PRECISION)
+            if type(prec) is int and prec >= 0:
+                decimal.getcontext().prec = prec
+            else:
+                decimal.getcontext().prec = DEFAULT_DECIMAL_SCALE
+        else:
+            decimal.getcontext().prec = DEFAULT_DECIMAL_SCALE
+
+        # scalar or vector
+        vector = False
+        if hasattr(func, OPTION_VECTOR):
+            vector = getattr(func, OPTION_VECTOR) is True
 
         # init result
         result = pb2.DataVector(
@@ -129,17 +144,25 @@ class Server(pb2_grpc.ServiceServicer):
         )
 
         # calculate
-        for i in range(request.length):
-            params = [None] * len(request.vectors)
-            for j in range(len(request.vectors)):
-                params[j] = getValueFromDataVector(request.vectors[j], i)
-            value = func(*params)
-            data = value2Data(value, result.type)
-            result.data.append(data)
+        if vector:
+            params = []
+            for i in range(len(request.vectors)):
+                params.append([getValueFromDataVector(request.vectors[i], j) for j in range(request.length)])
+            values = func(*params)
+            assert len(values) == request.length, f'request length {request.length} is not same with result length {len(values)}'
+            for value in values:
+                data = value2Data(value, result.type)
+                result.data.append(data)
+        else:
+            for i in range(request.length):
+                params = [getValueFromDataVector(request.vectors[j], i) for j in range(len(request.vectors))]
+                value = func(*params)
+                data = value2Data(value, result.type)
+                result.data.append(data)
         return pb2.Response(vector=result, type=pb2.DataResponse)
 
 
-def udfCheck(udf: pb2.Udf):
+def checkUdf(udf: pb2.Udf):
     assert udf.handler != "", "udf handler should not be null"
     assert udf.body != "", "udf body should not be null"
     assert udf.language == "python", "udf language should be python"
@@ -166,7 +189,7 @@ INSTALLING_MAP_LOCK = threading.RLock()
 def functionStatus(udf: pb2.Udf) -> (str, str, Optional[InstallingItem], FunctionStatus):
     with INSTALLING_MAP_LOCK:
         filepath, filename = os.path.split(udf.body)
-        path = os.path.join('udf', udf.db, filepath[filepath.rfind('/')+1:], udf.modifiedTime)
+        path = os.path.join('udf', udf.db, filepath[filepath.rfind('/') + 1:], udf.modifiedTime)
         item = INSTALLING_MAP.get(path)
         if item is None:
             if os.path.isfile(os.path.join(ROOT_PATH, path, INSTALLED_LABEL)):
@@ -196,9 +219,10 @@ def loadFunction(udf: pb2.Udf, filepath: str, filename: str) -> Callable:
         elif udf.body.endswith('.whl'):
             i = udf.handler.rfind('.')
             if i < 1:
-                raise Exception("when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
+                raise Exception(
+                    "when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
             file = importlib.import_module(f'.{udf.handler[:i]}', package=filepath.replace("/", "."))
-            return getattr(file, udf.handler[i+1:])
+            return getattr(file, udf.handler[i + 1:])
 
 
 def getDataFromDataVector(v: pb2.DataVector, i: int) -> pb2.Data:
