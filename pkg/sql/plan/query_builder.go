@@ -1257,6 +1257,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
+		determineShuffleMethod2(rootID, -1, builder)
 		determineHashOnPK(rootID, builder)
 		builder.pushdownRuntimeFilters(rootID)
 
