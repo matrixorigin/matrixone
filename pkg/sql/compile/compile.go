@@ -483,6 +483,7 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 				Magic: DropDatabase,
 				Plan:  pn,
 			}
+			return scopes, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
 			scopes[0] = &Scope{
