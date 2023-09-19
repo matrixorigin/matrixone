@@ -299,7 +299,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	if child.NodeType == plan.Node_JOIN {
 		if n.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
 			// shuffle group can follow shuffle join
-			if n.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType {
+			if n.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType && n.Stats.HashmapStats.ShuffleTypeForMultiCN == child.Stats.HashmapStats.ShuffleTypeForMultiCN {
 				groupHashCol, _ := GetHashColumn(n.GroupBy[n.Stats.HashmapStats.ShuffleColIdx])
 				switch exprImpl := child.OnList[child.Stats.HashmapStats.ShuffleColIdx].Expr.(type) {
 				case *plan.Expr_F:
