@@ -286,6 +286,7 @@ func TestSum(t *testing.T) {
 		err = tr.testUnaryAgg([]int64{1, 2, 3, 4}, nsp1, func(results int64, isEmpty bool) bool {
 			return results == 6 && !isEmpty
 		})
+		require.NoError(t, err)
 	}
 
 	{

@@ -20,6 +20,7 @@ var EqualFunctionName = "="
 var EqualFunctionEncodedID = encodeOverloadID(EQUAL, 0)
 var SerialFunctionEncodeID = encodeOverloadID(SERIAL, 0)
 var GroupConcatFunctionID = encodeOverloadID(GROUP_CONCAT, 0)
+var AggSumOverloadID = encodeOverloadID(SUM, 0)
 
 var InFunctionEncodedID = encodeOverloadID(IN, 0)
 var InFunctionName = "in"
