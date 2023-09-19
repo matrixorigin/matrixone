@@ -248,8 +248,15 @@ func (s *sAggStrMin) Grows(_ int)         {}
 func (s *sAggStrMin) Free(_ *mpool.MPool) {}
 func (s *sAggStrMin) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) (newResult []byte, isStillEmpty bool, err error) {
 	if !isNull {
-		if bytes.Compare(values, lastResult) < 0 || isEmpty {
-			return values, false, nil
+		if isEmpty {
+			lastResult = make([]byte, len(values))
+			copy(lastResult, values)
+			return lastResult, false, nil
+		}
+		if bytes.Compare(values, lastResult) < 0 {
+			lastResult = lastResult[:0]
+			lastResult = append(lastResult, values...)
+			return lastResult, false, nil
 		}
 	}
 	return lastResult, isEmpty, nil

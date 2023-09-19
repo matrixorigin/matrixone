@@ -41,7 +41,7 @@ func String(arg any, buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		buf.WriteString(fmt.Sprintf("%v(%v)", function.GetAggFunctionStringByID(int64(ag.Op)), ag.E))
+		buf.WriteString(fmt.Sprintf("%v(%v)", function.GetAggFunctionNameByID(ag.Op), ag.E))
 	}
 	if len(ap.MultiAggs) != 0 {
 		if len(ap.Aggs) > 0 {

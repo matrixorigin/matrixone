@@ -239,7 +239,7 @@ func generateAggExecutorWithoutConfig(
 	return generateAggExecutor(overloadID, isDistinct, inputTypes, nil)
 }
 
-func GetAggFunctionStringByID(overloadID int64) string {
+func GetAggFunctionNameByID(overloadID int64) string {
 	f, exist := GetFunctionByIdWithoutError(overloadID)
 	if !exist {
 		return "unknown function"
