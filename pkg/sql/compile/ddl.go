@@ -551,7 +551,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return nil
 		}
 		if qry.GetReplace() {
-			_, err := c.runSqlWithResult(fmt.Sprintf("drop view if exists %s", tblName))
+			err := c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
 			if err != nil {
 				return err
 			}
