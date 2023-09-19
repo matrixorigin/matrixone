@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"io"
 	gotrace "runtime/trace"
 	"sort"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -3503,6 +3504,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 		SqlHelper:     ses.GetSqlHelper(),
+		Buf:           ses.GetBuffer(),
 	}
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
