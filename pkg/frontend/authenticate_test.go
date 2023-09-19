@@ -5489,7 +5489,7 @@ func Test_doDropFunction(t *testing.T) {
 		}
 
 		ses := &Session{}
-		err := doDropFunction(ctx, ses, cu)
+		err := doDropFunction(ctx, ses, cu, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

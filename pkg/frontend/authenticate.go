@@ -1439,7 +1439,7 @@ const (
 					and mg.user_id = %d 
 					order by role.created_time asc limit 1;`
 
-	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
+	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
 
 	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s;`
 
@@ -4496,9 +4496,12 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	return err
 }
 
-func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (err error) {
+type rmPkg func(path string) error
+
+func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm rmPkg) (err error) {
 	var sql string
 	var argstr string
+	var bodyStr string
 	var checkDatabase string
 	var dbName string
 	var funcId int64
@@ -4550,6 +4553,10 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 			if err != nil {
 				return err
 			}
+			bodyStr, err = erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return err
+			}
 			argList := make([]*function.Arg, 0)
 			json.Unmarshal([]byte(argstr), &argList)
 			if len(argList) == len(df.Args) {
@@ -4569,6 +4576,12 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 					err = bh.Exec(ctx, "begin;")
 					defer func() {
 						err = finishTxn(ctx, bh, err)
+						if err == nil {
+							u := &function.NonSqlUdfBody{}
+							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
+								rm(u.Body)
+							}
+						}
 					}()
 					if err != nil {
 						return err

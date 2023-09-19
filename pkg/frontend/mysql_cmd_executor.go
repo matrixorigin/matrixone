@@ -1354,8 +1354,10 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 	})
 }
 
-func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction) error {
-	return doDropFunction(ctx, mce.GetSession(), df)
+func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction, proc *process.Process) error {
+	return doDropFunction(ctx, mce.GetSession(), df, func(path string) error {
+		return proc.FileService.Delete(ctx, path)
+	})
 }
 
 func (mce *MysqlCmdExecutor) handleCreateProcedure(ctx context.Context, cp *tree.CreateProcedure) error {
@@ -3191,7 +3193,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.DropFunction:
 		selfHandle = true
-		if err = mce.handleDropFunction(requestCtx, st); err != nil {
+		if err = mce.handleDropFunction(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.CreateProcedure:
