@@ -109,7 +109,7 @@ func (s *sAggBitAnd[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1, r
 	}
 	return result1 & result2, isEmpty1 && isEmpty2, nil
 }
-func (s *sAggBitAnd[T]) Eval(lastResult []uint64, _ error) ([]uint64, error) {
+func (s *sAggBitAnd[T]) Eval(lastResult []uint64) ([]uint64, error) {
 	return lastResult, nil
 }
 func (s *sAggBitAnd[T]) MarshalBinary() ([]byte, error) {
@@ -144,7 +144,7 @@ func (s *sAggBinaryBitAnd) Merge(groupNumber1 int64, groupNumber2 int64, result1
 	types.BitAnd(result1, result1, result2)
 	return result1, false, nil
 }
-func (s *sAggBinaryBitAnd) Eval(lastResult [][]byte, _ error) ([][]byte, error) {
+func (s *sAggBinaryBitAnd) Eval(lastResult [][]byte) ([][]byte, error) {
 	return lastResult, nil
 }
 func (s *sAggBinaryBitAnd) MarshalBinary() ([]byte, error) { return nil, nil }

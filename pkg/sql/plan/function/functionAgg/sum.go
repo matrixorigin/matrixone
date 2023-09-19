@@ -113,7 +113,7 @@ func (s *sAggSum[Input, Output]) Merge(groupNumber1 int64, groupNumber2 int64, r
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggSum[Input, Output]) Eval(lastResult []Output, _ error) ([]Output, error) {
+func (s *sAggSum[Input, Output]) Eval(lastResult []Output) ([]Output, error) {
 	return lastResult, nil
 }
 func (s *sAggSum[Input, Output]) MarshalBinary() ([]byte, error) { return nil, nil }
@@ -175,7 +175,7 @@ func (s *sAggDecimal64Sum) Merge(groupNumber1 int64, groupNumber2 int64, result1
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal64Sum) Eval(lastResult []types.Decimal64, _ error) ([]types.Decimal64, error) {
+func (s *sAggDecimal64Sum) Eval(lastResult []types.Decimal64) ([]types.Decimal64, error) {
 	return lastResult, nil
 }
 func (s *sAggDecimal64Sum) MarshalBinary() ([]byte, error) { return nil, nil }
@@ -237,7 +237,7 @@ func (s *sAggDecimal128Sum) Merge(groupNumber1 int64, groupNumber2 int64, result
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal128Sum) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
+func (s *sAggDecimal128Sum) Eval(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	return lastResult, nil
 }
 func (s *sAggDecimal128Sum) MarshalBinary() ([]byte, error) { return nil, nil }

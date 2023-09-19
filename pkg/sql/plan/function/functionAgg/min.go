@@ -140,9 +140,9 @@ func (s *sAggMin[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 T, re
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggMin[T]) Eval(lastResult []T, _ error) (result []T, err error) { return lastResult, nil }
-func (s *sAggMin[T]) MarshalBinary() ([]byte, error)                       { return nil, nil }
-func (s *sAggMin[T]) UnmarshalBinary([]byte) error                         { return nil }
+func (s *sAggMin[T]) Eval(lastResult []T) (result []T, err error) { return lastResult, nil }
+func (s *sAggMin[T]) MarshalBinary() ([]byte, error)              { return nil, nil }
+func (s *sAggMin[T]) UnmarshalBinary([]byte) error                { return nil }
 
 func (s *sAggBoolMin) Grows(_ int)         {}
 func (s *sAggBoolMin) Free(_ *mpool.MPool) {}
@@ -163,7 +163,7 @@ func (s *sAggBoolMin) Merge(groupNumber1 int64, groupNumber2 int64, result1 bool
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggBoolMin) Eval(lastResult []bool, _ error) (result []bool, err error) {
+func (s *sAggBoolMin) Eval(lastResult []bool) (result []bool, err error) {
 	return lastResult, nil
 }
 func (s *sAggBoolMin) MarshalBinary() ([]byte, error) { return nil, nil }
@@ -188,7 +188,7 @@ func (s *sAggDecimal64Min) Merge(groupNumber1 int64, groupNumber2 int64, result1
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal64Min) Eval(lastResult []types.Decimal64, _ error) (result []types.Decimal64, err error) {
+func (s *sAggDecimal64Min) Eval(lastResult []types.Decimal64) (result []types.Decimal64, err error) {
 	return lastResult, nil
 }
 func (s *sAggDecimal64Min) MarshalBinary() ([]byte, error) { return nil, nil }
@@ -213,7 +213,7 @@ func (s *sAggDecimal128Min) Merge(groupNumber1 int64, groupNumber2 int64, result
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal128Min) Eval(lastResult []types.Decimal128, _ error) (result []types.Decimal128, err error) {
+func (s *sAggDecimal128Min) Eval(lastResult []types.Decimal128) (result []types.Decimal128, err error) {
 	return lastResult, nil
 }
 func (s *sAggDecimal128Min) MarshalBinary() ([]byte, error) { return nil, nil }
@@ -238,7 +238,7 @@ func (s *sAggUuidMin) Merge(groupNumber1 int64, groupNumber2 int64, result1 type
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggUuidMin) Eval(lastResult []types.Uuid, _ error) (result []types.Uuid, err error) {
+func (s *sAggUuidMin) Eval(lastResult []types.Uuid) (result []types.Uuid, err error) {
 	return lastResult, nil
 }
 func (s *sAggUuidMin) MarshalBinary() ([]byte, error) { return nil, nil }
@@ -270,7 +270,7 @@ func (s *sAggStrMin) Merge(groupNumber1 int64, groupNumber2 int64, result1 []byt
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggStrMin) Eval(lastResult [][]byte, _ error) (result [][]byte, err error) {
+func (s *sAggStrMin) Eval(lastResult [][]byte) (result [][]byte, err error) {
 	return lastResult, nil
 }
 func (s *sAggStrMin) MarshalBinary() ([]byte, error) { return nil, nil }

@@ -47,7 +47,7 @@ func (s *sWindowBase) Fill(groupNumber int64, value int64, lastResult int64, cou
 func (s *sWindowBase) Merge(groupNumber1 int64, groupNumber2 int64, result1, result2 int64, isEmpty1, isEmpty2 bool, _ any) (int64, bool, error) {
 	return 0, false, nil
 }
-func (s *sWindowBase) EvalDenseRank(result []int64, _ error) ([]int64, error) {
+func (s *sWindowBase) EvalDenseRank(result []int64) ([]int64, error) {
 	idx := 0
 	for _, p := range s.ps {
 		sn := int64(1)

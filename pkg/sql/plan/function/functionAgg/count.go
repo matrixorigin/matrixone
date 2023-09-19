@@ -130,7 +130,7 @@ func (s *sAggCount[T]) BatchFill(results []int64, values []T, offset int, length
 func (s *sAggCount[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1, result2 int64, isEmpty1, isEmpty2 bool, _ any) (int64, bool, error) {
 	return result1 + result2, isEmpty1 && isEmpty2, nil
 }
-func (s *sAggCount[T]) Eval(vs []int64, _ error) ([]int64, error) {
+func (s *sAggCount[T]) Eval(vs []int64) ([]int64, error) {
 	return vs, nil
 }
 func (s *sAggCount[T]) MarshalBinary() ([]byte, error) {

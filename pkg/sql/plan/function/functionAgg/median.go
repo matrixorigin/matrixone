@@ -71,13 +71,13 @@ func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 	case types.T_float64:
 		return newGenericMedian[float64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_decimal64:
-		aggPriv := agg.NewD64Median()
+		aggPriv := &sAggDecimal64Median{}
 		if dist {
 			return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 		}
 		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_decimal128:
-		aggPriv := agg.NewD128Median()
+		aggPriv := &sAggDecimal128Median{}
 		if dist {
 			return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 		}
@@ -87,7 +87,7 @@ func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputTy
 }
 
 func newGenericMedian[T numeric](overloadID int64, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
-	aggPriv := agg.NewMedian[T]()
+	aggPriv := &sAggMedian[T]{}
 	if dist {
 		return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 	}
@@ -139,7 +139,7 @@ func (s *sAggMedian[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 fl
 	}
 	return 0, isEmpty1, nil
 }
-func (s *sAggMedian[T]) Eval(lastResult []float64, _ error) ([]float64, error) {
+func (s *sAggMedian[T]) Eval(lastResult []float64) ([]float64, error) {
 	for i := range lastResult {
 		count := len(s.values[i])
 		if count == 0 {
@@ -214,7 +214,7 @@ func (s *sAggDecimal64Median) Merge(groupNumber1 int64, groupNumber2 int64, resu
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal64Median) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
+func (s *sAggDecimal64Median) Eval(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i := range lastResult {
 		count := len(s.values[i])
@@ -301,7 +301,7 @@ func (s *sAggDecimal128Median) Merge(groupNumber1 int64, groupNumber2 int64, res
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal128Median) Eval(lastResult []types.Decimal128, _ error) ([]types.Decimal128, error) {
+func (s *sAggDecimal128Median) Eval(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i := range lastResult {
 		count := len(s.values[i])

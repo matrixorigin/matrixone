@@ -31,7 +31,7 @@ func NewWinRank(overloadID int64, dist bool, inputTypes []types.Type, outputType
 	return agg.NewUnaryAgg(overloadID, winPriv, false, inputTypes[0], outputType, winPriv.Grows, winPriv.EvalRank, winPriv.Merge, winPriv.Fill, nil), nil
 }
 
-func (s *sWindowBase) EvalRank(result []int64, _ error) ([]int64, error) {
+func (s *sWindowBase) EvalRank(result []int64) ([]int64, error) {
 	idx := 0
 	for _, p := range s.ps {
 		sn := int64(1)
