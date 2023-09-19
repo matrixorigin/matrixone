@@ -320,7 +320,7 @@ func Test_refactorScope(t *testing.T) {
 		ctx:  ctx,
 		proc: proc,
 	}
-	rs := refactorScope(c, s)
+	rs := appendWriteBackOperator(c, s)
 	require.Equal(t, rs.Instructions[1].Idx, -1)
 }
 
