@@ -45,9 +45,6 @@ func (c *chunk) free() {
 	if c.numFree = c.numFree + 1; c.numFree == c.numAlloc &&
 		c.flag&FULL == FULL { // this chunk is no longer needed
 		unix.Munmap(c.data)
-		c.data = nil
-		c.Unlock()
-		free(unsafe.Pointer(c))
 		return
 	}
 	c.Unlock()

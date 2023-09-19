@@ -80,10 +80,9 @@ func (b *Buffer) newChunk() *chunk {
 	if err != nil {
 		panic(err)
 	}
-	ptr := malloc(ChunkSize)
-	c := (*chunk)(ptr)
+	c := (*chunk)(unsafe.Pointer(unsafe.SliceData(data)))
 	c.data = data
-	c.ptr = uintptr(ptr)
+	c.off = uint32(ChunkSize)
 	return c
 }
 
