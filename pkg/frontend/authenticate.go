@@ -4312,6 +4312,9 @@ func postDropSuspendAccount(
 						fmt.Sprintf("kill connection for account %s failed on node %s",
 							accountName, res.nodeAddr))
 				}
+				if queryResp != nil {
+					qs.Release(queryResp)
+				}
 			}
 		case <-ctx.Done():
 			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
@@ -9141,6 +9144,9 @@ func postAlterSessionStatus(
 					retErr = moerr.NewInternalError(ctx,
 						fmt.Sprintf("alter account status for account %s failed on node %s",
 							accountName, res.nodeAddr))
+				}
+				if queryResp != nil {
+					qs.Release(queryResp)
 				}
 			}
 		case <-ctx.Done():
