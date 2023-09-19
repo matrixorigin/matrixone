@@ -52,11 +52,12 @@ func checkPythonUdf(overloads []overload, inputs []types.Type) checkResult {
 		}
 	}
 	if needCast {
-		castType := make([]types.Type, size+1)
+		castType := make([]types.Type, size+2)
 		castType[0] = inputs[0]
 		for i, typ := range requiredArgs {
 			castType[i+1] = typ
 		}
+		castType[size+1] = inputs[2*size+1]
 		return newCheckResultWithCast(0, castType)
 	}
 	return newCheckResultWithSuccess(0)
