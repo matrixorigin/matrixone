@@ -22,7 +22,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -132,7 +131,6 @@ func TestCompile(t *testing.T) {
 		// Enable memory check
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-		tc.proc.SessionInfo.Buf.Free()
 	}
 }
 
@@ -153,7 +151,6 @@ func TestCompileWithFaults(t *testing.T) {
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
-	proc.SessionInfo.Buf = buffer.New()
 	e, _, compilerCtx := testengine.New(context.Background())
 	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
 	require.NoError(t, err)

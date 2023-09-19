@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -241,8 +240,6 @@ type Session struct {
 	//  nextval internally will derive two sql (a select and an update). the two sql are executed
 	//	in the same transaction.
 	derivedStmt bool
-
-	buf *buffer.Buffer
 
 	//clear this part for every statement
 	stmtProfile struct {
@@ -554,7 +551,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		ses.seqLastValue = new(string)
 	}
 
-	ses.buf = buffer.New()
 	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.uuid, _ = uuid.NewUUID()
@@ -642,10 +638,6 @@ func (ses *Session) Close() {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(nil)
-	}
-	if ses.buf != nil {
-		ses.buf.Free()
-		ses.buf = nil
 	}
 }
 
@@ -1246,12 +1238,6 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	defer ses.mu.Unlock()
 	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
-}
-
-func (ses *Session) GetBuffer() *buffer.Buffer {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.buf
 }
 
 // SetSessionVar sets the value of system variable in session

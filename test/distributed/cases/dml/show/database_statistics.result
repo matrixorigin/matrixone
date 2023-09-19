@@ -15,7 +15,7 @@ Number of tables in system_metrics
 20
 show table_number from system;
 Number of tables in system
-5
+6
 use mo_task;
 show column_number from sys_async_task;
 Number of columns in sys_async_task
@@ -181,6 +181,9 @@ Number of columns in error_info
 show column_number from span_info;
 Number of columns in span_info
 12
+show column_number from sql_statement_hotspot;
+Number of columns in sql_statement_hotspot
+9
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;
