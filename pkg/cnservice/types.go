@@ -389,6 +389,10 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// SetDefaultValue setups the default of the config.
+// most of the code are copied from the Validate.
+// But, the Validate may change some global variables that the SetDefaultValue does not need.
+// So, need a different function.
 func (c *Config) SetDefaultValue() {
 	foundMachineHost := ""
 	if c.ListenAddress == "" {
@@ -494,22 +498,6 @@ func (c *Config) SetDefaultValue() {
 	c.LockService.Validate()
 	c.LockService.ServiceID = c.UUID
 
-	// pessimistic mode implies primary key check
-	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic || c.PrimaryKeyCheck {
-		plan.CNPrimaryCheck = true
-	} else {
-		plan.CNPrimaryCheck = false
-	}
-
-	if c.MaxPreparedStmtCount > 0 {
-		if c.MaxPreparedStmtCount > maxForMaxPreparedStmtCount {
-			frontend.MaxPrepareNumberInOneSession = maxForMaxPreparedStmtCount
-		} else {
-			frontend.MaxPrepareNumberInOneSession = c.MaxPreparedStmtCount
-		}
-	} else {
-		frontend.MaxPrepareNumberInOneSession = 100000
-	}
 	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
 
 	if c.PortBase != 0 {
