@@ -2062,7 +2062,7 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	}
 
 	// if alter cycle state of sequence
-	preCycle := result[4]
+	preCycle := result[5]
 	if preCycleVal, ok := preCycle.(bool); ok {
 		if stmt.Cycle != nil {
 			cycle = stmt.Cycle.Cycle

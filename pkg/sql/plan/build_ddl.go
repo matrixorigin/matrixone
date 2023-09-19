@@ -375,12 +375,12 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 	if stmt.Type == nil {
 		_, tableDef := ctx.Resolve(as.GetDatabase(), as.TableDef.Name)
 		if tableDef == nil {
-			return moerr.NewInvalidArg(ctx.GetContext(), "no such sequence %s", as.TableDef.Name)
+			return moerr.NewInvalidInput(ctx.GetContext(), "no such sequence %s", as.TableDef.Name)
 		} else {
 			typ = tableDef.Cols[0].GetTyp()
 		}
 	} else {
-		typ, err = getTypeFromAst(ctx.GetContext(), stmt.Type)
+		typ, err = getTypeFromAst(ctx.GetContext(), stmt.Type.Type)
 		if err != nil {
 			return err
 		}
