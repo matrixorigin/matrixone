@@ -8929,14 +8929,6 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	bh := ses.GetBackgroundExec(tenantCtx)
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
 	err = bh.Exec(tenantCtx, sql)
 	if err != nil {
 		return err
@@ -8987,14 +8979,6 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 
 	bh := ses.GetBackgroundExec(tenantCtx)
 	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	err = bh.Exec(tenantCtx, sql)
 	if err != nil {
