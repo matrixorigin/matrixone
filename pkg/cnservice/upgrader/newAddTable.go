@@ -180,7 +180,6 @@ var MoSessionsView = &table.Table{
 	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
 }
 
-
 var MoConfigurationsView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_CATALOG,
