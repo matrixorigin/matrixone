@@ -3500,7 +3500,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
-	ses.proc.UnixTime = proc.UnixTime // update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3614,6 +3613,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 				logStatementStatus(requestCtx, ses, stmt, fail, err)
 				return err
 			}
+		}
+
+		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		proc.UnixTime = time.Now().UnixNano()
+		if ses.proc != nil {
+			ses.proc.UnixTime = proc.UnixTime
 		}
 
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly)
