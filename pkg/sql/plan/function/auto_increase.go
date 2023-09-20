@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -61,7 +62,8 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 			autoIncrement, err := getCurrentValue(
 				proc.Ctx,
 				tableId,
-				autoIncrCol)
+				autoIncrCol,
+				proc.TxnOperator)
 			if err != nil {
 				return err
 			}
@@ -92,9 +94,11 @@ func getTableAutoIncrCol(
 func getCurrentValue(
 	ctx context.Context,
 	tableID uint64,
-	col string) (uint64, error) {
+	col string,
+	txnOp client.TxnOperator) (uint64, error) {
 	return incrservice.GetAutoIncrementService().CurrentValue(
 		ctx,
 		tableID,
-		col)
+		col,
+		txnOp)
 }

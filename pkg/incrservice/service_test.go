@@ -76,7 +76,7 @@ func TestCreateOnOtherService(t *testing.T) {
 			require.NoError(t, op.Commit(ctx))
 
 			s2 := ss[0]
-			_, err := s2.getCommittedTableCache(ctx, 0)
+			_, err := s2.getCommittedTableCache(ctx, 0, nil)
 			require.NoError(t, err)
 			s2.mu.Lock()
 			assert.Equal(t, 1, len(s2.mu.tables))

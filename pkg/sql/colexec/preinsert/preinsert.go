@@ -111,7 +111,8 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 	lastInsertValue, err := proc.IncrService.InsertValues(
 		proc.Ctx,
 		arg.TableDef.TblId,
-		bat)
+		bat,
+		proc.TxnOperator)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 			return moerr.NewNoSuchTableNoCtx(arg.SchemaName, arg.TableDef.Name)

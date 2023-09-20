@@ -174,10 +174,15 @@ func (s *service) Delete(
 func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
-	bat *batch.Batch) (uint64, error) {
+	bat *batch.Batch,
+	txnOp client.TxnOperator) (uint64, error) {
+	if txnOp.GetWorkspace() == nil {
+		txnOp = nil
+	}
 	ts, err := s.getCommittedTableCache(
 		ctx,
-		tableID)
+		tableID,
+		txnOp)
 	if err != nil {
 		return 0, err
 	}
@@ -187,10 +192,15 @@ func (s *service) InsertValues(
 func (s *service) CurrentValue(
 	ctx context.Context,
 	tableID uint64,
-	col string) (uint64, error) {
+	col string,
+	txnOp client.TxnOperator) (uint64, error) {
+	if txnOp.GetWorkspace() == nil {
+		txnOp = nil
+	}
 	ts, err := s.getCommittedTableCache(
 		ctx,
-		tableID)
+		tableID,
+		txnOp)
 	if err != nil {
 		return 0, err
 	}
@@ -232,7 +242,8 @@ func (s *service) doCreateLocked(
 
 func (s *service) getCommittedTableCache(
 	ctx context.Context,
-	tableID uint64) (incrTableCache, error) {
+	tableID uint64,
+	txnOp client.TxnOperator) (incrTableCache, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, ok := s.mu.tables[tableID]
@@ -244,7 +255,7 @@ func (s *service) getCommittedTableCache(
 		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
 
-	cols, err := s.store.GetColumns(ctx, tableID, nil)
+	cols, err := s.store.GetColumns(ctx, tableID, txnOp)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +269,7 @@ func (s *service) getCommittedTableCache(
 		cols,
 		s.cfg,
 		s.allocator,
-		nil,
+		txnOp,
 		true)
 	if err != nil {
 		return nil, err

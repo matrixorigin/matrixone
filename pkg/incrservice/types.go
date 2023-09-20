@@ -51,9 +51,9 @@ type AutoIncrementService interface {
 	// delete operation is triggered.
 	Delete(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// InsertValues insert auto columns values into bat.
-	InsertValues(ctx context.Context, tableID uint64, bat *batch.Batch) (uint64, error)
+	InsertValues(ctx context.Context, tableID uint64, bat *batch.Batch, txn client.TxnOperator) (uint64, error)
 	// CurrentValue return current incr column value.
-	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
+	CurrentValue(ctx context.Context, tableID uint64, col string, txn client.TxnOperator) (uint64, error)
 	// Close close the auto increment service
 	Close()
 }
