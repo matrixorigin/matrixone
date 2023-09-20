@@ -527,6 +527,25 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	return
 }
 
+func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (err error) {
+	factory := logtail.BackupCheckpointDataFactory(entry.start, entry.end)
+	data, err := factory(r.catalog)
+	if err != nil {
+		return
+	}
+	defer data.Close()
+	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
+	if err != nil {
+		return
+	}
+	entry.SetLocation(cnLocation, tnLocation)
+
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
+	})
+	return
+}
+
 func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration) (entry *CheckpointEntry, err error) {
 	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
 	entry.ckpLSN = ckpLSN

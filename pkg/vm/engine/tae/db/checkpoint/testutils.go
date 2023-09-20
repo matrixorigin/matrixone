@@ -33,6 +33,7 @@ type TestRunner interface {
 	CleanPenddingCheckpoint()
 	ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error
 	ForceIncrementalCheckpoint(end types.TS) error
+	ForceCheckpointForBackup(end types.TS) error
 	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
 
@@ -157,6 +158,31 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	now := time.Now()
 	r.storage.Unlock()
 	if err := r.doIncrementalCheckpoint(entry); err != nil {
+		return err
+	}
+	if err := r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
+		return err
+	}
+	entry.SetState(ST_Finished)
+	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
+	return nil
+}
+
+func (r *runner) ForceCheckpointForBackup(end types.TS) error {
+	prev := r.MaxCheckpoint()
+	if prev != nil && !prev.IsFinished() {
+		return moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
+	}
+	start := types.TS{}
+	if prev != nil {
+		start = prev.end.Next()
+	}
+	entry := NewCheckpointEntry(start, end, ET_Incremental)
+	r.storage.Lock()
+	r.storage.entries.Set(entry)
+	now := time.Now()
+	r.storage.Unlock()
+	if err := r.doCheckpointForBackup(entry); err != nil {
 		return err
 	}
 	if err := r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
