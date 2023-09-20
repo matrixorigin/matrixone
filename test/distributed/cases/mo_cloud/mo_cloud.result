@@ -620,6 +620,7 @@ mo_catalog    mo_columns    r    -
 mo_catalog    mo_database    r    -
 mo_catalog    mo_increment_columns        accountadmin
 mo_catalog    mo_indexes    r    accountadmin
+mo_catalog    mo_locks    v    accountadmin
 mo_catalog    mo_mysql_compatibility_mode    r    accountadmin
 mo_catalog    mo_pubs    r    accountadmin
 mo_catalog    mo_role    r    accountadmin

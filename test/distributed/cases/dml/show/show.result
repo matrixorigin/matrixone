@@ -239,9 +239,10 @@ mo_pubs
 mo_database
 mo_columns
 mo_tables
+mo_locks
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-17
+18
 show column_number from mo_database;
 Number of columns in mo_database
 9
