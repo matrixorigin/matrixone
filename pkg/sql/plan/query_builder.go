@@ -675,41 +675,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			child.AggList = make([]*Expr, 0, len(node.AggList))
 			for _, agg := range node.AggList {
 				switch agg.Expr.(*plan.Expr_F).F.Func.ObjName {
-				case "starcount":
-					expr := agg.Expr.(*plan.Expr_F)
-					c := expr.F.Args[0].Expr.(*plan.Expr_C)
-					child.AggList = append(child.AggList, &plan.Expr{
-						Typ: agg.Typ,
-						Expr: &plan.Expr_F{
-							F: &plan.Function{
-								Func: &plan.ObjectRef{
-									Obj:     expr.F.Func.Obj,
-									ObjName: expr.F.Func.ObjName,
-								},
-								Args: []*Expr{
-									&plan.Expr{
-										Typ: expr.F.Args[0].Typ,
-										Expr: &plan.Expr_C{
-											C: &plan.Const{
-												Isnull: c.C.Isnull,
-												Src:    c.C.Src,
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-					)
+				case "starcount", "count", "min", "max":
+					child.AggList = append(child.AggList, DeepCopyExpr(agg))
 				default:
 					child.AggList = nil
 				}
 				if child.AggList == nil {
 					break
 				}
-
 			}
-
 		}
 
 	case plan.Node_WINDOW:
