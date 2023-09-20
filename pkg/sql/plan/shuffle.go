@@ -259,6 +259,14 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	child := builder.qry.Nodes[n.Children[0]]
+
+	if child.NodeType == plan.Node_AGG && determineNoNeedToMergeForGroup(n.NodeId, builder) {
+		//speical kind of shuffle. the child agg can reuse shuffle logic
+		child.Stats.HashmapStats.Shuffle = true
+		child.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+		return
+	}
+
 	// for now, if agg children is agg or filter, do not allow shuffle
 	if isAggOrFilter(child, builder) {
 		return
@@ -395,4 +403,15 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 			}
 		}
 	}
+}
+
+// if  all parent groupby columns in child groupby columns, child groupby no need to merge
+func determineNoNeedToMergeForGroup(parentID int32, builder *QueryBuilder) bool {
+	parent := builder.qry.Nodes[parentID]
+	for _, expr := range parent.GroupBy {
+		if !onlyContainsTag(expr, 0) {
+			return false
+		}
+	}
+	return true
 }
