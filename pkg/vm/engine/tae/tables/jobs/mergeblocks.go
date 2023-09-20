@@ -233,6 +233,8 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 			return
 		}
 	}
+
+	var size, rowCnt int
 	for i, block := range task.compacted {
 		if views[i], err = block.GetColumnDataByIds(ctx, Idxs); err != nil {
 			return
@@ -241,6 +243,9 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 
 		task.deletes[i] = views[i].DeleteMask
 		rowCntBeforeApplyDelete := views[i].Columns[0].Length()
+		rowCnt += rowCntBeforeApplyDelete
+		size += views[i].ApproxSize()
+
 		views[i].ApplyDeletes()
 		vec := views[i].Columns[sortColDef.Idx].GetData()
 		defer vec.Close()
@@ -254,6 +259,9 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		fromAddr = append(fromAddr, uint32(length))
 		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
+	}
+	if rowsize := size / rowCnt; rowsize > schema.EstimateRowSize() {
+		task.rel.GetMeta().(*catalog.TableEntry).Stats.UpdateEstimateRowSize(rowsize)
 	}
 
 	if length == 0 {
