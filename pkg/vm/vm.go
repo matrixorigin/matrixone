@@ -35,14 +35,14 @@ func String(ins Instructions, buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(" -> ")
 		}
-		stringFunc[in.Op](in.Arg, buf)
+		in.Arg.String(buf)
 	}
 }
 
 // Prepare range instructions and do init work for each operator's argument by calling its prepare function
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
-		if err := prepareFunc[in.Op](proc, in.Arg); err != nil {
+		if err := in.Arg.Prepare(proc); err != nil {
 			return err
 		}
 	}
@@ -64,7 +64,7 @@ func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err
 	var ok process.ExecStatus
 
 	for i := start; i < len(ins); i++ {
-		if ok, err = execFunc[ins[i].Op](ins[i].Idx, proc, ins[i].Arg, ins[i].IsFirst, ins[i].IsLast); err != nil {
+		if ok, err = ins[i].Arg.Call(ins[i].Idx, proc, ins[i].IsFirst, ins[i].IsLast); err != nil {
 			return ok == process.ExecStop || end, err
 		}
 

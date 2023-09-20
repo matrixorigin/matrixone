@@ -15,9 +15,12 @@
 package mergedelete
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 type Argument struct {
 	AffectedRows uint64

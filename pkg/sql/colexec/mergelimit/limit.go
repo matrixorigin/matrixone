@@ -22,21 +22,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	ap := arg
 	buf.WriteString(fmt.Sprintf("mergeLimit(%d)", ap.Limit))
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.seen = 0
 	ap.ctr.InitReceiver(proc, true)
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	ap := arg
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()

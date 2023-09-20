@@ -39,8 +39,7 @@ var (
 	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 )
 
-func String(v any, buf *bytes.Buffer) {
-	arg := v.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("lock-op(")
 	n := len(arg.targets) - 1
 	for idx, target := range arg.targets {
@@ -55,8 +54,7 @@ func String(v any, buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func Prepare(proc *process.Process, v any) error {
-	arg := v.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
 	arg.rt = &state{}
 	arg.rt.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
 	for idx := range arg.targets {
@@ -79,17 +77,11 @@ func Prepare(proc *process.Process, v any) error {
 // concurrently modified by other transactions, a Timestamp column will be put on the output
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
-func Call(
+func (arg *Argument) Call(
 	idx int,
 	proc *process.Process,
-	v any,
 	isFirst bool,
 	isLast bool) (process.ExecStatus, error) {
-	arg, ok := v.(*Argument)
-	if !ok {
-		getLogger().Fatal("invalid argument",
-			zap.Any("argument", arg))
-	}
 
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {

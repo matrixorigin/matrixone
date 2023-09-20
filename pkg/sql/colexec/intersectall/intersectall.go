@@ -16,6 +16,7 @@ package intersectall
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,13 +29,13 @@ const (
 	End
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" intersect all ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
-	ap := arg.(*Argument)
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 	if ap.ctr.hashTable, err = hashmap.NewStrMap(true, ap.IBucket, ap.NBucket, proc.Mp()); err != nil {
@@ -52,12 +53,11 @@ func Prepare(proc *process.Process, arg any) error {
 // use values from left relation to probe and update the array.
 // throw away values that do not exist in the hash table.
 // preserve values that exist in the hash table (the minimum of the number of times that exist in either).
-func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
 	analyzer := proc.GetAnalyze(idx)
 	analyzer.Start()
 	defer analyzer.Stop()
-	arg := argument.(*Argument)
 	for {
 		switch arg.ctr.state {
 		case Build:

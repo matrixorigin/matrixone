@@ -66,14 +66,14 @@ var (
 	STATEMENT_ACCOUNT = "account"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("external output")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
 	defer span.End()
-	param := arg.(*Argument).Es
+	param := arg.Es
 	if proc.Lim.MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
@@ -118,7 +118,7 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	defer span.End()
 	select {
@@ -135,7 +135,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		anal.AddScanTime(t1)
 	}()
 	anal.Input(nil, isFirst)
-	param := arg.(*Argument).Es
+	param := arg.Es
 	if param.Fileparam.End {
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil

@@ -32,12 +32,12 @@ import (
 
 const batchSize = 8192
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" hash build ")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	if len(proc.Reg.MergeReceivers) > 1 {
 		ap.ctr.InitReceiver(proc, true)
@@ -85,11 +85,11 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, _ bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
+	ap := arg
 	ctr := ap.ctr
 	for {
 		switch ctr.state {

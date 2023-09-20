@@ -30,23 +30,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("processing on duplicate key before insert")
 }
 
-func Prepare(p *proc, arg any) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(p *proc) error {
+	ap := arg
 	ap.ctr = &container{}
 	ap.ctr.InitReceiver(p, true)
 	return nil
 }
 
-func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *proc, isFirst, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
 
-	arg := x.(*Argument)
 	ctr := arg.ctr
 
 	for {

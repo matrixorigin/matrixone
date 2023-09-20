@@ -27,22 +27,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("pre processing insert")
 }
 
-func Prepare(_ *proc, _ any) error {
+func (arg *Argument) Prepare(_ *proc) error {
 	return nil
 }
 
-func Call(idx int, proc *proc, x any, _, _ bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *proc, _, _ bool) (process.ExecStatus, error) {
 	analy := proc.GetAnalyze(idx)
 	analy.Start()
 	defer analy.Stop()
 
 	var err error
 
-	arg := x.(*Argument)
 	bat := proc.InputBatch()
 	if bat == nil {
 		proc.SetInputBatch(nil)

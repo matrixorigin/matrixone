@@ -14,7 +14,12 @@
 
 package limit
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+var _ vm.Operator = new(Argument)
 
 type Argument struct {
 	Seen  uint64 // seen is the number of tuples seen so far

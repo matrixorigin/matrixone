@@ -14,243 +14,186 @@
 
 package vm
 
-import (
-	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
+// var stringFunc = [...]func(any, *bytes.Buffer){
+// 	Top:         top.String,
+// 	Join:        join.String,
+// 	Semi:        semi.String,
+// 	RightSemi:   rightsemi.String,
+// 	RightAnti:   rightanti.String,
+// 	Left:        left.String,
+// 	Right:       right.String,
+// 	Single:      single.String,
+// 	Limit:       limit.String,
+// 	Order:       order.String,
+// 	Group:       group.String,
+// 	Window:      window.String,
+// 	Merge:       merge.String,
+// 	Output:      output.String,
+// 	Offset:      offset.String,
+// 	Product:     product.String,
+// 	Restrict:    restrict.String,
+// 	Dispatch:    dispatch.String,
+// 	Connector:   connector.String,
+// 	Projection:  projection.String,
+// 	Anti:        anti.String,
+// 	Mark:        mark.String,
+// 	MergeBlock:  mergeblock.String,
+// 	MergeDelete: mergedelete.String,
+// 	LoopJoin:    loopjoin.String,
+// 	LoopLeft:    loopleft.String,
+// 	LoopSingle:  loopsingle.String,
+// 	LoopSemi:    loopsemi.String,
+// 	LoopAnti:    loopanti.String,
+// 	LoopMark:    loopmark.String,
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopmark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
+// 	MergeTop:       mergetop.String,
+// 	MergeLimit:     mergelimit.String,
+// 	MergeOrder:     mergeorder.String,
+// 	MergeGroup:     mergegroup.String,
+// 	MergeOffset:    mergeoffset.String,
+// 	MergeRecursive: mergerecursive.String,
+// 	MergeCTE:       mergecte.String,
 
-var stringFunc = [...]func(any, *bytes.Buffer){
-	Top:         top.String,
-	Join:        join.String,
-	Semi:        semi.String,
-	RightSemi:   rightsemi.String,
-	RightAnti:   rightanti.String,
-	Left:        left.String,
-	Right:       right.String,
-	Single:      single.String,
-	Limit:       limit.String,
-	Order:       order.String,
-	Group:       group.String,
-	Window:      window.String,
-	Merge:       merge.String,
-	Output:      output.String,
-	Offset:      offset.String,
-	Product:     product.String,
-	Restrict:    restrict.String,
-	Dispatch:    dispatch.String,
-	Connector:   connector.String,
-	Projection:  projection.String,
-	Anti:        anti.String,
-	Mark:        mark.String,
-	MergeBlock:  mergeblock.String,
-	MergeDelete: mergedelete.String,
-	LoopJoin:    loopjoin.String,
-	LoopLeft:    loopleft.String,
-	LoopSingle:  loopsingle.String,
-	LoopSemi:    loopsemi.String,
-	LoopAnti:    loopanti.String,
-	LoopMark:    loopmark.String,
+// 	Deletion:        deletion.String,
+// 	Insert:          insert.String,
+// 	OnDuplicateKey:  onduplicatekey.String,
+// 	PreInsert:       preinsert.String,
+// 	PreInsertUnique: preinsertunique.String,
+// 	External:        external.String,
 
-	MergeTop:       mergetop.String,
-	MergeLimit:     mergelimit.String,
-	MergeOrder:     mergeorder.String,
-	MergeGroup:     mergegroup.String,
-	MergeOffset:    mergeoffset.String,
-	MergeRecursive: mergerecursive.String,
-	MergeCTE:       mergecte.String,
+// 	Minus:        minus.String,
+// 	Intersect:    intersect.String,
+// 	IntersectAll: intersectall.String,
 
-	Deletion:        deletion.String,
-	Insert:          insert.String,
-	OnDuplicateKey:  onduplicatekey.String,
-	PreInsert:       preinsert.String,
-	PreInsertUnique: preinsertunique.String,
-	External:        external.String,
+// 	HashBuild: hashbuild.String,
 
-	Minus:        minus.String,
-	Intersect:    intersect.String,
-	IntersectAll: intersectall.String,
+// 	TableFunction: table_function.String,
 
-	HashBuild: hashbuild.String,
+// 	LockOp: lockop.String,
 
-	TableFunction: table_function.String,
+// 	Shuffle: shuffle.String,
+// 	Stream:  stream.String,
+// }
 
-	LockOp: lockop.String,
+// var prepareFunc = [...]func(*process.Process, any) error{
+// 	Top:         top.Prepare,
+// 	Join:        join.Prepare,
+// 	Semi:        semi.Prepare,
+// 	RightSemi:   rightsemi.Prepare,
+// 	RightAnti:   rightanti.Prepare,
+// 	Left:        left.Prepare,
+// 	Right:       right.Prepare,
+// 	Single:      single.Prepare,
+// 	Limit:       limit.Prepare,
+// 	Order:       order.Prepare,
+// 	Group:       group.Prepare,
+// 	Window:      window.Prepare,
+// 	Merge:       merge.Prepare,
+// 	Output:      output.Prepare,
+// 	Offset:      offset.Prepare,
+// 	Product:     product.Prepare,
+// 	Restrict:    restrict.Prepare,
+// 	Dispatch:    dispatch.Prepare,
+// 	Connector:   connector.Prepare,
+// 	Projection:  projection.Prepare,
+// 	Anti:        anti.Prepare,
+// 	Mark:        mark.Prepare,
+// 	MergeBlock:  mergeblock.Prepare,
+// 	MergeDelete: mergedelete.Prepare,
+// 	LoopJoin:    loopjoin.Prepare,
+// 	LoopLeft:    loopleft.Prepare,
+// 	LoopSingle:  loopsingle.Prepare,
+// 	LoopSemi:    loopsemi.Prepare,
+// 	LoopAnti:    loopanti.Prepare,
+// 	LoopMark:    loopmark.Prepare,
 
-	Shuffle: shuffle.String,
-	Stream:  stream.String,
-}
+// 	MergeTop:       mergetop.Prepare,
+// 	MergeLimit:     mergelimit.Prepare,
+// 	MergeOrder:     mergeorder.Prepare,
+// 	MergeGroup:     mergegroup.Prepare,
+// 	MergeOffset:    mergeoffset.Prepare,
+// 	MergeRecursive: mergerecursive.Prepare,
+// 	MergeCTE:       mergecte.Prepare,
 
-var prepareFunc = [...]func(*process.Process, any) error{
-	Top:         top.Prepare,
-	Join:        join.Prepare,
-	Semi:        semi.Prepare,
-	RightSemi:   rightsemi.Prepare,
-	RightAnti:   rightanti.Prepare,
-	Left:        left.Prepare,
-	Right:       right.Prepare,
-	Single:      single.Prepare,
-	Limit:       limit.Prepare,
-	Order:       order.Prepare,
-	Group:       group.Prepare,
-	Window:      window.Prepare,
-	Merge:       merge.Prepare,
-	Output:      output.Prepare,
-	Offset:      offset.Prepare,
-	Product:     product.Prepare,
-	Restrict:    restrict.Prepare,
-	Dispatch:    dispatch.Prepare,
-	Connector:   connector.Prepare,
-	Projection:  projection.Prepare,
-	Anti:        anti.Prepare,
-	Mark:        mark.Prepare,
-	MergeBlock:  mergeblock.Prepare,
-	MergeDelete: mergedelete.Prepare,
-	LoopJoin:    loopjoin.Prepare,
-	LoopLeft:    loopleft.Prepare,
-	LoopSingle:  loopsingle.Prepare,
-	LoopSemi:    loopsemi.Prepare,
-	LoopAnti:    loopanti.Prepare,
-	LoopMark:    loopmark.Prepare,
+// 	Deletion:        deletion.Prepare,
+// 	Insert:          insert.Prepare,
+// 	OnDuplicateKey:  onduplicatekey.Prepare,
+// 	PreInsert:       preinsert.Prepare,
+// 	PreInsertUnique: preinsertunique.Prepare,
+// 	External:        external.Prepare,
 
-	MergeTop:       mergetop.Prepare,
-	MergeLimit:     mergelimit.Prepare,
-	MergeOrder:     mergeorder.Prepare,
-	MergeGroup:     mergegroup.Prepare,
-	MergeOffset:    mergeoffset.Prepare,
-	MergeRecursive: mergerecursive.Prepare,
-	MergeCTE:       mergecte.Prepare,
+// 	Minus:        minus.Prepare,
+// 	Intersect:    intersect.Prepare,
+// 	IntersectAll: intersectall.Prepare,
 
-	Deletion:        deletion.Prepare,
-	Insert:          insert.Prepare,
-	OnDuplicateKey:  onduplicatekey.Prepare,
-	PreInsert:       preinsert.Prepare,
-	PreInsertUnique: preinsertunique.Prepare,
-	External:        external.Prepare,
+// 	HashBuild: hashbuild.Prepare,
 
-	Minus:        minus.Prepare,
-	Intersect:    intersect.Prepare,
-	IntersectAll: intersectall.Prepare,
+// 	TableFunction: table_function.Prepare,
 
-	HashBuild: hashbuild.Prepare,
+// 	LockOp: lockop.Prepare,
 
-	TableFunction: table_function.Prepare,
+// 	Shuffle: shuffle.Prepare,
+// 	Stream:  stream.Prepare,
+// }
 
-	LockOp: lockop.Prepare,
+// var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecStatus, error){
+// 	Top:         top.Call,
+// 	Join:        join.Call,
+// 	Semi:        semi.Call,
+// 	RightSemi:   rightsemi.Call,
+// 	RightAnti:   rightanti.Call,
+// 	Left:        left.Call,
+// 	Right:       right.Call,
+// 	Single:      single.Call,
+// 	Limit:       limit.Call,
+// 	Order:       order.Call,
+// 	Group:       group.Call,
+// 	Window:      window.Call,
+// 	Merge:       merge.Call,
+// 	Output:      output.Call,
+// 	Offset:      offset.Call,
+// 	Product:     product.Call,
+// 	Restrict:    restrict.Call,
+// 	Dispatch:    dispatch.Call,
+// 	Connector:   connector.Call,
+// 	Projection:  projection.Call,
+// 	Anti:        anti.Call,
+// 	Mark:        mark.Call,
+// 	MergeBlock:  mergeblock.Call,
+// 	MergeDelete: mergedelete.Call,
+// 	LoopJoin:    loopjoin.Call,
+// 	LoopLeft:    loopleft.Call,
+// 	LoopSingle:  loopsingle.Call,
+// 	LoopSemi:    loopsemi.Call,
+// 	LoopAnti:    loopanti.Call,
+// 	LoopMark:    loopmark.Call,
 
-	Shuffle: shuffle.Prepare,
-	Stream:  stream.Prepare,
-}
+// 	MergeTop:       mergetop.Call,
+// 	MergeLimit:     mergelimit.Call,
+// 	MergeOrder:     mergeorder.Call,
+// 	MergeGroup:     mergegroup.Call,
+// 	MergeOffset:    mergeoffset.Call,
+// 	MergeRecursive: mergerecursive.Call,
+// 	MergeCTE:       mergecte.Call,
 
-var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecStatus, error){
-	Top:         top.Call,
-	Join:        join.Call,
-	Semi:        semi.Call,
-	RightSemi:   rightsemi.Call,
-	RightAnti:   rightanti.Call,
-	Left:        left.Call,
-	Right:       right.Call,
-	Single:      single.Call,
-	Limit:       limit.Call,
-	Order:       order.Call,
-	Group:       group.Call,
-	Window:      window.Call,
-	Merge:       merge.Call,
-	Output:      output.Call,
-	Offset:      offset.Call,
-	Product:     product.Call,
-	Restrict:    restrict.Call,
-	Dispatch:    dispatch.Call,
-	Connector:   connector.Call,
-	Projection:  projection.Call,
-	Anti:        anti.Call,
-	Mark:        mark.Call,
-	MergeBlock:  mergeblock.Call,
-	MergeDelete: mergedelete.Call,
-	LoopJoin:    loopjoin.Call,
-	LoopLeft:    loopleft.Call,
-	LoopSingle:  loopsingle.Call,
-	LoopSemi:    loopsemi.Call,
-	LoopAnti:    loopanti.Call,
-	LoopMark:    loopmark.Call,
+// 	Deletion: deletion.Call,
+// 	Insert:   insert.Call,
+// 	External: external.Call,
 
-	MergeTop:       mergetop.Call,
-	MergeLimit:     mergelimit.Call,
-	MergeOrder:     mergeorder.Call,
-	MergeGroup:     mergegroup.Call,
-	MergeOffset:    mergeoffset.Call,
-	MergeRecursive: mergerecursive.Call,
-	MergeCTE:       mergecte.Call,
+// 	OnDuplicateKey:  onduplicatekey.Call,
+// 	PreInsert:       preinsert.Call,
+// 	PreInsertUnique: preinsertunique.Call,
 
-	Deletion: deletion.Call,
-	Insert:   insert.Call,
-	External: external.Call,
+// 	Minus:        minus.Call,
+// 	Intersect:    intersect.Call,
+// 	IntersectAll: intersectall.Call,
 
-	OnDuplicateKey:  onduplicatekey.Call,
-	PreInsert:       preinsert.Call,
-	PreInsertUnique: preinsertunique.Call,
+// 	HashBuild: hashbuild.Call,
 
-	Minus:        minus.Call,
-	Intersect:    intersect.Call,
-	IntersectAll: intersectall.Call,
+// 	TableFunction: table_function.Call,
 
-	HashBuild: hashbuild.Call,
+// 	LockOp: lockop.Call,
 
-	TableFunction: table_function.Call,
-
-	LockOp: lockop.Call,
-
-	Shuffle: shuffle.Call,
-	Stream:  stream.Call,
-}
+// 	Shuffle: shuffle.Call,
+// 	Stream:  stream.Call,
+// }

@@ -108,8 +108,8 @@ func TestMergeBlock(t *testing.T) {
 		notFreeBatch: true,
 	}
 	proc.Reg.InputBatch = batch1
-	Prepare(proc, &argument1)
-	_, err := Call(0, proc, &argument1, false, false)
+	argument1.Prepare(proc)
+	_, err := argument1.Call(0, proc, false, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15*3), argument1.affectedRows)
 	// Check Tbl

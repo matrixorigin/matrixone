@@ -23,14 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (ap *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" ⨝ ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func (ap *Argument) Prepare(proc *process.Process) error {
 	var err error
 
-	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 
@@ -40,11 +39,10 @@ func Prepare(proc *process.Process, arg any) error {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (ap *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
 	ctr := ap.ctr
 	for {
 		switch ctr.state {

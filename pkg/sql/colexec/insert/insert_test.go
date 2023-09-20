@@ -86,9 +86,9 @@ func TestInsertOperator(t *testing.T) {
 		},
 	}
 	proc.Reg.InputBatch = batch1
-	err := Prepare(proc, &argument1)
+	err := argument1.Prepare(proc)
 	require.NoError(t, err)
-	_, err = Call(0, proc, &argument1, false, false)
+	_, err = argument1.Call(0, proc, false, false)
 	require.NoError(t, err)
 
 	result := argument1.InsertCtx.Rel.(*mockRelation).result

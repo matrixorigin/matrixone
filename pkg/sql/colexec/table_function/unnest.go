@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -42,9 +41,9 @@ func genFilterMap(filters []string) map[string]struct{} {
 	return filterMap
 }
 
-func unnestString(arg any, buf *bytes.Buffer) {
-	buf.WriteString("unnest")
-}
+// func unnestString(buf *bytes.Buffer) {
+// 	buf.WriteString("unnest")
+// }
 
 func unnestPrepare(proc *process.Process, arg *Argument) error {
 	param := unnestParam{}

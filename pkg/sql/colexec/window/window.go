@@ -31,12 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("window")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
 
@@ -57,9 +57,9 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst, isLast bool) (process.ExecStatus, error) {
 	var err error
-	ap := arg.(*Argument)
+	ap := arg
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
 	anal.Start()

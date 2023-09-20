@@ -16,20 +16,21 @@ package connector
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("pipe connector")
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Call(_ int, proc *process.Process, _ bool, _ bool) (process.ExecStatus, error) {
+	ap := arg
 	reg := ap.Reg
 	bat := proc.InputBatch()
 	if bat == nil {

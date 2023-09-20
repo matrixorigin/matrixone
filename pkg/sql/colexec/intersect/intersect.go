@@ -23,13 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" intersect ")
 }
 
-func Prepare(proc *process.Process, argument any) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
-	arg := argument.(*Argument)
+
 	arg.ctr = new(container)
 	arg.ctr.InitReceiver(proc, false)
 	arg.ctr.btc = nil
@@ -41,8 +41,7 @@ func Prepare(proc *process.Process, argument any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	arg := argument.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
 
 	analyze := proc.GetAnalyze(idx)
 	analyze.Start()

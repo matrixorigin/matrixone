@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	ap := arg
 	buf.WriteString("group([")
 	for i, expr := range ap.Exprs {
 		if i > 0 {
@@ -60,8 +61,8 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
@@ -142,8 +143,8 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	ap := arg
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()

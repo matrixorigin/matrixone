@@ -86,38 +86,38 @@ func init() {
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestWindow(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 	}
 }

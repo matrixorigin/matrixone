@@ -18,14 +18,18 @@ import (
 	"bufio"
 	"context"
 	"encoding/csv"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"io"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	ColumnCntLargerErrorInfo = "the table column is larger than input data column"

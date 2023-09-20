@@ -22,12 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("mergeroup()")
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
@@ -35,8 +35,8 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	ap := arg
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
 	anal.Start()

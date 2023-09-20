@@ -80,6 +80,6 @@ func TestPreInsertUnique(t *testing.T) {
 
 	types.T_int64.ToType()
 	proc.Reg.InputBatch = inputBatch
-	_, err := Call(0, proc, &argument, false, false)
+	_, err := argument.Call(0, proc, false, false)
 	require.NoError(t, err)
 }

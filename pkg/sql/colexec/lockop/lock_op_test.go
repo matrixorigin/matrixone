@@ -55,9 +55,9 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
-			require.NoError(t, Prepare(proc, arg))
+			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
-			_, err := Call(0, proc, arg, false, false)
+			_, err := arg.Call(0, proc, false, false)
 			require.NoError(t, err)
 
 			vec := proc.InputBatch().GetVector(1)
@@ -77,7 +77,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
-			require.NoError(t, Prepare(proc, arg))
+			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
 
 			arg.rt.parker.Reset()
@@ -94,7 +94,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				_, err = Call(0, proc, arg, false, false)
+				_, err = arg.Call(0, proc, false, false)
 				require.NoError(t, err)
 
 				vec := proc.InputBatch().GetVector(1)
@@ -118,7 +118,7 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
-			require.NoError(t, Prepare(proc, arg))
+			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
 
 			arg.rt.parker.Reset()
@@ -139,15 +139,15 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				arg2.rt = &state{}
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
-				Prepare(proc, arg2)
+				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
 				defer arg2.rt.parker.FreeMem()
 
-				_, err = Call(0, proc, arg2, false, false)
+				_, err = arg2.Call(0, proc, false, false)
 				assert.NoError(t, err)
 
 				proc.SetInputBatch(nil)
-				_, err = Call(0, proc, arg2, false, false)
+				_, err = arg2.Call(0, proc, false, false)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
@@ -164,7 +164,7 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
-			require.NoError(t, Prepare(proc, arg))
+			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
 
 			arg.rt.parker.Reset()
@@ -197,15 +197,15 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				arg2.rt = &state{}
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
-				Prepare(proc, arg2)
+				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
 				defer arg2.rt.parker.FreeMem()
 
-				_, err = Call(0, proc, arg2, false, false)
+				_, err = arg2.Call(0, proc, false, false)
 				assert.NoError(t, err)
 
 				proc.SetInputBatch(nil)
-				_, err = Call(0, proc, arg2, false, false)
+				_, err = arg2.Call(0, proc, false, false)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
@@ -222,7 +222,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
-			require.NoError(t, Prepare(proc, arg))
+			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
 
 			arg.rt.parker.Reset()
@@ -255,17 +255,17 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				arg2.rt = &state{}
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
-				Prepare(proc, arg2)
+				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
 				defer arg2.rt.parker.FreeMem()
 
 				proc.TxnOperator.TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
 
-				_, err = Call(0, proc, arg2, false, false)
+				_, err = arg2.Call(0, proc, false, false)
 				assert.NoError(t, err)
 
 				proc.SetInputBatch(nil)
-				_, err = Call(0, proc, arg2, false, false)
+				_, err = arg2.Call(0, proc, false, false)
 				require.NoError(t, err)
 			}()
 			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 1, conflictRow, 1))
@@ -290,7 +290,7 @@ func TestLockWithBlocking(t *testing.T) {
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.rt.hasNewVersionInRange = testFunc
-			end, err := Call(idx, proc, arg, isFirst, isLast)
+			end, err := arg.Call(idx, proc, isFirst, isLast)
 			require.NoError(t, err)
 			if arg.rt.step == stepLock {
 				require.Equal(t, batch.EmptyBatch, proc.InputBatch())
@@ -353,7 +353,7 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.rt.hasNewVersionInRange = testFunc
-			ok, err := Call(idx, proc, arg, isFirst, isLast)
+			ok, err := arg.Call(idx, proc, isFirst, isLast)
 			return ok == process.ExecStop, err
 		},
 		func(arg *Argument) {
@@ -381,7 +381,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 		[]uint64{1},
 		[][]int32{{0, 1, 2}},
 		func(proc *process.Process, arg *Argument) {
-			require.NoError(t, Prepare(proc, arg))
+			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = func(
 				proc *process.Process,
 				tableID uint64,
@@ -391,7 +391,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 				return true, nil
 			}
 
-			_, err := Call(0, proc, arg, false, false)
+			_, err := arg.Call(0, proc, false, false)
 			require.NoError(t, err)
 			require.Error(t, arg.rt.retryError)
 			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
@@ -472,7 +472,7 @@ func runLockBlockingOpTest(
 
 				batches = append(batches, bat)
 			}
-			require.NoError(t, Prepare(proc, arg))
+			require.NoError(t, arg.Prepare(proc))
 			arg.rt.batchFetchFunc = func(process.Analyze) (*batch.Batch, bool, error) {
 				if len(batches) == 0 {
 					return nil, true, nil

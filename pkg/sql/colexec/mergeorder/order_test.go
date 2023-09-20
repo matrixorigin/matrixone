@@ -53,7 +53,7 @@ func TestString(t *testing.T) {
 	}
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
@@ -66,7 +66,7 @@ func TestPrepare(t *testing.T) {
 		newTestCase([]types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}, {Expr: newExpression(1, types.T_int64), Flag: 0}}),
 	}
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
@@ -81,7 +81,7 @@ func TestOrder(t *testing.T) {
 	}
 
 	for tci, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
@@ -90,7 +90,7 @@ func TestOrder(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
 				require.NoError(t, err)
 				// do the result check
 				if len(tc.arg.OrderBySpecs) > 0 {
@@ -158,7 +158,7 @@ func BenchmarkOrder(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
+			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newRandomBatch(tc.types, tc.proc, BenchmarkRows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
@@ -167,7 +167,7 @@ func BenchmarkOrder(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok == process.ExecStop || err != nil {
+				if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
 						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 					}

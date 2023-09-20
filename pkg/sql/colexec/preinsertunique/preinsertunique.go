@@ -32,16 +32,16 @@ const (
 	rowIdColPos
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("pre processing insert unique key")
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatus, error) {
-	argument := arg.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, _, _ bool) (process.ExecStatus, error) {
+	argument := arg
 
 	analy := proc.GetAnalyze(idx)
 	analy.Start()

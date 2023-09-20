@@ -22,8 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	n := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	n := arg
 	buf.WriteString("projection(")
 	for i, e := range n.Es {
 		if i > 0 {
@@ -34,15 +34,15 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
 
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
@@ -63,7 +63,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 
 	anal.Input(bat, isFirst)
-	ap := arg.(*Argument)
+	ap := arg
 	rbat := batch.NewWithSize(len(ap.Es))
 
 	// do projection.

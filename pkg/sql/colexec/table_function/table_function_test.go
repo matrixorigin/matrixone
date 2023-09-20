@@ -25,39 +25,39 @@ import (
 
 func TestString(t *testing.T) {
 	arg := Argument{Name: "unnest"}
-	String(&arg, bytes.NewBuffer(nil))
+	arg.String(bytes.NewBuffer(nil))
 }
 
 func TestCall(t *testing.T) {
 	arg := Argument{Name: "unnest"}
-	end, err := Call(0, testutil.NewProc(), &arg, false, false)
+	end, err := arg.Call(0, testutil.NewProc(), false, false)
 	require.NoError(t, err)
 	require.True(t, end == process.ExecStop)
 	arg.Name = "generate_series"
-	end, err = Call(0, testutil.NewProc(), &arg, false, false)
+	end, err = arg.Call(0, testutil.NewProc(), false, false)
 	require.NoError(t, err)
 	require.True(t, end == process.ExecStop)
 	arg.Name = "metadata_scan"
-	end, err = Call(0, testutil.NewProc(), &arg, false, false)
+	end, err = arg.Call(0, testutil.NewProc(), false, false)
 	require.NoError(t, err)
 	require.True(t, end == process.ExecStop)
 	arg.Name = "not_exist"
-	end, err = Call(0, testutil.NewProc(), &arg, false, false)
+	end, err = arg.Call(0, testutil.NewProc(), false, false)
 	require.Error(t, err)
 	require.True(t, end == process.ExecStop)
 }
 
 func TestPrepare(t *testing.T) {
 	arg := Argument{Name: "unnest"}
-	err := Prepare(testutil.NewProc(), &arg)
+	err := arg.Prepare(testutil.NewProc())
 	require.Error(t, err)
 	arg.Name = "generate_series"
-	err = Prepare(testutil.NewProc(), &arg)
+	err = arg.Prepare(testutil.NewProc())
 	require.NoError(t, err)
 	arg.Name = "metadata_scan"
-	err = Prepare(testutil.NewProc(), &arg)
+	err = arg.Prepare(testutil.NewProc())
 	require.NoError(t, err)
 	arg.Name = "not_exist"
-	err = Prepare(testutil.NewProc(), &arg)
+	err = arg.Prepare(testutil.NewProc())
 	require.Error(t, err)
 }

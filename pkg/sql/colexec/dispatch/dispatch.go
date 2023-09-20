@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,12 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("dispatch")
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ctr := new(container)
 	ap.ctr = ctr
 	ctr.localRegsCnt = len(ap.LocalRegs)
@@ -90,8 +91,8 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	ap := arg
 	bat := proc.InputBatch()
 	if bat == nil && ap.RecSink {
 		bat = makeEndBatch(proc)

@@ -16,9 +16,13 @@ package preinsertunique
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 type Argument struct {
 	Ctx          context.Context

@@ -76,7 +76,7 @@ func init() {
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestJoin(t *testing.T) {
 		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 			jm.SetDupCount(int64(1))
 		}
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
@@ -98,7 +98,7 @@ func TestJoin(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
 				break
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -134,7 +134,7 @@ func BenchmarkJoin(b *testing.B) {
 		t := new(testing.T)
 		for _, tc := range tcs {
 			bat := hashBuild(t, tc)
-			err := Prepare(tc.proc, tc.arg)
+			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
@@ -144,7 +144,7 @@ func BenchmarkJoin(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok == process.ExecStop || err != nil {
+				if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
 					break
 				}
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -236,13 +236,13 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 }
 
 func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
-	err := hashbuild.Prepare(tc.proc, tc.barg)
+	err := tc.barg.Prepare(tc.proc)
 	require.NoError(t, err)
 	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 	for _, r := range tc.proc.Reg.MergeReceivers {
 		r.Ch <- nil
 	}
-	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
+	ok, err := tc.barg.Call(0, tc.proc, false, false)
 	require.NoError(t, err)
 	require.Equal(t, false, ok == process.ExecStop)
 	return tc.proc.Reg.InputBatch

@@ -85,7 +85,7 @@ func TestPreInsertNormal(t *testing.T) {
 	}
 	checkResultBat, _ := batch1.Dup(proc.Mp())
 	proc.SetInputBatch(batch1)
-	_, err := Call(0, proc, &argument1, false, false)
+	_, err := argument1.Call(0, proc, false, false)
 	require.NoError(t, err)
 	{
 		result := proc.InputBatch()
@@ -146,6 +146,6 @@ func TestPreInsertNullCheck(t *testing.T) {
 		},
 	}
 	proc.Reg.InputBatch = batch2
-	_, err2 := Call(0, proc, &argument2, false, false)
+	_, err2 := argument2.Call(0, proc, false, false)
 	require.Error(t, err2, "should return error when insert null into primary key column")
 }

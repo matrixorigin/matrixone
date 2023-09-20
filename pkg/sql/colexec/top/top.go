@@ -28,8 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	ap := arg
 	buf.WriteString("top([")
 	for i, f := range ap.Fs {
 		if i > 0 {
@@ -40,8 +40,8 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	if ap.Limit > 1024 {
 		ap.ctr.sels = make([]int64, 0, 1024)
@@ -61,8 +61,8 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	ap := arg
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(idx)
 	anal.Start()

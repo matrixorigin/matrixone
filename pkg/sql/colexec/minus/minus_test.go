@@ -73,12 +73,12 @@ func TestMinus(t *testing.T) {
 		},
 	)
 
-	err := Prepare(c.proc, c.arg)
+	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
 	var end process.ExecStatus
 	for {
-		end, err = Call(0, c.proc, c.arg, false, false)
+		end, err = c.arg.Call(0, c.proc, false, false)
 		if end == process.ExecStop {
 			break
 		}

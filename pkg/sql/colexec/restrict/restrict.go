@@ -17,6 +17,7 @@ package restrict
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,13 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	ap := arg
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 
 	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
@@ -41,7 +42,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (status process.ExecStatus, err error) {
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (status process.ExecStatus, err error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return process.ExecStop, nil
@@ -56,7 +57,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (s
 		return process.ExecNext, nil
 	}
 
-	ap := arg.(*Argument)
+	ap := arg
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()

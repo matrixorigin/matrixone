@@ -14,7 +14,11 @@
 
 package vm
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 type OpType int
 
@@ -97,17 +101,26 @@ type Instruction struct {
 	// Idx specified the analysis information index.
 	Idx int
 	// Arg contains the operand of this instruction.
-	Arg InstructionArgument
+	Arg Operator
 
 	// flag for analyzeInfo record the row information
 	IsFirst bool
 	IsLast  bool
 }
 
-type InstructionArgument interface {
+type Operator interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
 	Free(proc *process.Process, pipelineFailed bool)
+
+	// String returns the string representation of an operator.
+	String(buf *bytes.Buffer)
+
+	//Prepare prepares an operator for execution.
+	Prepare(proc *process.Process) error
+
+	//Call calls an operator.
+	Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error)
 }
 
 type Instructions []Instruction

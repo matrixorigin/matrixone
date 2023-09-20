@@ -204,7 +204,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	}
 
 	var isConnector bool
-	var lastArg vm.InstructionArgument
+	var lastArg vm.Operator
 	switch arg := lastInstruction.Arg.(type) {
 	case *connector.Argument:
 		isConnector = true
@@ -265,11 +265,11 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		s.Proc.SetInputBatch(bat)
 
 		if isConnector {
-			if ok, err := connector.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
+			if ok, err := lastArg.Call(-1, s.Proc, false, false); err != nil || ok == process.ExecStop {
 				return err
 			}
 		} else {
-			if ok, err := dispatch.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
+			if ok, err := lastArg.Call(-1, s.Proc, false, false); err != nil || ok == process.ExecStop {
 				return err
 			}
 		}
@@ -293,9 +293,9 @@ func (s *Scope) remoteRun(c *Compile) error {
 	lastArg := lastInstruction.Arg
 	switch arg := lastArg.(type) {
 	case *connector.Argument:
-		connector.Prepare(s.Proc, arg)
+		arg.Prepare(s.Proc)
 	case *dispatch.Argument:
-		dispatch.Prepare(s.Proc, arg)
+		arg.Prepare(s.Proc)
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}

@@ -148,15 +148,15 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 
 func TestUnnestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, ut := range utc {
-		unnestString(ut.arg, buf)
+	for _, tc := range utc {
+		tc.arg.String(buf)
 	}
 }
 
 func TestUnnestCall(t *testing.T) {
 	for _, ut := range utc {
 
-		err := Prepare(ut.proc, ut.arg)
+		err := ut.arg.Prepare(ut.proc)
 		require.NotNil(t, err)
 		var inputBat *batch.Batch
 		switch ut.jsonType {

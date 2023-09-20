@@ -21,21 +21,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", ap.Offset))
+func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", arg.Offset))
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
 	ap.ctr.seen = 0
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	ap := arg
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()

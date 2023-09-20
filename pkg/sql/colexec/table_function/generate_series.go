@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func generateSeriesString(arg any, buf *bytes.Buffer) {
+func generateSeriesString(buf *bytes.Buffer) {
 	buf.WriteString("generate_series")
 }
 

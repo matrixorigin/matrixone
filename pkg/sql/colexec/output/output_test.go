@@ -63,32 +63,32 @@ func init() {
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestOutput(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+		_, err = tc.arg.Call(0, tc.proc, false, false)
 		require.NoError(t, err)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())

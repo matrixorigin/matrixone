@@ -144,9 +144,9 @@ func TestMergeDelete(t *testing.T) {
 		AffectedRows: 0,
 	}
 
-	Prepare(proc, &argument1)
+	argument1.Prepare(proc)
 	proc.Reg.InputBatch = batch1
-	_, err = Call(0, proc, &argument1, false, false)
+	_, err = argument1.Call(0, proc, false, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.AffectedRows)
 
@@ -166,7 +166,7 @@ func TestMergeDelete(t *testing.T) {
 	}
 
 	proc.Reg.InputBatch = batch2
-	_, err = Call(0, proc, &argument1, false, false)
+	_, err = argument1.Call(0, proc, false, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(60), argument1.AffectedRows)
 

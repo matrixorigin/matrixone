@@ -20,21 +20,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" MergeS3BlocksMetaLoc ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ap.container = new(Container)
 	ap.container.mp = make(map[int]*batch.Batch)
 	ap.container.mp2 = make(map[int][]*batch.Batch)
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	var err error
-	ap := arg.(*Argument)
+	ap := arg
 	bat := proc.InputBatch()
 	if bat == nil {
 		return process.ExecStop, nil

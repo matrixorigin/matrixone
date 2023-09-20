@@ -63,19 +63,19 @@ func init() {
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
 func TestBuild(t *testing.T) {
 	for _, tc := range tcs[:1] {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		for {
-			ok, err := Call(0, tc.proc, tc.arg, false, false)
+			ok, err := tc.arg.Call(0, tc.proc, false, false)
 			require.NoError(t, err)
 			require.Equal(t, false, ok == process.ExecStop)
 			mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)
@@ -101,13 +101,13 @@ func BenchmarkBuild(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
+			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			for {
-				ok, err := Call(0, tc.proc, tc.arg, false, false)
+				ok, err := tc.arg.Call(0, tc.proc, false, false)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
 				mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)

@@ -26,12 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (ap *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("insert")
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	ap := arg.(*Argument)
+func (ap *Argument) Prepare(proc *process.Process) error {
 	ap.ctr = new(container)
 	ap.ctr.state = Process
 	if ap.ToWriteS3 {
@@ -56,9 +55,8 @@ func Prepare(proc *process.Process, arg any) error {
 
 // first parameter: true represents whether the current pipeline has ended
 // first parameter: false
-func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecStatus, error) {
+func (ap *Argument) Call(idx int, proc *process.Process, _ bool, _ bool) (process.ExecStatus, error) {
 	defer analyze(proc, idx)()
-	ap := arg.(*Argument)
 	if ap.ctr.state == End {
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil

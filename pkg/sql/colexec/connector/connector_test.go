@@ -52,20 +52,20 @@ func init() {
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestConnector(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		bat := newBatch(t, tc.types, tc.proc, Rows)
 		tc.proc.Reg.InputBatch = bat
@@ -76,11 +76,11 @@ func TestConnector(t *testing.T) {
 				}
 			}
 		}*/
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
+		_, _ = tc.arg.Call(0, tc.proc, false, false)
 		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
+		_, _ = tc.arg.Call(0, tc.proc, false, false)
 		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
+		_, _ = tc.arg.Call(0, tc.proc, false, false)
 		for len(tc.arg.Reg.Ch) > 0 {
 			bat := <-tc.arg.Reg.Ch
 			if bat == nil {

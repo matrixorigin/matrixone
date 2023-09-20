@@ -27,13 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" mark join ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
-	ap := arg.(*Argument)
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
@@ -76,11 +76,11 @@ func Prepare(proc *process.Process, arg any) error {
 //	    2.2.2 if condEq is condFalse in JoinMap
 //				check eq and non-eq conds in nullSels to determine condState. (same as 2.2.1.3)
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
+	ap := arg
 	ctr := ap.ctr
 	for {
 		switch ctr.state {

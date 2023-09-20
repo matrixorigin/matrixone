@@ -15,8 +15,11 @@
 package connector
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 // Argument pipe connector
 type Argument struct {

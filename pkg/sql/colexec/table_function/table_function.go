@@ -17,6 +17,7 @@ package table_function
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	tblArg := arg.(*Argument)
+func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	tblArg := arg
 	var (
 		f bool
 		e error
@@ -80,12 +81,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	return process.ExecNext, e
 }
 
-func String(arg any, buf *bytes.Buffer) {
-	buf.WriteString(arg.(*Argument).Name)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(arg.Name)
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	tblArg := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	tblArg := arg
 	tblArg.ctr = new(container)
 
 	retSchema := make([]types.Type, len(tblArg.Rets))

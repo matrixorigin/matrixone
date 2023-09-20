@@ -45,12 +45,12 @@ const (
 	FlushDeltaLoc
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("delete rows")
 }
 
-func Prepare(_ *process.Process, arg any) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(_ *process.Process) error {
+	ap := arg
 	if ap.RemoteDelete {
 		ap.ctr = new(container)
 		ap.ctr.blockId_type = make(map[string]int8)
@@ -63,8 +63,8 @@ func Prepare(_ *process.Process, arg any) error {
 }
 
 // the bool return value means whether it completed its work or not
-func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	p := arg.(*Argument)
+func (arg *Argument) Call(_ int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+	p := arg
 	bat := proc.InputBatch()
 
 	// last batch of block
