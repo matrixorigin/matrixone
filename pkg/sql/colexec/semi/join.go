@@ -119,6 +119,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
+		// for semi join, if left batch is sorted , then output batch is sorted
+		rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
 	}
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		rbat.Clean(proc.Mp())
