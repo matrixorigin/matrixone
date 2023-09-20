@@ -46,7 +46,6 @@ create  table  cpk_table_4(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 
 insert into cpk_table_4 select * from ex_table_cpk;
 select col4,col5,col13,col10,col16 from cpk_table_4;
 -- 唯一性验证
-
 insert into cpk_table_4 select * from ex_table_cpk;
 
 -- 复合主键smallint unsigned+int unsigned+bigint unsigned+char+bool+varchar
@@ -54,9 +53,7 @@ create  table  cpk_table_5(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 
 insert into cpk_table_5 select * from ex_table_cpk;
 select col6,col7,col8,col18,col16,col19 from cpk_table_5;
 -- 唯一性验证
-
 insert into cpk_table_5 select * from ex_table_cpk;
-
 show create table cpk_table_5;
 
 -- 复合主键19个
@@ -64,9 +61,7 @@ create  table  cpk_table_6(col1 tinyint,col2 smallint,col3 int,col4 bigint,col5 
 insert into cpk_table_6 select * from ex_table_cpk;
 select * from cpk_table_6;
 -- 唯一性验证
-
 insert into cpk_table_6 select * from ex_table_cpk;
-
 -- 异常：复合主键列部分不存在
 create table cpk_table_7(a int,b float,c char(20),primary key(a,d));
 create table cpk_table_8(a int,b float,c char(20),primary key(e,f));
