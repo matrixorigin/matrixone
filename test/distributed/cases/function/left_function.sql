@@ -29,9 +29,7 @@ SELECT LEFT(id, '1'), LEFT(str1, '1'), LEFT(str2, '1') FROM t;
 SELECT LEFT(id, LENGTH(str1)/1-1), LEFT(str1, 1) FROM t;
 SELECT LEFT(id, FIND_IN_SET('b','a,b,c,d')), LEFT(str2, EMPTY(str1)) FROM t;
 SELECT LEFT(id, '-1'), LEFT(str1, '0') FROM t;
--- @bvt:issue#5510
 SELECT LEFT(id, '1'+2), LEFT(str1, '1'+'1'), LEFT(str2, '1'+'0') FROM t;
--- @bvt:issue
 
 -- DATE column
 DROP TABLE IF EXISTS t;

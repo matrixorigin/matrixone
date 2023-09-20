@@ -43,10 +43,8 @@ alter table add01 add column col9 int not null first;
 show create table add01;
 insert into add01 values(1,3,'nihao','hei','hu','jj',2,'varchar',1);
 
--- @bvt:issue#8740
 insert into add01 values(2,3,'nihao',null,'hu','jj',2,'varchar',1);
 insert into add01 values(3,4,'nihao','hi','hu','jj',2,'varchar',null);
--- @bvt:issue
 
 show create table add01;
 select * from add01;
