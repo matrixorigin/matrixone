@@ -299,7 +299,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
 	if child.NodeType == plan.Node_JOIN {
 		if n.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
-			// shuffle group can follow shuffle join
+			// shuffle group can reuse shuffle join
 			if n.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType && n.Stats.HashmapStats.ShuffleTypeForMultiCN == child.Stats.HashmapStats.ShuffleTypeForMultiCN {
 				groupHashCol, _ := GetHashColumn(n.GroupBy[n.Stats.HashmapStats.ShuffleColIdx])
 				switch exprImpl := child.OnList[child.Stats.HashmapStats.ShuffleColIdx].Expr.(type) {
