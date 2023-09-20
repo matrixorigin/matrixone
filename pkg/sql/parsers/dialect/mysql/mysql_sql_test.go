@@ -2082,6 +2082,22 @@ var (
 			output: "create sequence s as smallint unsigned increment by 1 minvalue -100 maxvalue 100 start with -90 cycle",
 		},
 		{
+			input:  "ALTER SEQUENCE my_sequence START WITH 100;",
+			output: "alter sequence my_sequence start with 100 ",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence INCREMENT BY 5;",
+			output: "alter sequence my_sequence increment by 5 ",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence MINVALUE 1 MAXVALUE 1000;",
+			output: "alter sequence my_sequence minvalue 1 maxvalue 1000 ",
+		},
+		{
+			input:  "ALTER SEQUENCE my_sequence CYCLE;",
+			output: "alter sequence my_sequence cycle",
+		},
+		{
 			input:  "alter table t1 modify column b int",
 			output: "alter table t1 modify column b int",
 		},
@@ -2550,21 +2566,6 @@ var (
 		}, {
 			input:  "alter table t1 alter CONSTRAINT a NOT ENFORCED",
 			output: "alter table t1 alter CONSTRAINT not enforce",
-		}, {
-			input:  "create or replace VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = UNDEFINED VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = MERGE VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = TEMPTABLE VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
-		}, {
-			input:  "create or replace ALGORITHM = TEMPTABLE DEFINER = `ucl360`@`%` VIEW t2 as select * from t1",
-			output: "create view t2 as select * from t1",
 		}, {
 			input:  "create SQL SECURITY DEFINER VIEW t2 as select * from t1",
 			output: "create view t2 as select * from t1",

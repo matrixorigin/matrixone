@@ -2,7 +2,7 @@ name:  MO Checkin Regression On EKS
 
 on:
   pull_request_target:
-    branches: [ main,'[0-9]+.[0-9]+.[0-9]+*' ]
+    branches: [ main,'[0-9]+.[0-9]+*' ]
     types:
       - closed
     paths:
@@ -173,7 +173,12 @@ jobs:
           locale
           sed -i "s/127.0.0.1:6001/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}:6001/" ./mo-tester/mo.yml
           sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' ./mo-tester/mo.yml
-          cat ./mo-tester/mo.yml          
+          sed -i 's/waittime:.*/waittime: 2000/g' ./mo-tester/run.yml
+          cat ./mo-tester/mo.yml
+          echo "=========================="
+          cat ./mo-tester/run.yml
+          echo "=========================="
+          
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e optimistic 2>&1
           rm -rf .git lib
@@ -582,7 +587,7 @@ jobs:
           
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -663,6 +668,7 @@ jobs:
           retention-days: 7
 
   pessimistic-bvt-darwin-arm64:
+    if: ${{ github.event.pull_request.merged == true }}
     runs-on: mac-arm64-mini
     name: e2e BVT Test on Darwin/ARM64(LAUNCH, PESSIMISTIC)
     timeout-minutes: 60

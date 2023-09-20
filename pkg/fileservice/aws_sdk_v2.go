@@ -21,8 +21,6 @@ import (
 	"io"
 	"net"
 	stdhttp "net/http"
-	"net/url"
-	pathpkg "path"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -37,11 +35,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 type AwsSDKv2 struct {
 	name            string
-	keyPrefix       string
 	bucket          string
 	client          *s3.Client
 	perfCounterSets []*perfcounter.CounterSet
@@ -49,38 +47,17 @@ type AwsSDKv2 struct {
 }
 
 func NewAwsSDKv2(
+	ctx context.Context,
 	args ObjectStorageArguments,
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*AwsSDKv2, error) {
 
-	// validate endpoint
-	var endpointURL *url.URL
-	if args.Endpoint != "" {
-		var err error
-		endpointURL, err = url.Parse(args.Endpoint)
-		if err != nil {
-			return nil, err
-		}
-		if endpointURL.Scheme == "" {
-			endpointURL.Scheme = "https"
-		}
-		args.Endpoint = endpointURL.String()
+	if err := args.validate(); err != nil {
+		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-
-	// region
-	if args.Region == "" {
-		// try to get region from bucket
-		// only works for AWS S3
-		resp, err := stdhttp.Head("https://" + args.Bucket + ".s3.amazonaws.com")
-		if err == nil {
-			if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
-				args.Region = value
-			}
-		}
-	}
 
 	// http client
 	dialer := &net.Dialer{
@@ -230,9 +207,14 @@ func NewAwsSDKv2(
 		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
 	}
 
+	logutil.Info("new object storage",
+		zap.Any("sdk", "aws v2"),
+		zap.Any("endpoint", args.Endpoint),
+		zap.Any("bucket", args.Bucket),
+	)
+
 	return &AwsSDKv2{
 		name:            args.Name,
-		keyPrefix:       args.KeyPrefix,
 		bucket:          args.Bucket,
 		client:          client,
 		perfCounterSets: perfCounterSets,
@@ -242,20 +224,10 @@ func NewAwsSDKv2(
 
 var _ ObjectStorage = new(AwsSDKv2)
 
-func (a *AwsSDKv2) pathToKey(filePath string) string {
-	return pathpkg.Join(a.keyPrefix, filePath)
-}
-
-func (a *AwsSDKv2) keyToPath(key string) string {
-	path := strings.TrimPrefix(key, a.keyPrefix)
-	path = strings.TrimLeft(path, "/")
-	return path
-}
-
 func (a *AwsSDKv2) List(
 	ctx context.Context,
-	dirPath string,
-	fn func(DirEntry) (bool, error),
+	prefix string,
+	fn func(bool, string, int64) (bool, error),
 ) error {
 
 	select {
@@ -264,14 +236,6 @@ func (a *AwsSDKv2) List(
 	default:
 	}
 
-	path, err := ParsePathAtService(dirPath, a.name)
-	if err != nil {
-		return err
-	}
-	prefix := a.pathToKey(path.File)
-	if prefix != "" {
-		prefix += "/"
-	}
 	var marker *string
 
 loop1:
@@ -291,14 +255,7 @@ loop1:
 		}
 
 		for _, obj := range output.Contents {
-			filePath := a.keyToPath(*obj.Key)
-			filePath = strings.TrimRight(filePath, "/")
-			_, name := pathpkg.Split(filePath)
-			more, err := fn(DirEntry{
-				Name:  name,
-				IsDir: false,
-				Size:  obj.Size,
-			})
+			more, err := fn(false, *obj.Key, obj.Size)
 			if err != nil {
 				return err
 			}
@@ -308,13 +265,7 @@ loop1:
 		}
 
 		for _, prefix := range output.CommonPrefixes {
-			filePath := a.keyToPath(*prefix.Prefix)
-			filePath = strings.TrimRight(filePath, "/")
-			_, name := pathpkg.Split(filePath)
-			more, err := fn(DirEntry{
-				Name:  name,
-				IsDir: true,
-			})
+			more, err := fn(true, *prefix.Prefix, 0)
 			if err != nil {
 				return err
 			}
@@ -334,23 +285,18 @@ loop1:
 
 func (a *AwsSDKv2) Stat(
 	ctx context.Context,
-	filePath string,
+	key string,
 ) (
-	entry *DirEntry,
+	size int64,
 	err error,
 ) {
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		err = ctx.Err()
+		return
 	default:
 	}
-
-	path, err := ParsePathAtService(filePath, a.name)
-	if err != nil {
-		return nil, err
-	}
-	key := a.pathToKey(path.File)
 
 	output, err := a.headObject(
 		ctx,
@@ -363,31 +309,25 @@ func (a *AwsSDKv2) Stat(
 		var httpError *http.ResponseError
 		if errors.As(err, &httpError) {
 			if httpError.Response.StatusCode == 404 {
-				return nil, moerr.NewFileNotFound(ctx, filePath)
+				err = moerr.NewFileNotFound(ctx, key)
+				return
 			}
 		}
-		return nil, err
+		return
 	}
 
-	return &DirEntry{
-		Name:  pathpkg.Base(filePath),
-		IsDir: false,
-		Size:  output.ContentLength,
-	}, nil
+	size = output.ContentLength
+
+	return
 }
 
 func (a *AwsSDKv2) Exists(
 	ctx context.Context,
-	filePath string,
+	key string,
 ) (
 	bool,
 	error,
 ) {
-	path, err := ParsePathAtService(filePath, a.name)
-	if err != nil {
-		return false, err
-	}
-	key := a.pathToKey(path.File)
 	output, err := a.headObject(
 		ctx,
 		&s3.HeadObjectInput{
@@ -409,7 +349,7 @@ func (a *AwsSDKv2) Exists(
 
 func (a *AwsSDKv2) Write(
 	ctx context.Context,
-	path string,
+	key string,
 	r io.Reader,
 	size int64,
 	expire *time.Time,
@@ -417,7 +357,6 @@ func (a *AwsSDKv2) Write(
 	err error,
 ) {
 
-	key := a.pathToKey(path)
 	_, err = a.putObject(
 		ctx,
 		&s3.PutObjectInput{
@@ -437,15 +376,13 @@ func (a *AwsSDKv2) Write(
 
 func (a *AwsSDKv2) Read(
 	ctx context.Context,
-	path string,
+	key string,
 	min *int64,
 	max *int64,
 ) (
 	r io.ReadCloser,
 	err error,
 ) {
-
-	key := a.pathToKey(path)
 
 	if max == nil {
 		// read to end
@@ -486,7 +423,7 @@ func (a *AwsSDKv2) Read(
 
 func (a *AwsSDKv2) Delete(
 	ctx context.Context,
-	paths ...string,
+	keys ...string,
 ) (
 	err error,
 ) {
@@ -497,20 +434,16 @@ func (a *AwsSDKv2) Delete(
 	default:
 	}
 
-	if len(paths) == 0 {
+	if len(keys) == 0 {
 		return nil
 	}
-	if len(paths) == 1 {
-		return a.deleteSingle(ctx, paths[0])
+	if len(keys) == 1 {
+		return a.deleteSingle(ctx, keys[0])
 	}
 
 	objs := make([]types.ObjectIdentifier, 0, 1000)
-	for _, filePath := range paths {
-		path, err := ParsePathAtService(filePath, a.name)
-		if err != nil {
-			return err
-		}
-		objs = append(objs, types.ObjectIdentifier{Key: ptrTo(a.pathToKey(path.File))})
+	for _, key := range keys {
+		objs = append(objs, types.ObjectIdentifier{Key: ptrTo(key)})
 		if len(objs) == 1000 {
 			if err := a.deleteMultiObj(ctx, objs); err != nil {
 				return err
@@ -524,18 +457,14 @@ func (a *AwsSDKv2) Delete(
 	return nil
 }
 
-func (a *AwsSDKv2) deleteSingle(ctx context.Context, filePath string) error {
+func (a *AwsSDKv2) deleteSingle(ctx context.Context, key string) error {
 	ctx, span := trace.Start(ctx, "AwsSDKv2.deleteSingle")
 	defer span.End()
-	path, err := ParsePathAtService(filePath, a.name)
-	if err != nil {
-		return err
-	}
-	_, err = a.deleteObject(
+	_, err := a.deleteObject(
 		ctx,
 		&s3.DeleteObjectInput{
 			Bucket: ptrTo(a.bucket),
-			Key:    ptrTo(a.pathToKey(path.File)),
+			Key:    ptrTo(key),
 		},
 	)
 	if err != nil {

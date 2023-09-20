@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"runtime"
 	"strings"
@@ -59,6 +58,14 @@ type ShowStatementType int
 const (
 	NotShowStatement ShowStatementType = 0
 	ShowTableStatus  ShowStatementType = 1
+)
+
+type ConnType int
+
+const (
+	ConnTypeUnset    ConnType = 0
+	ConnTypeInternal ConnType = 1
+	ConnTypeExternal ConnType = 2
 )
 
 type Session struct {
@@ -216,8 +223,11 @@ type Session struct {
 
 	// requestLabel is the CN label info requested from client.
 	requestLabel map[string]string
+	// connTyp indicates the type of connection. Default is ConnTypeUnset.
+	// If it is internal connection, the value will be ConnTypeInternal, otherwise,
+	// the value will be ConnTypeExternal.
+	connType ConnType
 
-	sqlType atomic.Value
 	// startedAt is the session start time.
 	startedAt time.Time
 
@@ -230,6 +240,120 @@ type Session struct {
 	//  nextval internally will derive two sql (a select and an update). the two sql are executed
 	//	in the same transaction.
 	derivedStmt bool
+
+	//clear this part for every statement
+	stmtProfile struct {
+		// sqlSourceType denotes where the sql
+		sqlSourceType string
+		txnId         uuid.UUID
+		stmtId        uuid.UUID
+		// stmtType
+		stmtType string
+		// queryType
+		queryType string
+		// queryStart is the time when the query starts.
+		queryStart time.Time
+		//the sql from user may have multiple statements
+		//sqlOfStmt is the text part of one statement in the sql
+		sqlOfStmt string
+	}
+}
+
+func (ses *Session) ClearStmtProfile() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.stmtProfile.sqlSourceType = ""
+	ses.stmtProfile.txnId = uuid.UUID{}
+	ses.stmtProfile.stmtId = uuid.UUID{}
+	ses.stmtProfile.stmtType = ""
+	ses.stmtProfile.queryType = ""
+	ses.stmtProfile.sqlOfStmt = ""
+}
+
+func (ses *Session) GetSessionStart() time.Time {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.startedAt
+}
+
+func (ses *Session) SetTxnId(id []byte) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	copy(ses.stmtProfile.txnId[:], id)
+}
+
+func (ses *Session) GetTxnId() uuid.UUID {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.stmtProfile.txnId
+}
+
+func (ses *Session) SetStmtId(id uuid.UUID) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	copy(ses.stmtProfile.stmtId[:], id[:])
+}
+
+func (ses *Session) GetStmtId() uuid.UUID {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.stmtProfile.stmtId
+}
+
+func (ses *Session) SetStmtType(st string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.stmtProfile.stmtType = st
+}
+
+func (ses *Session) GetStmtType() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.stmtProfile.stmtType
+}
+
+func (ses *Session) SetQueryType(qt string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.stmtProfile.queryType = qt
+}
+
+func (ses *Session) GetQueryType() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.stmtProfile.queryType
+}
+
+func (ses *Session) SetSqlSourceType(st string) {
+	ses.stmtProfile.sqlSourceType = st
+}
+
+func (ses *Session) GetSqlSourceType() string {
+	return ses.stmtProfile.sqlSourceType
+}
+
+func (ses *Session) SetQueryStart(t time.Time) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.stmtProfile.queryStart = t
+}
+
+func (ses *Session) GetQueryStart() time.Time {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.stmtProfile.queryStart
+}
+
+func (ses *Session) SetSqlOfStmt(sot string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.stmtProfile.sqlOfStmt = sot
+}
+
+func (ses *Session) GetSqlOfStmt() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.stmtProfile.sqlOfStmt
 }
 
 func (ses *Session) IsDerivedStmt() bool {
@@ -415,6 +539,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		blockIdx:  0,
 		planCache: newPlanCache(100),
 		startedAt: time.Now(),
+		connType:  ConnTypeUnset,
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -498,6 +623,7 @@ func (ses *Session) Close() {
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
 	ses.sqlHelper = nil
+	ses.ClearStmtProfile()
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
 	if ses.proc != nil {
@@ -2037,44 +2163,31 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 // StatusSession implements the queryservice.Session interface.
 func (ses *Session) StatusSession() *status.Session {
 	var (
-		txnID         string
-		statementID   string
-		statementType string
-		queryType     string
-		sqlSourceType string
-		queryStart    time.Time
+		accountName string
+		userName    string
+		roleName    string
 	)
-	if ses.txnHandler != nil && ses.txnHandler.txnOperator != nil {
-		txn := ses.txnHandler.txnOperator.Txn()
-		txnID = hex.EncodeToString(txn.GetID())
-	}
-	stmtInfo := ses.tStmt
-	if stmtInfo != nil {
-		statementID = uuid.UUID(stmtInfo.StatementID).String()
-		statementType = stmtInfo.StatementType
-		queryType = stmtInfo.QueryType
-		queryStart = stmtInfo.RequestAt
-	}
-	if v := ses.sqlType.Load(); v != nil {
-		sqlSourceType = v.(string)
-	}
+
+	accountName, userName, roleName = getUserProfile(ses.GetTenantInfo())
 	return &status.Session{
 		NodeID:        ses.getRoutineManager().baseService.ID(),
 		ConnID:        ses.GetConnectionID(),
 		SessionID:     ses.GetUUIDString(),
-		Account:       ses.GetTenantName(),
-		User:          ses.GetUserName(),
+		Account:       accountName,
+		User:          userName,
 		Host:          ses.getRoutineManager().baseService.SQLAddress(),
 		DB:            ses.GetDatabaseName(),
-		SessionStart:  ses.startedAt,
+		SessionStart:  ses.GetSessionStart(),
 		Command:       ses.GetCmd().String(),
-		Info:          ses.GetSql(),
-		TxnID:         txnID,
-		StatementID:   statementID,
-		StatementType: statementType,
-		QueryType:     queryType,
-		SQLSourceType: sqlSourceType,
-		QueryStart:    queryStart,
+		Info:          ses.GetSqlOfStmt(),
+		TxnID:         ses.GetTxnId().String(),
+		StatementID:   ses.GetStmtId().String(),
+		StatementType: ses.GetStmtType(),
+		QueryType:     ses.GetQueryType(),
+		SQLSourceType: ses.GetSqlSourceType(),
+		QueryStart:    ses.GetQueryStart(),
+		ClientHost:    ses.GetMysqlProtocol().Peer(),
+		Role:          roleName,
 	}
 }
 

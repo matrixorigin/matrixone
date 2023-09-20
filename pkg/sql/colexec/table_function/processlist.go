@@ -140,6 +140,14 @@ func processlist(_ int, proc *process.Process, arg *Argument) (bool, error) {
 						false, mp); err != nil {
 						return false, err
 					}
+				case status.SessionField_CLIENT_HOST:
+					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetClientHost()), false, mp); err != nil {
+						return false, err
+					}
+				case status.SessionField_ROLE:
+					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetRole()), false, mp); err != nil {
+						return false, err
+					}
 				}
 			}
 		}
@@ -218,6 +226,7 @@ func fetchSessions(ctx context.Context, tenant string, user string, qs queryserv
 				queryResp, ok := res.response.(*query.Response)
 				if ok && queryResp.ShowProcessListResponse != nil {
 					sessions = append(sessions, queryResp.ShowProcessListResponse.Sessions...)
+					qs.Release(queryResp)
 				}
 			}
 		case <-ctx.Done():

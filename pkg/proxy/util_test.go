@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"net"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -155,4 +156,18 @@ func TestIsErrPacket(t *testing.T) {
 	data = []byte{0, 0, 0, 0, 0xFF, 0}
 	ret = isErrPacket(data)
 	require.True(t, ret)
+}
+
+func TestContainIP(t *testing.T) {
+	cidrs := []string{"192.168.20.0/24", "192.168.10.0/24"}
+	ipNetList := make([]*net.IPNet, 0, 2)
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		require.NoError(t, err)
+		ipNetList = append(ipNetList, ipNet)
+	}
+	ip := net.ParseIP("192.168.10.10")
+	require.True(t, containIP(ipNetList, ip))
+	ip = net.ParseIP("192.168.30.10")
+	require.False(t, containIP(ipNetList, ip))
 }

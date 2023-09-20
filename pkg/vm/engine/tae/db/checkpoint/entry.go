@@ -39,6 +39,9 @@ type CheckpointEntry struct {
 	tnLocation objectio.Location
 	lastPrint  time.Time
 	version    uint32
+
+	ckpLSN      uint64
+	truncateLSN uint64
 }
 
 func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
@@ -57,11 +60,20 @@ func (e *CheckpointEntry) SetPrintTime() {
 	defer e.Unlock()
 	e.lastPrint = time.Now()
 }
-
+func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
+	e.ckpLSN = ckpLSN
+	e.truncateLSN = truncateLSN
+}
 func (e *CheckpointEntry) CheckPrintTime() bool {
 	e.RLock()
 	defer e.RUnlock()
 	return time.Since(e.lastPrint) > 4*time.Minute
+}
+func (e *CheckpointEntry) LSNString() string {
+	if e.version < logtail.CheckpointVersion7 {
+		return fmt.Sprintf("version too small: v%d", e.version)
+	}
+	return fmt.Sprintf("ckp %d, truncate %d", e.ckpLSN, e.truncateLSN)
 }
 
 func (e *CheckpointEntry) GetStart() types.TS { return e.start }
@@ -144,7 +156,7 @@ func (e *CheckpointEntry) String() string {
 		t = "G"
 	}
 	state := e.GetState()
-	return fmt.Sprintf("CKP[%s][%v](%s->%s)", t, state, e.start.ToString(), e.end.ToString())
+	return fmt.Sprintf("CKP[%s][%v][%s](%s->%s)", t, state, e.LSNString(), e.start.ToString(), e.end.ToString())
 }
 
 func (e *CheckpointEntry) Prefetch(
