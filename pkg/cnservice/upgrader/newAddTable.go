@@ -185,10 +185,11 @@ var MoLocksView = &table.Table{
 	Database: catalog.MO_CATALOG,
 	Table:    "mo_locks",
 	Columns: []table.Column{
-		table.StringColumn("txn_id", "the txn id which holds the lock"),
+		table.StringColumn("cn_id", "the cn id which cn lock stays on"),
+		table.StringColumn("txn_id", "the txn id which txn holds the lock"),
 		table.StringColumn("table_id", "the table that the lock is on"),
 		table.StringColumn("lock_key", "point or range"),
-		table.UInt64Column("lock_content", "the content the clock is on"),
+		table.StringColumn("lock_content", "the content the clock is on"),
 		table.StringColumn("lock_mode", "shared or exclusive"),
 		table.StringColumn("lock_status", "acquired or wait"),
 		table.StringColumn("lock_wait", "the txn that waits on the lock"),
@@ -210,4 +211,4 @@ var SqlStatementHotspotView = &table.Table{
 }
 
 var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView}
-var registeredViews = []*table.Table{processlistView}
+var registeredViews = []*table.Table{processlistView, MoLocksView}
