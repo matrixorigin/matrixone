@@ -110,6 +110,7 @@ func getInternalProcessByUniqueID(
 		nil,
 		v.(lockservice.LockService),
 		nil,
+		nil,
 		nil)
 	internalProcesses[id] = proc
 	return proc, nil
