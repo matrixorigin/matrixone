@@ -565,24 +565,26 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.Shuffle {
 		idx := ndesc.Node.Stats.HashmapStats.ShuffleColIdx
 		shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
-		if shuffleType == plan.ShuffleType_Hash {
-			buf.WriteString(" shuffle: hash(")
-			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
-			if err != nil {
-				return "", err
+		if ndesc.Node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
+			if shuffleType == plan.ShuffleType_Hash {
+				buf.WriteString(" shuffle: hash(")
+				err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
+			} else {
+				buf.WriteString(" shuffle: range(")
+				err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
 			}
-			buf.WriteString(")")
-		} else {
-			buf.WriteString(" shuffle: range(")
-			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
-			if err != nil {
-				return "", err
-			}
-			buf.WriteString(")")
 		}
 
 		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-			buf.WriteString(" REUSE ")
+			buf.WriteString(" shuffle: REUSE ")
 		} else if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
 			buf.WriteString(" RESHUFFLE ")
 		}
