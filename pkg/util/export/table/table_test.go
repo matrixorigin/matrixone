@@ -165,6 +165,23 @@ func TestRow_ToStrings(t *testing.T) {
 				}},
 			want: []string{"0", "1", "1.1234567"},
 		},
+		{
+			name: "json",
+			fields: fields{
+				Table: &Table{
+					Columns: []Column{
+						JsonColumn("json1", ""),
+						JsonColumn("json2", ""),
+						JsonColumn("json3", ""),
+					},
+				},
+				prepare: func(r *Row) {
+					r.SetColumnVal(JsonColumn("json1", ""), StringField(`{"key":"str"}`))
+					r.SetColumnVal(JsonColumn("json2", ""), JsonField(`{"key":"json"}`))
+					r.SetColumnVal(JsonColumn("json3", ""), BytesField([]byte(`{"key":"byte"}`)))
+				}},
+			want: []string{`{"key":"str"}`, `{"key":"json"}`, `{"key":"byte"}`},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -2642,13 +2642,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 				}
 
+				if st, ok := cw.GetAst().(*tree.DropTable); ok {
+					_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
+				}
+
 				if st, ok := cw.GetAst().(*tree.CreateDatabase); ok {
 					_ = insertRecordToMoMysqlCompatibilityMode(requestCtx, ses, stmt)
 					_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 				}
 
-				if _, ok := cw.GetAst().(*tree.DropDatabase); ok {
+				if st, ok := cw.GetAst().(*tree.DropDatabase); ok {
 					_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+					_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 				}
 
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
@@ -3503,7 +3508,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 		SqlHelper:     ses.GetSqlHelper(),
-		Buf:           ses.GetBuffer(),
 	}
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
