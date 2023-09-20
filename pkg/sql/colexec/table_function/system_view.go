@@ -365,4 +365,3 @@ func fillMapToBatch(nodeType, nodeId string, attrs []string, kvs map[string]*log
 	}
 	return err
 }
-

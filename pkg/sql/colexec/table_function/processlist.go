@@ -212,4 +212,3 @@ func fetchSessions(ctx context.Context, tenant string, user string, qs queryserv
 
 	return sessions, retErr
 }
-
