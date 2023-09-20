@@ -16,6 +16,7 @@ package pythonservice
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -45,7 +46,13 @@ func (c *Client) init() error {
 			c.mutex.Lock()
 			defer c.mutex.Unlock()
 			if c.sc == nil {
-				conn, err := grpc.Dial(c.cfg.ServerAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+				conn, err := grpc.Dial(c.cfg.ServerAddress,
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+					grpc.WithDefaultCallOptions(
+						grpc.MaxCallSendMsgSize(math.MaxInt32),
+						grpc.MaxCallRecvMsgSize(math.MaxInt32),
+					),
+				)
 				if err != nil {
 					return err
 				}

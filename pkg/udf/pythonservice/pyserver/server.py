@@ -349,7 +349,10 @@ def value2Data(value: Any, typ: pb2.DataType) -> pb2.Data:
 
 
 def run():
-    server = grpc.server(futures.ThreadPoolExecutor())
+    server = grpc.server(futures.ThreadPoolExecutor(), options=[
+        ('grpc.max_send_message_length', 0x7fffffff),
+        ('grpc.max_receive_message_length', 0x7fffffff)
+    ])
     pb2_grpc.add_ServiceServicer_to_server(Server(), server)
     server.add_insecure_port(ARGS.address)
     server.start()

@@ -1298,7 +1298,7 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
 
-	return InitFunction(ctx, ses, tenant, cf, func(localPath string, storageDir string) (string, error) {
+	upload := func(localPath string, storageDir string) (string, error) {
 		loadLocalReader, loadLocalWriter := io.Pipe()
 
 		// write to pipe
@@ -1351,7 +1351,9 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 		}
 
 		return ioVector.FilePath, nil
-	})
+	}
+
+	return InitFunction(ctx, ses, tenant, cf, upload)
 }
 
 func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction, proc *process.Process) error {
