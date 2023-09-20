@@ -37,6 +37,8 @@ type TableCompactStat struct {
 	// if the size of table tail, in bytes, exceeds FlushMemCapacity, flush it immediately
 	FlushMemCapacity int
 
+	EstimateRowSize int
+
 	// Status
 
 	// dirty end range flushed by last flush txn. If we are waiting for a ckp [a, b], if all dirty tables' LastFlush are greater than b,
@@ -57,4 +59,16 @@ func (s *TableCompactStat) InitWithLock(durationHint time.Duration) {
 	s.FlushMemCapacity = 20 * 1024 * 1024
 	s.FlushTableTailEnabled = true
 	s.Inited = true
+}
+
+func (s *TableCompactStat) UpdateEstimateRowSize(rowSize int) {
+	s.Lock()
+	defer s.Unlock()
+	s.EstimateRowSize = rowSize
+}
+
+func (s *TableCompactStat) GetEstimateRowSize() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.EstimateRowSize
 }

@@ -3324,6 +3324,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
 	case "processlist", "mo_sessions":
 		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, childId)
+	case "mo_configurations":
+		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, childId)
 	case "mo_locks":
 		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, childId)
 	default:
