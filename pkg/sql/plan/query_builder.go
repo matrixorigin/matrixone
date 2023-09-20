@@ -676,36 +676,31 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for _, agg := range node.AggList {
 				switch agg.Expr.(*plan.Expr_F).F.Func.ObjName {
 				case "starcount":
+					expr := agg.Expr.(*plan.Expr_F)
+					child.AggList = append(child.AggList, &plan.Expr{
+						Typ: agg.Typ,
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: expr.F.Func.ObjName,
+								},
+								Args: []*Expr{
+									&plan.Expr{
+										Typ:  expr.F.Args[0].Typ,
+										Expr: &plan.Expr_C{},
+									},
+								},
+							},
+						},
+					},
+					)
 				default:
 					child.AggList = nil
 				}
 				if child.AggList == nil {
 					break
 				}
-				expr := agg.Expr.(*plan.Expr_F)
-				col := expr.F.Args[0].Expr.(*plan.Expr_Col)
-				child.AggList = append(child.AggList, &plan.Expr{
-					Typ: agg.Typ,
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: &plan.ObjectRef{
-								ObjName: expr.F.Func.ObjName,
-							},
-							Args: []*Expr{
-								&plan.Expr{
-									Typ: expr.F.Args[0].Typ,
-									Expr: &plan.Expr_Col{
-										Col: &plan.ColRef{
-											RelPos: col.Col.RelPos,
-											ColPos: col.Col.ColPos,
-											Name:   col.Col.Name,
-										},
-									},
-								},
-							},
-						},
-					},
-				})
+
 			}
 
 		}
