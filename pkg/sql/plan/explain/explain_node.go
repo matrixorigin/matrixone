@@ -417,8 +417,8 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 			buf.WriteString(")")
 		}
 
-		if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Complex {
-			buf.WriteString(" COMPLEX ")
+		if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+			buf.WriteString(" HYBRID ")
 		}
 	}
 

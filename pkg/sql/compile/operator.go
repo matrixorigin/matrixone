@@ -1214,7 +1214,7 @@ func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.No
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
 	if node.Stats.HashmapStats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
-		if node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Complex {
+		if node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
 			if left {
 				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 			} else {
