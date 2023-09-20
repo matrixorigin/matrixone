@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -91,12 +92,6 @@ var pool = sync.Pool{
 	},
 }
 
-var analPool = sync.Pool{
-	New: func() any {
-		return new(process.AnalyzeInfo)
-	},
-}
-
 // New is used to new an object of compile
 func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
@@ -124,9 +119,12 @@ func putCompile(c *Compile) {
 	}
 	if c.anal != nil {
 		for i := range c.anal.analInfos {
-			analPool.Put(c.anal.analInfos[i])
+			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
 		}
 		c.anal.analInfos = nil
+	}
+	if c.scope != nil {
+		c.scope = nil
 	}
 
 	c.proc.CleanValueScanBatchs()
@@ -442,7 +440,6 @@ func (c *Compile) runOnce() error {
 		})
 	}
 	wg.Wait()
-	c.scope = nil
 	close(errC)
 	for e := range errC {
 		if e != nil {
@@ -2940,9 +2937,7 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 func (c *Compile) initAnalyze(qry *plan.Query) {
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		//anals[i] = new(process.AnalyzeInfo)
-		anals[i] = analPool.Get().(*process.AnalyzeInfo)
-		anals[i].Reset()
+		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
 	}
 	c.anal = &anaylze{
 		qry:       qry,
