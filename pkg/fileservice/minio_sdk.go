@@ -311,6 +311,12 @@ func (a *MinioSDK) Read(
 	err error,
 ) {
 
+	defer func() {
+		if a.is404(err) {
+			err = moerr.NewFileNotFoundNoCtx(key)
+		}
+	}()
+
 	if max == nil {
 		// read to end
 		r, err := a.getObject(

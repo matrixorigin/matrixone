@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -93,6 +94,7 @@ type Engine struct {
 	fs         fileservice.FileService
 	ls         lockservice.LockService
 	qs         queryservice.QueryService
+	hakeeper   logservice.CNHAKeeperClient
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache

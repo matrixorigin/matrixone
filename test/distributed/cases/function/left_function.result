@@ -58,7 +58,9 @@ left(id, -1)    left(str1, 0)
     
     
 SELECT LEFT(id, '1'+2), LEFT(str1, '1'+'1'), LEFT(str2, '1'+'0') FROM t;
-[unknown result because it is related to issue#5510]
+left(id, 1 + 2)    left(str1, 1 + 1)    left(str2, 1 + 0)
+123    anike1001@g    googood
+123    nitin5438@y    hainghing
 DROP TABLE IF EXISTS t;
 CREATE TABLE t(
 id INT,

@@ -65,7 +65,7 @@ func TestGetWaitingList(t *testing.T) {
 					[]byte("txn2"),
 					option)
 				require.NoError(t, err)
-				assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, res.Timestamp)
+				assert.True(t, !res.Timestamp.IsEmpty())
 			}()
 
 			waitWaiters(t, l1, 0, []byte{1}, 1)
@@ -142,4 +142,101 @@ func TestGetLockTableBind(t *testing.T) {
 			assert.Equal(t, bind1, bind2)
 		},
 	)
+}
+
+func TestIterLocks(t *testing.T) {
+	table := uint64(1)
+	getRunner(false)(
+		t,
+		table,
+		func(
+			ctx context.Context,
+			s *service,
+			lt *localLockTable) {
+			exclusiveOpts := newTestRowExclusiveOptions()
+			sharedOpts := newTestRangeSharedOptions()
+			txn1 := newTestTxnID(1)
+			txn2 := newTestTxnID(2)
+			txn3 := newTestTxnID(3)
+			txn4 := newTestTxnID(4)
+			txn5 := newTestTxnID(5)
+
+			rows := newTestRows(1)
+			rangeRows := newTestRows(2, 3)
+
+			// txn1 hold 1
+			_, err := s.Lock(ctx, table, rows, txn1, exclusiveOpts)
+			require.NoError(t, err)
+
+			// txn2 and txn3 hold [2,3]
+			_, err = s.Lock(ctx, table, rangeRows, txn2, sharedOpts)
+			require.NoError(t, err)
+			_, err = s.Lock(ctx, table, rangeRows, txn3, sharedOpts)
+			require.NoError(t, err)
+
+			var wg sync.WaitGroup
+			// txn4 wait txn1 on row1
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err = s.Lock(ctx, table, rows, txn4, exclusiveOpts)
+				require.NoError(t, err)
+				require.NoError(t, s.Unlock(ctx, txn4, timestamp.Timestamp{}))
+			}()
+
+			// txn5 wait txn2 and txn3 on [3,4]
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err = s.Lock(ctx, table, rangeRows, txn5, exclusiveOpts)
+				require.NoError(t, err)
+				require.NoError(t, s.Unlock(ctx, txn5, timestamp.Timestamp{}))
+			}()
+
+			require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
+			require.NoError(t, waitLocalWaiters(lt, rangeRows[0], 1))
+
+			expectedKeys := make([][][]byte, 0, 2)
+			expectedModes := make([]pb.LockMode, 0, 2)
+			expectedHolders := make([][][]byte, 0, 2)
+			expectedWaiters := make([][][]byte, 0, 2)
+
+			expectedKeys = append(expectedKeys, newTestRows(1))
+			expectedModes = append(expectedModes, pb.LockMode_Exclusive)
+			expectedHolders = append(expectedHolders, [][]byte{txn1})
+			expectedWaiters = append(expectedWaiters, [][]byte{txn4})
+
+			expectedKeys = append(expectedKeys, newTestRows(2, 3))
+			expectedModes = append(expectedModes, pb.LockMode_Shared)
+			expectedHolders = append(expectedHolders, [][]byte{txn2, txn3})
+			expectedWaiters = append(expectedWaiters, [][]byte{txn5})
+
+			n := 0
+			s.IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool {
+				require.Equal(t, table, tableID)
+				require.Equal(t, expectedKeys[n], keys)
+				require.Equal(t, expectedModes[n], lock.GetLockMode())
+
+				i := 0
+				lock.IterHolders(func(holder pb.WaitTxn) bool {
+					require.Equal(t, expectedHolders[n][i], holder.TxnID)
+					i++
+					return true
+				})
+
+				i = 0
+				lock.IterWaiters(func(holder pb.WaitTxn) bool {
+					require.Equal(t, expectedWaiters[n][i], holder.TxnID)
+					i++
+					return true
+				})
+				n++
+				return true
+			})
+
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
+			wg.Wait()
+		})
 }

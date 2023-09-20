@@ -62,6 +62,10 @@ type Config struct {
 	// TLSKeyFile is the file path of file that contains X509 key in PEM
 	// format for client.
 	TLSKeyFile string `toml:"tls-key-file"`
+	// InternalCIDRs is the config which indicates that the CIDR list of
+	// internal network. The addresses outside the range are external
+	// addresses.
+	InternalCIDRs []string `toml:"internal-cidrs"`
 
 	// HAKeeper is the configuration of HAKeeper.
 	HAKeeper struct {
@@ -123,6 +127,14 @@ func WithTLSCertFile(f string) Option {
 func WithTLSKeyFile(f string) Option {
 	return func(s *Server) {
 		s.config.TLSKeyFile = f
+	}
+}
+
+// WithConfigData saves the data from the config file
+func WithConfigData(data []byte) Option {
+	return func(s *Server) {
+		s.configData = make([]byte, len(data))
+		copy(s.configData, data)
 	}
 }
 

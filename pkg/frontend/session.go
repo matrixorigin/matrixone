@@ -60,6 +60,14 @@ const (
 	ShowTableStatus  ShowStatementType = 1
 )
 
+type ConnType int
+
+const (
+	ConnTypeUnset    ConnType = 0
+	ConnTypeInternal ConnType = 1
+	ConnTypeExternal ConnType = 2
+)
+
 type Session struct {
 	// account id
 	accountId uint32
@@ -215,6 +223,10 @@ type Session struct {
 
 	// requestLabel is the CN label info requested from client.
 	requestLabel map[string]string
+	// connTyp indicates the type of connection. Default is ConnTypeUnset.
+	// If it is internal connection, the value will be ConnTypeInternal, otherwise,
+	// the value will be ConnTypeExternal.
+	connType ConnType
 
 	// startedAt is the session start time.
 	startedAt time.Time
@@ -527,6 +539,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		blockIdx:  0,
 		planCache: newPlanCache(100),
 		startedAt: time.Now(),
+		connType:  ConnTypeUnset,
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -568,6 +581,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		pu.FileService,
 		pu.LockService,
 		pu.QueryService,
+		pu.HAKeeperClient,
 		ses.GetAutoIncrCacheManager())
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
