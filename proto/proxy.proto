@@ -18,8 +18,6 @@ syntax = "proto3";
 package proxy;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/proxy";
 
-import "github.com/gogo/protobuf/gogoproto/gogo.proto";
-
 message RequestLabel {
   map<string, string> labels = 1;
 }
