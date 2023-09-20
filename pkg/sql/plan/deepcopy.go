@@ -795,6 +795,15 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			UnlockTables: &plan.UnLockTables{},
 		}
 
+	case *plan.DataDefinition_AlterSequence:
+		newDf.Definition = &plan.DataDefinition_AlterSequence{
+			AlterSequence: &plan.AlterSequence{
+				IfExists: df.AlterSequence.IfExists,
+				Database: df.AlterSequence.Database,
+				TableDef: df.AlterSequence.TableDef,
+			},
+		}
+
 	}
 
 	return newDf
