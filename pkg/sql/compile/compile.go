@@ -317,6 +317,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropSequence(c)
 	case CreateSequence:
 		return s.CreateSequence(c)
+	case AlterSequence:
+		return s.AlterSequence(c)
 	case CreateIndex:
 		return s.CreateIndex(c)
 	case DropIndex:
@@ -503,6 +505,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return []*Scope{{
 				Magic: DropSequence,
+				Plan:  pn,
+			}}, nil
+		case plan.DataDefinition_ALTER_SEQUENCE:
+			return []*Scope{{
+				Magic: AlterSequence,
 				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
@@ -1722,7 +1729,13 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	// prcoess partitioned table
 	var partitionRelNames []string
 	if n.TableDef.Partition != nil {
-		partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
+		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
+			for _, partition := range n.PartitionPrune.SelectedPartitions {
+				partitionRelNames = append(partitionRelNames, partition.PartitionTableName)
+			}
+		} else {
+			partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
+		}
 	}
 
 	s = &Scope{
@@ -3023,26 +3036,45 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 
 	if n.TableDef.Partition != nil {
 		isPartitionTable = true
-		partitionInfo := n.TableDef.Partition
-		partitionNum := int(partitionInfo.PartitionNum)
-		partitionTableNames := partitionInfo.PartitionTableNames
-		for i := 0; i < partitionNum; i++ {
-			partTableName := partitionTableNames[i]
-			subrelation, err := db.Relation(ctx, partTableName, c.proc)
-			if err != nil {
-				return nil, err
+		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
+			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
+				partTableName := partitionItem.PartitionTableName
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				if err != nil {
+					return nil, err
+				}
+				//add partition number into catalog.BlockInfo.
+				for _, r := range subranges[1:] {
+					blkInfo := catalog.DecodeBlockInfo(r)
+					blkInfo.PartitionNum = i
+					ranges = append(ranges, r)
+				}
 			}
-			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
-			if err != nil {
-				return nil, err
+		} else {
+			partitionInfo := n.TableDef.Partition
+			partitionNum := int(partitionInfo.PartitionNum)
+			partitionTableNames := partitionInfo.PartitionTableNames
+			for i := 0; i < partitionNum; i++ {
+				partTableName := partitionTableNames[i]
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				if err != nil {
+					return nil, err
+				}
+				//add partition number into catalog.BlockInfo.
+				for _, r := range subranges[1:] {
+					blkInfo := catalog.DecodeBlockInfo(r)
+					blkInfo.PartitionNum = i
+					ranges = append(ranges, r)
+				}
 			}
-			//add partition number into catalog.BlockInfo.
-			for _, r := range subranges[1:] {
-				blkInfo := catalog.DecodeBlockInfo(r)
-				blkInfo.PartitionNum = i
-				ranges = append(ranges, r)
-			}
-			//ranges = append(ranges, subranges[1:]...)
 		}
 	}
 

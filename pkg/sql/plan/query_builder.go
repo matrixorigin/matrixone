@@ -1250,8 +1250,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
+		//-----------------------------------------------------------------
+		builder.partitionPrune(rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
+		//-----------------------------------------------------------------
+
 		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
+		determineShuffleMethod2(rootID, -1, builder)
 		determineHashOnPK(rootID, builder)
 		builder.pushdownRuntimeFilters(rootID)
 

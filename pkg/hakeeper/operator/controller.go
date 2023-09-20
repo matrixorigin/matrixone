@@ -140,6 +140,8 @@ func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 		return createTaskService(st)
 	case DeleteCNStore:
 		return deleteCNStore(st)
+	case JoinGossipCluster:
+		return joinGossipCluster(st)
 	}
 	panic("invalid schedule command")
 }
@@ -291,6 +293,16 @@ func deleteCNStore(st DeleteCNStore) pb.ScheduleCommand {
 		ServiceType: pb.CNService,
 		DeleteCNStore: &pb.DeleteCNStore{
 			StoreID: st.StoreID,
+		},
+	}
+}
+
+func joinGossipCluster(st JoinGossipCluster) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.StoreID,
+		ServiceType: pb.CNService,
+		JoinGossipCluster: &pb.JoinGossipCluster{
+			Existing: st.Existing,
 		},
 	}
 }
