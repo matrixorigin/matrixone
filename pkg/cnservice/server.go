@@ -65,6 +65,9 @@ func NewService(
 		return nil, err
 	}
 
+	configKVMap, _ := dumpCnConfig(*cfg)
+	options = append(options, WithConfigData(configKVMap))
+
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
 	if err != nil {
@@ -173,6 +176,7 @@ func NewService(
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
 		queryService queryservice.QueryService,
+		hakeeper logservice.CNHAKeeperClient,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
@@ -353,6 +357,7 @@ func (s *service) handleRequest(
 			s.fileService,
 			s.lockService,
 			s.queryService,
+			s._hakeeperClient,
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
@@ -651,6 +656,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s._txnClient,
 		s.fileService,
 		s.queryService,
+		s._hakeeperClient,
 		s.aicm)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 }

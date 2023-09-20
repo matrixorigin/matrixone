@@ -16,6 +16,8 @@ package logservice
 
 import (
 	"fmt"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"strconv"
 	"strings"
 	"time"
@@ -599,4 +601,9 @@ func (c *Config) GossipServiceAddr() string {
 		return fmt.Sprintf("%s:%d", c.ServiceHost, c.GossipPort)
 	}
 	return c.GossipAddress
+}
+
+func dumpLogConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	return util.DumpConfig(cfg, defCfg)
 }

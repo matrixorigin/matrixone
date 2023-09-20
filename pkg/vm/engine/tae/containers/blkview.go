@@ -71,6 +71,13 @@ func (view *BlockView) ApplyDeletes() {
 	view.DeleteMask = nil
 }
 
+func (view *BlockView) ApproxSize() (size int) {
+	for _, col := range view.Columns {
+		size += col.data.ApproxSize()
+	}
+	return
+}
+
 func (view *BlockView) Close() {
 	for _, col := range view.Columns {
 		col.Close()
