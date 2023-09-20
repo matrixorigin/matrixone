@@ -677,17 +677,24 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				switch agg.Expr.(*plan.Expr_F).F.Func.ObjName {
 				case "starcount":
 					expr := agg.Expr.(*plan.Expr_F)
+					c := expr.F.Args[0].Expr.(*plan.Expr_C)
 					child.AggList = append(child.AggList, &plan.Expr{
 						Typ: agg.Typ,
 						Expr: &plan.Expr_F{
 							F: &plan.Function{
 								Func: &plan.ObjectRef{
+									Obj:     expr.F.Func.Obj,
 									ObjName: expr.F.Func.ObjName,
 								},
 								Args: []*Expr{
 									&plan.Expr{
-										Typ:  expr.F.Args[0].Typ,
-										Expr: &plan.Expr_C{},
+										Typ: expr.F.Args[0].Typ,
+										Expr: &plan.Expr_C{
+											C: &plan.Const{
+												Isnull: c.C.Isnull,
+												Src:    c.C.Src,
+											},
+										},
 									},
 								},
 							},
