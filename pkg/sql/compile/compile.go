@@ -316,6 +316,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropSequence(c)
 	case CreateSequence:
 		return s.CreateSequence(c)
+	case AlterSequence:
+		return s.AlterSequence(c)
 	case CreateIndex:
 		return s.CreateIndex(c)
 	case DropIndex:
@@ -502,6 +504,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return []*Scope{{
 				Magic: DropSequence,
+				Plan:  pn,
+			}}, nil
+		case plan.DataDefinition_ALTER_SEQUENCE:
+			return []*Scope{{
+				Magic: AlterSequence,
 				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
