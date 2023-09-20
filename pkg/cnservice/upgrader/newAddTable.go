@@ -197,6 +197,24 @@ var MoConfigurationsView = &table.Table{
 	CreateTableSql: "drop view `mo_catalog`.`mo_configurations`;",
 }
 
+var MoLocksView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_locks",
+	Columns: []table.Column{
+		table.StringColumn("txn_id", "the txn id which holds the lock"),
+		table.StringColumn("table_id", "the table that the lock is on"),
+		table.StringColumn("lock_key", "point or range"),
+		table.UInt64Column("lock_content", "the content the clock is on"),
+		table.StringColumn("lock_mode", "shared or exclusive"),
+		table.StringColumn("lock_status", "acquired or wait"),
+		table.StringColumn("lock_wait", "the txn that waits on the lock"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_locks` AS SELECT * FROM mo_locks() AS mo_locks_tmp;",
+	//actually drop view here
+	CreateTableSql: "drop view `mo_catalog`.`mo_locks`;",
+}
+
 var SqlStatementHotspotView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_SYSTEM,
@@ -208,5 +226,5 @@ var SqlStatementHotspotView = &table.Table{
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
 
-var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoConfigurationsView}
+var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView}
 var registeredViews = []*table.Table{processlistView}

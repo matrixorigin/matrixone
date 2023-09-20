@@ -45,6 +45,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		f, e = metadataScan(idx, proc, tblArg)
 	case "processlist":
 		f, e = processlist(idx, proc, tblArg)
+	case "mo_locks":
+		f, e = moLocksCall(idx, proc, tblArg)
 	case "mo_configurations":
 		f, e = moConfigurationsCall(idx, proc, tblArg)
 	default:
@@ -109,6 +111,8 @@ func Prepare(proc *process.Process, arg any) error {
 		return metadataScanPrepare(proc, tblArg)
 	case "processlist":
 		return processlistPrepare(proc, tblArg)
+	case "mo_locks":
+		return moLocksPrepare(proc, tblArg)
 	case "mo_configurations":
 		return moConfigurationsPrepare(proc, tblArg)
 	default:

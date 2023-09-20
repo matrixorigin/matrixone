@@ -133,7 +133,10 @@ func (ti *TenantInfo) SetDefaultRoleID(id uint32) {
 }
 
 func (ti *TenantInfo) IsSysTenant() bool {
-	return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+	if ti != nil {
+		return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+	}
+	return false
 }
 
 func (ti *TenantInfo) IsDefaultRole() bool {
@@ -817,6 +820,7 @@ var (
 		catalog.MOAutoIncrTable:       0,
 		"mo_sessions":                 0,
 		"mo_configurations":           0,
+		"mo_locks":                    0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -845,6 +849,7 @@ var (
 		"mo_stages":                   0,
 		"mo_sessions":                 0,
 		"mo_configurations":           0,
+		"mo_locks":                    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1021,6 +1026,7 @@ var (
 			);`,
 		`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
+		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
 	}
 
 	//drop tables for the tenant
@@ -1036,6 +1042,7 @@ var (
 		`drop table if exists mo_catalog.mo_stages;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
 		`drop view if exists mo_catalog.mo_configurations;`,
+		`drop view if exists mo_catalog.mo_locks;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql       = `delete from mo_catalog.mo_pubs;`
@@ -1425,6 +1432,12 @@ const (
 
 	// grant ownership on table
 	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
+
+	// revoke ownership on database owner
+	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s form %s;`
+
+	// revoke ownership on table owner
+	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`
 
 	// get the owner of the database
 	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
@@ -1997,6 +2010,16 @@ func getSqlForGrantOwnershipOnDatabase(dbName, roleName string) string {
 // getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
 func getSqlForGrantOwnershipOnTable(dbName, tbName, roleName string) string {
 	return fmt.Sprintf(grantOwnershipOnTableFormat, dbName, tbName, roleName)
+}
+
+// getSqlForRevokeOwnershipFromDatabase get the sql for revoke ownership on database
+func getSqlForRevokeOwnershipFromDatabase(dbName, roleName string) string {
+	return fmt.Sprintf(revokeOwnershipFromDatabaseFormat, dbName, roleName)
+}
+
+// getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
+func getSqlForRevokeOwnershipFromTable(dbName, tbName, roleName string) string {
+	return fmt.Sprintf(revokeOwnershipFromTableFormat, dbName, tbName, roleName)
 }
 
 // getSqlForGetOwnerOfDatabase get the sql for get the owner of the database
@@ -5600,6 +5623,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
+	case *tree.AlterSequence:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
 	case *tree.AlterView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeAlterView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -8915,6 +8945,57 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		// get table name
 		tableName := string(st.Table.ObjectName)
 		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
+	}
+
+	bh := ses.GetBackgroundExec(tenantCtx)
+	defer bh.Close()
+
+	err = bh.Exec(tenantCtx, sql)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
+func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var err error
+	var sql string
+	tenantInfo := ses.GetTenantInfo()
+	if tenantInfo == nil || tenantInfo.IsAdminRole() {
+		return err
+	}
+	currentRole := tenantInfo.GetDefaultRole()
+
+	// 1.first change to moadmin/accountAdmin
+	var tenantCtx context.Context
+	tenantInfo = ses.GetTenantInfo()
+	// if is system account
+	if tenantInfo.IsSysTenant() {
+		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	} else {
+		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+	}
+
+	// 2.grant database privilege
+	switch st := stmt.(type) {
+	case *tree.DropDatabase:
+		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), currentRole)
+	case *tree.DropTable:
+		// get database name
+		var dbName string
+		if len(st.Names[0].SchemaName) == 0 {
+			dbName = ses.GetDatabaseName()
+		} else {
+			dbName = string(st.Names[0].SchemaName)
+		}
+		// get table name
+		tableName := string(st.Names[0].ObjectName)
+		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
 	}
 
 	bh := ses.GetBackgroundExec(tenantCtx)
