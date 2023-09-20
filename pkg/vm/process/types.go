@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -207,6 +208,8 @@ type Process struct {
 	prepareParams       *vector.Vector
 
 	QueryService queryservice.QueryService
+
+	Hakeeper logservice.CNHAKeeperClient
 }
 
 type vectorPool struct {
