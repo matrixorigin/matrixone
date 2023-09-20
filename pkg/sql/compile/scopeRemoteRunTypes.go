@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -55,6 +56,7 @@ type cnInformation struct {
 	fileService  fileservice.FileService
 	lockService  lockservice.LockService
 	queryService queryservice.QueryService
+	hakeeper     logservice.CNHAKeeperClient
 	aicm         *defines.AutoIncrCacheManager
 }
 
@@ -197,6 +199,7 @@ func newMessageReceiverOnServer(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	txnClient client.TxnClient,
 	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
@@ -215,6 +218,7 @@ func newMessageReceiverOnServer(
 		fileService:  fileService,
 		lockService:  lockService,
 		queryService: queryService,
+		hakeeper:     hakeeper,
 		aicm:         aicm,
 	}
 
@@ -269,6 +273,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		cnInfo.fileService,
 		cnInfo.lockService,
 		cnInfo.queryService,
+		cnInfo.hakeeper,
 		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
