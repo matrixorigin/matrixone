@@ -40,6 +40,7 @@ type Server struct {
 	counterSet *counterSet
 	// for test.
 	testHAKeeperClient logservice.ClusterHAKeeperClient
+	configData         []byte
 }
 
 // NewServer creates the proxy server.

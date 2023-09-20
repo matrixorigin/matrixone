@@ -5,6 +5,7 @@ select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog
 relname    relkind
 mo_account    r
 mo_columns    r
+mo_configurations    v
 mo_database    r
 mo_increment_columns
 mo_indexes    r
