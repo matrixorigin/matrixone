@@ -124,7 +124,6 @@ func putCompile(c *Compile) {
 		c.anal.analInfos = nil
 	}
 	if c.scope != nil {
-		buffer.FreeSlice(c.proc.SessionInfo.Buf, c.scope)
 		c.scope = nil
 	}
 
@@ -453,12 +452,10 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 	case *plan.Plan_Query:
 		switch qry.Query.StmtType {
 		case plan.Query_REPLACE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: Replace,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		}
 		scopes, err := c.compileQuery(ctx, qry.Query)
 		if err != nil {
@@ -471,82 +468,65 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 	case *plan.Plan_Ddl:
 		switch qry.Ddl.DdlType {
 		case plan.DataDefinition_CREATE_DATABASE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: CreateDatabase,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: DropDatabase,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_CREATE_TABLE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: CreateTable,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_ALTER_VIEW:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: AlterView,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: AlterTable,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_DROP_TABLE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: DropTable,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: DropSequence,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
+		case plan.DataDefinition_ALTER_SEQUENCE:
+			return []*Scope{{
+				Magic: AlterSequence,
+				Plan:  pn,
+			}}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: TruncateTable,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_CREATE_SEQUENCE:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: CreateSequence,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_CREATE_INDEX:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: CreateIndex,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_DROP_INDEX:
-			scopes := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 1, 1)
-			scopes[0] = &Scope{
+			return []*Scope{{
 				Magic: DropIndex,
 				Plan:  pn,
-			}
-			return scopes, nil
+			}}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
 			plan.DataDefinition_SHOW_COLUMNS,
@@ -706,7 +686,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 	}
 
-	steps := buffer.MakeSlice[*Scope](c.proc.SessionInfo.Buf, 0, len(qry.Steps))
+	steps := make([]*Scope, 0, len(qry.Steps))
 	for i := len(qry.Steps) - 1; i >= 0; i-- {
 		scopes, err := c.compilePlanScope(ctx, int32(i), qry.Steps[i], qry.Nodes)
 		if err != nil {
