@@ -63,10 +63,9 @@ func (m *Max[T]) Grows(_ int) {
 
 func (m *Max[T]) Eval(vs []T, err error, partialresults any) ([]T, error) {
 	if partialresults != nil {
-		for _, max := range partialresults.([]any) {
-			if max.(T) > vs[0] {
-				vs[0] = max.(T)
-			}
+		max := partialresults.(T)
+		if max > vs[0] {
+			vs[0] = max
 		}
 	}
 	return vs, nil
@@ -108,10 +107,9 @@ func (m *Decimal64Max) Grows(_ int) {
 
 func (m *Decimal64Max) Eval(vs []types.Decimal64, err error, partialresults any) ([]types.Decimal64, error) {
 	if partialresults != nil {
-		for _, max := range partialresults.([]any) {
-			if max.(types.Decimal64) > vs[0] {
-				vs[0] = max.(types.Decimal64)
-			}
+		max := partialresults.(types.Decimal64)
+		if max > vs[0] {
+			vs[0] = max
 		}
 	}
 	return vs, nil
@@ -153,10 +151,9 @@ func (m *Decimal128Max) Grows(_ int) {
 
 func (m *Decimal128Max) Eval(vs []types.Decimal128, err error, partialresults any) ([]types.Decimal128, error) {
 	if partialresults != nil {
-		for _, max := range partialresults.([]any) {
-			if max.(types.Decimal128).Compare(vs[0]) > 0 {
-				vs[0] = max.(types.Decimal128)
-			}
+		max := partialresults.(types.Decimal128)
+		if max.Compare(vs[0]) > 0 {
+			vs[0] = max
 		}
 	}
 	return vs, nil
@@ -198,10 +195,9 @@ func (m *BoolMax) Grows(_ int) {
 
 func (m *BoolMax) Eval(vs []bool, err error, partialresults any) ([]bool, error) {
 	if partialresults != nil {
-		for _, max := range partialresults.([]any) {
-			if max.(bool) {
-				vs[0] = true
-			}
+		max := partialresults.(bool)
+		if max {
+			vs[0] = true
 		}
 	}
 	return vs, nil
@@ -243,14 +239,6 @@ func (m *StrMax) Grows(_ int) {
 }
 
 func (m *StrMax) Eval(vs [][]byte, err error, partialresults any) ([][]byte, error) {
-	if partialresults != nil {
-		for _, max := range partialresults.([]any) {
-			if bytes.Compare(max.([]byte), vs[0]) > 0 {
-				vs[0] = make([]byte, 0, len(max.([]byte)))
-				vs[0] = append(vs[0], max.([]byte)...)
-			}
-		}
-	}
 	return vs, nil
 }
 
@@ -292,11 +280,10 @@ func (m *UuidMax) Grows(_ int) {
 
 func (m *UuidMax) Eval(vs []types.Uuid, err error, partialresults any) ([]types.Uuid, error) {
 	if partialresults != nil {
-		for _, max := range partialresults.([]any) {
-			if max.(types.Uuid).Gt(vs[0]) {
-				vs[0] = max.(types.Uuid)
-			}
-		}
+		max := partialresults.(types.Uuid)
+		if max.Gt(vs[0]) {
+			vs[0] = max
+		}s
 	}
 	return vs, nil
 }
