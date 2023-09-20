@@ -283,7 +283,7 @@ func (m *UuidMax) Eval(vs []types.Uuid, err error, partialresults any) ([]types.
 		max := partialresults.(types.Uuid)
 		if max.Gt(vs[0]) {
 			vs[0] = max
-		}s
+		}
 	}
 	return vs, nil
 }
