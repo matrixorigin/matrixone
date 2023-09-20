@@ -2158,6 +2158,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			ds: st,
 		}
+	case *tree.AlterSequence:
+		ret = &AlterSequenceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cs: st,
+		}
 	case *tree.CreateView:
 		ret = &CreateViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -2616,7 +2623,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 				*tree.LockTableStmt, *tree.UnLockTableStmt,
-				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateStream:
+				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateStream, *tree.AlterSequence:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -3276,7 +3283,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	//just status, no result set
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex,
-		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
+		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.AlterSequence,
 		*tree.CreateSequence, *tree.DropSequence,
 		*tree.Insert, *tree.Update, *tree.Replace,
 		*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
