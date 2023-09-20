@@ -20,6 +20,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
 	"sync/atomic"
 
@@ -83,6 +84,8 @@ type Service struct {
 		holder         taskservice.TaskServiceHolder
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	config *util.ConfigData
 }
 
 func NewService(
@@ -95,6 +98,8 @@ func NewService(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	configKVMap, _ := dumpLogConfig(cfg)
+	opts = append(opts, WithConfigData(configKVMap))
 
 	service := &Service{
 		cfg:         cfg,

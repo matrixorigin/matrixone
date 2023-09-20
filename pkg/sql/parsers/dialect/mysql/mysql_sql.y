@@ -227,6 +227,8 @@ import (
     minValueOption  *tree.MinValueOption
     maxValueOption  *tree.MaxValueOption
     startWithOption *tree.StartWithOption
+    cycleOption     *tree.CycleOption
+    alterTypeOption *tree.TypeOption
 
     whenClause2 *tree.WhenStmt
     whenClauseList2 []*tree.WhenStmt
@@ -654,6 +656,8 @@ import (
 %type <minValueOption> min_value_opt
 %type <maxValueOption> max_value_opt
 %type <startWithOption> start_with_opt
+%type <cycleOption> alter_cycle_opt
+%type <alterTypeOption> alter_as_datatype_opt
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
@@ -2617,10 +2621,10 @@ alter_stmt:
 // |    alter_ddl_stmt
 
 alter_sequence_stmt:
-    ALTER SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
+    ALTER SEQUENCE exists_opt table_name alter_as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt alter_cycle_opt
     {
         $$ = &tree.AlterSequence{
-            IfNotExists: $3,
+            IfExists: $3,
             Name: $4,
             Type: $5,
             IncrementBy: $6,
@@ -6321,6 +6325,16 @@ as_datatype_opt:
     {
         $$ = $2
     }
+alter_as_datatype_opt:
+    {
+        $$ = nil
+    }
+|   AS column_type
+    {
+        $$ = &tree.TypeOption{
+            Type: $2,
+        }
+    }
 increment_by_opt:
     {
         $$ = nil
@@ -6399,6 +6413,22 @@ max_value_opt:
         $$ = &tree.MaxValueOption{
             Minus: true,
             Num: $3,
+        }
+    }
+alter_cycle_opt:
+    {
+        $$ = nil
+    }
+|   NO CYCLE
+    {
+        $$ = &tree.CycleOption{
+            Cycle: false,
+        }
+    }
+|   CYCLE
+    {
+        $$ = &tree.CycleOption{
+            Cycle: true,
         }
     }
 start_with_opt:
