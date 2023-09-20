@@ -232,6 +232,13 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 	return nil
 }
 
+func (s *Schema) EstimateRowSize() (size int) {
+	for _, col := range s.ColDefs {
+		size += col.Type.TypeSize()
+	}
+	return
+}
+
 func (s *Schema) IsSameColumns(other *Schema) bool {
 	return s.Extra.NextColSeqnum == other.Extra.NextColSeqnum &&
 		len(s.ColDefs) == len(other.ColDefs)

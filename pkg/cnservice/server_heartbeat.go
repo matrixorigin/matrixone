@@ -76,12 +76,17 @@ func (s *service) heartbeat(ctx context.Context) {
 		InitWorkState:      s.cfg.InitWorkState,
 		GossipAddress:      s.gossipServiceAddr(),
 		GossipJoined:       s.gossipNode.Joined(),
+		ConfigData:         s.config.GetData(),
 	}
+
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return
 	}
+
+	s.config.DecrCount()
+
 	s.handleCommands(cb.Commands)
 }
 
