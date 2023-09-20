@@ -114,6 +114,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
+		// for anti join, if left batch is sorted , then output batch is sorted
+		rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
 	}
 	count := bat.RowCount()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -142,6 +144,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
+		// for anti join, if left batch is sorted , then output batch is sorted
+		rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
 	}
 	if (ctr.bat.RowCount() == 1 && ctr.hasNull) || ctr.bat.RowCount() == 0 {
 		anal.Output(rbat, isLast)
