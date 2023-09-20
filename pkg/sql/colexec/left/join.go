@@ -124,6 +124,8 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
 				return err
 			}
+			// for left join, if left batch is sorted , then output batch is sorted
+			rbat.Vecs[i].SetSorted(bat.Vecs[rp.Pos].GetSorted())
 		} else {
 			rbat.Vecs[i] = vector.NewConstNull(*ctr.bat.Vecs[rp.Pos].GetType(), bat.RowCount(), proc.Mp())
 		}
@@ -141,6 +143,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
+			// for left join, if left batch is sorted , then output batch is sorted
+			rbat.Vecs[i].SetSorted(bat.Vecs[rp.Pos].GetSorted())
 		} else {
 			rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
 		}

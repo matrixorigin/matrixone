@@ -35,3 +35,8 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
 	assert.Equal(t, "true", c.Txn.IncrementalDedup)
 }
+
+func TestDefaulValue(t *testing.T) {
+	c := Config{}
+	c.SetDefaultValue()
+}
