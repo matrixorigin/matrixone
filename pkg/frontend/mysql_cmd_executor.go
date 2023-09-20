@@ -3500,6 +3500,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
+	ses.proc.UnixTime = proc.UnixTime // update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
