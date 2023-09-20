@@ -389,7 +389,7 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 			return
 		}
-		if node.Stats.HashmapStats.HashmapSize <= HashMapSizeForShuffle*64 {
+		if node.Stats.HashmapStats.HashmapSize <= HashMapSizeForShuffle*16 {
 			node.Stats.HashmapStats.Shuffle = false
 			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
 				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
