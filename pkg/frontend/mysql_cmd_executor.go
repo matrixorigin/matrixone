@@ -3490,6 +3490,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 		SqlHelper:     ses.GetSqlHelper(),
+		Buf:           ses.GetBuffer(),
 	}
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
