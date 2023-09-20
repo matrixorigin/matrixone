@@ -25,7 +25,7 @@ const (
 	HashMapSizeForShuffle           = 250000
 	MAXShuffleDOP                   = 64
 	ShuffleThreshHold               = 50000
-	ShuffleTypeThreshHoldLowerLimit = 32
+	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
 )
 
