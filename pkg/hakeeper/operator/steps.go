@@ -253,3 +253,19 @@ func (a DeleteCNStore) IsFinish(_ pb.LogState, _ pb.TNState, state pb.CNState) b
 	}
 	return true
 }
+
+type JoinGossipCluster struct {
+	StoreID  string
+	Existing []string
+}
+
+func (a JoinGossipCluster) String() string {
+	return fmt.Sprintf("join gossip cluster for %s", a.StoreID)
+}
+
+func (a JoinGossipCluster) IsFinish(_ pb.LogState, _ pb.TNState, state pb.CNState) bool {
+	if state, ok := state.Stores[a.StoreID]; ok {
+		return state.GetGossipJoined()
+	}
+	return true
+}

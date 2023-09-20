@@ -211,6 +211,7 @@ table_schema    table_name    definer
 system    error_info    root@localhost
 system    log_info    root@localhost
 system    span_info    root@localhost
+system    sql_statement_hotspot    root@localhost
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
 query_id    INT(32)    NO        '0'        
