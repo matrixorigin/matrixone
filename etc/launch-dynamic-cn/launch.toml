@@ -1,0 +1,27 @@
+logservices = [
+    "./etc/launch-multi-cn/log.toml",
+]
+
+tnservices = [
+    "./etc/launch-multi-cn/tn.toml"
+]
+
+cnservices = [
+    "./etc/launch-multi-cn/cn.toml"
+]
+
+
+[dynamic]
+enable = true
+# how many cpu can used pr cn instance
+cpus = 2
+cn-count = 5
+port-base = 18000
+frontend-port = 16001
+frontend-unix-socket = "/tmp/mysql1.sock"
+
+[dynamic.fileservice]
+memory-capacity = "1GB"
+disk-capacity = "1GB"
+
+
