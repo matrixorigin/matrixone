@@ -1115,7 +1115,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
-			IsIgnore: t.IsIgnore,
+			IsIgnore:        t.IsIgnore,
 		}
 	case vm.Anti:
 		t := opr.GetAnti()
