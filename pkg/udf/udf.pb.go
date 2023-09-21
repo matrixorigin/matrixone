@@ -259,7 +259,7 @@ type Request struct {
 	Vectors []*DataVector     `protobuf:"bytes,2,rep,name=vectors,proto3" json:"vectors,omitempty"`
 	Length  int64             `protobuf:"varint,3,opt,name=length,proto3" json:"length,omitempty"`
 	Type    RequestType       `protobuf:"varint,4,opt,name=type,proto3,enum=udf.RequestType" json:"type,omitempty"`
-	Context map[string]string `protobuf:"bytes,5,rep,name=context,proto3" json:"context,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	Context map[string]string `protobuf:"bytes,5,rep,name=context,proto3" json:"context,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"` // currently just transfer, not used
 }
 
 func (x *Request) Reset() {
@@ -392,7 +392,7 @@ type Udf struct {
 	Handler      string   `protobuf:"bytes,1,opt,name=handler,proto3" json:"handler,omitempty"`
 	IsImport     bool     `protobuf:"varint,2,opt,name=isImport,proto3" json:"isImport,omitempty"`
 	Body         string   `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"`
-	ImportPkg    []byte   `protobuf:"bytes,4,opt,name=importPkg,proto3" json:"importPkg,omitempty"`
+	ImportPkg    [][]byte `protobuf:"bytes,4,rep,name=importPkg,proto3" json:"importPkg,omitempty"`
 	RetType      DataType `protobuf:"varint,5,opt,name=retType,proto3,enum=udf.DataType" json:"retType,omitempty"`
 	Language     string   `protobuf:"bytes,6,opt,name=language,proto3" json:"language,omitempty"`
 	ModifiedTime string   `protobuf:"bytes,7,opt,name=modifiedTime,proto3" json:"modifiedTime,omitempty"`
@@ -452,7 +452,7 @@ func (x *Udf) GetBody() string {
 	return ""
 }
 
-func (x *Udf) GetImportPkg() []byte {
+func (x *Udf) GetImportPkg() [][]byte {
 	if x != nil {
 		return x.ImportPkg
 	}
@@ -777,7 +777,7 @@ var file_udf_proto_rawDesc = []byte{
 	0x28, 0x08, 0x52, 0x08, 0x69, 0x73, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x12, 0x12, 0x0a, 0x04,
 	0x62, 0x6f, 0x64, 0x79, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x62, 0x6f, 0x64, 0x79,
 	0x12, 0x1c, 0x0a, 0x09, 0x69, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x50, 0x6b, 0x67, 0x18, 0x04, 0x20,
-	0x01, 0x28, 0x0c, 0x52, 0x09, 0x69, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x50, 0x6b, 0x67, 0x12, 0x27,
+	0x03, 0x28, 0x0c, 0x52, 0x09, 0x69, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x50, 0x6b, 0x67, 0x12, 0x27,
 	0x0a, 0x07, 0x72, 0x65, 0x74, 0x54, 0x79, 0x70, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x0e, 0x32,
 	0x0d, 0x2e, 0x75, 0x64, 0x66, 0x2e, 0x44, 0x61, 0x74, 0x61, 0x54, 0x79, 0x70, 0x65, 0x52, 0x07,
 	0x72, 0x65, 0x74, 0x54, 0x79, 0x70, 0x65, 0x12, 0x1a, 0x0a, 0x08, 0x6c, 0x61, 0x6e, 0x67, 0x75,

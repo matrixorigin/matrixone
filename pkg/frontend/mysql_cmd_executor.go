@@ -3286,6 +3286,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	}
 
 	if selfHandle {
+		if err == nil {
+			switch stmt.(type) {
+			case *tree.CreateFunction, *tree.DropFunction:
+				rspLen = 1
+			}
+		}
 		return
 	}
 	if err = cw.SetDatabaseName(ses.GetDatabaseName()); err != nil {

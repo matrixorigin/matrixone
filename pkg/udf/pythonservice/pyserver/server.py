@@ -47,73 +47,91 @@ OPTION_DECIMAL_PRECISION = 'decimal_precision'
 class Server(pb2_grpc.ServiceServicer):
 
     def run(self, requestIterator: Iterator[pb2.Request], context) -> pb2.Response:
-        firstRequest: pb2.Request
-        path: str
-        filename: str
-        item: InstallingItem
+        firstRequest: Optional[pb2.Request] = None
+        path: Optional[str] = None
+        filename: Optional[str] = None
+        item: Optional[InstallingItem] = None
 
-        for request in requestIterator:
-            # check
-            checkUdf(request.udf)
+        try:
+            for request in requestIterator:
+                # check
+                checkUdf(request.udf)
 
-            if request.type == pb2.DataRequest:
+                # the first request
+                if request.type == pb2.DataRequest:
 
-                if request.udf.isImport:
-                    path, filename, item, status = functionStatus(request.udf)
+                    if request.udf.isImport:
+                        path, filename, item, status = functionStatus(request.udf)
 
-                    if status == FunctionStatus.NotExist:
-                        firstRequest = request
-                        yield pb2.Response(type=pb2.PkgRequest)
+                        if status == FunctionStatus.NotExist:
+                            firstRequest = request
+                            yield pb2.Response(type=pb2.PkgRequest)
 
-                    elif status == FunctionStatus.Installing:
-                        with item.condition:
-                            # block and waiting
-                            if not item.installed:
-                                item.condition.wait()
-                        yield self.calculate(request, path, filename)
+                        elif status == FunctionStatus.Installing:
+                            with item.condition:
+                                # block and waiting
+                                if not item.installed:
+                                    item.condition.wait()
+                            yield self.calculate(request, path, filename)
+
+                        else:
+                            yield self.calculate(request, path, filename)
 
                     else:
-                        yield self.calculate(request, path, filename)
+                        yield self.calculate(request, "", "")
+
+                # the second request (optional)
+                # var firstRequest, path, filename and item are not null
+                elif request.type == pb2.PkgResponse:
+                    # install pkg, do not need write lock
+                    absPath = os.path.join(ROOT_PATH, path)
+                    try:
+                        if os.path.exists(absPath):
+                            shutil.rmtree(absPath)
+                        os.makedirs(absPath, exist_ok=True)
+
+                        file = os.path.join(absPath, filename)
+
+                        with open(file, 'wb') as f:
+                            for data in request.udf.importPkg:
+                                f.write(data)
+
+                        if request.udf.body.endswith('.whl'):
+                            subprocess.check_call(['pip', 'install', '--no-index', file, '-t', absPath])
+                            os.remove(file)
+
+                        # mark the pkg is installed without error
+                        open(os.path.join(absPath, INSTALLED_LABEL), 'w').close()
+
+                    except Exception as e:
+                        shutil.rmtree(absPath, ignore_errors=True)
+                        raise e
+
+                    finally:
+                        with item.condition:
+                            item.installed = True
+                            item.condition.notifyAll()
+
+                        with INSTALLING_MAP_LOCK:
+                            INSTALLING_MAP[path] = None
+
+                    yield self.calculate(firstRequest, path, filename)
 
                 else:
-                    yield self.calculate(request, "", "")
+                    raise Exception('error udf request type')
+        # notify all
+        finally:
+            if item is None:
+                with INSTALLING_MAP_LOCK:
+                    item = INSTALLING_MAP[path]
 
-            elif request.type == pb2.PkgResponse:
-                # install pkg, do not need write lock
-                absPath = os.path.join(ROOT_PATH, path)
-                try:
-                    if os.path.exists(absPath):
-                        shutil.rmtree(absPath)
-                    os.makedirs(absPath, exist_ok=True)
+            if item is not None:
+                with item.condition:
+                    item.installed = True
+                    item.condition.notifyAll()
 
-                    file = os.path.join(absPath, filename)
-
-                    with open(file, 'wb') as f:
-                        f.write(request.udf.importPkg)
-
-                    if request.udf.body.endswith('.whl'):
-                        subprocess.check_call(['pip', 'install', file, '-t', absPath])
-                        os.remove(file)
-
-                    # mark the pkg is installed without error
-                    open(os.path.join(absPath, INSTALLED_LABEL), 'w').close()
-
-                except Exception as e:
-                    shutil.rmtree(absPath, ignore_errors=True)
-                    raise e
-
-                finally:
-                    with item.condition:
-                        item.installed = True
-                        item.condition.notifyAll()
-
-                    with INSTALLING_MAP_LOCK:
-                        INSTALLING_MAP[path] = None
-
-                yield self.calculate(firstRequest, path, filename)
-
-            else:
-                raise Exception('error udf request type')
+                with INSTALLING_MAP_LOCK:
+                    INSTALLING_MAP[path] = None
 
     def calculate(self, request: pb2.Request, filepath: str, filename: str) -> pb2.Response:
         # load function

@@ -53,7 +53,7 @@ message Udf {
   string handler = 1;
   bool isImport = 2;
   string body = 3;
-  bytes importPkg = 4;
+  repeated bytes importPkg = 4;
   DataType retType = 5;
   string language = 6;
   string modifiedTime = 7;

@@ -107,18 +107,45 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 
 	// getPkg
-	getPkg := func() (pkg []byte, err error) {
+	getPkg := func() (pkg [][]byte, err error) {
+		info, err := proc.FileService.StatFile(proc.Ctx, request.Udf.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		entrySize := int64(4096)
+		cnt := info.Size / entrySize
+		if info.Size%entrySize != 0 {
+			cnt += 1
+		}
+		entries := make([]fileservice.IOEntry, cnt)
+		offset := int64(0)
+		for i := int64(0); i < cnt; i++ {
+			entries[i].Offset = offset
+			if i == cnt-1 {
+				entries[i].Size = -1
+			} else {
+				entries[i].Size = entrySize
+			}
+			offset += entrySize
+		}
+
 		ioVector := &fileservice.IOVector{
 			FilePath: request.Udf.Body,
-			Entries: []fileservice.IOEntry{
-				{
-					Offset: 0,
-					Size:   -1,
-				},
-			},
+			Entries:  entries,
 		}
+
 		err = proc.FileService.Read(proc.Ctx, ioVector)
-		return ioVector.Entries[0].Data, err
+		if err != nil {
+			return nil, err
+		}
+
+		data := make([][]byte, cnt)
+		for i := int64(0); i < cnt; i++ {
+			data[i] = ioVector.Entries[i].Data
+		}
+
+		return data, err
 	}
 
 	// run
