@@ -17,6 +17,7 @@ package vm
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -72,6 +73,8 @@ const (
 	HashBuild
 
 	TableFunction
+	TableScan
+	ValueScan
 	// MergeBlock is used to recieve S3 block metLoc Info, and write
 	// them to S3
 	MergeBlock
@@ -127,6 +130,18 @@ type Operator interface {
 
 	//AppendChild append child to operator
 	AppendChild(child Operator)
+}
+
+type ExecStatus int
+
+const (
+	ExecStop ExecStatus = iota
+	ExecNext
+)
+
+type CallResult struct {
+	Status ExecStatus
+	Batch  *batch.Batch
 }
 
 type OperatorInfo struct {

@@ -1,0 +1,68 @@
+// Copyright 2021-2023 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package table_scan
+
+import (
+	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(" table_scan ")
+}
+
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	return nil
+}
+
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+	// if arg.lastBatch != nil {
+	// 	arg.lastBatch.Clean(proc.Mp())
+	// }
+
+	// result := vm.CallResult{
+	// 	Status: vm.ExecNext,
+	// }
+
+	select {
+	case <-proc.Ctx.Done():
+		proc.SetInputBatch(nil)
+		return process.ExecStop, nil
+	default:
+	}
+
+	// read data from storage engine
+	bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
+	if err != nil {
+		return process.ExecStop, err
+	}
+
+	if bat != nil {
+		bat.Cnt = 1
+		// arg.lastBatch = bat
+		anal.S3IOByte(bat)
+		anal.Alloc(int64(bat.Size()))
+	}
+
+	proc.SetInputBatch(bat)
+
+	// result.Batch = bat
+
+	return process.ExecNext, nil
+}
