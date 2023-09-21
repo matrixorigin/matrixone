@@ -10,9 +10,9 @@ env:
   oldrelease: v0.8.0
 
 jobs:
-  upgrade-release-linux-x86:
+  upgrade-release-linux-arm64:
     runs-on: aws-arm64-runner
-    name: Compatibility Test With Release on Linux/x64(LAUNCH)
+    name: Compatibility Test With Release on Linux/ARM64(LAUNCH)
     timeout-minutes: 60
 
     steps:
@@ -287,9 +287,9 @@ jobs:
             ${{ github.workspace }}/upload
           retention-days: 7
           
-  upgrade-oldrelease-linux-x86:
+  upgrade-oldrelease-linux-arm64:
     runs-on: aws-arm64-runner
-    name: Compatibility Test With OldRelease on Linux/x64(LAUNCH)
+    name: Compatibility Test With OldRelease on Linux/ARM64(LAUNCH)
     timeout-minutes: 60
 
     steps:
