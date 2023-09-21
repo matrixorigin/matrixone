@@ -45,6 +45,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	f := new(fuzzyCheck)
 	f.tbl = f.wrapup(tblName)
 	f.db = f.wrapup(dbName)
+	f.attr = n.TableDef.Pkey.PkeyColName
 
 	for _, c := range n.TableDef.Cols {
 		if c.Name == n.TableDef.Pkey.PkeyColName {
@@ -80,7 +81,6 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 // for more info, refer func backgroundSQLCheck
 func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 	toCheck := bat.GetVector(0)
-	f.attr = bat.Attrs[0]
 	f.cnt = bat.RowCount()
 
 	if err := f.firstlyCheck(ctx, toCheck); err != nil {
