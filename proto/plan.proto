@@ -461,7 +461,7 @@ enum ShuffleMethod {
 
 enum ShuffleTypeForMultiCN {
 	Simple = 0;
-	Complex = 1;
+	Hybrid = 1;
 }
 
 message HashMapStats{
@@ -1043,14 +1043,15 @@ message CreateTable {
 	bool if_not_exists 	= 1;
 	bool temporary 		= 2;
 	string database 	= 3;
-	TableDef table_def 	= 4;
-	repeated TableDef index_tables = 5;
+	bool replace        = 4;
+	TableDef table_def 	= 5;
+	repeated TableDef index_tables = 6;
 	// we need the db/table name of foreign key when create table. but we don't need it in ForeignKeyDef
-	repeated string fk_dbs = 6;
-	repeated string fk_tables = 7;
+	repeated string fk_dbs = 7;
+	repeated string fk_tables = 8;
 	// we need column name when create table, but not in ForeignKeyDef
-	repeated FkColName fk_cols = 8;
-	repeated TableDef partition_tables = 9;// partition tables for partitions
+	repeated FkColName fk_cols = 9;
+	repeated TableDef partition_tables = 10;// partition tables for partitions
 }
 
 message AlterTableDrop {
@@ -1181,6 +1182,9 @@ message DropSequence {
 }
 
 message AlterSequence {
+	bool if_exists		=1;
+	string database 		=2;
+	TableDef table_def 		=3;
 }
 
 message CreateIndex {

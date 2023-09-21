@@ -25,7 +25,7 @@ const (
 	HashMapSizeForShuffle           = 250000
 	MAXShuffleDOP                   = 64
 	ShuffleThreshHold               = 50000
-	ShuffleTypeThreshHoldLowerLimit = 32
+	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
 )
 
@@ -154,7 +154,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 					return
 				}
 			} else if leftCost > ShuffleTypeThreshHoldLowerLimit*rightCost {
-				n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Complex
+				n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Hybrid
 			}
 		}
 	}
@@ -259,6 +259,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	child := builder.qry.Nodes[n.Children[0]]
+
 	// for now, if agg children is agg or filter, do not allow shuffle
 	if isAggOrFilter(child, builder) {
 		return
@@ -298,8 +299,8 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
 	if child.NodeType == plan.Node_JOIN {
 		if n.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
-			// shuffle group can follow shuffle join
-			if n.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType {
+			// shuffle group can reuse shuffle join
+			if n.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType && n.Stats.HashmapStats.ShuffleTypeForMultiCN == child.Stats.HashmapStats.ShuffleTypeForMultiCN {
 				groupHashCol, _ := GetHashColumn(n.GroupBy[n.Stats.HashmapStats.ShuffleColIdx])
 				switch exprImpl := child.OnList[child.Stats.HashmapStats.ShuffleColIdx].Expr.(type) {
 				case *plan.Expr_F:
@@ -369,5 +370,30 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		determinShuffleForJoin(node, builder)
 	default:
 	}
+}
 
+// second pass of determine shuffle
+func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			determineShuffleMethod2(child, nodeID, builder)
+		}
+	}
+	if parentID == -1 {
+		return
+	}
+	parent := builder.qry.Nodes[parentID]
+
+	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			return
+		}
+		if node.Stats.HashmapStats.HashmapSize <= HashMapSizeForShuffle*16 {
+			node.Stats.HashmapStats.Shuffle = false
+			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			}
+		}
+	}
 }
