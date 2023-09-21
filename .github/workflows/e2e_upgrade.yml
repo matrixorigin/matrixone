@@ -24,7 +24,7 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
 
-      - name: checkout release
+      - name: checkout release ${{ env.release }}
         uses: actions/checkout@v3
         with:
           fetch-depth: '3'
@@ -40,7 +40,7 @@ jobs:
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD          
 
-      - name: Build MatrixOne for upstream
+      - name: Build MatrixOne for release ${{ env.release }}
         run: |
           cd $GITHUB_WORKSPACE/upstream && make clean && make build          
           git rev-parse --short HEAD
@@ -190,7 +190,7 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
 
-      - name: checkout upstream
+      - name: checkout oldrelease ${{ env.oldrelease }}
         uses: actions/checkout@v3
         with:
           fetch-depth: '3'
@@ -206,7 +206,7 @@ jobs:
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD          
 
-      - name: Build MatrixOne for upstream
+      - name: Build MatrixOne for oldrelease ${{ env.oldrelease }}
         run: |
           cd $GITHUB_WORKSPACE/upstream && make clean && make build          
           git rev-parse --short HEAD
