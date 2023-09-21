@@ -26,11 +26,14 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
+	"sync/atomic"
+	"time"
+
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"io"
-	"time"
 )
 
 type TraceID [16]byte
@@ -186,6 +189,7 @@ type SpanConfig struct {
 	// hungThreshold set by WithHungThreshold
 	// It will override Span ctx deadline setting, and start a goroutine to check ctx deadline
 	hungThreshold time.Duration
+	Extra         []zap.Field `json:"-"`
 }
 
 const (
@@ -208,6 +212,26 @@ func (c *SpanConfig) Reset() {
 	c.profileCpuDur = 0
 	c.profileTraceDur = 0
 	c.hungThreshold = 0
+	c.Extra = nil
+}
+
+var MOCtledSpanEnableConfig struct {
+	EnableS3FSSpan    atomic.Bool
+	EnableLocalFSSpan atomic.Bool
+}
+
+func (c *SpanConfig) NeedRecord(duration time.Duration) bool {
+	// if span kind in [SpanKindS3FSVis, SpanKindLocalFSVis], we
+	// hope it does record in every invoke and ignores the
+	// long time threshold restriction.
+	switch c.Kind {
+	case SpanKindS3FSVis:
+		return MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
+	case SpanKindLocalFSVis:
+		return MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
+	default:
+		return duration >= c.LongTimeThreshold
+	}
 }
 
 func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
@@ -380,6 +404,15 @@ func WithProfileTraceSecs(d time.Duration) SpanStartOption {
 	})
 }
 
+func WithFSReadWriteExtra(fileName string, status error, size int64) SpanEndOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.Extra = append(cfg.Extra,
+			zap.String("name", fileName),
+			zap.String("status", fmt.Sprintf("%v", status)),
+			zap.Int64("size", size))
+	})
+}
+
 type Resource struct {
 	m map[string]any
 }
@@ -427,6 +460,12 @@ const (
 	// SpanKindSession is a SpanKind for a Span that represents the operation
 	// start from session
 	SpanKindSession SpanKind = 3
+	// SpanKindS3FSVis is a SpanKind for a Span that needs to collect info of
+	// S3 object operation
+	SpanKindS3FSVis SpanKind = 4
+	// SpanKindLocalFSVis is a SpanKind for a Span that needs to collect info of
+	// local object operation
+	SpanKindLocalFSVis SpanKind = 5
 )
 
 func (k SpanKind) String() string {
@@ -439,6 +478,10 @@ func (k SpanKind) String() string {
 		return "remote"
 	case SpanKindSession:
 		return "session"
+	case SpanKindS3FSVis:
+		return "s3FSOperation"
+	case SpanKindLocalFSVis:
+		return "localFSOperation"
 	default:
 		return "unknown"
 	}

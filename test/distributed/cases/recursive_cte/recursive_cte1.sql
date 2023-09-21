@@ -175,29 +175,7 @@ FROM DirectReports
 ORDER BY ManagerID;
 select * from cte_insert_table;
 
--- transaction
-truncate table cte_insert_table;
-begin;
-insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
-(
-    SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
-    FROM MyEmployees
-    WHERE ManagerID IS NULL
-    UNION ALL
-    SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
-    FROM MyEmployees AS e
-        INNER JOIN DirectReports AS d
-        ON e.ManagerID = d.EmployeeID
-)
-SELECT ManagerID, EmployeeID, Title, EmployeeLevel
-FROM DirectReports
-ORDER BY ManagerID;
-select * from cte_insert_table;
-rollback;
-select * from cte_insert_table;
-
 -- recursive cte: update cte
--- @bvt:issue#11503
 update cte_insert_table set c3= (WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
 (
     SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
@@ -226,8 +204,28 @@ delete from  cte_insert_table where  c3 = (WITH RECURSIVE DirectReports(ManagerI
 )
 select Title from  DirectReports where ManagerID=16);
 select * from cte_insert_table;
--- @bvt:issue
--- @bvt:issue#11394
+
+-- transaction
+truncate table cte_insert_table;
+begin;
+insert into cte_insert_table  WITH RECURSIVE DirectReports(ManagerID, EmployeeID, Title, EmployeeLevel) AS
+(
+    SELECT ManagerID, EmployeeID, Title, 0 AS EmployeeLevel
+    FROM MyEmployees
+    WHERE ManagerID IS NULL
+    UNION ALL
+    SELECT e.ManagerID, e.EmployeeID, e.Title, EmployeeLevel + 1
+    FROM MyEmployees AS e
+        INNER JOIN DirectReports AS d
+        ON e.ManagerID = d.EmployeeID
+)
+SELECT ManagerID, EmployeeID, Title, EmployeeLevel
+FROM DirectReports
+ORDER BY ManagerID;
+select * from cte_insert_table;
+rollback;
+select * from cte_insert_table;
+
 -- recursive cte: create view as
 create view cte_view as(
 WITH  RECURSIVE DirectReports(Name, Title, EmployeeID, EmployeeLevel)
@@ -248,7 +246,6 @@ AS (SELECT concat(e.FirstName," ",e.LastName) as name,
 SELECT EmployeeID, Name, Title, EmployeeLevel
 FROM DirectReports order by EmployeeID);
 select * from cte_view order by EmployeeLevel;
--- @bvt:issue
 -- recursive cte abnormal:  recursive_query include sum/avg/count/max/min,group by,having,order by
 with recursive cte_ab_1(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, avg(p.price) FROM product p JOIN cte_ab_1 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_1;
 with recursive cte_ab_2(id, productID,price) as (SELECT p.id, p.p_id, p.price FROM product p where p.p_id is null UNION all SELECT p.id, p.p_id, sum(p.price) FROM product p JOIN cte_ab_2 c  ON p.id = c.productID  GROUP BY c.id, c.productID )SELECT * FROM cte_ab_2;
@@ -259,9 +256,7 @@ with recursive cte_ab_6(id,manager_id,name) as(select p.id,p.manager_id,p.name f
 -- recursive cte abnormal:  recursive_query include distinct ,limit, subquery , left join,right join,out join
 with recursive cte_ab_7(id,manager_id,name) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select distinct p.id,p.manager_id,p.name from emp p join cte_ab_7 c on p.manager_id= c.id) select * from cte_ab_7;
 with recursive cte_ab_8(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name,0 as level from emp p where manager_id is null union all select p.id,p.manager_id,p.name,levels+1 from emp p join cte_ab_8 c on p.manager_id= c.id limit 5) select * from cte_ab_8;
--- @bvt:issue#11276
 with recursive cte_ab_9(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name,0 as level from emp p where manager_id is null union all select p.id,p.manager_id,p.name,levels+1 from emp p where p.manager_id in(select c.id from cte_ab_9 c)) select * from cte_ab_9;
--- @bvt:issue
 -- abnormal: SELECT list and column names list have different column counts
 with recursive cte_ab_10(id,manager_id,name,levels) as(select p.id,p.manager_id,p.name from emp p where manager_id is null union all select p.id,p.manager_id,p.name from emp p join cte_ab_10 c on p.manager_id= c.id ) select * from cte_ab_10 order by id;
 with non_cte_8(manager_id,name) as(SELECT a.manager_id, a.id,a.name AS job_name FROM emp a), non_cte_9(id,name) as(SELECT m.id, m.name FROM employees_mgr m WHERE m.name != "lucky") select * FROM non_cte_8 a JOIN non_cte_9 b ON a.manager_id = b.id ORDER BY  a.manager_id;

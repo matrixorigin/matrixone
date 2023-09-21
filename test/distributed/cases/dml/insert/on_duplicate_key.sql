@@ -87,3 +87,15 @@ create table t1(a int primary key, b int, c int);
 insert into t1 values (1,1,1),(2,2,2);
 insert into t1 values (1,9,1),(11,8,2) on duplicate key update a=a+10, c=10;
 select * from t1 order by a;
+
+drop table if exists t1;
+create table t1(a int primary key, b int unique key);
+insert into t1 values (1,1),(2,2),(3,3);
+insert into t1 values (1,20) on duplicate key update b = b + 1;
+insert into t1 values (20,1) on duplicate key update a = a + 1;
+delete from t1;
+insert into t1 values (1,1),(3,2);
+insert into t1 values (1,2) on duplicate key update a = 10;
+delete from t1;
+insert into t1 values (1,1),(3,2);
+insert into t1 values (1,2) on duplicate key update a = a+2;

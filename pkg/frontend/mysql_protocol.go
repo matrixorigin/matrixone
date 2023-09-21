@@ -1184,7 +1184,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logInfo(mp.ses, "check password succeeded", "")
+				logInfo(mp.ses, mp.ses.GetDebugString(), "check password succeeded")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
@@ -2706,43 +2706,33 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 
 // receiveExtraInfo tries to receive salt and labels read from proxy module.
 func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
-	saltLen := 20
 	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
 	}
-	data := make([]byte, saltLen)
-	n, err := rs.RawConn().Read(data)
-	if err != nil {
-		// Something wrong when try to read the salt value.
-		// If the error is timeout, we treat it as normal case and do not update salt.
-		//
-		// TODO(volgariver6): we should change the port of the internal execution from
-		// 6001 to the proxy listen port.
-		if err, ok := err.(net.Error); !ok || err.Timeout() {
-			logError(mp.ses, mp.GetDebugString(),
-				"Failed to get salt",
-				zap.Error(err))
-		}
-	} else if n != saltLen {
-		logError(mp.ses, mp.GetDebugString(),
-			"Failed to get salt",
-			zap.Error(err))
-	} else {
-		mp.SetSalt(data)
-	}
-
-	// Read requested labels from proxy.
-	label := &proxy.RequestLabel{}
+	extraInfo := &proxy.ExtraInfo{}
 	reader := bufio.NewReader(rs.RawConn())
-	if err = label.Decode(reader); err != nil {
-		logError(mp.ses, mp.GetDebugString(),
-			"Failed to get CN labels",
-			zap.Error(err))
+	if err := extraInfo.Decode(reader); err != nil {
+		if err != nil {
+			// Something wrong when try to read the salt value.
+			// If the error is timeout, we treat it as normal case and do not update salt.
+			if err, ok := err.(net.Error); ok && err.Timeout() {
+				logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
+					zap.Error(err))
+			} else {
+				logError(mp.ses, mp.GetDebugString(), "failed to get extra info",
+					zap.Error(err))
+			}
+		}
 	} else {
-		mp.GetSession().requestLabel = label.Labels
-		logDebugf(mp.GetDebugString(), "got requested CN labels: %v", *label)
+		mp.SetSalt(extraInfo.Salt)
+		mp.GetSession().requestLabel = extraInfo.Label.Labels
+		if extraInfo.InternalConn {
+			mp.GetSession().connType = ConnTypeInternal
+		} else {
+			mp.GetSession().connType = ConnTypeExternal
+		}
 	}
 }
 

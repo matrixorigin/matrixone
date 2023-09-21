@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -97,7 +98,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-	if len(param.FileList) == 0 {
+	if len(param.FileList) == 0 && param.Extern.ScanType != tree.INLINE {
 		logutil.Warnf("no such file '%s'", param.Extern.Filepath)
 		param.Fileparam.End = true
 	}
@@ -139,7 +140,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
-	if param.plh == nil {
+	if param.plh == nil && param.Extern.ScanType != tree.INLINE {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			proc.SetInputBatch(nil)
 			return process.ExecStop, nil
@@ -282,6 +283,9 @@ func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process,
 }
 
 func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error) {
+	if param.Extern.ScanType == tree.INLINE {
+		return io.NopCloser(bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))), nil
+	}
 	if param.Extern.Local {
 		return io.NopCloser(proc.LoadLocalReader), nil
 	}

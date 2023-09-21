@@ -19,6 +19,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const maxRetryAttemps = 128
+
 func doWithRetry[T any](
 	what string,
 	fn func() (T, error),

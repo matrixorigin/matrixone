@@ -64,3 +64,29 @@ func (s *service) GetLockTableBind(tableID uint64) (pb.LockTable, error) {
 	}
 	return l.getBind(), nil
 }
+
+func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {
+	s.tables.Range(func(key, value any) bool {
+		tableID := key.(uint64)
+		l, ok := value.(lockTable).(*localLockTable)
+		if !ok {
+			return true
+		}
+		keys := make([][]byte, 0, 2)
+		return func() bool {
+			stop := false
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			l.mu.store.Iter(func(key []byte, lock Lock) bool {
+				keys = append(keys, key)
+				if lock.isLockRangeStart() {
+					return true
+				}
+				stop = !fn(tableID, keys, lock)
+				keys = keys[:0]
+				return !stop
+			})
+			return !stop
+		}()
+	})
+}

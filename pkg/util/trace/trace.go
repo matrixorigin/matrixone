@@ -26,7 +26,7 @@ import (
 	"sync/atomic"
 )
 
-// Start a span entity
+// Start starts a default span entity
 func Start(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span) {
 	return DefaultTracer().Start(ctx, spanName, opts...)
 }
@@ -40,8 +40,8 @@ func Generate(ctx context.Context) context.Context {
 	return ctx
 }
 
-func IsEnable() bool {
-	return DefaultTracer().IsEnable()
+func IsEnable(opts ...SpanStartOption) bool {
+	return DefaultTracer().IsEnable(opts...)
 }
 
 var gTracerHolder atomic.Value

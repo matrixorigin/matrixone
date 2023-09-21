@@ -3,19 +3,19 @@ Number of tables in mo_task
 2
 show table_number from information_schema;
 Number of tables in information_schema
-15
+16
 show table_number from mysql;
 Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-16
+19
 show table_number from system_metrics;
 Number of tables in system_metrics
 20
 show table_number from system;
 Number of tables in system
-5
+6
 use mo_task;
 show column_number from sys_async_task;
 Number of columns in sys_async_task
@@ -35,7 +35,7 @@ Number of columns in profiling
 18
 show column_number from processlist;
 Number of columns in processlist
-16
+18
 show column_number from schemata;
 Number of columns in schemata
 6
@@ -181,6 +181,9 @@ Number of columns in error_info
 show column_number from span_info;
 Number of columns in span_info
 12
+show column_number from sql_statement_hotspot;
+Number of columns in sql_statement_hotspot
+9
 drop database if exists test_db;
 create database test_db;
 show table_number from test_db;
@@ -340,13 +343,13 @@ drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
 Number of tables in information_schema
-15
+16
 show table_number from mysql;
 Number of tables in mysql
 5
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-15
+18
 show table_number from system_metrics;
 Number of tables in system_metrics
 7
@@ -365,7 +368,7 @@ Number of columns in profiling
 18
 show column_number from processlist;
 Number of columns in processlist
-16
+18
 show column_number from schemata;
 Number of columns in schemata
 6

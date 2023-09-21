@@ -509,7 +509,7 @@ select * from su_04;
 commit;
 
 begin;
-select * from su_04 where c2='kelly' for update;
+select * from su_04 where c2='results' for update;
 -- @session:id=1{
 use select_for_update;
 -- @wait:0:commit
@@ -519,7 +519,7 @@ show create table su_04;
 commit;
 
 begin;
-select * from su_04 where c2='kelly' for update;
+select * from su_04 where c2='results' for update;
 insert into su_04 values(10,'tell',96);
 update su_04 set c2='wed';
 delete from su_04 where c1=2;
@@ -570,7 +570,6 @@ delete from su_05 where c1=1;
 select * from su_05;
 -- @session}
 commit;
-
 begin;
 select * from su_05 where c1 in(1,3,6) and c2 !='io' for update;
 -- @session:id=1{
@@ -769,6 +768,8 @@ truncate table su_07;
 select * from su_07;
 -- @session}
 commit;
+
+insert into su_07 values(7,'results',20),(1,'plo',50),(3,'kelly',60),(4,'yellow',70);
 
 begin;
 select * from su_07 where c3>c1 for update;

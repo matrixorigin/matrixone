@@ -154,7 +154,7 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 }
 
 type aggInfo struct {
-	Op         int
+	Op         int64
 	Dist       bool
 	inputTypes types.Type
 	Agg        agg.Agg[any]

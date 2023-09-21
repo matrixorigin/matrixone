@@ -80,3 +80,9 @@ message FaultPoint {
     int64 Iarg                  = 4;
     string Sarg                 = 5;
 }
+
+message TraceSpan {
+    option (gogoproto.typedecl) = false;
+    string cmd                  = 1;
+    string spans       = 2;
+}

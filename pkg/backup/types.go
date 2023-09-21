@@ -31,6 +31,8 @@ const (
 	moMeta       = "mo_meta"
 	configDir    = "config"
 	taeDir       = "tae"
+	taeList      = "tae_list"
+	taeSum       = "tae_sum"
 	hakeeperDir  = "hakeeper"
 	HakeeperFile = "hk_data"
 )
@@ -134,6 +136,9 @@ func (m *Metas) AppendBuildinfo(info string) {
 }
 
 func (m *Metas) AppendLaunchconfig(subTyp, file string) {
+	if !subTypeIsValid(subTyp) {
+		return
+	}
 	m.Append(&Meta{
 		Typ:              TypeLaunchconfig,
 		SubTyp:           subTyp,
@@ -174,7 +179,21 @@ func (m *Metas) String() string {
 
 var (
 	launchConfigPaths = make(map[string][]string)
+	subTypes          = map[string]int8{
+		CnConfig:     1,
+		DnConfig:     1,
+		LogConfig:    1,
+		ProxyConfig:  1,
+		LaunchConfig: 1,
+	}
 )
+
+func subTypeIsValid(subType string) bool {
+	if _, ok := subTypes[subType]; ok {
+		return ok
+	}
+	return false
+}
 
 const (
 	CnConfig     = "cn"
@@ -203,6 +222,16 @@ type Config struct {
 	Metas *Metas
 }
 
+// metasGeneralFsMustBeSet denotes metas and generalFs must be ready
+func (c *Config) metasGeneralFsMustBeSet() bool {
+	return !(c == nil || c.Metas == nil || c.GeneralDir == nil)
+}
+
+// metasMustBeSet denotes metas must be ready
+func (c *Config) metasMustBeSet() bool {
+	return !(c == nil || c.Metas == nil)
+}
+
 type s3Config struct {
 	endpoint        string
 	accessKeyId     string
@@ -228,4 +257,33 @@ type pathConfig struct {
 	forETL bool
 	s3Config
 	filesystemConfig
+}
+
+type taeFile struct {
+	path     string
+	size     int64
+	checksum []byte
+}
+
+func (tfs *taeFile) String() string {
+	line := tfs.CsvString()
+	return strings.Join(line, ",")
+}
+
+func (tfs *taeFile) CsvString() []string {
+	return []string{tfs.path, fmt.Sprintf("%d", tfs.size), fmt.Sprintf("%x", tfs.checksum)}
+}
+
+func taeFileListToCsv(files []*taeFile) ([][]string, int64) {
+	lines := make([][]string, 0, len(files))
+	ret := int64(0)
+	for _, file := range files {
+		lines = append(lines, file.CsvString())
+		ret += file.size
+	}
+	return lines, ret
+}
+
+func taeBackupTimeAndSizeToCsv(backupTime string, size int64) []string {
+	return []string{backupTime, fmt.Sprintf("%d", size)}
 }

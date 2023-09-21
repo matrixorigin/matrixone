@@ -198,7 +198,7 @@ user_attributes    JSON(0)    null    null
 SELECT attname AS name, mo_show_visible_bin(atttyp,3) AS data_type, replace(mo_table_col_max(att_database,att_relname,attname),'\\0', '') AS `maximum`,  mo_table_col_min(att_database,att_relname,attname) as minimum from mo_catalog.mo_columns where att_database='system_metrics' and att_relname='metric' and attname NOT IN  ('__mo_rowid', '__mo_cpkey_col', '__mo_fake_pk_col') ORDER BY attnum;
 name    data_type    maximum    minimum
 metric_name    VARCHAR(1024)    null    null
-collecttime    DATETIME(0)    null    null
+collecttime    DATETIME(6)    null    null
 value    DOUBLE(0)    null    null
 node    VARCHAR(1024)    null    null
 role    VARCHAR(1024)    null    null
@@ -506,7 +506,7 @@ user_attributes    JSON(0)    YES        null
 DESC `system_metrics`.`metric` ;
 Field    Type    Null    Key    Default    Extra    Comment
 metric_name    VARCHAR(1024)    YES        'sys'        metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...
-collecttime    DATETIME(0)    NO        null        metric data collect time
+collecttime    DATETIME(6)    NO        null        metric data collect time
 value    DOUBLE(0)    YES        '0.0'        metric value
 node    VARCHAR(1024)    YES        'monolithic'        mo node uuid
 role    VARCHAR(1024)    YES        'monolithic'        mo node role, like: CN, DN, LOG
@@ -514,21 +514,21 @@ account    VARCHAR(1024)    YES        'sys'        account name
 type    VARCHAR(1024)    NO        null        sql type, like: insert, select, ...
 DESC `system_metrics`.`server_connections` ;
 Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME(0)    NO        null        
+collecttime    DATETIME(6)    NO        null        
 value    DOUBLE(0)    YES        null        
 node    VARCHAR(1024)    YES        null        
 role    VARCHAR(1024)    YES        null        
 account    VARCHAR(1024)    YES        null        
 DESC `system_metrics`.`server_storage_usage` ;
 Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME(0)    NO        null        
+collecttime    DATETIME(6)    NO        null        
 value    DOUBLE(0)    YES        null        
 node    VARCHAR(1024)    YES        null        
 role    VARCHAR(1024)    YES        null        
 account    VARCHAR(1024)    YES        null        
 DESC `system_metrics`.`sql_statement_errors` ;
 Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME(0)    NO        null        
+collecttime    DATETIME(6)    NO        null        
 value    DOUBLE(0)    YES        null        
 node    VARCHAR(1024)    YES        null        
 role    VARCHAR(1024)    YES        null        
@@ -536,7 +536,7 @@ account    VARCHAR(1024)    YES        null
 type    VARCHAR(1024)    NO        null        
 DESC `system_metrics`.`sql_transaction_total` ;
 Field    Type    Null    Key    Default    Extra    Comment
-collecttime    DATETIME(0)    NO        null        
+collecttime    DATETIME(6)    NO        null        
 value    DOUBLE(0)    YES        null        
 node    VARCHAR(1024)    YES        null        
 role    VARCHAR(1024)    YES        null        
@@ -593,10 +593,10 @@ SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_nam
 name    tables    owner
 system    1    accountadmin
 system_metrics    7    accountadmin
-information_schema    15    accountadmin
+information_schema    16    accountadmin
 mysql    5    accountadmin
 mo_mo    0    accountadmin
-mo_catalog    15    -
+mo_catalog    18    -
 SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id ORDER BY reldatabase, relname;
 datname    relname    relkind    owner
 mo_mo    null    null    -
@@ -611,6 +611,7 @@ information_schema    processlist    v    accountadmin
 information_schema    profiling    r    accountadmin
 information_schema    routines    r    accountadmin
 information_schema    schemata    v    accountadmin
+information_schema    statistics    v    accountadmin
 information_schema    tables    v    accountadmin
 information_schema    triggers    r    accountadmin
 information_schema    user_privileges    r    accountadmin
@@ -619,11 +620,14 @@ mo_catalog    mo_columns    r    -
 mo_catalog    mo_database    r    -
 mo_catalog    mo_increment_columns        accountadmin
 mo_catalog    mo_indexes    r    accountadmin
+mo_catalog    mo_locks    v    accountadmin
 mo_catalog    mo_mysql_compatibility_mode    r    accountadmin
 mo_catalog    mo_pubs    r    accountadmin
 mo_catalog    mo_role    r    accountadmin
 mo_catalog    mo_role_grant    r    accountadmin
 mo_catalog    mo_role_privs    r    accountadmin
+mo_catalog    mo_sessions    v    accountadmin
+mo_catalog    mo_configurations    v    accountadmin
 mo_catalog    mo_stages    r    accountadmin
 mo_catalog    mo_stored_procedure    r    accountadmin
 mo_catalog    mo_table_partitions    r    accountadmin
@@ -652,6 +656,7 @@ schemata    accountadmin
 tables    accountadmin
 partitions    accountadmin
 views    accountadmin
+statistics    accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mo_sample_data_tpch_sf1';
 name    owner
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mysql';

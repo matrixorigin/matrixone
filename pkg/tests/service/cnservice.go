@@ -138,7 +138,7 @@ func newCNService(
 	fileService fileservice.FileService,
 	options cnOptions,
 ) (CNService, error) {
-	srv, err := cnservice.NewService(cfg, ctx, fileService, options...)
+	srv, err := cnservice.NewService(cfg, ctx, fileService, nil, options...)
 	if err != nil {
 		return nil, err
 	}

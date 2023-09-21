@@ -421,9 +421,9 @@ a
 999.99
 -999.99
 insert into t1 values(999.995);
-invalid input: Can't convert string To Decimal64: 999.995(5,2)
+invalid input: 999.995 beyond the range, can't be converted to Decimal64(5,2).
 insert into t1 values(-999.995);
-invalid input: Can't convert string To Decimal64: 999.995(5,2)
+invalid input: 999.995 beyond the range, can't be converted to Decimal64(5,2).
 drop table t1;
 create table t1(a decimal(17,2));
 insert into t1 values(0), (2.1), (2.994), (2.995);
@@ -448,9 +448,9 @@ a
 999999999999999.99
 -999999999999999.99
 insert into t1 values(999999999999999.995);
-invalid input: Can't convert string To Decimal128: 999999999999999.995(17,2)
+invalid input: 999999999999999.995 beyond the range, can't be converted to Decimal128(17,2).
 insert into t1 values(-999999999999999.995);
-invalid input: Can't convert string To Decimal128: 999999999999999.995(17,2)
+invalid input: 999999999999999.995 beyond the range, can't be converted to Decimal128(17,2).
 drop table t1;
 create table t1(a decimal(5,5));
 insert into t1 values(0), (0.9), (0.99), (0.999), (0.9999), (0.99999), (0.999994);
@@ -480,9 +480,9 @@ a
 -0.99999
 -0.99999
 insert into t1 values(0.999995);
-invalid input: Can't convert string To Decimal64: 0.999995(5,5)
+invalid input: 0.999995 beyond the range, can't be converted to Decimal64(5,5).
 insert into t1 values(-0.999995);
-invalid input: Can't convert string To Decimal64: 0.999995(5,5)
+invalid input: 0.999995 beyond the range, can't be converted to Decimal64(5,5).
 drop table t1;
 create table t1(a decimal(17,17));
 insert into t1 values(0), (0.99999999999999999), (0.999999999999999994), (-0.99999999999999999), (-0.999999999999999994);
@@ -494,9 +494,9 @@ a
 -0.99999999999999999
 -0.99999999999999999
 insert into t1 values(0.999999999999999995);
-invalid input: Can't convert string To Decimal128: 0.999999999999999995(17,17)
+invalid input: 0.999999999999999995 beyond the range, can't be converted to Decimal128(17,17).
 insert into t1 values(-0.999999999999999995);
-invalid input: Can't convert string To Decimal128: 0.999999999999999995(17,17)
+invalid input: 0.999999999999999995 beyond the range, can't be converted to Decimal128(17,17).
 drop table if exists t1;
 create table t1 (a decimal(12,2), b decimal(12, 2));
 insert into t1 values (301934.27, 301934.27);
@@ -661,9 +661,9 @@ a * a
 0E-12
 INSERT INTO decimal01 VALUES(NULL);
 INSERT INTO decimal01 VALUES(3271838219.12);
-invalid input: Can't convert string To Decimal64: 3271838219.12(10,6)
+invalid input: 3271838219.12 beyond the range, can't be converted to Decimal64(10,6).
 INSERT INTO decimal01 VALUEs(-278732.48392480932);
-invalid input: Can't convert string To Decimal64: 278732.48392480932(10,6)
+invalid input: 278732.48392480932 beyond the range, can't be converted to Decimal64(10,6).
 DROP TABLE decimal01;
 DROP TABLE IF EXISTS decimal02;
 CREATE TABLE decimal02(a DECIMAL(10,11));
@@ -837,7 +837,7 @@ a    b    c    d
 INSERT INTO decimal10 VALUES(NULL, 21,32,32.0);
 constraint violation: Column 'a' cannot be null
 INSERT INTO decimal10 VALUES(21732843219738283.21,NULL,NULL,0);
-invalid input: Can't convert string To Decimal128: 21732843219738283.21(20,8)
+invalid input: 21732843219738283.21 beyond the range, can't be converted to Decimal128(20,8).
 SELECT a + b + c - d FROM decimal10;
 a + b + c - d
 -537301.385732
@@ -1066,7 +1066,7 @@ a    b
 1234567890981.1112311464210    1.232143214321
 32838293.3387298323000    -37827.382983283022
 SELECT CAST((a * b) AS DECIMAL(20,10)) FROM decimal11;
-invalid input: Can't convert string To Decimal128: 1521164449490.9642986411848(20,10)
+invalid input: 1521164449490.9642986411848 beyond the range, can't be converted to Decimal128(20,10).
 SELECT a * b FROM decimal11;
 a * b
 1521164449490.9642986411848
@@ -1266,7 +1266,7 @@ SELECT CAST(NULL AS decimal(6));
 cast(null as decimal(6))
 null
 SELECT 10.0 + CAST('aaa' AS decimal);
-invalid input: Can't convert string To Decimal128: aaa(38,0)
+invalid input: aaa beyond the range, can't be converted to Decimal128(38,0).
 SELECT CAST('101010101001' AS decimal);
 cast(101010101001 as decimal(38))
 101010101001
@@ -1319,3 +1319,23 @@ INSERT INTO decimal21 VALUES(99999999999999999999999999999999999.83293323);
 SELECT SUM(col1) from decimal21;
 invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
 DROP TABLE decimal21;
+DROP TABLE IF EXISTS decimal22;
+CREATE TABLE decimal22(col1 decimal(38,5),col2 decimal(38,25));
+INSERT INTO decimal22 VALUES('0xffffffffffffffffffffffff ',0.00000000000000000001);
+SELECT col1/(col1*col2) from decimal22;
+col1 / (col1 * col2)
+100000000000000000000.00000000000
+SELECT col1%col2 from decimal22;
+col1 % col2
+0.0000000000000000000000000
+DROP TABLE decimal22;
+DROP TABLE IF EXISTS decimal23;
+CREATE TABLE decimal23(col1 decimal(18,5),col2 decimal(18,15));
+INSERT INTO decimal23 VALUES('0xffffffffff',0.0000000000001);
+SELECT col1%col2 from decimal23;
+col1 % col2 
+0.000000000000000
+SELECT cast(col2 as double) from decimal23;
+cast(col2 as double)
+0.0000000000001
+DROP TABLE decimal23;
