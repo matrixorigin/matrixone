@@ -49,7 +49,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE && mkdir workspace 
 
-      - name: Start the Latest Version of Main of MO
+      - name: Start the Release ${{ env.release }} Version of MO
         run: |
           cd $GITHUB_WORKSPACE/workspace
           mv $GITHUB_WORKSPACE/upstream/etc .
@@ -84,7 +84,7 @@ jobs:
           distribution: 'adopt'
           architecture: x64
 
-      - name: Start BVT Test for MO with the Latest Version of Release ${{ env.release }}
+      - name: Start BVT Test for MO with Release ${{ env.release }}
         id: bvt_on_latest_main_version
         run: |
           export LC_ALL="C.UTF-8"
@@ -215,7 +215,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE && mkdir workspace 
 
-      - name: Start the Latest Version of Main of MO
+      - name: Start the OldRelease ${{ env.oldrelease }} of MO
         run: |
           cd $GITHUB_WORKSPACE/workspace
           mv $GITHUB_WORKSPACE/upstream/etc .
@@ -247,7 +247,7 @@ jobs:
           distribution: 'adopt'
           architecture: x64
 
-      - name: Start BVT Test for MO with the Latest Version of OldRelease ${{ env.oldrelease }}
+      - name: Start BVT Test for MO with OldRelease ${{ env.oldrelease }}
         id: bvt_on_latest_main_version
         run: |
           export LC_ALL="C.UTF-8"
