@@ -84,7 +84,7 @@ jobs:
           distribution: 'adopt'
           architecture: x64
 
-      - name: Start BVT Test for MO with the Latest Version of Main
+      - name: Start BVT Test for MO with the Latest Version of Release ${{ env.release }}
         id: bvt_on_latest_main_version
         run: |
           export LC_ALL="C.UTF-8"
@@ -247,7 +247,7 @@ jobs:
           distribution: 'adopt'
           architecture: x64
 
-      - name: Start BVT Test for MO with the Latest Version of Main
+      - name: Start BVT Test for MO with the Latest Version of OldRelease ${{ env.oldrelease }}
         id: bvt_on_latest_main_version
         run: |
           export LC_ALL="C.UTF-8"
