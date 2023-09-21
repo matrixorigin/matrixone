@@ -239,20 +239,22 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				continue
 			}
 
+		FOR_LOOP:
 			for i := 0; i < receiver.size; i++ {
 				select {
 				case <-s.Proc.Ctx.Done():
 					return nil
 
 				case filter := <-receiver.ch:
-					if filter == nil {
-						exprs = nil
-						s.NodeInfo.Data = s.NodeInfo.Data[:0]
-						break
-					}
 					switch filter.Typ {
-					case pbpipeline.RuntimeFilter_NO_FILTER:
+					case pbpipeline.RuntimeFilter_PASS:
 						continue
+
+					case pbpipeline.RuntimeFilter_DROP:
+						exprs = nil
+						// FIXME: Should give an empty "Data" and then early return
+						s.NodeInfo.Data = s.NodeInfo.Data[:1]
+						break FOR_LOOP
 
 					case pbpipeline.RuntimeFilter_IN:
 						inExpr := &plan.Expr{
