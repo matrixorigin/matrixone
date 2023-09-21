@@ -443,7 +443,7 @@ type service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	addressMgr   address.AddressManager
-	gossipNode   *gossip.Node
-	cacheServer  cacheservice.CacheService
+	addressMgr  address.AddressManager
+	gossipNode  *gossip.Node
+	cacheServer cacheservice.CacheService
 }
