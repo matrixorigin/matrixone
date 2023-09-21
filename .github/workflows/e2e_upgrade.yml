@@ -223,12 +223,12 @@ jobs:
           mv $GITHUB_WORKSPACE/upstream/optools .
           
           # Explicitly declare pessimistic mode
-          echo "==============cn configuration of upstram=============="
-          echo 'mode = "Pessimistic"' >> ./etc/launch-tae-CN-tae-DN/cn.toml
-          cat ./etc/launch-tae-CN-tae-DN/cn.toml
-          echo "==============tn configuration of upstram=============="
-          sed -i 's@\[dn\.Txn\]@\[dn\.txn\]\nmode = "Pessimistic"@g' ./etc/launch-tae-CN-tae-DN/dn.toml
-          cat ./etc/launch-tae-CN-tae-DN/dn.toml
+          # echo "==============cn configuration of upstram=============="
+          # echo 'mode = "Pessimistic"' >> ./etc/launch-tae-CN-tae-DN/cn.toml
+          # cat ./etc/launch-tae-CN-tae-DN/cn.toml
+          # echo "==============tn configuration of upstram=============="
+          # sed -i 's@\[dn\.Txn\]@\[dn\.txn\]\nmode = "Pessimistic"@g' ./etc/launch-tae-CN-tae-DN/dn.toml
+          # cat ./etc/launch-tae-CN-tae-DN/dn.toml
           echo "==============mo service binary information=============="
           ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-CN-tae-DN
