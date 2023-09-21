@@ -16,6 +16,7 @@ package group
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -47,42 +48,42 @@ var (
 
 func init() {
 	tcs = []groupTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int8.ToType(),
 			types.T_int16.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(1)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(0), newExpression(1)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int8.ToType(),
 			types.T_int16.ToType(),
 			types.T_int32.ToType(),
 			types.T_int64.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(0), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(1), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.New(types.T_varchar, 2, 0),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_varchar.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
 	}
 }
 
@@ -124,8 +125,8 @@ func TestGroup(t *testing.T) {
 func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []groupTestCase{
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
