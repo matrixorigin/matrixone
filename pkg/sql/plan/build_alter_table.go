@@ -210,7 +210,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		if len(col.Default.OriginString) > 0 {
 			nullOrNot = "DEFAULT " + formatStr(col.Default.OriginString)
 		} else if col.Default.NullAbility {
-			nullOrNot = "DEFAULT NULL"
+			nullOrNot = ""
 		}
 
 		if col.Typ.AutoIncr {
@@ -611,4 +611,47 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		}
 	}
 	return algorithm
+}
+
+func buildNotNullColumnVal(col *ColDef) string {
+	var defaultValue string
+	if col.Typ.Id == int32(types.T_int8) ||
+		col.Typ.Id == int32(types.T_int16) ||
+		col.Typ.Id == int32(types.T_int32) ||
+		col.Typ.Id == int32(types.T_int64) ||
+		col.Typ.Id == int32(types.T_uint8) ||
+		col.Typ.Id == int32(types.T_uint16) ||
+		col.Typ.Id == int32(types.T_uint32) ||
+		col.Typ.Id == int32(types.T_uint64) ||
+		col.Typ.Id == int32(types.T_float32) ||
+		col.Typ.Id == int32(types.T_float64) ||
+		col.Typ.Id == int32(types.T_decimal64) ||
+		col.Typ.Id == int32(types.T_decimal128) ||
+		col.Typ.Id == int32(types.T_decimal256) ||
+		col.Typ.Id == int32(types.T_bool) {
+		defaultValue = "0"
+	} else if col.Typ.Id == int32(types.T_varchar) ||
+		col.Typ.Id == int32(types.T_char) ||
+		col.Typ.Id == int32(types.T_text) ||
+		col.Typ.Id == int32(types.T_binary) ||
+		col.Typ.Id == int32(types.T_blob) {
+		defaultValue = "''"
+	} else if col.Typ.Id == int32(types.T_date) {
+		defaultValue = "'0001-01-01'"
+	} else if col.Typ.Id == int32(types.T_datetime) {
+		defaultValue = "'0001-01-01 00:00:00'"
+	} else if col.Typ.Id == int32(types.T_time) {
+		defaultValue = "'00:00:00'"
+	} else if col.Typ.Id == int32(types.T_timestamp) {
+		defaultValue = "'0001-01-01 00:00:00'"
+	} else if col.Typ.Id == int32(types.T_json) {
+		//defaultValue = "null"
+		defaultValue = "'{}'"
+	} else if col.Typ.Id == int32(types.T_enum) {
+		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
+		defaultValue = enumvalues[0]
+	} else {
+		defaultValue = "null"
+	}
+	return defaultValue
 }
