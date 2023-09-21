@@ -3516,6 +3516,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 		SqlHelper:     ses.GetSqlHelper(),
+		Buf:           ses.GetBuffer(),
 	}
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
@@ -3614,6 +3615,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 				logStatementStatus(requestCtx, ses, stmt, fail, err)
 				return err
 			}
+		}
+
+		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		proc.UnixTime = time.Now().UnixNano()
+		if ses.proc != nil {
+			ses.proc.UnixTime = proc.UnixTime
 		}
 
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly)
@@ -3725,6 +3732,11 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 	singleStatement := len(stmtExecs) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, exec := range stmtExecs {
+		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		proc.UnixTime = time.Now().UnixNano()
+		if ses.proc != nil {
+			ses.proc.UnixTime = proc.UnixTime
+		}
 		err = Execute(requestCtx, ses, proc, exec, beginInstant, sqlRecord[i], "", singleStatement)
 		if err != nil {
 			return err
