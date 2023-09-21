@@ -38,6 +38,7 @@ mo_tables
 mo_columns
 mo_database
 mo_sessions
+mo_configurations
 mo_locks
 create database t;
 internal error: do not have privilege to execute the statement

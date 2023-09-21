@@ -1,0 +1,101 @@
+goroutine 152 [running]:
+runtime/pprof.writeGoroutineStacks({0x103519618, 0x14000656260})
+	/usr/local/go/src/runtime/pprof/pprof.go:703 +0x6c
+runtime/pprof.writeGoroutine({0x103519618?, 0x14000656260?}, 0xd0?)
+	/usr/local/go/src/runtime/pprof/pprof.go:692 +0x2c
+runtime/pprof.(*Profile).WriteTo(0x102ea6486?, {0x103519618?, 0x14000656260?}, 0x1034f4e60?)
+	/usr/local/go/src/runtime/pprof/pprof.go:329 +0x148
+github.com/matrixorigin/matrixone/pkg/util/profile.ProfileRuntime({0x102ea6486?, 0x9?}, {0x103519618, 0x14000656260}, 0x3d?)
+	/Users/zengyan/Desktop/test/matrixone/pkg/util/profile/profile.go:69 +0x40
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.(*MOSpan).doProfileRuntime(0x14001505680, {0x103527d00, 0x140006334d0}, {0x102ea6486, 0x9}, 0x102290690?)
+	/Users/zengyan/Desktop/test/matrixone/pkg/util/trace/impl/motrace/mo_trace.go:337 +0xf8
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.(*MOSpan).doProfile(0x14001505680)
+	/Users/zengyan/Desktop/test/matrixone/pkg/util/trace/impl/motrace/mo_trace.go:357 +0xcc
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.(*MOSpan).End(0x14001505680, {0x0, 0x0, 0x14000123ef8?})
+	/Users/zengyan/Desktop/test/matrixone/pkg/util/trace/impl/motrace/mo_trace.go:320 +0x32c
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.TestMOSpan_doProfile.func1(0x1400048b520)
+	/Users/zengyan/Desktop/test/matrixone/pkg/util/trace/impl/motrace/mo_trace_test.go:467 +0xe0
+testing.tRunner(0x1400048b520, 0x14000635520)
+	/usr/local/go/src/testing/testing.go:1595 +0xe8
+created by testing.(*T).Run in goroutine 39
+	/usr/local/go/src/testing/testing.go:1648 +0x33c
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x14000623380, {0x102eb3653?, 0x4a4a39abc2f85?}, 0x103511f38)
+	/usr/local/go/src/testing/testing.go:1649 +0x350
+testing.runTests.func1(0x14000623380?)
+	/usr/local/go/src/testing/testing.go:2054 +0x48
+testing.tRunner(0x14000623380, 0x14000bc7c28)
+	/usr/local/go/src/testing/testing.go:1595 +0xe8
+testing.runTests(0x14000142d20?, {0x103ddea80, 0x23, 0x23}, {0x40?, 0x10344c320?, 0x1400042c9a0?})
+	/usr/local/go/src/testing/testing.go:2052 +0x3b4
+testing.(*M).Run(0x14000142d20)
+	/usr/local/go/src/testing/testing.go:1925 +0x538
+main.main()
+	_testmain.go:123 +0x1a8
+
+goroutine 6 [select]:
+github.com/panjf2000/ants/v2.(*Pool).purgeStaleWorkers(0x1400045a000, {0x103527d38, 0x1400004f360})
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:83 +0xb8
+created by github.com/panjf2000/ants/v2.(*Pool).goPurge in goroutine 1
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:148 +0xdc
+
+goroutine 7 [select]:
+github.com/panjf2000/ants/v2.(*Pool).ticktock(0x1400045a000, {0x103527d38, 0x1400004f3b0})
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:126 +0xf8
+created by github.com/panjf2000/ants/v2.(*Pool).goTicktock in goroutine 1
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:155 +0x118
+
+goroutine 11 [select]:
+github.com/panjf2000/ants/v2.(*Pool).purgeStaleWorkers(0x140001426e0, {0x103527d38, 0x1400002b540})
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:83 +0xb8
+created by github.com/panjf2000/ants/v2.(*Pool).goPurge in goroutine 1
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:148 +0xdc
+
+goroutine 12 [select]:
+github.com/panjf2000/ants/v2.(*Pool).ticktock(0x140001426e0, {0x103527d38, 0x1400002b590})
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:126 +0xf8
+created by github.com/panjf2000/ants/v2.(*Pool).goTicktock in goroutine 1
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:155 +0x118
+
+goroutine 13 [select]:
+github.com/panjf2000/ants/v2.(*Pool).purgeStaleWorkers(0x14000142820, {0x103527d38, 0x1400002b630})
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:83 +0xb8
+created by github.com/panjf2000/ants/v2.(*Pool).goPurge in goroutine 1
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:148 +0xdc
+
+goroutine 14 [select]:
+github.com/panjf2000/ants/v2.(*Pool).ticktock(0x14000142820, {0x103527d38, 0x1400002b680})
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:126 +0xf8
+created by github.com/panjf2000/ants/v2.(*Pool).goTicktock in goroutine 1
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:155 +0x118
+
+goroutine 15 [IO wait]:
+internal/poll.runtime_pollWait(0x10b2d38e0, 0x72)
+	/usr/local/go/src/runtime/netpoll.go:343 +0xa0
+internal/poll.(*pollDesc).wait(0x14000fd0200?, 0x10228c6f8?, 0x0)
+	/usr/local/go/src/internal/poll/fd_poll_runtime.go:84 +0x28
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/local/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x14000fd0200)
+	/usr/local/go/src/internal/poll/fd_unix.go:611 +0x250
+net.(*netFD).accept(0x14000fd0200)
+	/usr/local/go/src/net/fd_unix.go:172 +0x28
+net.(*TCPListener).accept(0x1400063d220)
+	/usr/local/go/src/net/tcpsock_posix.go:152 +0x28
+net.(*TCPListener).Accept(0x1400063d220)
+	/usr/local/go/src/net/tcpsock.go:315 +0x2c
+github.com/google/gops/agent.listen({0x103522060, 0x1400063d220})
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/google/gops@v0.3.25/agent/agent.go:130 +0x48
+created by github.com/google/gops/agent.Listen in goroutine 1
+	/Users/zengyan/Desktop/GO/pkg/mod/github.com/google/gops@v0.3.25/agent/agent.go:123 +0x310
+
+goroutine 39 [chan receive]:
+testing.(*T).Run(0x14000582340, {0x102ea6486?, 0x4?}, 0x14000635520)
+	/usr/local/go/src/testing/testing.go:1649 +0x350
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.TestMOSpan_doProfile(0x0?)
+	/Users/zengyan/Desktop/test/matrixone/pkg/util/trace/impl/motrace/mo_trace_test.go:462 +0x484
+testing.tRunner(0x14000582340, 0x103511f38)
+	/usr/local/go/src/testing/testing.go:1595 +0xe8
+created by testing.(*T).Run in goroutine 1
+	/usr/local/go/src/testing/testing.go:1648 +0x33c

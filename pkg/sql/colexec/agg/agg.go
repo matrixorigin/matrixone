@@ -16,33 +16,36 @@ package agg
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
-	eval func([]T2, error, any) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
+func NewUnaryAgg[T1, T2 any](
+	overloadID int64,
+	aggPrivateStructure AggStruct,
+	isCount bool, inputTypes,
+	outputType types.Type,
+	grows func(int),
+	eval func([]T2, any) ([]T2, error),
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
-	batchFill func(any, any, int64, int64, []uint64, *nulls.Nulls) error, partialresults any) Agg[*UnaryAgg[T1, T2]] {
+	partialresult any) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
-		op:             op,
-		priv:           priv,
-		otyp:           otyp,
-		eval:           eval,
-		fill:           fill,
-		merge:          merge,
-		grows:          grows,
-		batchFill:      batchFill,
-		isCount:        isCount,
-		ityps:          []types.Type{ityp},
-		partialresults: partialresults,
-		err:            nil,
+		op:            overloadID,
+		priv:          aggPrivateStructure,
+		outputType:    outputType,
+		eval:          eval,
+		fill:          fill,
+		merge:         merge,
+		grows:         grows,
+		isCount:       isCount,
+		inputTypes:    []types.Type{inputTypes},
+		partialresult: partialresult,
 	}
 }
 
 func (a *UnaryAgg[T1, T2]) Free(pool *mpool.MPool) {
-	if a.otyp.IsVarlen() {
+	if a.outputType.IsVarlen() {
 		return
 	}
 	if cap(a.da) > 0 {
@@ -52,11 +55,11 @@ func (a *UnaryAgg[T1, T2]) Free(pool *mpool.MPool) {
 }
 
 func (a *UnaryAgg[T1, T2]) OutputType() types.Type {
-	return a.otyp
+	return a.outputType
 }
 
 func (a *UnaryAgg[T1, T2]) InputTypes() []types.Type {
-	return a.ityps
+	return a.inputTypes
 }
 
 func (a *UnaryAgg[T1, T2]) Grows(count int, pool *mpool.MPool) error {
@@ -64,7 +67,7 @@ func (a *UnaryAgg[T1, T2]) Grows(count int, pool *mpool.MPool) error {
 
 	finalCount := len(a.es) + count
 	// allocate memory from pool except for string type.
-	if a.otyp.IsVarlen() {
+	if a.outputType.IsVarlen() {
 		// first time.
 		if len(a.es) == 0 {
 			a.vs = make([]T2, count)
@@ -81,7 +84,7 @@ func (a *UnaryAgg[T1, T2]) Grows(count int, pool *mpool.MPool) error {
 		}
 
 	} else {
-		itemSize := a.otyp.TypeSize()
+		itemSize := a.outputType.TypeSize()
 		if len(a.es) == 0 {
 			data, err := pool.Alloc(count * itemSize)
 			if err != nil {
@@ -156,7 +159,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfR
 			}
 
 			for i := uint64(0); i < loopLength; i++ {
-				if groupOfRows[i] == groupNotMatch {
+				if groupOfRows[i] == GroupNotMatch {
 					continue
 				}
 				groupNumber := int64(groupOfRows[i] - 1)
@@ -171,7 +174,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfR
 			nulls := inputVector.GetNulls()
 
 			for i := uint64(0); i < loopLength; i++ {
-				if groupOfRows[i] == groupNotMatch {
+				if groupOfRows[i] == GroupNotMatch {
 					continue
 				}
 				groupNumber := int64(groupOfRows[i] - 1)
@@ -199,7 +202,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfR
 		}
 
 		for i := uint64(0); i < loopLength; i++ {
-			if groupOfRows[i] == groupNotMatch {
+			if groupOfRows[i] == GroupNotMatch {
 				continue
 			}
 			groupNumber := int64(groupOfRows[i] - 1)
@@ -213,7 +216,7 @@ func (a *UnaryAgg[T1, T2]) BatchFill(offset int64, groupStatus []uint8, groupOfR
 		nulls := inputVector.GetNulls()
 
 		for i := uint64(0); i < loopLength; i++ {
-			if groupOfRows[i] == groupNotMatch {
+			if groupOfRows[i] == GroupNotMatch {
 				continue
 			}
 			groupNumber := int64(groupOfRows[i] - 1)
@@ -298,7 +301,7 @@ func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], groupIdx1, groupIdx2 int64) (err er
 func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) (err error) {
 	a2 := b.(*UnaryAgg[T1, T2])
 	for i := range groupStatus {
-		if groupIdxes[i] == groupNotMatch {
+		if groupIdxes[i] == GroupNotMatch {
 			continue
 		}
 		groupIdx1 := int64(groupIdxes[i] - 1)
@@ -313,19 +316,18 @@ func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus []ui
 }
 
 func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err error) {
-	a.vs, err = a.eval(a.vs, nil, a.partialresults)
+	a.vs, err = a.eval(a.vs, a.partialresult)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: it's a bad hack here. I will remove it later. and change it to a better way like `a.IsOrderedWindow()`
 	nullList := a.es
-	if GetFunctionIsWinOrderFunBySpecialId(a.op) {
+	if IsWinOrderFun(a.op) {
 		nullList = nil
 	}
 
-	vec = vector.NewVec(a.otyp)
-	if a.otyp.IsVarlen() {
+	vec = vector.NewVec(a.outputType)
+	if a.outputType.IsVarlen() {
 		vs := (any)(a.vs).([][]byte)
 		if err = vector.AppendBytesList(vec, vs, nullList, pool); err != nil {
 			vec.Free(pool)
@@ -351,7 +353,7 @@ func (a *UnaryAgg[T1, T2]) WildAggReAlloc(m *mpool.MPool) error {
 	}
 	copy(d, a.da)
 	a.da = d
-	setAggValues[T1, T2](a, a.otyp)
+	setAggValues[T1, T2](a, a.outputType)
 	return nil
 }
 
@@ -359,12 +361,8 @@ func (a *UnaryAgg[T1, T2]) IsDistinct() bool {
 	return false
 }
 
-func (a *UnaryAgg[T1, T2]) GetOperatorId() int {
+func (a *UnaryAgg[T1, T2]) GetOperatorId() int64 {
 	return a.op
-}
-
-func (a *UnaryAgg[T1, T2]) GetInputTypes() []types.Type {
-	return a.ityps
 }
 
 func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
@@ -377,12 +375,12 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		Op:         a.op,
 		Private:    pData,
 		Es:         a.es,
-		InputTypes: types.EncodeSlice(a.ityps),
-		OutputType: types.EncodeType(&a.otyp),
+		InputTypes: types.EncodeSlice(a.inputTypes),
+		OutputType: types.EncodeType(&a.outputType),
 		IsCount:    a.isCount,
 	}
 	switch {
-	case a.otyp.Oid.IsMySQLString():
+	case a.outputType.Oid.IsMySQLString():
 		source.Da = types.EncodeStringSlice(getUnaryAggStrVs(a))
 	default:
 		source.Da = a.da
@@ -410,15 +408,15 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	}
 
 	// Recover data
-	a.ityps = types.DecodeSlice[types.Type](decoded.InputTypes)
-	a.otyp = types.DecodeType(decoded.OutputType)
+	a.inputTypes = types.DecodeSlice[types.Type](decoded.InputTypes)
+	a.outputType = types.DecodeType(decoded.OutputType)
 	a.isCount = decoded.IsCount
 	a.es = decoded.Es
 	data = make([]byte, len(decoded.Da))
 	copy(data, decoded.Da)
 	a.da = data
 
-	setAggValues[T1, T2](a, a.otyp)
+	setAggValues[T1, T2](a, a.outputType)
 
 	return a.priv.UnmarshalBinary(decoded.Private)
 }

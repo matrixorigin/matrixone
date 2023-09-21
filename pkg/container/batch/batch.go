@@ -57,8 +57,7 @@ func SetLength(bat *Batch, n int) {
 
 func (info *aggInfo) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
-	i32 := int32(info.Op)
-	buf.Write(types.EncodeInt32(&i32))
+	buf.Write(types.EncodeInt64(&info.Op))
 	buf.Write(types.EncodeBool(&info.Dist))
 	buf.Write(types.EncodeType(&info.inputTypes))
 	data, err := types.Encode(info.Agg)
@@ -70,13 +69,13 @@ func (info *aggInfo) MarshalBinary() ([]byte, error) {
 }
 
 func (info *aggInfo) UnmarshalBinary(data []byte) error {
-	info.Op = int(types.DecodeInt32(data[:4]))
-	data = data[4:]
+	info.Op = types.DecodeInt64(data[:8])
+	data = data[8:]
 	info.Dist = types.DecodeBool(data[:1])
 	data = data[1:]
 	info.inputTypes = types.DecodeType(data[:types.TSize])
 	data = data[types.TSize:]
-	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes, nil)
+	aggregate, err := agg.NewAgg(info.Op, info.Dist, []types.Type{info.inputTypes})
 	if err != nil {
 		return err
 	}
@@ -88,7 +87,7 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	aggInfos := make([]aggInfo, len(bat.Aggs))
 	for i := range aggInfos {
 		aggInfos[i].Op = bat.Aggs[i].GetOperatorId()
-		aggInfos[i].inputTypes = bat.Aggs[i].GetInputTypes()[0]
+		aggInfos[i].inputTypes = bat.Aggs[i].InputTypes()[0]
 		aggInfos[i].Dist = bat.Aggs[i].IsDistinct()
 		aggInfos[i].Agg = bat.Aggs[i]
 	}

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -103,6 +104,7 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
@@ -114,7 +116,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, cli, aicm)
+		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(&receiver)
@@ -1498,7 +1500,7 @@ func convertToPipelineAggregates(ags []agg.Aggregate) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     int32(a.Op),
+			Op:     a.Op,
 			Dist:   a.Dist,
 			Expr:   a.E,
 			Config: a.Config,
@@ -1512,7 +1514,7 @@ func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
 	result := make([]agg.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = agg.Aggregate{
-			Op:     int(a.Op),
+			Op:     a.Op,
 			Dist:   a.Dist,
 			E:      a.Expr,
 			Config: a.Config,

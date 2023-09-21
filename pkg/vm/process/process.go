@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +44,7 @@ func New(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	aicm *defines.AutoIncrCacheManager) *Process {
 	return &Process{
 		mp:           m,
@@ -60,6 +62,7 @@ func New(
 		},
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
 		QueryService:   queryService,
+		Hakeeper:       hakeeper,
 	}
 }
 
@@ -87,6 +90,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.FileService = p.FileService
 	proc.IncrService = p.IncrService
 	proc.QueryService = p.QueryService
+	proc.Hakeeper = p.Hakeeper
 	proc.UnixTime = p.UnixTime
 	proc.LastInsertID = p.LastInsertID
 	proc.LockService = p.LockService
