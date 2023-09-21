@@ -161,7 +161,7 @@ func (p *KeyHashPartitionPruner) detachDNFCondAndBuildPrune(orExpr *plan.Expr) *
 		}
 	} else {
 		hitPartitions := make(map[int32]bool)
-		for i, _ := range dnfItems {
+		for i := range dnfItems {
 			if isLogicExpr(dnfItems[i], "and") {
 				exprs := SplitCNFItems(dnfItems[i])
 				tmp := p.detachCNFCondAndBuildPrune(exprs)
@@ -372,7 +372,7 @@ func extractColEqValFromEqualExpr(expr *plan.Expr, colEqValMap map[string]*plan.
 // extract column equivalent pairs from some expressions
 func extractColEqValFromExprs(cnfExprs []*Expr, partKeysMap map[string]int) (bool, map[string]*plan.Expr) {
 	colEqValMap := make(map[string]*plan.Expr)
-	for i, _ := range cnfExprs {
+	for i := range cnfExprs {
 		switch exprImpl := cnfExprs[i].Expr.(type) {
 		case *plan.Expr_F:
 			if exprImpl.F.Func.ObjName == "=" {
