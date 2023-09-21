@@ -61,10 +61,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	ap := arg
 	ctr := ap.ctr
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	for {

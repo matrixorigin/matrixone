@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +56,11 @@ func init() {
 			arg: &Argument{
 				Data: nil,
 				Func: sqlOutput,
+				info: &vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 	}
@@ -79,16 +85,16 @@ func TestOutput(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())

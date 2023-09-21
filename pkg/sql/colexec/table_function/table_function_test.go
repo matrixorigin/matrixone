@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -29,26 +30,36 @@ func TestString(t *testing.T) {
 }
 
 func TestCall(t *testing.T) {
-	arg := Argument{Name: "unnest"}
-	end, err := arg.Call(0, testutil.NewProc(), false, false)
+	arg := Argument{Name: "unnest",
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		}}
+	end, err := arg.Call(testutil.NewProc())
 	require.NoError(t, err)
 	require.True(t, end == process.ExecStop)
 	arg.Name = "generate_series"
-	end, err = arg.Call(0, testutil.NewProc(), false, false)
+	end, err = arg.Call(testutil.NewProc())
 	require.NoError(t, err)
 	require.True(t, end == process.ExecStop)
 	arg.Name = "metadata_scan"
-	end, err = arg.Call(0, testutil.NewProc(), false, false)
+	end, err = arg.Call(testutil.NewProc())
 	require.NoError(t, err)
 	require.True(t, end == process.ExecStop)
 	arg.Name = "not_exist"
-	end, err = arg.Call(0, testutil.NewProc(), false, false)
+	end, err = arg.Call(testutil.NewProc())
 	require.Error(t, err)
 	require.True(t, end == process.ExecStop)
 }
 
 func TestPrepare(t *testing.T) {
-	arg := Argument{Name: "unnest"}
+	arg := Argument{Name: "unnest",
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		}}
 	err := arg.Prepare(testutil.NewProc())
 	require.Error(t, err)
 	arg.Name = "generate_series"

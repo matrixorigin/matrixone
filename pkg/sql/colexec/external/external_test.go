@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -72,6 +73,11 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 					Fileparam: &ExFileparam{},
 					Filter:    &FilterParam{},
 				},
+			},
+			info: &vm.OperatorInfo{
+				Idx:     1,
+				IsFirst: false,
+				IsLast:  false,
 			},
 		},
 		cancel:   cancel,
@@ -189,17 +195,17 @@ func Test_Call(t *testing.T) {
 				},
 			}
 			param.FileSize = []int64{1}
-			end, err := tcs.arg.Call(1, tcs.proc, false, false)
+			end, err := tcs.arg.Call(tcs.proc)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end == process.ExecStop, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
-			end, err = tcs.arg.Call(1, tcs.proc, false, false)
+			end, err = tcs.arg.Call(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end == process.ExecStop, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
-			end, err = tcs.arg.Call(1, tcs.proc, false, false)
+			end, err = tcs.arg.Call(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(end == process.ExecStop, convey.ShouldBeTrue)
 		}

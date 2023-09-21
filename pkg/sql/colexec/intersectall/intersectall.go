@@ -53,15 +53,15 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // use values from left relation to probe and update the array.
 // throw away values that do not exist in the hash table.
 // preserve values that exist in the hash table (the minimum of the number of times that exist in either).
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	var err error
-	analyzer := proc.GetAnalyze(idx)
+	analyzer := proc.GetAnalyze(arg.info.Idx)
 	analyzer.Start()
 	defer analyzer.Stop()
 	for {
 		switch arg.ctr.state {
 		case Build:
-			if err = arg.ctr.build(proc, analyzer, isFirst); err != nil {
+			if err = arg.ctr.build(proc, analyzer, arg.info.IsFirst); err != nil {
 				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -71,7 +71,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 
 		case Probe:
 			last := false
-			last, err = arg.ctr.probe(proc, analyzer, isFirst, isLast)
+			last, err = arg.ctr.probe(proc, analyzer, arg.info.IsFirst, arg.info.IsLast)
 			if err != nil {
 				return process.ExecNext, err
 			}

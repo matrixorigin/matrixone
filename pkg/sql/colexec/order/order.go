@@ -37,6 +37,17 @@ type Argument struct {
 	ctr *container
 
 	OrderBySpec []*plan.OrderBySpec
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 type container struct {
@@ -250,7 +261,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	ctr := arg.ctr
 
 	bat := proc.InputBatch()

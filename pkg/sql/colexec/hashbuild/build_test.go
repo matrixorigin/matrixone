@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -75,7 +76,7 @@ func TestBuild(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		for {
-			ok, err := tc.arg.Call(0, tc.proc, false, false)
+			ok, err := tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			require.Equal(t, false, ok == process.ExecStop)
 			mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)
@@ -107,7 +108,7 @@ func BenchmarkBuild(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			for {
-				ok, err := tc.arg.Call(0, tc.proc, false, false)
+				ok, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
 				mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)
@@ -152,6 +153,11 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 			Typs:        ts,
 			Conditions:  cs,
 			NeedHashMap: true,
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 }

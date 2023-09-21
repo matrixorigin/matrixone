@@ -72,6 +72,17 @@ type Argument struct {
 	Result     []colexec.ResultPos
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

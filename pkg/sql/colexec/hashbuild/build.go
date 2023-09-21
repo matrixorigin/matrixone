@@ -85,8 +85,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, _ bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -94,7 +94,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, _ bool) 
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
+			if err := ctr.build(ap, proc, anal, arg.info.IsFirst); err != nil {
 				ctr.cleanHashMap()
 				return process.ExecNext, err
 			}

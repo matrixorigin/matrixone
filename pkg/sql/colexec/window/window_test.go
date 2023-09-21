@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -102,22 +103,22 @@ func TestWindow(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = nil
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 	}
 }
@@ -140,6 +141,11 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 			WinSpecList: exprs,
 			Types:       ts,
 			Aggs:        aggs,
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 }

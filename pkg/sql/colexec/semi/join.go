@@ -49,8 +49,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return err
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -86,7 +86,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 				proc.PutBatch(bat)
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast); err != nil {
 				bat.Clean(proc.Mp())
 				return process.ExecNext, err
 			}

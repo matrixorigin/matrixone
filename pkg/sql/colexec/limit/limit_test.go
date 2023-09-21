@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -72,6 +73,11 @@ func init() {
 			arg: &Argument{
 				Seen:  0,
 				Limit: 12,
+				info: &vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 	}
@@ -96,19 +102,19 @@ func TestLimit(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = tc.arg.Call(0, tc.proc, false, false)
+		_, _ = tc.arg.Call(tc.proc)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = tc.arg.Call(0, tc.proc, false, false)
+		_, _ = tc.arg.Call(tc.proc)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, _ = tc.arg.Call(0, tc.proc, false, false)
+		_, _ = tc.arg.Call(tc.proc)
 		tc.proc.Reg.InputBatch = nil
-		_, _ = tc.arg.Call(0, tc.proc, false, false)
+		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.Free(tc.proc, false)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -135,14 +141,14 @@ func BenchmarkLimit(b *testing.B) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			_, _ = tc.arg.Call(0, tc.proc, false, false)
+			_, _ = tc.arg.Call(tc.proc)
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			}
 			tc.proc.Reg.InputBatch = batch.EmptyBatch
-			_, _ = tc.arg.Call(0, tc.proc, false, false)
+			_, _ = tc.arg.Call(tc.proc)
 			tc.proc.Reg.InputBatch = nil
-			_, _ = tc.arg.Call(0, tc.proc, false, false)
+			_, _ = tc.arg.Call(tc.proc)
 		}
 	}
 }

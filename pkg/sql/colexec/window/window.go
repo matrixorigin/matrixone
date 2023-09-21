@@ -57,11 +57,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	var err error
 	ap := arg
 	ctr := ap.ctr
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 
@@ -74,7 +74,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst, isLast bool) 
 		if end {
 			break
 		}
-		anal.Input(bat, isFirst)
+		anal.Input(bat, arg.info.IsFirst)
 
 		if ctr.bat == nil {
 			ctr.bat = bat
@@ -136,7 +136,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst, isLast bool) 
 		ctr.cleanOrderVectors(proc.Mp())
 	}
 
-	anal.Output(ctr.bat, isLast)
+	anal.Output(ctr.bat, arg.info.IsLast)
 
 	proc.SetInputBatch(ctr.bat)
 	return process.ExecStop, nil

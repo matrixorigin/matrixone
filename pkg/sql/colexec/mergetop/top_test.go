@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -82,7 +83,7 @@ func TestTop(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
 					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 				}
@@ -119,7 +120,7 @@ func BenchmarkTop(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
+				if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
 						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 					}
@@ -157,6 +158,11 @@ func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec
 		arg: &Argument{
 			Fs:    fs,
 			Limit: limit,
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 		cancel: cancel,
 	}

@@ -45,11 +45,11 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // it built a hash table for right relation first.
 // use values from left relation to probe and update the hash table.
 // and preserve values that do not exist in the hash table.
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	var err error
 
 	// prepare the analysis work.
-	analyze := proc.GetAnalyze(idx)
+	analyze := proc.GetAnalyze(arg.info.Idx)
 	analyze.Start()
 	defer analyze.Stop()
 
@@ -57,7 +57,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		switch arg.ctr.state {
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
-			if err = arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
+			if err = arg.ctr.buildHashTable(proc, analyze, 1, arg.info.IsFirst); err != nil {
 				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -71,7 +71,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 			// only one batch is processed during each loop, and the batch will be sent to
 			// next operator immediately after successful processing.
 			last := false
-			last, err = arg.ctr.probeHashTable(proc, analyze, 0, isFirst, isLast)
+			last, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast)
 			if err != nil {
 				return process.ExecNext, err
 			}

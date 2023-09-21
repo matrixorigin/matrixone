@@ -33,8 +33,8 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -56,8 +56,8 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		break
 	}
 
-	anal.Input(bat, isFirst)
-	anal.Output(bat, isLast)
+	anal.Input(bat, arg.info.IsFirst)
+	anal.Output(bat, arg.info.IsLast)
 	proc.SetInputBatch(bat)
 	return process.ExecNext, nil
 }

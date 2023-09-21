@@ -35,8 +35,8 @@ func (arg *Argument) Prepare(_ *proc) error {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *proc, _, _ bool) (process.ExecStatus, error) {
-	analy := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *proc) (process.ExecStatus, error) {
+	analy := proc.GetAnalyze(arg.info.Idx)
 	analy.Start()
 	defer analy.Stop()
 

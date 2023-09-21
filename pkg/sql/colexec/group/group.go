@@ -143,18 +143,18 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	ap := arg
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 
 	// if operator has no group by clause.
 	if len(ap.Exprs) == 0 {
 		// if operator has no group by clause.
-		return ap.ctr.processWithoutGroup(ap, proc, anal, isFirst, isLast)
+		return ap.ctr.processWithoutGroup(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
 	}
-	return ap.ctr.processWithGroup(ap, proc, anal, isFirst, isLast)
+	return ap.ctr.processWithGroup(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
 }
 
 func (ctr *container) generateAggStructures(ap *Argument) error {

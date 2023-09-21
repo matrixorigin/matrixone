@@ -61,8 +61,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -74,7 +74,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		return process.ExecStop, nil
 	}
 
-	if end, err := ctr.build(ap, proc, anal, isFirst); err != nil {
+	if end, err := ctr.build(ap, proc, anal, arg.info.IsFirst); err != nil {
 		ap.Free(proc, true)
 		return process.ExecNext, err
 	} else if end {
@@ -86,7 +86,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
-	err := ctr.eval(ap.Limit, proc, anal, isLast)
+	err := ctr.eval(ap.Limit, proc, anal, arg.info.IsLast)
 	ap.Free(proc, err != nil)
 	if err == nil {
 		return process.ExecStop, nil

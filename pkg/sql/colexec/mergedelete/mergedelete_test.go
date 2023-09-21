@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -142,11 +143,16 @@ func TestMergeDelete(t *testing.T) {
 	argument1 := Argument{
 		DelSource:    &mockRelation{},
 		AffectedRows: 0,
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
 
 	argument1.Prepare(proc)
 	proc.Reg.InputBatch = batch1
-	_, err = argument1.Call(0, proc, false, false)
+	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.AffectedRows)
 
@@ -166,7 +172,7 @@ func TestMergeDelete(t *testing.T) {
 	}
 
 	proc.Reg.InputBatch = batch2
-	_, err = argument1.Call(0, proc, false, false)
+	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(60), argument1.AffectedRows)
 

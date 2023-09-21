@@ -41,16 +41,16 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 
-	analyze := proc.GetAnalyze(idx)
+	analyze := proc.GetAnalyze(arg.info.Idx)
 	analyze.Start()
 	defer analyze.Stop()
 
 	for {
 		switch arg.ctr.state {
 		case build:
-			if err := arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
+			if err := arg.ctr.buildHashTable(proc, analyze, 1, arg.info.IsFirst); err != nil {
 				return process.ExecNext, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -61,7 +61,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		case probe:
 			var err error
 			isLast := false
-			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, isFirst, isLast); err != nil {
+			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast); err != nil {
 				return process.ExecStop, err
 			}
 			if isLast {

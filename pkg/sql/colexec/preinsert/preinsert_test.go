@@ -27,6 +27,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -82,10 +83,15 @@ func TestPreInsertNormal(t *testing.T) {
 		Attrs:      []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		IsUpdate:   false,
 		HasAutoCol: false,
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
 	checkResultBat, _ := batch1.Dup(proc.Mp())
 	proc.SetInputBatch(batch1)
-	_, err := argument1.Call(0, proc, false, false)
+	_, err := argument1.Call(proc)
 	require.NoError(t, err)
 	{
 		result := proc.InputBatch()
@@ -144,8 +150,13 @@ func TestPreInsertNullCheck(t *testing.T) {
 				PkeyColName: "int64_column_primary",
 			},
 		},
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
 	proc.Reg.InputBatch = batch2
-	_, err2 := argument2.Call(0, proc, false, false)
+	_, err2 := argument2.Call(proc)
 	require.Error(t, err2, "should return error when insert null into primary key column")
 }

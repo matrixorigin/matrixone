@@ -55,8 +55,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return err
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	analyze := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	analyze := proc.GetAnalyze(arg.info.Idx)
 	analyze.Start()
 	defer analyze.Stop()
 	ap := arg
@@ -93,14 +93,14 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 				continue
 			}
 
-			if err := ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
+			if err := ctr.probe(bat, ap, proc, analyze, arg.info.IsFirst, arg.info.IsLast); err != nil {
 				return process.ExecNext, err
 			}
 
 			continue
 
 		case SendLast:
-			setNil, err := ctr.sendLast(ap, proc, analyze, isFirst, isLast)
+			setNil, err := ctr.sendLast(ap, proc, analyze, arg.info.IsFirst, arg.info.IsLast)
 			if err != nil {
 				return process.ExecNext, err
 			}

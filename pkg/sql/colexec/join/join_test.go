@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -100,7 +101,7 @@ func TestJoin(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
 				break
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -224,7 +225,7 @@ func BenchmarkJoin(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
+				if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
 					break
 				}
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -306,6 +307,11 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 			Result:     rp,
 			Conditions: cs,
 			Cond:       cond,
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 		barg: &hashbuild.Argument{
 			Typs:            ts,
@@ -327,7 +333,7 @@ func hashBuildWithBatch(t *testing.T, tc joinTestCase, bat *batch.Batch) *batch.
 	for _, r := range tc.proc.Reg.MergeReceivers {
 		r.Ch <- nil
 	}
-	ok, err := tc.barg.Call(0, tc.proc, false, false)
+	ok, err := tc.barg.Call(tc.proc)
 	require.NoError(t, err)
 	require.Equal(t, false, ok == process.ExecStop)
 	return tc.proc.Reg.InputBatch

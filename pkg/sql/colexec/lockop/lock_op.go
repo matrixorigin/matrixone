@@ -77,11 +77,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // concurrently modified by other transactions, a Timestamp column will be put on the output
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
-func (arg *Argument) Call(
-	idx int,
-	proc *process.Process,
-	isFirst bool,
-	isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
@@ -89,13 +85,13 @@ func (arg *Argument) Call(
 	}
 
 	if !arg.block {
-		ok, err := callNonBlocking(idx, proc, arg)
+		ok, err := callNonBlocking(arg.info.Idx, proc, arg)
 		if ok {
 			return process.ExecStop, err
 		}
 		return process.ExecNext, err
 	}
-	ok, err := callBlocking(idx, proc, arg, isFirst, isLast)
+	ok, err := callBlocking(arg.info.Idx, proc, arg, arg.info.IsFirst, arg.info.IsLast)
 	if ok {
 		return process.ExecStop, err
 	}
@@ -131,7 +127,7 @@ func callBlocking(
 	isFirst bool,
 	isLast bool) (bool, error) {
 
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 

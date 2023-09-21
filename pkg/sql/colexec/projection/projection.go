@@ -42,8 +42,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return err
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 
@@ -62,7 +62,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		return process.ExecNext, nil
 	}
 
-	anal.Input(bat, isFirst)
+	anal.Input(bat, arg.info.IsFirst)
 	ap := arg
 	rbat := batch.NewWithSize(len(ap.Es))
 
@@ -85,7 +85,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 	rbat.SetRowCount(bat.RowCount())
 
 	proc.PutBatch(bat)
-	anal.Output(rbat, isLast)
+	anal.Output(rbat, arg.info.IsLast)
 	proc.SetInputBatch(rbat)
 	return process.ExecNext, nil
 }

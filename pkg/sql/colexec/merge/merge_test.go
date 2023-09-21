@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -74,7 +75,7 @@ func TestMerge(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(0, tc.proc, false, false); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
 					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 				}
@@ -108,7 +109,7 @@ func newTestCase() mergeTestCase {
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 3),
 	}
-	return mergeTestCase{
+	cases := mergeTestCase{
 		proc: proc,
 		types: []types.Type{
 			types.T_int8.ToType(),
@@ -116,6 +117,13 @@ func newTestCase() mergeTestCase {
 		arg:    new(Argument),
 		cancel: cancel,
 	}
+	cases.arg.info =
+		&vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		}
+	return cases
 }
 
 // create a new block based on the type information

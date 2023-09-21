@@ -55,8 +55,8 @@ func (ap *Argument) Prepare(proc *process.Process) error {
 
 // first parameter: true represents whether the current pipeline has ended
 // first parameter: false
-func (ap *Argument) Call(idx int, proc *process.Process, _ bool, _ bool) (process.ExecStatus, error) {
-	defer analyze(proc, idx)()
+func (ap *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	defer analyze(proc, ap.info.Idx)()
 	if ap.ctr.state == End {
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil

@@ -29,7 +29,7 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(_ int, proc *process.Process, _ bool, _ bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	ap := arg
 	reg := ap.Reg
 	bat := proc.InputBatch()

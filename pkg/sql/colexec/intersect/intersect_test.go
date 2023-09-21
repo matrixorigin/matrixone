@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -78,7 +79,7 @@ func TestIntersect(t *testing.T) {
 	cnt := 0
 	var end process.ExecStatus
 	for {
-		end, err = c.arg.Call(0, c.proc, false, false)
+		end, err = c.arg.Call(c.proc)
 		if end == process.ExecStop {
 			break
 		}
@@ -123,6 +124,11 @@ func newIntersectTestCase(proc *process.Process, leftBatches, rightBatches []*ba
 		}
 	}
 	arg := new(Argument)
+	arg.info = &vm.OperatorInfo{
+		Idx:     0,
+		IsFirst: false,
+		IsLast:  false,
+	}
 	return intersectTestCase{
 		proc:   proc,
 		arg:    arg,

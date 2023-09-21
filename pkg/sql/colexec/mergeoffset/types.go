@@ -32,7 +32,17 @@ type Argument struct {
 	// Offset records the offset number of mergeOffset operator
 	Offset uint64
 	// ctr contains the attributes needn't do serialization work
-	ctr *container
+	ctr      *container
+	info     *vm.OperatorInfo
+	children []vm.Operator
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

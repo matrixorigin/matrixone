@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -98,22 +99,22 @@ func TestGroup(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = nil
-		_, err = tc.arg.Call(0, tc.proc, false, false)
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false)
 		tc.proc.FreeVectors()
@@ -132,16 +133,16 @@ func BenchmarkGroup(b *testing.B) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
-			_, err = tc.arg.Call(0, tc.proc, false, false)
+			_, err = tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
-			_, err = tc.arg.Call(0, tc.proc, false, false)
+			_, err = tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = batch.EmptyBatch
-			_, err = tc.arg.Call(0, tc.proc, false, false)
+			_, err = tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = nil
-			_, err = tc.arg.Call(0, tc.proc, false, false)
+			_, err = tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -168,6 +169,11 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 			Exprs: exprs,
 			Types: ts,
 			Aggs:  aggs,
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 }

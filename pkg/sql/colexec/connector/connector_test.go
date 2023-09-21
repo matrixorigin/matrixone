@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -76,11 +77,11 @@ func TestConnector(t *testing.T) {
 				}
 			}
 		}*/
-		_, _ = tc.arg.Call(0, tc.proc, false, false)
+		_, _ = tc.arg.Call(tc.proc)
 		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, _ = tc.arg.Call(0, tc.proc, false, false)
+		_, _ = tc.arg.Call(tc.proc)
 		tc.proc.Reg.InputBatch = nil
-		_, _ = tc.arg.Call(0, tc.proc, false, false)
+		_, _ = tc.arg.Call(tc.proc)
 		for len(tc.arg.Reg.Ch) > 0 {
 			bat := <-tc.arg.Reg.Ch
 			if bat == nil {
@@ -108,6 +109,11 @@ func newTestCase() connectorTestCase {
 			Reg: &process.WaitRegister{
 				Ctx: ctx,
 				Ch:  make(chan *batch.Batch, 3),
+			},
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
 			},
 		},
 		cancel: cancel,

@@ -42,7 +42,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return err
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (status process.ExecStatus, err error) {
+func (arg *Argument) Call(proc *process.Process) (status process.ExecStatus, err error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return process.ExecStop, nil
@@ -58,10 +58,10 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 	}
 
 	ap := arg
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat, isFirst)
+	anal.Input(bat, arg.info.IsFirst)
 
 	var sels []int64
 	for i := range ap.ctr.executors {
@@ -134,7 +134,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(nil)
 	} else {
-		anal.Output(bat, isLast)
+		anal.Output(bat, arg.info.IsLast)
 		proc.SetInputBatch(bat)
 	}
 	return process.ExecNext, nil

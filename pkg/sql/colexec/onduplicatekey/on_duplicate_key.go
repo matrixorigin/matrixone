@@ -34,15 +34,15 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("processing on duplicate key before insert")
 }
 
-func (arg *Argument) Prepare(p *proc) error {
+func (arg *Argument) Prepare(p *process.Process) error {
 	ap := arg
 	ap.ctr = &container{}
 	ap.ctr.InitReceiver(p, true)
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *proc, isFirst, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 
@@ -60,7 +60,7 @@ func (arg *Argument) Call(idx int, proc *proc, isFirst, isLast bool) (process.Ex
 				if end {
 					break
 				}
-				anal.Input(bat, isFirst)
+				anal.Input(bat, arg.info.IsFirst)
 				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
 				if err != nil {
 					bat.Clean(proc.Mp())
@@ -72,7 +72,7 @@ func (arg *Argument) Call(idx int, proc *proc, isFirst, isLast bool) (process.Ex
 
 		case Eval:
 			if ctr.insertBat != nil {
-				anal.Output(ctr.insertBat, isLast)
+				anal.Output(ctr.insertBat, arg.info.IsLast)
 				proc.SetInputBatch(ctr.insertBat)
 				ctr.insertBat = nil
 				ctr.state = End

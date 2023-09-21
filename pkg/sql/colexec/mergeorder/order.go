@@ -17,7 +17,6 @@ package mergeorder
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,68 +24,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-const maxBatchSizeToSend = 64 * mpool.MB
-
-var _ vm.Operator = new(Argument)
-
-const (
-	receiving = iota
-	normalSending
-	pickUpSending
-)
-
-type Argument struct {
-	ctr *container
-
-	OrderBySpecs []*plan.OrderBySpec
-}
-
-type container struct {
-	colexec.ReceiverOperator
-
-	// operator status
-	status int
-
-	// batchList is the data structure to store the all the received batches
-	batchList []*batch.Batch
-	orderCols [][]*vector.Vector
-	// indexList[i] = k means the number of rows before k in batchList[i] has been merged and send.
-	indexList []int64
-
-	// expression executors for order columns.
-	executors []colexec.ExpressionExecutor
-	compares  []compare.Compare
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		mp := proc.Mp()
-		ctr := arg.ctr
-		for i := range ctr.batchList {
-			if ctr.batchList[i] != nil {
-				ctr.batchList[i].Clean(mp)
-			}
-		}
-		for i := range ctr.orderCols {
-			if ctr.orderCols[i] != nil {
-				for j := range ctr.orderCols[i] {
-					if ctr.orderCols[i][j] != nil {
-						ctr.orderCols[i][j].Free(mp)
-					}
-				}
-			}
-		}
-		for i := range ctr.executors {
-			if ctr.executors[i] != nil {
-				ctr.executors[i].Free()
-			}
-		}
-	}
-}
 
 func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
 	ctr.batchList = append(ctr.batchList, bat)
@@ -251,11 +190,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	ap := arg
 	ctr := ap.ctr
 
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 

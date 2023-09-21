@@ -31,7 +31,7 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 // Call returning only the first n tuples from its input
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	bat := proc.InputBatch()
 
 	if bat == nil {
@@ -47,10 +47,10 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		return process.ExecNext, nil
 	}
 	ap := arg
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat, isFirst)
+	anal.Input(bat, arg.info.IsFirst)
 	if ap.Seen >= ap.Limit {
 		proc.SetInputBatch(nil)
 		proc.PutBatch(bat)
@@ -61,12 +61,12 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 	if newSeen >= ap.Limit { // limit - seen
 		batch.SetLength(bat, int(ap.Limit-ap.Seen))
 		ap.Seen = newSeen
-		anal.Output(bat, isLast)
+		anal.Output(bat, arg.info.IsLast)
 
 		proc.SetInputBatch(bat)
 		return process.ExecStop, nil
 	}
-	anal.Output(bat, isLast)
+	anal.Output(bat, arg.info.IsLast)
 	ap.Seen = newSeen
 	return process.ExecNext, nil
 }

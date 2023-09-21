@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,49 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package onduplicatekey
+package mergeorder
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const maxBatchSizeToSend = 64 * mpool.MB
 
 var _ vm.Operator = new(Argument)
 
 const (
-	Build = iota
-	Eval
-	End
+	receiving = iota
+	normalSending
+	pickUpSending
 )
 
-type container struct {
-	colexec.ReceiverOperator
-
-	state            int
-	checkConflictBat *batch.Batch //batch to check conflict
-	insertBat        *batch.Batch //the final batch
-}
-
 type Argument struct {
-	// Ts is not used
-	Ts       uint64
-	Affected uint64
-	Engine   engine.Engine
-
-	// Source       engine.Relation
-	// UniqueSource []engine.Relation
-	// Ref          *plan.ObjectRef
-	TableDef        *plan.TableDef
-	OnDuplicateIdx  []int32
-	OnDuplicateExpr map[string]*plan.Expr
-
-	IdxIdx []int32
-
 	ctr *container
+
+	OrderBySpecs []*plan.OrderBySpec
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
@@ -68,15 +52,45 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
 }
 
+type container struct {
+	colexec.ReceiverOperator
+
+	// operator status
+	status int
+
+	// batchList is the data structure to store the all the received batches
+	batchList []*batch.Batch
+	orderCols [][]*vector.Vector
+	// indexList[i] = k means the number of rows before k in batchList[i] has been merged and send.
+	indexList []int64
+
+	// expression executors for order columns.
+	executors []colexec.ExpressionExecutor
+	compares  []compare.Compare
+}
+
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-
-		if arg.ctr.insertBat != nil {
-			arg.ctr.insertBat.Clean(proc.GetMPool())
+		mp := proc.Mp()
+		ctr := arg.ctr
+		for i := range ctr.batchList {
+			if ctr.batchList[i] != nil {
+				ctr.batchList[i].Clean(mp)
+			}
 		}
-		if arg.ctr.checkConflictBat != nil {
-			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
+		for i := range ctr.orderCols {
+			if ctr.orderCols[i] != nil {
+				for j := range ctr.orderCols[i] {
+					if ctr.orderCols[i][j] != nil {
+						ctr.orderCols[i][j].Free(mp)
+					}
+				}
+			}
+		}
+		for i := range ctr.executors {
+			if ctr.executors[i] != nil {
+				ctr.executors[i].Free()
+			}
 		}
 	}
 }

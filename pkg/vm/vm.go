@@ -56,6 +56,15 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}()
 
+	for i := 0; i < len(ins); i++ {
+		info := &OperatorInfo{
+			Idx:     ins[i].Idx,
+			IsFirst: ins[i].IsFirst,
+			IsLast:  ins[i].IsLast,
+		}
+		ins[i].Arg.SetInfo(info)
+	}
+
 	return fubarRun(ins, proc, 0)
 }
 
@@ -64,7 +73,7 @@ func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err
 	var ok process.ExecStatus
 
 	for i := start; i < len(ins); i++ {
-		if ok, err = ins[i].Arg.Call(ins[i].Idx, proc, ins[i].IsFirst, ins[i].IsLast); err != nil {
+		if ok, err = ins[i].Arg.Call(proc); err != nil {
 			return ok == process.ExecStop || end, err
 		}
 

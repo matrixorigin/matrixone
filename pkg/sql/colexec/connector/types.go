@@ -23,7 +23,17 @@ var _ vm.Operator = new(Argument)
 
 // Argument pipe connector
 type Argument struct {
-	Reg *process.WaitRegister
+	Reg      *process.WaitRegister
+	info     *vm.OperatorInfo
+	children []vm.Operator
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

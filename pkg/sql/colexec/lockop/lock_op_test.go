@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -57,7 +58,7 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
-			_, err := arg.Call(0, proc, false, false)
+			_, err := arg.Call(proc)
 			require.NoError(t, err)
 
 			vec := proc.InputBatch().GetVector(1)
@@ -94,7 +95,7 @@ func TestCallLockOpWithConflict(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				_, err = arg.Call(0, proc, false, false)
+				_, err = arg.Call(proc)
 				require.NoError(t, err)
 
 				vec := proc.InputBatch().GetVector(1)
@@ -143,11 +144,11 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				arg2.rt.hasNewVersionInRange = testFunc
 				defer arg2.rt.parker.FreeMem()
 
-				_, err = arg2.Call(0, proc, false, false)
+				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
 
 				proc.SetInputBatch(nil)
-				_, err = arg2.Call(0, proc, false, false)
+				_, err = arg2.Call(proc)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
@@ -201,11 +202,11 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 				arg2.rt.hasNewVersionInRange = testFunc
 				defer arg2.rt.parker.FreeMem()
 
-				_, err = arg2.Call(0, proc, false, false)
+				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
 
 				proc.SetInputBatch(nil)
-				_, err = arg2.Call(0, proc, false, false)
+				_, err = arg2.Call(proc)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()
@@ -261,11 +262,11 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 
 				proc.TxnOperator.TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
 
-				_, err = arg2.Call(0, proc, false, false)
+				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
 
 				proc.SetInputBatch(nil)
-				_, err = arg2.Call(0, proc, false, false)
+				_, err = arg2.Call(proc)
 				require.NoError(t, err)
 			}()
 			require.NoError(t, lockservice.WaitWaiters(proc.LockService, 1, conflictRow, 1))
@@ -290,7 +291,12 @@ func TestLockWithBlocking(t *testing.T) {
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.rt.hasNewVersionInRange = testFunc
-			end, err := arg.Call(idx, proc, isFirst, isLast)
+			arg.info = &vm.OperatorInfo{
+				Idx:     idx,
+				IsFirst: isFirst,
+				IsLast:  isLast,
+			}
+			end, err := arg.Call(proc)
 			require.NoError(t, err)
 			if arg.rt.step == stepLock {
 				require.Equal(t, batch.EmptyBatch, proc.InputBatch())
@@ -353,7 +359,12 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			idx int,
 			isFirst, isLast bool) (bool, error) {
 			arg.rt.hasNewVersionInRange = testFunc
-			ok, err := arg.Call(idx, proc, isFirst, isLast)
+			arg.info = &vm.OperatorInfo{
+				Idx:     idx,
+				IsFirst: isFirst,
+				IsLast:  isLast,
+			}
+			ok, err := arg.Call(proc)
 			return ok == process.ExecStop, err
 		},
 		func(arg *Argument) {
@@ -391,7 +402,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 				return true, nil
 			}
 
-			_, err := arg.Call(0, proc, false, false)
+			_, err := arg.Call(proc)
 			require.NoError(t, err)
 			require.Error(t, arg.rt.retryError)
 			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
@@ -421,6 +432,11 @@ func runLockNonBlockingOpTest(
 			pkType := types.New(types.T_int32, 0, 0)
 			tsType := types.New(types.T_TS, 0, 0)
 			arg := NewArgument(nil)
+			arg.info = &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			}
 			for idx, table := range tables {
 				arg.AddLockTarget(table, offset, pkType, offset+1)
 

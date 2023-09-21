@@ -31,7 +31,7 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return process.ExecStop, nil
@@ -46,10 +46,10 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 		return process.ExecNext, nil
 	}
 	ap := arg
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat, isFirst)
+	anal.Input(bat, arg.info.IsFirst)
 
 	if ap.Seen > ap.Offset {
 		return process.ExecNext, nil

@@ -118,7 +118,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	defer span.End()
 	select {
@@ -128,13 +128,13 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 	default:
 	}
 	t1 := time.Now()
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer func() {
 		anal.Stop()
 		anal.AddScanTime(t1)
 	}()
-	anal.Input(nil, isFirst)
+	anal.Input(nil, arg.info.IsFirst)
 	param := arg.Es
 	if param.Fileparam.End {
 		proc.SetInputBatch(nil)
@@ -156,7 +156,7 @@ func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast b
 
 	proc.SetInputBatch(bat)
 	if bat != nil {
-		anal.Output(bat, isLast)
+		anal.Output(bat, arg.info.IsLast)
 		anal.Alloc(int64(bat.Size()))
 	}
 	return process.ExecNext, nil

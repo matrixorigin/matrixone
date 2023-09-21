@@ -120,7 +120,19 @@ type Operator interface {
 	Prepare(proc *process.Process) error
 
 	//Call calls an operator.
-	Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error)
+	Call(proc *process.Process) (process.ExecStatus, error)
+
+	//SetInfo set operator info
+	SetInfo(info *OperatorInfo)
+
+	//AppendChild append child to operator
+	AppendChild(child Operator)
+}
+
+type OperatorInfo struct {
+	Idx     int
+	IsFirst bool
+	IsLast  bool
 }
 
 type Instructions []Instruction

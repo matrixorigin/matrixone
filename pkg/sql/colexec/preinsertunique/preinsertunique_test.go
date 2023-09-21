@@ -26,6 +26,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -76,10 +77,15 @@ func TestPreInsertUnique(t *testing.T) {
 			PkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
 			UkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
 		},
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
 
 	types.T_int64.ToType()
 	proc.Reg.InputBatch = inputBatch
-	_, err := argument.Call(0, proc, false, false)
+	_, err := argument.Call(proc)
 	require.NoError(t, err)
 }

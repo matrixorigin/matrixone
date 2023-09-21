@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -266,12 +267,18 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		lastAnalyze.Network(bat)
 		s.Proc.SetInputBatch(bat)
 
+		info := &vm.OperatorInfo{
+			Idx:     -1,
+			IsFirst: false,
+			IsLast:  false,
+		}
+		lastArg.SetInfo(info)
 		if isConnector {
-			if ok, err := lastArg.Call(-1, s.Proc, false, false); err != nil || ok == process.ExecStop {
+			if ok, err := lastArg.Call(s.Proc); err != nil || ok == process.ExecStop {
 				return err
 			}
 		} else {
-			if ok, err := lastArg.Call(-1, s.Proc, false, false); err != nil || ok == process.ExecStop {
+			if ok, err := lastArg.Call(s.Proc); err != nil || ok == process.ExecStop {
 				return err
 			}
 		}

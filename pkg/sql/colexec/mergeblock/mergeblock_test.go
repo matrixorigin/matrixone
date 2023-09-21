@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -106,10 +107,15 @@ func TestMergeBlock(t *testing.T) {
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
 		notFreeBatch: true,
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
 	proc.Reg.InputBatch = batch1
 	argument1.Prepare(proc)
-	_, err := argument1.Call(0, proc, false, false)
+	_, err := argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15*3), argument1.affectedRows)
 	// Check Tbl

@@ -26,12 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (arg *Argument) Call(idx int, proc *process.Process, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	tblArg := arg
 	var (
 		f bool
 		e error
 	)
+	idx := arg.info.Idx
 
 	switch tblArg.Name {
 	case "unnest":
