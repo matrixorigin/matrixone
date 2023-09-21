@@ -378,6 +378,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
+		toFreeBatches:                   make(map[[2]string][]*batch.Batch),
 		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
 	}
 	if txn.meta.IsRCIsolation() {
