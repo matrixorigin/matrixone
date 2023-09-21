@@ -1,0 +1,52 @@
+create sequence alter_seq_01  as smallint;
+show sequences;
+Names    Data Type
+alter_seq_01    SMALLINT
+alter sequence alter_seq_01 as bigint;
+show sequences;
+Names    Data Type
+alter_seq_01    BIGINT
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+1    1
+alter sequence alter_seq_01 minvalue 1 maxvalue 2;
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+1    1
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+2    2
+select nextval('alter_seq_01'),currval('alter_seq_01');
+internal error: Reached maximum value of sequence alter_seq_01
+alter sequence alter_seq_01 cycle;
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+1    1
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+2    2
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+1    1
+alter sequence alter_seq_01 maxvalue 1000;
+alter sequence alter_seq_01 increment by 10;
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+1    1
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+11    11
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+21    21
+alter sequence alter_seq_01 start with 900;
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+900    900
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+910    910
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+920    920
+drop sequence alter_seq_01;
