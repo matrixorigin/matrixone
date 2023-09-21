@@ -65,7 +65,9 @@ jobs:
           echo ""  >> ./etc/launch/tn.toml
           echo '[dn.txn]' >> ./etc/launch/tn.toml
           echo 'mode = "Pessimistic"' >> ./etc/launch/tn.toml
-          cat ./etc/launch/tn.toml     
+          cat ./etc/launch/tn.toml
+          echo "==============mo service binary information=============="
+          ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Clone test-tool repository
@@ -127,6 +129,8 @@ jobs:
           else 
             cat ./etc/launch/tn.toml     
           fi
+          echo "==============mo service binary information=============="
+          ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Start BVT Test for MO with Version of Head
@@ -228,6 +232,8 @@ jobs:
           echo '[dn.txn]' >> ./etc/launch/tn.toml
           echo 'mode = "Pessimistic"' >> ./etc/launch/tn.toml
           cat ./etc/launch/tn.toml
+          echo "==============mo service binary information=============="
+          ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Clone test-tool repository
@@ -289,6 +295,8 @@ jobs:
           else 
             cat ./etc/launch/tn.toml     
           fi
+          echo "==============mo service binary information=============="
+          ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
 
       - name: Start BVT Test for MO with Version of Head
