@@ -611,18 +611,41 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 				panic(fmt.Sprintf("invalid block id. %x", rowID))
 			}
 
-			entry.DeleteTime = deleteTimeVector[i]
+			if entry.DeleteTime.IsEmpty() {
+				// apply first delete
+				entry.DeleteTime = deleteTimeVector[i]
 
-			p.blocks.Set(entry)
+				p.blocks.Set(entry)
 
-			{
-				e := BlockIndexByTSEntry{
-					Time:         entry.DeleteTime,
-					BlockID:      blockID,
-					IsDelete:     true,
-					IsAppendable: entry.EntryState,
+				{
+					e := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Set(e)
 				}
-				p.blockIndexByTS.Set(e)
+			} else {
+				// update deletetime, if incoming delete ts is less
+				if entry.DeleteTime.Greater(deleteTimeVector[i]) {
+					old := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Delete(old)
+					entry.DeleteTime = deleteTimeVector[i]
+					p.blocks.Set(entry)
+					new := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Set(new)
+				}
 			}
 
 		})
