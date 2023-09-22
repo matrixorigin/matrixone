@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,10 @@ type compilerContext struct {
 	defaultDB string
 	engine    engine.Engine
 	proc      *process.Process
+
+	buildAlterView       bool
+	dbOfView, nameOfView string
+	mu                   sync.Mutex
 }
 
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
@@ -197,11 +202,18 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
-	panic("not supported in internal sql executor")
+	// Required for running executeConditionalUpgrades() in boostrap.go and authentication.go
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buildAlterView = yesOrNo
+	c.dbOfView = dbName
+	c.nameOfView = viewName
 }
 
 func (c *compilerContext) GetBuildingAlterView() (bool, string, string) {
-	panic("not supported in internal sql executor")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buildAlterView, c.dbOfView, c.nameOfView
 }
 
 func (c *compilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {
