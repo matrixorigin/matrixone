@@ -28,4 +28,4 @@ type Service interface {
 	Run(ctx context.Context, request *Request, getPkg GetPkgFunc) (*Response, error)
 }
 
-type GetPkgFunc func() (pkg [][]byte, err error)
+type GetPkgFunc func(path string) (pkg [][]byte, err error)

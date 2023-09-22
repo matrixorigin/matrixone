@@ -98,7 +98,7 @@ func (c *Client) Run(ctx context.Context, request *udf.Request, getPkg udf.GetPk
 	case udf.ResponseType_DataResponse:
 		return response, nil
 	case udf.ResponseType_PkgRequest:
-		request.Udf.ImportPkg, err = getPkg()
+		request.Udf.ImportPkg, err = getPkg(request.Udf.Body)
 		if err != nil {
 			return nil, err
 		}

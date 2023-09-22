@@ -16,10 +16,14 @@ package function
 
 import (
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"errors"
+	"golang.org/x/sync/errgroup"
+	"io"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -107,43 +111,56 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 
 	// getPkg
-	getPkg := func() (pkg [][]byte, err error) {
-		info, err := proc.FileService.StatFile(proc.Ctx, request.Udf.Body)
-		if err != nil {
-			return nil, err
-		}
+	getPkg := func(path string) ([][]byte, error) {
+		reader, writer := io.Pipe()
 
-		entrySize := int64(4096)
-		cnt := info.Size / entrySize
-		if info.Size%entrySize != 0 {
-			cnt += 1
-		}
-		entries := make([]fileservice.IOEntry, cnt)
-		offset := int64(0)
-		for i := int64(0); i < cnt; i++ {
-			entries[i].Offset = offset
-			if i == cnt-1 {
-				entries[i].Size = -1
-			} else {
-				entries[i].Size = entrySize
+		// watch and cancel
+		go func() {
+			defer reader.Close()
+			for {
+				select {
+				case <-proc.Ctx.Done():
+					return
+				default:
+					time.Sleep(time.Second)
+				}
 			}
-			offset += entrySize
-		}
+		}()
 
 		ioVector := &fileservice.IOVector{
-			FilePath: request.Udf.Body,
-			Entries:  entries,
+			FilePath: path,
+			Entries: []fileservice.IOEntry{
+				{
+					Offset:        0,
+					Size:          -1,
+					WriterForRead: writer,
+				},
+			},
 		}
 
-		err = proc.FileService.Read(proc.Ctx, ioVector)
-		if err != nil {
-			return nil, err
-		}
+		errGroup := new(errgroup.Group)
+		errGroup.Go(func() error {
+			defer writer.Close()
+			return proc.FileService.Read(proc.Ctx, ioVector)
+		})
 
-		data := make([][]byte, cnt)
-		for i := int64(0); i < cnt; i++ {
-			data[i] = ioVector.Entries[i].Data
+		var err error
+		data := make([][]byte, 0)
+		buffer := make([]byte, 4096)
+		for {
+			var n int
+			n, err = reader.Read(buffer)
+			if err != nil {
+				if err == io.EOF {
+					err = nil
+				}
+				break
+			}
+			d := make([]byte, n)
+			copy(d, buffer[:n])
+			data = append(data, d)
 		}
+		err = errors.Join(err, errGroup.Wait())
 
 		return data, err
 	}

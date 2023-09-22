@@ -1301,6 +1301,19 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 	upload := func(localPath string, storageDir string) (string, error) {
 		loadLocalReader, loadLocalWriter := io.Pipe()
 
+		// watch and cancel
+		go func() {
+			defer loadLocalReader.Close()
+			for {
+				select {
+				case <-proc.Ctx.Done():
+					return
+				default:
+					time.Sleep(time.Second)
+				}
+			}
+		}()
+
 		// write to pipe
 		loadLocalErrGroup := new(errgroup.Group)
 		loadLocalErrGroup.Go(func() error {
@@ -1312,40 +1325,20 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 			return mce.processLoadLocal(proc.Ctx, param, loadLocalWriter)
 		})
 
-		// read from pipe
-		defer loadLocalReader.Close()
-		var err error
-		var offset int64
-		buffer := make([]byte, 4096)
+		// read from pipe and upload
 		ioVector := fileservice.IOVector{
 			FilePath: path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:]),
-		}
-		for {
-			var n int
-			n, err = loadLocalReader.Read(buffer)
-			if err != nil {
-				if err == io.EOF {
-					err = nil
-				}
-				break
-			}
-			data := make([]byte, n)
-			copy(data, buffer[:n])
-			ioVector.Entries = append(ioVector.Entries, fileservice.IOEntry{
-				Offset: offset,
-				Size:   int64(n),
-				Data:   data,
-			})
-			offset += int64(n)
-		}
-		err = errors.Join(err, loadLocalErrGroup.Wait())
-		if err != nil {
-			return "", err
+			Entries: []fileservice.IOEntry{
+				{
+					Size:           -1,
+					ReaderForWrite: loadLocalReader,
+				},
+			},
 		}
 
-		// upload
-		_ = proc.FileService.Delete(ctx, ioVector.FilePath)
-		err = proc.FileService.Write(ctx, ioVector)
+		_ = proc.FileService.Delete(proc.Ctx, ioVector.FilePath)
+		err := proc.FileService.Write(proc.Ctx, ioVector)
+		err = errors.Join(err, loadLocalErrGroup.Wait())
 		if err != nil {
 			return "", err
 		}

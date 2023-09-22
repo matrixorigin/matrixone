@@ -19,6 +19,7 @@ import decimal
 import enum
 import importlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -43,6 +44,12 @@ INSTALLED_LABEL = 'installed'
 OPTION_VECTOR = 'vector'
 OPTION_DECIMAL_PRECISION = 'decimal_precision'
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] - [%(name)s] - [%(levelname)s] - [%(threadName)s] : %(message)s'
+)
+log = logging.getLogger('Server')
+
 
 class Server(pb2_grpc.ServiceServicer):
 
@@ -59,6 +66,7 @@ class Server(pb2_grpc.ServiceServicer):
 
                 # the first request
                 if request.type == pb2.DataRequest:
+                    log.info('data request')
 
                     if request.udf.isImport:
                         path, filename, item, status = functionStatus(request.udf)
@@ -71,7 +79,9 @@ class Server(pb2_grpc.ServiceServicer):
                             with item.condition:
                                 # block and waiting
                                 if not item.installed:
+                                    log.info('waiting')
                                     item.condition.wait()
+                                    log.info('finish waiting')
                             yield self.calculate(request, path, filename)
 
                         else:
@@ -83,6 +93,8 @@ class Server(pb2_grpc.ServiceServicer):
                 # the second request (optional)
                 # var firstRequest, path, filename and item are not null
                 elif request.type == pb2.PkgResponse:
+                    log.info('pkg response')
+
                     # install pkg, do not need write lock
                     absPath = os.path.join(ROOT_PATH, path)
                     try:
@@ -123,7 +135,7 @@ class Server(pb2_grpc.ServiceServicer):
         finally:
             if item is None:
                 with INSTALLING_MAP_LOCK:
-                    item = INSTALLING_MAP[path]
+                    item = INSTALLING_MAP.get(path)
 
             if item is not None:
                 with item.condition:
@@ -134,6 +146,8 @@ class Server(pb2_grpc.ServiceServicer):
                     INSTALLING_MAP[path] = None
 
     def calculate(self, request: pb2.Request, filepath: str, filename: str) -> pb2.Response:
+        log.info('calculating')
+
         # load function
         func = loadFunction(request.udf, filepath, filename)
 
@@ -177,6 +191,7 @@ class Server(pb2_grpc.ServiceServicer):
                 value = func(*params)
                 data = value2Data(value, result.type)
                 result.data.append(data)
+        log.info('finish calculating')
         return pb2.Response(vector=result, type=pb2.DataResponse)
 
 
