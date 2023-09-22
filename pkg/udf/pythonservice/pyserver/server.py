@@ -59,6 +59,9 @@ class Server(pb2_grpc.ServiceServicer):
         filename: Optional[str] = None
         item: Optional[InstallingItem] = None
 
+        firstBlock = True
+        lastBlock = False
+
         try:
             for request in requestIterator:
                 # check
@@ -66,7 +69,7 @@ class Server(pb2_grpc.ServiceServicer):
 
                 # the first request
                 if request.type == pb2.DataRequest:
-                    log.info('data request')
+                    log.info('receive data')
 
                     if request.udf.isImport:
                         path, filename, item, status = functionStatus(request.udf)
@@ -93,41 +96,48 @@ class Server(pb2_grpc.ServiceServicer):
                 # the second request (optional)
                 # var firstRequest, path, filename and item are not null
                 elif request.type == pb2.PkgResponse:
-                    log.info('pkg response')
+                    log.info('receive pkg')
 
                     # install pkg, do not need write lock
                     absPath = os.path.join(ROOT_PATH, path)
+                    lastBlock = request.udf.importPkg.last
                     try:
-                        if os.path.exists(absPath):
-                            shutil.rmtree(absPath)
-                        os.makedirs(absPath, exist_ok=True)
+                        if firstBlock:
+                            if os.path.exists(absPath):
+                                shutil.rmtree(absPath)
+                            os.makedirs(absPath, exist_ok=True)
+                            firstBlock = False
 
                         file = os.path.join(absPath, filename)
 
-                        with open(file, 'wb') as f:
-                            for data in request.udf.importPkg:
-                                f.write(data)
+                        with open(file, 'ab+') as f:
+                            f.write(request.udf.importPkg.data)
 
-                        if request.udf.body.endswith('.whl'):
-                            subprocess.check_call(['pip', 'install', '--no-index', file, '-t', absPath])
-                            os.remove(file)
+                        if lastBlock:
+                            if request.udf.body.endswith('.whl'):
+                                subprocess.check_call(['pip', 'install', '--no-index', file, '-t', absPath])
+                                os.remove(file)
 
-                        # mark the pkg is installed without error
-                        open(os.path.join(absPath, INSTALLED_LABEL), 'w').close()
+                            # mark the pkg is installed without error
+                            open(os.path.join(absPath, INSTALLED_LABEL), 'w').close()
 
                     except Exception as e:
                         shutil.rmtree(absPath, ignore_errors=True)
                         raise e
 
                     finally:
-                        with item.condition:
-                            item.installed = True
-                            item.condition.notifyAll()
+                        if lastBlock:
+                            with item.condition:
+                                item.installed = True
+                                item.condition.notifyAll()
 
-                        with INSTALLING_MAP_LOCK:
-                            INSTALLING_MAP[path] = None
+                            with INSTALLING_MAP_LOCK:
+                                INSTALLING_MAP[path] = None
 
-                    yield self.calculate(firstRequest, path, filename)
+                    if not lastBlock:
+                        yield pb2.Response(type=pb2.PkgRequest)
+                    else:
+                        yield self.calculate(firstRequest, path, filename)
 
                 else:
                     raise Exception('error udf request type')

@@ -16,6 +16,7 @@ package pythonservice
 
 import (
 	"context"
+	"io"
 	"math"
 	"sync"
 
@@ -98,24 +99,55 @@ func (c *Client) Run(ctx context.Context, request *udf.Request, getPkg udf.GetPk
 	case udf.ResponseType_DataResponse:
 		return response, nil
 	case udf.ResponseType_PkgRequest:
-		request.Udf.ImportPkg, err = getPkg(request.Udf.Body)
+		var reader io.Reader
+		reader, err = getPkg(request.Udf.Body)
 		if err != nil {
 			return nil, err
 		}
+
 		pkgRequest := &udf.Request{
 			Udf:     request.Udf,
 			Type:    udf.RequestType_PkgResponse,
 			Context: request.Context,
 		}
-		err = stream.Send(pkgRequest)
-		if err != nil {
-			return nil, err
+		for {
+			pkg := &udf.Package{}
+			buffer := make([]byte, 5*1024*1024)
+			var offset int
+			for {
+				var n int
+				n, err = reader.Read(buffer[offset:])
+				if err != nil {
+					if err == io.EOF {
+						err = nil
+						pkg.Last = true
+					} else {
+						return nil, err
+					}
+				}
+				offset += n
+
+				if pkg.Last || len(buffer) == offset {
+					pkg.Data = buffer[:offset]
+					break
+				}
+			}
+
+			pkgRequest.Udf.ImportPkg = pkg
+			err = stream.Send(pkgRequest)
+			if err != nil {
+				return nil, err
+			}
+
+			response, err = stream.Recv()
+			if err != nil {
+				return nil, err
+			}
+
+			if pkg.Last {
+				return response, nil
+			}
 		}
-		response, err = stream.Recv()
-		if err != nil {
-			return nil, err
-		}
-		return response, nil
 	default:
 		return nil, moerr.NewInternalError(ctx, "error udf response type")
 	}

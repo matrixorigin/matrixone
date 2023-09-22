@@ -53,11 +53,16 @@ message Udf {
   string handler = 1;
   bool isImport = 2;
   string body = 3;
-  repeated bytes importPkg = 4;
+  Package importPkg = 4;
   DataType retType = 5;
   string language = 6;
   string modifiedTime = 7;
   string db = 8;
+}
+
+message Package {
+  bytes data = 1;
+  bool last = 2;
 }
 
 message DataVector {

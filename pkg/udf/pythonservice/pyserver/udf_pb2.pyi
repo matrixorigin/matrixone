@@ -121,12 +121,20 @@ class Udf(_message.Message):
     handler: str
     isImport: bool
     body: str
-    importPkg: _containers.RepeatedScalarFieldContainer[bytes]
+    importPkg: Package
     retType: DataType
     language: str
     modifiedTime: str
     db: str
-    def __init__(self, handler: _Optional[str] = ..., isImport: bool = ..., body: _Optional[str] = ..., importPkg: _Optional[_Iterable[bytes]] = ..., retType: _Optional[_Union[DataType, str]] = ..., language: _Optional[str] = ..., modifiedTime: _Optional[str] = ..., db: _Optional[str] = ...) -> None: ...
+    def __init__(self, handler: _Optional[str] = ..., isImport: bool = ..., body: _Optional[str] = ..., importPkg: _Optional[_Union[Package, _Mapping]] = ..., retType: _Optional[_Union[DataType, str]] = ..., language: _Optional[str] = ..., modifiedTime: _Optional[str] = ..., db: _Optional[str] = ...) -> None: ...
+
+class Package(_message.Message):
+    __slots__ = ["data", "last"]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    LAST_FIELD_NUMBER: _ClassVar[int]
+    data: bytes
+    last: bool
+    def __init__(self, data: _Optional[bytes] = ..., last: bool = ...) -> None: ...
 
 class DataVector(_message.Message):
     __slots__ = ["data", "const", "length", "type", "scale"]

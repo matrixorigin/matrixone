@@ -16,7 +16,6 @@ package function
 
 import (
 	"encoding/json"
-	"errors"
 	"golang.org/x/sync/errgroup"
 	"io"
 	"time"
@@ -111,12 +110,21 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 
 	// getPkg
-	getPkg := func(path string) ([][]byte, error) {
+	getPkg := func(path string) (io.Reader, error) {
 		reader, writer := io.Pipe()
+		var errGroup *errgroup.Group
 
 		// watch and cancel
 		go func() {
-			defer reader.Close()
+			defer func() {
+				reader.Close()
+				if errGroup == nil {
+					writer.Close()
+				} else {
+					errGroup.Wait()
+				}
+			}()
+
 			for {
 				select {
 				case <-proc.Ctx.Done():
@@ -138,31 +146,13 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 			},
 		}
 
-		errGroup := new(errgroup.Group)
+		errGroup = new(errgroup.Group)
 		errGroup.Go(func() error {
 			defer writer.Close()
 			return proc.FileService.Read(proc.Ctx, ioVector)
 		})
 
-		var err error
-		data := make([][]byte, 0)
-		buffer := make([]byte, 4096)
-		for {
-			var n int
-			n, err = reader.Read(buffer)
-			if err != nil {
-				if err == io.EOF {
-					err = nil
-				}
-				break
-			}
-			d := make([]byte, n)
-			copy(d, buffer[:n])
-			data = append(data, d)
-		}
-		err = errors.Join(err, errGroup.Wait())
-
-		return data, err
+		return reader, err
 	}
 
 	// run
