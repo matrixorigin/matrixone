@@ -82,6 +82,13 @@ func WithRunnerHeartbeatInterval(interval time.Duration) RunnerOption {
 	}
 }
 
+// WithRunnerHeartbeatTimeout set heartbeat timeout.
+func WithRunnerHeartbeatTimeout(timeout time.Duration) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.heartbeatTimeout = timeout
+	}
+}
+
 // WithOptions set all options needed by taskRunner
 func WithOptions(
 	queryLimit int,
@@ -91,6 +98,7 @@ func WithOptions(
 	fetchTimeout time.Duration,
 	retryInterval time.Duration,
 	heartbeatInterval time.Duration,
+	heartbeatTimeout time.Duration,
 ) RunnerOption {
 	return func(r *taskRunner) {
 		r.options.queryLimit = queryLimit
@@ -100,6 +108,7 @@ func WithOptions(
 		r.options.fetchTimeout = fetchTimeout
 		r.options.retryInterval = retryInterval
 		r.options.heartbeatInterval = heartbeatInterval
+		r.options.heartbeatTimeout = heartbeatTimeout
 	}
 }
 
@@ -136,6 +145,16 @@ type taskRunner struct {
 		s []runningTask
 	}
 
+	// accountID indicates the runner belongs to the account.
+	canClaimDaemonTask func(string) bool
+
+	pendingTaskHandle chan TaskHandler
+	// daemonTasks contains all daemon tasks that run on this node.
+	daemonTasks struct {
+		sync.Mutex
+		m map[uint64]*daemonTask
+	}
+
 	options struct {
 		queryLimit        int
 		parallelism       int
@@ -144,15 +163,18 @@ type taskRunner struct {
 		fetchTimeout      time.Duration
 		retryInterval     time.Duration
 		heartbeatInterval time.Duration
+		heartbeatTimeout  time.Duration
 	}
 }
 
 // NewTaskRunner new task runner. The TaskRunner can be created by CN nodes and pull tasks from TaskService to
 // execute periodically.
-func NewTaskRunner(runnerID string, service TaskService, opts ...RunnerOption) TaskRunner {
+func NewTaskRunner(runnerID string, service TaskService, claimFn func(string) bool, opts ...RunnerOption) TaskRunner {
 	r := &taskRunner{
 		runnerID: runnerID,
 		service:  service,
+		// set the claim checker function for daemon task.
+		canClaimDaemonTask: claimFn,
 	}
 	r.executors.m = make(map[task.TaskCode]TaskExecutor)
 	for _, opt := range opts {
@@ -166,6 +188,8 @@ func NewTaskRunner(runnerID string, service TaskService, opts ...RunnerOption) T
 	r.waitTasksC = make(chan runningTask, r.options.maxWaitTasks)
 	r.doneC = make(chan runningTask, r.options.maxWaitTasks)
 	r.runningTasks.m = make(map[uint64]runningTask)
+	r.pendingTaskHandle = make(chan TaskHandler, 20)
+	r.daemonTasks.m = make(map[uint64]*daemonTask)
 	return r
 }
 
@@ -184,6 +208,9 @@ func (r *taskRunner) adjust() {
 	}
 	if r.options.heartbeatInterval == 0 {
 		r.options.heartbeatInterval = time.Second * 5
+	}
+	if r.options.heartbeatTimeout == 0 {
+		r.options.heartbeatTimeout = time.Second * 30
 	}
 	if r.options.maxWaitTasks == 0 {
 		r.options.maxWaitTasks = 256
@@ -204,7 +231,16 @@ func (r *taskRunner) Start() error {
 	if !r.started.CompareAndSwap(false, true) {
 		return nil
 	}
+	if err := r.startAsyncTaskWorker(); err != nil {
+		return err
+	}
+	if err := r.startDaemonTaskWorker(); err != nil {
+		return err
+	}
+	return nil
+}
 
+func (r *taskRunner) startAsyncTaskWorker() error {
 	if err := r.stopper.RunNamedTask("fetch-task", r.fetch); err != nil {
 		return err
 	}
@@ -249,6 +285,17 @@ func (r *taskRunner) RegisterExecutor(code task.TaskCode, executor TaskExecutor)
 	}
 }
 
+func (r *taskRunner) Attach(ctx context.Context, taskID uint64, routine ActiveRoutine) error {
+	r.daemonTasks.Lock()
+	defer r.daemonTasks.Unlock()
+	t, ok := r.daemonTasks.m[taskID]
+	if !ok {
+		return moerr.NewErrTaskNotFound(ctx, taskID)
+	}
+	t.activeRoutine = routine
+	return nil
+}
+
 func (r *taskRunner) fetch(ctx context.Context) {
 	r.logger.Debug("fetch task started")
 	ticker := time.NewTicker(r.options.fetchInterval)
@@ -272,10 +319,10 @@ func (r *taskRunner) fetch(ctx context.Context) {
 	}
 }
 
-func (r *taskRunner) doFetch() ([]task.Task, error) {
+func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), r.options.fetchTimeout)
-	tasks, err := r.service.QueryTask(ctx,
-		WithTaskStatusCond(EQ, task.TaskStatus_Running),
+	tasks, err := r.service.QueryAsyncTask(ctx,
+		WithTaskStatusCond(task.TaskStatus_Running),
 		WithLimitCond(r.options.queryLimit),
 		WithTaskRunnerCond(EQ, r.runnerID))
 	cancel()
@@ -299,13 +346,13 @@ func (r *taskRunner) doFetch() ([]task.Task, error) {
 	return newTasks, nil
 }
 
-func (r *taskRunner) addTasks(ctx context.Context, tasks []task.Task) {
+func (r *taskRunner) addTasks(ctx context.Context, tasks []task.AsyncTask) {
 	for _, t := range tasks {
 		r.addToWait(ctx, t)
 	}
 }
 
-func (r *taskRunner) addToWait(ctx context.Context, task task.Task) bool {
+func (r *taskRunner) addToWait(ctx context.Context, task task.AsyncTask) bool {
 	ctx2, cancel := context.WithCancel(ctx)
 	rt := runningTask{
 		task:   task,
@@ -394,7 +441,7 @@ func (r *taskRunner) run(rt runningTask) {
 		executor, err := r.getExecutor(rt.task.Metadata.Executor)
 		result := &task.ExecuteResult{Code: task.ResultCode_Success}
 		if err == nil {
-			if err = executor(rt.ctx, rt.task); err == nil {
+			if err = executor(rt.ctx, &rt.task); err == nil {
 				goto taskDone
 			}
 		}
@@ -532,7 +579,6 @@ func (r *taskRunner) doHeartbeat(ctx context.Context) {
 func (r *taskRunner) removeRunningTask(id uint64) {
 	r.runningTasks.Lock()
 	defer r.runningTasks.Unlock()
-
 	delete(r.runningTasks.m, id)
 }
 
@@ -547,7 +593,7 @@ func (r *taskRunner) getExecutor(code task.TaskCode) (TaskExecutor, error) {
 }
 
 type runningTask struct {
-	task       task.Task
+	task       task.AsyncTask
 	ctx        context.Context
 	cancel     context.CancelFunc
 	retryTimes uint32

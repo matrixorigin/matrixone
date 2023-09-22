@@ -212,8 +212,8 @@ func (s *taskService) addToRetrySchedule(task task.CronTask) {
 	s.crons.retryC <- task
 }
 
-func newTaskFromMetadata(metadata task.TaskMetadata) task.Task {
-	return task.Task{
+func newTaskFromMetadata(metadata task.TaskMetadata) task.AsyncTask {
+	return task.AsyncTask{
 		Metadata: metadata,
 		Status:   task.TaskStatus_Created,
 		CreateAt: time.Now().UnixMilli(),
@@ -268,8 +268,8 @@ func (j *cronJob) run() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 
-		queryTask, err := j.s.QueryTask(ctx,
-			WithTaskStatusCond(EQ, task.TaskStatus_Running),
+		queryTask, err := j.s.QueryAsyncTask(ctx,
+			WithTaskStatusCond(task.TaskStatus_Running),
 			WithTaskExecutorCond(EQ, j.task.Metadata.Executor))
 		if err != nil ||
 			uint32(len(queryTask)) >= j.task.Metadata.Options.Concurrency {
