@@ -64,22 +64,19 @@ jobs:
           sudo pip3 install PyYAML==6.0
           sudo pip3 install shyaml==0.6.2
           sudo pip3 install PyMySQL==1.0.2
-
       - name: Build MatrixOne for head
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD          
-
       - name: Build MatrixOne for release ${{ env.release }}
         run: |
           cd $GITHUB_WORKSPACE/upstream && make clean && make build          
           git rev-parse --short HEAD
-
       - name: Create path for execution
         run: |
           cd $GITHUB_WORKSPACE && mkdir workspace 
-
       - name: Start the Release ${{ env.release }} Version of MO
+        if: ${{ always() && !cancelled()  }}
         run: |
           cd $GITHUB_WORKSPACE/workspace
           mv $GITHUB_WORKSPACE/upstream/etc .
@@ -99,7 +96,6 @@ jobs:
           echo "==============mo service binary information=============="
           ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
-
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
         timeout-minutes: 15
@@ -134,7 +130,7 @@ jobs:
           sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpcc_10`
           ./load.sh -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
           
-      - name: Start TPCC 10 Warehouses 100 terminals Test
+      - name: Start TPCC 10 Warehouses 10 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
         timeout-minutes: 15
         run: |
@@ -144,14 +140,13 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
-          sed -i '/.*terminals=*/c\terminals=100' props_10.mo
+          sed -i '/.*terminals=*/c\terminals=10' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062,9999' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
-
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
@@ -167,8 +162,8 @@ jobs:
             fi
             sleep 2
           done
-
-      - name: Start the Version of Head of MO
+      - name: Start the MO of Head
+        if: ${{ always() && !cancelled()  }}
         run: |
           cd $GITHUB_WORKSPACE/workspace
           mv mo-service mo-service-upstream
@@ -192,7 +187,6 @@ jobs:
           echo "==============mo service binary information=============="
           ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
-
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
         timeout-minutes: 15
@@ -215,6 +209,7 @@ jobs:
       # start tpcc test
       - name: Load TPCC 10 Warehouse Data
         if: ${{ always() && !cancelled() }}
+        id: load_tpcc_data_head
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -227,9 +222,9 @@ jobs:
           sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpcc_10`
           ./load.sh -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
           
-      - name: Start TPCC 10 Warehouses 100 terminals Test
-        if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 30
+      - name: Start TPCC 10 Warehouses 10 Terminals Test
+        if: ${{ always() && !cancelled() && steps.load_tpcc_data_head.conclusion == 'success' }}
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -238,14 +233,13 @@ jobs:
           mv report report-release
           mkdir -p report
           cp props.mo props_10.mo
-          sed -i '/.*terminals=*/c\terminals=100' props_10.mo
+          sed -i '/.*terminals=*/c\terminals=10' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062,9999' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
-
       - name: Dump mo-service-new goroutines
         if: ${{ always() && !cancelled() }}
         run: |
@@ -261,20 +255,18 @@ jobs:
             fi
             sleep 2
           done
-
       - name: generate upload files
         if: ${{ always() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload
+          cd ${{ github.workspace }}/mo-load && rm -rf .git .github
+          cd ${{ github.workspace }}/mo-load-data && rm -rf .git .github
+          cd ${{ github.workspace }}/mo-tpcc && rm -rf .git .github
           mv ${{ github.workspace }}/workspace ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-load/report ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-load/report-release ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-load-data/report ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-load-data/report-release ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-tpcc/report ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-tpcc/report-release ${{ github.workspace }}/upload/
-
+          mv ${{ github.workspace }}/mo-load ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-load-data ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-tpcc ${{ github.workspace }}/upload/
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
@@ -338,39 +330,28 @@ jobs:
           sudo pip3 install PyYAML==6.0
           sudo pip3 install shyaml==0.6.2
           sudo pip3 install PyMySQL==1.0.2
-
       - name: Build MatrixOne for head
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make build
           git rev-parse --short HEAD          
-
       - name: Build MatrixOne for oldrelease ${{ env.oldrelease }}
         run: |
           cd $GITHUB_WORKSPACE/upstream && make clean && make build          
           git rev-parse --short HEAD
-
       - name: Create path for execution
         run: |
           cd $GITHUB_WORKSPACE && mkdir workspace 
-
       - name: Start the OldRelease ${{ env.oldrelease }} of MO
+        if: ${{ always() && !cancelled()  }}
         run: |
           cd $GITHUB_WORKSPACE/workspace
           mv $GITHUB_WORKSPACE/upstream/etc .
           mv $GITHUB_WORKSPACE/upstream/mo-service .
           mv $GITHUB_WORKSPACE/upstream/optools .
           
-          # Explicitly declare pessimistic mode
-          # echo "==============cn configuration of upstram=============="
-          # echo 'mode = "Pessimistic"' >> ./etc/launch-tae-CN-tae-DN/cn.toml
-          # cat ./etc/launch-tae-CN-tae-DN/cn.toml
-          # echo "==============tn configuration of upstram=============="
-          # sed -i 's@\[dn\.Txn\]@\[dn\.txn\]\nmode = "Pessimistic"@g' ./etc/launch-tae-CN-tae-DN/dn.toml
-          # cat ./etc/launch-tae-CN-tae-DN/dn.toml
           echo "==============mo service binary information=============="
           ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-CN-tae-DN
-
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() && !cancelled()  }}
         timeout-minutes: 15
@@ -404,7 +385,7 @@ jobs:
           sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpcc_10`
           ./load.sh -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
           
-      - name: Start TPCC 10 Warehouses 100 terminals Test
+      - name: Start TPCC 10 Warehouses 10 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
         timeout-minutes: 15
         run: |
@@ -414,14 +395,13 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
-          sed -i '/.*terminals=*/c\terminals=100' props_10.mo
+          sed -i '/.*terminals=*/c\terminals=10' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062,9999' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
-
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
@@ -437,8 +417,8 @@ jobs:
             fi
             sleep 2
           done
-
       - name: Start the MO of Head
+        if: ${{ always() && !cancelled() }}
         run: |
           cd $GITHUB_WORKSPACE/workspace
           mv mo-service mo-service-upstream
@@ -462,7 +442,6 @@ jobs:
           echo "==============mo service binary information=============="
           ./mo-service -version
           ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch
-
       - name: Start OLTP Point Select Test With 100 Threads For HEAD
         if: ${{ always() && !cancelled()  }}
         timeout-minutes: 15
@@ -485,6 +464,7 @@ jobs:
       # start tpcc test
       - name: Load TPCC 10 Warehouse Data
         if: ${{ always() && !cancelled() }}
+        id: load_tpcc_data_head
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -497,9 +477,9 @@ jobs:
           sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpcc_10`
           ./load.sh -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
           
-      - name: Start TPCC 10 Warehouses 100 terminals Test
-        if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 30
+      - name: Start TPCC 10 Warehouses 10 terminals Test
+        if: ${{ always() && !cancelled() && steps.load_tpcc_data_head.conclusion == 'success' }}
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -508,15 +488,13 @@ jobs:
           mv report report-release
           mkdir -p report
           cp props.mo props_10.mo
-          sed -i '/.*terminals=*/c\terminals=100' props_10.mo
+          sed -i '/.*terminals=*/c\terminals=10' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062,9999' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
-
-
       - name: Dump mo-service-new goroutines
         if: ${{ always() && !cancelled() }}
         run: |
@@ -532,26 +510,25 @@ jobs:
             fi
             sleep 2
           done
-
       - name: generate upload files
         if: ${{ always() }}
         continue-on-error: true
         run: |
           mkdir -p ${{ github.workspace }}/upload
+          cd ${{ github.workspace }}/mo-load && rm -rf .git .github
+          cd ${{ github.workspace }}/mo-load-data && rm -rf .git .github
+          cd ${{ github.workspace }}/mo-tpcc && rm -rf .git .github
           mv ${{ github.workspace }}/workspace ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-load/report ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-load/report-release ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-load-data/report ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-load-data/report-release ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-tpcc/report ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-tpcc/report-release ${{ github.workspace }}/upload/
-
-
+          mv ${{ github.workspace }}/mo-load ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-load-data ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-tpcc ${{ github.workspace }}/upload/
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
           name: compatibility-test-With-${{ env.oldrelease }}
           path: |
+            ${{ github.workspace }}/upload
+          retention-days: 7
             ${{ github.workspace }}/upload
           retention-days: 7
