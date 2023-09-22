@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"math/bits"
+	"unsafe"
 )
 
 const (
@@ -34,6 +36,37 @@ const (
 	ShuffleToLocalMatchedReg int32 = 1
 	ShuffleToMultiMatchedReg int32 = 2
 )
+
+// convert first 8 bytes to uint64
+func strToUint64(bytes []byte) uint64 {
+	var result uint64 = 0
+	i := 0
+	length := len(bytes)
+	for ; i < 8; i++ {
+		result = result * 256
+		if i < length {
+			result += uint64(bytes[i])
+		}
+	}
+	return result
+}
+
+// convert first 8 bytes to uint64. vec.area must be nil
+// if varlena length less than 8 bytes, should have filled zero in varlena
+func varlenaToUint64Inline(v *types.Varlena) uint64 {
+	return bits.Reverse64(*(*uint64)(unsafe.Add(unsafe.Pointer(&v[0]), 1)))
+}
+
+// convert first 8 bytes to uint64
+func varlenaToUint64(v *types.Varlena, area []byte) uint64 {
+	svlen := (*v)[0]
+	if svlen <= types.VarlenaInlineSize {
+		return varlenaToUint64Inline(v)
+	} else {
+		voff, vlen := v.OffsetLen()
+		return strToUint64(area[voff : voff+vlen])
+	}
+}
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
