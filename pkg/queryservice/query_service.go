@@ -16,6 +16,8 @@ package queryservice
 
 import (
 	"context"
+	"github.com/pkg/errors"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -159,4 +161,83 @@ func (s *queryService) unwrapResponseError(resp *pb.Response) (*pb.Response, err
 
 func (s *queryService) ServiceID() string {
 	return s.serviceID
+}
+
+type nodeResponse struct {
+	nodeAddr string      //address of cn
+	response interface{} //response to the request
+	err      error
+}
+
+// RequestMultipleCn sends the request to multiple cn and wait the responses.
+// nodes : the address of the multiple cn
+// qs : QueryService
+// genRequest : generate the specific Request based on the business
+// handleValidResponse : valid response handler
+// handleInvalidResponse : invalid response handler
+func RequestMultipleCn(ctx context.Context,
+	nodes []string,
+	qs QueryService,
+	genRequest func() *pb.Request,
+	handleValidResponse func(string, *pb.Response),
+	handleInvalidResponse func(string),
+) error {
+	if genRequest == nil {
+		return moerr.NewInternalError(ctx, "invalid request generate function")
+	}
+	if handleValidResponse == nil {
+		return moerr.NewInternalError(ctx, "invalid response handle function")
+	}
+	nodesLeft := len(nodes)
+	responseChan := make(chan nodeResponse, nodesLeft)
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	var retErr error
+
+	for _, node := range nodes {
+		// Invalid node address, ignore it.
+		if len(node) == 0 {
+			nodesLeft--
+			continue
+		}
+
+		go func(addr string) {
+			// gen request and send it
+			if genRequest != nil {
+				req := genRequest()
+				resp, err := qs.SendMessage(ctx, addr, req)
+				responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
+			}
+		}(node)
+	}
+
+	// Wait for all responses.
+	for nodesLeft > 0 {
+		select {
+		case res := <-responseChan:
+			if res.err != nil && retErr != nil {
+				retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
+			} else {
+				queryResp, ok := res.response.(*pb.Response)
+				if ok {
+					//save response
+					if handleValidResponse != nil {
+						handleValidResponse(res.nodeAddr, queryResp)
+					}
+					if queryResp != nil {
+						qs.Release(queryResp)
+					}
+				} else {
+					if handleInvalidResponse != nil {
+						handleInvalidResponse(res.nodeAddr)
+					}
+				}
+			}
+		case <-ctx.Done():
+			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+		}
+		nodesLeft--
+	}
+	return retErr
 }
