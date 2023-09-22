@@ -31,8 +31,11 @@ type ObjectStorageArguments struct {
 	KeySecret           string
 	SessionToken        string
 	SecurityToken       string
+	BearerToken         string
 	KeyPrefix           string
 	RoleARN             string
+	RoleSessionName     string
+	RAMRole             string
 	ExternalID          string
 	SharedConfigProfile string
 
@@ -57,12 +60,20 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			o.KeyID = value
 		case "secret":
 			o.KeySecret = value
-		case "token":
+		case "token", "session-token":
 			o.SessionToken = value
+		case "security-token":
+			o.SecurityToken = value
+		case "bearer-token":
+			o.BearerToken = value
 		case "prefix":
 			o.KeyPrefix = value
 		case "role-arn":
 			o.RoleARN = value
+		case "role-session-name":
+			o.RoleSessionName = value
+		case "ram-role":
+			o.RAMRole = value
 		case "external-id":
 			o.ExternalID = value
 		case "name":
