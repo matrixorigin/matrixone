@@ -65,7 +65,6 @@ func buildVarlenaFromByteSlice(bs []byte) *types.Varlena {
 }
 
 // The result will be 0 if a == b, -1 if a < b, and +1 if a > b.
-// A nil argument is equivalent to an empty slice.
 func compareUint64(a, b uint64) int {
 	if a == b {
 		return 0

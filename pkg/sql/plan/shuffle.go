@@ -37,7 +37,7 @@ const (
 	ShuffleToMultiMatchedReg int32 = 2
 )
 
-// convert first 8 bytes to uint64
+// convert first 8 bytes to uint64, slice might be less than 8 bytes
 func ByteSliceToUint64(bytes []byte) uint64 {
 	var result uint64 = 0
 	i := 0
@@ -63,8 +63,8 @@ func VarlenaToUint64(v *types.Varlena, area []byte) uint64 {
 	if svlen <= types.VarlenaInlineSize {
 		return VarlenaToUint64Inline(v)
 	} else {
-		voff, vlen := v.OffsetLen()
-		return ByteSliceToUint64(area[voff : voff+vlen])
+		voff, _ := v.OffsetLen()
+		return bits.ReverseBytes64(*(*uint64)(unsafe.Pointer(&area[voff])))
 	}
 }
 
