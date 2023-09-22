@@ -34,15 +34,13 @@ func (node *DropConnector) GetQueryType() string     { return QueryTypeDDL }
 
 type CreateConnector struct {
 	statementImpl
-	ConnectorName *TableName
-	Options       []TableOption
+	TableName *TableName
+	Options   []*ConnectorOption
 }
 
 func (node *CreateConnector) Format(ctx *FmtCtx) {
-	ctx.WriteString("create")
-	ctx.WriteString(" connector")
-	ctx.WriteByte(' ')
-	node.ConnectorName.Format(ctx)
+	ctx.WriteString("create connector for ")
+	node.TableName.Format(ctx)
 	if node.Options != nil {
 		prefix := " with ("
 		for _, t := range node.Options {
@@ -54,13 +52,13 @@ func (node *CreateConnector) Format(ctx *FmtCtx) {
 	}
 }
 
-type CreateConnectorWithOption struct {
+type ConnectorOption struct {
 	createOptionImpl
 	Key Identifier
 	Val Expr
 }
 
-func (node *CreateConnectorWithOption) Format(ctx *FmtCtx) {
+func (node *ConnectorOption) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(node.Key))
 	ctx.WriteString(" = ")
 	node.Val.Format(ctx)
