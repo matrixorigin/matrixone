@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"io"
@@ -178,4 +179,69 @@ func TestMultiLayerFileWithChecksum(t *testing.T) {
 			return f4
 		},
 	)
+}
+
+func BenchmarkFileWithChecksumRead(b *testing.B) {
+	ctx := context.Background()
+
+	dir := b.TempDir()
+	f, err := os.CreateTemp(dir, "*")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer f.Close()
+
+	f2 := NewFileWithChecksum(ctx, f, _BlockContentSize, nil)
+	_, err = f2.Write(bytes.Repeat([]byte("a"), 65536))
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err = f2.Seek(0, io.SeekStart)
+		if err != nil {
+			b.Fatal(err)
+		}
+		n, err := io.Copy(io.Discard, f2)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if n != 65536 {
+			b.Fatal()
+		}
+	}
+}
+
+func BenchmarkFileWithChecksumWrite(b *testing.B) {
+	ctx := context.Background()
+
+	dir := b.TempDir()
+	f, err := os.CreateTemp(dir, "*")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer f.Close()
+
+	content := bytes.Repeat([]byte("a"), 65536)
+	f2 := NewFileWithChecksum(ctx, f, _BlockContentSize, nil)
+	_, err = f2.Write(content)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err = f2.Seek(0, io.SeekStart)
+		if err != nil {
+			b.Fatal(err)
+		}
+		n, err := f2.Write(content)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if n != 65536 {
+			b.Fatal()
+		}
+	}
 }
