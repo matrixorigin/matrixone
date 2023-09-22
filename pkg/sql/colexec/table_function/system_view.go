@@ -17,27 +17,20 @@ package table_function
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strings"
 )
-
-// lockInfo holds all info from lockservice
-type lockInfo struct {
-	tableId     uint64
-	keys        [][]byte
-	lockMode    pblock.LockMode
-	isRangeLock bool
-	holders     []pblock.WaitTxn
-	waiters     []pblock.WaitTxn
-}
 
 const (
 	lockStatusWait     = "wait"     // nobody holds the lock but somebody waits on it
@@ -45,32 +38,9 @@ const (
 	lockStatusNone     = "none"     // nobody waits and holds the lock
 )
 
-func (li *lockInfo) isRange() bool {
-	return li.isRangeLock
-}
-
-func (li *lockInfo) rangeKeys() ([]byte, []byte) {
-	llen := len(li.keys)
-	if llen >= 2 {
-		return li.keys[0], li.keys[1]
-	} else if llen >= 1 {
-		return li.keys[0], []byte{}
-	} else {
-		return []byte{}, []byte{}
-	}
-}
-
-func (li *lockInfo) pointKey() []byte {
-	llen := len(li.keys)
-	if llen >= 1 {
-		return li.keys[0]
-	}
-	return []byte{}
-}
-
-func (li *lockInfo) status() string {
-	hasHolders := len(li.holders) != 0
-	hasWaiters := len(li.waiters) != 0
+func getLockStatus(li *query.LockInfo) string {
+	hasHolders := len(li.GetHolders()) != 0
+	hasWaiters := len(li.GetWaiters()) != 0
 	if !hasHolders && !hasWaiters {
 		return lockStatusNone
 	} else if hasHolders {
@@ -80,30 +50,25 @@ func (li *lockInfo) status() string {
 	}
 }
 
-func (li *lockInfo) holderList() []pblock.WaitTxn {
-	return li.holders
-}
-
-func (li *lockInfo) waiterList() []pblock.WaitTxn {
-	return li.waiters
-}
-
-func copyKeys(src [][]byte) [][]byte {
-	dst := make([][]byte, 0, len(src))
-	for _, s := range src {
-		d := make([]byte, len(s))
-		copy(d, s)
-		dst = append(dst, s)
+func getRangeKeys(li *query.LockInfo) ([]byte, []byte) {
+	keys := li.GetKeys()
+	llen := len(keys)
+	if llen >= 2 {
+		return keys[0], keys[1]
+	} else if llen >= 1 {
+		return keys[0], []byte{}
+	} else {
+		return []byte{}, []byte{}
 	}
-	return dst
 }
 
-func copyWaitTxn(src pblock.WaitTxn) pblock.WaitTxn {
-	dst := pblock.WaitTxn{}
-	dst.TxnID = make([]byte, len(src.TxnID))
-	copy(dst.TxnID, src.GetTxnID())
-	dst.CreatedOn = src.GetCreatedOn()
-	return dst
+func getPointKey(li *query.LockInfo) []byte {
+	keys := li.GetKeys()
+	llen := len(keys)
+	if llen >= 1 {
+		return keys[0]
+	}
+	return []byte{}
 }
 
 func moLocksPrepare(proc *process.Process, arg *Argument) error {
@@ -121,6 +86,11 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
 
+		rsps, err := getLocks(proc)
+		if err != nil {
+			return false, err
+		}
+
 		//alloc batch
 		bat := batch.NewWithSize(len(arg.Attrs))
 		for i, col := range arg.Attrs {
@@ -135,113 +105,91 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 		bat.Attrs = arg.Attrs
 
-		locks := make([]*lockInfo, 0)
-
-		getAllLocks := func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool {
-			//need copy keys
-			info := &lockInfo{
-				tableId:     tableID,
-				keys:        copyKeys(keys),
-				lockMode:    lock.GetLockMode(),
-				isRangeLock: lock.IsRangeLock(),
-			}
-
-			lock.IterHolders(func(holder pblock.WaitTxn) bool {
-				info.holders = append(info.holders, copyWaitTxn(holder))
-				return true
-			})
-
-			lock.IterWaiters(func(waiter pblock.WaitTxn) bool {
-				info.waiters = append(info.waiters, copyWaitTxn(waiter))
-				return true
-			})
-
-			locks = append(locks, info)
-			return true
-		}
-
-		proc.LockService.IterLocks(getAllLocks)
-
-		//fill batch
-		for _, lock := range locks {
-			if lock == nil {
+		//fill batch from lock info
+		for _, rsp := range rsps {
+			if rsp == nil || len(rsp.LockInfoList) == 0 {
 				continue
 			}
-			//cnId := ""
-			//sessionId := ""
-			txnId := ""
-			tableId := fmt.Sprintf("%d", lock.tableId)
-
-			//table name
-			//tableName := ""
-			//lock key
-			lockKey := "point"
-			if lock.isRange() {
-				lockKey = "range"
-			}
-
-			//lock content
-			lockContent := ""
-			if lock.isRange() {
-				k1, k2 := lock.rangeKeys()
-				lockContent = hex.EncodeToString(k1) + "," + hex.EncodeToString(k2)
-			} else {
-				lockContent = hex.EncodeToString(lock.pointKey())
-			}
-
-			//lock mode
-			lockMode := lock.lockMode.String()
-			//lock status
-			lockStatus := lock.status()
-			//lock wait
-			lockWait := ""
-
-			hList := lock.holderList()
-			hLen := len(hList)
-			wList := lock.waiterList()
-			wLen := len(wList)
-
-			record := make([][]byte, len(plan2.MoLocksColNames))
-			//record[plan2.MoLocksColTypeCnId] = []byte(cnId)
-			//record[plan2.MoLocksColTypeSessionId] = []byte(sessionId)
-			record[plan2.MoLocksColTypeTxnId] = []byte(txnId)
-			record[plan2.MoLocksColTypeTableId] = []byte(tableId)
-			//record[plan2.MoLocksColTypeTableName] = []byte(tableName)
-			record[plan2.MoLocksColTypeLockKey] = []byte(lockKey)
-			record[plan2.MoLocksColTypeLockContent] = []byte(lockContent)
-			record[plan2.MoLocksColTypeLockMode] = []byte(lockMode)
-			record[plan2.MoLocksColTypeLockStatus] = []byte(lockStatus)
-			record[plan2.MoLocksColTypeLockWait] = []byte(lockWait)
-
-			if hLen == 0 && wLen == 0 {
-				//one record
-				if err := fillRecord(proc, bat, record); err != nil {
-					return false, err
+			for _, lock := range rsp.LockInfoList {
+				if lock == nil {
+					continue
 				}
-			} else if hLen == 0 && wLen != 0 {
-				//wLen records
-				for j := 0; j < wLen; j++ {
-					record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[j].GetTxnID()))
+				cnId := rsp.GetCnId()
+				//sessionId := ""
+				txnId := ""
+				tableId := fmt.Sprintf("%d", lock.GetTableId())
+
+				//table name
+				//tableName := ""
+				//lock key
+				lockKey := "point"
+				if lock.GetIsRangeLock() {
+					lockKey = "range"
+				}
+
+				//lock content
+				lockContent := ""
+				if lock.GetIsRangeLock() {
+					k1, k2 := getRangeKeys(lock)
+					lockContent = hex.EncodeToString(k1) + "," + hex.EncodeToString(k2)
+				} else {
+					lockContent = hex.EncodeToString(getPointKey(lock))
+				}
+
+				//lock mode
+				lockMode := lock.GetLockMode().String()
+				//lock status
+				lockStatus := getLockStatus(lock)
+				//lock wait
+				lockWait := ""
+
+				hList := lock.GetHolders()
+				hLen := len(hList)
+				wList := lock.GetWaiters()
+				wLen := len(wList)
+
+				record := make([][]byte, len(plan2.MoLocksColNames))
+				record[plan2.MoLocksColTypeCnId] = []byte(cnId)
+				//record[plan2.MoLocksColTypeSessionId] = []byte(sessionId)
+				record[plan2.MoLocksColTypeTxnId] = []byte(txnId)
+				record[plan2.MoLocksColTypeTableId] = []byte(tableId)
+				//record[plan2.MoLocksColTypeTableName] = []byte(tableName)
+				record[plan2.MoLocksColTypeLockKey] = []byte(lockKey)
+				record[plan2.MoLocksColTypeLockContent] = []byte(lockContent)
+				record[plan2.MoLocksColTypeLockMode] = []byte(lockMode)
+				record[plan2.MoLocksColTypeLockStatus] = []byte(lockStatus)
+				record[plan2.MoLocksColTypeLockWait] = []byte(lockWait)
+
+				if hLen == 0 && wLen == 0 {
+					//one record
 					if err := fillRecord(proc, bat, record); err != nil {
 						return false, err
 					}
-				}
-			} else if hLen != 0 && wLen == 0 {
-				//hLen records
-				for j := 0; j < hLen; j++ {
-					record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
-					if err := fillRecord(proc, bat, record); err != nil {
-						return false, err
-					}
-				}
-			} else {
-				//hLen * wLen records
-				for j := 0; j < hLen; j++ {
-					for k := 0; k < wLen; k++ {
-						record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
-						record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[k].GetTxnID()))
+				} else if hLen == 0 && wLen != 0 {
+					//wLen records
+					for j := 0; j < wLen; j++ {
+						record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[j].GetTxnID()))
 						if err := fillRecord(proc, bat, record); err != nil {
 							return false, err
+						}
+					}
+				} else if hLen != 0 && wLen == 0 {
+					//hLen records
+					for j := 0; j < hLen; j++ {
+						record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
+						if err := fillRecord(proc, bat, record); err != nil {
+							return false, err
+						}
+					}
+				} else {
+					//hLen * wLen records
+					for j := 0; j < hLen; j++ {
+						for k := 0; k < wLen; k++ {
+							record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
+							record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[k].GetTxnID()))
+							if err := fillRecord(proc, bat, record); err != nil {
+								return false, err
+							}
 						}
 					}
 				}
@@ -268,6 +216,34 @@ func fillRecord(proc *process.Process, bat *batch.Batch, record [][]byte) error 
 		}
 	}
 	return nil
+}
+
+// getLocks get lock info from all cn
+func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
+	var err error
+	var nodes []string
+
+	disttae.SelectForSuperTenant(clusterservice.NewSelector(), "root", nil,
+		func(s *metadata.CNService) {
+			nodes = append(nodes, s.QueryAddress)
+		})
+
+	genRequest := func() *query.Request {
+		req := proc.QueryService.NewRequest(query.CmdMethod_GetLockInfo)
+		req.GetLockInfoRequest = &query.GetLockInfoRequest{}
+		return req
+	}
+
+	rsps := make([]*query.GetLockInfoResponse, 0)
+
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp != nil && rsp.GetLockInfoResponse != nil {
+			rsps = append(rsps, rsp.GetLockInfoResponse)
+		}
+	}
+
+	err = queryservice.RequestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	return rsps, err
 }
 
 func moConfigurationsPrepare(proc *process.Process, arg *Argument) error {
