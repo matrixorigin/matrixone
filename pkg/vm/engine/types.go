@@ -107,6 +107,7 @@ func (node IndexT) ToString() string {
 		return "BSI"
 	default:
 		return "INVAILD"
+		//TODO: need to define all the index type here aswell. Can't we reuse tree.IndexType?
 	}
 }
 
