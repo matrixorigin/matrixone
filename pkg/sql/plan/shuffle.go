@@ -257,13 +257,10 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
-	case types.T_varchar, types.T_char, types.T_text:
-		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
-		n.Stats.HashmapStats.Shuffle = true
 	}
 }
 
@@ -320,13 +317,10 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
-	case types.T_varchar, types.T_char, types.T_text:
-		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
-		n.Stats.HashmapStats.Shuffle = true
 	}
 
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
@@ -379,6 +373,11 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		}
 		switch types.T(n.TableDef.Cols[firstColID].Typ.Id) {
 		case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
+			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
+			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstColName])
+		case types.T_char, types.T_varchar, types.T_text:
 			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
 			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])

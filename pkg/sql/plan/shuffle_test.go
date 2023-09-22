@@ -75,7 +75,7 @@ func compareUint64(a, b uint64) int {
 		return 1
 	}
 }
- 
+
 func TestStringToUint64(t *testing.T) {
 	s1 := []byte("abc")
 	u1 := varlenaToUint64Inline(buildVarlenaFromByteSlice(s1))
