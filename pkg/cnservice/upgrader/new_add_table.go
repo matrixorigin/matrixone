@@ -44,9 +44,36 @@ var (
     		  PRIMARY KEY table_id (table_id, name)
 			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS),
 	}
+
+	SysDaemonTaskTable = &table.Table{
+		Account:  table.AccountSys,
+		Database: catalog.MOTaskDB,
+		Table:    catalog.MOSysDaemonTask,
+		CreateTableSql: fmt.Sprintf(`create table %s.%s(
+			task_id                     int primary key auto_increment,
+			task_metadata_id            varchar(50),
+			task_metadata_executor      int,
+			task_metadata_context       blob,
+			task_metadata_option        varchar(1000),
+			account_id                  int unsigned not null,
+			account                     varchar(128) not null,
+			task_type                   varchar(64) not null,
+			task_runner                 varchar(64),
+			task_status                 int not null,
+			last_heartbeat              timestamp,
+			create_at                   timestamp not null,
+			update_at                   timestamp not null,
+			end_at                      timestamp,
+			last_run                    timestamp,
+			details                     blob)`,
+			catalog.MOTaskDB, catalog.MOSysDaemonTask),
+	}
 )
 
-var needUpgradNewTable = []*table.Table{MoTablePartitionsTable}
+var needUpgradeNewTable = []*table.Table{
+	MoTablePartitionsTable,
+	SysDaemonTaskTable,
+}
 
 var PARTITIONSView = &table.Table{
 	Account:  table.AccountAll,
@@ -202,10 +229,11 @@ var MoLocksView = &table.Table{
 	Database: catalog.MO_CATALOG,
 	Table:    "mo_locks",
 	Columns: []table.Column{
-		table.StringColumn("txn_id", "the txn id which holds the lock"),
+		table.StringColumn("cn_id", "the cn id which cn lock stays on"),
+		table.StringColumn("txn_id", "the txn id which txn holds the lock"),
 		table.StringColumn("table_id", "the table that the lock is on"),
 		table.StringColumn("lock_key", "point or range"),
-		table.UInt64Column("lock_content", "the content the clock is on"),
+		table.StringColumn("lock_content", "the content the clock is on"),
 		table.StringColumn("lock_mode", "shared or exclusive"),
 		table.StringColumn("lock_status", "acquired or wait"),
 		table.StringColumn("lock_wait", "the txn that waits on the lock"),
@@ -226,5 +254,5 @@ var SqlStatementHotspotView = &table.Table{
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
 
-var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView}
-var registeredViews = []*table.Table{processlistView}
+var registeredViews = []*table.Table{processlistView, MoLocksView}
+var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView}

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"math"
 	"math/bits"
 	"os"
@@ -51,7 +52,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	errors2 "github.com/pkg/errors"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -4295,61 +4295,31 @@ func postDropSuspendAccount(
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
-	nodesLeft := len(nodes)
 
-	type nodeResponse struct {
-		nodeAddr string
-		response interface{}
-		err      error
-	}
-	responseChan := make(chan nodeResponse, nodesLeft)
-
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
 	var retErr error
-	for _, node := range nodes {
-		// Invalid node address, ignore it.
-		if len(node) == 0 {
-			nodesLeft--
-			continue
+	genRequest := func() *query.Request {
+		req := qs.NewRequest(query.CmdMethod_KillConn)
+		req.KillConnRequest = &query.KillConnRequest{
+			AccountID: accountID,
+			Version:   version,
 		}
-
-		go func(addr string) {
-			req := qs.NewRequest(query.CmdMethod_KillConn)
-			req.KillConnRequest = &query.KillConnRequest{
-				AccountID: accountID,
-				Version:   version,
-			}
-			resp, err := qs.SendMessage(ctx, addr, req)
-			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
-		}(node)
+		return req
 	}
 
-	// Wait for all responses.
-	for nodesLeft > 0 {
-		select {
-		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
-			} else {
-				queryResp, ok := res.response.(*query.Response)
-
-				if !ok || (queryResp.KillConnResponse != nil && !queryResp.KillConnResponse.Success) {
-					retErr = moerr.NewInternalError(ctx,
-						fmt.Sprintf("kill connection for account %s failed on node %s",
-							accountName, res.nodeAddr))
-				}
-				if queryResp != nil {
-					qs.Release(queryResp)
-				}
-			}
-		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp.KillConnResponse != nil && !rsp.KillConnResponse.Success {
+			retErr = moerr.NewInternalError(ctx,
+				fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 		}
-		nodesLeft--
 	}
 
-	return retErr
+	handleInvalidResponse := func(nodeAddr string) {
+		retErr = moerr.NewInternalError(ctx,
+			fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
+	}
+
+	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	return errors.Join(err, retErr)
 }
 
 // doDropUser accomplishes the DropUser statement
@@ -5613,8 +5583,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
-		if st.ConnectorName != nil {
-			dbName = string(st.ConnectorName.SchemaName)
+		if st.TableName != nil {
+			dbName = string(st.TableName.SchemaName)
 		}
 	case *tree.CreateSequence:
 		objType = objectTypeDatabase
@@ -5741,7 +5711,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
-		*tree.ShowBackendServers, *tree.ShowStages:
+		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
+		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
@@ -9186,59 +9157,30 @@ func postAlterSessionStatus(
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
-	nodesLeft := len(nodes)
 
-	type nodeResponse struct {
-		nodeAddr string
-		response interface{}
-		err      error
-	}
-	responseChan := make(chan nodeResponse, nodesLeft)
+	var retErr, err error
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
-	var retErr error
-	for _, node := range nodes {
-		// Invalid node address, ignore it.
-		if len(node) == 0 {
-			nodesLeft--
-			continue
+	genRequest := func() *query.Request {
+		req := qs.NewRequest(query.CmdMethod_AlterAccount)
+		req.AlterAccountRequest = &query.AlterAccountRequest{
+			TenantId: tenantId,
+			Status:   status,
 		}
-
-		go func(addr string) {
-			req := qs.NewRequest(query.CmdMethod_AlterAccount)
-			req.AlterAccountRequest = &query.AlterAccountRequest{
-				TenantId: tenantId,
-				Status:   status,
-			}
-			resp, err := qs.SendMessage(ctx, addr, req)
-			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
-		}(node)
+		return req
 	}
 
-	// Wait for all responses.
-	for nodesLeft > 0 {
-		select {
-		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
-			} else {
-				queryResp, ok := res.response.(*query.Response)
-
-				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
-					retErr = moerr.NewInternalError(ctx,
-						fmt.Sprintf("alter account status for account %s failed on node %s",
-							accountName, res.nodeAddr))
-				}
-				if queryResp != nil {
-					qs.Release(queryResp)
-				}
-			}
-		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp.AlterAccountResponse != nil && !rsp.AlterAccountResponse.AlterSuccess {
+			retErr = moerr.NewInternalError(ctx,
+				fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
 		}
-		nodesLeft--
 	}
 
-	return retErr
+	handleInvalidResponse := func(nodeAddr string) {
+		retErr = moerr.NewInternalError(ctx,
+			fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
+	}
+
+	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	return errors.Join(err, retErr)
 }

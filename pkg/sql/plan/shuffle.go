@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"math/bits"
+	"unsafe"
 )
 
 const (
@@ -34,6 +36,37 @@ const (
 	ShuffleToLocalMatchedReg int32 = 1
 	ShuffleToMultiMatchedReg int32 = 2
 )
+
+// convert first 8 bytes to uint64, slice might be less than 8 bytes
+func ByteSliceToUint64(bytes []byte) uint64 {
+	var result uint64 = 0
+	i := 0
+	length := len(bytes)
+	for ; i < 8; i++ {
+		result = result * 256
+		if i < length {
+			result += uint64(bytes[i])
+		}
+	}
+	return result
+}
+
+// convert first 8 bytes to uint64. vec.area must be nil
+// if varlena length less than 8 bytes, should have filled zero in varlena
+func VarlenaToUint64Inline(v *types.Varlena) uint64 {
+	return bits.ReverseBytes64(*(*uint64)(unsafe.Add(unsafe.Pointer(&v[0]), 1)))
+}
+
+// convert first 8 bytes to uint64
+func VarlenaToUint64(v *types.Varlena, area []byte) uint64 {
+	svlen := (*v)[0]
+	if svlen <= types.VarlenaInlineSize {
+		return VarlenaToUint64Inline(v)
+	} else {
+		voff, _ := v.OffsetLen()
+		return bits.ReverseBytes64(*(*uint64)(unsafe.Pointer(&area[voff])))
+	}
+}
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
@@ -224,13 +257,10 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
-	case types.T_varchar, types.T_char, types.T_text:
-		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
-		n.Stats.HashmapStats.Shuffle = true
 	}
 }
 
@@ -287,13 +317,10 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
-	case types.T_varchar, types.T_char, types.T_text:
-		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
-		n.Stats.HashmapStats.Shuffle = true
 	}
 
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
@@ -346,6 +373,11 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		}
 		switch types.T(n.TableDef.Cols[firstColID].Typ.Id) {
 		case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
+			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
+			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstColName])
+		case types.T_char, types.T_varchar, types.T_text:
 			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
 			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
