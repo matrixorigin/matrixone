@@ -319,7 +319,7 @@ func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err erro
 	if a.partialresult != nil {
 		if a.isCount {
 			var x T1
-			a.vs[0], a.es[0], err = a.fill(0, x, a.vs[0], a.partialresult.(int64), false, false)
+			a.vs[0], a.es[0], err = a.fill(0, x, a.vs[0], a.partialresult.(int64), a.es[0], false)
 			if err != nil {
 				return nil, err
 			}
