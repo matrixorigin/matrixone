@@ -17,25 +17,32 @@ package task
 import (
 	"fmt"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+type Task interface {
+	GetID() uint64
+	GetMetadata() TaskMetadata
+}
+
 // IsDelayTask returns true if the task is a delay task
-func (m Task) IsDelayTask() bool {
+func (m AsyncTask) IsDelayTask() bool {
 	return m.Metadata.Options.DelayDuration > 0
 }
 
 // IsInitTask returns true if the task is an init task
-func (m Task) IsInitTask() bool {
+func (m AsyncTask) IsInitTask() bool {
 	return m.Metadata.Executor == TaskCode_SystemInit
 }
 
 // GetDelayDuration returns delay duration
-func (m Task) GetDelayDuration() time.Duration {
+func (m AsyncTask) GetDelayDuration() time.Duration {
 	return time.Duration(m.Metadata.Options.DelayDuration)
 }
 
 // DebugString returns the debug string
-func (m Task) DebugString() string {
+func (m AsyncTask) DebugString() string {
 	return fmt.Sprintf("%s/%d", m.Metadata.ID, m.Metadata.Executor)
 }
 
@@ -45,4 +52,32 @@ func (m CronTask) DebugString() string {
 		m.Metadata.ID,
 		m.TriggerTimes,
 		m.CronExpr)
+}
+
+// Type returns the task's type. It panics if the type is invalid.
+func (t *Details) Type() TaskType {
+	typ, err := detailsType(t.Details)
+	if err != nil {
+		panic(err)
+	}
+	return typ
+}
+
+func detailsType(d isDetails_Details) (TaskType, error) {
+	switch d := d.(type) {
+	case *Details_Connector:
+		return TaskType_TypeKafkaSinkConnector, nil
+	default:
+		return TaskType_TypeUnknown, moerr.NewInternalErrorNoCtx("Unknown details type: %T", d)
+	}
+}
+
+func (t *Details) Scan(src any) error {
+	var data []byte
+	if b, ok := src.([]byte); ok {
+		data = b
+	} else if s, ok := src.(string); ok {
+		data = []byte(s)
+	}
+	return t.Unmarshal(data)
 }

@@ -17,7 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
-	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -95,6 +96,12 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 		return
 	}
 	s.startTaskRunner()
+
+	ts, ok := s.task.holder.Get()
+	if !ok {
+		panic("no task service is initialized")
+	}
+	s.pu.TaskService = ts
 }
 
 func (s *service) initSqlWriterFactory() {
@@ -108,10 +115,6 @@ func (s *service) initSqlWriterFactory() {
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
 	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
 	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
-}
-
-func (s *service) initMOConnectorMgr() {
-	s.connectorMgr = moconnector.NewConnectorManager(context.Background())
 }
 
 func (s *service) upgrade() {
@@ -134,6 +137,63 @@ func (s *service) upgrade() {
 	}
 	ug.Upgrade(moServerCtx)
 }
+
+func (s *service) canClaimDaemonTask(taskAccount string) bool {
+	const accountKey = "account"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	state, err := s._hakeeperClient.GetClusterState(ctx)
+	if err != nil {
+		return false
+	}
+	stores := state.CNState.Stores
+
+	info, ok := stores[s.cfg.UUID]
+	// 1. Cannot find current CN service UUID in cluster state.
+	if !ok {
+		return false
+	}
+
+	// We assume that the runner is a shard runner.
+	localShared := true
+
+	// 2. If the current runner has the same account info, return true.
+	for _, account := range info.Labels[accountKey].Labels {
+		if account != "" {
+			// This CN node has account, so it is not a shared one.
+			localShared = false
+		}
+		if strings.EqualFold(account, taskAccount) {
+			return true
+		}
+	}
+
+	isSysTask := strings.EqualFold(taskAccount, frontend.GetDefaultTenant())
+
+	var taskHasRunner bool
+	for _, store := range stores {
+		for key, labelInfo := range store.Labels {
+			if strings.EqualFold(accountKey, key) {
+				for _, label := range labelInfo.Labels {
+					if strings.EqualFold(label, taskAccount) {
+						taskHasRunner = true
+					}
+				}
+			}
+		}
+	}
+
+	// 3. If there are no other runners for this task, and local runner is a shared one or the
+	// task is belongs to sys account, we could run it.
+	if !taskHasRunner && (localShared || isSysTask) {
+		return true
+	}
+
+	// 4. Otherwise, we could not run this task.
+	return false
+}
+
 func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
@@ -149,6 +209,7 @@ func (s *service) startTaskRunner() {
 
 	s.task.runner = taskservice.NewTaskRunner(s.cfg.UUID,
 		ts,
+		s.canClaimDaemonTask,
 		taskservice.WithRunnerLogger(s.logger),
 		taskservice.WithOptions(
 			s.cfg.TaskRunner.QueryLimit,
@@ -158,6 +219,7 @@ func (s *service) startTaskRunner() {
 			s.cfg.TaskRunner.FetchTimeout.Duration,
 			s.cfg.TaskRunner.RetryInterval.Duration,
 			s.cfg.TaskRunner.HeartbeatInterval.Duration,
+			s.cfg.TaskRunner.HeartbeatTimeout.Duration,
 		),
 	)
 
@@ -201,9 +263,9 @@ func (s *service) waitSystemInitCompleted(ctx context.Context) {
 		default:
 			ts, ok := s.GetTaskService()
 			if ok {
-				tasks, err := ts.QueryTask(ctx,
+				tasks, err := ts.QueryAsyncTask(ctx,
 					taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_SystemInit),
-					taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Completed))
+					taskservice.WithTaskStatusCond(task.TaskStatus_Completed))
 				if err != nil {
 					s.logger.Error("wait all init task completed failed", zap.Error(err))
 					break
@@ -297,4 +359,7 @@ func (s *service) registerExecutorsLocked() {
 	// init metric task
 	s.task.runner.RegisterExecutor(task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(ieFactory))
+	// streaming connector task
+	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
+		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
 }
