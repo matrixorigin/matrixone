@@ -234,6 +234,7 @@ func init() {
 		"issuer":                     ISSUER,
 		"isolation":                  ISOLATION,
 		"iterate":                    ITERATE,
+		"ivfflat":                    IVFFLAT,
 		"join":                       JOIN,
 		"json":                       JSON,
 		"uuid":                       UUID,
