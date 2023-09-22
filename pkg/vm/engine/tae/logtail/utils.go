@@ -2444,7 +2444,7 @@ func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
 
 func (collector *BaseCollector) VisitBackupBlk(entry *catalog.BlockEntry) (err error) {
 	entry.RLock()
-	mvccNodes := entry.ClonePreparedInRangeForBackup(collector.end)
+	mvccNodes := entry.ClonePreparedInRangeForBackup(collector.start, collector.end)
 	entry.RUnlock()
 	if len(mvccNodes) == 0 {
 		return nil

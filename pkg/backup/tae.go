@@ -89,8 +89,9 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 }
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
-	backupTime := names[0]
-	names = names[1:]
+	backup := names[0]
+	backupTime := names[1]
+	names = names[2:]
 	files := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
@@ -99,6 +100,42 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
+		if len(ckpStr) != 2 {
+			return moerr.NewInternalError(ctx, "invalid checkpoint string")
+		}
+		metaLoc := ckpStr[0]
+		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
+		if err != nil {
+			return err
+		}
+		key, err := blockio.EncodeLocationFromString(metaLoc)
+		if err != nil {
+			return err
+		}
+		locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
+		if err != nil {
+			return err
+		}
+		table.UpdateTable(data)
+		gcFiles := table.SoftGC()
+		mergeGCFile(gcFiles, gcFileMap)
+		for _, location := range locations {
+			if files[location.Name().String()] == nil {
+				dentry, err := srcFs.StatFile(ctx, location.Name().String())
+				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+						isGC(gcFileMap, location.Name().String()) {
+						continue
+					} else {
+						return err
+					}
+				}
+				files[location.Name().String()] = dentry
+			}
+		}
+	}
+	if backup != "" {
+		ckpStr := strings.Split(backup, ":")
 		if len(ckpStr) != 2 {
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
 		}

@@ -527,7 +527,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	return
 }
 
-func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (err error) {
+func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (err error, location string) {
 	factory := logtail.BackupCheckpointDataFactory(entry.start, entry.end)
 	data, err := factory(r.catalog)
 	if err != nil {
@@ -539,7 +539,7 @@ func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (err error) {
 		return
 	}
 	entry.SetLocation(cnLocation, tnLocation)
-
+	location = tnLocation.String()
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
 	})

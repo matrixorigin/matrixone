@@ -398,10 +398,10 @@ func (be *MVCCChain[T]) ClonePreparedInRange(start, end types.TS) (ret []T) {
 
 // ClonePreparedInRange will collect all txn node prepared in the time window.
 // Wait txn to complete committing if it didn't.
-func (be *MVCCChain[T]) ClonePreparedInRangeForBackup(end types.TS) (ret []T) {
+func (be *MVCCChain[T]) ClonePreparedInRangeForBackup(start, end types.TS) (ret []T) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[T]) bool {
 		un := n.GetPayload()
-		in, before := un.PreparedIn(end, txnif.UncommitTS)
+		in, before := un.PreparedIn(start, end)
 		if in {
 			if ret == nil {
 				ret = make([]T, 0)
