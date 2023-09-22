@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"math"
 	"math/bits"
 	"os"
@@ -51,7 +52,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	errors2 "github.com/pkg/errors"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -133,7 +133,10 @@ func (ti *TenantInfo) SetDefaultRoleID(id uint32) {
 }
 
 func (ti *TenantInfo) IsSysTenant() bool {
-	return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+	if ti != nil {
+		return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+	}
+	return false
 }
 
 func (ti *TenantInfo) IsDefaultRole() bool {
@@ -816,6 +819,8 @@ var (
 		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
 		"mo_sessions":                 0,
+		"mo_configurations":           0,
+		"mo_locks":                    0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -843,6 +848,8 @@ var (
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
 		"mo_sessions":                 0,
+		"mo_configurations":           0,
+		"mo_locks":                    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1018,6 +1025,8 @@ var (
 				primary key(stage_id)
 			);`,
 		`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
+		`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
+		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
 	}
 
 	//drop tables for the tenant
@@ -1032,6 +1041,8 @@ var (
 		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 		`drop table if exists mo_catalog.mo_stages;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
+		`drop view if exists mo_catalog.mo_configurations;`,
+		`drop view if exists mo_catalog.mo_locks;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql       = `delete from mo_catalog.mo_pubs;`
@@ -1421,6 +1432,12 @@ const (
 
 	// grant ownership on table
 	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
+
+	// revoke ownership on database owner
+	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s form %s;`
+
+	// revoke ownership on table owner
+	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`
 
 	// get the owner of the database
 	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
@@ -1993,6 +2010,16 @@ func getSqlForGrantOwnershipOnDatabase(dbName, roleName string) string {
 // getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
 func getSqlForGrantOwnershipOnTable(dbName, tbName, roleName string) string {
 	return fmt.Sprintf(grantOwnershipOnTableFormat, dbName, tbName, roleName)
+}
+
+// getSqlForRevokeOwnershipFromDatabase get the sql for revoke ownership on database
+func getSqlForRevokeOwnershipFromDatabase(dbName, roleName string) string {
+	return fmt.Sprintf(revokeOwnershipFromDatabaseFormat, dbName, roleName)
+}
+
+// getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
+func getSqlForRevokeOwnershipFromTable(dbName, tbName, roleName string) string {
+	return fmt.Sprintf(revokeOwnershipFromTableFormat, dbName, tbName, roleName)
 }
 
 // getSqlForGetOwnerOfDatabase get the sql for get the owner of the database
@@ -4268,61 +4295,31 @@ func postDropSuspendAccount(
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
-	nodesLeft := len(nodes)
 
-	type nodeResponse struct {
-		nodeAddr string
-		response interface{}
-		err      error
-	}
-	responseChan := make(chan nodeResponse, nodesLeft)
-
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
 	var retErr error
-	for _, node := range nodes {
-		// Invalid node address, ignore it.
-		if len(node) == 0 {
-			nodesLeft--
-			continue
+	genRequest := func() *query.Request {
+		req := qs.NewRequest(query.CmdMethod_KillConn)
+		req.KillConnRequest = &query.KillConnRequest{
+			AccountID: accountID,
+			Version:   version,
 		}
-
-		go func(addr string) {
-			req := qs.NewRequest(query.CmdMethod_KillConn)
-			req.KillConnRequest = &query.KillConnRequest{
-				AccountID: accountID,
-				Version:   version,
-			}
-			resp, err := qs.SendMessage(ctx, addr, req)
-			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
-		}(node)
+		return req
 	}
 
-	// Wait for all responses.
-	for nodesLeft > 0 {
-		select {
-		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
-			} else {
-				queryResp, ok := res.response.(*query.Response)
-
-				if !ok || (queryResp.KillConnResponse != nil && !queryResp.KillConnResponse.Success) {
-					retErr = moerr.NewInternalError(ctx,
-						fmt.Sprintf("kill connection for account %s failed on node %s",
-							accountName, res.nodeAddr))
-				}
-				if queryResp != nil {
-					qs.Release(queryResp)
-				}
-			}
-		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp.KillConnResponse != nil && !rsp.KillConnResponse.Success {
+			retErr = moerr.NewInternalError(ctx,
+				fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 		}
-		nodesLeft--
 	}
 
-	return retErr
+	handleInvalidResponse := func(nodeAddr string) {
+		retErr = moerr.NewInternalError(ctx,
+			fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
+	}
+
+	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	return errors.Join(err, retErr)
 }
 
 // doDropUser accomplishes the DropUser statement
@@ -5590,6 +5587,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			dbName = string(st.ConnectorName.SchemaName)
 		}
 	case *tree.CreateSequence:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
+	case *tree.AlterSequence:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
@@ -8924,6 +8928,57 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	return err
 }
 
+func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var err error
+	var sql string
+	tenantInfo := ses.GetTenantInfo()
+	if tenantInfo == nil || tenantInfo.IsAdminRole() {
+		return err
+	}
+	currentRole := tenantInfo.GetDefaultRole()
+
+	// 1.first change to moadmin/accountAdmin
+	var tenantCtx context.Context
+	tenantInfo = ses.GetTenantInfo()
+	// if is system account
+	if tenantInfo.IsSysTenant() {
+		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	} else {
+		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+	}
+
+	// 2.grant database privilege
+	switch st := stmt.(type) {
+	case *tree.DropDatabase:
+		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), currentRole)
+	case *tree.DropTable:
+		// get database name
+		var dbName string
+		if len(st.Names[0].SchemaName) == 0 {
+			dbName = ses.GetDatabaseName()
+		} else {
+			dbName = string(st.Names[0].SchemaName)
+		}
+		// get table name
+		tableName := string(st.Names[0].ObjectName)
+		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
+	}
+
+	bh := ses.GetBackgroundExec(tenantCtx)
+	defer bh.Close()
+
+	err = bh.Exec(tenantCtx, sql)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
 func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[string]interface{}, err error) {
 	var sql string
 	var erArray []ExecResult
@@ -9101,59 +9156,30 @@ func postAlterSessionStatus(
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
-	nodesLeft := len(nodes)
 
-	type nodeResponse struct {
-		nodeAddr string
-		response interface{}
-		err      error
-	}
-	responseChan := make(chan nodeResponse, nodesLeft)
+	var retErr, err error
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
-	var retErr error
-	for _, node := range nodes {
-		// Invalid node address, ignore it.
-		if len(node) == 0 {
-			nodesLeft--
-			continue
+	genRequest := func() *query.Request {
+		req := qs.NewRequest(query.CmdMethod_AlterAccount)
+		req.AlterAccountRequest = &query.AlterAccountRequest{
+			TenantId: tenantId,
+			Status:   status,
 		}
-
-		go func(addr string) {
-			req := qs.NewRequest(query.CmdMethod_AlterAccount)
-			req.AlterAccountRequest = &query.AlterAccountRequest{
-				TenantId: tenantId,
-				Status:   status,
-			}
-			resp, err := qs.SendMessage(ctx, addr, req)
-			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
-		}(node)
+		return req
 	}
 
-	// Wait for all responses.
-	for nodesLeft > 0 {
-		select {
-		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
-			} else {
-				queryResp, ok := res.response.(*query.Response)
-
-				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
-					retErr = moerr.NewInternalError(ctx,
-						fmt.Sprintf("alter account status for account %s failed on node %s",
-							accountName, res.nodeAddr))
-				}
-				if queryResp != nil {
-					qs.Release(queryResp)
-				}
-			}
-		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp.AlterAccountResponse != nil && !rsp.AlterAccountResponse.AlterSuccess {
+			retErr = moerr.NewInternalError(ctx,
+				fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
 		}
-		nodesLeft--
 	}
 
-	return retErr
+	handleInvalidResponse := func(nodeAddr string) {
+		retErr = moerr.NewInternalError(ctx,
+			fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
+	}
+
+	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	return errors.Join(err, retErr)
 }

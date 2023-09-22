@@ -105,6 +105,27 @@ func (node *StartWithOption) Format(ctx *FmtCtx) {
 	formatAny(node.Minus, node.Num, ctx)
 }
 
+type CycleOption struct {
+	Cycle bool
+}
+
+func (node *CycleOption) Format(ctx *FmtCtx) {
+	if node.Cycle {
+		ctx.WriteString("cycle")
+	} else {
+		ctx.WriteString("no cycle")
+	}
+}
+
+type TypeOption struct {
+	Type ResolvableTypeReference
+}
+
+func (node *TypeOption) Format(ctx *FmtCtx) {
+	ctx.WriteString(" as ")
+	node.Type.(*T).InternalType.Format(ctx)
+}
+
 func formatAny(minus bool, num any, ctx *FmtCtx) {
 	switch num := num.(type) {
 	case uint64:
@@ -137,3 +158,49 @@ func (node *DropSequence) Format(ctx *FmtCtx) {
 
 func (node *DropSequence) GetStatementType() string { return "Drop Sequence" }
 func (node *DropSequence) GetQueryType() string     { return QueryTypeDDL }
+
+type AlterSequence struct {
+	statementImpl
+
+	Name        *TableName
+	Type        *TypeOption
+	IfExists    bool
+	IncrementBy *IncrementByOption
+	MinValue    *MinValueOption
+	MaxValue    *MaxValueOption
+	StartWith   *StartWithOption
+	Cycle       *CycleOption
+}
+
+func (node *AlterSequence) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter sequence ")
+
+	if node.IfExists {
+		ctx.WriteString("if exists ")
+	}
+
+	node.Name.Format(ctx)
+
+	if node.Type != nil {
+		node.Type.Format(ctx)
+	}
+	ctx.WriteString(" ")
+	if node.IncrementBy != nil {
+		node.IncrementBy.Format(ctx)
+	}
+	if node.MinValue != nil {
+		node.MinValue.Format(ctx)
+	}
+	if node.MaxValue != nil {
+		node.MaxValue.Format(ctx)
+	}
+	if node.StartWith != nil {
+		node.StartWith.Format(ctx)
+	}
+	if node.Cycle != nil {
+		node.Cycle.Format(ctx)
+	}
+}
+
+func (node *AlterSequence) GetStatementType() string { return "Alter Sequence" }
+func (node *AlterSequence) GetQueryType() string     { return QueryTypeDDL }

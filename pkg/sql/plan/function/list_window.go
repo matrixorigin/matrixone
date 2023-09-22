@@ -17,7 +17,7 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 )
 
 var supportedWindowFunctions = []FuncNew{
@@ -35,10 +35,11 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
+				retType:    functionAgg.WinRankReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "rank",
+					aggNew: functionAgg.NewWinRank,
 				},
-				specialId: agg.WinRank,
 			},
 		},
 	},
@@ -56,10 +57,11 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
+				retType:    functionAgg.WinRowNumberReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "row_number",
+					aggNew: functionAgg.NewWinRowNumber,
 				},
-				specialId: agg.WinRowNumber,
 			},
 		},
 	},
@@ -77,10 +79,11 @@ var supportedWindowFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
+				retType:    functionAgg.WinDenseRankReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "dense_rank",
+					aggNew: functionAgg.NewWinDenseRank,
 				},
-				specialId: agg.WinDenseRank,
 			},
 		},
 	},
