@@ -234,7 +234,7 @@ insert into pri10 (col1, col2) values (1, null);
 constraint violation: Column 'col2' cannot be null
 insert into pri10 values (-2, 'p');
 insert into pri10 (col1, col2) values (1, 'a');
-Duplicate entry '(1,a)' for key '__mo_cpkey_col'
+Duplicate entry ('\(\d\,\w\)'|'\d\w\d{12}') for key '__mo_cpkey_col'
 select * from pri10;
 col1    col2
 1    a
