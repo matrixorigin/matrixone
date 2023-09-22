@@ -140,7 +140,7 @@ func (s *sAggMedian[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 fl
 	}
 	return 0, isEmpty1, nil
 }
-func (s *sAggMedian[T]) Eval(lastResult []float64, _ any) ([]float64, error) {
+func (s *sAggMedian[T]) Eval(lastResult []float64) ([]float64, error) {
 	for i := range lastResult {
 		count := len(s.values[i])
 		if count == 0 {
@@ -215,7 +215,7 @@ func (s *sAggDecimal64Median) Merge(groupNumber1 int64, groupNumber2 int64, resu
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal64Median) Eval(lastResult []types.Decimal128, _ any) ([]types.Decimal128, error) {
+func (s *sAggDecimal64Median) Eval(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i := range lastResult {
 		count := len(s.values[i])
@@ -302,7 +302,7 @@ func (s *sAggDecimal128Median) Merge(groupNumber1 int64, groupNumber2 int64, res
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal128Median) Eval(lastResult []types.Decimal128, _ any) ([]types.Decimal128, error) {
+func (s *sAggDecimal128Median) Eval(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i := range lastResult {
 		count := len(s.values[i])

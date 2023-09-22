@@ -49,7 +49,7 @@ type simpleAggTester[inputT, outputT any] struct {
 	free  func(pool *mpool.MPool)
 	fill  func(int64, inputT, outputT, int64, bool, bool) (outputT, bool, error)
 	merge func(int64, int64, outputT, outputT, bool, bool, any) (outputT, bool, error)
-	eval  func([]outputT, any) ([]outputT, error)
+	eval  func([]outputT) ([]outputT, error)
 }
 
 // please make sure the inputValues is not empty. and make sure its length is not less than inputNsp.Length().
@@ -108,7 +108,7 @@ func (tr *simpleAggTester[in, out]) testUnaryAgg(
 	}
 
 	results = results[:1]
-	results, err = tr.eval(results, nil)
+	results, err = tr.eval(results)
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(
 			fmt.Sprintf("agg test failed. eval failed. err is %s", err))

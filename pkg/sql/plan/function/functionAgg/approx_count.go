@@ -120,7 +120,7 @@ func (s *sAggApproxCountDistinct[T]) Merge(groupNumber1 int64, groupNumber2 int6
 	}
 	return result1, isEmpty1 && isEmpty2, err
 }
-func (s *sAggApproxCountDistinct[T]) Eval(lastResult []uint64, _ any) ([]uint64, error) {
+func (s *sAggApproxCountDistinct[T]) Eval(lastResult []uint64) ([]uint64, error) {
 	for i := range lastResult {
 		lastResult[i] = s.sk[i].Estimate()
 	}

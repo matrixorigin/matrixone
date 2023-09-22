@@ -109,7 +109,7 @@ func (s *sAggGroupConcat) Merge(groupNumber1 int64, groupNumber2 int64, result1 
 
 	return nil, isEmpty1 && isEmpty2, nil
 }
-func (s *sAggGroupConcat) Eval(lastResult [][]byte, _ any) ([][]byte, error) {
+func (s *sAggGroupConcat) Eval(lastResult [][]byte) ([][]byte, error) {
 	result := make([][]byte, 0, len(s.result))
 
 	for i := 0; i < len(s.result); i++ {

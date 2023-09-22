@@ -134,7 +134,7 @@ func (s *sAggVarPop[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 fl
 	s.counts[groupNumber1] += s2.counts[groupNumber2]
 	return result1 + result2, isEmpty1 && isEmpty2, nil
 }
-func (s *sAggVarPop[T]) Eval(lastResult []float64, _ any) ([]float64, error) {
+func (s *sAggVarPop[T]) Eval(lastResult []float64) ([]float64, error) {
 	for i := range lastResult {
 		if s.counts[i] == 0 {
 			continue
@@ -144,9 +144,9 @@ func (s *sAggVarPop[T]) Eval(lastResult []float64, _ any) ([]float64, error) {
 	}
 	return lastResult, nil
 }
-func (s *sAggVarPop[T]) EvalStdDevPop(lastResult []float64, _ any) ([]float64, error) {
+func (s *sAggVarPop[T]) EvalStdDevPop(lastResult []float64) ([]float64, error) {
 	var err error
-	lastResult, err = s.Eval(lastResult, nil)
+	lastResult, err = s.Eval(lastResult)
 	if err == nil {
 		for i := range lastResult {
 			lastResult[i] = math.Sqrt(lastResult[i])
@@ -287,7 +287,7 @@ func (s *VarianceDecimal) Merge(groupNumber1 int64, groupNumber2 int64, result1 
 	result1, err = result1.Add128(result2)
 	return result1, isEmpty1, err
 }
-func (s *VarianceDecimal) Eval(lastResult []types.Decimal128, _ any) ([]types.Decimal128, error) {
+func (s *VarianceDecimal) Eval(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i := range lastResult {
 		if s.Counts[i] == 1 {
@@ -318,9 +318,9 @@ func (s *VarianceDecimal) Eval(lastResult []types.Decimal128, _ any) ([]types.De
 	}
 	return lastResult, nil
 }
-func (s *VarianceDecimal) EvalStdDevPop(lastResult []types.Decimal128, _ any) ([]types.Decimal128, error) {
+func (s *VarianceDecimal) EvalStdDevPop(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
-	lastResult, err = s.Eval(lastResult, nil)
+	lastResult, err = s.Eval(lastResult)
 	if err == nil {
 		for i := range lastResult {
 			tmp := math.Sqrt(types.Decimal128ToFloat64(lastResult[i], s.ScaleDivMul))

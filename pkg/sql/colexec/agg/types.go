@@ -139,7 +139,7 @@ type UnaryAgg[T1, T2 any] struct {
 	grows func(int)
 
 	// eval get final result of agg.
-	eval func([]T2, any) ([]T2, error)
+	eval func([]T2) ([]T2, error)
 
 	// merge used to merge 2 groups of agg.
 	// the arguments are
@@ -185,7 +185,7 @@ type UnaryDistAgg[T1, T2 any] struct {
 	grows func(int)
 
 	// eval get final result of agg.
-	eval func([]T2, any) ([]T2, error)
+	eval func([]T2) ([]T2, error)
 
 	// merge used to merge 2 groups of agg.
 	// the arguments are

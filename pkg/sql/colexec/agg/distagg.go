@@ -27,7 +27,7 @@ func NewUnaryDistAgg[T1, T2 any](
 	isCount bool,
 	ityp, otyp types.Type,
 	grows func(int),
-	eval func([]T2, any) ([]T2, error),
+	eval func([]T2) ([]T2, error),
 	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
 	partialresult any) Agg[*UnaryDistAgg[T1, T2]] {
@@ -460,7 +460,21 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus 
 }
 
 func (a *UnaryDistAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err error) {
-	a.vs, err = a.eval(a.vs, a.partialresult)
+	if a.partialresult != nil {
+		if a.isCount {
+			var x T1
+			a.vs[0], a.es[0], err = a.fill(0, x, a.vs[0], a.partialresult.(int64), false, false)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			a.vs[0], a.es[0], err = a.fill(0, a.partialresult.(T1), a.vs[0], 1, a.es[0], false)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	a.vs, err = a.eval(a.vs)
 	if err != nil {
 		return nil, err
 	}

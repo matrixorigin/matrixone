@@ -164,7 +164,7 @@ func (s *sAggAnyValue[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1,
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggAnyValue[T]) Eval(vs []T, _ any) ([]T, error) {
+func (s *sAggAnyValue[T]) Eval(vs []T) ([]T, error) {
 	return vs, nil
 }
 func (s *sAggAnyValue[T]) MarshalBinary() ([]byte, error) {

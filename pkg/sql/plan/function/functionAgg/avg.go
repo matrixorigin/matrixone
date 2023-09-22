@@ -140,7 +140,7 @@ func (s *sAggAvg[T]) Merge(groupNumber1 int64, groupNumber2 int64, result1 float
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggAvg[T]) Eval(lastResult []float64, _ any) ([]float64, error) {
+func (s *sAggAvg[T]) Eval(lastResult []float64) ([]float64, error) {
 	for i := range lastResult {
 		if s.cnts[i] == 0 {
 			continue
@@ -276,7 +276,7 @@ func (s *sAggDecimalAvg) Merge(groupNumber1 int64, groupNumber2 int64, result1 t
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimalAvg) Eval(lastResult []types.Decimal128, _ any) ([]types.Decimal128, error) {
+func (s *sAggDecimalAvg) Eval(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i := range lastResult {
 		if s.cnts[i] == 0 {
