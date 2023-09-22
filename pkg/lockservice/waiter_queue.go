@@ -25,6 +25,7 @@ type waiterQueue interface {
 	reset()
 
 	// writes methods, only can used in local_lock_table locked methods
+	resetCommittedAt(timestamp.Timestamp)
 	moveTo(to waiterQueue)
 	put(...*waiter)
 	notify(value notifyValue)
@@ -70,19 +71,20 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 	q.Lock()
 	defer q.Unlock()
-	if len(q.waiters) == 0 {
-		return
-	}
-
-	if q.beginChangeIdx != -1 {
-		panic("BUG: cannot call notify in changing waiter queue")
-	}
 
 	// save the max committed ts
 	if value.ts.Less(q.keyCommittedAt) {
 		value.ts = q.keyCommittedAt
 	} else {
 		q.keyCommittedAt = value.ts
+	}
+
+	if len(q.waiters) == 0 {
+		return
+	}
+
+	if q.beginChangeIdx != -1 {
+		panic("BUG: cannot call notify in changing waiter queue")
 	}
 
 	skipAt := -1
@@ -95,6 +97,14 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 		skipAt = i
 	}
 	q.waiters = append(q.waiters[:0], q.waiters[skipAt+1:]...)
+}
+
+func (q *sliceBasedWaiterQueue) resetCommittedAt(ts timestamp.Timestamp) {
+	q.Lock()
+	defer q.Unlock()
+	if ts.Greater(q.keyCommittedAt) {
+		q.keyCommittedAt = ts
+	}
 }
 
 func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {

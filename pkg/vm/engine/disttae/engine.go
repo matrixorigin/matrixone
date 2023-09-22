@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"runtime"
 	"strings"
 	"sync"
@@ -53,7 +54,7 @@ func New(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	cli client.TxnClient,
-	idGen IDGenerator,
+	hakeeper logservice.CNHAKeeperClient,
 ) *Engine {
 	var services []metadata.TNService
 	cluster := clusterservice.GetMOCluster()
@@ -74,12 +75,13 @@ func New(
 	}
 
 	e := &Engine{
-		mp:    mp,
-		fs:    fs,
-		ls:    ls.(lockservice.LockService),
-		cli:   cli,
-		idGen: idGen,
-		tnID:  tnID,
+		mp:       mp,
+		fs:       fs,
+		ls:       ls.(lockservice.LockService),
+		hakeeper: hakeeper,
+		cli:      cli,
+		idGen:    hakeeper,
+		tnID:     tnID,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -341,6 +343,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.fs,
 		e.ls,
 		e.qs,
+		e.hakeeper,
 		nil,
 	)
 
@@ -378,10 +381,8 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
+		toFreeBatches:                   make(map[[2]string][]*batch.Batch),
 		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
-	}
-	if txn.meta.IsRCIsolation() {
-		txn.tableCache.cachedIndex = e.catalog.GetDeletedTableIndex()
 	}
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.

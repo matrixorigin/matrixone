@@ -472,6 +472,8 @@ func doLock(
 	if !result.HasConflict ||
 		!result.HasPrevCommit {
 		return true, false, timestamp.Timestamp{}, nil
+	} else if lockedTS.Less(snapshotTS) {
+		return true, false, timestamp.Timestamp{}, nil
 	}
 
 	// Arriving here means that at least one of the conflicting

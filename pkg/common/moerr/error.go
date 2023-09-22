@@ -203,6 +203,7 @@ const (
 	ErrTAENeedRetry               uint16 = 20629
 	ErrTxnCannotRetry             uint16 = 20630
 	ErrTxnNeedRetryWithDefChanged uint16 = 20631
+	ErrTxnStale                   uint16 = 20632
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -234,6 +235,14 @@ const (
 	ErrPartitionMaxvalue                   uint16 = 20817
 	ErrRangeNotIncreasing                  uint16 = 20818
 	ErrCheckRecursiveLevel                 uint16 = 20819
+
+	// Group 9: streaming
+	ErrUnsupportedOption   uint16 = 20901
+	ErrInvalidValue        uint16 = 20902
+	ErrLackOption          uint16 = 20903
+	ErrDuplicateConnector  uint16 = 20904
+	ErrUnsupportedDataType uint16 = 20905
+	ErrTaskNotFound        uint16 = 20906
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -396,6 +405,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTAENeedRetry:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae need retry"},
 	ErrTxnCannotRetry:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
 	ErrTxnNeedRetryWithDefChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode, def changed"},
+	ErrTxnStale:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn is stale: timestamp is too small"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -423,6 +433,14 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPartitionMaxvalue:                   {ER_PARTITION_MAXVALUE_ERROR, []string{MySQLDefaultSqlState}, "MAXVALUE can only be used in last partition definition"},
 	ErrRangeNotIncreasing:                  {ER_RANGE_NOT_INCREASING_ERROR, []string{MySQLDefaultSqlState}, "VALUES LESS THAN value must be strictly increasing for each partition"},
 	ErrCheckRecursiveLevel:                 {ErrCheckRecursiveLevel, []string{MySQLDefaultSqlState}, "recursive level out of range"},
+
+	// Group 9: streaming
+	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
+	ErrInvalidValue:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid value %s for option %s"},
+	ErrLackOption:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lack of option %s"},
+	ErrDuplicateConnector:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the connector for table %s already exists"},
+	ErrUnsupportedDataType: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported data type %T"},
+	ErrTaskNotFound:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "task with ID %d not found"},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1213,6 +1231,30 @@ func NewErrAlterOperationNotSupportedReasonFkRename(ctx context.Context) *Error 
 
 func NewErrPrimaryCantHaveNull(ctx context.Context) *Error {
 	return newError(ctx, ErrPrimaryCantHaveNull)
+}
+
+func NewErrUnsupportedOption(ctx context.Context, option string) *Error {
+	return newError(ctx, ErrUnsupportedOption, option)
+}
+
+func NewErrInvalidValue(ctx context.Context, option string, value string) *Error {
+	return newError(ctx, ErrInvalidValue, option, value)
+}
+
+func NewErrLackOption(ctx context.Context, option string) *Error {
+	return newError(ctx, ErrLackOption, option)
+}
+
+func NewErrDuplicateConnector(ctx context.Context, tableName string) *Error {
+	return newError(ctx, ErrDuplicateConnector, tableName)
+}
+
+func NewErrUnsupportedDataType(ctx context.Context, typ any) *Error {
+	return newError(ctx, ErrUnsupportedDataType, typ)
+}
+
+func NewErrTaskNotFound(ctx context.Context, taskID uint64) *Error {
+	return newError(ctx, ErrTaskNotFound, taskID)
 }
 
 var contextFunc atomic.Value

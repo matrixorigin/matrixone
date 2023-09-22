@@ -700,8 +700,9 @@ c1    c2    c3
 10    mini    90
 commit;
 begin;
-select * from su_04 where c2='kelly' for update;
+select * from su_04 where c2='results' for update;
 c1    c2    c3
+1    results    20
 use select_for_update;
 alter table su_04 add unique index a1(c1);
 show create table su_04;
@@ -709,8 +710,9 @@ Table    Create Table
 su_04    CREATE TABLE `su_04` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\n`c3` INT DEFAULT NULL,\nUNIQUE KEY `a1` (`c1`)\n)
 commit;
 begin;
-select * from su_04 where c2='kelly' for update;
+select * from su_04 where c2='results' for update;
 c1    c2    c3
+1    results    20
 insert into su_04 values(10,'tell',96);
 Duplicate entry '10' for key '__mo_index_idx_col'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
@@ -1105,9 +1107,14 @@ truncate table su_07;
 select * from su_07;
 c1    c2    c3
 commit;
+insert into su_07 values(7,'results',20),(1,'plo',50),(3,'kelly',60),(4,'yellow',70);
 begin;
 select * from su_07 where c3>c1 for update;
 c1    c2    c3
+7    results    20
+1    plo    50
+3    kelly    60
+4    yellow    70
 use select_for_update;
 drop table su_07;
 select * from su_07;

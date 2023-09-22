@@ -83,22 +83,22 @@ func (l Lock) isEmpty() bool {
 		(l.waiters == nil || l.waiters.size() == 0)
 }
 
-func (l Lock) tryHold(c *lockContext) bool {
+func (l Lock) tryHold(c *lockContext) (bool, bool) {
 	if l.isEmpty() {
 		panic("BUG: try hold on empty lock")
 	}
 
 	// txn already hold the lock
 	if l.holders.contains(c.txn.txnID) {
-		return true
+		return true, false
 	}
 
 	if l.canHold(c) {
 		l.addHolder(c)
-		return true
+		return true, true
 	}
 
-	return false
+	return false, false
 }
 
 // (no holders && is first waiter txn) || (both shared lock) can hold lock
@@ -170,11 +170,34 @@ func (l Lock) isShared() bool {
 	return l.value&flagLockSharedMode != 0
 }
 
-func (l Lock) getLockMode() pb.LockMode {
+// IsRangeLock return true if is range lock
+func (l Lock) IsRangeLock() bool {
+	return !l.isLockRow()
+}
+
+// GetLockMode returns lock mode
+func (l Lock) GetLockMode() pb.LockMode {
 	if l.value&flagLockExclusiveMode != 0 {
 		return pb.LockMode_Exclusive
 	}
 	return pb.LockMode_Shared
+}
+
+// IterHolders iter lock holders, if holders is empty means the last holder is closed
+// and the lock is waiting first waiter to get this lock.
+func (l Lock) IterHolders(fn func(holder pb.WaitTxn) bool) {
+	for _, txn := range l.holders.txns {
+		if !fn(txn) {
+			return
+		}
+	}
+}
+
+// IterHolders iter which txn is waiting for this lock
+func (l Lock) IterWaiters(fn func(waiter pb.WaitTxn) bool) {
+	l.waiters.iter(func(w *waiter) bool {
+		return !fn(w.txn)
+	})
 }
 
 // String implement Stringer
@@ -193,7 +216,7 @@ func (l Lock) String() string {
 		return true
 	})
 	return fmt.Sprintf("%s(%s): holder(%s), waiters(%s)",
-		l.getLockMode().String(),
+		l.GetLockMode().String(),
 		g,
 		l.holders.String(),
 		strings.TrimSpace(waiters.String()))

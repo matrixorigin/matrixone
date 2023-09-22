@@ -76,7 +76,6 @@ drop table t1;
 
 #WHERE， EXTREME VALUES，嵌套
 #SET timestamp=UNIX_TIMESTAMP('2011-07-31 10:00:00');
--- @bvt:issue#4573
 CREATE TABLE t1 (
 col_datetime_2_not_null_key datetime(2) NOT NULL,
 col_datetime_5 datetime(5) DEFAULT NULL,
@@ -102,7 +101,6 @@ year(col_datetime_5) < year(utc_timestamp())
 ORDER BY 1;
 DROP TABLE t1;
 #SET timestamp=DEFAULT;
--- @bvt:issue
 
 #EXTREME VALUES, 多语言
 

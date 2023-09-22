@@ -56,6 +56,8 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 		return table.TBytes, nil
 	case strings.Contains(strings.ToLower(dataType), "uuid"):
 		return table.TUuid, nil
+	case strings.Contains(strings.ToLower(dataType), "int unsigned"):
+		return table.TUint64, nil
 	default:
 		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type")
 	}
@@ -185,6 +187,11 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		return err
 	}
 
+	if err = u.UpgradeNewViewColumn(ctx); err != nil {
+		logutil.Errorf("upgrade new view column failed: %s", err.Error())
+		return err
+	}
+
 	if err = u.UpgradeNewTableColumn(ctx); err != nil {
 		logutil.Errorf("upgrade new table column failed: %s", err.Error())
 		return err
@@ -202,7 +209,46 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	return nil
 }
 
-// Upgrade the newly added columns in the system table
+// UpgradeNewViewColumn the newly added columns in the system table
+func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	for _, tbl := range registeredViews {
+		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
+		if err != nil {
+			return err
+		}
+
+		diff, err := u.GenerateDiff(currentSchema, tbl)
+		if err != nil {
+			return err
+		} else if len(diff.AddedColumns) == 0 {
+			continue
+		}
+
+		//
+		stmt := []string{
+			"begin;",
+			appendSemicolon(tbl.CreateTableSql), //drop view
+			appendSemicolon(tbl.CreateViewSql),  //create view
+			"commit;",
+		}
+
+		//alter view
+		upgradeSQL := strings.Join(stmt, "\n")
+
+		// Execute upgrade SQL
+		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpgradeNewTableColumn the newly added columns in the system table
 func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
 	exec := u.IEFactory()
 	if exec == nil {
@@ -235,14 +281,14 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
 	return nil
 }
 
-// Upgrade system tables, add system tables
+// UpgradeNewTable system tables, add system tables
 func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.TenantInfo) error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
-	for _, tbl := range needUpgradNewTable {
+	for _, tbl := range needUpgradeNewTable {
 		if tbl.Account == table.AccountAll {
 			for _, tenant := range tenants {
 				if err := u.upgradeFunc(ctx, tbl, false, tenant, exec); err != nil {
@@ -266,14 +312,14 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 	return nil
 }
 
-// Upgrade system tables, add system views
+// UpgradeNewView system tables, add system views
 func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.TenantInfo) error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
-	for _, tbl := range needUpgradNewView {
+	for _, tbl := range needUpgradeNewView {
 		if tbl.Account == table.AccountAll {
 			for _, tenant := range tenants {
 				if err := u.upgradeFunc(ctx, tbl, true, tenant, exec); err != nil {
@@ -420,4 +466,11 @@ func attachAccount(ctx context.Context, tenant *frontend.TenantInfo) context.Con
 
 func makeOptions(tenant *frontend.TenantInfo) *ie.OptsBuilder {
 	return ie.NewOptsBuilder().AccountId(tenant.GetTenantID()).UserId(tenant.GetUserID()).DefaultRoleId(tenant.GetDefaultRoleID())
+}
+
+func appendSemicolon(s string) string {
+	if !strings.HasSuffix(s, ";") {
+		return s + ";"
+	}
+	return s
 }

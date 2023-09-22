@@ -153,7 +153,10 @@ func (tbl *txnTable) ForeachBlock(
 	fn func(block logtailreplay.BlockEntry) error,
 ) (err error) {
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	iter := state.NewBlocksIter(ts)
+	iter, err := state.NewBlocksIter(ts)
+	if err != nil {
+		return err
+	}
 	for iter.Next() {
 		entry := iter.Entry()
 		if err = fn(entry); err != nil {
@@ -322,7 +325,10 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		return -1, err
 	}
 	// Calculate the block size
-	biter := part.NewBlocksIter(ts)
+	biter, err := part.NewBlocksIter(ts)
+	if err != nil {
+		return 0, err
+	}
 	for biter.Next() {
 		blk := biter.Entry()
 		location := blk.MetaLocation()
@@ -483,7 +489,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 }
 
 // LoadDeletesForBlockIn loads deletes for volatile blocks in PartitionState.
-func (tbl *txnTable) LoadDeletesForVolatileBlocksIn(
+func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	state *logtailreplay.PartitionState,
 	deletesRowId map[types.Rowid]uint8) error {
 

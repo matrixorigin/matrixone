@@ -275,7 +275,7 @@ CREATE TABLE mysql_ddl_test_t40 (id int, score_1 decimal(15,2), score_2 numeric(
 Insert into mysql_ddl_test_t40 values(1, '66.34', '80.32', '80.2222');
 Insert into mysql_ddl_test_t40 values(1, '55.34', '11.32', '1.22');
 Insert into mysql_ddl_test_t40 values(1, '33.34', '22.32', 'abc');
-invalid input: Can't convert string To Decimal128: abc(38,0)
+invalid input: abc beyond the range, can't be converted to Decimal128(38,0).
 select * from mysql_ddl_test_t40;
 id    score_1    score_2    score_3
 1    66.34    80.32    80

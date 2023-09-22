@@ -5,14 +5,17 @@ select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog
 relname    relkind
 mo_account    r
 mo_columns    r
+mo_configurations    v
 mo_database    r
 mo_increment_columns
 mo_indexes    r
+mo_locks    v
 mo_mysql_compatibility_mode    r
 mo_pubs    r
 mo_role    r
 mo_role_grant    r
 mo_role_privs    r
+mo_sessions    v
 mo_stages    r
 mo_stored_procedure    r
 mo_table_partitions    r

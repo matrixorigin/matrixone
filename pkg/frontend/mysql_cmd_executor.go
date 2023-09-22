@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"io"
 	gotrace "runtime/trace"
 	"sort"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -222,7 +223,13 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	ses.sqlType.Store(sqlType)
+	ses.SetStmtId(stmID)
+	ses.SetStmtType(getStatementType(statement).GetStatementType())
+	ses.SetQueryType(getStatementType(statement).GetQueryType())
+	ses.SetSqlSourceType(sqlType)
+	ses.SetSqlOfStmt(text)
+
+	//note: txn id here may be empty
 	if sqlType != constant.InternalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -336,7 +343,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 			} else {
 				stm.SetTxnID(txn.Txn().ID)
 			}
-
+			ses.SetTxnId(txn.Txn().ID)
 		}
 		stm.Report(ctx)
 	}
@@ -1184,16 +1191,6 @@ func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
 // handleDeallocate
 func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deallocate) error {
 	return doDeallocate(ctx, mce.GetSession(), st)
-}
-
-func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree.CreateConnector) error {
-	//todo: handle Create connector
-	return nil
-}
-
-func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.DropConnector) error {
-	//todo: handle Create connector
-	return nil
 }
 
 // handleReset
@@ -2173,6 +2170,13 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 			},
 			ds: st,
 		}
+	case *tree.AlterSequence:
+		ret = &AlterSequenceExecutor{
+			statusStmtExecutor: &statusStmtExecutor{
+				base,
+			},
+			cs: st,
+		}
 	case *tree.CreateView:
 		ret = &CreateViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
@@ -2566,6 +2570,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
 
+	ses.SetQueryStart(time.Now())
+
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
 	if endStmtProfile != nil {
@@ -2629,7 +2635,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 				*tree.LockTableStmt, *tree.UnLockTableStmt,
-				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateStream:
+				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateStream, *tree.AlterSequence:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if _, ok := stmt.(*tree.Insert); ok {
 					resp.lastInsertId = proc.GetLastInsertID()
@@ -2645,13 +2651,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 				}
 
+				if st, ok := cw.GetAst().(*tree.DropTable); ok {
+					_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
+				}
+
 				if st, ok := cw.GetAst().(*tree.CreateDatabase); ok {
 					_ = insertRecordToMoMysqlCompatibilityMode(requestCtx, ses, stmt)
 					_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 				}
 
-				if _, ok := cw.GetAst().(*tree.DropDatabase); ok {
+				if st, ok := cw.GetAst().(*tree.DropDatabase); ok {
 					_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+					_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 				}
 
 				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
@@ -2676,15 +2687,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					}
 				}
 
-			case *tree.SetVar, *tree.SetTransaction, *tree.BackupStart:
+			case *tree.SetVar, *tree.SetTransaction, *tree.BackupStart, *tree.CreateConnector, *tree.DropConnector,
+				*tree.PauseDaemonTask, *tree.ResumeDaemonTask, *tree.CancelDaemonTask:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
 				}
-			case *tree.CreateConnector:
-				// todo : Create and run Connector
-			case *tree.DropConnector:
-				// todo : Drop Connector
 			case *tree.Deallocate:
 				//we will not send response in COM_STMT_CLOSE command
 				if ses.GetCmd() != COM_STMT_CLOSE {
@@ -2896,10 +2904,33 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err != nil {
 			return err
 		}
+	case *tree.PauseDaemonTask:
+		selfHandle = true
+		err = mce.handlePauseDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
+	case *tree.CancelDaemonTask:
+		selfHandle = true
+		err = mce.handleCancelDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
+	case *tree.ResumeDaemonTask:
+		selfHandle = true
+		err = mce.handleResumeDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
 	case *tree.DropConnector:
 		selfHandle = true
 		err = mce.handleDropConnector(requestCtx, st)
 		if err != nil {
+			return err
+		}
+	case *tree.ShowConnectors:
+		selfHandle = true
+		if err = mce.handleShowConnectors(requestCtx, i, len(cws)); err != nil {
 			return err
 		}
 	case *tree.Deallocate:
@@ -3304,7 +3335,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	//just status, no result set
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex,
-		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable,
+		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.AlterSequence,
 		*tree.CreateSequence, *tree.DropSequence,
 		*tree.Insert, *tree.Update, *tree.Replace,
 		*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
@@ -3493,6 +3524,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.FileService,
 		pu.LockService,
 		pu.QueryService,
+		pu.HAKeeperClient,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -3511,6 +3543,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 		SqlHelper:     ses.GetSqlHelper(),
+		Buf:           ses.GetBuffer(),
 	}
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
@@ -3611,6 +3644,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			}
 		}
 
+		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		proc.UnixTime = time.Now().UnixNano()
+		if ses.proc != nil {
+			ses.proc.UnixTime = proc.UnixTime
+		}
+
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly)
 		if err != nil {
 			return err
@@ -3669,6 +3708,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		pu.FileService,
 		pu.LockService,
 		pu.QueryService,
+		pu.HAKeeperClient,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -3719,6 +3759,11 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 	singleStatement := len(stmtExecs) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, exec := range stmtExecs {
+		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		proc.UnixTime = time.Now().UnixNano()
+		if ses.proc != nil {
+			ses.proc.UnixTime = proc.UnixTime
+		}
 		err = Execute(requestCtx, ses, proc, exec, beginInstant, sqlRecord[i], "", singleStatement)
 		if err != nil {
 			return err

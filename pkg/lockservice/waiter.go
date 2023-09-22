@@ -203,6 +203,14 @@ func (w *waiter) wait(ctx context.Context) notifyValue {
 	return w.mustRecvNotification(ctx)
 }
 
+func (w *waiter) disableNotify() {
+	w.setStatus(completed)
+	select {
+	case <-w.c:
+	default:
+	}
+}
+
 // notify return false means this waiter is completed, cannot be used to notify
 func (w *waiter) notify(value notifyValue) bool {
 	debug := ""
