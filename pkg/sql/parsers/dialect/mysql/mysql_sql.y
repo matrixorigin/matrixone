@@ -333,7 +333,7 @@ import (
 %token <str> PROPERTIES
 
 // Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
@@ -6048,6 +6048,10 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_BSI
     }
+|   USING IVFFLAT
+    {
+        $$ = tree.INDEX_TYPE_IVFFLAT
+    }
 
 create_database_stmt:
     CREATE database_or_schema not_exists_opt ident subcription_opt create_option_list_opt
@@ -7078,10 +7082,18 @@ index_def:
         if $3[1] != "" {
                t := strings.ToLower($3[1])
             switch t {
+ 	    case "btree":
+            	keyTyp = tree.INDEX_TYPE_BTREE
+            case "hash":
+            	keyTyp = tree.INDEX_TYPE_HASH
+	    case "rtree":
+	   	keyTyp = tree.INDEX_TYPE_RTREE
             case "zonemap":
                 keyTyp = tree.INDEX_TYPE_ZONEMAP
             case "bsi":
                 keyTyp = tree.INDEX_TYPE_BSI
+            case "ivfflat":
+            	keyTyp = tree.INDEX_TYPE_IVFFLAT
             default:
                 yylex.Error("Invail the type of index")
                 return 1
@@ -7101,10 +7113,18 @@ index_def:
         if $3[1] != "" {
                t := strings.ToLower($3[1])
             switch t {
-            case "zonemap":
-                keyTyp = tree.INDEX_TYPE_ZONEMAP
-            case "bsi":
-                keyTyp = tree.INDEX_TYPE_BSI
+             case "btree":
+		keyTyp = tree.INDEX_TYPE_BTREE
+	     case "hash":
+		keyTyp = tree.INDEX_TYPE_HASH
+	     case "rtree":
+		keyTyp = tree.INDEX_TYPE_RTREE
+	     case "zonemap":
+		keyTyp = tree.INDEX_TYPE_ZONEMAP
+	     case "bsi":
+		keyTyp = tree.INDEX_TYPE_BSI
+	     case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
             default:
                 yylex.Error("Invail the type of index")
                 return 1
@@ -7239,6 +7259,7 @@ index_type:
 |   RTREE
 |   ZONEMAP
 |   BSI
+|   IVFFLAT
 
 insert_method_options:
     NO
