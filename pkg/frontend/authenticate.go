@@ -5792,6 +5792,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.BackupStart:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.EmptyStmt:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}

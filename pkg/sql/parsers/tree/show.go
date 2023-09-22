@@ -797,3 +797,23 @@ func (node *ShowBackendServers) Format(ctx *FmtCtx) {
 
 func (node *ShowBackendServers) GetStatementType() string { return "Show Backend Servers" }
 func (node *ShowBackendServers) GetQueryType() string     { return QueryTypeOth }
+
+type EmptyStmt struct {
+	statementImpl
+}
+
+func (e *EmptyStmt) String() string {
+	return ""
+}
+
+func (e *EmptyStmt) Format(ctx *FmtCtx) {
+	ctx.WriteString("")
+}
+
+func (e EmptyStmt) GetStatementType() string {
+	return "InternalCmd"
+}
+
+func (e EmptyStmt) GetQueryType() string {
+	return QueryTypeOth
+}
