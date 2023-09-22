@@ -54,7 +54,7 @@ func strToUint64(bytes []byte) uint64 {
 // convert first 8 bytes to uint64. vec.area must be nil
 // if varlena length less than 8 bytes, should have filled zero in varlena
 func varlenaToUint64Inline(v *types.Varlena) uint64 {
-	return bits.Reverse64(*(*uint64)(unsafe.Add(unsafe.Pointer(&v[0]), 1)))
+	return bits.ReverseBytes64(*(*uint64)(unsafe.Add(unsafe.Pointer(&v[0]), 1)))
 }
 
 // convert first 8 bytes to uint64
