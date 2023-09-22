@@ -1,7 +1,5 @@
 /*!40101 -- SET @saved_cs_client = @@character_set_client */;
-SQL parser error: Query was empty
 /*!40101 -- SET character_set_client = utf8 */;
-SQL parser error: Query was empty
 /*!40000 create database if not exists mysql_ddl_test_db_5 */;
 /*!40000 show tables in mysql_ddl_test_db_5 */;
 Tables_in_mysql_ddl_test_db_5
