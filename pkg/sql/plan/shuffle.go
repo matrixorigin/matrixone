@@ -38,7 +38,7 @@ const (
 )
 
 // convert first 8 bytes to uint64
-func strToUint64(bytes []byte) uint64 {
+func ByteSliceToUint64(bytes []byte) uint64 {
 	var result uint64 = 0
 	i := 0
 	length := len(bytes)
@@ -53,18 +53,18 @@ func strToUint64(bytes []byte) uint64 {
 
 // convert first 8 bytes to uint64. vec.area must be nil
 // if varlena length less than 8 bytes, should have filled zero in varlena
-func varlenaToUint64Inline(v *types.Varlena) uint64 {
+func VarlenaToUint64Inline(v *types.Varlena) uint64 {
 	return bits.ReverseBytes64(*(*uint64)(unsafe.Add(unsafe.Pointer(&v[0]), 1)))
 }
 
 // convert first 8 bytes to uint64
-func varlenaToUint64(v *types.Varlena, area []byte) uint64 {
+func VarlenaToUint64(v *types.Varlena, area []byte) uint64 {
 	svlen := (*v)[0]
 	if svlen <= types.VarlenaInlineSize {
-		return varlenaToUint64Inline(v)
+		return VarlenaToUint64Inline(v)
 	} else {
 		voff, vlen := v.OffsetLen()
-		return strToUint64(area[voff : voff+vlen])
+		return ByteSliceToUint64(area[voff : voff+vlen])
 	}
 }
 

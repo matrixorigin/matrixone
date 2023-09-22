@@ -153,8 +153,8 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_char, types.T_varchar, types.T_text:
-			s.MinValMap[colName] = float64(strToUint64(info.ColumnZMs[i].GetMinBuf()))
-			s.MaxValMap[colName] = float64(strToUint64(info.ColumnZMs[i].GetMaxBuf()))
+			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
 		}
 	}
 }
