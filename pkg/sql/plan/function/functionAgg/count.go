@@ -63,8 +63,6 @@ func newCount(overloadID int64, isCountStart bool, inputType types.Type, outputT
 		return newGenericCount[float64](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
 		return newGenericCount[[]byte](overloadID, isCountStart, inputType, outputType, dist)
-	case types.T_array_float32, types.T_array_float64:
-		return newGenericCount[[]byte](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_date:
 		return newGenericCount[types.Date](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_datetime:
