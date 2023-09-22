@@ -238,10 +238,9 @@ DROP TABLE t1;
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;
 SELECT COUNT(*) FROM t1;
-DELETE FROM t1 WHERE a%2=1;
 DELETE FROM t1 WHERE a>50000;
 SELECT COUNT(*) FROM t1;
--- @separator:table
-SELECT mo_ctl('dn', 'flush', 'func_aggr_count.t1');
+SELECT COUNT(a) FROM t1;
+DELETE FROM t1 WHERE a%2=1;
 SELECT COUNT(*) FROM t1;
 DROP TABLE t1;

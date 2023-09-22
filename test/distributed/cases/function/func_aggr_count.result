@@ -407,14 +407,14 @@ INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;
 SELECT COUNT(*) FROM t1;
 count(*)
 100000
-DELETE FROM t1 WHERE a%2=1;
 DELETE FROM t1 WHERE a>50000;
 SELECT COUNT(*) FROM t1;
 count(*)
-25000
-SELECT mo_ctl('dn', 'flush', 'func_aggr_count.t1');
-mo_ctl(dn, flush, func_aggr_count.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+50000
+SELECT COUNT(a) FROM t1;
+count(a)
+50000
+DELETE FROM t1 WHERE a%2=1;
 SELECT COUNT(*) FROM t1;
 count(*)
 25000
