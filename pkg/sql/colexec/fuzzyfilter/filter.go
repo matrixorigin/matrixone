@@ -128,7 +128,7 @@ func appendCollisionKey(proc *process.Process, arg *Argument, idx int, bat *batc
 
 // rbat will contain the keys that have hash collisions
 func generateRbat(proc *process.Process, arg *Argument, bat *batch.Batch) error {
-	rbat := batch.New(true, bat.Attrs)
+	rbat := batch.NewWithSize(1)
 	rbat.SetVector(0, vector.NewVec(*bat.GetVector(0).GetType()))
 	arg.rbat = rbat
 	return nil
