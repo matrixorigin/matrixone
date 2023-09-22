@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,7 +43,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		buf.WriteString(fmt.Sprintf("%v(%v)", agg.Names[ag.Op], ag.E))
+		buf.WriteString(fmt.Sprintf("%v(%v)", function.GetAggFunctionNameByID(ag.Op), ag.E))
 	}
 	if len(ap.MultiAggs) != 0 {
 		if len(ap.Aggs) > 0 {
@@ -162,7 +163,7 @@ func (ctr *container) generateAggStructures(ap *Argument) error {
 	var err error
 	i := 0
 	for i < len(ap.Aggs) {
-		if ctr.bat.Aggs[i], err = agg.NewWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType(), ap.Aggs[i].Config); err != nil {
+		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, ap.Aggs[i].Config); err != nil {
 			ctr.bat = nil
 			return err
 		}

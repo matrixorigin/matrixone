@@ -104,7 +104,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 	for i, ag := range ap.Aggs {
-		if ctr.bat.Aggs[i], err = agg.NewWithConfig(ag.Op, ag.Dist, ap.Types[i], ag.Config); err != nil {
+		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
 			return result, err
 		}
 		if err = ctr.bat.Aggs[i].Grows(n, proc.Mp()); err != nil {
