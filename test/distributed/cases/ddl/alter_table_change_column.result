@@ -1325,17 +1325,14 @@ col1    col2new    col3
 3    73829.2738972984    38298390
 drop table primary08;
 drop table if exists primary09;
-[unknown result because it is related to issue#11264]
 create table primary09 (col1 int primary key, col2 decimal);
-[unknown result because it is related to issue#11264]
 show create table primary09;
-[unknown result because it is related to issue#11264]
+Table    Create Table
+primary09    CREATE TABLE `primary09` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into primary09 values(1, 3412.324);
-[unknown result because it is related to issue#11264]
 insert into primary09 values (-10, 323943.2343);
-[unknown result because it is related to issue#11264]
 alter table primary09 change col1 col1New float default null;
-[unknown result because it is related to issue#11264]
+Invalid default value for 'col1new'
 drop table primary09
 drop table if exists index01;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 5 near "
