@@ -713,11 +713,11 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
 		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
 		assert.NoError(t, err)
-		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
+		err = taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "a"})
 		assert.NoError(t, err)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
-		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
 		store.taskSchedule(state)
@@ -725,7 +725,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		store.taskSchedule(state)
-		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 
@@ -733,15 +733,15 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
 		_, err = store.addCNStoreHeartbeat(ctx, cnMsg2)
 		assert.NoError(t, err)
-		err = taskService.Create(ctx, task.TaskMetadata{ID: "b"})
+		err = taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "b"})
 		assert.NoError(t, err)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
-		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
 		store.taskSchedule(state)
-		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}
@@ -814,11 +814,11 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
 		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
 		assert.NoError(t, err)
-		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
+		err = taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "a"})
 		assert.NoError(t, err)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
-		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
 		store.taskSchedule(state)
@@ -826,7 +826,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		store.taskSchedule(state)
-		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 
@@ -842,13 +842,13 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				state, err = store.getCheckerState()
 				require.NoError(t, err)
 				store.taskSchedule(state)
-				tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+				tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
 				assert.NoError(t, err)
 				if len(tasks) == 0 {
 					testLogger.Info("no task found")
 					time.Sleep(50 * time.Millisecond)
 				} else {
-					tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+					tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 					assert.Equal(t, 0, len(tasks))
 					return true
 				}
