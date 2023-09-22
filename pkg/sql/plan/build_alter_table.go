@@ -437,11 +437,20 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	for key, value := range alterCtx.alterColMap {
 		if isFirst {
 			insertBuffer.WriteString("`" + key + "`")
-			selectBuffer.WriteString(value)
+			if value.sexprType == columnName {
+				selectBuffer.WriteString("`" + value.sexprStr + "`")
+			} else {
+				selectBuffer.WriteString(value.sexprStr)
+			}
 			isFirst = false
 		} else {
 			insertBuffer.WriteString(", " + "`" + key + "`")
-			selectBuffer.WriteString(", " + value)
+
+			if value.sexprType == columnName {
+				selectBuffer.WriteString(", " + "`" + value.sexprStr + "`")
+			} else {
+				selectBuffer.WriteString(", " + value.sexprStr)
+			}
 		}
 	}
 
@@ -466,7 +475,7 @@ const UnKnownColId uint64 = math.MaxUint64
 type AlterTableContext struct {
 	// key   --> Copy table column name
 	// value --> Original table column name
-	alterColMap     map[string]string
+	alterColMap     map[string]selectExpr
 	schemaName      string
 	originTableName string
 	copyTableName   string
@@ -474,14 +483,29 @@ type AlterTableContext struct {
 	changColDefMap map[uint64]*ColDef
 }
 
+type exprType int
+
+const (
+	constValue exprType = iota
+	columnName
+)
+
+type selectExpr struct {
+	sexprType exprType
+	sexprStr  string
+}
+
 func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, schemaName string) *AlterTableContext {
-	alterTblColMap := make(map[string]string)
+	alterTblColMap := make(map[string]selectExpr)
 	changTblColIdMap := make(map[uint64]*ColDef)
 	for _, coldef := range originTableDef.Cols {
 		if coldef.Hidden {
 			continue
 		}
-		alterTblColMap[coldef.Name] = coldef.Name
+		alterTblColMap[coldef.Name] = selectExpr{
+			sexprType: columnName,
+			sexprStr:  coldef.Name,
+		}
 
 		if !coldef.Hidden {
 			changTblColIdMap[coldef.ColId] = &plan.ColDef{

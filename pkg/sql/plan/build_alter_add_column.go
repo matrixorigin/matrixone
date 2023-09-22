@@ -58,7 +58,10 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 	}
 
 	if !newCol.Default.NullAbility && len(newCol.Default.OriginString) == 0 {
-		alterCtx.alterColMap[newCol.Name] = buildNotNullColumnVal(newCol)
+		alterCtx.alterColMap[newCol.Name] = selectExpr{
+			sexprType: constValue,
+			sexprStr:  buildNotNullColumnVal(newCol),
+		}
 	}
 
 	return nil
