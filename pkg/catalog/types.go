@@ -166,6 +166,10 @@ const (
 	SystemColAttr_Seqnum          = "attr_seqnum"
 	SystemColAttr_EnumValues      = "attr_enum"
 
+	// 'mo_indexes' table
+	IndexAlgoName      = "algorithm"
+	IndexAlgoTableType = "algorithm_table_type"
+
 	BlockMeta_ID              = "block_id"
 	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
