@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,19 +32,21 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
 	var name string
 	ap := arg
 	bat := proc.Reg.InputBatch
+	result := vm.NewCallResult()
 	if bat == nil {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 
 	// 	  blkId           deltaLoc                        type                                 partitionIdx
@@ -63,13 +66,13 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			bat.Cnt = 1
 			pIndex := partitionIdxs[i]
 			err = ap.PartitionSources[pIndex].Delete(proc.Ctx, bat, name)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 		}
 	} else {
@@ -78,16 +81,16 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
 			bat := &batch.Batch{}
 			if err := bat.UnmarshalBinary(deltaLocs[i]); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			bat.Cnt = 1
 			err = ap.DelSource.Delete(proc.Ctx, bat, name)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 		}
 	}
 	// and there are another attr used to record how many rows are deleted
 	ap.AffectedRows += uint64(vector.GetFixedAt[uint32](bat.GetVector(4), 0))
-	return process.ExecNext, nil
+	return result, nil
 }

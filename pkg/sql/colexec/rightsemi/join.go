@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -55,17 +56,18 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	analyze := proc.GetAnalyze(arg.info.Idx)
 	analyze.Start()
 	defer analyze.Stop()
 	ap := arg
 	ctr := ap.ctr
+	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, analyze); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if ctr.mp == nil {
 				ctr.state = End
@@ -76,7 +78,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, analyze)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 			if bat == nil {
@@ -95,7 +97,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 
 			if err = ctr.probe(bat, ap, proc, analyze, arg.info.IsFirst, arg.info.IsLast); err != nil {
 				bat.Clean(proc.Mp())
-				return process.ExecNext, err
+				return result, err
 			}
 			proc.PutBatch(bat)
 			continue
@@ -103,7 +105,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		case SendLast:
 			setNil, err := ctr.sendLast(ap, proc, analyze, arg.info.IsFirst, arg.info.IsLast)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 			ctr.state = End
@@ -111,11 +113,12 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 				continue
 			}
 
-			return process.ExecNext, nil
+			return result, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

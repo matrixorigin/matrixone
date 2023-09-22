@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -40,7 +41,7 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	argument := arg
 
 	analy := proc.GetAnalyze(arg.info.Idx)
@@ -48,14 +49,16 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	defer analy.Stop()
 
 	inputBat := proc.InputBatch()
+	result := vm.NewCallResult()
 	if inputBat == nil {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
 	if inputBat.IsEmpty() {
 		proc.PutBatch(inputBat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 	defer proc.PutBatch(inputBat)
 
@@ -100,9 +103,9 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		err := insertUniqueBat.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
 		if err != nil {
 			insertUniqueBat.Clean(proc.GetMPool())
-			return process.ExecNext, err
+			return result, err
 		}
 	}
 	proc.SetInputBatch(insertUniqueBat)
-	return process.ExecNext, nil
+	return result, nil
 }

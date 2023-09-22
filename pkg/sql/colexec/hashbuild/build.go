@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -85,10 +86,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
+	result := vm.NewCallResult()
 	ap := arg
 	ctr := ap.ctr
 	for {
@@ -96,7 +98,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		case BuildHashMap:
 			if err := ctr.build(ap, proc, anal, arg.info.IsFirst); err != nil {
 				ctr.cleanHashMap()
-				return process.ExecNext, err
+				return result, err
 			}
 			if ap.ctr.intHashMap != nil {
 				anal.Alloc(ap.ctr.intHashMap.Size())
@@ -107,7 +109,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 
 		case HandleRuntimeFilter:
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 		case Eval:
@@ -130,11 +132,12 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 				proc.SetInputBatch(nil)
 			}
 			ctr.state = End
-			return process.ExecNext, nil
+			return result, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

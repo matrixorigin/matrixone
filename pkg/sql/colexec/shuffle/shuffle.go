@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -37,7 +38,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 
 	if ap.ctr.state == outPutNotEnding {
@@ -185,8 +186,9 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 	return nil
 }
 
-func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.ExecStatus {
+func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) vm.CallResult {
 	threshHold := shuffleBatchSize * 3 / 4
+	result := vm.NewCallResult()
 	if isEnding {
 		threshHold = 0
 	}
@@ -203,7 +205,8 @@ func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.Ex
 				} else {
 					ap.ctr.state = outPutNotEnding
 				}
-				return process.ExecHasMore
+				result.Status = vm.ExecHasMore
+				return result
 			}
 		}
 	}
@@ -212,15 +215,17 @@ func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) process.Ex
 	}
 	ap.ctr.state = input
 	if isEnding {
-		return process.ExecStop
+		result.Status = vm.ExecStop
+		return result
 	}
-	return process.ExecNext
+	return result
 }
 
-func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (process.ExecStatus, error) {
+func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (vm.CallResult, error) {
 	err := genShuffledBatsByHash(ap, bat, proc)
+	result := vm.NewCallResult()
 	if err != nil {
-		return process.ExecNext, err
+		return result, err
 	}
 	return sendOneBatch(ap, proc, false), nil
 }
@@ -355,14 +360,15 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, sels [][]int32, proc
 	return nil
 }
 
-func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (process.ExecStatus, error) {
+func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (vm.CallResult, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
+	result := vm.NewCallResult()
 	if groupByVec.GetSorted() {
 		ok, regIndex := allBatchInOneRange(ap, bat)
 		if ok {
 			bat.ShuffleIDX = int(regIndex)
 			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 		}
 	}
 
@@ -371,13 +377,13 @@ func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (proces
 		if len(sels[i]) == bat.RowCount() {
 			bat.ShuffleIDX = i
 			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 		}
 	}
 
 	err := genShuffledBatsByRange(ap, bat, sels, proc)
 	if err != nil {
-		return process.ExecNext, err
+		return result, err
 	}
 	return sendOneBatch(ap, proc, false), nil
 }

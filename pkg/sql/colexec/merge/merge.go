@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -33,7 +34,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
@@ -41,12 +42,14 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	ctr := ap.ctr
 	var bat *batch.Batch
 	var end bool
+	result := vm.NewCallResult()
 
 	for {
 		bat, end, _ = ctr.ReceiveFromAllRegs(anal)
 		if end {
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 
 		if bat.Last() && ap.SinkScan {
@@ -59,5 +62,5 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	anal.Input(bat, arg.info.IsFirst)
 	anal.Output(bat, arg.info.IsLast)
 	proc.SetInputBatch(bat)
-	return process.ExecNext, nil
+	return result, nil
 }

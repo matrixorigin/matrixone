@@ -261,22 +261,24 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := arg.ctr
 
 	bat := proc.InputBatch()
+	result := vm.NewCallResult()
 	if bat == nil {
-		return process.ExecStop, ctr.sortAndSend(proc)
+		result.Status = vm.ExecStop
+		return result, ctr.sortAndSend(proc)
 	}
 
 	enoughToSend, err := ctr.appendBatch(proc, bat)
 	if err != nil {
-		return process.ExecNext, err
+		return result, err
 	}
 	if enoughToSend {
-		return process.ExecNext, ctr.sortAndSend(proc)
+		return result, ctr.sortAndSend(proc)
 	}
 
 	proc.SetInputBatch(batch.EmptyBatch)
-	return process.ExecNext, nil
+	return result, nil
 }

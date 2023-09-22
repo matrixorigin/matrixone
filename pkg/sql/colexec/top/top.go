@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -61,12 +62,13 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
+	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
@@ -78,30 +80,33 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			if bat.IsEmpty() {
 				proc.PutBatch(bat)
 				proc.SetInputBatch(batch.EmptyBatch)
-				return process.ExecNext, nil
+				return result, nil
 			}
 			if ap.Limit == 0 {
 				proc.PutBatch(bat)
 				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
 			err := ctr.build(ap, bat, proc, anal)
 			if err != nil {
 				ap.Free(proc, true)
 			}
-			return process.ExecNext, err
+			return result, err
 
 		case Eval:
 			if ctr.bat == nil {
 				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
 			err := ctr.eval(ap.Limit, proc)
 			ap.Free(proc, err != nil)
 			if err == nil {
-				return process.ExecStop, nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
-			return process.ExecNext, err
+			return result, err
 		}
 	}
 }

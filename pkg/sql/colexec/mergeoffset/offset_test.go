@@ -78,7 +78,7 @@ func TestOffset(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
 					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 				}
@@ -120,7 +120,7 @@ func BenchmarkOffset(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
+				if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
 						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 					}

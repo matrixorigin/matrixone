@@ -24,6 +24,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -190,20 +191,21 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
+	result := vm.NewCallResult()
 
 	for {
 		switch ctr.status {
 		case receiving:
 			bat, end, err := ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if end {
 				// if number of block is less than 2, no need to do merge sort.
@@ -214,7 +216,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 
 					// evaluate the first batch's order column.
 					if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
-						return process.ExecNext, err
+						return result, err
 					}
 					ctr.generateCompares(ap.OrderBySpecs)
 					ctr.indexList = make([]int64, len(ctr.batchList))
@@ -223,28 +225,31 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			}
 
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 		case normalSending:
 			if len(ctr.batchList) == 0 {
 				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
 				proc.SetInputBatch(ctr.batchList[0])
 				ctr.batchList[0] = nil
-				return process.ExecStop, nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
 
 		case pickUpSending:
 			ok, err := ctr.pickAndSend(proc)
 			if ok {
-				return process.ExecStop, err
+				result.Status = vm.ExecStop
+				return result, err
 			}
-			return process.ExecNext, err
+			return result, err
 		}
 	}
 }

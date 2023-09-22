@@ -17,6 +17,7 @@ package table_scan
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -28,7 +29,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
@@ -39,18 +40,20 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	// result := vm.CallResult{
 	// 	Status: vm.ExecNext,
 	// }
-
+	result := vm.NewCallResult()
 	select {
 	case <-proc.Ctx.Done():
 		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	default:
 	}
 
 	// read data from storage engine
 	bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
 	if err != nil {
-		return process.ExecStop, err
+		result.Status = vm.ExecStop
+		return result, err
 	}
 
 	if bat != nil {
@@ -64,5 +67,5 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 
 	// result.Batch = bat
 
-	return process.ExecNext, nil
+	return result, nil
 }

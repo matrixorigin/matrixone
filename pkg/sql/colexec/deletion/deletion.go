@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -63,9 +64,10 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 // the bool return value means whether it completed its work or not
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	p := arg
 	bat := proc.InputBatch()
+	result := vm.NewCallResult()
 
 	// last batch of block
 	if bat == nil {
@@ -91,7 +93,8 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 					bat.SetRowCount(bat.GetVector(0).Length())
 					bytes, err := bat.MarshalBinary()
 					if err != nil {
-						return process.ExecStop, err
+						result.Status = vm.ExecStop
+						return result, err
 					}
 					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
 					vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
@@ -106,7 +109,8 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 					bat.SetRowCount(bat.GetVector(0).Length())
 					bytes, err := bat.MarshalBinary()
 					if err != nil {
-						return process.ExecStop, err
+						result.Status = vm.ExecStop
+						return result, err
 					}
 					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
 					vector.AppendFixed(resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
@@ -119,14 +123,15 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 
 			proc.SetInputBatch(resBat)
 		}
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
 	// empty batch
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 
 	defer proc.PutBatch(bat)
@@ -136,7 +141,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		// trigger write s3
 		p.SplitBatch(proc, bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 
 	var affectedRows uint64
@@ -146,7 +151,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch,
 			len(delCtx.PartitionTableIDs), delCtx.PrimaryKeyIdx)
 		if err != nil {
-			return process.ExecNext, err
+			return result, err
 		}
 
 		for i, delBatch := range delBatches {
@@ -156,7 +161,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
 				if err != nil {
 					delBatch.Clean(proc.Mp())
-					return process.ExecNext, err
+					return result, err
 				}
 				delBatch.Clean(proc.Mp())
 			}
@@ -165,14 +170,14 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		delBatch, err := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx,
 			delCtx.PrimaryKeyIdx)
 		if err != nil {
-			return process.ExecNext, err
+			return result, err
 		}
 		affectedRows = uint64(delBatch.RowCount())
 		if affectedRows > 0 {
 			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
 			if err != nil {
 				delBatch.Clean(proc.GetMPool())
-				return process.ExecNext, err
+				return result, err
 			}
 		}
 		delBatch.Clean(proc.GetMPool())
@@ -183,5 +188,5 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&p.affectedRows, affectedRows)
 	}
-	return process.ExecNext, nil
+	return result, nil
 }

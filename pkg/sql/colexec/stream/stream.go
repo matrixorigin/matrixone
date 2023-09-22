@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -56,16 +57,19 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	_, span := trace.Start(proc.Ctx, "StreamCall")
 	defer span.End()
 	p := arg
+	result := vm.NewCallResult()
 	b, err := mokafka.RetrieveData(proc.Ctx, p.Configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
 	if err != nil {
-		return process.ExecStop, err
+		result.Status = vm.ExecStop
+		return result, err
 	}
 
 	proc.SetInputBatch(b)
 	//todo: change to process.ExecNext
-	return process.ExecStop, nil
+	result.Status = vm.ExecStop
+	return result, nil
 }

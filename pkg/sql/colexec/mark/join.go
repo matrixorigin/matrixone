@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -76,24 +77,25 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 //	    2.2.2 if condEq is condFalse in JoinMap
 //				check eq and non-eq conds in nullSels to determine condState. (same as 2.2.1.3)
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
 	ctr := ap.ctr
+	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			ctr.state = Probe
 
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 			if bat == nil {
@@ -107,20 +109,23 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
 				if err = ctr.emptyProbe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast); err != nil {
 					bat.Clean(proc.Mp())
-					return process.ExecStop, err
+					result.Status = vm.ExecStop
+					return result, err
 				}
 			} else {
 				if err = ctr.probe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast); err != nil {
 					bat.Clean(proc.Mp())
-					return process.ExecStop, err
+					result.Status = vm.ExecStop
+					return result, err
 				}
 			}
 			proc.PutBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,24 +43,26 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
+	result := vm.NewCallResult()
 
 	bat := proc.InputBatch()
 	if bat == nil {
 		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	if bat.Last() {
 		proc.SetInputBatch(bat)
-		return process.ExecNext, nil
+		return result, nil
 	}
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 
 	anal.Input(bat, arg.info.IsFirst)
@@ -70,7 +73,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	for i := range ap.ctr.projExecutors {
 		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			return process.ExecNext, err
+			return result, err
 		}
 		rbat.Vecs[i] = vec
 	}
@@ -78,7 +81,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	newAlloc, err := colexec.FixProjectionResult(proc, ap.ctr.projExecutors, rbat, bat)
 	if err != nil {
 		bat.Clean(proc.Mp())
-		return process.ExecNext, err
+		return result, err
 	}
 	anal.Alloc(int64(newAlloc))
 
@@ -87,5 +90,5 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	proc.PutBatch(bat)
 	anal.Output(rbat, arg.info.IsLast)
 	proc.SetInputBatch(rbat)
-	return process.ExecNext, nil
+	return result, nil
 }

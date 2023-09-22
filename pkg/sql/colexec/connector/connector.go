@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,17 +30,19 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	reg := ap.Reg
 	bat := proc.InputBatch()
+	result := vm.NewCallResult()
 	if bat == nil {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 
 	// there is no need to log anything here.
@@ -47,14 +50,16 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	select {
 	case <-proc.Ctx.Done():
 		proc.PutBatch(bat)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 
 	case <-reg.Ctx.Done():
 		proc.PutBatch(bat)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 
 	case reg.Ch <- bat:
 		proc.SetInputBatch(nil)
-		return process.ExecNext, nil
+		return result, nil
 	}
 }

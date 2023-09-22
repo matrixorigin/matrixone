@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -61,37 +62,41 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
 	ctr := ap.ctr
-
+	result := vm.NewCallResult()
 	if ap.Limit == 0 {
 		ap.Free(proc, false)
 		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
 	if end, err := ctr.build(ap, proc, anal, arg.info.IsFirst); err != nil {
 		ap.Free(proc, true)
-		return process.ExecNext, err
+		return result, err
 	} else if end {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
 	if ctr.bat == nil {
 		ap.Free(proc, false)
 		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	err := ctr.eval(ap.Limit, proc, anal, arg.info.IsLast)
 	ap.Free(proc, err != nil)
 	if err == nil {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
-	return process.ExecNext, err
+	return result, err
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {

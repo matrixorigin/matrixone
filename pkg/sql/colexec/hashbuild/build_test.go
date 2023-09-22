@@ -78,7 +78,7 @@ func TestBuild(t *testing.T) {
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			require.NoError(t, err)
-			require.Equal(t, false, ok == process.ExecStop)
+			require.Equal(t, false, ok.Status == vm.ExecStop)
 			mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()

@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,25 +36,27 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ctr := ap.ctr
-
+	result := vm.NewCallResult()
 	for {
 		bat, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 		if end {
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 		if bat.Last() {
 			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 		}
 
 		anal.Input(bat, arg.info.IsFirst)
@@ -66,14 +69,14 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			ap.ctr.seen = newSeen
 			anal.Output(bat, arg.info.IsLast)
 			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 		} else {
 			num := int(newSeen - ap.Limit)
 			batch.SetLength(bat, bat.RowCount()-num)
 			ap.ctr.seen = newSeen
 			anal.Output(bat, arg.info.IsLast)
 			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 		}
 	}
 }

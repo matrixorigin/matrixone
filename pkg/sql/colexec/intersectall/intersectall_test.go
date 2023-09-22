@@ -76,10 +76,10 @@ func TestIntersectAll(t *testing.T) {
 	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
-	var end process.ExecStatus
+	var end vm.CallResult
 	for {
 		end, err = c.arg.Call(c.proc)
-		if end == process.ExecStop {
+		if end.Status == vm.ExecStop {
 			break
 		}
 		require.NoError(t, err)

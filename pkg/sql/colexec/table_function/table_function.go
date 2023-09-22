@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,13 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	tblArg := arg
 	var (
 		f bool
 		e error
 	)
 	idx := arg.info.Idx
+	result := vm.NewCallResult()
 
 	switch tblArg.Name {
 	case "unnest":
@@ -52,38 +54,44 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	case "mo_configurations":
 		f, e = moConfigurationsCall(idx, proc, tblArg)
 	default:
-		return process.ExecStop, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
+		result.Status = vm.ExecStop
+		return result, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
 	if e != nil || f {
 		if f {
-			return process.ExecStop, e
+			result.Status = vm.ExecStop
+			return result, e
 		}
-		return process.ExecNext, e
+		return result, e
 	}
 
 	bat := proc.InputBatch()
 	if bat == nil {
-		return process.ExecStop, e
+		result.Status = vm.ExecStop
+		return result, e
 	}
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, e
+		return result, e
 	}
 
 	if bat.VectorCount() != len(tblArg.retSchema) {
-		return process.ExecStop, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
+		result.Status = vm.ExecStop
+		return result, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}
 	for i := range tblArg.retSchema {
 		if proc.InputBatch().GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
-			return process.ExecStop, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.Name)
+			result.Status = vm.ExecStop
+			return result, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.Name)
 		}
 	}
 
 	if f {
-		return process.ExecStop, e
+		result.Status = vm.ExecStop
+		return result, e
 	}
-	return process.ExecNext, e
+	return result, e
 }
 
 func (arg *Argument) String(buf *bytes.Buffer) {

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,16 +45,17 @@ func (ap *Argument) Prepare(proc *process.Process) error {
 	return err
 }
 
-func (ap *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (ap *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(ap.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ctr := ap.ctr
+	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			ctr.state = Probe
 
@@ -61,7 +63,7 @@ func (ap *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			var err error
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 			if bat == nil {
@@ -83,11 +85,12 @@ func (ap *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 				proc.PutBatch(bat)
 			}
 
-			return process.ExecNext, err
+			return result, err
 
 		default:
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

@@ -274,11 +274,11 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 		lastArg.SetInfo(info)
 		if isConnector {
-			if ok, err := lastArg.Call(s.Proc); err != nil || ok == process.ExecStop {
+			if ok, err := lastArg.Call(s.Proc); err != nil || ok.Status == vm.ExecStop {
 				return err
 			}
 		} else {
-			if ok, err := lastArg.Call(s.Proc); err != nil || ok == process.ExecStop {
+			if ok, err := lastArg.Call(s.Proc); err != nil || ok.Status == vm.ExecStop {
 				return err
 			}
 		}

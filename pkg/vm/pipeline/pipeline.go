@@ -67,6 +67,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 
 	for _, ins := range p.instructions {
 		ins.Idx += 1
+		ins.IsFirst = false
 	}
 
 	tableScanOperator := table_scan.Argument{
@@ -110,6 +111,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 
 	for _, ins := range p.instructions {
 		ins.Idx += 1
+		ins.IsFirst = false
 	}
 
 	valueScanOperator := value_scan.Argument{

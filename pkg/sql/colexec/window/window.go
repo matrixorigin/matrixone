@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -57,18 +58,18 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
 	ap := arg
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-
+	result := vm.NewCallResult()
 	for {
 		bat, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
-			return process.ExecNext, err
+			return result, err
 		}
 
 		if end {
@@ -84,7 +85,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			n := bat.Vecs[i].Length()
 			err = ctr.bat.Vecs[i].UnionBatch(bat.Vecs[i], 0, n, makeFlagsOne(n), proc.Mp())
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 		}
 		ctr.bat.AddRowCount(bat.RowCount())
@@ -93,20 +94,21 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	// init agg frame
 	if ctr.bat == nil {
 		proc.SetInputBatch(ctr.bat)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	n := ctr.bat.Vecs[0].Length()
 	if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
-		return process.ExecNext, err
+		return result, err
 	}
 
 	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 	for i, ag := range ap.Aggs {
 		if ctr.bat.Aggs[i], err = agg.NewWithConfig(ag.Op, ag.Dist, ap.Types[i], ag.Config); err != nil {
-			return process.ExecNext, err
+			return result, err
 		}
 		if err = ctr.bat.Aggs[i].Grows(n, proc.Mp()); err != nil {
-			return process.ExecNext, err
+			return result, err
 		}
 	}
 
@@ -118,18 +120,18 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			for j := range ctr.orderVecs {
 				ctr.orderVecs[j].executor, err = colexec.NewExpressionExecutor(proc, ap.Fs[j].Expr)
 				if err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
 			}
 			_, err = ctr.processOrder(i, ap, ctr.bat, proc)
 			if err != nil {
 				ap.Free(proc, true)
-				return process.ExecNext, err
+				return result, err
 			}
 		}
 		// evaluate func
 		if err = ctr.processFunc(i, ap, proc, anal); err != nil {
-			return process.ExecNext, err
+			return result, err
 		}
 
 		// clean
@@ -139,7 +141,8 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	anal.Output(ctr.bat, arg.info.IsLast)
 
 	proc.SetInputBatch(ctr.bat)
-	return process.ExecStop, nil
+	result.Status = vm.ExecStop
+	return result, nil
 }
 
 func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, anal process.Analyze) error {

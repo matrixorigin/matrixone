@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -41,12 +42,13 @@ func (arg *Argument) Prepare(p *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 
 	ctr := arg.ctr
+	result := vm.NewCallResult()
 
 	for {
 		switch ctr.state {
@@ -54,7 +56,8 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			for {
 				bat, end, err := ctr.ReceiveFromAllRegs(anal)
 				if err != nil {
-					return process.ExecStop, nil
+					result.Status = vm.ExecStop
+					return result, nil
 				}
 
 				if end {
@@ -64,7 +67,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 				err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
 				if err != nil {
 					bat.Clean(proc.Mp())
-					return process.ExecNext, err
+					return result, err
 				}
 
 			}
@@ -76,13 +79,14 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 				proc.SetInputBatch(ctr.insertBat)
 				ctr.insertBat = nil
 				ctr.state = End
-				return process.ExecNext, nil
+				return result, nil
 			}
 			ctr.state = End
 
 		case End:
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

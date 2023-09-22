@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -31,19 +32,21 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	bat := proc.InputBatch()
+	result := vm.NewCallResult()
 	if bat == nil {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	if bat.Last() {
 		proc.SetInputBatch(bat)
-		return process.ExecNext, nil
+		return result, nil
 	}
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
@@ -52,7 +55,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	anal.Input(bat, arg.info.IsFirst)
 
 	if ap.Seen > ap.Offset {
-		return process.ExecNext, nil
+		return result, nil
 	}
 	length := bat.RowCount()
 	if ap.Seen+uint64(length) > ap.Offset {
@@ -61,12 +64,12 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		proc.SetInputBatch(bat)
-		return process.ExecNext, nil
+		return result, nil
 	}
 	ap.Seen += uint64(length)
 	proc.PutBatch(bat)
 	proc.SetInputBatch(batch.EmptyBatch)
-	return process.ExecNext, nil
+	return result, nil
 }
 
 func newSels(start, count int64, proc *process.Process) []int64 {

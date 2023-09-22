@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,20 +36,21 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-
+	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			for {
 				bat, end, err := ctr.ReceiveFromAllRegs(anal)
 				if err != nil {
-					return process.ExecStop, nil
+					result.Status = vm.ExecStop
+					return result, nil
 				}
 
 				if end {
@@ -57,7 +59,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 				anal.Input(bat, arg.info.IsFirst)
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
-					return process.ExecNext, err
+					return result, err
 				}
 			}
 			ctr.state = Eval
@@ -69,7 +71,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
-							return process.ExecNext, err
+							return result, err
 						}
 						ctr.bat.Aggs[i] = nil
 						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
@@ -85,13 +87,14 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 				proc.SetInputBatch(ctr.bat)
 				ctr.bat = nil
 				ctr.state = End
-				return process.ExecNext, nil
+				return result, nil
 			}
 			ctr.state = End
 
 		case End:
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

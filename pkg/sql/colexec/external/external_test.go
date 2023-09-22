@@ -197,17 +197,17 @@ func Test_Call(t *testing.T) {
 			param.FileSize = []int64{1}
 			end, err := tcs.arg.Call(tcs.proc)
 			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(end == process.ExecStop, convey.ShouldBeFalse)
+			convey.So(end.Status == vm.ExecStop, convey.ShouldBeFalse)
 
 			param.Fileparam.End = false
 			end, err = tcs.arg.Call(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(end == process.ExecStop, convey.ShouldBeTrue)
+			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 
 			param.Fileparam.End = true
 			end, err = tcs.arg.Call(tcs.proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(end == process.ExecStop, convey.ShouldBeTrue)
+			convey.So(end.Status == vm.ExecStop, convey.ShouldBeTrue)
 		}
 	})
 }

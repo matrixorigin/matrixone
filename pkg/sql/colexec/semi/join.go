@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -49,17 +50,18 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return err
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
 	ctr := ap.ctr
+	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(anal); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if ctr.mp == nil {
 				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
@@ -71,7 +73,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 			if bat == nil {
@@ -88,14 +90,15 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			}
 			if err := ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast); err != nil {
 				bat.Clean(proc.Mp())
-				return process.ExecNext, err
+				return result, err
 			}
 			proc.PutBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 
 		default:
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,23 +33,25 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
 	ap := arg
 	bat := proc.InputBatch()
+	result := vm.NewCallResult()
 	if bat == nil {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 	defer proc.PutBatch(bat)
 
 	if err := ap.Split(proc, bat); err != nil {
-		return process.ExecNext, err
+		return result, err
 	}
 
 	if !ap.notFreeBatch {
@@ -66,14 +69,14 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			if ap.container.mp[i].RowCount() > 0 {
 				// batches in mp will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
 			}
 
 			for _, bat := range ap.container.mp2[i] {
 				// batches in mp2 will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, bat); err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
 
 			}
@@ -84,19 +87,19 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		if ap.container.mp[0].RowCount() > 0 {
 			//batches in mp will be deeply copied into txn's workspace.
 			if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 		}
 
 		for _, bat := range ap.container.mp2[0] {
 			//batches in mp2 will be deeply copied into txn's workspace.
 			if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 		}
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
 	proc.SetInputBatch(nil)
-	return process.ExecNext, nil
+	return result, nil
 }

@@ -85,7 +85,7 @@ func TestProduct(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
 				break
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -115,7 +115,7 @@ func BenchmarkProduct(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
-				if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
+				if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
 					break
 				}
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -166,7 +166,7 @@ func hashBuild(t *testing.T, tc productTestCase) *batch.Batch {
 	}
 	ok, err := tc.barg.Call(tc.proc)
 	require.NoError(t, err)
-	require.Equal(t, false, ok == process.ExecStop)
+	require.Equal(t, false, ok.Status == vm.ExecStop)
 	return tc.proc.Reg.InputBatch
 }
 

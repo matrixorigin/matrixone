@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -77,25 +78,27 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // concurrently modified by other transactions, a Timestamp column will be put on the output
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
-
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	result := vm.NewCallResult()
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
-		return process.ExecNext, nil
+		return result, nil
 	}
 
 	if !arg.block {
 		ok, err := callNonBlocking(arg.info.Idx, proc, arg)
 		if ok {
-			return process.ExecStop, err
+			result.Status = vm.ExecStop
+			return result, err
 		}
-		return process.ExecNext, err
+		return result, err
 	}
 	ok, err := callBlocking(arg.info.Idx, proc, arg, arg.info.IsFirst, arg.info.IsLast)
 	if ok {
-		return process.ExecStop, err
+		result.Status = vm.ExecStop
+		return result, err
 	}
-	return process.ExecNext, err
+	return result, err
 }
 
 func callNonBlocking(

@@ -50,9 +50,13 @@ func Prepare(ins Instructions, proc *process.Process) error {
 }
 
 func Run(ins Instructions, proc *process.Process) (end bool, err error) {
+	var result *CallResult
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(proc.Ctx, e)
+		}
+		if result != nil && result.Batch != nil {
+			result.Batch.Clean(proc.Mp())
 		}
 	}()
 
@@ -63,23 +67,37 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 			IsLast:  ins[i].IsLast,
 		}
 		ins[i].Arg.SetInfo(info)
+
+		if i > 0 {
+			ins[i].Arg.AppendChild(ins[i-1].Arg)
+		}
 	}
+
+	// root := ins[len(ins)-1].Arg
+	// end = false
+	// for !end {
+	// 	result, err = root.Call(proc)
+	// 	if err != nil {
+	// 		return result, err
+	// 	}
+	// 	end = result.Status == ExecStop || result.Batch == nil
+	// }
 
 	return fubarRun(ins, proc, 0)
 }
 
 func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
 	var fubarStack []int
-	var ok process.ExecStatus
+	var result CallResult
 
 	for i := start; i < len(ins); i++ {
-		if ok, err = ins[i].Arg.Call(proc); err != nil {
-			return ok == process.ExecStop || end, err
+		if result, err = ins[i].Arg.Call(proc); err != nil {
+			return result.Status == ExecStop || end, err
 		}
 
-		if ok == process.ExecStop {
+		if result.Status == process.ExecStop {
 			end = true
-		} else if ok == process.ExecHasMore {
+		} else if result.Status == process.ExecHasMore {
 			fubarStack = append(fubarStack, i)
 		}
 	}

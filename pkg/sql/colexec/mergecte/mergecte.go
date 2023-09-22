@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -37,7 +38,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
@@ -46,12 +47,13 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	var sb *batch.Batch
 	var end bool
 	var err error
-
+	result := vm.NewCallResult()
 	switch ctr.status {
 	case sendInitial:
 		sb, _, err = ctr.ReceiveFromSingleReg(0, anal)
 		if err != nil {
-			return process.ExecStop, err
+			result.Status = vm.ExecStop
+			return result, err
 		}
 		if sb == nil {
 			ctr.status = sendLastTag
@@ -68,7 +70,8 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			sb, end, _ = ctr.ReceiveFromAllRegs(anal)
 			if sb == nil || end {
 				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
 			if !sb.Last() {
 				break
@@ -88,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	anal.Input(sb, arg.info.IsFirst)
 	anal.Output(sb, arg.info.IsLast)
 	proc.SetInputBatch(sb)
-	return process.ExecNext, nil
+	return result, nil
 }
 
 func makeRecursiveBatch(proc *process.Process) *batch.Batch {

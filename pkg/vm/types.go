@@ -123,7 +123,7 @@ type Operator interface {
 	Prepare(proc *process.Process) error
 
 	//Call calls an operator.
-	Call(proc *process.Process) (process.ExecStatus, error)
+	Call(proc *process.Process) (CallResult, error)
 
 	//SetInfo set operator info
 	SetInfo(info *OperatorInfo)
@@ -137,11 +137,18 @@ type ExecStatus int
 const (
 	ExecStop ExecStatus = iota
 	ExecNext
+	ExecHasMore
 )
 
 type CallResult struct {
 	Status ExecStatus
 	Batch  *batch.Batch
+}
+
+func NewCallResult() CallResult {
+	return CallResult{
+		Status: ExecNext,
+	}
 }
 
 type OperatorInfo struct {

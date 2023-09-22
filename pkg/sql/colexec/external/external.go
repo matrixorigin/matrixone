@@ -51,6 +51,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -118,15 +119,18 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
 	defer span.End()
+	result := vm.NewCallResult()
 	select {
 	case <-proc.Ctx.Done():
 		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	default:
 	}
+
 	t1 := time.Now()
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
@@ -138,12 +142,14 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	param := arg.Es
 	if param.Fileparam.End {
 		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	if param.plh == nil && param.Extern.ScanType != tree.INLINE {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
@@ -151,7 +157,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	bat, err := scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
-		return process.ExecNext, err
+		return result, err
 	}
 
 	proc.SetInputBatch(bat)
@@ -159,7 +165,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		anal.Output(bat, arg.info.IsLast)
 		anal.Alloc(int64(bat.Size()))
 	}
-	return process.ExecNext, nil
+	return result, nil
 }
 
 func containColname(col string) bool {

@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,22 +33,24 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
 	ctr := ap.ctr
 	var sb *batch.Batch
-
+	result := vm.NewCallResult()
 	for !ctr.last {
 		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 		if err != nil {
-			return process.ExecStop, err
+			result.Status = vm.ExecStop
+			return result, err
 		}
 		if bat == nil || bat.End() {
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 		if bat.Last() {
 			ctr.last = true
@@ -64,11 +67,12 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	if sb.End() {
 		sb.Clean(proc.Mp())
 		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
 	anal.Input(sb, arg.info.IsFirst)
 	anal.Output(sb, arg.info.IsLast)
 	proc.SetInputBatch(sb)
-	return process.ExecNext, nil
+	return result, nil
 }

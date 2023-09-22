@@ -116,7 +116,7 @@ func TestMark(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
 				break
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
@@ -170,7 +170,7 @@ func BenchmarkMark(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
-				if ok, err := tc.arg.Call(tc.proc); ok == process.ExecStop || err != nil {
+				if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
 					break
 				}
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())

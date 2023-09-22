@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -45,20 +46,21 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // it built a hash table for right relation first.
 // use values from left relation to probe and update the hash table.
 // and preserve values that do not exist in the hash table.
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
 
 	// prepare the analysis work.
 	analyze := proc.GetAnalyze(arg.info.Idx)
 	analyze.Start()
 	defer analyze.Stop()
+	result := vm.NewCallResult()
 
 	for {
 		switch arg.ctr.state {
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
 			if err = arg.ctr.buildHashTable(proc, analyze, 1, arg.info.IsFirst); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if arg.ctr.hashTable != nil {
 				analyze.Alloc(arg.ctr.hashTable.Size())
@@ -73,18 +75,19 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			last := false
 			last, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if last {
 				arg.ctr.state = operatorEnd
 				continue
 			}
-			return process.ExecNext, nil
+			return result, nil
 
 		case operatorEnd:
 			// operator over.
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

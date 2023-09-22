@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -91,13 +92,16 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	bat := proc.InputBatch()
+	result := vm.NewCallResult()
+
 	if bat == nil && ap.RecSink {
 		bat = makeEndBatch(proc)
 	} else if bat == nil {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	if bat.Last() {
 		if !ap.ctr.hasData {
@@ -108,15 +112,16 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 	} else if bat.IsEmpty() {
 		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	} else {
 		ap.ctr.hasData = true
 	}
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {
-		return process.ExecStop, err
+		result.Status = vm.ExecStop
+		return result, err
 	} else {
-		return process.ExecNext, err
+		return result, err
 	}
 }
 

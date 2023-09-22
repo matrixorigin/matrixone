@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -41,17 +42,19 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	analyze := proc.GetAnalyze(arg.info.Idx)
 	analyze.Start()
 	defer analyze.Stop()
 
+	result := vm.NewCallResult()
+
 	for {
 		switch arg.ctr.state {
 		case build:
 			if err := arg.ctr.buildHashTable(proc, analyze, 1, arg.info.IsFirst); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if arg.ctr.hashTable != nil {
 				analyze.Alloc(arg.ctr.hashTable.Size())
@@ -62,18 +65,20 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			var err error
 			isLast := false
 			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast); err != nil {
-				return process.ExecStop, err
+				result.Status = vm.ExecStop
+				return result, err
 			}
 			if isLast {
 				arg.ctr.state = end
 				continue
 			}
 
-			return process.ExecNext, nil
+			return result, nil
 
 		case end:
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

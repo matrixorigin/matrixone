@@ -17,6 +17,7 @@ package value_scan
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -28,11 +29,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	// result := vm.CallResult{
 	// 	Status: vm.ExecNext,
 	// }
-
+	result := vm.NewCallResult()
 	if arg.idx < len(arg.Batchs) {
 		// result.Batch = arg.Batchs[arg.idx]
 		// if arg.idx > 0 {
@@ -44,5 +45,5 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 		arg.idx += 1
 	}
 
-	return process.ExecNext, nil
+	return result, nil
 }

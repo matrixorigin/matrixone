@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,30 +34,32 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	ctr := ap.ctr
-
+	result := vm.NewCallResult()
 	for {
 		bat, end, err := ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
 			// WTF, nil?
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 
 		if end {
 			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 
 		anal.Input(bat, arg.info.IsFirst)
 		if ap.ctr.seen > ap.Offset {
 			anal.Output(bat, arg.info.IsLast)
 			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 		}
 		length := bat.RowCount()
 		// bat = PartOne + PartTwo, and PartTwo is required.
@@ -67,7 +70,7 @@ func (arg *Argument) Call(proc *process.Process) (process.ExecStatus, error) {
 			proc.Mp().PutSels(sels)
 			anal.Output(bat, arg.info.IsLast)
 			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+			return result, nil
 		}
 		ap.ctr.seen += uint64(length)
 		proc.PutBatch(bat)
