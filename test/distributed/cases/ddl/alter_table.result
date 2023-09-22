@@ -314,7 +314,7 @@ alter table t5 add column l varchar(255), add column m Date, add column n DateTi
 alter table t5 add column q decimal(5,2), add column r text;
 show create table t5;
 Table    Create Table
-t5    CREATE TABLE `t5` (\n`a` INT DEFAULT null,\n`b` TINYINT DEFAULT null,\n`c` SMALLINT DEFAULT null,\n`d` INT DEFAULT null,\n`e` BIGINT DEFAULT null,\n`f` TINYINT UNSIGNED DEFAULT null,\n`g` SMALLINT UNSIGNED DEFAULT null,\n`h` INT UNSIGNED DEFAULT null,\n`i` BIGINT UNSIGNED DEFAULT null,\n`j` FLOAT DEFAULT null,\n`k` DOUBLE DEFAULT null,\n`l` VARCHAR(255) DEFAULT null,\n`m` DATE DEFAULT null,\n`n` DATETIME DEFAULT null,\n`o` TIMESTAMP DEFAULT null,\n`p` BOOL DEFAULT null,\n`q` DECIMAL(5,2) DEFAULT null,\n`r` TEXT DEFAULT null\n) COMMENT='comment_3'
+t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` TINYINT DEFAULT NULL,\n`c` SMALLINT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` BIGINT DEFAULT NULL,\n`f` TINYINT UNSIGNED DEFAULT NULL,\n`g` SMALLINT UNSIGNED DEFAULT NULL,\n`h` INT UNSIGNED DEFAULT NULL,\n`i` BIGINT UNSIGNED DEFAULT NULL,\n`j` FLOAT DEFAULT NULL,\n`k` DOUBLE DEFAULT NULL,\n`l` VARCHAR(255) DEFAULT NULL,\n`m` DATE DEFAULT NULL,\n`n` DATETIME DEFAULT NULL,\n`o` TIMESTAMP DEFAULT NULL,\n`p` BOOL DEFAULT NULL,\n`q` DECIMAL(5,2) DEFAULT NULL,\n`r` TEXT DEFAULT NULL\n) COMMENT='comment_3'
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null
@@ -397,3 +397,117 @@ create table t5(a int, b int) cluster by a;
 alter table t5 add column c int;
 alter table t5 drop column a;
 drop table t5;
+drop table if exists t6;
+create table t6(a int not null);
+insert into t6 values(1),(2);
+select * from t6;
+a
+1
+2
+alter table t6 add column b timestamp not null;
+select * from t6;
+a    b
+1    0001-01-01 00:00:00
+2    0001-01-01 00:00:00
+alter table t6 add column c time not null;
+select * from t6;
+a    b    c
+1    0001-01-01 00:00:00    00:00:00
+2    0001-01-01 00:00:00    00:00:00
+alter table t6 add column d datetime not null;
+select * from t6;
+a    b    c    d
+1    0001-01-01 00:00:00    00:00:00    0001-01-01 00:00:00
+2    0001-01-01 00:00:00    00:00:00    0001-01-01 00:00:00
+alter table t6 add column e date not null;
+select * from t6;
+a    b    c    d    e
+1    0001-01-01 00:00:00    00:00:00    0001-01-01 00:00:00    0001-01-01
+2    0001-01-01 00:00:00    00:00:00    0001-01-01 00:00:00    0001-01-01
+alter table t6 add column f datetime after a;
+select * from t6;
+a    f    b    c    d    e
+1    null    0001-01-01 00:00:00    00:00:00    0001-01-01 00:00:00    0001-01-01
+2    null    0001-01-01 00:00:00    00:00:00    0001-01-01 00:00:00    0001-01-01
+drop table t6;
+drop table if exists t7;
+create table t7(a int not null);
+insert into t7 values(1),(2);
+select * from t7;
+a
+1
+2
+alter table t7 add column b int not null;
+select * from t7;
+a    b
+1    0
+2    0
+alter table t7 add column c float not null;
+select * from t7;
+a    b    c
+1    0    0.0
+2    0    0.0
+alter table t7 add column d int unsigned not null;
+select * from t7;
+a    b    c    d
+1    0    0.0    0
+2    0    0.0    0
+alter table t7 add column e decimal(7,2) not null;
+select * from t7;
+a    b    c    d    e
+1    0    0.0    0    0.00
+2    0    0.0    0    0.00
+alter table t7 add column f bool not null;
+select * from t7;
+a    b    c    d    e    f
+1    0    0.0    0    0.00    false
+2    0    0.0    0    0.00    false
+alter table t7 add column g double after a;
+select * from t7;
+a    g    b    c    d    e    f
+1    null    0    0.0    0    0.00    false
+2    null    0    0.0    0    0.00    false
+drop table t7;
+drop table if exists t8;
+create table t8(a int not null);
+insert into t8 values(1),(2);
+select * from t8;
+a
+1
+2
+alter table t8 add column b char(20) not null;
+select * from t8;
+a    b
+1    
+2    
+alter table t8 add column c varchar(20) not null;
+select * from t8;
+a    b    c
+1        
+2        
+alter table t8 add column d text not null;
+select * from t8;
+a    b    c    d
+1            
+2            
+alter table t8 add column e binary(2) not null;
+select * from t8;
+a    b    c    d    e
+1                  
+2                  
+alter table t8 add column f blob not null;
+select * from t8;
+a    b    c    d    e    f
+1                      
+2                      
+alter table t8 add column g varchar(50) after a;
+select * from t8;
+a    g    b    c    d    e    f
+1    null                      
+2    null                      
+alter table t8 add column h json not null;
+select * from t8;
+a    g    b    c    d    e    f    h
+1    null                          {}
+2    null                          {}
+drop table t8;
