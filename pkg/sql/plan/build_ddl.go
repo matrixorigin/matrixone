@@ -1590,9 +1590,13 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
-	indexAuxTable := &plan.CreateTable{TableDef: &TableDef{}}
+	// `CreateIndex.TableDef` will hold the original table definition
+	// `CreateIndex.Index` will hold the CreateTable request having,
+	// - table_def : containing all IndexDefs[]
+	// - index_tables : contains auxiliary tables[]
+	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 	if uIdx != nil {
-		if err := buildUniqueIndexTable(indexAuxTable, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
+		if err := buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
 		// TableExist=true signifies that, we need to create an auxiliary table for this unique index in the `/compile` pkg.
@@ -1600,12 +1604,12 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	if sIdx != nil {
 		var err error
-		if createIndex.TableExist, err = buildSecondaryIndexDef(indexAuxTable, []*tree.Index{sIdx}, colMap, oriPriKeyName, ctx); err != nil {
+		if createIndex.TableExist, err = buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = false
 	}
-	createIndex.Index = indexAuxTable
+	createIndex.Index = indexInfo
 	createIndex.Table = tableName
 	createIndex.TableDef = tableDef
 
