@@ -7632,6 +7632,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		return err
 	}
 
+	//TODO: need to see how we can reuse the bootstrap.go initialization.
 	// when the database is already initialized
 	executeConditionalUpgrades := func() error {
 		ctx, span = trace.Debug(ctx, "executeConditionalUpgrades")
