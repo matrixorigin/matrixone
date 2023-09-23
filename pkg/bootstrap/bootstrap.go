@@ -112,6 +112,25 @@ var (
 			update_at					bigint)`,
 			catalog.MOTaskDB),
 
+		fmt.Sprintf(`create table %s.sys_daemon_task (
+			task_id                     int primary key auto_increment,
+			task_metadata_id            varchar(50),
+			task_metadata_executor      int,
+			task_metadata_context       blob,
+			task_metadata_option        varchar(1000),
+			account_id                  int unsigned not null,
+			account                     varchar(128) not null,
+			task_type                   varchar(64) not null,
+			task_runner                 varchar(64),
+			task_status                 int not null,
+			last_heartbeat              timestamp,
+			create_at                   timestamp not null,
+			update_at                   timestamp not null,
+			end_at                      timestamp,
+			last_run                    timestamp,
+			details                     blob)`,
+			catalog.MOTaskDB),
+
 		fmt.Sprintf(`insert into %s.sys_async_task(
                               task_metadata_id,
                               task_metadata_executor,

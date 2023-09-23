@@ -887,10 +887,6 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
 		distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-		fun, err := function.GetFunctionById(ctx, obj)
-		if err != nil {
-			panic(err)
-		}
 		var e *plan.Expr = nil
 		var cfg []byte
 
@@ -915,7 +911,7 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 		aggs[i] = agg.Aggregate{
 			E:      e,
 			Dist:   distinct,
-			Op:     fun.GetSpecialId(),
+			Op:     obj,
 			Config: cfg,
 		}
 		if e != nil {
@@ -964,10 +960,6 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-			fun, err := function.GetFunctionById(ctx, obj)
-			if err != nil {
-				panic(err)
-			}
 			if len(f.F.Args) > 0 {
 				//for group concat, the last arg is separator string
 				if f.F.Func.ObjName == plan2.NameGroupConcat && len(f.F.Args) > 1 {
@@ -987,7 +979,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 			aggs[i] = agg.Aggregate{
 				E:      f.F.Args[0],
 				Dist:   distinct,
-				Op:     fun.GetSpecialId(),
+				Op:     obj,
 				Config: cfg,
 			}
 		}
@@ -1214,7 +1206,7 @@ func constructDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.No
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
 	if node.Stats.HashmapStats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
-		if node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Complex {
+		if node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
 			if left {
 				arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 			} else {

@@ -24,6 +24,7 @@ option (gogoproto.protosizer_all) = true;
 
 import "plan.proto";
 import "timestamp.proto";
+import "lock.proto";
 
 message Message {
   uint64  sid = 1;
@@ -76,7 +77,7 @@ message MultiArguemnt{
 }
 
 message Aggregate {
-  int32 op = 1;
+  int64 op = 1;
   bool dist = 2;
   plan.Expr expr = 3;
   bytes config =4;
@@ -153,6 +154,7 @@ message LockTarget {
   int32 filter_col_idx_in_bat   = 5;
   bool lock_table               = 6;
   bool ChangeDef               = 7;
+  lock.LockMode Mode         = 8;
 }
 
 message LockOp {

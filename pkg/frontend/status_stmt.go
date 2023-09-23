@@ -437,6 +437,11 @@ type DropSequenceExecutor struct {
 	ds *tree.DropSequence
 }
 
+type AlterSequenceExecutor struct {
+	*statusStmtExecutor
+	cs *tree.AlterSequence
+}
+
 type DropViewExecutor struct {
 	*statusStmtExecutor
 	dv *tree.DropView

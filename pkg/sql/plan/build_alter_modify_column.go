@@ -69,7 +69,11 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	alterCtx.alterColMap[newCol.Name] = col.Name
+	alterCtx.alterColMap[newCol.Name] = selectExpr{
+		sexprType: columnName,
+		sexprStr:  col.Name,
+	}
+
 	return nil
 }
 

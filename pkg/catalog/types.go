@@ -92,6 +92,9 @@ const (
 
 	// MOTaskDB mo task db name
 	MOTaskDB = "mo_task"
+
+	// MOSysDaemonTask is the table name of daemon task table in mo_task.
+	MOSysDaemonTask = "sys_daemon_task"
 )
 
 const (

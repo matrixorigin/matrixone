@@ -100,15 +100,17 @@ func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error
 	}()
 
 	for len(buf) > 0 {
-		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
-		data, putback, err2 := f.readBlock(blockOffset)
-		defer putback.Put()
 
-		err = err2
+		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
+		var data []byte
+		var putback PutBack[[]byte]
+		data, putback, err = f.readBlock(blockOffset)
 		if err != nil && err != io.EOF {
 			// read error
+			putback.Put()
 			return
 		}
+
 		data = data[offsetInBlock:]
 		nBytes := copy(buf, data)
 		buf = buf[nBytes:]
@@ -116,12 +118,15 @@ func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error
 			// not fully read
 			err = nil
 		}
+		putback.Put()
+
 		offset += int64(nBytes)
 		n += nBytes
 		if err == io.EOF && nBytes == 0 {
 			// no more data
 			break
 		}
+
 	}
 	return
 }
@@ -140,11 +145,11 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 	}()
 
 	for len(buf) > 0 {
+
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
 		data, putback, err := f.readBlock(blockOffset)
-		defer putback.Put()
-
 		if err != nil && err != io.EOF {
+			putback.Put()
 			return 0, err
 		}
 
@@ -165,6 +170,7 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 		checksumBytes := make([]byte, _ChecksumSize)
 		binary.LittleEndian.PutUint32(checksumBytes, checksum)
 		if n, err := f.underlying.WriteAt(checksumBytes, blockOffset); err != nil {
+			putback.Put()
 			return n, err
 		} else {
 			perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
@@ -173,12 +179,15 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 		}
 
 		if n, err := f.underlying.WriteAt(data, blockOffset+_ChecksumSize); err != nil {
+			putback.Put()
 			return n, err
 		} else {
 			perfcounter.Update(f.ctx, func(c *perfcounter.CounterSet) {
 				c.FileService.FileWithChecksum.UnderlyingWrite.Add(int64(n))
 			}, f.perfCounterSets...)
 		}
+
+		putback.Put()
 
 		n += nBytes
 		offset += int64(nBytes)

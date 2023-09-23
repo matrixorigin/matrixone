@@ -93,7 +93,7 @@ func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
 			WithTaskParentTaskIDCond(EQ, "t1"))
 		assertTaskCountEqual(t, store, time.Second*5, 1,
 			WithTaskParentTaskIDCond(EQ, "t1"),
-			WithTaskStatusCond(EQ, task.TaskStatus_Running))
+			WithTaskStatusCond(task.TaskStatus_Running))
 	}, time.Millisecond, time.Millisecond)
 }
 
@@ -165,7 +165,7 @@ func waitHasTasks(t *testing.T, store *memTaskStorage, timeout time.Duration, co
 			require.Fail(t, "wait any tasks failed")
 			return
 		default:
-			tasks, err := store.Query(ctx, conds...)
+			tasks, err := store.QueryAsyncTask(ctx, conds...)
 			require.NoError(t, err)
 			if len(tasks) > 0 {
 				return
@@ -184,7 +184,7 @@ func assertTaskCountEqual(t *testing.T, store *memTaskStorage, timeout time.Dura
 		case <-ctx.Done():
 			return
 		default:
-			tasks, err := store.Query(ctx, conds...)
+			tasks, err := store.QueryAsyncTask(ctx, conds...)
 			require.NoError(t, err)
 			require.LessOrEqual(t, len(tasks), count, "err")
 		}

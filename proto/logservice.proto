@@ -47,6 +47,7 @@ message CNStore {
   map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
   metadata.WorkState WorkState       = 10;
   string          QueryAddress       = 11;
+  ConfigData ConfigData = 12;
 }
 
 message TNStore {
@@ -62,6 +63,7 @@ message TNStore {
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 7;
   string          CtlAddress         = 8;
+  ConfigData ConfigData = 9;
 }
 
 message LogStore {
@@ -71,6 +73,7 @@ message LogStore {
   NodeState State          = 4;
 
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
+  ConfigData ConfigData = 6;
 }
 
 // LogShardInfo contains information a log shard.
@@ -110,6 +113,9 @@ message CNStoreHeartbeat {
   bool            TaskServiceCreated = 7;
   string          QueryAddress       = 8;
   string          InitWorkState      = 9;
+  string          GossipAddress      = 10;
+  bool            GossipJoined       = 11;
+  ConfigData      ConfigData         = 12;
 }
 
 
@@ -135,6 +141,8 @@ message LogStoreHeartbeat {
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
   // TaskServiceCreated task service is created at the current log node
   bool            TaskServiceCreated    = 6;
+
+  ConfigData ConfigData = 7;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -165,6 +173,7 @@ message TNStoreHeartbeat {
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
   string          CtlAddress         = 7;
+  ConfigData ConfigData = 8;
 };
 
 message RSMState {
@@ -425,6 +434,11 @@ message ScheduleCommand {
   ShutdownStore     ShutdownStore   = 5;
   CreateTaskService CreateTaskService = 6;
   DeleteCNStore     DeleteCNStore     = 7;
+  JoinGossipCluster JoinGossipCluster = 8;
+}
+
+message JoinGossipCluster {
+  repeated string Existing = 1;
 }
 
 // CreateTaskService start task service at current node
@@ -457,6 +471,9 @@ message CNStoreInfo {
   map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
   metadata.WorkState WorkState       = 9;
   string          QueryAddress       = 10;
+  string          GossipAddress      = 11;
+  bool            GossipJoined       = 12;
+  ConfigData      ConfigData         = 13;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -479,6 +496,7 @@ message TNStoreInfo {
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
   string CtlAddress         = 7;
+  ConfigData ConfigData = 8;
 }
 
 // TNState contains all TN details known to the HAKeeper.
@@ -518,6 +536,7 @@ message LogStoreInfo {
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
 
   bool TaskServiceCreated = 6;
+  ConfigData ConfigData = 7;
 }
 
 message LogState {
@@ -589,4 +608,21 @@ message BackupData {
   uint64 NextID                   = 1;
   // NextIDByKey is IDs isolated by keys.
   map<string, uint64> NextIDByKey = 2;
+}
+
+message ConfigItem{
+  // Name is the name of config item
+  string Name = 1;
+  // CurrentValue is the current value of config item
+  string CurrentValue = 2;
+  // DefaultValue is the default value of config item
+  string DefaultValue = 3;
+  // Internal denotes the config item is internal or not
+  string Internal = 4;
+}
+
+// ConfigData is the content of config on cn,tn,log and proxy
+message ConfigData{
+  // Content is the key value of the config
+  map<string, ConfigItem> Content = 1;
 }

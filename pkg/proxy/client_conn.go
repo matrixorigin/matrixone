@@ -131,6 +131,8 @@ type clientConn struct {
 	prepareStmts []string
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
+	// ipNetList is the list of ip net, which is parsed from CIDRs.
+	ipNetList []*net.IPNet
 	// testHelper is used for testing.
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
@@ -150,6 +152,7 @@ func newClientConn(
 	mc clusterservice.MOCluster,
 	router Router,
 	tun *tunnel,
+	ipNetList []*net.IPNet,
 ) (ClientConn, error) {
 	var originIP net.IP
 	host, _, err := net.SplitHostPort(conn.RemoteAddress())
@@ -168,6 +171,7 @@ func newClientConn(
 		clientInfo: clientInfo{
 			originIP: originIP,
 		},
+		ipNetList: ipNetList,
 	}
 	c.connID, err = c.genConnID()
 	if err != nil {
@@ -394,6 +398,9 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 
 		// Set the salt value of cn server.
 		cn.salt = c.mysqlProto.GetSalt()
+
+		// Update the internal connection.
+		cn.internalConn = containIP(c.ipNetList, c.clientInfo.originIP)
 
 		// After select a CN server, we try to connect to it. If connect
 		// fails, and it is a retryable error, we reselect another CN server.

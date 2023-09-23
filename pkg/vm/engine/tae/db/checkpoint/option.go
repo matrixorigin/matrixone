@@ -77,3 +77,9 @@ func WithCheckpointBlockRows(rows int) Option {
 		r.options.checkpointBlockRows = rows
 	}
 }
+
+func WithReserveWALEntryCount(count uint64) Option {
+	return func(r *runner) {
+		r.options.reservedWALEntryCount = count
+	}
+}

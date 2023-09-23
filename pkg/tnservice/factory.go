@@ -128,11 +128,12 @@ func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Cli
 
 func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
 	ckpcfg := &options.CheckpointCfg{
-		MinCount:            s.cfg.Ckp.MinCount,
-		ScanInterval:        s.cfg.Ckp.ScanInterval.Duration,
-		FlushInterval:       s.cfg.Ckp.FlushInterval.Duration,
-		IncrementalInterval: s.cfg.Ckp.IncrementalInterval.Duration,
-		GlobalMinCount:      s.cfg.Ckp.GlobalMinCount,
+		MinCount:              s.cfg.Ckp.MinCount,
+		ScanInterval:          s.cfg.Ckp.ScanInterval.Duration,
+		FlushInterval:         s.cfg.Ckp.FlushInterval.Duration,
+		IncrementalInterval:   s.cfg.Ckp.IncrementalInterval.Duration,
+		GlobalMinCount:        s.cfg.Ckp.GlobalMinCount,
+		ReservedWALEntryCount: s.cfg.Ckp.ReservedWALEntryCount,
 	}
 	logtailServerAddr := s.logtailServiceListenAddr()
 	logtailServerCfg := &options.LogtailServerCfg{
