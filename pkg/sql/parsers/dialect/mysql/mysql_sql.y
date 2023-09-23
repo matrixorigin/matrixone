@@ -5962,6 +5962,8 @@ create_index_stmt:
         } else if $11 != nil{
             io = $11
             io.IType = $5
+        }else{
+            io = &tree.IndexOption{IType: tree.INDEX_TYPE_INVALID}
         }
         $$ = &tree.CreateIndex{
             Name: tree.Identifier($4.Compare()),
