@@ -108,6 +108,7 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		cli,
 		nil,
 	)

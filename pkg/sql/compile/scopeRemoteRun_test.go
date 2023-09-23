@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"hash/crc32"
 	"testing"
 	"time"
@@ -38,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -84,6 +84,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -142,6 +144,7 @@ func Test_CnServerMessageHandler(t *testing.T) {
 				nil,
 				nil,
 				nil,
+				nil,
 				cli,
 				nil,
 				nil,
@@ -176,6 +179,7 @@ func Test_CnServerMessageHandler(t *testing.T) {
 				nil,
 				nil,
 				nil,
+				nil,
 				cli,
 				nil,
 				nil,
@@ -198,6 +202,15 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 	ch := make(chan morpc.Message)
 	streamSender.EXPECT().Receive().Return(ch, nil)
 
+	agg0, err := functionAgg.NewAggAvg(
+		(function.AVG<<32)|0,
+		false,
+		[]types.Type{types.T_int64.ToType()},
+		types.T_int64.ToType(),
+		0,
+	)
+	require.Nil(t, err)
+
 	bat := &batch.Batch{
 		Recursive:  0,
 		Ro:         false,
@@ -205,19 +218,8 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		Cnt:        1,
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
-		Aggs: []agg.Agg[any]{agg.NewUnaryAgg[int64, int64](
-			1,
-			&agg.Avg[int64]{Cnts: []int64{1}},
-			false,
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			nil,
-			nil,
-			nil,
-			nil,
-			nil,
-		)},
-		AuxData: nil,
+		Aggs:       []agg.Agg[any]{agg0},
+		AuxData:    nil,
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)
@@ -241,7 +243,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		nil,
 		nil,
 		nil,
-	)
+		nil)
 	vp.AnalInfos = []*process.AnalyzeInfo{}
 	vp.Reg = process.Register{}
 	c := &Compile{
@@ -666,7 +668,17 @@ func Test_decodeBatch(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil)
+
+	agg0, err := functionAgg.NewAggAvg(
+		(function.AVG<<32)|0,
+		false,
+		[]types.Type{types.T_int64.ToType()},
+		types.T_int64.ToType(),
+		0,
 	)
+	require.Nil(t, err)
+
 	bat := &batch.Batch{
 		Recursive:  0,
 		Ro:         false,
@@ -674,19 +686,8 @@ func Test_decodeBatch(t *testing.T) {
 		Cnt:        1,
 		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
-		Aggs: []agg.Agg[any]{agg.NewUnaryAgg[int64, int64](
-			1,
-			&agg.Avg[int64]{Cnts: []int64{1}},
-			false,
-			types.T_int64.ToType(),
-			types.T_int64.ToType(),
-			nil,
-			nil,
-			nil,
-			nil,
-			nil,
-		)},
-		AuxData: nil,
+		Aggs:       []agg.Agg[any]{agg0},
+		AuxData:    nil,
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)
@@ -696,7 +697,7 @@ func Test_decodeBatch(t *testing.T) {
 }
 
 func TestScopeContext_addSubPipeline(t *testing.T) {
-	proc := process.New(context.TODO(), nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(context.TODO(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	proc.Reg = process.Register{
 		MergeReceivers: []*process.WaitRegister{{}},
 	}

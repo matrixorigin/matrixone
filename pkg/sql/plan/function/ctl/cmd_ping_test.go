@@ -32,7 +32,7 @@ import (
 func TestCmdPingTNWithEmptyTN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime()
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"",
@@ -49,7 +49,7 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 
 	shardID := uint64(1)
 	ctx := context.Background()
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"",
@@ -70,7 +70,7 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 func TestCmdPingTNWithMultiTN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"",
@@ -94,7 +94,7 @@ func TestCmdPingTNWithMultiTN(t *testing.T) {
 func TestCmdPingTNWithParameter(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"1",

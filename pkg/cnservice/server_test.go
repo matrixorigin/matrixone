@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -69,6 +70,7 @@ func Test_InitServer(t *testing.T) {
 		fs fileservice.FileService,
 		lockService lockservice.LockService,
 		queryService queryservice.QueryService,
+		hakeeper logservice.CNHAKeeperClient,
 		udfService udf.Service,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,

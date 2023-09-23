@@ -119,7 +119,6 @@ func (c *Client) Run(ctx context.Context, request *udf.Request, getPkg udf.GetPk
 				n, err = reader.Read(buffer[offset:])
 				if err != nil {
 					if err == io.EOF {
-						err = nil
 						pkg.Last = true
 					} else {
 						return nil, err
