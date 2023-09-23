@@ -7667,7 +7667,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			if err != nil {
 				return err
 			}
-			if len(bh.GetExecResultBatches()) == 0 {
+			//TODO: check if we can use GetExecResultSet() instead of GetExecResultBatches()
+			if len(bh.GetExecResultSet()) == 0 {
 				if err = bh.Exec(newTenantCtx, conditionalUpgradeSQL.then); err != nil {
 					return err
 				}
