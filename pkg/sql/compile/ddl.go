@@ -331,16 +331,17 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 			//---------------------------------------------------------
 			if act.AddIndex.IndexTableExist {
+				//TODO: change
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
 				// 2. create index table from unique index object
-				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
+				createSQL := genCreateAuxIndexTableSqlForUniqueIndex(def, indexDef, qry.Database)
 				err = c.runSql(createSQL)
 				if err != nil {
 					return err
 				}
 
 				// 3. insert data into index table for unique index object
-				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
+				insertSQL := genInsertIntoAuxIndexTableSqlForUniqueIndex(tableDef, indexDef, qry.Database)
 				err = c.runSql(insertSQL)
 				if err != nil {
 					return err
@@ -801,67 +802,116 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	tableId := r.GetTableID(c.ctx)
 
-	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
-	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
+	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef)
+	// IndexInfo is named same as planner's IndexInfo
+	indexInfo := qry.GetIndex()
+	indexTableDef := indexInfo.GetTableDef()
 
-	if indexDef.Unique {
-		// 0. check original data is not duplicated
-		err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
+	//[Stage a] create auxiliary tables for index
+	//indexTableDef.Indexes will have 1 entry for UniqueIndex -- Unique
+	//indexTableDef.Indexes will have 1 entry for BTREEIndex  -- Secondary
+	//indexTableDef.Indexes will have 2 entries for IVFFLATIndex -- Secondary
+	// !!! NOTE: When you have 2 entries for same index, we need to use algo_table_type to make table creation
+	// part mutually exclusive. Make sure that, they don't execute twice for the same index.
+	for _, indexDef := range indexTableDef.Indexes {
+
+		// i) Unique Index
+		if indexDef.Unique {
+			// 0. Pre-check: check original data is not duplicated
+			{
+				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, originalTableDef.Name, partsToColsStr(indexDef.Parts))
+				if err != nil {
+					return err
+				}
+			}
+
+			// 1. Table-Build: build and create index table for unique index
+			if qry.TableExist {
+				tblDef := indexInfo.GetIndexTables()[0]
+				createSQL := genCreateAuxIndexTableSqlForUniqueIndex(tblDef, indexDef, qry.Database)
+				err = c.runSql(createSQL)
+				if err != nil {
+					return err
+				}
+
+				insertSQL := genInsertIntoAuxIndexTableSqlForUniqueIndex(originalTableDef, indexDef, qry.Database)
+				err = c.runSql(insertSQL)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		// ii) Secondary Index
+		if !indexDef.Unique {
+			{
+				// 0. Pre-check: can have pre-check phase in the future.
+			}
+
+			// 1. Table-Build : create auxiliary tables for secondary index.
+			if qry.TableExist {
+				if indexDef.IndexAlgo == tree.INDEX_TYPE_BTREE.ToString() {
+					tblDef := indexInfo.GetIndexTables()[0]
+					createSQL := genCreateAuxIndexTableSqlForBTreeIndex(tblDef, indexDef, qry.Database)
+					err = c.runSql(createSQL)
+					if err != nil {
+						return err
+					}
+
+					insertSQL := genInsertIntoAuxIndexTableSqlForBTreeIndex(originalTableDef, indexDef, qry.Database)
+					err = c.runSql(insertSQL)
+					if err != nil {
+						return err
+					}
+				} else if indexDef.IndexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
+					indexDef.IndexAlgoTableType == catalog.SystemSecondaryIndex_IvfCentroidsRel {
+
+				} else if indexDef.IndexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
+					indexDef.IndexAlgoTableType == catalog.SystemSecondaryIndex_IvfCentroidsMappingRel {
+
+				}
+
+			}
+		}
+	}
+
+	{ //[Stage b] build and update constraint def
+		defs, err := planDefsToExeDefs(indexTableDef)
+		if err != nil {
+			return err
+		}
+		ct := defs[0].(*engine.ConstraintDef)
+		tblDefs, err := r.TableDefs(c.ctx)
+		if err != nil {
+			return err
+		}
+		var oldCt *engine.ConstraintDef
+		for _, def := range tblDefs {
+			if ct, ok := def.(*engine.ConstraintDef); ok {
+				oldCt = ct
+				break
+			}
+		}
+		newCt, err := makeNewCreateConstraint(oldCt, ct.Cts[0])
+		if err != nil {
+			return err
+		}
+		err = r.UpdateConstraint(c.ctx, newCt)
 		if err != nil {
 			return err
 		}
 	}
 
-	// build and create index table for unique index
-	if qry.TableExist {
-		def := qry.GetIndex().GetIndexTables()[0]
-		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-		err = c.runSql(createSQL)
+	//[Stage c] generate insert into mo_indexes metadata
+	for _, indexDef := range indexTableDef.Indexes {
+		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
 		if err != nil {
 			return err
 		}
-
-		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
-		err = c.runSql(insertSQL)
+		err = c.runSql(sql)
 		if err != nil {
 			return err
 		}
-	}
-	// build and update constraint def
-	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
-	if err != nil {
-		return err
-	}
-	ct := defs[0].(*engine.ConstraintDef)
-
-	tblDefs, err := r.TableDefs(c.ctx)
-	if err != nil {
-		return err
-	}
-	var oldCt *engine.ConstraintDef
-	for _, def := range tblDefs {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
-	}
-	newCt, err := makeNewCreateConstraint(oldCt, ct.Cts[0])
-	if err != nil {
-		return err
-	}
-	err = r.UpdateConstraint(c.ctx, newCt)
-	if err != nil {
-		return err
-	}
-
-	// generate insert into mo_indexes metadata
-	sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
-	if err != nil {
-		return err
-	}
-	err = c.runSql(sql)
-	if err != nil {
-		return err
 	}
 	return nil
 }
