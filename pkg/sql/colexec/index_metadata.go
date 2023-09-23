@@ -56,19 +56,21 @@ const (
 
 // Column type mapping of table 'mo_indexes'
 var MO_INDEX_COLTYPE = map[string]types.T{
-	MO_INDEX_ID:               types.T_uint64,
-	MO_INDEX_TABLE_ID:         types.T_uint64,
-	MO_INDEX_DATABASE_ID:      types.T_uint64,
-	MO_INDEX_NAME:             types.T_varchar,
-	MO_INDEX_TYPE:             types.T_varchar,
-	MO_INDEX_IS_VISIBLE:       types.T_int8,
-	MO_INDEX_HIDDEN:           types.T_int8,
-	MO_INDEX_COMMENT:          types.T_varchar,
-	MO_INDEX_COLUMN_NAME:      types.T_varchar,
-	MO_INDEX_ORDINAL_POSITION: types.T_uint32,
-	MO_INDEX_OPTIONS:          types.T_text,
-	MO_INDEX_TABLE_NAME:       types.T_varchar,
-	MO_INDEX_PRIKEY:           types.T_varchar,
+	MO_INDEX_ID:                   types.T_uint64,
+	MO_INDEX_TABLE_ID:             types.T_uint64,
+	MO_INDEX_DATABASE_ID:          types.T_uint64,
+	MO_INDEX_NAME:                 types.T_varchar,
+	MO_INDEX_TYPE:                 types.T_varchar,
+	MO_INDEX_ALGORITHM:            types.T_varchar,
+	MO_INDEX_ALGORITHM_TABLE_TYPE: types.T_varchar,
+	MO_INDEX_IS_VISIBLE:           types.T_int8,
+	MO_INDEX_HIDDEN:               types.T_int8,
+	MO_INDEX_COMMENT:              types.T_varchar,
+	MO_INDEX_COLUMN_NAME:          types.T_varchar,
+	MO_INDEX_ORDINAL_POSITION:     types.T_uint32,
+	MO_INDEX_OPTIONS:              types.T_text,
+	MO_INDEX_TABLE_NAME:           types.T_varchar,
+	MO_INDEX_PRIKEY:               types.T_varchar,
 }
 
 const (
