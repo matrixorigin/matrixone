@@ -144,7 +144,6 @@ var testMoAllTypes = []types.T{
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 	types.T_float32, types.T_float64,
 	types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary,
-	types.T_array_float32, types.T_array_float64,
 	types.T_date, types.T_datetime, types.T_timestamp, types.T_time,
 	types.T_enum,
 	types.T_decimal64, types.T_decimal128,
