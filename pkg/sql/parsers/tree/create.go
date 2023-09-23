@@ -738,6 +738,8 @@ func (it IndexType) ToString() string {
 		return "zonemap"
 	case INDEX_TYPE_IVFFLAT:
 		return "ivfflat"
+	case INDEX_TYPE_INVALID:
+		return ""
 	default:
 		return "Unknown IndexType"
 	}

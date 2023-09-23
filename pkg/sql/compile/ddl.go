@@ -335,14 +335,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				//TODO: change
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
 				// 2. create index table from unique index object
-				createSQL := genCreateAuxIndexTableSqlForUniqueIndex(def, indexDef, qry.Database)
+				createSQL := genCreateSecondaryIndexTableSqlForUniqueIndex(def, indexDef, qry.Database)
 				err = c.runSql(createSQL)
 				if err != nil {
 					return err
 				}
 
 				// 3. insert data into index table for unique index object
-				insertSQL := genInsertIntoAuxIndexTableSqlForUniqueIndex(tableDef, indexDef, qry.Database)
+				insertSQL := genInsertIntoSecondaryIndexTableSqlForUniqueIndex(tableDef, indexDef, qry.Database)
 				err = c.runSql(insertSQL)
 				if err != nil {
 					return err
@@ -804,8 +804,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	tableId := r.GetTableID(c.ctx)
 
 	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef)
-	// IndexInfo is named same as planner's IndexInfo
-	indexInfo := qry.GetIndex()
+	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
 	indexTableDef := indexInfo.GetTableDef()
 
 	//[Stage a] create auxiliary tables for index
@@ -829,13 +828,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			// 1. Table-Build: build and create index table for unique index
 			if qry.TableExist {
 				tblDef := indexInfo.GetIndexTables()[0]
-				createSQL := genCreateAuxIndexTableSqlForUniqueIndex(tblDef, indexDef, qry.Database)
+				createSQL := genCreateSecondaryIndexTableSqlForUniqueIndex(tblDef, indexDef, qry.Database)
 				err = c.runSql(createSQL)
 				if err != nil {
 					return err
 				}
 
-				insertSQL := genInsertIntoAuxIndexTableSqlForUniqueIndex(originalTableDef, indexDef, qry.Database)
+				insertSQL := genInsertIntoSecondaryIndexTableSqlForUniqueIndex(originalTableDef, indexDef, qry.Database)
 				err = c.runSql(insertSQL)
 				if err != nil {
 					return err
@@ -845,22 +844,27 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 		// ii) Secondary Index
 		if !indexDef.Unique {
+			// 0. Pre-check: check original data is not duplicated
 			{
-				// 0. Pre-check: can have pre-check phase in the future.
+				//TODO: Learn how to remove this and how PK will handle duplicates.
+				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, originalTableDef.Name, partsToColsStr(indexDef.Parts))
+				if err != nil {
+					return err
+				}
 			}
 
 			// 1. Table-Build : create auxiliary tables for secondary index.
 			if qry.TableExist {
 				indexAlgo := strings.ToLower(indexDef.IndexAlgo)
-				if indexAlgo == tree.INDEX_TYPE_BTREE.ToString() {
+				if indexAlgo == tree.INDEX_TYPE_BTREE.ToString() || indexAlgo == tree.INDEX_TYPE_INVALID.ToString() {
 					tblDef := indexInfo.GetIndexTables()[0]
-					createSQL := genCreateAuxIndexTableSqlForBTreeIndex(tblDef, indexDef, qry.Database)
+					createSQL := genCreateSecondaryIndexTableSqlForBTreeIndex(tblDef, indexDef, qry.Database)
 					err = c.runSql(createSQL)
 					if err != nil {
 						return err
 					}
 
-					insertSQL := genInsertIntoAuxIndexTableSqlForBTreeIndex(originalTableDef, indexDef, qry.Database)
+					insertSQL := genInsertIntoSecondaryIndexTableSqlForBTreeIndex(originalTableDef, indexDef, qry.Database)
 					err = c.runSql(insertSQL)
 					if err != nil {
 						return err

@@ -75,8 +75,8 @@ var (
 	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
 )
 
-// genCreateAuxIndexTableSqlForUniqueIndex: Generate ddl statements for creating index table
-func genCreateAuxIndexTableSqlForUniqueIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+// genCreateSecondaryIndexTableSqlForUniqueIndex: Generate ddl statements for creating index table
+func genCreateSecondaryIndexTableSqlForUniqueIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
@@ -108,7 +108,7 @@ func genCreateAuxIndexTableSqlForUniqueIndex(indexTableDef *plan.TableDef, index
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
-func genCreateAuxIndexTableSqlForBTreeIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+func genCreateSecondaryIndexTableSqlForBTreeIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
@@ -130,7 +130,7 @@ func genCreateAuxIndexTableSqlForBTreeIndex(indexTableDef *plan.TableDef, indexD
 			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
 		case types.T_decimal128:
 			sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-		//No need to include T_array here.
+		//No need to include T_array here as T_array will not be used as BTREE index column.
 		default:
 			sql += typeId.String()
 		}
@@ -141,13 +141,13 @@ func genCreateAuxIndexTableSqlForBTreeIndex(indexTableDef *plan.TableDef, indexD
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
-func genInsertIntoAuxIndexTableSqlForBTreeIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+func genInsertIntoSecondaryIndexTableSqlForBTreeIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)
 	if originTableDef.Pkey == nil || len(originTableDef.Pkey.PkeyColName) == 0 {
 		// make it error
-		panic("primary key required")
+		panic("primary key required for secondary index")
 	} else {
 		pkeyName := originTableDef.Pkey.PkeyColName
 		var pKeyMsg string
@@ -173,8 +173,8 @@ func genInsertIntoAuxIndexTableSqlForBTreeIndex(originTableDef *plan.TableDef, i
 	return insertSQL
 }
 
-// genInsertIntoAuxIndexTableSqlForUniqueIndex: Generate an insert statement for inserting data into the index table
-func genInsertIntoAuxIndexTableSqlForUniqueIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+// genInsertIntoSecondaryIndexTableSqlForUniqueIndex: Generate an insert statement for inserting data into the index table
+func genInsertIntoSecondaryIndexTableSqlForUniqueIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)

@@ -1275,9 +1275,9 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 	for _, indexInfo := range indexInfos {
 		switch indexInfo.KeyType {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
-			tableExists = true
+			tableExists = true // stating that secondary index table exists and need to build during compile.
 			indexDef := &plan.IndexDef{}
-			indexDef.Unique = false
+			indexDef.Unique = false // stating that this is not a unique index.
 
 			// 1.a secondary index table def (with name)
 			indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
