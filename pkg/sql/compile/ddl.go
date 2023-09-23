@@ -878,9 +878,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 					}
 				} else if indexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
 					indexDef.IndexAlgoTableType == catalog.SystemSecondaryIndex_IvfCentroidsRel {
-
+					//TODO: fill this later
 				} else if indexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
 					indexDef.IndexAlgoTableType == catalog.SystemSecondaryIndex_IvfCentroidsMappingRel {
+					//TODO: fill this later
 				}
 
 			}
