@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -850,7 +851,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 			// 1. Table-Build : create auxiliary tables for secondary index.
 			if qry.TableExist {
-				if indexDef.IndexAlgo == tree.INDEX_TYPE_BTREE.ToString() {
+				indexAlgo := strings.ToLower(indexDef.IndexAlgo)
+				if indexAlgo == tree.INDEX_TYPE_BTREE.ToString() {
 					tblDef := indexInfo.GetIndexTables()[0]
 					createSQL := genCreateAuxIndexTableSqlForBTreeIndex(tblDef, indexDef, qry.Database)
 					err = c.runSql(createSQL)
@@ -863,12 +865,11 @@ func (s *Scope) CreateIndex(c *Compile) error {
 					if err != nil {
 						return err
 					}
-				} else if indexDef.IndexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
+				} else if indexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
 					indexDef.IndexAlgoTableType == catalog.SystemSecondaryIndex_IvfCentroidsRel {
 
-				} else if indexDef.IndexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
+				} else if indexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
 					indexDef.IndexAlgoTableType == catalog.SystemSecondaryIndex_IvfCentroidsMappingRel {
-
 				}
 
 			}

@@ -1272,10 +1272,9 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) (tableExists bool, err error) {
 	nameCount := make(map[string]int)
 
-	tableExists = false
 	for _, indexInfo := range indexInfos {
 		switch indexInfo.KeyType {
-		case tree.INDEX_TYPE_BTREE:
+		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
 			tableExists = true
 			indexDef := &plan.IndexDef{}
 			indexDef.Unique = false
@@ -1692,7 +1691,6 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		if createIndex.TableExist, err = buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
-		createIndex.TableExist = false
 	}
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
