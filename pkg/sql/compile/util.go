@@ -75,8 +75,8 @@ var (
 	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
 )
 
-// genCreateIndexTableSql: Generate ddl statements for creating index table
-func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+// genCreateAuxIndexTableSqlForUniqueIndex: Generate ddl statements for creating index table
+func genCreateAuxIndexTableSqlForUniqueIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
@@ -108,8 +108,73 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
-// genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
-func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+func genCreateAuxIndexTableSqlForBTreeIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	var sql string
+	planCols := indexTableDef.GetCols()
+	for i, planCol := range planCols {
+		if i == 1 {
+			sql += ","
+		}
+		sql += planCol.Name + " "
+		typeId := types.T(planCol.Typ.Id)
+		switch typeId {
+		case types.T_char:
+			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+		case types.T_varchar:
+			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+		case types.T_binary:
+			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+		case types.T_varbinary:
+			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+		case types.T_decimal64:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_decimal128:
+			sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		//No need to include T_array here.
+		default:
+			sql += typeId.String()
+		}
+		if i == 0 {
+			sql += " primary key"
+		}
+	}
+	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
+}
+
+func genInsertIntoAuxIndexTableSqlForBTreeIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	// insert data into index table
+	var insertSQL string
+	temp := partsToColsStr(indexDef.Parts)
+	if originTableDef.Pkey == nil || len(originTableDef.Pkey.PkeyColName) == 0 {
+		// make it error
+		panic("primary key required")
+	} else {
+		pkeyName := originTableDef.Pkey.PkeyColName
+		var pKeyMsg string
+		if pkeyName == catalog.CPrimaryKeyColName {
+			pKeyMsg = "serial("
+			for i, part := range originTableDef.Pkey.Names {
+				if i == 0 {
+					pKeyMsg += part
+				} else {
+					pKeyMsg += "," + part
+				}
+			}
+			pKeyMsg += ")"
+		} else {
+			pKeyMsg = pkeyName
+		}
+		if len(indexDef.Parts) == 1 {
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+		} else {
+			insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+		}
+	}
+	return insertSQL
+}
+
+// genInsertIntoAuxIndexTableSqlForUniqueIndex: Generate an insert statement for inserting data into the index table
+func genInsertIntoAuxIndexTableSqlForUniqueIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)

@@ -1276,12 +1276,21 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 	for _, indexInfo := range indexInfos {
 		switch indexInfo.KeyType {
 		case tree.INDEX_TYPE_BTREE:
-
+			tableExists = true
 			indexDef := &plan.IndexDef{}
 			indexDef.Unique = false
 
-			indexParts := make([]string, 0)
+			// 1.a secondary index table def (with name)
+			indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+			if err != nil {
+				return false, err
+			}
+			tableDef := &TableDef{
+				Name: indexTableName,
+			}
 
+			// 1.b check index column types and build column parts
+			indexParts := make([]string, 0)
 			for _, keyPart := range indexInfo.KeyParts {
 				name := keyPart.ColName.Parts[0]
 				if _, ok := colMap[name]; !ok {
@@ -1296,9 +1305,82 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 				if colMap[name].Typ.Id == int32(types.T_json) {
 					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 				}
+				if colMap[name].Typ.Id == int32(types.T_array_float32) {
+					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECF32 column '%s' cannot be in index", name))
+				}
+				if colMap[name].Typ.Id == int32(types.T_array_float64) {
+					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECF64 column '%s' cannot be in index", name))
+				}
 				indexParts = append(indexParts, name)
 			}
 
+			// 1.c build index table column def
+			{
+				// 1.c.i) add index columns to index table
+				var keyName string
+				if len(indexInfo.KeyParts) == 1 {
+					keyName = catalog.IndexTableIndexColName
+					colDef := &ColDef{
+						Name: keyName,
+						Alg:  plan.CompressType_Lz4,
+						Typ: &Type{
+							Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+							Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
+						},
+						//TODO: check if this should be true
+						// If PK, then can, the column be nullable?
+						Default: &plan.Default{
+							NullAbility:  false,
+							Expr:         nil,
+							OriginString: "",
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, colDef)
+					tableDef.Pkey = &PrimaryKeyDef{
+						Names:       []string{keyName},
+						PkeyColName: keyName,
+					}
+				} else {
+					keyName = catalog.IndexTableIndexColName
+					colDef := &ColDef{
+						Name: keyName,
+						Alg:  plan.CompressType_Lz4,
+						Typ: &Type{
+							Id:    int32(types.T_varchar),
+							Width: types.MaxVarcharLen,
+						},
+						Default: &plan.Default{
+							NullAbility:  false,
+							Expr:         nil,
+							OriginString: "",
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, colDef)
+					tableDef.Pkey = &PrimaryKeyDef{
+						Names:       []string{keyName},
+						PkeyColName: keyName,
+					}
+				}
+
+				// 1.c.ii) add tablePK column to index table
+				if pkeyName != "" {
+					colDef := &ColDef{
+						Name: catalog.IndexTablePrimaryColName,
+						Alg:  plan.CompressType_Lz4,
+						Typ:  colMap[pkeyName].Typ,
+						Default: &plan.Default{
+							NullAbility:  false,
+							Expr:         nil,
+							OriginString: "",
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, colDef)
+				} else {
+					return false, moerr.NewInternalErrorNoCtx("table needs a PK for secondary index to work")
+				}
+			}
+
+			// 1.d Update indexInfo details (IndexName,IndexAlgo,IndexTables etc)
 			if indexInfo.Name == "" {
 				firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
 				nameCount[firstPart]++
@@ -1311,10 +1393,11 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			} else {
 				indexDef.IndexName = indexInfo.Name
 			}
-			indexDef.IndexTableName = ""
+			indexDef.IndexTableName = indexTableName
 			indexDef.Parts = indexParts
-			indexDef.TableExist = false
+			indexDef.TableExist = true
 			if indexInfo.IndexOption != nil {
+				//TODO: later make IndexOption as JSON.
 				indexDef.Comment = indexInfo.IndexOption.Comment
 			} else {
 				indexDef.Comment = ""
@@ -1323,6 +1406,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef.IndexAlgo = indexInfo.KeyType.ToString()
 			indexDef.IndexAlgoTableType = ""
 
+			// 1.e update createTable
+			createTable.IndexTables = append(createTable.IndexTables, tableDef)
 			createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 
 		case tree.INDEX_TYPE_IVFFLAT:
