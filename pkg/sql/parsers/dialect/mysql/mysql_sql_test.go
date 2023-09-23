@@ -649,7 +649,8 @@ var (
 		input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 		output: "show variables",
 	}, {
-		input: "create index idx1 using bsi on a (a) ",
+		input:  "create index idx1 using bsi on a (a)",
+		output: "create index idx1 using bsi on a (a)",
 	}, {
 		input:  "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
 		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
@@ -1378,7 +1379,8 @@ var (
 			input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
-			input: "create index idx1 on a (a)",
+			input:  "create index idx1 on a (a)",
+			output: "create index idx1 on a (a)",
 		}, {
 			input: "create unique index idx1 using btree on a (a, b(10), (a + b), (a - b)) visible",
 		}, {
