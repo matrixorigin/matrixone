@@ -44,9 +44,36 @@ var (
     		  PRIMARY KEY table_id (table_id, name)
 			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS),
 	}
+
+	SysDaemonTaskTable = &table.Table{
+		Account:  table.AccountSys,
+		Database: catalog.MOTaskDB,
+		Table:    catalog.MOSysDaemonTask,
+		CreateTableSql: fmt.Sprintf(`create table %s.%s(
+			task_id                     int primary key auto_increment,
+			task_metadata_id            varchar(50),
+			task_metadata_executor      int,
+			task_metadata_context       blob,
+			task_metadata_option        varchar(1000),
+			account_id                  int unsigned not null,
+			account                     varchar(128) not null,
+			task_type                   varchar(64) not null,
+			task_runner                 varchar(64),
+			task_status                 int not null,
+			last_heartbeat              timestamp,
+			create_at                   timestamp not null,
+			update_at                   timestamp not null,
+			end_at                      timestamp,
+			last_run                    timestamp,
+			details                     blob)`,
+			catalog.MOTaskDB, catalog.MOSysDaemonTask),
+	}
 )
 
-var needUpgradNewTable = []*table.Table{MoTablePartitionsTable}
+var needUpgradeNewTable = []*table.Table{
+	MoTablePartitionsTable,
+	SysDaemonTaskTable,
+}
 
 var PARTITIONSView = &table.Table{
 	Account:  table.AccountAll,
@@ -227,5 +254,5 @@ var SqlStatementHotspotView = &table.Table{
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
 
-var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView}
 var registeredViews = []*table.Table{processlistView, MoLocksView}
+var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView}
