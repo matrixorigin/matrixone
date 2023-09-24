@@ -70,6 +70,10 @@ func VarlenaToUint64(v *types.Varlena, area []byte) uint64 {
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
+	if lenBytes == 0 {
+		// always hash empty string to first bucket
+		return 0
+	}
 	//sample five bytes
 	h := (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1]))
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
