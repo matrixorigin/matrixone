@@ -2151,7 +2151,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				if _, err := buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, oriPriKeyName, ctx); err != nil {
+				var tableExists = false
+				if tableExists, err = buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
 
@@ -2162,7 +2163,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							TableName:             tableName,
 							OriginTablePrimaryKey: oriPriKeyName,
 							IndexInfo:             indexInfo,
-							IndexTableExist:       false,
+							IndexTableExist:       tableExists,
 						},
 					},
 				}
