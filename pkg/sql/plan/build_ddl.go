@@ -1207,7 +1207,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 	if len(secondaryIndexInfos) != 0 {
-		_, err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, pkeyName, ctx)
+		_, err = buildSecondaryIndexTable(createTable, secondaryIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
@@ -1407,7 +1407,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	}, nil
 }
 
-func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) (tableExists bool, err error) {
+func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) (tableExists bool, err error) {
 	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
@@ -1416,6 +1416,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			tableExists = true // stating that secondary index table exists and need to build during compile.
 			indexDef := &plan.IndexDef{}
 			indexDef.Unique = false // stating that this is not a unique index.
+			indexDef.TableExist = true
 
 			// 1.a secondary index table def (with name)
 			indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
@@ -1532,9 +1533,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			}
 			indexDef.IndexTableName = indexTableName
 			indexDef.Parts = indexParts
-			indexDef.TableExist = true
 			if indexInfo.IndexOption != nil {
-				//TODO: later make IndexOption as JSON. (seperate PR)
+				//TODO: later make IndexOption as JSON. (separate PR)
 				indexDef.Comment = indexInfo.IndexOption.Comment
 			} else {
 				indexDef.Comment = ""
@@ -1826,7 +1826,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	if sIdx != nil {
 		var err error
-		if createIndex.TableExist, err = buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, oriPriKeyName, ctx); err != nil {
+		if createIndex.TableExist, err = buildSecondaryIndexTable(indexInfo, []*tree.Index{sIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -2153,7 +2153,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 				var tableExists bool
-				if tableExists, err = buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, oriPriKeyName, ctx); err != nil {
+				if tableExists, err = buildSecondaryIndexTable(indexInfo, []*tree.Index{def}, colMap, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
 
