@@ -203,7 +203,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 	streamSender.EXPECT().Receive().Return(ch, nil)
 
 	agg0, err := functionAgg.NewAggAvg(
-		(function.AVG<<32)|0,
+		function.AVG<<32,
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
@@ -671,7 +671,7 @@ func Test_decodeBatch(t *testing.T) {
 		nil)
 
 	agg0, err := functionAgg.NewAggAvg(
-		(function.AVG<<32)|0,
+		function.AVG<<32,
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
