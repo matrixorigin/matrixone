@@ -16,119 +16,76 @@ package moconnector
 
 import (
 	"context"
-	"fmt"
+	"strings"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"go.uber.org/zap"
 )
 
-type ConnectorStatus int
-
-const (
-	CREATED ConnectorStatus = iota
-	RUNNING
-	STOPPED
-	ERROR
-)
-
-func (s ConnectorStatus) String() string {
-	return [...]string{"CREATED", "RUNNING", "STOPPED", "ERROR"}[s]
-}
-
-// ConnectorManagerInterface defines the operations for managing connectors.
-type ConnectorManagerInterface interface {
-	// CreateConnector creates a new connector based on the provided name and options.
-	CreateConnector(ctx context.Context, name string, options map[string]interface{}) error
-
-	// StopConnector stops the connector with the given name.
-	StopConnector(ctx context.Context, name string) error
-
-	// GetConnector retrieves the connector with the given name.
-	GetConnector(name string) (Connector, error)
-
-	ListConnectors() []Connector
-}
-
-var _ ConnectorManagerInterface = (*ConnectorManager)(nil)
-
-type ConnectorManager struct {
-	ctx        context.Context
-	connectors map[string]Connector
-}
-
-func NewConnectorManager(ctx context.Context) *ConnectorManager {
-	return &ConnectorManager{
-		connectors: make(map[string]Connector),
-		ctx:        ctx,
-	}
-}
-
-func (cm *ConnectorManager) CreateConnector(ctx context.Context, name string, options map[string]any) error {
-	if _, exists := cm.connectors[name]; exists {
-		return moerr.NewInternalError(ctx, "Connector already exists")
-	}
-
-	switch options["type"] {
-	case "kafka-mo":
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
-		if !ok {
-			return moerr.NewInternalError(ctx, "Internal SQL Executor not found")
-		}
-		ie := v.(executor.SQLExecutor)
-
-		connector, err := NewKafkaMoConnector(options, ie)
+func KafkaSinkConnectorExecutor(
+	logger *zap.Logger,
+	ts taskservice.TaskService,
+	ieFactory func() ie.InternalExecutor,
+	attachToTask func(context.Context, uint64, taskservice.ActiveRoutine) error,
+) func(context.Context, task.Task) error {
+	return func(ctx context.Context, t task.Task) error {
+		ctx1, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		tasks, err := ts.QueryDaemonTask(ctx1,
+			taskservice.WithTaskIDCond(taskservice.EQ, t.GetID()),
+		)
 		if err != nil {
 			return err
 		}
-		cm.connectors[name] = connector
-	default:
-		return moerr.NewInternalError(ctx, "Invalid connector type")
+		if len(tasks) != 1 {
+			return moerr.NewInternalError(ctx, "invalid tasks count %d", len(tasks))
+		}
+		details, ok := tasks[0].Details.Details.(*task.Details_Connector)
+		if !ok {
+			return moerr.NewInternalError(ctx, "invalid details type")
+		}
+		options := details.Connector.Options
+		fullTableName := details.Connector.TableName
+		// Set database and table name for options.
+		ss := strings.Split(fullTableName, ".")
+		options["database"] = ss[0]
+		options["table"] = ss[1]
+		c, err := NewKafkaMoConnector(logger, options, ieFactory())
+		if err != nil {
+			return err
+		}
+		if err := attachToTask(ctx, t.GetID(), c); err != nil {
+			return err
+		}
+		// Start the connector task and hangs here.
+		if err := c.Start(ctx); err != nil {
+			return err
+		}
+		return nil
 	}
-	return nil
-}
-
-func (cm *ConnectorManager) StopConnector(ctx context.Context, name string) error {
-	//todo: implement stop connecot
-	return nil
-}
-
-func (cm *ConnectorManager) GetConnector(name string) (Connector, error) {
-	if connector, exists := cm.connectors[name]; exists {
-		return connector, nil
-	}
-	return nil, moerr.NewInternalError(context.Background(), "Connector not found")
-}
-
-func (cm *ConnectorManager) ListConnectors() []Connector {
-	connectors := make([]Connector, 0)
-	for _, connector := range cm.connectors {
-		connectors = append(connectors, connector)
-	}
-	return connectors
-}
-
-// Connector is an interface for various types of connectors.
-type Connector interface {
-	Prepare() error
-	Start(ctx context.Context) error
-	Close() error
-	Status() ConnectorStatus
 }
 
 // KafkaMoConnector is an example implementation of the Connector interface for a Kafka to MO Table connection.
 
 type KafkaMoConnector struct {
+	logger       *zap.Logger
 	kafkaAdapter mokafka.KafkaAdapterInterface
-	options      map[string]any
-	ie           executor.SQLExecutor
-	stopChan     chan struct{}
-	status       ConnectorStatus
+	options      map[string]string
+	ie           ie.InternalExecutor
+	decoder      Decoder
+	converter    Converter
+	resumeC      chan struct{}
+	cancelC      chan struct{}
+	pauseC       chan struct{}
 }
 
-func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
+func convertToKafkaConfig(configs map[string]string) *kafka.ConfigMap {
 	kafkaConfigs := &kafka.ConfigMap{}
 	allowedKeys := map[string]struct{}{
 		"bootstrap.servers": {},
@@ -144,20 +101,23 @@ func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
 			kafkaConfigs.SetKey(key, value)
 		}
 	}
-	groupId := configs["topic"].(string) + "-" + configs["database"].(string) + "-" + configs["table"].(string)
+	groupId := configs["topic"] + "-" + configs["database"] + "-" + configs["table"]
 	kafkaConfigs.SetKey("group.id", groupId)
 	return kafkaConfigs
 }
 
-func NewKafkaMoConnector(options map[string]any, ie executor.SQLExecutor) (*KafkaMoConnector, error) {
+func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.InternalExecutor) (*KafkaMoConnector, error) {
 	// Validate options before proceeding
 	kmc := &KafkaMoConnector{
+		logger:  logger,
 		options: options,
 		ie:      ie,
+		decoder: newJsonDecoder(),
 	}
 	if err := kmc.validateParams(); err != nil {
 		return nil, err
 	}
+	kmc.converter = newSQLConverter(options["database"], options["table"])
 
 	// Create a Kafka consumer using the provided options
 	kafkaAdapter, err := mokafka.NewKafkaAdapter(convertToKafkaConfig(options))
@@ -166,7 +126,9 @@ func NewKafkaMoConnector(options map[string]any, ie executor.SQLExecutor) (*Kafk
 	}
 
 	kmc.kafkaAdapter = kafkaAdapter
-	kmc.stopChan = make(chan struct{})
+	kmc.resumeC = make(chan struct{})
+	kmc.cancelC = make(chan struct{})
+	kmc.pauseC = make(chan struct{})
 	return kmc, nil
 }
 
@@ -184,7 +146,7 @@ func (k *KafkaMoConnector) validateParams() error {
 	}
 
 	// 2. Check for valid type
-	if k.options["type"] != "kafka-mo" {
+	if k.options["type"] != "kafka" {
 		return moerr.NewInternalError(context.Background(), "Invalid connector type")
 	}
 
@@ -194,19 +156,6 @@ func (k *KafkaMoConnector) validateParams() error {
 	}
 
 	return nil
-}
-func (k *KafkaMoConnector) Status() ConnectorStatus {
-	return k.status
-}
-
-// Prepare initializes resources, validates configurations, and prepares the connector for starting.
-func (k *KafkaMoConnector) Prepare() error {
-	// 1. Validate input params (assuming a separate function for this)
-	if err := k.validateParams(); err != nil {
-		return err
-	}
-	// 2. Create or find table in MO
-	return k.createOrFindTable(k.options)
 }
 
 // Start begins consuming messages from Kafka and writing them to the MO Table.
@@ -221,7 +170,7 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 		return moerr.NewInternalError(ctx, "Kafka Adapter Consumer not initialized")
 	}
 	// Define the topic to consume from
-	topic := k.options["topic"].(string)
+	topic := k.options["topic"]
 
 	// Subscribe to the topic
 	if err := ct.Subscribe(topic, nil); err != nil {
@@ -230,8 +179,21 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 	// Continuously listen for messages
 	for {
 		select {
-		case <-k.stopChan:
+		case <-ctx.Done():
 			return nil
+
+		case <-k.cancelC:
+			return nil
+
+		case <-k.pauseC:
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-k.cancelC:
+				return nil
+			case <-k.resumeC:
+			}
+
 		default:
 			ev := ct.Poll(100)
 			if ev == nil {
@@ -241,12 +203,18 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 			switch e := ev.(type) {
 			case *kafka.Message:
 				var insertSQL string
-				var err error
-
-				switch k.options["value"].(string) {
+				switch k.options["value"] {
 				case "json":
-					// Convert the JSON message into an SQL INSERT statement
-					insertSQL, err = convertJSONToInsertSQL(string(e.Value), k.options["database"].(string), k.options["table"].(string))
+					obj, err := k.decoder.Decode(e.Value)
+					if err != nil {
+						k.logger.Error("failed to decode from json data", zap.Error(err))
+						continue
+					}
+					insertSQL, err = k.converter.Convert(ctx, obj)
+					if err != nil {
+						k.logger.Error("failed to convert to insert SQL", zap.Error(err))
+						continue
+					}
 				case "avro":
 					// Handle Avro decoding and conversion to SQL here
 					// For now, we'll skip it since you mentioned not to use SchemaRegistry
@@ -257,19 +225,12 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 					return moerr.NewInternalError(ctx, "Unsupported value format")
 				}
 
-				if err != nil {
-					return moerr.NewInternalError(ctx, "Error converting message to SQL")
-				}
+				// Insert the row data to table.
+				k.insertRow(insertSQL)
 
-				// Execute the INSERT statement
-				opts := executor.Options{}
-				_, err = k.ie.Exec(ctx, insertSQL, opts)
-				if err != nil {
-					return moerr.NewInternalError(ctx, "Error executing SQL")
-				}
 			case kafka.Error:
 				// Handle the error accordingly.
-				return e
+				k.logger.Error("got error message", zap.Error(e))
 			default:
 				// Ignored other types of events
 			}
@@ -277,14 +238,23 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 	}
 }
 
-// Assuming a simple function to convert JSON to SQL INSERT statement
-func convertJSONToInsertSQL(jsonMessage string, database string, table string) (string, error) {
-	// This is a placeholder. Actual conversion logic will depend on the structure of the JSON and the table schema.
-	return fmt.Sprintf("INSERT INTO %s.%s VALUES (...);", database, table), nil
+// Resume implements the taskservice.ActiveRoutine interface.
+func (k *KafkaMoConnector) Resume() error {
+	k.resumeC <- struct{}{}
+	return nil
 }
 
-func (k *KafkaMoConnector) Close() error {
-	close(k.stopChan)
+// Pause implements the taskservice.ActiveRoutine interface.
+func (k *KafkaMoConnector) Pause() error {
+	k.pauseC <- struct{}{}
+	return nil
+}
+
+// Cancel implements the taskservice.ActiveRoutine interface.
+func (k *KafkaMoConnector) Cancel() error {
+	// Cancel the connector go-routine.
+	close(k.cancelC)
+
 	// Close the Kafka consumer.
 	ct, err := k.kafkaAdapter.GetKafkaConsumer()
 	if err != nil {
@@ -296,35 +266,12 @@ func (k *KafkaMoConnector) Close() error {
 	return nil
 }
 
-func (k *KafkaMoConnector) createOrFindTable(options map[string]interface{}) error {
-	database := options["database"].(string)
-	tableName := options["table"].(string)
-
-	// Check if the table exists
-	if !k.doesTableExist(context.Background(), database, tableName) {
-		// Todo: enable create table
-		k.createTable(context.Background(), database, tableName)
-		return moerr.NewInternalError(context.Background(), "Table does not exist")
+func (k *KafkaMoConnector) insertRow(sql string) {
+	opts := ie.SessionOverrideOptions{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	err := k.ie.Exec(ctx, sql, opts)
+	if err != nil {
+		k.logger.Error("failed to insert row", zap.String("SQL", sql), zap.Error(err))
 	}
-
-	return nil
-}
-
-func (k *KafkaMoConnector) doesTableExist(ctx context.Context, database, tableName string) bool {
-	query := fmt.Sprintf("SHOW TABLES IN %s LIKE '%s';", database, tableName)
-	opts := executor.Options{}
-	result, err := k.ie.Exec(ctx, query, opts)
-	if err != nil || len(result.Batches) == 0 {
-		return false
-	}
-	// Further validation can be added based on the 'result' structure
-	return true
-}
-
-func (k *KafkaMoConnector) createTable(ctx context.Context, database, tableName string) error {
-	// todo: define the schema for the table
-	query := fmt.Sprintf("CREATE TABLE %s.%s (id INT, data VARCHAR(255));", database, tableName)
-	opts := executor.Options{}
-	_, err := k.ie.Exec(ctx, query, opts)
-	return err
 }

@@ -22,7 +22,8 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
 type MockSQLExecutor struct {
@@ -31,16 +32,18 @@ type MockSQLExecutor struct {
 	wg           *sync.WaitGroup
 }
 
-func (m *MockSQLExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+func (m *MockSQLExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {
 	m.execCount++
 	m.executedSQLs = append(m.executedSQLs, sql)
 	m.wg.Done() // Decrement the WaitGroup counter after processing a message
-	return executor.Result{}, nil
-}
-
-func (m *MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(executor.TxnExecutor) error, opts executor.Options) error {
 	return nil
 }
+
+func (m *MockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
+	return nil
+}
+
+func (m *MockSQLExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {}
 
 func TestKafkaMoConnector(t *testing.T) {
 	// Setup mock Kafka cluster
@@ -57,15 +60,16 @@ func TestKafkaMoConnector(t *testing.T) {
 	mockExecutor := &MockSQLExecutor{wg: &wg}
 
 	// Create KafkaMoConnector instance
-	options := map[string]any{
-		"type":              "kafka-mo",
+	options := map[string]string{
+		"type":              "kafka",
 		"topic":             topic,
 		"database":          "testDB",
 		"table":             "testTable",
 		"value":             "json",
 		"bootstrap.servers": broker,
 	}
-	connector, err := NewKafkaMoConnector(options, mockExecutor)
+	rt := runtime.DefaultRuntime()
+	connector, err := NewKafkaMoConnector(rt.Logger().RawLogger(), options, mockExecutor)
 	if err != nil {
 		t.Fatalf("Failed to create KafkaMoConnector: %s", err)
 	}
@@ -116,7 +120,7 @@ func TestKafkaMoConnector(t *testing.T) {
 	}
 
 	// Stop the connector
-	if err := connector.Close(); err != nil {
+	if err := connector.Cancel(); err != nil {
 		t.Errorf("Error in Close: %s", err)
 	}
 
