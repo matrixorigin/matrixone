@@ -233,6 +233,69 @@ func TestStatsArray_AddV2(t *testing.T) {
 	}
 }
 
+func TestStatsArray_AddV3(t *testing.T) {
+	type field struct {
+		version      float64
+		timeConsumed float64
+		memory       float64
+		s3in         float64
+		s3out        float64
+		traffic      float64
+		connType     ConnType
+	}
+	tests := []struct {
+		name       string
+		field      field
+		wantString []byte
+	}{
+		{
+			name: "normal",
+			field: field{
+				version:      1,
+				timeConsumed: 2,
+				memory:       3,
+				s3in:         4,
+				s3out:        5,
+				traffic:      6,
+				connType:     ConnTypeInternal,
+			},
+			wantString: []byte(`[3,3,5.000,7,9,11,1]`),
+		},
+		{
+			name: "random",
+			field: field{
+				version:      1,
+				timeConsumed: 65,
+				memory:       6,
+				s3in:         78,
+				s3out:        3494,
+				traffic:      456,
+				connType:     ConnTypeExternal,
+			},
+			wantString: []byte(`[3,66,8.000,81,3498,461,1]`),
+		},
+	}
+
+	getInitStatsArray := func() *StatsArray {
+		return NewStatsArrayV3().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4).WithOutTrafficBytes(5).WithConnType(ConnTypeInternal)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := getInitStatsArray()
+			s := NewStatsArrayV3().
+				WithTimeConsumed(tt.field.timeConsumed).
+				WithMemorySize(tt.field.memory).
+				WithS3IOInputCount(tt.field.s3in).
+				WithS3IOOutputCount(tt.field.s3out).
+				WithOutTrafficBytes(tt.field.traffic).
+				WithConnType(tt.field.connType)
+			got := dst.Add(s).ToJsonString()
+			require.Equal(t, tt.wantString, got)
+		})
+	}
+}
+
 func TestStatsArray_InitIfEmpty(t *testing.T) {
 	tests := []struct {
 		name string

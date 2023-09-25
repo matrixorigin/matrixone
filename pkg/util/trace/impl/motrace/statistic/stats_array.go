@@ -70,6 +70,10 @@ func NewStatsArrayV1() *StatsArray {
 }
 
 func NewStatsArrayV2() *StatsArray {
+	return NewStatsArray().WithVersion(StatsArrayVersion2)
+}
+
+func NewStatsArrayV3() *StatsArray {
 	return NewStatsArray()
 }
 
@@ -146,19 +150,30 @@ func (s *StatsArray) WithConnType(v ConnType) *StatsArray {
 }
 
 func (s *StatsArray) ToJsonString() []byte {
-	if s.GetVersion() == StatsArrayVersion1 {
+	switch s.GetVersion() {
+	case StatsArrayVersion1:
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV1])
+	case StatsArrayVersion2:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV2])
+	case StatsArrayVersion3:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV3])
+	default:
+		return StatsArrayToJsonString((*s)[:])
 	}
-	return StatsArrayToJsonString((*s)[:])
 }
 
-func (s *StatsArray) Add(src *StatsArray) *StatsArray {
-	dstLen := len(*src)
-	if len(*s) < len(*src) {
+// Add do add two stats array together
+// except for Element ConnType, which idx = StatsArrayIndexConnType, just keep s[StatsArrayIndexConnType] value.
+func (s *StatsArray) Add(delta *StatsArray) *StatsArray {
+	dstLen := len(*delta)
+	if len(*s) < len(*delta) {
 		dstLen = len(*s)
 	}
 	for idx := 1; idx < dstLen; idx++ {
-		(*s)[idx] += (*src)[idx]
+		if idx == StatsArrayIndexConnType {
+			continue
+		}
+		(*s)[idx] += (*delta)[idx]
 	}
 	return s
 }
