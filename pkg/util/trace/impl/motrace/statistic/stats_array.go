@@ -26,11 +26,12 @@ const (
 )
 
 const (
-	StatsArrayVersion = StatsArrayVersion2
+	StatsArrayVersion = StatsArrayVersion3
 
 	StatsArrayVersion0 = 0 // raw statistics
 	StatsArrayVersion1 = 1 // float64 array
 	StatsArrayVersion2 = 2 // float64 array + plus one elem OutTrafficBytes
+	StatsArrayVersion3 = 3 // ... + one elem: ConnType
 )
 
 const (
@@ -40,6 +41,7 @@ const (
 	StatsArrayIndexS3IOInputCount
 	StatsArrayIndexS3IOOutputCount // index: 4
 	StatsArrayIndexOutTrafficBytes // index: 5
+	StatsArrayIndexConnType        // index: 6
 
 	StatsArrayLength
 )
@@ -47,6 +49,15 @@ const (
 const (
 	StatsArrayLengthV1 = 5
 	StatsArrayLengthV2 = 6
+	StatsArrayLengthV3 = 7
+)
+
+type ConnType float64
+
+const (
+	ConnTypeUnknown  ConnType = 0
+	ConnTypeInternal ConnType = 1
+	ConnTypeExternal ConnType = 2
 )
 
 func NewStatsArray() *StatsArray {
@@ -95,6 +106,12 @@ func (s *StatsArray) GetOutTrafficBytes() float64 { // unit: byte
 	}
 	return (*s)[StatsArrayIndexOutTrafficBytes]
 }
+func (s *StatsArray) GetConnType() float64 {
+	if s.GetVersion() < StatsArrayVersion3 {
+		return 0
+	}
+	return (*s)[StatsArrayIndexConnType]
+}
 
 // WithVersion set the version array in StatsArray, please carefully to use.
 func (s *StatsArray) WithVersion(v float64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
@@ -117,6 +134,13 @@ func (s *StatsArray) WithS3IOOutputCount(v float64) *StatsArray {
 func (s *StatsArray) WithOutTrafficBytes(v float64) *StatsArray {
 	if s.GetVersion() >= StatsArrayVersion2 {
 		(*s)[StatsArrayIndexOutTrafficBytes] = v
+	}
+	return s
+}
+
+func (s *StatsArray) WithConnType(v ConnType) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion3 {
+		(*s)[StatsArrayIndexConnType] = float64(v)
 	}
 	return s
 }
