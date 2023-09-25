@@ -1534,7 +1534,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef.Parts = indexParts
 			indexDef.TableExist = true
 			if indexInfo.IndexOption != nil {
-				//TODO: later make IndexOption as JSON.
+				//TODO: later make IndexOption as JSON. (seperate PR)
 				indexDef.Comment = indexInfo.IndexOption.Comment
 			} else {
 				indexDef.Comment = ""
@@ -2129,6 +2129,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, err
 				}
 
+				// TODO: should we have def.GetIndexName()
 				indexName := def.Name
 
 				constrNames := map[string]bool{}
@@ -2275,6 +2276,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					// NOTE: alterAddCol won't support adding Index to the column.
+					// It will be handled by alterAddIndex.
+					// SQL:
+					// ALTER TABLE your_table_name
+					// ADD new_column_name data_type,
+					// ADD INDEX (new_column_name);
 					return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport add unique index constraints when adding new column")
 					//uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 					//	KeyParts: []*tree.KeyPart{
