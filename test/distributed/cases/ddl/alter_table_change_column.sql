@@ -732,7 +732,6 @@ drop table primary08;
 
 
 -- column primary key change to default null
--- @bvt:issue#11264
 drop table if exists primary09;
 create table primary09 (col1 int primary key, col2 decimal);
 show create table primary09;
@@ -740,7 +739,6 @@ insert into primary09 values(1, 3412.324);
 insert into primary09 values (-10, 323943.2343);
 alter table primary09 change col1 col1New float default null;
 drop table primary09
--- @bvt:issue
 
 
 -- unique key

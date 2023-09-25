@@ -16,9 +16,6 @@ package cnservice
 
 import (
 	"context"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"runtime"
 	"strings"
 	"sync"
@@ -39,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -46,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -160,6 +159,7 @@ type Config struct {
 		FetchTimeout      toml.Duration `toml:"task-fetch-timeout"`
 		RetryInterval     toml.Duration `toml:"task-retry-interval"`
 		HeartbeatInterval toml.Duration `toml:"task-heartbeat-interval"`
+		HeartbeatTimeout  toml.Duration `toml:"task-heartbeat-timeout"`
 	}
 
 	// RPC rpc config used to build txn sender
@@ -569,11 +569,10 @@ type service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	addressMgr   address.AddressManager
-	connectorMgr moconnector.ConnectorManagerInterface
-	gossipNode   *gossip.Node
-	cacheServer  cacheservice.CacheService
-	config       *util.ConfigData
+	addressMgr  address.AddressManager
+	gossipNode  *gossip.Node
+	cacheServer cacheservice.CacheService
+	config      *util.ConfigData
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

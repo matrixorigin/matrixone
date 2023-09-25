@@ -100,7 +100,6 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
 			s.upgrade()
-			s.initMOConnectorMgr()
 		} else if s.gossipNode.Created() && cmd.JoinGossipCluster != nil {
 			s.gossipNode.SetJoined()
 
