@@ -97,6 +97,8 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint32(zm.GetMinBuf())), upplerLimit)
 	case types.T_uint16:
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint16(zm.GetMinBuf())), upplerLimit)
+	case types.T_varchar, types.T_char, types.T_text:
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), ByteSliceToUint64(zm.GetMinBuf()), upplerLimit)
 	}
 	panic("unsupported shuffle type!")
 }
