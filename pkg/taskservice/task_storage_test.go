@@ -50,7 +50,7 @@ func createRefresh(t *testing.T) TaskStorage {
 // 	return storage
 // }
 
-func TestAddTask(t *testing.T) {
+func TestAddAsyncTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -58,15 +58,15 @@ func TestAddTask(t *testing.T) {
 				assert.NoError(t, s.Close())
 			}()
 
-			v := newTestTask("t1")
-			mustAddTestTask(t, s, 1, v)
-			mustAddTestTask(t, s, 0, v)
-			assert.Equal(t, 1, len(mustGetTestTask(t, s, 1)))
+			v := newTestAsyncTask("t1")
+			mustAddTestAsyncTask(t, s, 1, v)
+			mustAddTestAsyncTask(t, s, 0, v)
+			assert.Equal(t, 1, len(mustGetTestAsyncTask(t, s, 1)))
 		})
 	}
 }
 
-func TestUpdateTask(t *testing.T) {
+func TestUpdateAsyncTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -74,17 +74,17 @@ func TestUpdateTask(t *testing.T) {
 				assert.NoError(t, s.Close())
 			}()
 
-			v := newTestTask("t1")
-			mustAddTestTask(t, s, 1, v)
+			v := newTestAsyncTask("t1")
+			mustAddTestAsyncTask(t, s, 1, v)
 
-			tasks := mustGetTestTask(t, s, 1)
+			tasks := mustGetTestAsyncTask(t, s, 1)
 			tasks[0].Metadata.Executor = 1
-			mustUpdateTestTask(t, s, 1, tasks)
+			mustUpdateTestAsyncTask(t, s, 1, tasks)
 		})
 	}
 }
 
-func TestUpdateTaskWithConditions(t *testing.T) {
+func TestUpdateAsyncTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -92,22 +92,22 @@ func TestUpdateTaskWithConditions(t *testing.T) {
 				assert.NoError(t, s.Close())
 			}()
 
-			mustAddTestTask(t, s, 1, newTestTask("t1"))
-			tasks := mustGetTestTask(t, s, 1)
+			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t1"))
+			tasks := mustGetTestAsyncTask(t, s, 1)
 
-			mustUpdateTestTask(t, s, 0, tasks, WithTaskRunnerCond(EQ, "t2"))
-			mustUpdateTestTask(t, s, 1, tasks, WithTaskRunnerCond(EQ, "t1"))
+			mustUpdateTestAsyncTask(t, s, 0, tasks, WithTaskRunnerCond(EQ, "t2"))
+			mustUpdateTestAsyncTask(t, s, 1, tasks, WithTaskRunnerCond(EQ, "t1"))
 
 			tasks[0].Metadata.Context = []byte{1}
-			mustUpdateTestTask(t, s, 0, tasks, WithTaskIDCond(EQ, tasks[0].ID+1))
-			mustUpdateTestTask(t, s, 1, tasks, WithTaskIDCond(EQ, tasks[0].ID))
+			mustUpdateTestAsyncTask(t, s, 0, tasks, WithTaskIDCond(EQ, tasks[0].ID+1))
+			mustUpdateTestAsyncTask(t, s, 1, tasks, WithTaskIDCond(EQ, tasks[0].ID))
 			tasks[0].Metadata.Context = []byte{1, 2}
-			mustUpdateTestTask(t, s, 1, tasks, WithTaskIDCond(GT, 0))
+			mustUpdateTestAsyncTask(t, s, 1, tasks, WithTaskIDCond(GT, 0))
 		})
 	}
 }
 
-func TestDeleteTaskWithConditions(t *testing.T) {
+func TestDeleteAsyncTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -115,23 +115,23 @@ func TestDeleteTaskWithConditions(t *testing.T) {
 				assert.NoError(t, s.Close())
 			}()
 
-			mustAddTestTask(t, s, 1, newTestTask("t1"))
-			mustAddTestTask(t, s, 1, newTestTask("t2"))
-			mustAddTestTask(t, s, 1, newTestTask("t3"))
-			tasks := mustGetTestTask(t, s, 3)
+			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t1"))
+			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t2"))
+			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t3"))
+			tasks := mustGetTestAsyncTask(t, s, 3)
 
-			mustDeleteTestTask(t, s, 0, WithTaskRunnerCond(EQ, "t4"))
-			mustDeleteTestTask(t, s, 1, WithTaskRunnerCond(EQ, "t1"))
+			mustDeleteTestAsyncTask(t, s, 0, WithTaskRunnerCond(EQ, "t4"))
+			mustDeleteTestAsyncTask(t, s, 1, WithTaskRunnerCond(EQ, "t1"))
 
-			mustDeleteTestTask(t, s, 0, WithTaskIDCond(EQ, tasks[len(tasks)-1].ID+1))
-			mustDeleteTestTask(t, s, 2, WithTaskIDCond(GT, tasks[0].ID))
+			mustDeleteTestAsyncTask(t, s, 0, WithTaskIDCond(EQ, tasks[len(tasks)-1].ID+1))
+			mustDeleteTestAsyncTask(t, s, 2, WithTaskIDCond(GT, tasks[0].ID))
 
-			mustGetTestTask(t, s, 0)
+			mustGetTestAsyncTask(t, s, 0)
 		})
 	}
 }
 
-func TestQueryTaskWithConditions(t *testing.T) {
+func TestQueryAsyncTaskWithConditions(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
@@ -139,19 +139,19 @@ func TestQueryTaskWithConditions(t *testing.T) {
 				assert.NoError(t, s.Close())
 			}()
 
-			mustAddTestTask(t, s, 1, newTestTask("t1"))
-			mustAddTestTask(t, s, 1, newTestTask("t2"))
-			mustAddTestTask(t, s, 1, newTestTask("t3"))
-			tasks := mustGetTestTask(t, s, 3)
+			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t1"))
+			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t2"))
+			mustAddTestAsyncTask(t, s, 1, newTestAsyncTask("t3"))
+			tasks := mustGetTestAsyncTask(t, s, 3)
 
-			mustGetTestTask(t, s, 1, WithLimitCond(1))
-			mustGetTestTask(t, s, 1, WithTaskRunnerCond(EQ, "t1"))
-			mustGetTestTask(t, s, 2, WithTaskIDCond(GT, tasks[0].ID))
-			mustGetTestTask(t, s, 3, WithTaskIDCond(GE, tasks[0].ID))
-			mustGetTestTask(t, s, 3, WithTaskIDCond(LE, tasks[2].ID))
-			mustGetTestTask(t, s, 2, WithTaskIDCond(LT, tasks[2].ID))
-			mustGetTestTask(t, s, 1, WithLimitCond(1), WithTaskIDCond(GT, tasks[0].ID))
-			mustGetTestTask(t, s, 1, WithTaskIDCond(EQ, tasks[0].ID))
+			mustGetTestAsyncTask(t, s, 1, WithLimitCond(1))
+			mustGetTestAsyncTask(t, s, 1, WithTaskRunnerCond(EQ, "t1"))
+			mustGetTestAsyncTask(t, s, 2, WithTaskIDCond(GT, tasks[0].ID))
+			mustGetTestAsyncTask(t, s, 3, WithTaskIDCond(GE, tasks[0].ID))
+			mustGetTestAsyncTask(t, s, 3, WithTaskIDCond(LE, tasks[2].ID))
+			mustGetTestAsyncTask(t, s, 2, WithTaskIDCond(LT, tasks[2].ID))
+			mustGetTestAsyncTask(t, s, 1, WithLimitCond(1), WithTaskIDCond(GT, tasks[0].ID))
+			mustGetTestAsyncTask(t, s, 1, WithTaskIDCond(EQ, tasks[0].ID))
 		})
 	}
 }
@@ -186,8 +186,8 @@ func TestUpdateCronTask(t *testing.T) {
 			}()
 
 			v1 := newTestCronTask("t1", "cron1")
-			v2 := newTestTask("t1-cron-1")
-			v3 := newTestTask("t1-cron-2")
+			v2 := newTestAsyncTask("t1-cron-1")
+			v3 := newTestAsyncTask("t1-cron-2")
 
 			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 			defer cancel()
@@ -197,7 +197,7 @@ func TestUpdateCronTask(t *testing.T) {
 			assert.Equal(t, 0, n)
 
 			mustAddTestCronTask(t, s, 1, v1)
-			mustAddTestTask(t, s, 1, v2)
+			mustAddTestAsyncTask(t, s, 1, v2)
 
 			v1 = mustQueryTestCronTask(t, s, 1)[0]
 
@@ -217,38 +217,144 @@ func TestUpdateCronTask(t *testing.T) {
 	}
 }
 
-func mustGetTestTask(t *testing.T, s TaskStorage, expectCount int, conds ...Condition) []task.Task {
+func TestAddDaemonTask(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			v := newTestDaemonTask(1, "t1")
+			mustAddTestDaemonTask(t, s, 1, v)
+			mustAddTestDaemonTask(t, s, 0, v)
+			assert.Equal(t, 1, len(mustGetTestDaemonTask(t, s, 1)))
+		})
+	}
+}
+
+func TestUpdateDaemonTask(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			v := newTestDaemonTask(1, "t1")
+			mustAddTestDaemonTask(t, s, 1, v)
+
+			tasks := mustGetTestDaemonTask(t, s, 1)
+			tasks[0].Metadata.Executor = 1
+			mustUpdateTestDaemonTask(t, s, 1, tasks)
+		})
+	}
+}
+
+func TestUpdateDaemonTaskWithConditions(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
+			tasks := mustGetTestDaemonTask(t, s, 1)
+
+			mustUpdateTestDaemonTask(t, s, 0, tasks, WithTaskRunnerCond(EQ, "t2"))
+			mustUpdateTestDaemonTask(t, s, 1, tasks, WithTaskRunnerCond(EQ, "t1"))
+
+			tasks[0].Metadata.Context = []byte{1}
+			mustUpdateTestDaemonTask(t, s, 0, tasks, WithTaskIDCond(EQ, tasks[0].ID+1))
+			mustUpdateTestDaemonTask(t, s, 1, tasks, WithTaskIDCond(EQ, tasks[0].ID))
+			tasks[0].Metadata.Context = []byte{1, 2}
+			mustUpdateTestDaemonTask(t, s, 1, tasks, WithTaskIDCond(GT, 0))
+		})
+	}
+}
+
+func TestDeleteDaemonTaskWithConditions(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
+			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(2, "t2"))
+			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(3, "t3"))
+			tasks := mustGetTestDaemonTask(t, s, 3)
+
+			mustDeleteTestDaemonTask(t, s, 0, WithTaskRunnerCond(EQ, "t4"))
+			mustDeleteTestDaemonTask(t, s, 1, WithTaskRunnerCond(EQ, "t1"))
+
+			mustDeleteTestDaemonTask(t, s, 0, WithTaskIDCond(EQ, tasks[len(tasks)-1].ID+1))
+			mustDeleteTestDaemonTask(t, s, 2, WithTaskIDCond(GT, tasks[0].ID))
+
+			mustGetTestDaemonTask(t, s, 0)
+		})
+	}
+}
+
+func TestQueryDaemonTaskWithConditions(t *testing.T) {
+	for name, factory := range storages {
+		t.Run(name, func(t *testing.T) {
+			s := factory(t)
+			defer func() {
+				assert.NoError(t, s.Close())
+			}()
+
+			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(1, "t1"))
+			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(2, "t2"))
+			mustAddTestDaemonTask(t, s, 1, newTestDaemonTask(3, "t3"))
+			tasks := mustGetTestDaemonTask(t, s, 3)
+
+			mustGetTestDaemonTask(t, s, 1, WithLimitCond(1))
+			mustGetTestDaemonTask(t, s, 1, WithTaskRunnerCond(EQ, "t1"))
+			mustGetTestDaemonTask(t, s, 2, WithTaskIDCond(GT, tasks[0].ID))
+			mustGetTestDaemonTask(t, s, 3, WithTaskIDCond(GE, tasks[0].ID))
+			mustGetTestDaemonTask(t, s, 3, WithTaskIDCond(LE, tasks[2].ID))
+			mustGetTestDaemonTask(t, s, 2, WithTaskIDCond(LT, tasks[2].ID))
+			mustGetTestDaemonTask(t, s, 1, WithLimitCond(1), WithTaskIDCond(GT, tasks[0].ID))
+			mustGetTestDaemonTask(t, s, 1, WithTaskIDCond(EQ, tasks[0].ID))
+		})
+	}
+}
+
+func mustGetTestAsyncTask(t *testing.T, s TaskStorage, expectCount int, conds ...Condition) []task.AsyncTask {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	tasks, err := s.Query(ctx, conds...)
+	tasks, err := s.QueryAsyncTask(ctx, conds...)
 	require.NoError(t, err)
 	require.Equal(t, expectCount, len(tasks))
 	return tasks
 }
 
-func mustAddTestTask(t *testing.T, s TaskStorage, expectAdded int, tasks ...task.Task) {
+func mustAddTestAsyncTask(t *testing.T, s TaskStorage, expectAdded int, tasks ...task.AsyncTask) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	n, err := s.Add(ctx, tasks...)
+	n, err := s.AddAsyncTask(ctx, tasks...)
 	require.NoError(t, err)
 	require.Equal(t, expectAdded, n)
 }
 
-func mustUpdateTestTask(t *testing.T, s TaskStorage, expectUpdated int, tasks []task.Task, conds ...Condition) {
+func mustUpdateTestAsyncTask(t *testing.T, s TaskStorage, expectUpdated int, tasks []task.AsyncTask, conds ...Condition) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	n, err := s.Update(ctx, tasks, conds...)
+	n, err := s.UpdateAsyncTask(ctx, tasks, conds...)
 	require.NoError(t, err)
 	require.Equal(t, expectUpdated, n)
 }
 
-func mustDeleteTestTask(t *testing.T, s TaskStorage, expectUpdated int, conds ...Condition) {
+func mustDeleteTestAsyncTask(t *testing.T, s TaskStorage, expectUpdated int, conds ...Condition) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	n, err := s.Delete(ctx, conds...)
+	n, err := s.DeleteAsyncTask(ctx, conds...)
 	require.NoError(t, err)
 	require.Equal(t, expectUpdated, n)
 }
@@ -272,8 +378,44 @@ func mustQueryTestCronTask(t *testing.T, s TaskStorage, expectQueryCount int) []
 	return tasks
 }
 
-func newTestTask(id string) task.Task {
-	v := task.Task{}
+func mustAddTestDaemonTask(t *testing.T, s TaskStorage, expectAdded int, tasks ...task.DaemonTask) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	n, err := s.AddDaemonTask(ctx, tasks...)
+	require.NoError(t, err)
+	require.Equal(t, expectAdded, n)
+}
+
+func mustGetTestDaemonTask(t *testing.T, s TaskStorage, expectCount int, conds ...Condition) []task.DaemonTask {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	tasks, err := s.QueryDaemonTask(ctx, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectCount, len(tasks))
+	return tasks
+}
+
+func mustUpdateTestDaemonTask(t *testing.T, s TaskStorage, expectUpdated int, tasks []task.DaemonTask, conds ...Condition) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	n, err := s.UpdateDaemonTask(ctx, tasks, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectUpdated, n)
+}
+
+func mustDeleteTestDaemonTask(t *testing.T, s TaskStorage, expectUpdated int, conds ...Condition) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	n, err := s.DeleteDaemonTask(ctx, conds...)
+	require.NoError(t, err)
+	require.Equal(t, expectUpdated, n)
+}
+
+func newTestAsyncTask(id string) task.AsyncTask {
+	v := task.AsyncTask{}
 	v.Metadata.ID = id
 	v.TaskRunner = id
 	return v
@@ -283,5 +425,13 @@ func newTestCronTask(id, cron string) task.CronTask {
 	v := task.CronTask{}
 	v.Metadata.ID = id
 	v.CronExpr = cron
+	return v
+}
+
+func newTestDaemonTask(id uint64, mid string) task.DaemonTask {
+	v := task.DaemonTask{}
+	v.ID = id
+	v.Metadata.ID = mid
+	v.TaskRunner = mid
 	return v
 }

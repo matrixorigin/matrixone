@@ -1193,16 +1193,6 @@ func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deal
 	return doDeallocate(ctx, mce.GetSession(), st)
 }
 
-func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree.CreateConnector) error {
-	//todo: handle Create connector
-	return nil
-}
-
-func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.DropConnector) error {
-	//todo: handle Create connector
-	return nil
-}
-
 // handleReset
 func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) error {
 	return doReset(ctx, mce.GetSession(), st)
@@ -1518,6 +1508,18 @@ func (mce *MysqlCmdExecutor) handleShowBackendServers(ctx context.Context, cwInd
 	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed, error: %v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleEmptyStmt(ctx context.Context, stmt *tree.EmptyStmt) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	resp := NewGeneralOkResponse(COM_QUERY, mce.ses.GetServerStatus())
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 	}
 	return err
 }
@@ -2685,15 +2687,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					}
 				}
 
-			case *tree.SetVar, *tree.SetTransaction, *tree.BackupStart:
+			case *tree.SetVar, *tree.SetTransaction, *tree.BackupStart, *tree.CreateConnector, *tree.DropConnector,
+				*tree.PauseDaemonTask, *tree.ResumeDaemonTask, *tree.CancelDaemonTask:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
 				}
-			case *tree.CreateConnector:
-				// todo : Create and run Connector
-			case *tree.DropConnector:
-				// todo : Drop Connector
 			case *tree.Deallocate:
 				//we will not send response in COM_STMT_CLOSE command
 				if ses.GetCmd() != COM_STMT_CLOSE {
@@ -2905,10 +2904,33 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err != nil {
 			return err
 		}
+	case *tree.PauseDaemonTask:
+		selfHandle = true
+		err = mce.handlePauseDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
+	case *tree.CancelDaemonTask:
+		selfHandle = true
+		err = mce.handleCancelDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
+	case *tree.ResumeDaemonTask:
+		selfHandle = true
+		err = mce.handleResumeDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
 	case *tree.DropConnector:
 		selfHandle = true
 		err = mce.handleDropConnector(requestCtx, st)
 		if err != nil {
+			return err
+		}
+	case *tree.ShowConnectors:
+		selfHandle = true
+		if err = mce.handleShowConnectors(requestCtx, i, len(cws)); err != nil {
 			return err
 		}
 	case *tree.Deallocate:
@@ -3144,6 +3166,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.BackupStart:
 		selfHandle = true
 		if err = mce.handleStartBackup(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.EmptyStmt:
+		selfHandle = true
+		if err = mce.handleEmptyStmt(requestCtx, st); err != nil {
 			return err
 		}
 	}

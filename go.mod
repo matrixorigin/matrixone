@@ -8,7 +8,7 @@ require (
 	github.com/FastFilter/xorfilter v0.1.3
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/aliyun/aliyun-oss-go-sdk v2.2.9+incompatible
-	github.com/aliyun/credentials-go v1.2.7
+	github.com/aliyun/credentials-go v1.3.1
 	github.com/aws/aws-sdk-go-v2 v1.18.0
 	github.com/aws/aws-sdk-go-v2/config v1.18.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.13.24
@@ -54,7 +54,6 @@ require (
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/spf13/cobra v1.7.0
 	github.com/stretchr/testify v1.8.4
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.673
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
 	go.uber.org/ratelimit v0.2.0
