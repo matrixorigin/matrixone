@@ -1987,7 +1987,7 @@ func getSqlForSpBody(ctx context.Context, name string, db string) (string, error
 	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
 }
 
-// isClusterTable decides a table is the index table or not
+// isIndexTable decides a table is the index table or not
 func isIndexTable(name string) bool {
 	return strings.HasPrefix(name, catalog.IndexTableNamePrefix)
 }
