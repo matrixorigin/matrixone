@@ -39,7 +39,9 @@ insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
 begin ;
 truncate table atomic_table_10;
 use transaction_enhance;
+
 insert into atomic_table_10 values (6,"a"),(7,"b"),(8,"c");
+
 select * from atomic_table_10;
 c1    c2
 3    a
@@ -54,25 +56,39 @@ commit;
 select * from atomic_table_10;
 c1    c2
 drop table if exists atomic_table_11;
+
 create table atomic_table_11(c1 int,c2 varchar(25));
+
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
+
 begin;
+
 drop table atomic_table_11;
 
 use transaction_enhance;
+
 insert into atomic_table_11 values (6,"a");
+
 select * from atomic_table_11;
 SQL parser error: table "atomic_table_11" does not exist
 commit;
+
 select * from atomic_table_11;
 SQL parser error: table "atomic_table_11" does not exist
 drop table if exists atomic_table_11;
+
 create table atomic_table_11(c1 int,c2 varchar(25));
+
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
+
 begin;
+
 drop table atomic_table_11;
+
 use transaction_enhance;
+
 insert into atomic_table_11 values (6,"a");
+
 select * from atomic_table_11;
 c1    c2
 3    a
@@ -80,6 +96,7 @@ c1    c2
 5    c
 6    a
 rollback ;
+
 select * from atomic_table_11;
 c1    c2
 3    a
@@ -93,7 +110,7 @@ begin;
 use transaction_enhance;
 drop table atomic_table_11;
 drop table atomic_table_11;
-no such table transaction_enhance.atomic_table_11
+SQL parser error: table "atomic_table_11" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 drop table if exists atomic_table_12;
@@ -156,16 +173,27 @@ show create table atomic_table_13;
 Table    Create Table
 atomic_table_13    CREATE TABLE `atomic_table_13` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`),\nCONSTRAINT `ffa` FOREIGN KEY (`c1`) REFERENCES `atomic_table_12_2` (`c1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 drop table if exists atomic_table_12_3;
+
 drop table if exists atomic_table_13;
+
 create table atomic_table_12_3(c1 int primary key,c2 varchar(25));
+
 insert into atomic_table_12_3 values (3,"a"),(4,"b"),(5,"c");
+
 create table atomic_table_13(c1 int primary key,c2 varchar(25));
+
 insert into atomic_table_13 values (3,"d"),(4,"e"),(5,"f");
+
 alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references atomic_table_12_3(c1);
+
 begin;
+
 alter table atomic_table_13 drop foreign key ffa;
+
 use transaction_enhance;
+
 insert into atomic_table_13 values (8,"h");
+
 select * from atomic_table_13;
 c1    c2
 3    d
@@ -173,20 +201,32 @@ c1    c2
 5    f
 8    h
 commit;
+
 show create table atomic_table_13;
 Table    Create Table
 atomic_table_13    CREATE TABLE `atomic_table_13` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
 drop table if exists atomic_table_12_4;
+
 drop table if exists atomic_table_13;
+
 create table atomic_table_12_4(c1 int primary key,c2 varchar(25));
+
 insert into atomic_table_12_4 values (3,"a"),(4,"b"),(5,"c");
+
 create table atomic_table_13(c1 int primary key,c2 varchar(25));
+
 insert into atomic_table_13 values (3,"d"),(4,"e"),(5,"f");
+
 alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references atomic_table_12_4(c1);
+
 begin;
+
 alter table atomic_table_13 drop foreign key ffa;
+
 use transaction_enhance;
+
 insert into atomic_table_13 values (8,"h");
+
 select * from atomic_table_13;
 c1    c2
 3    d
@@ -194,17 +234,26 @@ c1    c2
 5    f
 8    h
 rollback ;
+
 show create table atomic_table_13;
 Table    Create Table
 atomic_table_13    CREATE TABLE `atomic_table_13` (\n`c1` INT NOT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`c1`)\n)
 drop table if exists atomic_table_12_5;
+
 drop table if exists atomic_table_13;
+
 create table atomic_table_12_5(c1 int,c2 varchar(25));
+
 insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
+
 alter table atomic_table_12_5 add index key1(c1);
+
 begin;
+
 alter table atomic_table_12_5 drop index key1;
+
 use transaction_enhance;
+
 show create table atomic_table_12_5;
 Table    Create Table
 atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`c1`)\n)
@@ -214,6 +263,7 @@ c1    c2
 4    b
 5    c
 commit;
+
 show index from atomic_table_12_5;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 drop table if exists atomic_table_14;
@@ -231,40 +281,65 @@ commit;
 select * from atomic_table_14;
 SQL parser error: table "atomic_table_14" does not exist
 drop table if exists atomic_table_15;
+
 create table atomic_table_15(c1 int,c2 varchar(25));
+
 begin;
+
 insert into atomic_table_15 values (6,"a"),(7,"b");
+
 truncate table atomic_table_15;
+
 use transaction_enhance;
+
 drop table atomic_table_15;
+
 select * from atomic_table_15;
 c1    c2
 commit;
+
 select * from atomic_table_15;
 SQL parser error: table "atomic_table_15" does not exist
 drop table if exists atomic_table_16;
+
 create table atomic_table_16(c1 int,c2 varchar(25));
+
 begin;
+
 insert into atomic_table_16 values (6,"a"),(7,"b");
+
 drop table atomic_table_16;
+
 use transaction_enhance;
+
 drop table atomic_table_16;
+
 commit;
+
 select * from atomic_table_16;
 SQL parser error: table "atomic_table_16" does not exist
 drop table if exists atomic_table_17;
+
 create table atomic_table_17(c1 int,c2 varchar(25));
+
 begin;
+
 insert into atomic_table_17 values (6,"a"),(7,"b");
+
 drop table atomic_table_17;
+
 use transaction_enhance;
+
 alter table atomic_table_17 add constraint unique key (c1);
+
 update atomic_table_17 set c1=8 where c2="b";
+
 commit;
 w-w conflict
 select * from atomic_table_17;
 SQL parser error: table "atomic_table_17" does not exist
 start transaction ;
+
 create database tdb;
 internal error: CREATE/DROP of database is not supported in transactions
 use tdb;
@@ -272,82 +347,120 @@ invalid database tdb
 drop database tdb;
 internal error: CREATE/DROP of database is not supported in transactions
 commit;
+
 begin;
+
 create sequence seq_01 as int start 30;
 internal error: Only CREATE of DDL is supported in transactions
 use transaction_enhance;
+
 select nextval('seq_01');
 SQL parser error: table "seq_01" does not exist
 commit;
+
 select nextval('seq_01');
 SQL parser error: table "seq_01" does not exist
 drop table if exists atomic_table_11;
+
 drop account if exists trans_acc1;
+
 create account trans_acc1 admin_name "admin" identified by "111";
+
 begin;
+
 drop account trans_acc1;
 internal error: administrative command is unsupported in transactions
 use transaction_enhance;
+
 select count(*) from mo_catalog.mo_account where account_name='trans_acc1';
 count(*)
 1
 commit;
+
 select count(*) from mo_catalog.mo_account where account_name='trans_acc1';
 count(*)
 1
 drop table if exists atomic_table_18;
+
 create table atomic_table_18(c1 int,c2 varchar(25));
+
 insert into atomic_table_18 values (6,"a"),(7,"b");
+
 set autocommit=0;
+
 alter table atomic_table_18 add index key1(c1);
+
 alter table atomic_table_18 alter index key1 visible;
+
 use transaction_enhance;
+
 show create table atomic_table_18;
 Table    Create Table
 atomic_table_18    CREATE TABLE `atomic_table_18` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL\n)
 rollback;
+
 show create table atomic_table_18;
 Table    Create Table
 atomic_table_18    CREATE TABLE `atomic_table_18` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL\n)
 show index from atomic_table_18;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 truncate table atomic_table_18;
+
 use transaction_enhance;
+
 drop table atomic_table_18;
+
 select * from atomic_table_18;
 c1    c2
 commit;
+
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 set autocommit=1;
+
 drop table if exists atomic_table_18;
+
 create table atomic_table_18(c1 int,c2 varchar(25));
+
 insert into atomic_table_18 values (6,"a"),(7,"b");
+
 set autocommit=0;
+
 drop table atomic_table_18;
 
 use transaction_enhance;
+
 drop table atomic_table_18;
 no such table transaction_enhance.atomic_table_18
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
+
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 set autocommit=1;
+
 drop account if exists trans_acc1;
 
 drop table if exists alter01;
+
 drop table if exists alter02;
+
 create table alter01(col1 int primary key,col2 varchar(25));
+
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+
 begin;
+
 alter table alter01 modify col1 float;
+
 use transaction_enhance;
+
 insert into alter01 values (8,"h");
+
 select * from alter01;
 col1    col2
 3.0    a
@@ -355,7 +468,9 @@ col1    col2
 5.0    c
 1.1E-44    h
 insert into alter01 values (6,"h");
+
 commit;
+
 select * from alter01;
 col1    col2
 3.0    a
@@ -491,24 +606,24 @@ col1new    col2
 5    c
 8    h
 show create table atomic_table_12_5;
-Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`clnew`)\n)
+
+select * from atomic_table_12_5;
+
+show create table atomic_table_12_5;
+
 drop table if exists alter01;
-[unknown result because it is related to issue#11774]
 create table alter01(col1 int primary key,col2 varchar(25));
-[unknown result because it is related to issue#11774]
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11774]
 begin;
-[unknown result because it is related to issue#11774]
 alter table alter01 rename column col1 to col1New;
-[unknown result because it is related to issue#11774]
 use transaction_enhance;
-[unknown result because it is related to issue#11774]
 insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11774]
 select * from alter01;
-[unknown result because it is related to issue#11774]
+col1new    col2
+3    a
+4    b
+5    c
+8    h
 insert into alter01 values (6,"h");
 select * from alter01;
 col1new    col2
@@ -518,44 +633,42 @@ col1new    col2
 8    h
 6    h
 drop table if exists alter01;
-[unknown result because it is related to issue#11213]
-create table alter01(col1 int,col2 varchar(25));
-[unknown result because it is related to issue#11213]
-insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11213]
-begin;
-[unknown result because it is related to issue#11213]
-alter table alter01 add constraint primary key (col1);
-[unknown result because it is related to issue#11213]
-use transaction_enhance;
-[unknown result because it is related to issue#11213]
-insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11213]
-select * from alter01;
-[unknown result because it is related to issue#11213]
-insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11213]
-select * from alter01;
-[unknown result because it is related to issue#11213]
-drop table if exists alter01;
-[unknown result because it is related to issue#11213]
-create table alter01(col1 int primary key,col2 varchar(25));
-[unknown result because it is related to issue#11213]
-insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11213]
-begin;
-[unknown result because it is related to issue#11213]
-alter table alter01 drop primary key;
-[unknown result because it is related to issue#11213]
-use transaction_enhance;
-[unknown result because it is related to issue#11213]
-insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11213]
-select * from alter01;
-[unknown result because it is related to issue#11213]
-insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11213]
-select * from alter01;
-[unknown result because it is related to issue#11213]
 
+create table alter01(col1 int,col2 varchar(25));
+
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+
+begin;
+
+alter table alter01 add constraint primary key (col1);
+
+use transaction_enhance;
+
+insert into alter01 values (8,"h");
+
+select * from alter01;
+
+insert into alter01 values (6,"h");
+
+select * from alter01;
+
+drop table if exists alter01;
+
+create table alter01(col1 int primary key,col2 varchar(25));
+
+insert into alter01 values (3,"a"),(4,"b"),(5,"c");
+
+begin;
+
+alter table alter01 drop primary key;
+
+use transaction_enhance;
+
+insert into alter01 values (8,"h");
+
+select * from alter01;
+
+insert into alter01 values (6,"h");
+
+select * from alter01;
 
