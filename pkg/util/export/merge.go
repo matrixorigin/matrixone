@@ -67,7 +67,7 @@ const defaultMaxFileSize = 32 * mpool.MB
 //
 // - Merge.doMergeFiles handle one job flow: read each file, merge in cache, write into file.
 type Merge struct {
-	task        task.Task               // set by WithTask
+	task        task.AsyncTask          // set by WithTask
 	table       *table.Table            // set by WithTable
 	fs          fileservice.FileService // set by WithFileService
 	pathBuilder table.PathBuilder       // const as table.NewAccountDatePathBuilder()
@@ -96,7 +96,7 @@ func (opt MergeOption) Apply(m *Merge) {
 	opt(m)
 }
 
-func WithTask(task task.Task) MergeOption {
+func WithTask(task task.AsyncTask) MergeOption {
 	return MergeOption(func(m *Merge) {
 		m.task = task
 	})
@@ -593,7 +593,7 @@ func (c *SliceCache) Put(r *table.Row) {
 
 func (c *SliceCache) Size() int64 { return c.size }
 
-func LongRunETLMerge(ctx context.Context, task task.Task, logger *log.MOLogger, opts ...MergeOption) error {
+func LongRunETLMerge(ctx context.Context, task task.AsyncTask, logger *log.MOLogger, opts ...MergeOption) error {
 	// should init once in/with schema-init.
 	tables := table.GetAllTables()
 	if len(tables) == 0 {
@@ -624,19 +624,23 @@ func LongRunETLMerge(ctx context.Context, task task.Task, logger *log.MOLogger, 
 
 func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, task task.Task) error {
 
-	CronMerge := func(ctx context.Context, task task.Task) error {
+	CronMerge := func(ctx context.Context, t task.Task) error {
+		asyncTask, ok := t.(*task.AsyncTask)
+		if !ok {
+			return moerr.NewInternalError(ctx, "invalid task type")
+		}
 		ctx, span := trace.Start(ctx, "CronMerge")
 		defer span.End()
 
-		args := task.Metadata.Context
+		args := asyncTask.Metadata.Context
 		ts := time.Now()
 		logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameETLMerge)
 		fields := []zap.Field{
 			zap.String("args", util.UnsafeBytesToString(args)),
 			zap.Time("start", ts),
-			zap.Uint64("taskID", task.ID),
-			zap.Int64("create", task.CreateAt),
-			zap.String("metadataID", task.Metadata.ID),
+			zap.Uint64("taskID", asyncTask.ID),
+			zap.Int64("create", asyncTask.CreateAt),
+			zap.String("metadataID", asyncTask.Metadata.ID),
 		}
 		logger.Info("start merge", fields...)
 		defer logger.Info("done merge", fields...)
@@ -645,7 +649,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		if len(args) != 0 {
 			logger.Warn("ETLMergeTask should have empty args", zap.Int("cnt", len(args)))
 		}
-		if err := LongRunETLMerge(ctx, task, logger, opts...); err != nil {
+		if err := LongRunETLMerge(ctx, *asyncTask, logger, opts...); err != nil {
 			return err
 		}
 		return nil
