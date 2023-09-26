@@ -1038,7 +1038,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			preInsertUkArg, err := constructPreInsertSk(n, c.proc)
+			preInsertSkArg, err := constructPreInsertSk(n, c.proc)
 			if err != nil {
 				return nil, err
 			}
@@ -1046,7 +1046,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Op:      vm.PreInsertSecondaryIndex,
 				Idx:     c.anal.curr,
 				IsFirst: currentFirstFlag,
-				Arg:     preInsertUkArg,
+				Arg:     preInsertSkArg,
 			})
 		}
 		c.setAnalyzeCurrent(ss, curr)

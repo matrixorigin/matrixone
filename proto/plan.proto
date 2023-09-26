@@ -804,7 +804,7 @@ message PreInsertSkCtx {
 	repeated int32 columns 	= 1;
 	int32 pk_column 		= 2;
 	Type pk_type 			= 3;
-	Type uk_type			= 4;
+	Type sk_type			= 4;
 	TableDef table_def 		= 5;
 }
 
