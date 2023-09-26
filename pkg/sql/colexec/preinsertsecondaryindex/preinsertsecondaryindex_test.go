@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPreInsertUnique(t *testing.T) {
+func TestPreInsertSecondary(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
