@@ -1736,7 +1736,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		}
 	}
 
-	var uniqueIndexTables []engine.Relation
+	var indexTables []engine.Relation
 	if tableDef != nil {
 		uniqueIndexTables = make([]engine.Relation, 0)
 		if tableDef.Indexes != nil {

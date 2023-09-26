@@ -847,10 +847,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 					return err
 				}
 			}
-		}
+		} else if !indexDef.Unique {
+			// ii) Secondary Index
 
-		// ii) Secondary Index
-		if !indexDef.Unique {
 			// 0. Pre-check: check original data is not duplicated
 			{
 				//TODO: Learn how to remove this and how PK will handle duplicates.
