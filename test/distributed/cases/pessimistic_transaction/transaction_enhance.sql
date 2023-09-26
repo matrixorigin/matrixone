@@ -395,8 +395,8 @@ alter table atomic_table_12_5 add index key1(c1);
 begin;
 alter table atomic_table_12_5 rename column c1 to clNew;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into atomic_table_12_5 values (8,"h");
 show create table atomic_table_12_5;
 select * from atomic_table_12_5;
