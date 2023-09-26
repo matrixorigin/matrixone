@@ -1738,27 +1738,27 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 
 	var indexTables []engine.Relation
 	if tableDef != nil {
-		uniqueIndexTables = make([]engine.Relation, 0)
+		indexTables = make([]engine.Relation, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
-				if indexdef.Unique {
-					var indexTable engine.Relation
-					if indexdef.TableExist {
-						if isTemp {
-							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName), proc)
-						} else {
-							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName, proc)
-						}
-						if err != nil {
-							return nil, nil, err
-						}
-						uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				//if indexdef.Unique {
+				var indexTable engine.Relation
+				if indexdef.TableExist {
+					if isTemp {
+						indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName), proc)
+					} else {
+						indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName, proc)
 					}
-				} else {
-					continue
+					if err != nil {
+						return nil, nil, err
+					}
+					indexTables = append(indexTables, indexTable)
 				}
+				//} else {
+				//	continue
+				//}
 			}
 		}
 	}
-	return relation, uniqueIndexTables, err
+	return relation, indexTables, err
 }
