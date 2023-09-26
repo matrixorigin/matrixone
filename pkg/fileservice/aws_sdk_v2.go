@@ -29,8 +29,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -99,16 +102,7 @@ func NewAwsSDKv2(
 		)
 	}
 
-	credentialProvider := getCredentialsProvider(
-		ctx,
-		args.Endpoint,
-		args.Region,
-		args.KeyID,
-		args.KeySecret,
-		args.SessionToken,
-		args.RoleARN,
-		args.ExternalID,
-	)
+	credentialProvider := args.credentialsProviderForAwsSDKv2(ctx)
 
 	// validate
 	if credentialProvider != nil {
@@ -661,3 +655,74 @@ func (noOpRateLimit) GetToken(context.Context, uint) (func() error, error) {
 	return noOpToken, nil
 }
 func noOpToken() error { return nil }
+
+func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
+	ctx context.Context,
+) (
+	ret aws.CredentialsProvider,
+) {
+
+	// cache
+	defer func() {
+		if ret == nil {
+			return
+		}
+		ret = aws.NewCredentialsCache(ret)
+	}()
+
+	// aws role arn
+	if o.RoleARN != "" {
+		if provider := func() aws.CredentialsProvider {
+			loadConfigOptions := []func(*config.LoadOptions) error{
+				config.WithLogger(logutil.GetS3Logger()),
+				config.WithClientLogMode(
+					aws.LogSigning |
+						aws.LogRetries |
+						aws.LogRequest |
+						aws.LogResponse |
+						aws.LogDeprecatedUsage |
+						aws.LogRequestEventMessage |
+						aws.LogResponseEventMessage,
+				),
+			}
+			awsConfig, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+			if err != nil {
+				return nil
+			}
+			stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
+				if o.Region == "" {
+					options.Region = "ap-northeast-1"
+				} else {
+					options.Region = o.Region
+				}
+			})
+			provider := stscreds.NewAssumeRoleProvider(
+				stsSvc,
+				o.RoleARN,
+				func(opts *stscreds.AssumeRoleOptions) {
+					if o.ExternalID != "" {
+						opts.ExternalID = &o.ExternalID
+					}
+				},
+			)
+			_, err = provider.Retrieve(ctx)
+			if err == nil {
+				return provider
+			}
+			logutil.Info("skipping bad role arn credentials provider",
+				zap.Any("error", err),
+			)
+			return nil
+		}(); provider != nil {
+			return provider
+		}
+	}
+
+	// static credential
+	if o.KeyID != "" && o.KeySecret != "" {
+		// static
+		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken)
+	}
+
+	return
+}

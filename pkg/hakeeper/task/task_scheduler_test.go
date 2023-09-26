@@ -40,7 +40,7 @@ func TestMain(m *testing.M) {
 
 func TestGetExpiredTasks(t *testing.T) {
 	cases := []struct {
-		tasks     []task.Task
+		tasks     []task.AsyncTask
 		workingCN []string
 
 		expected map[uint64]struct{}
@@ -53,7 +53,7 @@ func TestGetExpiredTasks(t *testing.T) {
 		},
 		{
 			// CN running task 1 is expired.
-			tasks: []task.Task{
+			tasks: []task.AsyncTask{
 				{ID: 1, TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
 				{ID: 2, TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
 			},
@@ -63,7 +63,7 @@ func TestGetExpiredTasks(t *testing.T) {
 		},
 		{
 			// Heartbeat of task 1 is expired.
-			tasks: []task.Task{
+			tasks: []task.AsyncTask{
 				{ID: 1, TaskRunner: "a", LastHeartbeat: time.Now().Add(-taskSchedulerDefaultTimeout - 1).UnixMilli()},
 				{ID: 2, TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
 			},
@@ -84,7 +84,7 @@ func TestGetExpiredTasks(t *testing.T) {
 
 func TestGetCNOrderedMap(t *testing.T) {
 	cases := []struct {
-		tasks     []task.Task
+		tasks     []task.AsyncTask
 		workingCN []string
 
 		expected *cnMap
@@ -96,7 +96,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 			expected: newOrderedMap(nil),
 		},
 		{
-			tasks: []task.Task{
+			tasks: []task.AsyncTask{
 				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
 				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
 				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()}},
@@ -108,7 +108,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 			},
 		},
 		{
-			tasks: []task.Task{
+			tasks: []task.AsyncTask{
 				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
 				{TaskRunner: "b", LastHeartbeat: time.Now().UnixMilli()},
 				{TaskRunner: "a", LastHeartbeat: time.Now().UnixMilli()},
@@ -138,23 +138,23 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	scheduler.Schedule(cnState, currentTick)
 
 	// Create Task 1
-	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "1"}))
-	query, err := service.QueryTask(context.Background())
+	assert.NoError(t, service.CreateAsyncTask(context.Background(), task.TaskMetadata{ID: "1"}))
+	query, err := service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, task.TaskStatus_Created, query[0].Status)
 
 	// Schedule Task 1
 	scheduler.Schedule(cnState, currentTick)
 
-	query, err = service.QueryTask(context.Background())
+	query, err = service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, "a", query[0].TaskRunner)
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
 
 	// Create Task 2
-	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "2"}))
-	query, err = service.QueryTask(context.Background(),
-		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+	assert.NoError(t, service.CreateAsyncTask(context.Background(), task.TaskMetadata{ID: "2"}))
+	query, err = service.QueryAsyncTask(context.Background(),
+		taskservice.WithTaskStatusCond(task.TaskStatus_Created))
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(query))
 	assert.NotNil(t, query[0].Status)
@@ -165,7 +165,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	// Schedule Task 2
 	scheduler.Schedule(cnState, currentTick)
 
-	query, err = service.QueryTask(context.Background(), taskservice.WithTaskRunnerCond(taskservice.EQ, "b"))
+	query, err = service.QueryAsyncTask(context.Background(), taskservice.WithTaskRunnerCond(taskservice.EQ, "b"))
 	assert.NoError(t, err)
 	assert.NotNil(t, query)
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
@@ -178,15 +178,15 @@ func TestReallocateExpiredTasks(t *testing.T) {
 	currentTick := expiredTick - 1
 
 	// Create Task 1
-	assert.NoError(t, service.Create(context.Background(), task.TaskMetadata{ID: "1"}))
-	query, err := service.QueryTask(context.Background())
+	assert.NoError(t, service.CreateAsyncTask(context.Background(), task.TaskMetadata{ID: "1"}))
+	query, err := service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, task.TaskStatus_Created, query[0].Status)
 
 	// Schedule Task 1 on "a"
 	scheduler.Schedule(cnState, currentTick)
 
-	query, err = service.QueryTask(context.Background())
+	query, err = service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(query))
 	assert.Equal(t, "a", query[0].TaskRunner)
@@ -200,7 +200,7 @@ func TestReallocateExpiredTasks(t *testing.T) {
 	// Since no other CN available, task 1 remains on CN "a"
 	scheduler.Schedule(cnState, currentTick)
 
-	query, err = service.QueryTask(context.Background())
+	query, err = service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(query))
 	assert.Equal(t, "a", query[0].TaskRunner)
@@ -213,7 +213,7 @@ func TestReallocateExpiredTasks(t *testing.T) {
 	// "b" available
 	scheduler.Schedule(cnState, currentTick)
 
-	query, err = service.QueryTask(context.Background())
+	query, err = service.QueryAsyncTask(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(query))
 	assert.Equal(t, "b", query[0].TaskRunner)

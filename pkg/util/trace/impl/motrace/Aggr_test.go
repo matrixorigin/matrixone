@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -110,6 +111,7 @@ func TestAggregator(t *testing.T) {
 			StatementID:   _1TxnID,
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+			ConnType:      statistic.ConnTypeExternal,
 		})
 		if err != nil {
 			t.Fatalf("Unexpected error when adding item: %v", err)
@@ -131,6 +133,7 @@ func TestAggregator(t *testing.T) {
 			StatementID:   _1TxnID,
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+			ConnType:      statistic.ConnTypeExternal,
 		})
 		if err != nil {
 			t.Fatalf("Unexpected error when adding item: %v", err)
@@ -152,6 +155,7 @@ func TestAggregator(t *testing.T) {
 			StatementID:   _1TxnID,
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+			ConnType:      statistic.ConnTypeExternal,
 		})
 
 		if err != nil {
@@ -174,6 +178,7 @@ func TestAggregator(t *testing.T) {
 			StatementID:   _1TxnID,
 			Status:        StatementStatusFailed,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+			ConnType:      statistic.ConnTypeExternal,
 		})
 		if err != nil {
 			t.Fatalf("Unexpected error when adding item: %v", err)
@@ -191,20 +196,20 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, results[1].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
-	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
-	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,10.000,15,20,25,2]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,10.000,15,20,25,2]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,10.000,15,20,25,2]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,10.000,15,20,25,2]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
 	item, _ := results[0].(*StatementInfo)
 	row := item.GetTable().GetRow(ctx)
 	results[0].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[2,5,2.000,15,20,25]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,2.000,15,20,25,2]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 	results[1].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[2,5,2.000,15,20,25]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,2.000,15,20,25,2]`), results[1].(*StatementInfo).ExecPlan2Stats(ctx))
 	results[2].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[2,5,2.000,15,20,25]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,2.000,15,20,25,2]`), results[2].(*StatementInfo).ExecPlan2Stats(ctx))
 	results[3].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[2,5,2.000,15,20,25]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,2.000,15,20,25,2]`), results[3].(*StatementInfo).ExecPlan2Stats(ctx))
 
 	aggregator.Close()
 
@@ -269,9 +274,9 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, fixedTime.Add(4*time.Second), results[0].(*StatementInfo).RequestAt)
 	// ResponseAt should be end of the window
 	assert.Equal(t, fixedTime.Add(9*time.Second), results[0].(*StatementInfo).ResponseAt)
-	require.Equal(t, []byte(`[2,5,10.000,15,20,25]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,10.000,15,20,25,0]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 	results[0].(*StatementInfo).FillRow(ctx, row)
-	require.Equal(t, []byte(`[2,5,2.000,15,20,25]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
+	require.Equal(t, []byte(`[3,5,2.000,15,20,25,0]`), results[0].(*StatementInfo).ExecPlan2Stats(ctx))
 
 	_, err = aggregator.AddItem(&StatementInfo{
 		Account:       "MO",

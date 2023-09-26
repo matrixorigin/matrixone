@@ -122,9 +122,9 @@ func getShuffledSelsByHash(ap *Argument, bat *batch.Batch) [][]int32 {
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_char, types.T_varchar, types.T_text:
-		groupByCol := vector.MustFixedCol[types.Varlena](groupByVec)
+		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(groupByVec.GetArea()), lenRegs)
+			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(area), lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	default:
@@ -266,6 +266,12 @@ func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
 		vlast := groupByCol[groupByVec.Length()-1]
 		regIndexFirst = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(vfirst), lenRegs)
 		regIndexLast = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(vlast), lenRegs)
+	case types.T_char, types.T_varchar, types.T_text:
+		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
+		vfirst := plan2.VarlenaToUint64(&groupByCol[0], area)
+		vlast := plan2.VarlenaToUint64(&groupByCol[groupByVec.Length()-1], area)
+		regIndexFirst = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), vfirst, lenRegs)
+		regIndexLast = plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), vlast, lenRegs)
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
@@ -316,6 +322,21 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 		for row, v := range groupByCol {
 			regIndex := plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), uint64(v), lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_char, types.T_varchar, types.T_text:
+		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
+		if area == nil {
+			for row := range groupByCol {
+				v := plan2.VarlenaToUint64Inline(&groupByCol[row])
+				regIndex := plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, lenRegs)
+				sels[regIndex] = append(sels[regIndex], int32(row))
+			}
+		} else {
+			for row := range groupByCol {
+				v := plan2.VarlenaToUint64(&groupByCol[row], area)
+				regIndex := plan2.GetRangeShuffleIndexUnsigned(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, lenRegs)
+				sels[regIndex] = append(sels[regIndex], int32(row))
+			}
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
