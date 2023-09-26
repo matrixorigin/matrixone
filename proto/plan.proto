@@ -672,6 +672,7 @@ message Node {
 		PRE_DELETE = 61;
 		// the node which build insert batch for hidden table(unique key)
 		PRE_INSERT_UK = 62;
+		PRE_INSERT_SK = 63;
 	}
 
 	enum JoinType {
@@ -763,6 +764,8 @@ message Node {
 	bool recursive_sink = 43;
 	ExternScan extern_scan = 44;
 	PartitionPrune partition_prune = 45;
+
+	PreInsertSkCtx pre_insert_sk_ctx = 46;
 }
 
 message ExternScan {
@@ -788,6 +791,15 @@ message LockTarget {
 }
 
 message PreInsertUkCtx {
+	// index of columns(parts of unique key) in pre batch
+	repeated int32 columns 	= 1;
+	int32 pk_column 		= 2;
+	Type pk_type 			= 3;
+	Type uk_type			= 4;
+	TableDef table_def 		= 5;
+}
+
+message PreInsertSkCtx {
 	// index of columns(parts of unique key) in pre batch
 	repeated int32 columns 	= 1;
 	int32 pk_column 		= 2;
