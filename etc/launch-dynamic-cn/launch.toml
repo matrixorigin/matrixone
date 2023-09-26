@@ -1,27 +1,22 @@
 logservices = [
-    "./etc/launch-multi-cn/log.toml",
+    "./etc/launch-dynamic-cn/log.toml",
 ]
 
 tnservices = [
-    "./etc/launch-multi-cn/tn.toml"
+    "./etc/launch-dynamic-cn/tn.toml"
 ]
 
-cnservices = [
-    "./etc/launch-multi-cn/cn.toml"
-]
-
-
+# dynamic is used to launch dynamic cn service. Each cn service will run 
+# in a separate process.
 [dynamic]
 enable = true
+# http ctl server address. We can use cn index to start and stop dynamic cn.
+# start cn0: curl "http://localhost:16000/dynamic/cn?cn=0&action=start"
+# stop cn0: curl "http://localhost:16000/dynamic/cn?cn=0&action=stop"
+ctl-address = ":16000"
+# cn template config toml file
+cn-template = "./etc/launch-dynamic-cn/cn.toml.base"
+# how many cn service can be launched
+service-count = 2
 # how many cpu can used pr cn instance
-cpus = 2
-cn-count = 5
-port-base = 18000
-frontend-port = 16001
-frontend-unix-socket = "/tmp/mysql1.sock"
-
-[dynamic.fileservice]
-memory-capacity = "1GB"
-disk-capacity = "1GB"
-
-
+cpu-count = 2
