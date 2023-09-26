@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -47,14 +48,26 @@ func (s *service) Start() error {
 
 	if s.process == nil {
 		var err error
-		file := path.Join(s.cfg.Path, "server.py")
+		var file string
+
+		ex, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		exePath := filepath.Dir(ex)
+
+		if path.IsAbs(file) {
+			file = path.Join(s.cfg.Path, "server.py")
+		} else {
+			file = path.Join(exePath, s.cfg.Path, "server.py")
+		}
 		_, err = os.Stat(file)
 		if err != nil {
 			return err
 		}
 
 		no := strconv.Itoa(int(atomic.AddInt32(&severNo, 1)))
-		s.log, err = os.OpenFile("server"+no+".log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+		s.log, err = os.OpenFile(path.Join(exePath, "pyserver"+no+".log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			return err
 		}
