@@ -18,10 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/backup"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/backup"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -48,6 +48,10 @@ func startCluster(
 	cfg := &LaunchConfig{}
 	if err := parseConfigFromFile(*launchFile, cfg); err != nil {
 		return err
+	}
+
+	if cfg.Dynamic.Enable {
+		return startDynamicCluster(ctx, cfg, stopper, perfCounterSet, shutdownC)
 	}
 
 	/*
