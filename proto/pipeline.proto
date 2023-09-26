@@ -374,7 +374,7 @@ message Instruction{
   Merge merge = 34;
   StreamScan stream_scan = 35;
 
-  PreInsertUnique pre_insert_secondary_index  = 36;
+  PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
 }
 
 message AnalysisList {

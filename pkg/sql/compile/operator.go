@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -566,6 +567,14 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.Argument, error) {
 	preCtx := n.PreInsertUkCtx
 	return &preinsertunique.Argument{
+		Ctx:          proc.Ctx,
+		PreInsertCtx: preCtx,
+	}, nil
+}
+
+func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.Argument, error) {
+	preCtx := n.PreInsertSkCtx
+	return &preinsertsecondaryindex.Argument{
 		Ctx:          proc.Ctx,
 		PreInsertCtx: preCtx,
 	}, nil
