@@ -428,8 +428,8 @@ insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 add constraint primary key (col1);
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into alter01 values (5,"h");
 select * from alter01;
 -- @session
@@ -445,8 +445,8 @@ insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 drop primary key;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into alter01 values (5,"h");
 select * from alter01;
 -- @session
