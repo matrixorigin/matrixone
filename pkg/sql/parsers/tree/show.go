@@ -811,3 +811,23 @@ func (node *ShowConnectors) GetQueryType() string     { return QueryTypeOth }
 func NewShowConnectors(f bool) *ShowConnectors {
 	return &ShowConnectors{}
 }
+
+type EmptyStmt struct {
+	statementImpl
+}
+
+func (e *EmptyStmt) String() string {
+	return ""
+}
+
+func (e *EmptyStmt) Format(ctx *FmtCtx) {
+	ctx.WriteString("")
+}
+
+func (e EmptyStmt) GetStatementType() string {
+	return "InternalCmd"
+}
+
+func (e EmptyStmt) GetQueryType() string {
+	return QueryTypeOth
+}

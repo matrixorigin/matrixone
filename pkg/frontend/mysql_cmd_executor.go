@@ -209,6 +209,19 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
+func transferSessionConnType2StatisticConnType(c ConnType) statistic.ConnType {
+	switch c {
+	case ConnTypeUnset:
+		return statistic.ConnTypeUnknown
+	case ConnTypeInternal:
+		return statistic.ConnTypeInternal
+	case ConnTypeExternal:
+		return statistic.ConnTypeExternal
+	default:
+		panic("unknown connection type")
+	}
+}
+
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
 	// set StatementID
 	var stmID uuid.UUID
@@ -277,6 +290,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
+	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
 	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
 		// fix original issue #8165
 		stm.User = ""
@@ -1508,6 +1522,18 @@ func (mce *MysqlCmdExecutor) handleShowBackendServers(ctx context.Context, cwInd
 	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed, error: %v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleEmptyStmt(ctx context.Context, stmt *tree.EmptyStmt) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	resp := NewGeneralOkResponse(COM_QUERY, mce.ses.GetServerStatus())
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 	}
 	return err
 }
@@ -3154,6 +3180,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.BackupStart:
 		selfHandle = true
 		if err = mce.handleStartBackup(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.EmptyStmt:
+		selfHandle = true
+		if err = mce.handleEmptyStmt(requestCtx, st); err != nil {
 			return err
 		}
 	}

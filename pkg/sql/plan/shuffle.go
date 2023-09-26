@@ -70,6 +70,10 @@ func VarlenaToUint64(v *types.Varlena, area []byte) uint64 {
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
+	if lenBytes == 0 {
+		// always hash empty string to first bucket
+		return 0
+	}
 	//sample five bytes
 	h := (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1]))
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
@@ -93,6 +97,8 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint32(zm.GetMinBuf())), upplerLimit)
 	case types.T_uint16:
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint16(zm.GetMinBuf())), upplerLimit)
+	case types.T_varchar, types.T_char, types.T_text:
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), ByteSliceToUint64(zm.GetMinBuf()), upplerLimit)
 	}
 	panic("unsupported shuffle type!")
 }
