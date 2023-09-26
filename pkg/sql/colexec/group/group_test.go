@@ -16,11 +16,13 @@ package group
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -99,24 +101,37 @@ func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = tc.arg.Call(tc.proc)
+
+		testBat := newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
+		resetChildren(tc.arg, testBat)
+		result, err := tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
+		testBat = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
+		resetChildren(tc.arg, testBat)
+		result, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, err = tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
+		testBat = batch.EmptyBatch
+		resetChildren(tc.arg, testBat)
+		result, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = nil
-		_, err = tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
+		testBat = nil
+		resetChildren(tc.arg, testBat)
+		result, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-		}
-		tc.proc.Reg.InputBatch = nil
-		_, err = tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
+		testBat = nil
+		resetChildren(tc.arg, testBat)
+		result, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
+		cleanResult(&result, tc.proc)
+
 		tc.arg.Free(tc.proc, false)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -133,21 +148,31 @@ func BenchmarkGroup(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
+			testBat := newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
+			tc.arg.AppendChild(&value_scan.Argument{
+				Batchs: []*batch.Batch{testBat},
+			})
+			result, err := tc.arg.Call(tc.proc)
+			require.NoError(t, err)
+			cleanResult(&result, tc.proc)
+
+			testBat = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
+			resetChildren(tc.arg, testBat)
 			_, err = tc.arg.Call(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
+			cleanResult(&result, tc.proc)
+
+			testBat = batch.EmptyBatch
+			resetChildren(tc.arg, testBat)
 			_, err = tc.arg.Call(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = batch.EmptyBatch
+			cleanResult(&result, tc.proc)
+
+			testBat = nil
+			resetChildren(tc.arg, testBat)
 			_, err = tc.arg.Call(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = nil
-			_, err = tc.arg.Call(tc.proc)
-			require.NoError(t, err)
-			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			}
+			cleanResult(&result, tc.proc)
 		}
 	}
 }
@@ -171,7 +196,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 			Types: ts,
 			Aggs:  aggs,
 			info: &vm.OperatorInfo{
-				Idx:     0,
+				Idx:     1,
 				IsFirst: false,
 				IsLast:  false,
 			},
@@ -193,4 +218,26 @@ func newExpression(pos int32) *plan.Expr {
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
+	arg.ctr.state = vm.Build
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+		result.Batch = nil
+	}
 }

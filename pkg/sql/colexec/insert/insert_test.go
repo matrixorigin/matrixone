@@ -25,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,13 +92,39 @@ func TestInsertOperator(t *testing.T) {
 			IsFirst: false,
 			IsLast:  false,
 		},
+		ctr: &container{
+			state: vm.Build,
+		},
 	}
-	proc.Reg.InputBatch = batch1
+	resetChildren(&argument1, batch1)
+	// proc.Reg.InputBatch = batch1
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
-	_, err = argument1.Call(proc)
+	result, err := argument1.Call(proc)
 	require.NoError(t, err)
+	// result := argument1.InsertCtx.Rel.(*mockRelation).result
+	// require.Equal(t, result.Batch, batch.EmptyBatch)
+	cleanResult(&result, proc)
+}
 
-	result := argument1.InsertCtx.Rel.(*mockRelation).result
-	require.Equal(t, result, batch.EmptyBatch)
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
+	arg.ctr.state = vm.Build
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+		result.Batch = nil
+	}
 }

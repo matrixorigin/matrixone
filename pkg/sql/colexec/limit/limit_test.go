@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -53,6 +54,11 @@ func init() {
 			arg: &Argument{
 				Seen:  0,
 				Limit: 8,
+				info: &vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		{
@@ -63,6 +69,11 @@ func init() {
 			arg: &Argument{
 				Seen:  0,
 				Limit: 10,
+				info: &vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		{
@@ -101,20 +112,27 @@ func TestLimit(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = tc.arg.Call(tc.proc)
-		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-		}
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = tc.arg.Call(tc.proc)
-		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-		}
-		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, _ = tc.arg.Call(tc.proc)
-		tc.proc.Reg.InputBatch = nil
-		_, _ = tc.arg.Call(tc.proc)
+
+		testBatch := newBatch(t, tc.types, tc.proc, Rows)
+		resetChildren(tc.arg, testBatch)
+		result, _ := tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
+		testBatch = newBatch(t, tc.types, tc.proc, Rows)
+		resetChildren(tc.arg, testBatch)
+		result, _ = tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
+		testBatch = batch.EmptyBatch
+		resetChildren(tc.arg, testBatch)
+		result, _ = tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
+		testBatch = nil
+		resetChildren(tc.arg, testBatch)
+		result, _ = tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
 		tc.arg.Free(tc.proc, false)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -140,15 +158,21 @@ func BenchmarkLimit(b *testing.B) {
 		for _, tc := range tcs {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
+
+			testBatch := newBatch(t, tc.types, tc.proc, BenchmarkRows)
+			resetChildren(tc.arg, testBatch)
+			result, _ := tc.arg.Call(tc.proc)
+			cleanResult(&result, tc.proc)
+
+			testBatch = batch.EmptyBatch
+			resetChildren(tc.arg, testBatch)
 			_, _ = tc.arg.Call(tc.proc)
-			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-			}
-			tc.proc.Reg.InputBatch = batch.EmptyBatch
+			cleanResult(&result, tc.proc)
+
+			testBatch = nil
+			resetChildren(tc.arg, testBatch)
 			_, _ = tc.arg.Call(tc.proc)
-			tc.proc.Reg.InputBatch = nil
-			_, _ = tc.arg.Call(tc.proc)
+			cleanResult(&result, tc.proc)
 		}
 	}
 }
@@ -156,4 +180,25 @@ func BenchmarkLimit(b *testing.B) {
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+		result.Batch = nil
+	}
 }

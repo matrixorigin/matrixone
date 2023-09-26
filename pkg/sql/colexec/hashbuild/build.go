@@ -87,7 +87,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.Info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -96,7 +96,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := ctr.build(ap, proc, anal, arg.info.IsFirst); err != nil {
+			if err := ctr.build(ap, proc, anal, arg.Info.IsFirst); err != nil {
 				ctr.cleanHashMap()
 				return result, err
 			}
@@ -121,21 +121,20 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 						ctr.bat.AuxData = hashmap.NewJoinMap(ctr.multiSels, nil, nil, ctr.strHashMap, ctr.hasNull, ap.IsDup)
 					}
 				}
-
-				proc.SetInputBatch(ctr.bat)
+				result.Batch = ctr.bat
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
 				ctr.bat = nil
 				ctr.multiSels = nil
 			} else {
 				ctr.cleanHashMap()
-				proc.SetInputBatch(nil)
+				result.Batch = nil
 			}
 			ctr.state = End
 			return result, nil
 
 		default:
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}

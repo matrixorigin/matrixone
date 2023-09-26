@@ -94,8 +94,14 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
-	bat := proc.InputBatch()
-	result := vm.NewCallResult()
+	// bat := proc.InputBatch()
+	// result := vm.NewCallResult()
+
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	bat := result.Batch
 
 	if bat == nil && ap.RecSink {
 		bat = makeEndBatch(proc)
@@ -111,7 +117,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	} else if bat.IsEmpty() {
 		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
+		// proc.SetInputBatch(batch.EmptyBatch)
+		result.Batch = batch.EmptyBatch
 		return result, nil
 	} else {
 		ap.ctr.hasData = true
@@ -121,6 +128,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, err
 	} else {
+		result.Batch = nil
 		return result, err
 	}
 }

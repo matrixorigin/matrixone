@@ -97,8 +97,12 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bat
 		for {
-			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Status == vm.ExecStop || err != nil {
 				break
+			}
+			if ok.Batch != nil {
+				ok.Batch.Clean(tc.proc.Mp())
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
@@ -119,8 +123,12 @@ func TestAnti(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Status == vm.ExecStop || err != nil {
 				break
+			}
+			if ok.Batch != nil {
+				ok.Batch.Clean(tc.proc.Mp())
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
@@ -250,7 +258,7 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 			Conditions: cs,
 			Cond:       cond,
 			info: &vm.OperatorInfo{
-				Idx:     0,
+				Idx:     1,
 				IsFirst: false,
 				IsLast:  false,
 			},
@@ -259,6 +267,11 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 			Typs:        ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
+			Info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 }

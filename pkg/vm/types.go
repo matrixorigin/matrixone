@@ -140,6 +140,14 @@ const (
 	ExecHasMore
 )
 
+type CtrState int
+
+const (
+	Build CtrState = iota
+	Eval
+	End
+)
+
 type CallResult struct {
 	Status ExecStatus
 	Batch  *batch.Batch

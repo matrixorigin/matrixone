@@ -73,7 +73,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			// only one batch is processed during each loop, and the batch will be sent to
 			// next operator immediately after successful processing.
 			last := false
-			last, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast)
+			last, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast, &result)
 			if err != nil {
 				return result, err
 			}
@@ -85,7 +85,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case operatorEnd:
 			// operator over.
-			proc.SetInputBatch(nil)
+			// proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -133,7 +134,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 // probeHashTable use a batch from proc.Reg.MergeReceivers[index] to probe and update the hash map.
 // If a row of data never appears in the hash table, add it into hath table and send it to the next operator.
 // if batch is the last one, return true, else return false.
-func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool, isLast bool) (bool, error) {
+func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	inserted := make([]uint8, hashmap.UnitLimit)
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
@@ -148,7 +149,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			return true, nil
 		}
 		if bat.Last() {
-			proc.SetInputBatch(bat)
+			// proc.SetInputBatch(bat)
+			result.Batch = bat
 			return false, nil
 		}
 		// just an empty batch.
@@ -200,7 +202,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			}
 		}
 		ana.Output(ctr.bat, isLast)
-		proc.SetInputBatch(ctr.bat)
+		// proc.SetInputBatch(ctr.bat)
+		result.Batch = ctr.bat
 		ctr.bat = nil
 		proc.PutBatch(bat)
 		return false, nil

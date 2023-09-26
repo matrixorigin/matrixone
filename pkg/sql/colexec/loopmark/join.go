@@ -76,15 +76,16 @@ func (ap *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast)
+				err = ctr.emptyProbe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast, &result)
 			} else {
-				err = ctr.probe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast)
+				err = ctr.probe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast, &result)
 			}
 			proc.PutBatch(bat)
 			return result, err
 
 		default:
-			proc.SetInputBatch(nil)
+			// proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -103,7 +104,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.RowCount()
@@ -123,11 +124,12 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	rbat.AddRowCount(bat.RowCount())
 	anal.Output(rbat, isLast)
 
-	proc.SetInputBatch(rbat)
+	// proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	markPos := -1
@@ -194,6 +196,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	rbat.AddRowCount(bat.RowCount())
 	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	// proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return nil
 }

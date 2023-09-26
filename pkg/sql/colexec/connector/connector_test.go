@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -69,7 +70,9 @@ func TestConnector(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		bat := newBatch(t, tc.types, tc.proc, Rows)
-		tc.proc.Reg.InputBatch = bat
+		tc.arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
 		/*{
 			for _, vec := range bat.Vecs {
 				if vec.IsOriginal() {
@@ -78,9 +81,15 @@ func TestConnector(t *testing.T) {
 			}
 		}*/
 		_, _ = tc.arg.Call(tc.proc)
-		tc.proc.Reg.InputBatch = batch.EmptyBatch
+		tc.arg.children = tc.arg.children[:0]
+		tc.arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{batch.EmptyBatch},
+		})
 		_, _ = tc.arg.Call(tc.proc)
-		tc.proc.Reg.InputBatch = nil
+		tc.arg.children = tc.arg.children[:0]
+		tc.arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{},
+		})
 		_, _ = tc.arg.Call(tc.proc)
 		for len(tc.arg.Reg.Ch) > 0 {
 			bat := <-tc.arg.Reg.Ch

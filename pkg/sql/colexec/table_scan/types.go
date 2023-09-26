@@ -26,8 +26,6 @@ type Argument struct {
 	Reader engine.Reader
 	Attrs  []string
 
-	// lastBatch *batch.Batch
-
 	info     *vm.OperatorInfo
 	children []vm.Operator
 }

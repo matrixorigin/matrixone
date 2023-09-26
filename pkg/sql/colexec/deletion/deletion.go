@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,6 +53,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(_ *process.Process) error {
 	ap := arg
+	arg.ctr.state = vm.Build
 	if ap.RemoteDelete {
 		ap.ctr = new(container)
 		ap.ctr.blockId_type = make(map[string]int8)
@@ -65,87 +67,107 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 
 // the bool return value means whether it completed its work or not
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	p := arg
-	bat := proc.InputBatch()
-	result := vm.NewCallResult()
+	if arg.RemoteDelete {
+		return arg.remote_delete(proc)
+	}
+	return arg.normal_delete(proc)
+}
 
-	// last batch of block
-	if bat == nil {
-		if p.RemoteDelete {
-			// ToDo: CNBlock Compaction
-			// blkId,delta_metaLoc,type
-			resBat := batch.NewWithSize(5)
-			resBat.Attrs = []string{
-				catalog.BlockMeta_Delete_ID,
-				catalog.BlockMeta_DeltaLoc,
-				catalog.BlockMeta_Type,
-				catalog.BlockMeta_Partition,
-				catalog.BlockMeta_Deletes_Length,
+func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error) {
+	if arg.ctr.state == vm.Build {
+		for {
+			result, err := arg.children[0].Call(proc)
+			if err != nil {
+				return result, err
 			}
-			resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-			resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
-			resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
-			resBat.SetVector(3, vector.NewVec(types.T_int32.ToType()))
-
-			for pidx, blockId_rowIdBatch := range p.ctr.partitionId_blockId_rowIdBatch {
-				for blkid, bat := range blockId_rowIdBatch {
-					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-					bat.SetRowCount(bat.GetVector(0).Length())
-					bytes, err := bat.MarshalBinary()
-					if err != nil {
-						result.Status = vm.ExecStop
-						return result, err
-					}
-					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-					vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
-					vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
-				}
+			if result.Batch == nil {
+				arg.ctr.state = vm.Eval
+				break
+			}
+			if result.Batch.IsEmpty() {
+				continue
 			}
 
-			for pidx, blockId_deltaLoc := range p.ctr.partitionId_blockId_deltaLoc {
-				for blkid, bat := range blockId_deltaLoc {
-					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-					//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
-					bat.SetRowCount(bat.GetVector(0).Length())
-					bytes, err := bat.MarshalBinary()
-					if err != nil {
-						result.Status = vm.ExecStop
-						return result, err
-					}
-					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-					vector.AppendFixed(resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
-					vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
-				}
-			}
-
-			resBat.SetRowCount(resBat.Vecs[0].Length())
-			resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.RowCount(), proc.GetMPool()))
-
-			proc.SetInputBatch(resBat)
+			arg.SplitBatch(proc, result.Batch)
 		}
-		result.Status = vm.ExecStop
+	}
+
+	result := vm.NewCallResult()
+	if arg.ctr.state == vm.Eval {
+		// ToDo: CNBlock Compaction
+		// blkId,delta_metaLoc,type
+		resBat := batch.NewWithSize(5)
+		resBat.Attrs = []string{
+			catalog.BlockMeta_Delete_ID,
+			catalog.BlockMeta_DeltaLoc,
+			catalog.BlockMeta_Type,
+			catalog.BlockMeta_Partition,
+			catalog.BlockMeta_Deletes_Length,
+		}
+		resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
+		resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
+		resBat.SetVector(3, vector.NewVec(types.T_int32.ToType()))
+
+		for pidx, blockId_rowIdBatch := range arg.ctr.partitionId_blockId_rowIdBatch {
+			for blkid, bat := range blockId_rowIdBatch {
+				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+				bat.SetRowCount(bat.GetVector(0).Length())
+				bytes, err := bat.MarshalBinary()
+				if err != nil {
+					result.Status = vm.ExecStop
+					return result, err
+				}
+				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+				vector.AppendFixed(resBat.GetVector(2), arg.ctr.blockId_type[blkid], false, proc.GetMPool())
+				vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
+			}
+		}
+
+		for pidx, blockId_deltaLoc := range arg.ctr.partitionId_blockId_deltaLoc {
+			for blkid, bat := range blockId_deltaLoc {
+				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+				//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
+				bat.SetRowCount(bat.GetVector(0).Length())
+				bytes, err := bat.MarshalBinary()
+				if err != nil {
+					result.Status = vm.ExecStop
+					return result, err
+				}
+				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+				vector.AppendFixed(resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
+				vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
+			}
+		}
+
+		resBat.SetRowCount(resBat.Vecs[0].Length())
+		resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, resBat.RowCount(), proc.GetMPool()))
+
+		result.Batch = resBat
+		arg.ctr.state = vm.End
 		return result, nil
 	}
 
-	// empty batch
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
+	if arg.ctr.state == vm.End {
 		return result, nil
+	} else {
+		return result, moerr.NewInternalError(proc.Ctx, "")
 	}
 
-	defer proc.PutBatch(bat)
-	if p.RemoteDelete {
-		// we will cache all rowId in memory,
-		// when the size is too large we will
-		// trigger write s3
-		p.SplitBatch(proc, bat)
-		proc.SetInputBatch(batch.EmptyBatch)
+}
+
+func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error) {
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
+	bat := result.Batch
 
 	var affectedRows uint64
-	delCtx := p.DeleteCtx
+	delCtx := arg.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
 		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch,
@@ -183,10 +205,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		delBatch.Clean(proc.GetMPool())
 	}
 
-	proc.SetInputBatch(batch.EmptyBatch)
+	result.Batch = batch.EmptyBatch
 
 	if delCtx.AddAffectedRows {
-		atomic.AddUint64(&p.affectedRows, affectedRows)
+		atomic.AddUint64(&arg.affectedRows, affectedRows)
 	}
 	return result, nil
 }

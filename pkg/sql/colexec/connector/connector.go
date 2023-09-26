@@ -17,7 +17,6 @@ package connector
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -33,15 +32,18 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	reg := ap.Reg
-	bat := proc.InputBatch()
-	result := vm.NewCallResult()
+
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	bat := result.Batch
+
 	if bat == nil {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
 		return result, nil
 	}
 
@@ -59,7 +61,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 
 	case reg.Ch <- bat:
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		return result, nil
 	}
 }

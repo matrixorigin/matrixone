@@ -79,10 +79,10 @@ func TestBuild(t *testing.T) {
 			ok, err := tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			require.Equal(t, false, ok.Status == vm.ExecStop)
-			mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)
+			mp := ok.Batch.AuxData.(*hashmap.JoinMap)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			ok.Batch.Clean(tc.proc.Mp())
 			break
 		}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -153,7 +153,7 @@ func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
 			Typs:        ts,
 			Conditions:  cs,
 			NeedHashMap: true,
-			info: &vm.OperatorInfo{
+			Info: &vm.OperatorInfo{
 				Idx:     0,
 				IsFirst: false,
 				IsLast:  false,

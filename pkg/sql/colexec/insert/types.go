@@ -24,13 +24,13 @@ import (
 
 var _ vm.Operator = new(Argument)
 
-const (
-	Process = iota
-	End
-)
+// const (
+// 	Process = iota
+// 	End
+// )
 
 type container struct {
-	state              int
+	state              vm.CtrState
 	s3Writer           *colexec.S3Writer
 	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
 }

@@ -66,6 +66,8 @@ type container struct {
 	deleted_length uint32
 	pool           *BatchPool
 	debug_len      uint32
+
+	state vm.CtrState
 }
 type Argument struct {
 	Ts           uint64

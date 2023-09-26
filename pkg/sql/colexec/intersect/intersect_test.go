@@ -84,11 +84,11 @@ func TestIntersect(t *testing.T) {
 			break
 		}
 		require.NoError(t, err)
-		result := c.proc.InputBatch()
+		result := end.Batch
 		if result != nil && !result.IsEmpty() {
 			cnt += result.RowCount()
 			require.Equal(t, 3, len(result.Vecs)) // 3 column
-			c.proc.InputBatch().Clean(c.proc.Mp())
+			result.Clean(c.proc.Mp())
 		}
 	}
 	require.Equal(t, 1, cnt) // 1 row

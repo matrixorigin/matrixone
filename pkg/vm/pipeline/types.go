@@ -92,17 +92,18 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool) {
 	proc.Cancel()
 
 	// clean all the coming batches.
-	if pipelineFailed {
-		bat := proc.InputBatch()
-		if bat != nil {
-			cnt := bat.GetCnt()
-			for cnt > 0 {
-				cnt--
-				bat.Clean(proc.Mp())
-			}
-		}
-		proc.SetInputBatch(nil)
-	}
+	// if pipelineFailed {
+	// 	bat := proc.InputBatch()
+	// 	if bat != nil {
+	// 		cnt := bat.GetCnt()
+	// 		for cnt > 0 {
+	// 			cnt--
+	// 			bat.Clean(proc.Mp())
+	// 		}
+	// 	}
+	// 	proc.SetInputBatch(nil)
+	// }
+
 	// clean operator hold memory.
 	for i := range p.instructions {
 		p.instructions[i].Arg.Free(proc, pipelineFailed)

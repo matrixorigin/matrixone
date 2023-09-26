@@ -33,28 +33,24 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 
 // Call returning only the first n tuples from its input
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	bat := proc.InputBatch()
-	result := vm.NewCallResult()
-	if bat == nil {
-		result.Status = vm.ExecStop
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
-	if bat.Last() {
-		proc.SetInputBatch(bat)
-		return result, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return result, nil
-	}
+	bat := result.Batch
+
 	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	anal.Input(bat, arg.info.IsFirst)
+
 	if ap.Seen >= ap.Limit {
-		proc.SetInputBatch(nil)
+		// proc.SetInputBatch(nil)
+		result.Batch = nil
 		proc.PutBatch(bat)
 		result.Status = vm.ExecStop
 		return result, nil
@@ -66,7 +62,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.Seen = newSeen
 		anal.Output(bat, arg.info.IsLast)
 
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 		result.Status = vm.ExecStop
 		return result, nil
 	}

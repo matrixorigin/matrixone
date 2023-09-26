@@ -64,7 +64,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		case probe:
 			var err error
 			isLast := false
-			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast); err != nil {
+			if isLast, err = arg.ctr.probeHashTable(proc, analyze, 0, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
 				result.Status = vm.ExecStop
 				return result, err
 			}
@@ -76,7 +76,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 
 		case end:
-			proc.SetInputBatch(nil)
+			// proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -137,7 +138,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 	return nil
 }
 
-func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool) (bool, error) {
+func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	for {
 		btc, _, err := c.ReceiveFromSingleReg(idx, analyze)
 		if err != nil {
@@ -218,7 +219,8 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		analyze.Alloc(int64(c.btc.Size()))
 		analyze.Output(c.btc, isLast)
 
-		proc.SetInputBatch(c.btc)
+		// proc.SetInputBatch(c.btc)
+		result.Batch = c.btc
 		return false, nil
 	}
 }

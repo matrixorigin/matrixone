@@ -79,10 +79,11 @@ func TestJoin(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Status == vm.ExecStop || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			cleanResult(&ok, tc.proc)
 		}
 		tc.arg.Free(tc.proc, false)
 		tc.proc.FreeVectors()
@@ -109,10 +110,11 @@ func BenchmarkJoin(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
-				if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
+				ok, err := tc.arg.Call(tc.proc)
+				if ok.Status == vm.ExecStop || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				cleanResult(&ok, tc.proc)
 			}
 		}
 	}
@@ -176,13 +178,18 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 			Cond:   cond,
 			Result: rp,
 			info: &vm.OperatorInfo{
-				Idx:     0,
+				Idx:     1,
 				IsFirst: false,
 				IsLast:  false,
 			},
 		},
 		barg: &hashbuild.Argument{
 			Typs: ts,
+			Info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 }
@@ -197,10 +204,16 @@ func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 	ok, err := tc.barg.Call(tc.proc)
 	require.NoError(t, err)
 	require.Equal(t, false, ok.Status == vm.ExecStop)
-	return tc.proc.Reg.InputBatch
+	return ok.Batch
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+	}
 }

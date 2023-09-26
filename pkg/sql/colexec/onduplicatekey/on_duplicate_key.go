@@ -50,6 +50,29 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := arg.ctr
 	result := vm.NewCallResult()
 
+	// if ctr.state == Build {
+	// 	for {
+	// 		result, err := arg.children[0].Call(proc)
+	// 		if err != nil {
+	// 			return result, err
+	// 		}
+	// 		if result.Batch == nil {
+	// 			ctr.state = Eval
+	// 			break
+	// 		}
+	// 		//do
+	// 	}
+	// }
+
+	// if ctr.state == Eval {
+	// 	//....当前
+	// }
+
+	// if ctr.state == End {
+	// 	result := vm.NewCallResult()
+	// 	return result, nil
+	// }
+
 	for {
 		switch ctr.state {
 		case Build:

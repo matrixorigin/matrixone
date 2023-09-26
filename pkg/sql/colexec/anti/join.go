@@ -73,23 +73,23 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if bat.Last() {
-				proc.SetInputBatch(bat)
+				result.Batch = bat
 				return result, nil
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
+				result.Batch = bat
 				continue
 			}
 
 			if ctr.bat == nil || ctr.bat.IsEmpty() {
-				err = ctr.emptyProbe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+				result.Batch, err = ctr.emptyProbe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
 			} else {
-				err = ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+				result.Batch, err = ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
 			}
 			return result, err
 
 		default:
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -111,7 +111,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (*batch.Batch, error) {
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
@@ -130,18 +130,17 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			for j, pos := range ap.Result {
 				if err := rbat.Vecs[j].UnionOne(bat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
 					rbat.Clean(proc.Mp())
-					return err
+					return nil, err
 				}
 			}
 		}
 		rbat.AddRowCount(n)
 	}
 	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
-	return nil
+	return rbat, nil
 }
 
-func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
+func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (*batch.Batch, error) {
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
@@ -152,12 +151,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	if (ctr.bat.RowCount() == 1 && ctr.hasNull) || ctr.bat.RowCount() == 0 {
 		anal.Output(rbat, isLast)
-		proc.SetInputBatch(rbat)
-		return nil
+		return rbat, nil
 	}
 
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
-		return err
+		return nil, err
 	}
 
 	if ctr.joinBat1 == nil {
@@ -195,15 +193,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for _, sel := range sels {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
-						return err
+						return nil, err
 					}
 					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
 						1, ctr.cfs2); err != nil {
-						return err
+						return nil, err
 					}
 					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
 					if err != nil {
-						return err
+						return nil, err
 					}
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
@@ -226,14 +224,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		for j, pos := range ap.Result {
 			if err := rbat.Vecs[j].Union(bat.Vecs[pos], eligible, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())
-				return err
+				return nil, err
 			}
 		}
 		eligible = eligible[:0]
 	}
 	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
-	return nil
+	return rbat, nil
 }
 
 func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process) error {

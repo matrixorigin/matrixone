@@ -33,13 +33,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	// if arg.lastBatch != nil {
-	// 	arg.lastBatch.Clean(proc.Mp())
-	// }
 
-	// result := vm.CallResult{
-	// 	Status: vm.ExecNext,
-	// }
 	result := vm.NewCallResult()
 	select {
 	case <-proc.Ctx.Done():
@@ -58,14 +52,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if bat != nil {
 		bat.Cnt = 1
-		// arg.lastBatch = bat
 		anal.S3IOByte(bat)
 		anal.Alloc(int64(bat.Size()))
 	}
 
-	proc.SetInputBatch(bat)
-
-	// result.Batch = bat
+	result.Batch = bat
 
 	return result, nil
 }

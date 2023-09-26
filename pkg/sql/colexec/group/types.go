@@ -72,6 +72,8 @@ type container struct {
 	hasAggResult bool
 
 	tmpVecs []*vector.Vector // for reuse
+
+	state vm.CtrState
 }
 
 type Argument struct {

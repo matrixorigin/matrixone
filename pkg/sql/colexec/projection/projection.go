@@ -47,23 +47,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	result := vm.NewCallResult()
 
-	bat := proc.InputBatch()
-	if bat == nil {
-		proc.SetInputBatch(nil)
-		result.Status = vm.ExecStop
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
-	if bat.Last() {
-		proc.SetInputBatch(bat)
-		return result, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return result, nil
-	}
+	bat := result.Batch
 
 	anal.Input(bat, arg.info.IsFirst)
 	ap := arg
@@ -89,6 +81,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	proc.PutBatch(bat)
 	anal.Output(rbat, arg.info.IsLast)
-	proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return result, nil
 }

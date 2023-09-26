@@ -73,7 +73,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case Probe:
 			last := false
-			last, err = arg.ctr.probe(proc, analyzer, arg.info.IsFirst, arg.info.IsLast)
+			last, err = arg.ctr.probe(proc, analyzer, arg.info.IsFirst, arg.info.IsLast, &result)
 			if err != nil {
 				return result, err
 			}
@@ -84,7 +84,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 
 		case End:
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -146,7 +146,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 // If a row of the batch appears in the hash table and the value of it in the ctr.counter is greater than 0，
 // send it to the next operator and counter--; else, continue.
 // if batch is the last one, return true, else return false.
-func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool) (bool, error) {
+func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	for {
 		bat, _, err := ctr.ReceiveFromSingleReg(0, analyzer)
 		if err != nil {
@@ -156,7 +156,8 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			return true, nil
 		}
 		if bat.Last() {
-			proc.SetInputBatch(bat)
+			// proc.SetInputBatch(bat)
+			result.Batch = bat
 			return false, nil
 		}
 		if bat.IsEmpty() {
@@ -231,7 +232,8 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		analyzer.Alloc(int64(outputBat.Size()))
 		analyzer.Output(outputBat, isLast)
 
-		proc.SetInputBatch(outputBat)
+		// proc.SetInputBatch(outputBat)
+		result.Batch = outputBat
 		proc.PutBatch(bat)
 		return false, nil
 	}

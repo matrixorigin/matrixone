@@ -30,18 +30,12 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	// result := vm.CallResult{
-	// 	Status: vm.ExecNext,
-	// }
 	result := vm.NewCallResult()
 	if arg.idx < len(arg.Batchs) {
-		// result.Batch = arg.Batchs[arg.idx]
-		// if arg.idx > 0 {
-		// 	arg.Batchs[arg.idx-1].Clean(proc.Mp())
-		// }
-
-		proc.SetInputBatch(arg.Batchs[arg.idx])
-
+		result.Batch = arg.Batchs[arg.idx]
+		if arg.idx > 0 {
+			arg.Batchs[arg.idx-1].Clean(proc.Mp())
+		}
 		arg.idx += 1
 	}
 

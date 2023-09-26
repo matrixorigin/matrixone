@@ -103,7 +103,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 
 		case SendLast:
-			setNil, err := ctr.sendLast(ap, proc, analyze, arg.info.IsFirst, arg.info.IsLast)
+			setNil, err := ctr.sendLast(ap, proc, analyze, arg.info.IsFirst, arg.info.IsLast, &result)
 			if err != nil {
 				return result, err
 			}
@@ -116,7 +116,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 
 		default:
-			proc.SetInputBatch(nil)
+			// proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -139,7 +140,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 	return nil
 }
 
-func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
+func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	ctr.handledLast = true
 
 	if ap.NumCPU > 1 {
@@ -182,7 +183,8 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	rbat.AddRowCount(len(sels))
 
 	analyze.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+	// proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return false, nil
 }
 

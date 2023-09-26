@@ -73,41 +73,42 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 		}
 	}
 
-	// root := ins[len(ins)-1].Arg
-	// end = false
-	// for !end {
-	// 	result, err = root.Call(proc)
-	// 	if err != nil {
-	// 		return result, err
-	// 	}
-	// 	end = result.Status == ExecStop || result.Batch == nil
-	// }
+	root := ins[len(ins)-1].Arg
+	end = false
+	for !end {
+		result, err := root.Call(proc)
+		if err != nil {
+			return true, err
+		}
+		end = result.Status == ExecStop || result.Batch == nil
+	}
+	return end, nil
 
-	return fubarRun(ins, proc, 0)
+	// return fubarRun(ins, proc, 0)
 }
 
-func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
-	var fubarStack []int
-	var result CallResult
+// func fubarRun(ins Instructions, proc *process.Process, start int) (end bool, err error) {
+// 	var fubarStack []int
+// 	var result CallResult
 
-	for i := start; i < len(ins); i++ {
-		if result, err = ins[i].Arg.Call(proc); err != nil {
-			return result.Status == ExecStop || end, err
-		}
+// 	for i := start; i < len(ins); i++ {
+// 		if result, err = ins[i].Arg.Call(proc); err != nil {
+// 			return result.Status == ExecStop || end, err
+// 		}
 
-		if result.Status == process.ExecStop {
-			end = true
-		} else if result.Status == process.ExecHasMore {
-			fubarStack = append(fubarStack, i)
-		}
-	}
+// 		if result.Status == process.ExecStop {
+// 			end = true
+// 		} else if result.Status == process.ExecHasMore {
+// 			fubarStack = append(fubarStack, i)
+// 		}
+// 	}
 
-	// run the stack backwards.
-	for i := len(fubarStack) - 1; i >= 0; i-- {
-		end, err = fubarRun(ins, proc, fubarStack[i])
-		if end || err != nil {
-			return end, err
-		}
-	}
-	return end, err
-}
+// 	// run the stack backwards.
+// 	for i := len(fubarStack) - 1; i >= 0; i-- {
+// 		end, err = fubarRun(ins, proc, fubarStack[i])
+// 		if end || err != nil {
+// 			return end, err
+// 		}
+// 	}
+// 	return end, err
+// }
