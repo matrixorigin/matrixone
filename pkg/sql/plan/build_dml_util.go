@@ -2229,7 +2229,7 @@ func appendPreInsertSecondaryIndexPlan(
 			Columns:  useColumns,
 			PkColumn: int32(pkColumn),
 			PkType:   originPkType,
-			UkType:   skType,
+			SkType:   skType,
 			TableDef: tableDef,
 		},
 	}
