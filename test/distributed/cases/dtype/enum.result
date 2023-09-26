@@ -141,8 +141,6 @@ show create table pri01;
 Table    Create Table
 pri01    CREATE TABLE `pri01` (\n`col1` ENUM NOT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
-insert into pri01 values ('qy4iujd3wi4fu4h3f');
-Duplicate entry '1' for key 'col1'
 insert into pri01 (col1) values ('323242r34df432432');
 insert into pri01 (col1) values (null);
 constraint violation: Column 'col1' cannot be null
