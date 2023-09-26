@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"hash/fnv"
 	"math"
 	"net"
@@ -42,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
+	"go.uber.org/zap"
 )
 
 var (
@@ -66,6 +66,22 @@ type LaunchConfig struct {
 	CNServiceConfigsFiles []string `toml:"cnservices"`
 	// CNServiceConfigsFiles log service config files
 	ProxyServiceConfigsFiles []string `toml:"proxy-services"`
+	// Dynamic dynamic cn service config
+	Dynamic Dynamic `toml:"dynamic"`
+}
+
+// Dynamic dynamic cn config
+type Dynamic struct {
+	// Enable enable dynamic cn config
+	Enable bool `toml:"enable"`
+	// CtlAddress http server port for ctl dynamic cn
+	CtlAddress string `toml:"ctl-address"`
+	// CNTemplate cn template file
+	CNTemplate string `toml:"cn-template"`
+	// ServiceCount how many cn services to start
+	ServiceCount int `toml:"service-count"`
+	// CpuCount how many cpu can used pr cn instance
+	CpuCount int `toml:"cpu-count"`
 }
 
 // Config mo-service configuration
