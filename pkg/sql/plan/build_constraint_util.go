@@ -186,6 +186,7 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 				newTblInfo.haveConstraint = true
 			} else {
 				for _, indexdef := range tblDef.Indexes {
+					//Not required
 					if indexdef.Unique {
 						newTblInfo.haveConstraint = true
 						break
@@ -294,6 +295,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 			tblInfo.haveConstraint = true
 		} else {
 			for _, indexdef := range tableDef.Indexes {
+				//Not required
 				if indexdef.Unique {
 					tblInfo.haveConstraint = true
 					break
