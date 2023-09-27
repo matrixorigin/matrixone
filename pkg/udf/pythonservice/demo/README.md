@@ -6,8 +6,14 @@
 
 当前部署方式（仅支持 linux 系统）：
 
-1. 在部署之前，我们需要确保本地拥有 python3 的环境和 mysql 客户端。
-2. 下载 MO 二进制包并解压：
+1. 在部署之前，我们需要确保本地拥有 python3 的环境和 mysql 客户端，并在 python 环境下安装 grpc 相关的 package：
+
+```shell
+pip install protobuf
+pip install grpcio
+```
+
+1. 下载 MO 二进制包并解压：
 
 ```shell
 wget https://github.com/joker-star-l/matrixone/releases/download/python_udf_test/mo-linux-x86_64.zip
