@@ -477,7 +477,9 @@ func (a *AwsSDKv1) getObject(ctx context.Context, min *int64, max *int64, params
 				"s3 get object",
 				func() (out *s3.GetObjectOutput, err error) {
 					_, span := trace.Start(ctx, "s3Client.GetObject", trace.WithKind(trace.SpanKindRemoteFSVis))
-					defer span.End(trace.WithFSReadWriteExtra(*params.Key, err, *out.ContentLength))
+					defer func() {
+						span.End(trace.WithFSReadWriteExtra(*params.Key, err, *out.ContentLength))
+					}()
 
 					out, err = a.client.GetObject(params)
 					return
