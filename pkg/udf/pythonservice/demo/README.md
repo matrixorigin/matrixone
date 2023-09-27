@@ -11,13 +11,14 @@
 
 ```shell
 wget https://github.com/joker-star-l/matrixone/releases/download/python_udf_test/mo-linux-x86_64.zip
-unzip mo-linux-x86_64.zip mo 
+unzip mo-linux-x86_64.zip
 ```
 
 3. 启动 MO（需要20到30秒的时间）：
 
 ```shell
-cd mo
+cd mo-linux-x86_64
+chmod +x ./mo-service
 nohup ./mo-service -launch ./etc/launch-with-python-udf-server/launch.toml > mo.log 2>&1 &
 ```
 
