@@ -107,6 +107,18 @@ func (mr *MockTxnClientMockRecorder) GetSyncLatestCommitTSTimes() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncLatestCommitTSTimes", reflect.TypeOf((*MockTxnClient)(nil).GetSyncLatestCommitTSTimes))
 }
 
+// IterTxns mocks base method.
+func (m *MockTxnClient) IterTxns(arg0 func(client.TxnOverview) bool) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "IterTxns", arg0)
+}
+
+// IterTxns indicates an expected call of IterTxns.
+func (mr *MockTxnClientMockRecorder) IterTxns(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IterTxns", reflect.TypeOf((*MockTxnClient)(nil).IterTxns), arg0)
+}
+
 // MinTimestamp mocks base method.
 func (m *MockTxnClient) MinTimestamp() timestamp.Timestamp {
 	m.ctrl.T.Helper()
@@ -258,6 +270,20 @@ func (mr *MockTxnOperatorMockRecorder) AddLockTable(locktable interface{}) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddLockTable", reflect.TypeOf((*MockTxnOperator)(nil).AddLockTable), locktable)
 }
 
+// AddWaitLock mocks base method.
+func (m *MockTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddWaitLock", tableID, rows, opt)
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// AddWaitLock indicates an expected call of AddWaitLock.
+func (mr *MockTxnOperatorMockRecorder) AddWaitLock(tableID, rows, opt interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddWaitLock", reflect.TypeOf((*MockTxnOperator)(nil).AddWaitLock), tableID, rows, opt)
+}
+
 // AddWorkspace mocks base method.
 func (m *MockTxnOperator) AddWorkspace(workspace client.Workspace) {
 	m.ctrl.T.Helper()
@@ -330,6 +356,20 @@ func (mr *MockTxnOperatorMockRecorder) Debug(ctx, ops interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockTxnOperator)(nil).Debug), ctx, ops)
 }
 
+// GetOverview mocks base method.
+func (m *MockTxnOperator) GetOverview() client.TxnOverview {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetOverview")
+	ret0, _ := ret[0].(client.TxnOverview)
+	return ret0
+}
+
+// GetOverview indicates an expected call of GetOverview.
+func (mr *MockTxnOperatorMockRecorder) GetOverview() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetOverview", reflect.TypeOf((*MockTxnOperator)(nil).GetOverview))
+}
+
 // GetWorkspace mocks base method.
 func (m *MockTxnOperator) GetWorkspace() client.Workspace {
 	m.ctrl.T.Helper()
@@ -371,6 +411,18 @@ func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.
 func (mr *MockTxnOperatorMockRecorder) Read(ctx, ops interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Read", reflect.TypeOf((*MockTxnOperator)(nil).Read), ctx, ops)
+}
+
+// RemoveWaitLock mocks base method.
+func (m *MockTxnOperator) RemoveWaitLock(key uint64) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "RemoveWaitLock", key)
+}
+
+// RemoveWaitLock indicates an expected call of RemoveWaitLock.
+func (mr *MockTxnOperatorMockRecorder) RemoveWaitLock(key interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveWaitLock", reflect.TypeOf((*MockTxnOperator)(nil).RemoveWaitLock), key)
 }
 
 // ResetRetry mocks base method.
