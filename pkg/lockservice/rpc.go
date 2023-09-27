@@ -39,7 +39,7 @@ var (
 		},
 	}
 
-	defaultRPCTimeout = time.Second * 3
+	defaultRPCTimeout = time.Second * 10
 )
 
 type client struct {
@@ -54,6 +54,10 @@ func NewClient(cfg morpc.Config) (Client, error) {
 		cluster: clusterservice.GetMOCluster(),
 	}
 	c.cfg.Adjust()
+	// add read timeout for lockservice client, to avoid remote lock hung and cannot read the lock response
+	// due to tcp disconnected.
+	c.cfg.BackendOptions = append(c.cfg.BackendOptions,
+		morpc.WithBackendReadTimeout(defaultRPCTimeout))
 
 	client, err := c.cfg.NewClient("",
 		getLogger().RawLogger(),
