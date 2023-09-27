@@ -33,7 +33,7 @@ const (
 )
 
 func String(_ any, buf *bytes.Buffer) {
-	buf.WriteString("pre processing insert unique key")
+	buf.WriteString("pre processing insert secondary key")
 }
 
 func Prepare(_ *process.Process, _ any) error {
