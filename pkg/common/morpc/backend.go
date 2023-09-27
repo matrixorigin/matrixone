@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"fmt"
+	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -109,6 +110,13 @@ func WithBackendGoettyOptions(options ...goetty.Option) BackendOption {
 	}
 }
 
+// WithBackendReadTimeout set read timeout for read loop.
+func WithBackendReadTimeout(value time.Duration) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.readTimeout = value
+	}
+}
+
 type remoteBackend struct {
 	remote      string
 	logger      *zap.Logger
@@ -123,6 +131,7 @@ type remoteBackend struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	cancelOnce  sync.Once
+	pingTimer   *time.Timer
 
 	options struct {
 		hasPayloadResponse bool
@@ -133,6 +142,7 @@ type remoteBackend struct {
 		batchSendSize      int
 		streamBufferSize   int
 		filter             func(msg Message, backendAddr string) bool
+		readTimeout        time.Duration
 	}
 
 	stateMu struct {
@@ -266,18 +276,21 @@ func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Fu
 }
 
 func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
-	request.SetID(rb.nextID())
-
-	f := rb.newFuture()
-	f.init(RPCMessage{Ctx: ctx, Message: request, internal: internal})
-	rb.addFuture(f)
-
+	f := rb.getFuture(ctx, request, internal)
 	if err := rb.doSend(f); err != nil {
 		f.Close()
 		return nil, err
 	}
 	rb.active()
 	return f, nil
+}
+
+func (rb *remoteBackend) getFuture(ctx context.Context, request Message, internal bool) *Future {
+	request.SetID(rb.nextID())
+	f := rb.newFuture()
+	f.init(RPCMessage{Ctx: ctx, Message: request, internal: internal})
+	rb.addFuture(f)
+	return f
 }
 
 func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
@@ -388,6 +401,7 @@ func (rb *remoteBackend) inactive() {
 func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.logger.Debug("write loop started")
 	defer func() {
+		rb.pingTimer.Stop()
 		rb.closeConn(false)
 		rb.readStopper.Stop()
 		rb.closeConn(true)
@@ -407,6 +421,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		}
 	}()
 
+	rb.pingTimer = time.NewTimer(rb.getPingTimeout())
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
 	for {
@@ -510,7 +525,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			rb.clean()
 			return
 		default:
-			msg, err := rb.conn.Read(goetty.ReadOptions{})
+			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
 			if err != nil {
 				rb.logger.Error("read from backend failed", zap.Error(err))
 				rb.inactiveReadLoop()
@@ -540,34 +555,35 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	}
 	messages = messages[:0]
 	select {
+	case <-rb.pingTimer.C:
+		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
+		// no need wait response, close immediately
+		f.Close()
+		messages = rb.fetchN(append(messages, f), maxFetchCount-1)
+		rb.pingTimer.Reset(rb.getPingTimeout())
 	case f := <-rb.writeC:
-		messages = append(messages, f)
-		n := maxFetchCount - 1
-	OUTER:
-		for i := 0; i < n; i++ {
-			select {
-			case f := <-rb.writeC:
-				messages = append(messages, f)
-			default:
-				break OUTER
-			}
-		}
+		messages = rb.fetchN(append(messages, f), maxFetchCount-1)
 	case <-rb.resetConnC:
 		// If the connect needs to be reset, then all futures in the waiting response state will never
 		// get the response and need to be notified of an error immediately.
 		rb.makeAllWaitingFutureFailed()
 		rb.handleResetConn()
 	case <-rb.stopWriteC:
-		for {
-			select {
-			case f := <-rb.writeC:
-				messages = append(messages, f)
-			default:
-				return messages, true
-			}
-		}
+		return rb.fetchN(messages, math.MaxInt), true
 	}
 	return messages, false
+}
+
+func (rb *remoteBackend) fetchN(messages []*Future, n int) []*Future {
+	for i := 0; i < n; i++ {
+		select {
+		case f := <-rb.writeC:
+			messages = append(messages, f)
+		default:
+			return messages
+		}
+	}
+	return messages
 }
 
 func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
@@ -839,6 +855,13 @@ func (rb *remoteBackend) newFuture() *Future {
 
 func (rb *remoteBackend) nextID() uint64 {
 	return atomic.AddUint64(&rb.atomic.id, 1)
+}
+
+func (rb *remoteBackend) getPingTimeout() time.Duration {
+	if rb.options.readTimeout > 0 {
+		return rb.options.readTimeout / 5
+	}
+	return time.Duration(math.MaxInt64)
 }
 
 type goettyBasedBackendFactory struct {
