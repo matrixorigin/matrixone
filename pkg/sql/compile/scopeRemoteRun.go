@@ -184,6 +184,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			receiver.finalAnalysisInfo = c.proc.AnalInfos
 		}
 		c.proc.FreeVectors()
+		c.proc.CleanValueScanBatchs()
 		return err
 
 	default:

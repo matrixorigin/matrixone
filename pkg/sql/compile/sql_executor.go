@@ -216,6 +216,10 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.SessionInfo.Buf = exec.s.buf
+	defer func() {
+		proc.CleanValueScanBatchs()
+		proc.FreeVectors()
+	}()
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
