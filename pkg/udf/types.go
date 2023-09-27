@@ -26,7 +26,17 @@ const (
 // Service handle non-sql udf in cn
 type Service interface {
 	Language() string
-	Run(ctx context.Context, request *Request, getPkg GetPkgFunc) (*Response, error)
+	Run(ctx context.Context, request *Request, pkgReader PkgReader) (*Response, error)
 }
 
 type GetPkgFunc func(path string) (reader io.Reader, err error)
+
+// PkgReader read udf package from storage
+type PkgReader interface {
+	Get(ctx context.Context, path string) (reader io.Reader, err error)
+}
+
+// PkgUploader upload udf package to storage
+type PkgUploader interface {
+	Upload(ctx context.Context, localPath string, storageDir string) (storagePath string, err error)
+}

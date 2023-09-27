@@ -16,13 +16,9 @@ package function
 
 import (
 	"encoding/json"
-	"golang.org/x/sync/errgroup"
-	"io"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -110,53 +106,12 @@ func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	}
 
 	// getPkg
-	getPkg := func(path string) (io.Reader, error) {
-		reader, writer := io.Pipe()
-		var errGroup *errgroup.Group
-
-		// watch and cancel
-		go func() {
-			defer func() {
-				reader.Close()
-				if errGroup == nil {
-					writer.Close()
-				} else {
-					errGroup.Wait()
-				}
-			}()
-
-			for {
-				select {
-				case <-proc.Ctx.Done():
-					return
-				default:
-					time.Sleep(time.Second)
-				}
-			}
-		}()
-
-		ioVector := &fileservice.IOVector{
-			FilePath: path,
-			Entries: []fileservice.IOEntry{
-				{
-					Offset:        0,
-					Size:          -1,
-					WriterForRead: writer,
-				},
-			},
-		}
-
-		errGroup = new(errgroup.Group)
-		errGroup.Go(func() error {
-			defer writer.Close()
-			return proc.FileService.Read(proc.Ctx, ioVector)
-		})
-
-		return reader, err
+	reader := &DefaultPkgReader{
+		Proc: proc,
 	}
 
 	// run
-	response, err := proc.UdfService.Run(proc.Ctx, request, getPkg)
+	response, err := proc.UdfService.Run(proc.Ctx, request, reader)
 	if err != nil {
 		return err
 	}

@@ -20,9 +20,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/errgroup"
+	"io"
 	"math"
 	"math/bits"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,21 +42,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -8370,9 +8377,60 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-type uploadPkg = func(localPath string, storageDir string) (storagePath string, err error)
+type MySqlPkgUploader struct {
+	Mce  *MysqlCmdExecutor
+	Proc *process.Process
+}
 
-func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction, upload uploadPkg) (err error) {
+func (m *MySqlPkgUploader) Upload(ctx context.Context, localPath string, storageDir string) (string, error) {
+	loadLocalReader, loadLocalWriter := io.Pipe()
+
+	// watch and cancel
+	go func() {
+		defer loadLocalReader.Close()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				time.Sleep(time.Second)
+			}
+		}
+	}()
+
+	// write to pipe
+	loadLocalErrGroup := new(errgroup.Group)
+	loadLocalErrGroup.Go(func() error {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: localPath,
+			},
+		}
+		return m.Mce.processLoadLocal(ctx, param, loadLocalWriter)
+	})
+
+	// read from pipe and upload
+	ioVector := fileservice.IOVector{
+		FilePath: path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:]),
+		Entries: []fileservice.IOEntry{
+			{
+				Size:           -1,
+				ReaderForWrite: loadLocalReader,
+			},
+		},
+	}
+
+	_ = m.Proc.FileService.Delete(ctx, ioVector.FilePath)
+	err := m.Proc.FileService.Write(ctx, ioVector)
+	err = errors.Join(err, loadLocalErrGroup.Wait())
+	if err != nil {
+		return "", err
+	}
+
+	return ioVector.FilePath, nil
+}
+
+func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction, uploader udf.PkgUploader) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
@@ -8477,7 +8535,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			}
 			// upload
 			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = upload(cf.Body, storageDir)
+			cf.Body, err = uploader.Upload(ctx, cf.Body, storageDir)
 			if err != nil {
 				return err
 			}

@@ -15,7 +15,10 @@
 package function
 
 import (
+	"context"
 	"encoding/json"
+	"golang.org/x/sync/errgroup"
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,8 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Udf struct {
@@ -686,3 +691,52 @@ var (
 		udf.DataType_BLOB:       types.T_blob,
 	}
 )
+
+type DefaultPkgReader struct {
+	Proc *process.Process
+}
+
+func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.Reader, error) {
+	reader, writer := io.Pipe()
+	var errGroup *errgroup.Group
+
+	// watch and cancel
+	go func() {
+		defer func() {
+			reader.Close()
+			if errGroup == nil {
+				writer.Close()
+			} else {
+				errGroup.Wait()
+			}
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				time.Sleep(time.Second)
+			}
+		}
+	}()
+
+	ioVector := &fileservice.IOVector{
+		FilePath: path,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset:        0,
+				Size:          -1,
+				WriterForRead: writer,
+			},
+		},
+	}
+
+	errGroup = new(errgroup.Group)
+	errGroup.Go(func() error {
+		defer writer.Close()
+		return d.Proc.FileService.Read(ctx, ioVector)
+	})
+
+	return reader, nil
+}

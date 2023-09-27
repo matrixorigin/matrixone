@@ -41,10 +41,10 @@ func (s *service) Language() string {
 	return "multiple"
 }
 
-func (s *service) Run(ctx context.Context, request *Request, getPkg GetPkgFunc) (*Response, error) {
+func (s *service) Run(ctx context.Context, request *Request, pkgReader PkgReader) (*Response, error) {
 	srv := s.mapping[request.Udf.Language]
 	if srv == nil {
 		return nil, moerr.NewInternalError(ctx, "missing "+request.Udf.Language+" udf service")
 	}
-	return srv.Run(ctx, request, getPkg)
+	return srv.Run(ctx, request, pkgReader)
 }

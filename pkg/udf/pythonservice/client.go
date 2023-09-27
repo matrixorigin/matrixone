@@ -68,7 +68,7 @@ func (c *Client) init() error {
 	return nil
 }
 
-func (c *Client) Run(ctx context.Context, request *udf.Request, getPkg udf.GetPkgFunc) (*udf.Response, error) {
+func (c *Client) Run(ctx context.Context, request *udf.Request, pkgReader udf.PkgReader) (*udf.Response, error) {
 	if request.Udf.Language != udf.LanguagePython {
 		return nil, moerr.NewInvalidArg(ctx, "udf language", request.Udf.Language)
 	}
@@ -100,7 +100,7 @@ func (c *Client) Run(ctx context.Context, request *udf.Request, getPkg udf.GetPk
 		return response, nil
 	case udf.ResponseType_PkgRequest:
 		var reader io.Reader
-		reader, err = getPkg(request.Udf.Body)
+		reader, err = pkgReader.Get(ctx, request.Udf.Body)
 		if err != nil {
 			return nil, err
 		}

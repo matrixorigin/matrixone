@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path"
 	gotrace "runtime/trace"
 	"sort"
 	"strconv"
@@ -1298,55 +1297,12 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
 
-	upload := func(localPath string, storageDir string) (string, error) {
-		loadLocalReader, loadLocalWriter := io.Pipe()
-
-		// watch and cancel
-		go func() {
-			defer loadLocalReader.Close()
-			for {
-				select {
-				case <-proc.Ctx.Done():
-					return
-				default:
-					time.Sleep(time.Second)
-				}
-			}
-		}()
-
-		// write to pipe
-		loadLocalErrGroup := new(errgroup.Group)
-		loadLocalErrGroup.Go(func() error {
-			param := &tree.ExternParam{
-				ExParamConst: tree.ExParamConst{
-					Filepath: localPath,
-				},
-			}
-			return mce.processLoadLocal(proc.Ctx, param, loadLocalWriter)
-		})
-
-		// read from pipe and upload
-		ioVector := fileservice.IOVector{
-			FilePath: path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:]),
-			Entries: []fileservice.IOEntry{
-				{
-					Size:           -1,
-					ReaderForWrite: loadLocalReader,
-				},
-			},
-		}
-
-		_ = proc.FileService.Delete(proc.Ctx, ioVector.FilePath)
-		err := proc.FileService.Write(proc.Ctx, ioVector)
-		err = errors.Join(err, loadLocalErrGroup.Wait())
-		if err != nil {
-			return "", err
-		}
-
-		return ioVector.FilePath, nil
+	uploader := &MySqlPkgUploader{
+		Mce:  mce,
+		Proc: proc,
 	}
 
-	return InitFunction(ctx, ses, tenant, cf, upload)
+	return InitFunction(ctx, ses, tenant, cf, uploader)
 }
 
 func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction, proc *process.Process) error {
