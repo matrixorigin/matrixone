@@ -61,6 +61,10 @@ func (s *StorageTxnClient) New(
 	}, nil
 }
 
+func (s *StorageTxnClient) IterTxns(func(client.TxnOverview) bool) {
+	panic("unimplemented")
+}
+
 func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
 	panic("unimplemented")
 }
@@ -265,5 +269,17 @@ func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
 }
 
 func (s *StorageTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }

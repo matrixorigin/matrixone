@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/BurntSushi/toml v1.2.1
 	github.com/DATA-DOG/go-sqlmock v1.5.0
-	github.com/FastFilter/xorfilter v0.1.3
+	github.com/FastFilter/xorfilter v0.1.4
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/aliyun/aliyun-oss-go-sdk v2.2.9+incompatible
 	github.com/aliyun/credentials-go v1.3.1
