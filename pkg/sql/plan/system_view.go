@@ -21,7 +21,7 @@ import (
 )
 
 var MoLocksColNames = []string{
-	//"cn_id",
+	"cn_id",
 	//"session_id",
 	"txn_id",
 	"table_id",
@@ -41,27 +41,28 @@ var MoLocksColTypes = []types.Type{
 	types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	types.New(types.T_varchar, types.MaxVarcharLen, 0),
-	//types.New(types.T_varchar, types.MaxVarcharLen, 0),
+	types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	//types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	//types.New(types.T_varchar, types.MaxVarcharLen, 0),
 }
 
 var MoLocksColName2Index = map[string]int32{
-	"txn_id":       0,
-	"table_id":     1,
-	"lock_key":     2,
-	"lock_content": 3,
-	"lock_mode":    4,
-	"lock_status":  5,
-	"lock_wait":    6,
+	"cn_id":        0,
+	"txn_id":       1,
+	"table_id":     2,
+	"lock_key":     3,
+	"lock_content": 4,
+	"lock_mode":    5,
+	"lock_status":  6,
+	"lock_wait":    7,
 }
 
 type MoLocksColType int32
 
 const (
-	//MoLocksColTypeCnId = iota
+	MoLocksColTypeCnId = iota
 	//MoLocksColTypeSessionId
-	MoLocksColTypeTxnId = iota
+	MoLocksColTypeTxnId
 	MoLocksColTypeTableId
 	//MoLocksColTypeTableName
 	MoLocksColTypeLockKey

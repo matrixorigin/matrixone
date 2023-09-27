@@ -43,9 +43,10 @@ type Future struct {
 	releaseFunc func(*Future)
 	mu          struct {
 		sync.Mutex
-		closed bool
-		ref    int
-		cb     func()
+		notified bool
+		closed   bool
+		ref      int
+		cb       func()
 	}
 }
 
@@ -58,6 +59,7 @@ func (f *Future) init(send RPCMessage) {
 	f.id = send.Message.GetID()
 	f.mu.Lock()
 	f.mu.closed = false
+	f.mu.notified = false
 	f.mu.Unlock()
 }
 
@@ -118,6 +120,10 @@ func (f *Future) done(response Message, cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.mu.notified {
+		return
+	}
+
 	if !f.mu.closed && !f.timeout() {
 		if response.GetID() != f.getSendMessageID() {
 			return
@@ -127,11 +133,16 @@ func (f *Future) done(response Message, cb func()) {
 	} else if cb != nil {
 		cb()
 	}
+	f.mu.notified = true
 }
 
 func (f *Future) error(id uint64, err error, cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.mu.notified {
+		return
+	}
 
 	if !f.mu.closed && !f.timeout() {
 		if id != f.getSendMessageID() {
@@ -142,6 +153,7 @@ func (f *Future) error(id uint64, err error, cb func()) {
 	} else if cb != nil {
 		cb()
 	}
+	f.mu.notified = true
 }
 
 func (f *Future) ref() {

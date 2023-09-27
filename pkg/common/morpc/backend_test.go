@@ -709,6 +709,37 @@ func TestWaitingFutureMustGetClosedError(t *testing.T) {
 	)
 }
 
+func TestIssue11838(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			if seq == 100 {
+				return backendClosed
+			}
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
+			defer cancel()
+
+			var futures []*Future
+			for i := 0; i < 10000; i++ {
+				req := newTestMessage(uint64(i))
+				f, err := b.Send(ctx, req)
+				if err == nil {
+					futures = append(futures, f)
+				}
+			}
+
+			for _, f := range futures {
+				_, err := f.Get()
+				if err == nil {
+					f.Close()
+				}
+			}
+		},
+	)
+}
+
 func testBackendSend(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	testFunc func(b *remoteBackend),
