@@ -157,13 +157,13 @@ type FrontendParameters struct {
 	MoVersion string
 
 	//port defines which port the mo-server listens on and clients connect to
-	Port int64 `toml:"port"`
+	Port int64 `toml:"port" user_setting:"basic"`
 
 	//listening ip
-	Host string `toml:"host"`
+	Host string `toml:"host" user_setting:"basic"`
 
 	// UnixSocketAddress listening unix domain socket
-	UnixSocketAddress string `toml:"unix-socket"`
+	UnixSocketAddress string `toml:"unix-socket" user_setting:"advanced"`
 
 	//guest mmu limitation. default: 1 << 40 = 1099511627776
 	GuestMmuLimitation int64 `toml:"guestMmuLimitation"`
@@ -190,7 +190,7 @@ type FrontendParameters struct {
 	ServerVersionPrefix string `toml:"serverVersionPrefix"`
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
-	LengthOfQueryPrinted int64 `toml:"lengthOfQueryPrinted"`
+	LengthOfQueryPrinted int64 `toml:"lengthOfQueryPrinted" user_setting:"advanced"`
 
 	//the count of rows in vector of batch in load data
 	BatchSizeInLoadData int64 `toml:"batchSizeInLoadData"`
@@ -214,16 +214,16 @@ type FrontendParameters struct {
 	PortOfRpcServerInComputationEngine int64 `toml:"portOfRpcServerInComputationEngine"`
 
 	//default is false. With true. Server will support tls
-	EnableTls bool `toml:"enableTls"`
+	EnableTls bool `toml:"enableTls" user_setting:"advanced"`
 
 	//default is ''. Path of file that contains list of trusted SSL CAs for client
-	TlsCaFile string `toml:"tlsCaFile"`
+	TlsCaFile string `toml:"tlsCaFile" user_setting:"advanced"`
 
 	//default is ''. Path of file that contains X509 certificate in PEM format for client
-	TlsCertFile string `toml:"tlsCertFile"`
+	TlsCertFile string `toml:"tlsCertFile" user_setting:"advanced"`
 
 	//default is ''. Path of file that contains X509 key in PEM format for client
-	TlsKeyFile string `toml:"tlsKeyFile"`
+	TlsKeyFile string `toml:"tlsKeyFile" user_setting:"advanced"`
 
 	//default is 1
 	LogShardID uint64 `toml:"logshardid"`
@@ -240,17 +240,17 @@ type FrontendParameters struct {
 	MaxMessageSize uint64 `toml:"max-message-size"`
 
 	// default off
-	SaveQueryResult string `toml:"saveQueryResult"`
+	SaveQueryResult string `toml:"saveQueryResult" user_setting:"advanced"`
 
 	// default 24 (h)
-	QueryResultTimeout uint64 `toml:"queryResultTimeout"`
+	QueryResultTimeout uint64 `toml:"queryResultTimeout" user_setting:"advanced"`
 
 	// default 100 (MB)
-	QueryResultMaxsize uint64 `toml:"queryResultMaxsize"`
+	QueryResultMaxsize uint64 `toml:"queryResultMaxsize" user_setting:"advanced"`
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames int64 `toml:"lowerCaseTableNames"`
+	LowerCaseTableNames int64 `toml:"lowerCaseTableNames" user_setting:"advanced"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -452,20 +452,20 @@ type ObservabilityParameters struct {
 	MoVersion string
 
 	// Host listening ip. normally same as FrontendParameters.Host
-	Host string `toml:"host"`
+	Host string `toml:"host" user_setting:"advanced"`
 
 	// StatusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
 	// Start listen with EnableMetricToProm is true.
-	StatusPort int `toml:"statusPort"`
+	StatusPort int `toml:"statusPort" user_setting:"advanced"`
 
 	// EnableMetricToProm default is false. if true, metrics can be scraped through host:status/metrics endpoint
-	EnableMetricToProm bool `toml:"enableMetricToProm"`
+	EnableMetricToProm bool `toml:"enableMetricToProm" user_setting:"advanced"`
 
 	// DisableMetric default is false. if false, enable metric at booting
-	DisableMetric bool `toml:"disableMetric"`
+	DisableMetric bool `toml:"disableMetric" user_setting:"advanced"`
 
 	// DisableTrace default is false. if false, enable trace at booting
-	DisableTrace bool `toml:"disableTrace"`
+	DisableTrace bool `toml:"disableTrace" user_setting:"advanced"`
 
 	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
@@ -474,7 +474,7 @@ type ObservabilityParameters struct {
 	TraceExportInterval int `toml:"traceExportInterval"`
 
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
-	LongQueryTime float64 `toml:"longQueryTime"`
+	LongQueryTime float64 `toml:"longQueryTime" user_setting:"advanced"`
 
 	// MetricExportInterval default is 15 sec.
 	MetricExportInterval int `toml:"metric-export-interval"`
