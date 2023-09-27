@@ -74,7 +74,7 @@ func (c *CacheConfig) setDefaults() {
 }
 
 func (c *CacheConfig) SetRemoteCacheCallback() {
-	if c.KeyRouterFactory == nil {
+	if !c.RemoteCacheEnabled || c.KeyRouterFactory == nil {
 		return
 	}
 	c.InitKeyRouter = &sync.Once{}

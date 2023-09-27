@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -146,6 +147,7 @@ func WithServerMessageFilter(filter func(*pb.Request) bool) ServerOption {
 }
 
 type server struct {
+	address  string
 	cfg      *morpc.Config
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
@@ -162,6 +164,7 @@ func NewServer(
 	opts ...ServerOption) (Server, error) {
 	s := &server{
 		cfg:      &cfg,
+		address:  address,
 		handlers: make(map[pb.Method]RequestHandleFunc),
 	}
 	s.cfg.Adjust()
@@ -230,8 +233,10 @@ func (s *server) onMessage(
 
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		getLogger().Fatal("missing request handler",
-			zap.String("method", req.Method.String()))
+		return moerr.NewNotSupportedNoCtx("method [%s], from %s, current %s",
+			req.Method.String(),
+			cs.RemoteAddress(),
+			s.address)
 	}
 
 	select {
