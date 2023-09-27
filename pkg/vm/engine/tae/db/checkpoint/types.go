@@ -45,7 +45,7 @@ type Runner interface {
 	Stop()
 	String() string
 	EnqueueWait(any) error
-	Replay(catalog.DataFactory) (types.TS, error)
+	Replay(catalog.DataFactory) (types.TS, uint64, bool, error)
 
 	FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) error
 	GCByTS(ctx context.Context, ts types.TS) error
@@ -86,12 +86,14 @@ const (
 )
 
 const (
-	CheckpointAttr_StartTS      = "start_ts"
-	CheckpointAttr_EndTS        = "end_ts"
-	CheckpointAttr_MetaLocation = "meta_location"
-	CheckpointAttr_EntryType    = "entry_type"
-	CheckpointAttr_Version      = "version"
-	CheckpointAttr_AllLocations = "all_locations"
+	CheckpointAttr_StartTS       = "start_ts"
+	CheckpointAttr_EndTS         = "end_ts"
+	CheckpointAttr_MetaLocation  = "meta_location"
+	CheckpointAttr_EntryType     = "entry_type"
+	CheckpointAttr_Version       = "version"
+	CheckpointAttr_AllLocations  = "all_locations"
+	CheckpointAttr_CheckpointLSN = "checkpoint_lsn"
+	CheckpointAttr_TruncateLSN   = "truncate_lsn"
 
 	CheckpointSchemaColumnCountV1 = 5 // start, end, loc, type, ver
 )
@@ -108,6 +110,8 @@ var (
 		CheckpointAttr_EntryType,
 		CheckpointAttr_Version,
 		CheckpointAttr_AllLocations,
+		CheckpointAttr_CheckpointLSN,
+		CheckpointAttr_TruncateLSN,
 	}
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0),
@@ -116,6 +120,8 @@ var (
 		types.New(types.T_bool, 0, 0), // true for incremental
 		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 )
 

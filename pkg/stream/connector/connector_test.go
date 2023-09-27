@@ -22,7 +22,8 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
 type MockSQLExecutor struct {
@@ -31,16 +32,18 @@ type MockSQLExecutor struct {
 	wg           *sync.WaitGroup
 }
 
-func (m *MockSQLExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+func (m *MockSQLExecutor) Exec(ctx context.Context, sql string, opts ie.SessionOverrideOptions) error {
 	m.execCount++
 	m.executedSQLs = append(m.executedSQLs, sql)
 	m.wg.Done() // Decrement the WaitGroup counter after processing a message
-	return executor.Result{}, nil
-}
-
-func (m *MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(executor.TxnExecutor) error, opts executor.Options) error {
 	return nil
 }
+
+func (m *MockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
+	return nil
+}
+
+func (m *MockSQLExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {}
 
 func TestKafkaMoConnector(t *testing.T) {
 	// Setup mock Kafka cluster
@@ -57,15 +60,16 @@ func TestKafkaMoConnector(t *testing.T) {
 	mockExecutor := &MockSQLExecutor{wg: &wg}
 
 	// Create KafkaMoConnector instance
-	options := map[string]any{
-		"type":              "kafka-mo",
+	options := map[string]string{
+		"type":              "kafka",
 		"topic":             topic,
 		"database":          "testDB",
 		"table":             "testTable",
 		"value":             "json",
 		"bootstrap.servers": broker,
 	}
-	connector, err := NewKafkaMoConnector(options, mockExecutor)
+	rt := runtime.DefaultRuntime()
+	connector, err := NewKafkaMoConnector(rt.Logger().RawLogger(), options, mockExecutor)
 	if err != nil {
 		t.Fatalf("Failed to create KafkaMoConnector: %s", err)
 	}
@@ -85,8 +89,10 @@ func TestKafkaMoConnector(t *testing.T) {
 	}
 	value, _ := json.Marshal(payload)
 
+	msg_num := 10
+
 	// produce 10 messages
-	for i := 0; i < 10; i++ {
+	for i := 0; i < msg_num; i++ {
 		wg.Add(1) // Increment the WaitGroup counter for each message
 		p.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
@@ -109,22 +115,17 @@ func TestKafkaMoConnector(t *testing.T) {
 	select {
 	case <-done:
 		// All messages processed
-	case <-time.After(10 * time.Second): // Adjust the timeout duration as needed
-		t.Fatal("Timeout waiting for messages to be processed")
+	case <-time.After(30 * time.Second):
+		t.Error("Timed out waiting for messages to be processed")
 	}
 
 	// Stop the connector
-	if err := connector.Close(); err != nil {
+	if err := connector.Cancel(); err != nil {
 		t.Errorf("Error in Close: %s", err)
 	}
 
 	// Verify that the MockSQLExecutor has executed the correct SQL for 10 times
-	if mockExecutor.execCount != 10 {
+	if mockExecutor.execCount != msg_num {
 		t.Errorf("Expected SQL to be executed 10 times, but got %d", mockExecutor.execCount)
 	}
-
-	// Additional verification for executed SQLs can be added here, if needed.
-	//for _, sql := range mockExecutor.executedSQLs {
-	//	// Example: t.Logf("Executed SQL: %s", sql)
-	//}
 }

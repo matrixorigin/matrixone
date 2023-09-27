@@ -207,6 +207,16 @@ func TestStringToArray(t *testing.T) {
 			args:    args{input: "[1,a]", typ: T_array_float64},
 			wantErr: moerr.NewInternalErrorNoCtx("error while casting a to DOUBLE"),
 		},
+		{
+			name:       "Test5 - float32",
+			args:       args{input: "[0.1, 0.2, 0.3, 0.4, 0.5]", typ: T_array_float32},
+			wantResF32: []float32{0.1, 0.2, 0.3, 0.4, 0.5},
+		},
+		{
+			name:    "Test6 - float64",
+			args:    args{input: "[   ]", typ: T_array_float64},
+			wantErr: moerr.NewInternalErrorNoCtx("malformed vector input: [   ]"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -18,6 +18,7 @@ syntax = "proto3";
 package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "lock.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -418,12 +419,14 @@ message TableDef {
 	string createsql 		= 6;
 	TableFunction tbl_func	= 7;
 	uint32 version 			= 8;
+	string parent_tbl_name  = 9;
 
 	PrimaryKeyDef pkey				= 11;
 	repeated IndexDef indexes = 12;
 	repeated ForeignKeyDef fkeys	= 13;
 	repeated uint64 ref_child_tbls	= 14;
 	repeated CheckDef checks		= 15;
+	repeated ColDef parent_unique_cols  = 16;
 
 	PartitionByDef partition		= 21;
 	ClusterByDef cluster_by		= 22;
@@ -458,7 +461,7 @@ enum ShuffleMethod {
 
 enum ShuffleTypeForMultiCN {
 	Simple = 0;
-	Complex = 1;
+	Hybrid = 1;
 }
 
 message HashMapStats{
@@ -601,6 +604,11 @@ message AnalyzeInfo {
 	int64 insertTime = 14;
 }
 
+message PartitionPrune {
+	bool isPruned = 1;
+	repeated PartitionItem selected_partitions = 2;
+}
+
 message Node {
 	enum NodeType {
 		UNKNOWN = 0;
@@ -661,10 +669,12 @@ message Node {
 
 		//
 		ON_DUPLICATE_KEY = 59;
-		PRE_INSERT = 60;
-		PRE_DELETE = 61;
+		FUZZY_FILTER = 60;
+
+		PRE_INSERT = 61;
+		PRE_DELETE = 62;
 		// the node which build insert batch for hidden table(unique key)
-		PRE_INSERT_UK = 62;
+		PRE_INSERT_UK = 63;
 	}
 
 	enum JoinType {
@@ -754,7 +764,8 @@ message Node {
 
 	bytes uuid = 42;
 	bool recursive_sink = 43;
-    ExternScan extern_scan = 44;
+	ExternScan extern_scan = 44;
+	PartitionPrune partition_prune = 45;
 }
 
 message ExternScan {
@@ -776,6 +787,7 @@ message LockTarget {
 	bool is_partition_table = 7;
 	repeated uint64 partition_table_ids = 8;
 	bool                block   = 9;
+	lock.LockMode Mode  = 10;
 }
 
 message PreInsertUkCtx {
@@ -968,6 +980,7 @@ message DataDefinition {
 		ALTER_SEQUENCE		= 30;
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
+		SHOW_CONNECTORS = 33;
 
 	}
 	//DataDefinition type
@@ -1031,14 +1044,15 @@ message CreateTable {
 	bool if_not_exists 	= 1;
 	bool temporary 		= 2;
 	string database 	= 3;
-	TableDef table_def 	= 4;
-	repeated TableDef index_tables = 5;
+	bool replace        = 4;
+	TableDef table_def 	= 5;
+	repeated TableDef index_tables = 6;
 	// we need the db/table name of foreign key when create table. but we don't need it in ForeignKeyDef
-	repeated string fk_dbs = 6;
-	repeated string fk_tables = 7;
+	repeated string fk_dbs = 7;
+	repeated string fk_tables = 8;
 	// we need column name when create table, but not in ForeignKeyDef
-	repeated FkColName fk_cols = 8;
-	repeated TableDef partition_tables = 9;// partition tables for partitions
+	repeated FkColName fk_cols = 9;
+	repeated TableDef partition_tables = 10;// partition tables for partitions
 }
 
 message AlterTableDrop {
@@ -1169,6 +1183,9 @@ message DropSequence {
 }
 
 message AlterSequence {
+	bool if_exists		=1;
+	string database 		=2;
+	TableDef table_def 		=3;
 }
 
 message CreateIndex {

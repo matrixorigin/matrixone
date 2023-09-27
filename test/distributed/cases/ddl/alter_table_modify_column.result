@@ -606,7 +606,7 @@ col1    col2
 alter table char01 modify col2 varchar(20) after col1;
 show create table char01;
 Table    Create Table
-char01    CREATE TABLE `char01` (\n`col1` INT DEFAULT null,\n`col2` VARCHAR(20) DEFAULT null\n)
+char01    CREATE TABLE `char01` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(20) DEFAULT NULL\n)
 insert into char01 values (100, '**(*(&(*UJHI');
 truncate table char01;
 select * from char01;
@@ -629,7 +629,7 @@ col1    col2
 alter table char02 modify col2 char(20) first;
 show create table char02;
 Table    Create Table
-char02    CREATE TABLE `char02` (\n`col2` CHAR(20) DEFAULT null,\n`col1` INT DEFAULT null\n)
+char02    CREATE TABLE `char02` (\n`col2` CHAR(20) DEFAULT NULL,\n`col1` INT DEFAULT NULL\n)
 insert into char02 values ('738fewhu&^YUH', 100);
 select * from char02;
 col2    col1
@@ -737,7 +737,7 @@ col1    col2    col3
 alter table alter03 modify col1 decimal after col3, modify col2 varbinary(20);
 show create table alter03;
 Table    Create Table
-alter03    CREATE TABLE `alter03` (\n`col2` VARBINARY(20) DEFAULT null,\n`col3` DECIMAL(38,0) DEFAULT null,\n`col1` DECIMAL(38,0) DEFAULT null\n)
+alter03    CREATE TABLE `alter03` (\n`col2` VARBINARY(20) DEFAULT NULL,\n`col3` DECIMAL(38,0) DEFAULT NULL,\n`col1` DECIMAL(38,0) DEFAULT NULL\n)
 insert into alter03 values ('32143124', 42432321.000, 132432.214234);
 select * from alter03;
 col2    col3    col1
@@ -801,7 +801,7 @@ insert into primary01 values (2, '243ewfvefreverewfcwr');
 alter table primary01 modify col1 float primary key;
 show create table primary01;
 Table    Create Table
-primary01    CREATE TABLE `primary01` (\n`col1` FLOAT NOT NULL,\n`col2` TEXT DEFAULT null,\nPRIMARY KEY (`col1`)\n)
+primary01    CREATE TABLE `primary01` (\n`col1` FLOAT NOT NULL,\n`col2` TEXT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into primary01 values (1, '432r2f234day89ujfw42342');
 Duplicate entry '1' for key 'col1'
 insert into primary01 values (2378.32423, '234242))())_');
@@ -840,7 +840,7 @@ insert into primary03 values (2, '3e');
 alter table primary03 modify col1 int primary key;
 show create table primary03;
 Table    Create Table
-primary03    CREATE TABLE `primary03` (\n`col1` INT NOT NULL,\n`col2` BINARY(10) DEFAULT null,\nPRIMARY KEY (`col1`)\n)
+primary03    CREATE TABLE `primary03` (\n`col1` INT NOT NULL,\n`col2` BINARY(10) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into primary03 values (3, '*');
 insert into primary03 values (3, 'assad');
 Duplicate entry '3' for key 'col1'
@@ -861,7 +861,7 @@ insert into primary04 values (2, '324543##');
 alter table primary04 modify col1 float;
 show create table primary04;
 Table    Create Table
-primary04    CREATE TABLE `primary04` (\n`col1` FLOAT NOT NULL,\n`col2` VARBINARY(20) DEFAULT null,\nPRIMARY KEY (`col1`)\n)
+primary04    CREATE TABLE `primary04` (\n`col1` FLOAT NOT NULL,\n`col2` VARBINARY(20) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 insert into primary04 values (1, '324342__');
 Duplicate entry '1' for key 'col1'
 insert into primary04 values (3, 'qw');
@@ -931,7 +931,7 @@ All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQ
 alter table primary07 modify col2 decimal(28,10);
 show create table primary07;
 Table    Create Table
-primary07    CREATE TABLE `primary07` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(28,10) NOT NULL,\n`col3` DECIMAL(38,0) DEFAULT null,\nPRIMARY KEY (`col1`,`col2`)\n)
+primary07    CREATE TABLE `primary07` (\n`col1` INT NOT NULL,\n`col2` DECIMAL(28,10) NOT NULL,\n`col3` DECIMAL(38,0) DEFAULT NULL,\nPRIMARY KEY (`col1`,`col2`)\n)
 drop table primary07;
 drop table if exists index01;
 CREATE TABLE index01(a INTEGER not null , b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
@@ -949,7 +949,7 @@ a    b    c    d
 alter table index01 modify b VARCHAR(20);
 show create table index01;
 Table    Create Table
-index01    CREATE TABLE `index01` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT null,\n`c` DATE DEFAULT null,\n`d` DECIMAL(7,2) DEFAULT null,\nUNIQUE KEY `a` (`a`,`b`)\n)
+index01    CREATE TABLE `index01` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT NULL,\n`c` DATE DEFAULT NULL,\n`d` DECIMAL(7,2) DEFAULT NULL,\nUNIQUE KEY `a` (`a`,`b`)\n)
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 index01    0    a    1    a    A    0    NULL    NULL                    YES    NULL
@@ -962,7 +962,7 @@ index01    0    a    2    b    A    0    NULL    NULL    YES                YES 
 index01    0    b    1    b    A    0    NULL    NULL    YES                YES    NULL
 show create table index01;
 Table    Create Table
-index01    CREATE TABLE `index01` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT null,\n`c` DATE DEFAULT null,\n`d` DECIMAL(7,2) DEFAULT null,\nUNIQUE KEY `a` (`a`,`b`),\nUNIQUE KEY `b` (`b`)\n)
+index01    CREATE TABLE `index01` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT NULL,\n`c` DATE DEFAULT NULL,\n`d` DECIMAL(7,2) DEFAULT NULL,\nUNIQUE KEY `a` (`a`,`b`),\nUNIQUE KEY `b` (`b`)\n)
 select * from index01;
 a    b    c    d
 1    ab    1980-12-17    800.00
@@ -996,7 +996,7 @@ alter table index02 modify b VARCHAR(20) KEY;
 Multiple primary key defined
 show create table index02;
 Table    Create Table
-index02    CREATE TABLE `index02` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT null,\n`c` DATE DEFAULT null,\n`d` DECIMAL(7,2) DEFAULT null,\nPRIMARY KEY (`a`),\nKEY `a` (`a`,`b`),\nKEY `c` (`c`)\n)
+index02    CREATE TABLE `index02` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT NULL,\n`c` DATE DEFAULT NULL,\n`d` DECIMAL(7,2) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `a` (`a`,`b`),\nKEY `c` (`c`)\n)
 alter table index02 modify b VARCHAR(20) UNIQUE KEY;
 show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
@@ -1016,7 +1016,7 @@ index02    1    c    1    c    A    0    NULL    NULL    YES                YES 
 index02    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
 show create table index02;
 Table    Create Table
-index02    CREATE TABLE `index02` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT null,\n`c` VARCHAR(20) DEFAULT null,\n`d` DECIMAL(7,2) DEFAULT null,\nPRIMARY KEY (`a`),\nUNIQUE KEY `b` (`b`),\nUNIQUE KEY `c_2` (`c`),\nKEY `a` (`a`,`b`),\nKEY `c` (`c`)\n)
+index02    CREATE TABLE `index02` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT NULL,\n`c` VARCHAR(20) DEFAULT NULL,\n`d` DECIMAL(7,2) DEFAULT NULL,\nPRIMARY KEY (`a`),\nUNIQUE KEY `b` (`b`),\nUNIQUE KEY `c_2` (`c`),\nKEY `a` (`a`,`b`),\nKEY `c` (`c`)\n)
 desc index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -1076,10 +1076,10 @@ alter table foreign01 modify col2 varchar(100);
 alter table foreign02 modify col2 double after col3;
 show create table foreign01;
 Table    Create Table
-foreign01    CREATE TABLE `foreign01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(100) DEFAULT null,\n`col3` INT DEFAULT null,\n`col4` BIGINT DEFAULT null,\nPRIMARY KEY (`col1`)\n)
+foreign01    CREATE TABLE `foreign01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(100) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT null,\n`col3` INT NOT NULL,\n`col2` DOUBLE DEFAULT null,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col3` INT NOT NULL,\n`col2` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 foreign01    col1    INT    NO
@@ -1107,7 +1107,7 @@ alter table decimal01 modify col2 decimal(38,9);
 
 show create table decimal01;
 Table    Create Table
-decimal01    CREATE TABLE `decimal01` (\n`col1` DECIMAL(38,6) DEFAULT null,\n`col2` DECIMAL(38,9) DEFAULT null\n)
+decimal01    CREATE TABLE `decimal01` (\n`col1` DECIMAL(38,6) DEFAULT NULL,\n`col2` DECIMAL(38,9) DEFAULT NULL\n)
 select * from decimal01;
 col1    col2
 23746723468723.000000    38208439024234.432423424
@@ -1116,7 +1116,7 @@ truncate table decimal01;
 alter table decimal01 add column col3 decimal(19,0) first;
 show create table decimal01;
 Table    Create Table
-decimal01    CREATE TABLE `decimal01` (\n`col3` DECIMAL(19,0) DEFAULT null,\n`col1` DECIMAL(38,6) DEFAULT null,\n`col2` DECIMAL(38,9) DEFAULT null\n)
+decimal01    CREATE TABLE `decimal01` (\n`col3` DECIMAL(19,0) DEFAULT NULL,\n`col1` DECIMAL(38,6) DEFAULT NULL,\n`col2` DECIMAL(38,9) DEFAULT NULL\n)
 insert into decimal01 values (37298342.123, -37829342.3244234, -283794324.2342);
 select * from decimal01;
 col3    col1    col2
@@ -1147,7 +1147,7 @@ insert into null02 values (2, '3e');
 alter table null02 modify col1 int not null;
 show create table null02;
 Table    Create Table
-null02    CREATE TABLE `null02` (\n`col1` INT NOT NULL,\n`col2` VARBINARY(100) DEFAULT null\n)
+null02    CREATE TABLE `null02` (\n`col1` INT NOT NULL,\n`col2` VARBINARY(100) DEFAULT NULL\n)
 insert into null02 values (null, '1');
 constraint violation: Column 'col1' cannot be null
 insert into null02 values (342, 'aesd');
@@ -1176,7 +1176,7 @@ null    null    null    null
 alter table cast01 modify col1 float;
 show create table cast01;
 Table    Create Table
-cast01    CREATE TABLE `cast01` (\n`col1` FLOAT DEFAULT null,\n`col2` SMALLINT DEFAULT null,\n`col3` BIGINT UNSIGNED DEFAULT null,\n`col4` TINYINT UNSIGNED DEFAULT null\n)
+cast01    CREATE TABLE `cast01` (\n`col1` FLOAT DEFAULT NULL,\n`col2` SMALLINT DEFAULT NULL,\n`col3` BIGINT UNSIGNED DEFAULT NULL,\n`col4` TINYINT UNSIGNED DEFAULT NULL\n)
 insert into cast01 values (3271.312432, null, 323254324321432, 100);
 select * from cast01;
 col1    col2    col3    col4
@@ -1188,7 +1188,7 @@ null    null    null    null
 alter table cast01 modify col2 double first;
 show create table cast01;
 Table    Create Table
-cast01    CREATE TABLE `cast01` (\n`col2` DOUBLE DEFAULT null,\n`col1` FLOAT DEFAULT null,\n`col3` BIGINT UNSIGNED DEFAULT null,\n`col4` TINYINT UNSIGNED DEFAULT null\n)
+cast01    CREATE TABLE `cast01` (\n`col2` DOUBLE DEFAULT NULL,\n`col1` FLOAT DEFAULT NULL,\n`col3` BIGINT UNSIGNED DEFAULT NULL,\n`col4` TINYINT UNSIGNED DEFAULT NULL\n)
 insert into cast01 values (3271834.2134, -3892843.214, 328943232, 255);
 select * from cast01;
 col2    col1    col3    col4
@@ -1201,7 +1201,7 @@ null    3271.3125    323254324321432    100
 alter table cast01 modify col3 double;
 show create table cast01;
 Table    Create Table
-cast01    CREATE TABLE `cast01` (\n`col2` DOUBLE DEFAULT null,\n`col1` FLOAT DEFAULT null,\n`col3` DOUBLE DEFAULT null,\n`col4` TINYINT UNSIGNED DEFAULT null\n)
+cast01    CREATE TABLE `cast01` (\n`col2` DOUBLE DEFAULT NULL,\n`col1` FLOAT DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL,\n`col4` TINYINT UNSIGNED DEFAULT NULL\n)
 insert into cast01 values (3271834.2134, -3892843.214, 328943232.3234, 255);
 select * from cast01;
 col2    col1    col3    col4
@@ -1215,7 +1215,7 @@ null    3271.3125    3.23254324321432E14    100
 alter table cast01 modify col4 decimal(28,10) after col2;
 show create table cast01;
 Table    Create Table
-cast01    CREATE TABLE `cast01` (\n`col2` DOUBLE DEFAULT null,\n`col4` DECIMAL(28,10) DEFAULT null,\n`col1` FLOAT DEFAULT null,\n`col3` DOUBLE DEFAULT null\n)
+cast01    CREATE TABLE `cast01` (\n`col2` DOUBLE DEFAULT NULL,\n`col4` DECIMAL(28,10) DEFAULT NULL,\n`col1` FLOAT DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL\n)
 insert into cast01 values (3271834.2134, -3823243.4324, 328943232.3234, -32423.43243);
 select * from cast01;
 col2    col4    col1    col3
@@ -1247,7 +1247,7 @@ col1    col2    col3    col4
 alter table cast02 modify col1 int unsigned;
 show create table cast02;
 Table    Create Table
-cast02    CREATE TABLE `cast02` (\n`col1` INT UNSIGNED DEFAULT null,\n`col2` DOUBLE DEFAULT null,\n`col3` DECIMAL(30,5) DEFAULT null,\n`col4` DECIMAL(37,1) DEFAULT null\n)
+cast02    CREATE TABLE `cast02` (\n`col1` INT UNSIGNED DEFAULT NULL,\n`col2` DOUBLE DEFAULT NULL,\n`col3` DECIMAL(30,5) DEFAULT NULL,\n`col4` DECIMAL(37,1) DEFAULT NULL\n)
 insert into cast02 values (2724.327832, null, 32325432421432, 100.3322142142);
 select * from cast02;
 col1    col2    col3    col4
@@ -1258,7 +1258,7 @@ col1    col2    col3    col4
 alter table cast02 modify col2 bigint;
 show create table cast02;
 Table    Create Table
-cast02    CREATE TABLE `cast02` (\n`col1` INT UNSIGNED DEFAULT null,\n`col2` BIGINT DEFAULT null,\n`col3` DECIMAL(30,5) DEFAULT null,\n`col4` DECIMAL(37,1) DEFAULT null\n)
+cast02    CREATE TABLE `cast02` (\n`col1` INT UNSIGNED DEFAULT NULL,\n`col2` BIGINT DEFAULT NULL,\n`col3` DECIMAL(30,5) DEFAULT NULL,\n`col4` DECIMAL(37,1) DEFAULT NULL\n)
 insert into cast02 values (1000, 323421423421342, 328943232.321424, -255.321151234);
 select * from cast02;
 col1    col2    col3    col4
@@ -1270,7 +1270,7 @@ col1    col2    col3    col4
 alter table cast02 modify col3 bigint unsigned;
 show create table cast02;
 Table    Create Table
-cast02    CREATE TABLE `cast02` (\n`col1` INT UNSIGNED DEFAULT null,\n`col2` BIGINT DEFAULT null,\n`col3` BIGINT UNSIGNED DEFAULT null,\n`col4` DECIMAL(37,1) DEFAULT null\n)
+cast02    CREATE TABLE `cast02` (\n`col1` INT UNSIGNED DEFAULT NULL,\n`col2` BIGINT DEFAULT NULL,\n`col3` BIGINT UNSIGNED DEFAULT NULL,\n`col4` DECIMAL(37,1) DEFAULT NULL\n)
 insert into cast02 values (32718, 100, 32894323237289, 234);
 select * from cast02;
 col1    col2    col3    col4
@@ -1283,7 +1283,7 @@ col1    col2    col3    col4
 alter table cast02 modify col4 smallint first;
 show create table cast02;
 Table    Create Table
-cast02    CREATE TABLE `cast02` (\n`col4` SMALLINT DEFAULT null,\n`col1` INT UNSIGNED DEFAULT null,\n`col2` BIGINT DEFAULT null,\n`col3` BIGINT UNSIGNED DEFAULT null\n)
+cast02    CREATE TABLE `cast02` (\n`col4` SMALLINT DEFAULT NULL,\n`col1` INT UNSIGNED DEFAULT NULL,\n`col2` BIGINT DEFAULT NULL,\n`col3` BIGINT UNSIGNED DEFAULT NULL\n)
 insert into cast02 values (234, 32718, 100, 32894323237289);
 select * from cast02;
 col4    col1    col2    col3
@@ -1303,7 +1303,7 @@ insert into cast03 (col1, col2, col3, col4) values (null, null, null, null);
 alter table cast03 modify col1 char(50), modify col2 char(100), modify col3 varchar(50), modify col4 varchar(15) first;
 show create table cast03;
 Table    Create Table
-cast03    CREATE TABLE `cast03` (\n`col4` VARCHAR(15) DEFAULT null,\n`col1` CHAR(50) DEFAULT null,\n`col2` CHAR(100) DEFAULT null,\n`col3` VARCHAR(50) DEFAULT null\n)
+cast03    CREATE TABLE `cast03` (\n`col4` VARCHAR(15) DEFAULT NULL,\n`col1` CHAR(50) DEFAULT NULL,\n`col2` CHAR(100) DEFAULT NULL,\n`col3` VARCHAR(50) DEFAULT NULL\n)
 insert into cast03 values ('3243342', '3242f()', '4728947234342,', '457328990r3if943i4u9owiuo4ewfr3w4r3fre');
 select * from cast03;
 col4    col1    col2    col3
@@ -1321,11 +1321,11 @@ alter table cast04 modify col1 int unsigned;
 alter table cast04 modify col2 decimal(34,4) after col4;
 show create table cast04;
 Table    Create Table
-cast04    CREATE TABLE `cast04` (\n`col1` INT UNSIGNED DEFAULT null,\n`col3` TEXT DEFAULT null,\n`col4` BLOB DEFAULT null,\n`col2` DECIMAL(34,4) DEFAULT null\n)
+cast04    CREATE TABLE `cast04` (\n`col1` INT UNSIGNED DEFAULT NULL,\n`col3` TEXT DEFAULT NULL,\n`col4` BLOB DEFAULT NULL,\n`col2` DECIMAL(34,4) DEFAULT NULL\n)
 alter table cast04 modify col3 double, modify col4 float;
 show create table cast04;
 Table    Create Table
-cast04    CREATE TABLE `cast04` (\n`col1` INT UNSIGNED DEFAULT null,\n`col3` DOUBLE DEFAULT null,\n`col4` FLOAT DEFAULT null,\n`col2` DECIMAL(34,4) DEFAULT null\n)
+cast04    CREATE TABLE `cast04` (\n`col1` INT UNSIGNED DEFAULT NULL,\n`col3` DOUBLE DEFAULT NULL,\n`col4` FLOAT DEFAULT NULL,\n`col2` DECIMAL(34,4) DEFAULT NULL\n)
 insert into cast04 values ();
 select * from cast04;
 col1    col3    col4    col2
@@ -1359,7 +1359,7 @@ col1
 null
 show create table cast05;
 Table    Create Table
-cast05    CREATE TABLE `cast05` (\n`col1` DATETIME DEFAULT null\n)
+cast05    CREATE TABLE `cast05` (\n`col1` DATETIME DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast05' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 cast05    col1    DATETIME    YES
@@ -1380,7 +1380,7 @@ col1    col2
 3242334    10
 show create table abnormal02;
 Table    Create Table
-abnormal02    CREATE TABLE `abnormal02` (\n`col1` INT DEFAULT null,\n`col2` SMALLINT DEFAULT null\n)
+abnormal02    CREATE TABLE `abnormal02` (\n`col1` INT DEFAULT NULL,\n`col2` SMALLINT DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 abnormal02    col1    INT    YES
@@ -1408,7 +1408,7 @@ col1    col2    col3
 null    null    null
 show create table abnormal01;
 Table    Create Table
-abnormal01    CREATE TABLE `abnormal01` (\n`col1` INT DEFAULT null,\n`col2` BIGINT DEFAULT null,\n`col3` DECIMAL(10,0) DEFAULT null\n)
+abnormal01    CREATE TABLE `abnormal01` (\n`col1` INT DEFAULT NULL,\n`col2` BIGINT DEFAULT NULL,\n`col3` DECIMAL(10,0) DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 abnormal01    col1    INT    YES
@@ -1456,7 +1456,7 @@ col1    col2
 2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 show create table abnormal03;
 Table    Create Table
-abnormal03    CREATE TABLE `abnormal03` (\n`col1` VARCHAR(100) DEFAULT null,\n`col2` BLOB DEFAULT null\n)
+abnormal03    CREATE TABLE `abnormal03` (\n`col1` VARCHAR(100) DEFAULT NULL,\n`col2` BLOB DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal03' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 abnormal03    col1    VARCHAR    YES
@@ -1471,7 +1471,7 @@ col1    col2
 {"x": "red"}    a
 {"x": [3, 5, 7]}    b
 alter table abnormal04 modify col1 float;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 20 near " DEFAULT NULL
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 2 near " 
 )";
 alter table abnormal04 modify col2 int;
 invalid argument cast to int, bad value a
@@ -1522,7 +1522,7 @@ v0    create view v0 as select view01.a, view02.a as b from view01 left join vie
 alter table view01 modify a float;
 show create table view01;
 Table    Create Table
-view01    CREATE TABLE `view01` (\n`a` FLOAT DEFAULT null\n)
+view01    CREATE TABLE `view01` (\n`a` FLOAT DEFAULT NULL\n)
 show create view v0;
 View    Create View
 v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
@@ -1537,7 +1537,7 @@ alter table cluster01 modify column col2 float;
 alter table cluster01 modify col1 double after col2;
 show create table cluster01;
 Table    Create Table
-cluster01    CREATE TABLE `cluster01` (\n`col2` FLOAT DEFAULT null,\n`col1` DOUBLE DEFAULT null\n) CLUSTER BY (`col1`)
+cluster01    CREATE TABLE `cluster01` (\n`col2` FLOAT DEFAULT NULL,\n`col1` DOUBLE DEFAULT NULL\n) CLUSTER BY (`col1`)
 select * from cluster01;
 col2    col1
 3.892349E8    1.0
@@ -1556,7 +1556,7 @@ alter table insert01 modify col1 float;
 alter table insert01 modify col2 decimal(30,1);
 show create table insert01;
 Table    Create Table
-insert01    CREATE TABLE `insert01` (\n`col1` FLOAT DEFAULT null,\n`col2` DECIMAL(30,1) DEFAULT null,\n`col3` DATE DEFAULT null\n)
+insert01    CREATE TABLE `insert01` (\n`col1` FLOAT DEFAULT NULL,\n`col2` DECIMAL(30,1) DEFAULT NULL,\n`col3` DATE DEFAULT NULL\n)
 insert into insert01 select * from insert01;
 select * from insert01;
 col1    col2    col3
@@ -1578,7 +1578,7 @@ col1    col2    col3    col4
 alter table time01 modify col1 int, modify col2 int first, modify col3 int after col1, modify col4 int;
 show create table time01;
 Table    Create Table
-time01    CREATE TABLE `time01` (\n`col2` INT DEFAULT null,\n`col1` INT DEFAULT null,\n`col3` INT DEFAULT null,\n`col4` INT DEFAULT null\n)
+time01    CREATE TABLE `time01` (\n`col2` INT DEFAULT NULL,\n`col1` INT DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` INT DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 time01    col1    INT    YES
@@ -1599,7 +1599,7 @@ null    1889-01-01 23:23:59    23:23:59
 alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after col2, modify col4 decimal(38,0);
 show create table time02;
 Table    Create Table
-time02    CREATE TABLE `time02` (\n`col2` DECIMAL(20,10) DEFAULT null,\n`col3` DECIMAL(38,0) DEFAULT null,\n`col4` DECIMAL(38,0) DEFAULT null\n)
+time02    CREATE TABLE `time02` (\n`col2` DECIMAL(20,10) DEFAULT NULL,\n`col3` DECIMAL(38,0) DEFAULT NULL,\n`col4` DECIMAL(38,0) DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 time02    col2    DECIMAL128    YES
@@ -1613,7 +1613,7 @@ prepare s1 from 'alter table prepare01 modify col1 decimal primary key';
 execute s1;
 show create table prepare01;
 Table    Create Table
-prepare01    CREATE TABLE `prepare01` (\n`col1` DECIMAL(38,0) NOT NULL,\n`col2` CHAR(1) DEFAULT null,\nPRIMARY KEY (`col1`)\n)
+prepare01    CREATE TABLE `prepare01` (\n`col1` DECIMAL(38,0) NOT NULL,\n`col2` CHAR(1) DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 prepare s2 from 'alter table prepare01 modify col2 varchar(100) not null';
 execute s2;
 show create table prepare01;
@@ -1661,7 +1661,7 @@ col1    col2    col3    col4
 alter table mix01 add column col1_2 binary after col1;
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`col1` INT NOT NULL,\n`col1_2` BINARY(1) DEFAULT null,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null\n)
+mix01    CREATE TABLE `mix01` (\n`col1` INT NOT NULL,\n`col1_2` BINARY(1) DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\n`col3` DATE DEFAULT NULL,\n`col4` VARCHAR(100) DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO
@@ -1672,19 +1672,18 @@ mix01    col4    VARCHAR    YES
 alter table mix01 modify column col1_2 varbinary(10) first;
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`col1_2` VARBINARY(10) DEFAULT null,\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null\n)
+mix01    CREATE TABLE `mix01` (\n`col1_2` VARBINARY(10) DEFAULT NULL,\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\n`col3` DATE DEFAULT NULL,\n`col4` VARCHAR(100) DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO
 mix01    col1_2    VARBINARY    YES
-mix01    col2    DECIMAL128    YES
 mix01    col3    DATE    YES
 mix01    col4    VARCHAR    YES
 truncate table mix01;
 alter table mix01 add column col5 int;
 show create table mix01;
 Table    Create Table
-mix01    CREATE TABLE `mix01` (\n`col1_2` VARBINARY(10) DEFAULT null,\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT null,\n`col3` DATE DEFAULT null,\n`col4` VARCHAR(100) DEFAULT null,\n`col5` INT DEFAULT null\n)
+mix01    CREATE TABLE `mix01` (\n`col1_2` VARBINARY(10) DEFAULT NULL,\n`col1` INT NOT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\n`col3` DATE DEFAULT NULL,\n`col4` VARCHAR(100) DEFAULT NULL,\n`col5` INT DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO

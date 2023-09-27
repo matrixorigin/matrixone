@@ -242,6 +242,7 @@ func testFileService(
 		assert.Nil(t, err)
 
 		var r io.ReadCloser
+
 		vec := &IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -257,6 +258,24 @@ func testFileService(
 		data, err := io.ReadAll(r)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("1234"), data)
+		err = r.Close()
+		assert.Nil(t, err)
+
+		vec = &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset:            0,
+					Size:              3,
+					ReadCloserForRead: &r,
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		data, err = io.ReadAll(r)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("123"), data)
 		err = r.Close()
 		assert.Nil(t, err)
 

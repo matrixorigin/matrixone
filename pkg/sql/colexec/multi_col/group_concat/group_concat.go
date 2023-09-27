@@ -17,6 +17,7 @@ package group_concat
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 	"strings"
 	"unsafe"
@@ -330,15 +331,10 @@ func (gc *GroupConcat) BatchMerge(agg2 agg.Agg[any], start int64, os []uint8, vp
 	return nil
 }
 
-// GetInputTypes get types of aggregate's input arguments.
-func (gc *GroupConcat) GetInputTypes() []types.Type {
-	return gc.ityp
-}
-
 // GetOperatorId get types of aggregate's aggregate id.
 // this is used to print log in group string();
-func (gc *GroupConcat) GetOperatorId() int {
-	return agg.AggregateGroupConcat
+func (gc *GroupConcat) GetOperatorId() int64 {
+	return function.GroupConcatFunctionID
 }
 
 func (gc *GroupConcat) IsDistinct() bool {

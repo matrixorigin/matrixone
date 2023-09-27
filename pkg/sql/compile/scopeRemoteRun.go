@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -103,6 +105,7 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
@@ -114,7 +117,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, cli, aicm)
+		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(&receiver)
@@ -147,9 +150,9 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		case <-putCtx.Done():
 			return moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
 		case <-receiver.ctx.Done():
-			logutil.Errorf("receiver conctx done during send notify to dispatch operator")
+			//logutil.Errorf("receiver conctx done during send notify to dispatch operator")
 		case <-opProc.Ctx.Done():
-			logutil.Errorf("dispatch operator context done")
+			//logutil.Errorf("dispatch operator context done")
 		case opProc.DispatchNotifyCh <- info:
 			// TODO: need fix. It may hung here if dispatch operator receive the info but
 			// end without close doneCh
@@ -159,22 +162,17 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 	case pipeline.PipelineMessage:
 		c := receiver.newCompile()
-		defer c.proc.FreeVectors()
 
 		// decode and rewrite the scope.
-		// insert operator needs to fill the engine info.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
 		if err != nil {
 			return err
 		}
-		s = refactorScope(c, s)
+		s = appendWriteBackOperator(c, s)
 		s.SetContextRecursively(c.ctx)
 
 		err = s.ParallelRun(c, s.IsRemote)
-		if err != nil {
-			return err
-		}
-		defer func() {
+		if err == nil {
 			// record the number of s3 requests
 			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.Put.Load()
 			c.proc.AnalInfos[c.anal.curr].S3IOInputCount += c.counterSet.FileService.S3.List.Load()
@@ -182,9 +180,12 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Get.Load()
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.Delete.Load()
 			c.proc.AnalInfos[c.anal.curr].S3IOOutputCount += c.counterSet.FileService.S3.DeleteMulti.Load()
-		}()
-		receiver.finalAnalysisInfo = c.proc.AnalInfos
-		return nil
+
+			receiver.finalAnalysisInfo = c.proc.AnalInfos
+		}
+		c.proc.FreeVectors()
+		return err
+
 	default:
 		return moerr.NewInternalError(receiver.ctx, "unknown message type")
 	}
@@ -412,7 +413,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	return procInfo.Marshal()
 }
 
-func refactorScope(c *Compile, s *Scope) *Scope {
+func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
@@ -708,6 +709,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
+	case *fuzzyfilter.Argument:
+		in.FuzzyFilter = &pipeline.FuzzyFilter{}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName: t.SchemaName,
@@ -1116,6 +1119,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
+	case vm.FuzzyFilter:
+		// t := opr.GetFuzzyFilter()
+		v.Arg = new(fuzzyfilter.Argument)
 	case vm.Anti:
 		t := opr.GetAnti()
 		v.Arg = &anti.Argument{
@@ -1500,7 +1506,7 @@ func convertToPipelineAggregates(ags []agg.Aggregate) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     int32(a.Op),
+			Op:     a.Op,
 			Dist:   a.Dist,
 			Expr:   a.E,
 			Config: a.Config,
@@ -1514,7 +1520,7 @@ func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
 	result := make([]agg.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = agg.Aggregate{
-			Op:     int(a.Op),
+			Op:     a.Op,
 			Dist:   a.Dist,
 			E:      a.Expr,
 			Config: a.Config,

@@ -17,20 +17,18 @@ package objectio
 import (
 	"context"
 	"fmt"
-	"os"
-	"path"
-	"path/filepath"
-	"testing"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
+	"os"
+	"path"
+	"path/filepath"
+	"testing"
+	"time"
 )
 
 const (
@@ -331,7 +329,7 @@ func newBatch(mp *mpool.MPool) *batch.Batch {
 		types.T_uint8.ToType(),
 		types.T_uint64.ToType(),
 	}
-	return testutil.NewBatch(types, false, int(40000*2), mp)
+	return NewBatch(types, false, int(40000*2), mp)
 }
 
 func newBatch2(mp *mpool.MPool) *batch.Batch {
@@ -343,5 +341,5 @@ func newBatch2(mp *mpool.MPool) *batch.Batch {
 		types.T_uint16.ToType(),
 		types.T_uint32.ToType(),
 	}
-	return testutil.NewBatch(types, false, int(40000*2), mp)
+	return NewBatch(types, false, int(40000*2), mp)
 }

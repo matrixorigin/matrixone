@@ -138,8 +138,11 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback(context.Background())
 }
 
-func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
-	replayer := newReplayer(dataFactory, db, maxTs)
+func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS, lsn uint64, valid bool) {
+	if !valid {
+		logutil.Infof("checkpoint version is too small, LSN check is disable")
+	}
+	replayer := newReplayer(dataFactory, db, maxTs, lsn, valid)
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
 
