@@ -892,7 +892,6 @@ jobs:
       - name: Start BVT Test
         id: bvt_on_pr_version
         continue-on-error: true
-        timeout-minutes: 30
         run: |
           export LC_ALL="C.UTF-8"
           locale
