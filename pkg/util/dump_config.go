@@ -131,7 +131,6 @@ func flatten(in any, name string, prefix string, userSet string, exp *exporter) 
 	case reflect.Complex128:
 		fallthrough
 	case reflect.String:
-		//fmt.Printf("%s + %v\n", prefix, value)
 		exp.Export(prefix, fmt.Sprintf("%v", value), userSet)
 	case reflect.Uintptr:
 		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
@@ -139,7 +138,6 @@ func flatten(in any, name string, prefix string, userSet string, exp *exporter) 
 		fallthrough
 	case reflect.Array:
 		if value.Len() == 0 {
-			//fmt.Printf("%s%s - %v\n", prefix, typ.Name(), "empty")
 			exp.Export(prefix+typ.Name(), "", userSet)
 		} else {
 			for k := 0; k < value.Len(); k++ {
@@ -154,12 +152,11 @@ func flatten(in any, name string, prefix string, userSet string, exp *exporter) 
 	case reflect.Chan:
 		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
 	case reflect.Func:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		exp.Export(prefix+typ.Name(), "", userSet)
 	case reflect.Interface:
-		return moerr.NewInternalErrorNoCtx("unsupported type %v", typ.Kind())
+		exp.Export(prefix+typ.Name(), "", userSet)
 	case reflect.Map:
 		if value.Len() == 0 {
-			//fmt.Printf("%s%s - %v\n", prefix, typ.Name(), "empty")
 			exp.Export(prefix+typ.Name(), "", userSet)
 		} else {
 			keys := value.MapKeys()
@@ -174,7 +171,6 @@ func flatten(in any, name string, prefix string, userSet string, exp *exporter) 
 
 	case reflect.Pointer:
 		if value.IsNil() {
-			//fmt.Printf("%s%s - %v\n", prefix, typ.Name(), "nil")
 			exp.Export(prefix+typ.Name(), "nil", userSet)
 		} else {
 			nextPrefix := ""
@@ -253,6 +249,17 @@ func DumpConfig(cfg any, defCfg any) (map[string]*logservicepb.ConfigItem, error
 		ret[name] = citem
 	}
 	return ret, err
+}
+
+// MergeConfig copy all items from src to dst and overwrite the existed item.
+func MergeConfig(dst *ConfigData, src map[string]*logservicepb.ConfigItem) {
+	if dst == nil || dst.configData == nil || src == nil {
+		return
+	}
+	for s, item := range src {
+		dst.configData[s] = item
+		fmt.Println(s, item)
+	}
 }
 
 const (

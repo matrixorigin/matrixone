@@ -182,3 +182,9 @@ service-addresses = [
 	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
 	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
 }
+
+func TestDumpCommonConfig(t *testing.T) {
+	cfg1 := *NewConfig()
+	_, err := dumpCommonConfig(cfg1)
+	assert.NoError(t, err)
+}
