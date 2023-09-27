@@ -23,6 +23,7 @@ import (
 
 const (
 	defaultCacheQueueSize = 100
+	maxItemCount          = 8192 * 2000 // about 1.5GB
 )
 
 // DistKeyCache keeps the key cache of local set/delete items
@@ -79,6 +80,9 @@ func (dc *DistKeyCache) AddItem(key cache.CacheKey, operation gossip.Operation) 
 	}
 	dc.queueMu.Lock()
 	defer dc.queueMu.Unlock()
+	if len(dc.queueMu.itemQueue) >= maxItemCount {
+		return
+	}
 	item := gossip.CacheKeyItem{
 		Operation:     operation,
 		CacheKey:      key,
