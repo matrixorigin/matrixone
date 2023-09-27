@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -226,8 +227,9 @@ func (s *server) onMessage(
 
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		getLogger().Fatal("missing request handler",
-			zap.String("method", req.Method.String()))
+		return moerr.NewNotSupportedNoCtx("method [%s] in tn, from %s",
+			req.Method.String(),
+			cs.RemoteAddress())
 	}
 
 	select {
