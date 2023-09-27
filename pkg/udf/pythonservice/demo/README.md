@@ -4,6 +4,31 @@
 
 ## 单机快速部署
 
+当前部署方式（仅支持 linux 系统）：
+
+1. 在部署之前，我们需要确保本地拥有 python3 的环境和 mysql 客户端。
+2. 下载 MO 二进制包并解压：
+
+```shell
+wget https://github.com/joker-star-l/matrixone/releases/download/python_udf_test/mo-linux-x86_64.zip
+unzip mo-linux-x86_64.zip mo 
+```
+
+3. 启动 MO（需要20到30秒的时间）：
+
+```shell
+cd mo
+nohup ./mo-service -launch ./etc/launch-with-python-udf-server/launch.toml > mo.log 2>&1 &
+```
+
+4. 使用 mysql 客户端连接 MO：
+
+```shell
+mysql -h 127.0.0.1 -P 6001 -uroot -p111 --local-infile
+```
+
+后续发布后可能的部署方式：
+
 1. 在部署之前，我们需要确保本地拥有 python3 的环境。
 
 2. 按照官方文档[快速开始](https://docs.matrixorigin.cn/1.0.0-rc1/MatrixOne/Get-Started/install-standalone-matrixone/)中的步骤完成相关安装，在启动 MO 之前，执行以下命令修改 mo_ctl 的配置：
@@ -165,7 +190,7 @@ MO udf 支持重载，我们可以创建多个名称相同但参数类型或数�
 
 ## 案例：信用卡欺诈检测
 
-本节以“信用卡欺诈检测”为例，讲述了 python udf 在机器学习推理流水线中的应用。（相关代码详见 [github](https://github.com/matrixorigin/matrixone/tree/main/pkg/udf/pythonservice/demo)）
+本节以“信用卡欺诈检测”为例，讲述了 python udf 在机器学习推理流水线中的应用。（相关代码详见 [github](https://github.com/joker-star-l/matrixone/tree/main/pkg/udf/pythonservice/demo)）
 
 在本节中，我们需要确保本地 python 环境已安装了 numpy 和 scikit-learn。
 
