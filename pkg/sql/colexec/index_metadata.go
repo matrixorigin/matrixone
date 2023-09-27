@@ -213,6 +213,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	vec_type := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TYPE].ToType())
 	bat.Vecs[4] = vec_type
 
+	// TODO: check if this will work or not.
 	vec_algo := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM].ToType())
 	bat.Vecs[5] = vec_algo
 
