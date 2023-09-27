@@ -143,6 +143,7 @@ func WithServerMessageFilter(filter func(*pb.Request) bool) ServerOption {
 }
 
 type server struct {
+	address  string
 	cfg      *morpc.Config
 	rpc      morpc.RPCServer
 	handlers map[pb.Method]RequestHandleFunc
@@ -159,6 +160,7 @@ func NewServer(
 	opts ...ServerOption) (Server, error) {
 	s := &server{
 		cfg:      &cfg,
+		address:  address,
 		handlers: make(map[pb.Method]RequestHandleFunc),
 	}
 	s.cfg.Adjust()
@@ -227,9 +229,10 @@ func (s *server) onMessage(
 
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		return moerr.NewNotSupportedNoCtx("method [%s] in tn, from %s",
+		return moerr.NewNotSupportedNoCtx("method [%s], from %s, current %s",
 			req.Method.String(),
-			cs.RemoteAddress())
+			cs.RemoteAddress(),
+			s.address)
 	}
 
 	select {
