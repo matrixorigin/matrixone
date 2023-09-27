@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -58,10 +59,10 @@ func TestCallLockOpWithNoConflict(t *testing.T) {
 		func(proc *process.Process, arg *Argument) {
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.hasNewVersionInRange = testFunc
-			_, err := arg.Call(proc)
+			result, err := arg.Call(proc)
 			require.NoError(t, err)
 
-			vec := proc.InputBatch().GetVector(1)
+			vec := result.Batch.GetVector(1)
 			values := vector.MustFixedCol[types.TS](vec)
 			assert.Equal(t, 3, len(values))
 			for _, v := range values {
@@ -95,10 +96,10 @@ func TestCallLockOpWithConflict(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				_, err = arg.Call(proc)
+				result, err := arg.Call(proc)
 				require.NoError(t, err)
 
-				vec := proc.InputBatch().GetVector(1)
+				vec := result.Batch.GetVector(1)
 				values := vector.MustFixedCol[types.TS](vec)
 				assert.Equal(t, 3, len(values))
 				for _, v := range values {
@@ -136,18 +137,26 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{}
+				arg2 := &Argument{
+					info: &vm.OperatorInfo{
+						Idx:     1,
+						IsFirst: false,
+						IsLast:  false,
+					},
+				}
 				arg2.rt = &state{}
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
+				valueScan := arg.children[0].(*value_scan.Argument)
+				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
 
-				proc.SetInputBatch(nil)
+				resetChildren(arg2, nil)
 				_, err = arg2.Call(proc)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
@@ -194,18 +203,25 @@ func TestCallLockOpWithHasPrevCommit(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{}
+				arg2 := &Argument{
+					info: &vm.OperatorInfo{
+						Idx:     1,
+						IsFirst: false,
+						IsLast:  false,
+					}}
 				arg2.rt = &state{}
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
+				valueScan := arg.children[0].(*value_scan.Argument)
+				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
 
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
 
-				proc.SetInputBatch(nil)
+				resetChildren(arg2, nil)
 				_, err = arg2.Call(proc)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
@@ -252,12 +268,19 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				arg2 := &Argument{}
+				arg2 := &Argument{
+					info: &vm.OperatorInfo{
+						Idx:     1,
+						IsFirst: false,
+						IsLast:  false,
+					}}
 				arg2.rt = &state{}
 				arg2.rt.retryError = nil
 				arg2.targets = arg.targets
 				arg2.Prepare(proc)
 				arg2.rt.hasNewVersionInRange = testFunc
+				valueScan := arg.children[0].(*value_scan.Argument)
+				resetChildren(arg2, valueScan.Batchs[0])
 				defer arg2.rt.parker.FreeMem()
 
 				proc.TxnOperator.TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
@@ -265,7 +288,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				_, err = arg2.Call(proc)
 				assert.NoError(t, err)
 
-				proc.SetInputBatch(nil)
+				resetChildren(arg2, nil)
 				_, err = arg2.Call(proc)
 				require.NoError(t, err)
 			}()
@@ -299,15 +322,15 @@ func TestLockWithBlocking(t *testing.T) {
 			end, err := arg.Call(proc)
 			require.NoError(t, err)
 			if arg.rt.step == stepLock {
-				require.Equal(t, batch.EmptyBatch, proc.InputBatch())
+				require.Equal(t, batch.EmptyBatch, end.Batch)
 			} else if arg.rt.step == stepDownstream {
 				if n > 0 {
-					downstreamBatches = append(downstreamBatches, proc.InputBatch())
+					downstreamBatches = append(downstreamBatches, end.Batch)
 				}
 				n++
 			} else {
 				if end.Status != vm.ExecStop {
-					downstreamBatches = append(downstreamBatches, proc.InputBatch())
+					downstreamBatches = append(downstreamBatches, end.Batch)
 				} else {
 					require.Equal(t, 3, len(downstreamBatches))
 					for i, bat := range downstreamBatches {
@@ -448,7 +471,9 @@ func runLockNonBlockingOpTest(
 				bat.Vecs[offset+1] = vec
 				offset += 2
 			}
-			proc.SetInputBatch(bat)
+			// proc.SetInputBatch(bat)
+			resetChildren(arg, bat)
+
 			fn(proc, arg)
 			arg.Free(proc, false)
 		},
@@ -561,4 +586,18 @@ func runLockOpTest(
 		},
 		nil,
 	)
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
 }

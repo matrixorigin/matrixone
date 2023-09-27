@@ -69,7 +69,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		for {
 			sb, end, _ = ctr.ReceiveFromAllRegs(anal)
 			if sb == nil || end {
-				proc.SetInputBatch(nil)
+				result.Batch = nil
 				result.Status = vm.ExecStop
 				return result, nil
 			}
@@ -90,7 +90,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	anal.Input(sb, arg.info.IsFirst)
 	anal.Output(sb, arg.info.IsLast)
-	proc.SetInputBatch(sb)
+	result.Batch = sb
 	return result, nil
 }
 

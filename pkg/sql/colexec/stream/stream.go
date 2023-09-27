@@ -68,7 +68,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	proc.SetInputBatch(b)
+	result.Batch = b
 	//todo: change to process.ExecNext
 	result.Status = vm.ExecStop
 	return result, nil

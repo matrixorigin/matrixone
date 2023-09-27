@@ -71,7 +71,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	if ap.Limit == 0 {
 		ap.Free(proc, false)
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
@@ -86,11 +86,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if ctr.bat == nil {
 		ap.Free(proc, false)
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	err := ctr.eval(ap.Limit, proc, anal, arg.info.IsLast)
+	err := ctr.eval(ap.Limit, proc, anal, arg.info.IsLast, &result)
 	ap.Free(proc, err != nil)
 	if err == nil {
 		result.Status = vm.ExecStop
@@ -206,7 +206,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *container) eval(limit int64, proc *process.Process, anal process.Analyze, isLast bool) error {
+func (ctr *container) eval(limit int64, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
 	if int64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
@@ -225,7 +225,7 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	anal.Output(ctr.bat, isLast)
-	proc.SetInputBatch(ctr.bat)
+	result.Batch = ctr.bat
 	ctr.bat = nil
 	return nil
 }

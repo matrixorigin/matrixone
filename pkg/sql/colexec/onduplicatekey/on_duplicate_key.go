@@ -50,29 +50,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := arg.ctr
 	result := vm.NewCallResult()
 
-	// if ctr.state == Build {
-	// 	for {
-	// 		result, err := arg.children[0].Call(proc)
-	// 		if err != nil {
-	// 			return result, err
-	// 		}
-	// 		if result.Batch == nil {
-	// 			ctr.state = Eval
-	// 			break
-	// 		}
-	// 		//do
-	// 	}
-	// }
-
-	// if ctr.state == Eval {
-	// 	//....当前
-	// }
-
-	// if ctr.state == End {
-	// 	result := vm.NewCallResult()
-	// 	return result, nil
-	// }
-
 	for {
 		switch ctr.state {
 		case Build:
@@ -99,7 +76,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		case Eval:
 			if ctr.insertBat != nil {
 				anal.Output(ctr.insertBat, arg.info.IsLast)
-				proc.SetInputBatch(ctr.insertBat)
+				result.Batch = ctr.insertBat
 				ctr.insertBat = nil
 				ctr.state = End
 				return result, nil
@@ -107,7 +84,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = End
 
 		case End:
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}

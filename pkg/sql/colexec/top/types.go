@@ -26,14 +26,9 @@ import (
 
 var _ vm.Operator = new(Argument)
 
-const (
-	Build = iota
-	Eval
-)
-
 type container struct {
 	n     int // result vector number
-	state int
+	state vm.CtrState
 	sels  []int64
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare

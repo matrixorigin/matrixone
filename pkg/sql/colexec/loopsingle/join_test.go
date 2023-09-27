@@ -82,6 +82,7 @@ func TestJoin(t *testing.T) {
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
+				cleanResult(&ok, tc.proc)
 				break
 			}
 			cleanResult(&ok, tc.proc)
@@ -105,6 +106,7 @@ func TestJoin(t *testing.T) {
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
+				cleanResult(&ok, tc.proc)
 				break
 			}
 			cleanResult(&ok, tc.proc)

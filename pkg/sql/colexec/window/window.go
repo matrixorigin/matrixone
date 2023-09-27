@@ -93,7 +93,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	// init agg frame
 	if ctr.bat == nil {
-		proc.SetInputBatch(ctr.bat)
+		result.Batch = ctr.bat
 		result.Status = vm.ExecStop
 		return result, nil
 	}
@@ -140,7 +140,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	anal.Output(ctr.bat, arg.info.IsLast)
 
-	proc.SetInputBatch(ctr.bat)
+	result.Batch = ctr.bat
 	result.Status = vm.ExecStop
 	return result, nil
 }

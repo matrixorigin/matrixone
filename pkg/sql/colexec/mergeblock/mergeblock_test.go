@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
@@ -113,7 +114,8 @@ func TestMergeBlock(t *testing.T) {
 			IsLast:  false,
 		},
 	}
-	proc.Reg.InputBatch = batch1
+	resetChildren(&argument1, batch1)
+
 	argument1.Prepare(proc)
 	_, err := argument1.Call(proc)
 	require.NoError(t, err)
@@ -149,4 +151,18 @@ func TestMergeBlock(t *testing.T) {
 	//}
 	argument1.Free(proc, false)
 	//require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
 }

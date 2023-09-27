@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -90,11 +91,11 @@ func TestPreInsertNormal(t *testing.T) {
 		},
 	}
 	checkResultBat, _ := batch1.Dup(proc.Mp())
-	proc.SetInputBatch(batch1)
-	_, err := argument1.Call(proc)
+	resetChildren(&argument1, batch1)
+	callResult, err := argument1.Call(proc)
 	require.NoError(t, err)
 	{
-		result := proc.InputBatch()
+		result := callResult.Batch
 		// check attr names
 		require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
 		// check vector
@@ -151,12 +152,26 @@ func TestPreInsertNullCheck(t *testing.T) {
 			},
 		},
 		info: &vm.OperatorInfo{
-			Idx:     0,
+			Idx:     1,
 			IsFirst: false,
 			IsLast:  false,
 		},
 	}
-	proc.Reg.InputBatch = batch2
+	resetChildren(&argument2, batch2)
 	_, err2 := argument2.Call(proc)
 	require.Error(t, err2, "should return error when insert null into primary key column")
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
 }

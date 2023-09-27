@@ -68,47 +68,57 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	result := vm.NewCallResult()
-	for {
-		switch ctr.state {
-		case Build:
-			bat := proc.InputBatch()
+
+	if ap.Limit == 0 {
+		result := vm.NewCallResult()
+		result.Status = vm.ExecStop
+		return result, nil
+	}
+
+	if ctr.state == vm.Build {
+		for {
+			result, err := arg.children[0].Call(proc)
+			if err != nil {
+				return result, err
+			}
+			bat := result.Batch
 			if bat == nil {
-				ctr.state = Eval
-				continue
+				ctr.state = vm.Eval
+				break
 			}
 			if bat.IsEmpty() {
 				proc.PutBatch(bat)
-				proc.SetInputBatch(batch.EmptyBatch)
-				return result, nil
+				continue
 			}
-			if ap.Limit == 0 {
-				proc.PutBatch(bat)
-				proc.SetInputBatch(nil)
-				result.Status = vm.ExecStop
-				return result, nil
-			}
-			err := ctr.build(ap, bat, proc, anal)
+			err = ctr.build(ap, bat, proc, anal)
 			if err != nil {
 				ap.Free(proc, true)
 			}
-			return result, err
-
-		case Eval:
-			if ctr.bat == nil {
-				proc.SetInputBatch(nil)
-				result.Status = vm.ExecStop
-				return result, nil
-			}
-			err := ctr.eval(ap.Limit, proc)
-			ap.Free(proc, err != nil)
-			if err == nil {
-				result.Status = vm.ExecStop
-				return result, nil
-			}
-			return result, err
 		}
 	}
+
+	result := vm.NewCallResult()
+	if ctr.state == vm.Eval {
+		if ctr.bat == nil {
+			ctr.state = vm.End
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+
+		err := ctr.eval(ap.Limit, proc, &result)
+		if err != nil {
+			return result, err
+		}
+		ctr.state = vm.End
+		return result, err
+	}
+
+	if ctr.state == vm.End {
+		return result, nil
+	}
+
+	panic("bug")
 }
 
 func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Process, analyze process.Analyze) error {
@@ -164,7 +174,6 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 	}
 	err := ctr.processBatch(ap.Limit, bat, proc)
 	proc.PutBatch(bat)
-	proc.SetInputBatch(batch.EmptyBatch)
 	return err
 }
 
@@ -213,7 +222,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *container) eval(limit int64, proc *process.Process) error {
+func (ctr *container) eval(limit int64, proc *process.Process, result *vm.CallResult) error {
 	if int64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
@@ -231,7 +240,7 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
-	proc.SetInputBatch(ctr.bat)
+	result.Batch = ctr.bat
 	ctr.bat = nil
 	return nil
 }

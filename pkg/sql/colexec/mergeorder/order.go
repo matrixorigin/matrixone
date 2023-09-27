@@ -74,7 +74,7 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 	}
 }
 
-func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err error) {
+func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
 	bat := batch.NewWithSize(ctr.batchList[0].VectorCount())
 	mp := proc.Mp()
 
@@ -108,7 +108,7 @@ func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err err
 		}
 	}
 	bat.SetRowCount(wholeLength)
-	proc.SetInputBatch(bat)
+	result.Batch = bat
 	return sendOver, nil
 }
 
@@ -230,21 +230,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case normalSending:
 			if len(ctr.batchList) == 0 {
-				proc.SetInputBatch(nil)
+				result.Batch = nil
 				result.Status = vm.ExecStop
 				return result, nil
 			}
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
-				proc.SetInputBatch(ctr.batchList[0])
+				result.Batch = ctr.batchList[0]
 				ctr.batchList[0] = nil
 				result.Status = vm.ExecStop
 				return result, nil
 			}
 
 		case pickUpSending:
-			ok, err := ctr.pickAndSend(proc)
+			ok, err := ctr.pickAndSend(proc, &result)
 			if ok {
 				result.Status = vm.ExecStop
 				return result, err

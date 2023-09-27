@@ -97,7 +97,7 @@ func TestOrder(t *testing.T) {
 				if len(tc.arg.OrderBySpecs) > 0 {
 					desc := tc.arg.OrderBySpecs[0].Flag&plan.OrderBySpec_DESC != 0
 					index := tc.arg.OrderBySpecs[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
-					bat := tc.proc.Reg.InputBatch
+					bat := ok.Batch
 					vec := bat.Vecs[index]
 					if vec.GetType().Oid == types.T_int8 {
 						i8c := vector.MustFixedCol[int8](vec)
@@ -132,9 +132,7 @@ func TestOrder(t *testing.T) {
 					}
 				}
 
-				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-				}
+				cleanResult(&ok, tc.proc)
 				break
 			}
 		}
@@ -168,12 +166,11 @@ func BenchmarkOrder(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
-					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-					}
+				ok, err := tc.arg.Call(tc.proc)
+				if ok.Status == vm.ExecStop || err != nil {
 					break
 				}
+				cleanResult(&ok, tc.proc)
 			}
 			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
@@ -275,4 +272,10 @@ func newIntBatch(ts []types.Type, proc *process.Process, rows int64, fs []*plan.
 
 func newRandomBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+	}
 }

@@ -44,21 +44,14 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	bat := proc.InputBatch()
-	result := vm.NewCallResult()
-	if bat == nil {
-		result.Status = vm.ExecStop
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
-	if bat.Last() {
-		proc.SetInputBatch(bat)
-		return result, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return result, nil
-	}
+	bat := result.Batch
 
 	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
@@ -75,7 +68,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		vec, err := ap.ctr.executors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			bat.Clean(proc.Mp())
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			return result, err
 		}
 
@@ -135,10 +128,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	// but not use the IsEnd flag to do the clean work.
 	if ap.IsEnd {
 		bat.Clean(proc.Mp())
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 	} else {
 		anal.Output(bat, arg.info.IsLast)
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 	}
 	return result, nil
 }

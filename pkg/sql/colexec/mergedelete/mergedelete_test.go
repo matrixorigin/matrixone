@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -151,7 +152,7 @@ func TestMergeDelete(t *testing.T) {
 	}
 
 	argument1.Prepare(proc)
-	proc.Reg.InputBatch = batch1
+	resetChildren(&argument1, batch1)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.AffectedRows)
@@ -171,7 +172,7 @@ func TestMergeDelete(t *testing.T) {
 		require.Equal(t, 15, vec.Length(), fmt.Sprintf("column number: %d", i))
 	}
 
-	proc.Reg.InputBatch = batch2
+	resetChildren(&argument1, batch2)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(60), argument1.AffectedRows)
@@ -201,4 +202,18 @@ func TestMergeDelete(t *testing.T) {
 	batch2.Clean(proc.GetMPool())
 	// constVector can't free
 	require.Equal(t, int64(16), proc.GetMPool().CurrNB())
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
 }

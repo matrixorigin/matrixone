@@ -116,10 +116,12 @@ func TestMark(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Status == vm.ExecStop || err != nil {
+				cleanResult(&ok, tc.proc)
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			cleanResult(&ok, tc.proc)
 		}
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -170,10 +172,11 @@ func BenchmarkMark(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
-				if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
+				ok, err := tc.arg.Call(tc.proc)
+				if ok.Status == vm.ExecStop || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				cleanResult(&ok, tc.proc)
 			}
 		}
 	}
@@ -264,6 +267,11 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 			Typs:        ts,
 			NeedHashMap: true,
 			Conditions:  cs[1],
+			Info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 	return c
@@ -285,4 +293,10 @@ func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, true, int(rows), proc.Mp())
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+	}
 }

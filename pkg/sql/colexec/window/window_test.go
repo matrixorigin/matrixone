@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -102,22 +101,26 @@ func TestWindow(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
+		// tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
+
+		// tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
+
+		// tc.proc.Reg.InputBatch = &batch.Batch{}
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = nil
+
+		// tc.proc.Reg.InputBatch = nil
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
+
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		tc.proc.Reg.InputBatch = nil
+		// tc.proc.Reg.InputBatch = nil
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 	}
@@ -162,6 +165,13 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
+// func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+// 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+// }
+
+// func cleanResult(result *vm.CallResult, proc *process.Process) {
+// 	if result.Batch != nil {
+// 		result.Batch.Clean(proc.Mp())
+// 		result.Batch = nil
+// 	}
+// }

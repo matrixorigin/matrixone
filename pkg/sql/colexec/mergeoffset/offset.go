@@ -50,7 +50,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		if end {
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -58,7 +58,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Input(bat, arg.info.IsFirst)
 		if ap.ctr.seen > ap.Offset {
 			anal.Output(bat, arg.info.IsLast)
-			proc.SetInputBatch(bat)
+			result.Batch = bat
 			return result, nil
 		}
 		length := bat.RowCount()
@@ -69,7 +69,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			bat.Shrink(sels)
 			proc.Mp().PutSels(sels)
 			anal.Output(bat, arg.info.IsLast)
-			proc.SetInputBatch(bat)
+			result.Batch = bat
 			return result, nil
 		}
 		ap.ctr.seen += uint64(length)

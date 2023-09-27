@@ -50,12 +50,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 		if end {
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
 		if bat.Last() {
-			proc.SetInputBatch(bat)
+			result.Batch = bat
 			return result, nil
 		}
 
@@ -68,14 +68,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		if newSeen < ap.Limit {
 			ap.ctr.seen = newSeen
 			anal.Output(bat, arg.info.IsLast)
-			proc.SetInputBatch(bat)
+			result.Batch = bat
 			return result, nil
 		} else {
 			num := int(newSeen - ap.Limit)
 			batch.SetLength(bat, bat.RowCount()-num)
 			ap.ctr.seen = newSeen
 			anal.Output(bat, arg.info.IsLast)
-			proc.SetInputBatch(bat)
+			result.Batch = bat
 			return result, nil
 		}
 	}

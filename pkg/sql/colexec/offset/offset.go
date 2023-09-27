@@ -33,21 +33,15 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	bat := proc.InputBatch()
-	result := vm.NewCallResult()
-	if bat == nil {
-		result.Status = vm.ExecStop
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
-	if bat.Last() {
-		proc.SetInputBatch(bat)
-		return result, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return result, nil
-	}
+	bat := result.Batch
+
 	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
@@ -63,12 +57,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.Seen += uint64(length)
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 		return result, nil
 	}
 	ap.Seen += uint64(length)
 	proc.PutBatch(bat)
-	proc.SetInputBatch(batch.EmptyBatch)
+	result.Batch = batch.EmptyBatch
 	return result, nil
 }
 

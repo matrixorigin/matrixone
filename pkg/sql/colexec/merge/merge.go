@@ -47,7 +47,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		bat, end, _ = ctr.ReceiveFromAllRegs(anal)
 		if end {
-			proc.SetInputBatch(nil)
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -61,6 +60,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	anal.Input(bat, arg.info.IsFirst)
 	anal.Output(bat, arg.info.IsLast)
-	proc.SetInputBatch(bat)
+	result.Batch = bat
 	return result, nil
 }

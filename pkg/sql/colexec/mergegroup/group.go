@@ -84,7 +84,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.bat.Aggs = nil
 				}
 				anal.Output(ctr.bat, arg.info.IsLast)
-				proc.SetInputBatch(ctr.bat)
+				result.Batch = ctr.bat
 				ctr.bat = nil
 				ctr.state = End
 				return result, nil
@@ -92,7 +92,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.state = End
 
 		case End:
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}

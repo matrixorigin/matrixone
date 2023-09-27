@@ -37,7 +37,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	select {
 	case <-proc.Ctx.Done():
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	default:
@@ -57,6 +57,5 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	result.Batch = bat
-
 	return result, nil
 }

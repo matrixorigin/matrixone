@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -84,17 +85,27 @@ func TestOutput(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
+
+		testBatch := newBatch(t, tc.types, tc.proc, Rows)
+		resetChildren(tc.arg, testBatch)
+		result, err := tc.arg.Call(tc.proc)
+		require.NoError(t, err)
+		cleanResult(&result, tc.proc)
+
+		testBatch = newBatch(t, tc.types, tc.proc, Rows)
+		resetChildren(tc.arg, testBatch)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
+
+		testBatch = batch.EmptyBatch
+		resetChildren(tc.arg, testBatch)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = batch.EmptyBatch
+
+		testBatch = nil
+		resetChildren(tc.arg, testBatch)
 		_, err = tc.arg.Call(tc.proc)
-		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = nil
-		_, err = tc.arg.Call(tc.proc)
+
 		require.NoError(t, err)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -104,4 +115,25 @@ func TestOutput(t *testing.T) {
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+		result.Batch = nil
+	}
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
 }

@@ -36,18 +36,14 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
 	ap := arg
-	bat := proc.InputBatch()
-	result := vm.NewCallResult()
-	if bat == nil {
-		result.Status = vm.ExecStop
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
-
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return result, nil
-	}
+	bat := result.Batch
 	defer proc.PutBatch(bat)
 
 	if err := ap.Split(proc, bat); err != nil {
@@ -100,6 +96,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
-	proc.SetInputBatch(nil)
+	// proc.SetInputBatch(nil)
+	result.Batch = nil
 	return result, nil
 }

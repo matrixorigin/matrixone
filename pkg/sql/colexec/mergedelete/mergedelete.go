@@ -36,18 +36,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var err error
 	var name string
 	ap := arg
-	bat := proc.Reg.InputBatch
-	result := vm.NewCallResult()
-	if bat == nil {
-		result.Status = vm.ExecStop
-		return result, nil
-	}
 
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() {
 		return result, nil
 	}
+	bat := result.Batch
 
 	// 	  blkId           deltaLoc                        type                                 partitionIdx
 	// |----------|-----------------------------|-------------------------------------------|---------------------

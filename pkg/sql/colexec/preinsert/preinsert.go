@@ -36,24 +36,20 @@ func (arg *Argument) Prepare(_ *proc) error {
 }
 
 func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() {
+		return result, nil
+	}
+	bat := result.Batch
+
 	analy := proc.GetAnalyze(arg.info.Idx)
 	analy.Start()
 	defer analy.Stop()
-
-	var err error
-	result := vm.NewCallResult()
-	bat := proc.InputBatch()
-	if bat == nil {
-		proc.SetInputBatch(nil)
-		result.Status = vm.ExecStop
-		return result, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return result, nil
-	}
 	defer proc.PutBatch(bat)
+
 	newBat := batch.NewWithSize(len(arg.Attrs))
 	newBat.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
@@ -103,7 +99,8 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 		}
 		newBat.Vecs = append(newBat.Vecs, rowIdVec)
 	}
-	proc.SetInputBatch(newBat)
+
+	result.Batch = newBat
 	return result, nil
 }
 

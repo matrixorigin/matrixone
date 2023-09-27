@@ -48,7 +48,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 		if bat == nil || bat.End() {
-			proc.SetInputBatch(nil)
+			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -66,13 +66,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if sb.End() {
 		sb.Clean(proc.Mp())
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
 	anal.Input(sb, arg.info.IsFirst)
 	anal.Output(sb, arg.info.IsLast)
-	proc.SetInputBatch(sb)
+	result.Batch = sb
 	return result, nil
 }
