@@ -23,7 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -135,6 +137,11 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 			Attrs: attrs,
 			Rets:  colDefs,
 			Name:  "unnest",
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 		jsons:    jsons,
 		paths:    paths,
@@ -165,14 +172,14 @@ func TestUnnestCall(t *testing.T) {
 			inputBat, err = makeUnnestBatch(ut.jsons, types.T_varchar, encodeStr, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Args = makeConstInputExprs(ut.jsons, ut.paths, ut.jsonType, ut.outers)
-			ut.proc.SetInputBatch(inputBat)
 			err := unnestPrepare(ut.proc, ut.arg)
 			require.Nil(t, err)
-			end, err := unnestCall(0, ut.proc, ut.arg)
+			result := vm.NewCallResult()
+			result.Batch = inputBat
+			end, err := unnestCall(0, ut.proc, ut.arg, &result)
 			require.Nil(t, err)
 			require.False(t, end)
-			ut.proc.InputBatch().Clean(ut.proc.Mp())
-			inputBat.Clean(ut.proc.Mp())
+			cleanResult(&result, ut.proc)
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		case "json":
@@ -180,14 +187,14 @@ func TestUnnestCall(t *testing.T) {
 			inputBat, err = makeUnnestBatch(ut.jsons, types.T_json, encodeJson, ut.proc)
 			require.Nil(t, err)
 			ut.arg.Args = makeColExprs(ut.jsonType, ut.paths, ut.outers)
-			ut.proc.SetInputBatch(inputBat)
 			err := unnestPrepare(ut.proc, ut.arg)
 			require.Nil(t, err)
-			end, err := unnestCall(0, ut.proc, ut.arg)
+			result := vm.NewCallResult()
+			result.Batch = inputBat
+			end, err := unnestCall(0, ut.proc, ut.arg, &result)
 			require.Nil(t, err)
 			require.False(t, end)
-			ut.proc.InputBatch().Clean(ut.proc.Mp())
-			inputBat.Clean(ut.proc.Mp())
+			cleanResult(&result, ut.proc)
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		}
@@ -297,4 +304,25 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 		},
 	}
 	return ret
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+		result.Batch = nil
+	}
 }

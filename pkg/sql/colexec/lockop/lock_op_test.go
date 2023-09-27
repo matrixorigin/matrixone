@@ -471,7 +471,6 @@ func runLockNonBlockingOpTest(
 				bat.Vecs[offset+1] = vec
 				offset += 2
 			}
-			// proc.SetInputBatch(bat)
 			resetChildren(arg, bat)
 
 			fn(proc, arg)

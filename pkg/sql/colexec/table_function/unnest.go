@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -88,7 +89,7 @@ func unnestPrepare(proc *process.Process, arg *Argument) error {
 	return err
 }
 
-func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	var (
 		err      error
 		rbat     *batch.Batch
@@ -98,6 +99,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		path     bytejson.Path
 		outer    bool
 	)
+	bat := result.Batch
 	defer func() {
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
@@ -111,14 +113,16 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		if outerVec != nil {
 			outerVec.Free(proc.Mp())
 		}
+		if bat != nil {
+			bat.Clean(proc.GetMPool())
+		}
 	}()
-	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
 	if bat.IsEmpty() {
 		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
+		result.Batch = batch.EmptyBatch
 		return false, nil
 	}
 	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
@@ -163,7 +167,7 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return false, nil
 }
 

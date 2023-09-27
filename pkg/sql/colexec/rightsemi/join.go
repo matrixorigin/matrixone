@@ -116,7 +116,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 
 		default:
-			// proc.SetInputBatch(nil)
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -183,7 +182,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	rbat.AddRowCount(len(sels))
 
 	analyze.Output(rbat, isLast)
-	// proc.SetInputBatch(rbat)
 	result.Batch = rbat
 	return false, nil
 }

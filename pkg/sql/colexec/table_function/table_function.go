@@ -34,25 +34,29 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		e error
 	)
 	idx := arg.info.Idx
-	result := vm.NewCallResult()
+
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
 
 	switch tblArg.Name {
 	case "unnest":
-		f, e = unnestCall(idx, proc, tblArg)
+		f, e = unnestCall(idx, proc, tblArg, &result)
 	case "generate_series":
-		f, e = generateSeriesCall(idx, proc, tblArg)
+		f, e = generateSeriesCall(idx, proc, tblArg, &result)
 	case "meta_scan":
-		f, e = metaScanCall(idx, proc, tblArg)
+		f, e = metaScanCall(idx, proc, tblArg, &result)
 	case "current_account":
-		f, e = currentAccountCall(idx, proc, tblArg)
+		f, e = currentAccountCall(idx, proc, tblArg, &result)
 	case "metadata_scan":
-		f, e = metadataScan(idx, proc, tblArg)
+		f, e = metadataScan(idx, proc, tblArg, &result)
 	case "processlist":
-		f, e = processlist(idx, proc, tblArg)
+		f, e = processlist(idx, proc, tblArg, &result)
 	case "mo_locks":
-		f, e = moLocksCall(idx, proc, tblArg)
+		f, e = moLocksCall(idx, proc, tblArg, &result)
 	case "mo_configurations":
-		f, e = moConfigurationsCall(idx, proc, tblArg)
+		f, e = moConfigurationsCall(idx, proc, tblArg, &result)
 	default:
 		result.Status = vm.ExecStop
 		return result, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))

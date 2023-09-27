@@ -76,7 +76,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 
 		case end:
-			// proc.SetInputBatch(nil)
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -219,7 +218,6 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		analyze.Alloc(int64(c.btc.Size()))
 		analyze.Output(c.btc, isLast)
 
-		// proc.SetInputBatch(c.btc)
 		result.Batch = c.btc
 		return false, nil
 	}

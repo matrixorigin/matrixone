@@ -149,9 +149,7 @@ func BenchmarkGroup(b *testing.B) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			testBat := newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
-			tc.arg.AppendChild(&value_scan.Argument{
-				Batchs: []*batch.Batch{testBat},
-			})
+			resetChildren(tc.arg, testBat)
 			result, err := tc.arg.Call(tc.proc)
 			require.NoError(t, err)
 			cleanResult(&result, tc.proc)

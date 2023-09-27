@@ -82,7 +82,6 @@ func (ap *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 
 		default:
-			// proc.SetInputBatch(nil)
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -120,7 +119,6 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	}
 	rbat.AddRowCount(bat.RowCount())
 	anal.Output(rbat, isLast)
-	// proc.SetInputBatch(rbat)
 	result.Batch = rbat
 	return nil
 }
@@ -236,7 +234,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat.SetRowCount(rbat.RowCount() + rowCountIncrese)
 
 	anal.Output(rbat, isLast)
-	// proc.SetInputBatch(rbat)
 	result.Batch = rbat
 	return nil
 }

@@ -85,7 +85,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case operatorEnd:
 			// operator over.
-			// proc.SetInputBatch(nil)
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -149,7 +148,6 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			return true, nil
 		}
 		if bat.Last() {
-			// proc.SetInputBatch(bat)
 			result.Batch = bat
 			return false, nil
 		}
@@ -202,7 +200,6 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			}
 		}
 		ana.Output(ctr.bat, isLast)
-		// proc.SetInputBatch(ctr.bat)
 		result.Batch = ctr.bat
 		ctr.bat = nil
 		proc.PutBatch(bat)

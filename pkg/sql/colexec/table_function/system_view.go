@@ -17,6 +17,8 @@ package table_function
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,9 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 const (
@@ -82,7 +84,7 @@ func moLocksPrepare(proc *process.Process, arg *Argument) error {
 	return nil
 }
 
-func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
 
@@ -197,12 +199,12 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 		arg.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		return true, nil
 	default:
 		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
@@ -257,7 +259,7 @@ func moConfigurationsPrepare(proc *process.Process, arg *Argument) error {
 	return nil
 }
 
-func moConfigurationsCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
 
@@ -318,12 +320,13 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument) (bool, er
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 		arg.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
 		proc.SetInputBatch(nil)
+		result.Batch = nil
 		return true, nil
 	default:
 		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)

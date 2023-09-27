@@ -368,9 +368,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 
 	if ctr.state == vm.End {
 		return result, nil
-	} else {
-		return result, moerr.NewInternalError(proc.Ctx, "")
 	}
+
+	panic("bug")
 }
 
 // processH8 use whole batch to fill the aggregation.

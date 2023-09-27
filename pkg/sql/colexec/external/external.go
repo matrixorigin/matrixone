@@ -125,7 +125,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	select {
 	case <-proc.Ctx.Done():
-		// proc.SetInputBatch(nil)
 		result.Status = vm.ExecStop
 		return result, nil
 	default:
@@ -141,13 +140,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Input(nil, arg.info.IsFirst)
 	param := arg.Es
 	if param.Fileparam.End {
-		// proc.SetInputBatch(nil)
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	if param.plh == nil && param.Extern.ScanType != tree.INLINE {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
-			// proc.SetInputBatch(nil)
 			result.Status = vm.ExecStop
 			return result, nil
 		}
@@ -160,7 +157,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	// proc.SetInputBatch(bat)
 	if bat != nil {
 		anal.Output(bat, arg.info.IsLast)
 		anal.Alloc(int64(bat.Size()))

@@ -96,7 +96,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
-	// proc.SetInputBatch(nil)
 	result.Batch = nil
 	return result, nil
 }

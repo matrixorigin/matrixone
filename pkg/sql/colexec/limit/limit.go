@@ -49,7 +49,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Input(bat, arg.info.IsFirst)
 
 	if ap.Seen >= ap.Limit {
-		// proc.SetInputBatch(nil)
 		result.Batch = nil
 		proc.PutBatch(bat)
 		result.Status = vm.ExecStop

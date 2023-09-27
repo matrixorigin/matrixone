@@ -35,6 +35,7 @@ func TestCall(t *testing.T) {
 			IsFirst: false,
 			IsLast:  false,
 		}}
+	resetChildren(&arg, nil)
 	end, err := arg.Call(testutil.NewProc())
 	require.NoError(t, err)
 	require.True(t, end.Status == vm.ExecStop)

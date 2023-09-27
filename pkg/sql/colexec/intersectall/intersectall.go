@@ -156,7 +156,6 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			return true, nil
 		}
 		if bat.Last() {
-			// proc.SetInputBatch(bat)
 			result.Batch = bat
 			return false, nil
 		}
@@ -232,7 +231,6 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		analyzer.Alloc(int64(outputBat.Size()))
 		analyzer.Output(outputBat, isLast)
 
-		// proc.SetInputBatch(outputBat)
 		result.Batch = outputBat
 		proc.PutBatch(bat)
 		return false, nil

@@ -117,7 +117,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	} else if bat.IsEmpty() {
 		proc.PutBatch(bat)
-		// proc.SetInputBatch(batch.EmptyBatch)
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	} else {

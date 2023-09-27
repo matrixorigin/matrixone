@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -39,12 +40,13 @@ func generateSeriesPrepare(proc *process.Process, arg *Argument) (err error) {
 	return err
 }
 
-func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func generateSeriesCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	var (
 		err                                               error
 		startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector
 		rbat                                              *batch.Batch
 	)
+	bat := result.Batch
 	defer func() {
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
@@ -64,8 +66,10 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if endVecTmp != nil {
 			endVecTmp.Free(proc.Mp())
 		}
+		if bat != nil {
+			bat.Clean(proc.GetMPool())
+		}
 	}()
-	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
@@ -145,7 +149,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", startVec.GetType().Oid.String())
 
 	}
-	proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return false, nil
 }
 

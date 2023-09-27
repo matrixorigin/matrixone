@@ -46,6 +46,7 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 type container struct {
+	state          vm.CtrState
 	batWaitForSort *batch.Batch
 
 	desc      []bool // ds[i] == true: the attrs[i] are in descending order

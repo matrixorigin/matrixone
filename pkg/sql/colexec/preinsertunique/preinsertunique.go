@@ -42,31 +42,25 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	argument := arg
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+		return result, nil
+	}
+	inputBat := result.Batch
 
 	analy := proc.GetAnalyze(arg.info.Idx)
 	analy.Start()
 	defer analy.Stop()
-
-	inputBat := proc.InputBatch()
-	result := vm.NewCallResult()
-	if inputBat == nil {
-		result.Status = vm.ExecStop
-		return result, nil
-	}
-
-	if inputBat.IsEmpty() {
-		proc.PutBatch(inputBat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return result, nil
-	}
 	defer proc.PutBatch(inputBat)
 
 	var vec *vector.Vector
 	var bitMap *nulls.Nulls
 
-	uniqueColumnPos := argument.PreInsertCtx.Columns
-	pkPos := int(argument.PreInsertCtx.PkColumn)
+	uniqueColumnPos := arg.PreInsertCtx.Columns
+	pkPos := int(arg.PreInsertCtx.PkColumn)
 	// tableDef := argument.PreInsertCtx.TableDef
 
 	var insertUniqueBat *batch.Batch
@@ -106,6 +100,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 	}
-	proc.SetInputBatch(insertUniqueBat)
+	result.Batch = insertUniqueBat
 	return result, nil
 }
