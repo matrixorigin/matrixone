@@ -16,8 +16,6 @@ package mpool
 
 import (
 	"fmt"
-	"os"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -492,6 +490,20 @@ func DeleteMPool(mp *MPool) {
 	mp.destroy()
 }
 
+func ForceDeleteMPool(mp *MPool) {
+	if mp == nil {
+		return
+	}
+
+	globalPools.Delete(mp.id)
+	if !atomic.CompareAndSwapInt32(&mp.available, 0, 1) {
+		logutil.Errorf("Mpool %s double destroy", mp.tag)
+	}
+	globalStats.RecordManyFrees(mp.tag,
+		mp.stats.NumAlloc.Load()-mp.stats.NumFree.Load(),
+		mp.stats.NumCurrBytes.Load())
+}
+
 var nextPool int64
 var globalCap int64
 var globalStats MPoolStats
@@ -561,12 +573,6 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 	if mycurr > mp.Cap() {
 		mp.stats.RecordFree(mp.tag, tempSize)
 		globalStats.RecordFree("global", tempSize)
-
-		// debug
-		fmt.Println(fmt.Sprintf("[cms that] stack is %s", debug.Stack()))
-		fmt.Println(mp.details.reportJson())
-		os.Exit(1)
-
 		return nil, moerr.NewInternalErrorNoCtx("mpool out of space, alloc %d bytes, cap %d", sz, mp.cap)
 	}
 
@@ -605,14 +611,19 @@ func (mp *MPool) Free(bs []byte) {
 		panic(moerr.NewInternalErrorNoCtx("invalid free, mp header corruption"))
 	}
 	if atomic.LoadInt32(&mp.available) == Unavailable {
-		panic(moerr.NewInternalErrorNoCtx("mpool %s unavailable for alloc", mp.tag))
+		//panic(moerr.NewInternalErrorNoCtx("mpool %s unavailable for free", mp.tag))
+
+		// [tag-11768]
+		return
 	}
 
 	// if cross pool free.
 	if pHdr.poolId != mp.id {
 		otherPool, ok := globalPools.Load(pHdr.poolId)
 		if !ok {
-			panic(moerr.NewInternalErrorNoCtx("invalid mpool id %d", pHdr.poolId))
+			// panic(moerr.NewInternalErrorNoCtx("invalid mpool id %d", pHdr.poolId))
+			// [tag-11768]
+			return
 		}
 		(otherPool.(*MPool)).Free(bs)
 		return

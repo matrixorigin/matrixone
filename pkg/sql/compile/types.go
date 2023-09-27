@@ -218,6 +218,9 @@ type Compile struct {
 	buildPlanFunc func() (*plan2.Plan, error)
 
 	fuzzy *fuzzyCheck
+
+	// [tag-11768]
+	tag11768 bool
 }
 
 type runtimeFilterReceiver struct {
