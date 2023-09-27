@@ -57,6 +57,8 @@ import (
     attributeReference *tree.AttributeReference
     loadParam *tree.ExternParam
     tailParam *tree.TailParameter
+    connectorOption *tree.ConnectorOption
+    connectorOptions []*tree.ConnectorOption
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -398,7 +400,7 @@ import (
 %token <str> RECURSIVE CONFIG DRAINER
 
 // Stream
-%token <str> SOURCE STREAM HEADERS CONNECTOR
+%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
@@ -447,13 +449,13 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
-%type <statement> create_stream_stmt create_connector_stmt
+%type <statement> create_stream_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> show_servers_stmt
+%type <statement> show_servers_stmt show_connectors_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
@@ -538,7 +540,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list connector_option_list
+%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -553,7 +555,9 @@ import (
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
-%type <tableOption> table_option stream_option connector_option
+%type <tableOption> table_option stream_option
+%type <connectorOption> connector_option
+%type <connectorOptions> connector_option_list
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
@@ -3182,6 +3186,7 @@ show_stmt:
 |   show_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
+|   show_connectors_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -3637,6 +3642,7 @@ drop_ddl_stmt:
 |   drop_publication_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
+|   drop_connector_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -5118,8 +5124,11 @@ create_ddl_stmt:
 |   create_extension_stmt
 |   create_sequence_stmt
 |   create_procedure_stmt
-|	create_stream_stmt
-|	create_connector_stmt
+|   create_stream_stmt
+|   create_connector_stmt
+|   pause_daemon_task_stmt
+|   cancel_daemon_task_stmt
+|   resume_daemon_task_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -6131,11 +6140,71 @@ default_opt:
     }
 
 create_connector_stmt:
-    CREATE CONNECTOR table_name WITH '(' connector_option_list ')'
+    CREATE CONNECTOR FOR table_name WITH '(' connector_option_list ')'
     {
         $$ = &tree.CreateConnector{
-            ConnectorName: $3,
-            Options: $6,
+            TableName: $4,
+            Options: $7,
+        }
+    }
+
+show_connectors_stmt:
+    SHOW CONNECTORS
+    {
+	$$ = &tree.ShowConnectors{}
+    }
+
+pause_daemon_task_stmt:
+    PAUSE DAEMON TASK INTEGRAL
+    {
+        var taskID uint64
+        switch v := $4.(type) {
+        case uint64:
+    	    taskID = v
+        case int64:
+    	    taskID = uint64(v)
+        default:
+    	    yylex.Error("parse integral fail")
+    	    return 1
+        }
+        $$ = &tree.PauseDaemonTask{
+            TaskID: taskID,
+        }
+    }
+
+cancel_daemon_task_stmt:
+    CANCEL DAEMON TASK INTEGRAL
+    {
+        var taskID uint64
+        switch v := $4.(type) {
+        case uint64:
+    	    taskID = v
+        case int64:
+    	    taskID = uint64(v)
+        default:
+    	    yylex.Error("parse integral fail")
+    	    return 1
+        }
+        $$ = &tree.CancelDaemonTask{
+            TaskID: taskID,
+        }
+    }
+
+resume_daemon_task_stmt:
+    RESUME DAEMON TASK INTEGRAL
+    {
+        var taskID uint64
+        switch v := $4.(type) {
+        case uint64:
+    	    taskID = v
+        case int64:
+    	    taskID = uint64(v)
+        default:
+    	    yylex.Error("parse integral fail")
+    	    return 1
+        }
+        $$ = &tree.ResumeDaemonTask{
+            TaskID: taskID,
         }
     }
 
@@ -6746,7 +6815,7 @@ linear_opt:
 connector_option_list:
 	connector_option
 	{
-		$$ = []tree.TableOption{$1}
+		$$ = []*tree.ConnectorOption{$1}
 	}
 |	connector_option_list ',' connector_option
 	{
@@ -6756,11 +6825,11 @@ connector_option_list:
 connector_option:
 	ident equal_opt literal
     {
-        $$ = &tree.CreateConnectorWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
+        $$ = &tree.ConnectorOption{Key: tree.Identifier($1.Compare()), Val: $3}
     }
     |   STRING equal_opt literal
         {
-             $$ = &tree.CreateConnectorWithOption{Key: tree.Identifier($1), Val: $3}
+             $$ = &tree.ConnectorOption{Key: tree.Identifier($1), Val: $3}
         }
 
 stream_option_list_opt:
@@ -10182,6 +10251,7 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   CANCEL
 |   CHAIN
 |   CHECKSUM
 |   CLUSTER
@@ -10197,10 +10267,12 @@ non_reserved_keyword:
 |   COMPACT
 |   COLUMN_FORMAT
 |   CONNECTOR
+|   CONNECTORS
 |   SECONDARY_ENGINE_ATTRIBUTE
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
 |   CASCADE
+|   DAEMON
 |   DATA
 |	DAY
 |   DATETIME
@@ -10281,6 +10353,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |   QUERY
+|   PAUSE
 |   PROFILES
 |   ROLE
 |   RANGE
@@ -10291,6 +10364,7 @@ non_reserved_keyword:
 |   REPAIR
 |   REPEATABLE
 |   RELEASE
+|   RESUME
 |   REVOKE
 |   REPLICATION
 |   ROW_FORMAT
@@ -10313,6 +10387,7 @@ non_reserved_keyword:
 |   SUBPARTITIONS
 |   SUBPARTITION
 |   SIMPLE
+|   TASK
 |   TEXT
 |   THAN
 |   TINYBLOB
