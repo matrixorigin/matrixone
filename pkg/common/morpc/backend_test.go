@@ -58,6 +58,27 @@ func TestSend(t *testing.T) {
 	)
 }
 
+func TestReadTimeout(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			// no response
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req)
+			assert.NoError(t, err)
+			defer f.Close()
+
+			_, err = f.Get()
+			assert.Error(t, err)
+		},
+		WithBackendReadTimeout(time.Millisecond*200),
+	)
+}
+
 func TestSendWithPayloadCannotTimeout(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
