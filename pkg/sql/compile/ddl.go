@@ -306,43 +306,77 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
-			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
-			for i := range addIndex {
-				if indexDef.IndexName == addIndex[i].IndexName {
-					return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
+			indexTableDef := act.AddIndex.IndexInfo.TableDef
+
+			for _, indexDef := range indexTableDef.Indexes {
+				for i := range addIndex {
+					if indexDef.IndexName == addIndex[i].IndexName {
+						return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
+					}
 				}
-			}
-			addIndex = append(addIndex, indexDef)
-			if indexDef.Unique {
-				// 0. check original data is not duplicated
-				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
-				if err != nil {
-					return err
+
+				addIndex = append(addIndex, indexDef)
+				if indexDef.Unique {
+					// 0. check original data is not duplicated
+					err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
+					if err != nil {
+						return err
+					}
+
+					if act.AddIndex.IndexTableExist {
+						def := act.AddIndex.IndexInfo.GetIndexTables()[0]
+						// 2. create index table from unique index object
+						createSQL := genCreateSecondaryIndexTableSqlForUniqueIndex(def, indexDef, qry.Database)
+						err = c.runSql(createSQL)
+						if err != nil {
+							return err
+						}
+
+						// 3. insert data into index table for unique index object
+						insertSQL := genInsertIntoSecondaryIndexTableSqlForUniqueIndex(tableDef, indexDef, qry.Database)
+						err = c.runSql(insertSQL)
+						if err != nil {
+							return err
+						}
+					}
+				} else if !indexDef.Unique {
+					if act.AddIndex.IndexTableExist {
+						indexAlgo := strings.ToLower(indexDef.IndexAlgo)
+						if indexAlgo == tree.INDEX_TYPE_BTREE.ToString() || indexAlgo == tree.INDEX_TYPE_INVALID.ToString() {
+							def := act.AddIndex.IndexInfo.GetIndexTables()[0]
+							// 2. create index table from unique index object
+							createSQL := genCreateSecondaryIndexTableSqlForBTreeIndex(def, indexDef, qry.Database)
+							err = c.runSql(createSQL)
+							if err != nil {
+								return err
+							}
+
+							// 3. insert data into index table for unique index object
+							insertSQL := genInsertIntoSecondaryIndexTableSqlForBTreeIndex(tableDef, indexDef, qry.Database)
+							err = c.runSql(insertSQL)
+							if err != nil {
+								return err
+							}
+						} else if indexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
+							indexDef.IndexAlgoTableType == catalog.SystemSecondaryIndex_IvfCentroidsRel {
+							//TODO: fill this later
+							panic("not yet implemented")
+						} else if indexAlgo == tree.INDEX_TYPE_IVFFLAT.ToString() &&
+							indexDef.IndexAlgoTableType == catalog.SystemSecondaryIndex_IvfCentroidsMappingRel {
+							//TODO: fill this later
+							panic("not yet implemented")
+						}
+					}
 				}
+
 			}
 
 			//1. build and update constraint def
-			insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
-			if err != nil {
-				return err
-			}
-			err = c.runSql(insertSql)
-			if err != nil {
-				return err
-			}
-			//---------------------------------------------------------
-			if act.AddIndex.IndexTableExist {
-				//TODO: change
-				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
-				// 2. create index table from unique index object
-				createSQL := genCreateSecondaryIndexTableSqlForUniqueIndex(def, indexDef, qry.Database)
-				err = c.runSql(createSQL)
+			for _, indexDef := range indexTableDef.Indexes {
+				insertSQL, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
 				if err != nil {
 					return err
 				}
-
-				// 3. insert data into index table for unique index object
-				insertSQL := genInsertIntoSecondaryIndexTableSqlForUniqueIndex(tableDef, indexDef, qry.Database)
 				err = c.runSql(insertSQL)
 				if err != nil {
 					return err
