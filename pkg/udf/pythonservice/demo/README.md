@@ -191,7 +191,7 @@ MO udf 支持重载，我们可以创建多个名称相同但参数类型或数�
 
 ## 案例：信用卡欺诈检测
 
-本节以“信用卡欺诈检测”为例，讲述了 python udf 在机器学习推理流水线中的应用。（相关代码详见 [github](https://github.com/joker-star-l/matrixone/tree/main/pkg/udf/pythonservice/demo)）
+本节以“信用卡欺诈检测”为例，讲述了 python udf 在机器学习推理流水线中的应用。（相关代码详见 [github](https://github.com/joker-star-l/matrixone/tree/dev/pkg/udf/pythonservice/demo)）
 
 在本节中，我们需要确保本地 python 环境已安装了 numpy 和 scikit-learn。
 
