@@ -124,7 +124,6 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		create_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
-		create_1.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
@@ -216,7 +215,6 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
-			select_2.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 			select_2.EXPECT().GetColumns().Return(self_handle_sql_columns[i], nil).AnyTimes()
 			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 			cws = append(cws, select_2)

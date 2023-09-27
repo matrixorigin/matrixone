@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -62,6 +63,9 @@ type TxnClient interface {
 	RefreshExpressionEnabled() bool
 	// CNBasedConsistencyEnabled return true if cn based consistency feature enabled
 	CNBasedConsistencyEnabled() bool
+
+	// IterTxns iter all txns
+	IterTxns(func(TxnOverview) bool)
 }
 
 // TxnOperator operator for transaction clients, handling read and write
@@ -71,6 +75,9 @@ type TxnClient interface {
 // to check if it is a moerr.ErrDNShardNotFound error, if so, the TN information
 // held is out of date and needs to be reloaded by HAKeeper.
 type TxnOperator interface {
+	// GetOverview returns txn overview
+	GetOverview() TxnOverview
+
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta
 	// TxnRef returns pointer of current txn metadata. In RC mode, txn's snapshot ts
@@ -116,6 +123,10 @@ type TxnOperator interface {
 	// will be committed to tn to check. If the metadata of the lockservice changes in [lock, commit],
 	// the transaction will be rolled back.
 	AddLockTable(locktable lock.LockTable) error
+	// AddWaitLock add wait lock for current txn
+	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
+	// RemoveWaitLock remove wait lock for current txn
+	RemoveWaitLock(key uint64)
 
 	// AddWorkspace for the transaction
 	AddWorkspace(workspace Workspace)
@@ -188,4 +199,27 @@ type Workspace interface {
 
 	IncrSQLCount()
 	GetSQLCount() uint64
+}
+
+// TxnOverview txn overview include meta and status
+type TxnOverview struct {
+	// CreateAt create at
+	CreateAt time.Time
+	// Meta txn metadata
+	Meta txn.TxnMeta
+	// UserTxn true if is a user transaction
+	UserTxn bool
+	// WaitLocks wait locks
+	WaitLocks []Lock
+}
+
+// Lock wait locks
+type Lock struct {
+	// TableID table id
+	TableID uint64
+	// Rows lock rows. If granularity is row, rows contains all point lock keys, otherwise rows
+	// is range1start, range1end, range2start, range2end, ...
+	Rows [][]byte
+	// Options lock options, include lock type(row|range) and lock mode
+	Options lock.LockOptions
 }
