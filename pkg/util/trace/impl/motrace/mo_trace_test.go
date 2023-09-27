@@ -529,25 +529,32 @@ func TestWithFSSpan(t *testing.T) {
 	tracer.provider.enable = true
 
 	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
+	trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Store(false)
 
-	_, span := tracer.Start(context.Background(), "test", trace.WithKind(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	_, span := tracer.Start(ctx, "test", trace.WithKind(
 		trace.SpanKindLocalFSVis))
 
 	_, ok := span.(trace.NoopSpan)
 
 	assert.True(t, tracer.IsEnable(trace.WithKind(trace.SpanKindLocalFSVis)))
 	assert.False(t, ok)
-	assert.True(t, span.(*MOSpan).NeedRecord(0))
+	assert.True(t, span.(*MOSpan).NeedRecord())
 	span.End()
 
 	_, span = tracer.Start(context.Background(), "test", trace.WithKind(
-		trace.SpanKindS3FSVis))
+		trace.SpanKindRemoteFSVis))
 	_, ok = span.(trace.NoopSpan)
-	assert.False(t, tracer.IsEnable(trace.WithKind(trace.SpanKindS3FSVis)))
+	assert.False(t, tracer.IsEnable(trace.WithKind(trace.SpanKindRemoteFSVis)))
 	assert.True(t, ok)
 	span.End()
 
+	tracer.provider.longSpanTime = time.Millisecond * 20
+	_, span = tracer.Start(ctx, "test")
+	time.Sleep(time.Millisecond * 30)
+	assert.False(t, span.(*MOSpan).NeedRecord())
+	span.End()
 }
 
 func TestMOCtledKindOverwrite(t *testing.T) {
@@ -561,12 +568,12 @@ func TestMOCtledKindOverwrite(t *testing.T) {
 	defer fspan.End()
 	require.Equal(t, fspan.SpanContext().Kind, trace.SpanKindRemote)
 
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(true)
+	trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(true)
 	// won't be overwritten
-	_, span := tracer.Start(fctx, "test3", trace.WithKind(trace.SpanKindS3FSVis))
+	_, span := tracer.Start(fctx, "test3", trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 	require.NotEqual(t, span.SpanContext().Kind, fspan.SpanContext().Kind)
-	require.Equal(t, span.SpanContext().Kind, trace.SpanKindS3FSVis)
+	require.Equal(t, span.SpanContext().Kind, trace.SpanKindStatement)
 
 }
 
@@ -577,11 +584,11 @@ func TestMOCtledKindPassDown(t *testing.T) {
 	}
 	tracer.provider.enable = true
 
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(true)
+	trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Store(true)
 	specialCtx, specialSpan := tracer.Start(context.Background(), "special span",
-		trace.WithKind(trace.SpanKindS3FSVis))
+		trace.WithKind(trace.SpanKindRemoteFSVis))
 	defer specialSpan.End()
-	require.Equal(t, specialSpan.SpanContext().Kind, trace.SpanKindS3FSVis)
+	require.Equal(t, specialSpan.SpanContext().Kind, trace.SpanKindRemoteFSVis)
 
 	// won't pass down kind to child
 	_, span := tracer.Start(specialCtx, "child span")

@@ -16,9 +16,6 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-
-	"github.com/mohae/deepcopy"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -37,9 +34,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/mohae/deepcopy"
 )
 
 var _ ComputationWrapper = &TxnComputationWrapper{}

@@ -36,8 +36,8 @@ import (
 // the cmd format for CN service:
 // 		mo_ctl("cn", "TranceSpan" "uuids of cn:enable/disable:kinds of span")
 // examples as below:
-// 		mo_ctl("cn", "TraceSpan", "cn_uuid1:enable:s3")
-// 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:s3,local,...")
+// 		mo_ctl("cn", "TraceSpan", "cn_uuid1:enable:remote_fs")
+// 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:remote_fs,local_fs,...")
 // 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:all")
 // 		mo_ctl("cn", "TraceSpan", "all:enable:all)
 //
@@ -46,21 +46,21 @@ import (
 // (because there only exist one dn service, so we don't need to specify the uuid,
 // 		but, the uuid will be ignored and will not check its validation even though it is specified.)
 // examples as below:
-// mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3")
-// mo_ctl("dn", "TraceSpan", "[uuid]:disable:local")
-// mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3, local,...")
+// mo_ctl("dn", "TraceSpan", "[uuid]:disable:remote_fs")
+// mo_ctl("dn", "TraceSpan", "[uuid]:disable:local_fs")
+// mo_ctl("dn", "TraceSpan", "[uuid]:disable:remote_fs, local_fs,...")
 // mo_ctl("dn", "TraceSpan", "[uuid]:enable:all")
 
 var supportedSpans = map[string]func(state bool){
-	// enable or disable s3 file service read and write span
-	"s3": func(s bool) { trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(s) },
+	// enable or disable remote file service read and write span
+	"remote_fs": func(s bool) { trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Store(s) },
 	// enable or disable local file service read and write span
-	"local": func(s bool) { trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(s) },
+	"local_fs": func(s bool) { trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(s) },
 	// enable or disable statement span
 	"statement": func(s bool) { trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(s) },
 	// enable or disable all span
 	"all": func(s bool) {
-		trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(s)
+		trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Store(s)
 		trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(s)
 		trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(s)
 	},

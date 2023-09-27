@@ -485,8 +485,15 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 		func(offset int64) (io.ReadCloser, error) {
 			obj, err := doWithRetry(
 				"s3 get object",
-				func() (*minio.Object, error) {
-					return a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
+				func() (obj *minio.Object, err error) {
+					_, span := trace.Start(ctx, "MinioSDKClient.GetObject", trace.WithKind(trace.SpanKindRemoteFSVis))
+					defer func() {
+						info, _ := obj.Stat()
+						span.End(trace.WithFSReadWriteExtra(key, err, info.Size))
+					}()
+
+					obj, err = a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
+					return
 				},
 				maxRetryAttemps,
 				isRetryableError,

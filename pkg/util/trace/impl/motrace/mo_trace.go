@@ -122,8 +122,8 @@ func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 	// The enable state of kind, which falls within [SpanKindS3FSVis, SpanKindLocalFSVis],
 	// is managed by 'mo_ctl'
 	switch cfg.Kind {
-	case trace.SpanKindS3FSVis:
-		return enable && trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
+	case trace.SpanKindRemoteFSVis:
+		return enable && trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Load()
 	case trace.SpanKindLocalFSVis:
 		return enable && trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
 	case trace.SpanKindStatement:
@@ -293,18 +293,9 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	for _, fn := range s.onEnd {
 		fn()
 	}
-	deadline, hasDeadline := s.ctx.Deadline()
-	s.Duration = s.EndTime.Sub(s.StartTime)
-	// check need record
-	if hasDeadline {
-		if s.EndTime.After(deadline) {
-			s.needRecord = true
-			err = s.ctx.Err()
-		}
-	} else {
-		if s.NeedRecord(s.Duration) {
-			s.needRecord = true
-		}
+
+	if s.NeedRecord() {
+		s.needRecord = true
 	}
 	if !s.needRecord {
 		freeMOSpan(s)
@@ -345,6 +336,32 @@ func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
 	} else {
 		s.AddExtraFields(zap.String(name, filepath))
 	}
+}
+
+func (s *MOSpan) NeedRecord() bool {
+	// if the span kind falls in mo_ctl controlled spans, we
+	// hope it ignores the long time threshold and deadline restrictions.
+	switch s.Kind {
+	case trace.SpanKindRemoteFSVis:
+		return trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Load()
+	case trace.SpanKindLocalFSVis:
+		return trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
+	case trace.SpanKindStatement:
+		return trace.MOCtledSpanEnableConfig.EnableStatementSpan.Load()
+	default:
+	}
+
+	// the record logic before mo_ctl controlled spans have been introduced
+	deadline, hasDeadline := s.ctx.Deadline()
+	s.Duration = s.EndTime.Sub(s.StartTime)
+	if hasDeadline {
+		if s.EndTime.After(deadline) {
+			return true
+		}
+	} else {
+		return s.Duration >= s.LongTimeThreshold
+	}
+	return false
 }
 
 // doProfile is sync op.

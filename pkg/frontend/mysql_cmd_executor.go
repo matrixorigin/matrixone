@@ -302,14 +302,6 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.Report(ctx)
 	}
 
-	//span := trace.SpanFromContext(ctx)
-	//proc.Ctx = trace.ContextWithSpan(proc.Ctx, span)
-	//ses.requestCtx = trace.ContextWithSpan(ses.requestCtx, span)
-
-	//sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
-	//proc.WithSpanContext(sc)
-	//reqCtx := ses.GetRequestContext()
-	//ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
 	return motrace.ContextWithStatement(ctx, stm)
 }
 
@@ -2574,12 +2566,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	tenant string,
 	userName string,
 ) (retErr error) {
-
-	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.executeStmt",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
-
 	var err error
 	var runResult *util2.RunResult
 	var cmpBegin time.Time
@@ -2594,6 +2580,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var mrs *MysqlResultSet
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
+
+	var span trace.Span
+	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.executeStmt",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
 	ses.SetQueryStart(time.Now())
 
@@ -3531,11 +3522,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
-	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End()
-
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	input.genSqlSourceType(ses)
@@ -3598,6 +3584,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
+	var span trace.Span
+	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(ses.proc)

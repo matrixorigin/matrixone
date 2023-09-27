@@ -396,7 +396,7 @@ func BenchmarkMOTracer_WithOpts_vs_WithoutOpts(b *testing.B) {
 	tracer.provider.enable = true
 
 	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
+	trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Store(false)
 
 	b.Run("enable with opts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {

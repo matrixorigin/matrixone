@@ -216,25 +216,9 @@ func (c *SpanConfig) Reset() {
 }
 
 var MOCtledSpanEnableConfig struct {
-	EnableS3FSSpan      atomic.Bool
+	EnableRemoteFSSpan  atomic.Bool
 	EnableLocalFSSpan   atomic.Bool
 	EnableStatementSpan atomic.Bool
-}
-
-func (c *SpanConfig) NeedRecord(duration time.Duration) bool {
-	// if span kind in [SpanKindS3FSVis, SpanKindLocalFSVis], we
-	// hope it does record in every invoke and ignores the
-	// long time threshold restriction.
-	switch c.Kind {
-	case SpanKindS3FSVis:
-		return MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
-	case SpanKindLocalFSVis:
-		return MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
-	case SpanKindStatement:
-		return MOCtledSpanEnableConfig.EnableStatementSpan.Load()
-	default:
-		return duration >= c.LongTimeThreshold
-	}
 }
 
 func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
@@ -473,9 +457,9 @@ const (
 	// SpanKindSession is a SpanKind for a Span that represents the operation
 	// start from session
 	SpanKindSession SpanKind = 3
-	// SpanKindS3FSVis is a SpanKind for a Span that needs to collect info of
-	// S3 object operation
-	SpanKindS3FSVis SpanKind = 4
+	// SpanKindRemoteFSVis is a SpanKind for a Span that needs to collect info of
+	// remote object operation
+	SpanKindRemoteFSVis SpanKind = 4
 	// SpanKindLocalFSVis is a SpanKind for a Span that needs to collect info of
 	// local object operation
 	SpanKindLocalFSVis SpanKind = 5
@@ -491,8 +475,8 @@ func (k SpanKind) String() string {
 		return "remote"
 	case SpanKindSession:
 		return "session"
-	case SpanKindS3FSVis:
-		return "s3FSOperation"
+	case SpanKindRemoteFSVis:
+		return "remoteFSOperation"
 	case SpanKindLocalFSVis:
 		return "localFSOperation"
 	default:

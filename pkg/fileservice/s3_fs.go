@@ -250,7 +250,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 
 	var err error
 	size := vector.EntriesSize()
-	ctx, span := trace.Start(ctx, "S3FS.Write", trace.WithKind(trace.SpanKindS3FSVis))
+	ctx, span := trace.Start(ctx, "S3FS.Write", trace.WithKind(trace.SpanKindRemoteFSVis))
 	defer func() {
 		// cover another func to catch the err when process Write
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
@@ -447,7 +447,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 
 	// collect read info only when cache missing
 	size := vector.EntriesSize()
-	ctx, span := trace.Start(ctx, "S3FS.read", trace.WithKind(trace.SpanKindS3FSVis))
+	ctx, span := trace.Start(ctx, "S3FS.read", trace.WithKind(trace.SpanKindRemoteFSVis))
 	defer func() {
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
 	}()
