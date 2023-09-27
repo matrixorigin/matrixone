@@ -508,3 +508,20 @@ func (client *txnClient) removeFromLeakCheck(id []byte) {
 		client.leakChecker.txnClosed(id)
 	}
 }
+
+func (client *txnClient) IterTxns(fn func(TxnOverview) bool) {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+
+	for _, op := range client.mu.activeTxns {
+		if !fn(op.GetOverview()) {
+			return
+		}
+	}
+
+	for _, op := range client.mu.waitActiveTxns {
+		if !fn(op.GetOverview()) {
+			return
+		}
+	}
+}
