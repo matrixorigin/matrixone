@@ -62,6 +62,9 @@ func (d *delegate) NodeMeta(limit int) []byte {
 
 // NotifyMsg implements the memberlist.Delegate interface.
 func (d *delegate) NotifyMsg(data []byte) {
+	if len(data) == 0 {
+		return
+	}
 	var item gossip.CacheKeyItem
 	if err := item.Unmarshal(data); err != nil {
 		d.logger.Error("failed to unmarshal cache item from buf", zap.Error(err))
