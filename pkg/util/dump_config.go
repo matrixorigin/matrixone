@@ -57,9 +57,9 @@ func (et *exporter) Export(k, v, userSet string) {
 }
 
 func (et *exporter) Print() {
-	for k, v := range et.kvs {
-		fmt.Println(k, v.v, v.userSet)
-	}
+	//for k, v := range et.kvs {
+	//	fmt.Println(k, v.v, v.userSet)
+	//}
 }
 
 func (et *exporter) Dump() map[string]item {
@@ -258,7 +258,6 @@ func MergeConfig(dst *ConfigData, src map[string]*logservicepb.ConfigItem) {
 	}
 	for s, item := range src {
 		dst.configData[s] = item
-		fmt.Println(s, item)
 	}
 }
 
