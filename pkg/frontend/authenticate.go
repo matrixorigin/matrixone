@@ -1045,7 +1045,6 @@ var (
 		`drop view if exists mo_catalog.mo_locks;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
-	deleteMoPubsSql       = `delete from mo_catalog.mo_pubs;`
 	dropAutoIcrColSql     = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes         = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
@@ -4128,14 +4127,6 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 			if err != nil {
 				return err
 			}
-		}
-
-		// delete all publications
-
-		err = bh.Exec(deleteCtx, deleteMoPubsSql)
-
-		if err != nil {
-			return err
 		}
 
 		//drop databases created by user
