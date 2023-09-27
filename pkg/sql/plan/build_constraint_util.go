@@ -186,7 +186,8 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 				newTblInfo.haveConstraint = true
 			} else {
 				for _, indexdef := range tblDef.Indexes {
-					//Not required
+					//NOTE: we don't need to implement secondary index logic here.
+					// This logic is for checking Unique Key constraint.
 					if indexdef.Unique {
 						newTblInfo.haveConstraint = true
 						break
@@ -295,7 +296,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 			tblInfo.haveConstraint = true
 		} else {
 			for _, indexdef := range tableDef.Indexes {
-				//Not required
+				//NOTE: we don't need to implement secondary index logic here.
+				// This logic is for checking Unique Key constraint.
 				if indexdef.Unique {
 					tblInfo.haveConstraint = true
 					break

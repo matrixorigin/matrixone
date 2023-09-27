@@ -32,7 +32,6 @@ func checkDropColumnWithPrimaryKey(colName string, pkey *plan.PrimaryKeyDef, ctx
 
 func checkDropColumnWithIndex(colName string, indexes []*plan.IndexDef, ctx CompilerContext) error {
 	for _, indexInfo := range indexes {
-		//TODO: need to verify if this works or not.[done]
 		if indexInfo.Unique {
 			for _, column := range indexInfo.Parts {
 				if column == colName {

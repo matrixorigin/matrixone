@@ -56,7 +56,7 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 		// Any columns used as the partitioning key must comprise part or all of the table's primary key, if the table has one.
 		// Where no column name is specified as the partitioning key, the table's primary key is used, if there is one.
 		// If there is no primary key but there is a unique key, then the unique key is used for the partitioning key
-		//Not required.
+		//NOTE: we don't need to implement secondary index logic here.
 		primaryKeys, uniqueIndices := getPrimaryKeyAndUniqueKey(stmt.Defs)
 		if len(primaryKeys) != 0 {
 			partitionType.ColumnList = primaryKeys

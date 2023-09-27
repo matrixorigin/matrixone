@@ -307,7 +307,7 @@ func checkPartitionIntegrity(ctx context.Context, partitionBinder *PartitionBind
 	return nil
 }
 
-// Not required
+// NOTE: we don't need to implement secondary index logic here.
 func getPrimaryKeyAndUniqueKey(defs tree.TableDefs) (primaryKeys []*tree.UnresolvedName, uniqueIndexs []*tree.UniqueIndex) {
 	for _, item := range defs {
 		switch def := item.(type) {
@@ -647,7 +647,7 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 
 	if tableDef.Indexes != nil {
 		for _, indexDef := range tableDef.Indexes {
-			// Not required
+			//NOTE: we don't need to implement secondary index logic here.
 			if indexDef.Unique {
 				uniqueKeys := make(map[string]int)
 				if dup, dupName := stringSliceToMap(indexDef.Parts, uniqueKeys); dup {
