@@ -193,7 +193,12 @@ func (rt *Routine) handleRequest(req *Request) error {
 	var resp *Response
 	var quit bool
 	reqBegin := time.Now()
-	routineCtx = rt.getCancelRoutineCtx()
+
+	var span trace.Span
+	routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
 	parameters := rt.getParameters()
 	mpi := rt.getProtocol()
 	mpi.SetSequenceID(req.seq)

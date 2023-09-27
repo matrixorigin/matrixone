@@ -216,8 +216,9 @@ func (c *SpanConfig) Reset() {
 }
 
 var MOCtledSpanEnableConfig struct {
-	EnableS3FSSpan    atomic.Bool
-	EnableLocalFSSpan atomic.Bool
+	EnableS3FSSpan      atomic.Bool
+	EnableLocalFSSpan   atomic.Bool
+	EnableStatementSpan atomic.Bool
 }
 
 func (c *SpanConfig) NeedRecord(duration time.Duration) bool {
@@ -229,6 +230,8 @@ func (c *SpanConfig) NeedRecord(duration time.Duration) bool {
 		return MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
 	case SpanKindLocalFSVis:
 		return MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
+	case SpanKindStatement:
+		return MOCtledSpanEnableConfig.EnableStatementSpan.Load()
 	default:
 		return duration >= c.LongTimeThreshold
 	}
@@ -410,6 +413,16 @@ func WithFSReadWriteExtra(fileName string, status error, size int64) SpanEndOpti
 			zap.String("name", fileName),
 			zap.String("status", fmt.Sprintf("%v", status)),
 			zap.Int64("size", size))
+	})
+}
+
+func WithStatementExtra(txnID uuid.UUID, stmID uuid.UUID, stm string) SpanEndOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.Extra = append(cfg.Extra,
+			zap.String("txn_id", txnID.String()),
+			zap.String("statement_id", stmID.String()),
+			zap.String("statement", stm),
+		)
 	})
 }
 

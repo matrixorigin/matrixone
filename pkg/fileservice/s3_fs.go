@@ -361,6 +361,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
+	ctx, span := trace.Start(ctx, "S3FS.Read", trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}

@@ -301,11 +301,16 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
-	sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
-	proc.WithSpanContext(sc)
-	reqCtx := ses.GetRequestContext()
-	ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
-	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
+
+	//span := trace.SpanFromContext(ctx)
+	//proc.Ctx = trace.ContextWithSpan(proc.Ctx, span)
+	//ses.requestCtx = trace.ContextWithSpan(ses.requestCtx, span)
+
+	//sc := trace.SpanContextWithID(trace.TraceID(stmID), trace.SpanKindStatement)
+	//proc.WithSpanContext(sc)
+	//reqCtx := ses.GetRequestContext()
+	//ses.SetRequestContext(trace.ContextWithSpanContext(reqCtx, sc))
+	return motrace.ContextWithStatement(ctx, stm)
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
@@ -2569,6 +2574,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	tenant string,
 	userName string,
 ) (retErr error) {
+
+	var span trace.Span
+	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.executeStmt",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
+
 	var err error
 	var runResult *util2.RunResult
 	var cmpBegin time.Time
@@ -3520,6 +3531,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
+	var span trace.Span
+	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	input.genSqlSourceType(ses)
@@ -3559,6 +3575,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		SqlHelper:     ses.GetSqlHelper(),
 		Buf:           ses.GetBuffer(),
 	}
+	proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -3739,6 +3756,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 	}
+	proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -3803,6 +3821,11 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 			}
 		}
 	}()
+
+	var span trace.Span
+	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.ExecRequest",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
 
 	var sql string
 	logDebugf(ses.GetDebugString(), "cmd %v", req.GetCmd())

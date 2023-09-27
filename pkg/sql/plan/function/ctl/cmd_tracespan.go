@@ -44,7 +44,7 @@ import (
 // the cmd format for TN service:
 // 		mo_ctl("dn", "TraceSpan", "enable/disable:kinds of span")
 // (because there only exist one dn service, so we don't need to specify the uuid,
-// 		but, the uuid will be ignored and will not check its validation even through it is specified.)
+// 		but, the uuid will be ignored and will not check its validation even though it is specified.)
 // examples as below:
 // mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3")
 // mo_ctl("dn", "TraceSpan", "[uuid]:disable:local")
@@ -56,10 +56,13 @@ var supportedSpans = map[string]func(state bool){
 	"s3": func(s bool) { trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(s) },
 	// enable or disable local file service read and write span
 	"local": func(s bool) { trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(s) },
+	// enable or disable statement span
+	"statement": func(s bool) { trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(s) },
 	// enable or disable all span
 	"all": func(s bool) {
 		trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(s)
 		trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(s)
+		trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(s)
 	},
 }
 

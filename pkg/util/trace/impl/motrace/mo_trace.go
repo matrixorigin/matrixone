@@ -126,6 +126,8 @@ func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 		return enable && trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
 	case trace.SpanKindLocalFSVis:
 		return enable && trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
+	case trace.SpanKindStatement:
+		return enable && trace.MOCtledSpanEnableConfig.EnableStatementSpan.Load()
 	default:
 		return enable
 	}

@@ -351,8 +351,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}()
 	var err error
 	var isTlsHeader bool
-	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler")
-	defer span.End()
+	ctx := rm.getCtx()
 	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
 	if routine == nil {
@@ -360,6 +359,12 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
+
+	var span trace.Span
+	routine.cancelRoutineCtx, span = trace.Start(routine.cancelRoutineCtx, "RoutineManager.Handler",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
 	routine.updateGoroutineId()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)

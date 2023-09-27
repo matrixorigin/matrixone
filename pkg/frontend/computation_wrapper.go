@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/mohae/deepcopy"
 
@@ -195,6 +196,11 @@ func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 }
 
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	var span trace.Span
+	requestCtx, span = trace.Start(requestCtx, "TxnComputationWrapper.Compile",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
+
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.ses.IfInitedTempEngine() {
@@ -334,7 +340,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
 	}
-	cwft.proc.Ctx = txnCtx
+	cwft.proc.Ctx = requestCtx
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
 
 	var tenant string
@@ -348,7 +354,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.ses.GetSql(),
 		tenant,
 		cwft.ses.GetUserName(),
-		txnCtx,
+		requestCtx,
 		cwft.ses.GetStorage(),
 		cwft.proc,
 		cwft.stmt,
