@@ -209,6 +209,19 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
+func transferSessionConnType2StatisticConnType(c ConnType) statistic.ConnType {
+	switch c {
+	case ConnTypeUnset:
+		return statistic.ConnTypeUnknown
+	case ConnTypeInternal:
+		return statistic.ConnTypeInternal
+	case ConnTypeExternal:
+		return statistic.ConnTypeExternal
+	default:
+		panic("unknown connection type")
+	}
+}
+
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
 	// set StatementID
 	var stmID uuid.UUID
@@ -277,6 +290,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
+	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
 	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
 		// fix original issue #8165
 		stm.User = ""

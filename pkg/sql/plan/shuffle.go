@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	HashMapSizeForShuffle           = 250000
+	HashMapSizeForShuffle           = 160000
+	threshHoldForHybirdShuffle      = 4000000
 	MAXShuffleDOP                   = 64
 	ShuffleThreshHold               = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
@@ -97,6 +98,8 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint32(zm.GetMinBuf())), upplerLimit)
 	case types.T_uint16:
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint16(zm.GetMinBuf())), upplerLimit)
+	case types.T_varchar, types.T_char, types.T_text:
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), ByteSliceToUint64(zm.GetMinBuf()), upplerLimit)
 	}
 	panic("unsupported shuffle type!")
 }
@@ -425,7 +428,7 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 			return
 		}
-		if node.Stats.HashmapStats.HashmapSize <= HashMapSizeForShuffle*16 {
+		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false
 			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
 				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
