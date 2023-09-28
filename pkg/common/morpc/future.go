@@ -51,7 +51,7 @@ type Future struct {
 }
 
 func (f *Future) init(send RPCMessage) {
-	if _, ok := send.Ctx.Deadline(); !ok {
+	if _, ok := send.Ctx.Deadline(); !ok && !send.internal {
 		panic("context deadline not set")
 	}
 	f.waiting.Store(false)
@@ -108,7 +108,20 @@ func (f *Future) messageSent(err error) {
 
 func (f *Future) maybeReleaseLocked() {
 	if f.mu.closed && f.mu.ref == 0 && f.releaseFunc != nil {
+		f.clear()
 		f.releaseFunc(f)
+	}
+}
+
+func (f *Future) clear() {
+	for {
+		select {
+		case <-f.c:
+		case <-f.errC:
+		case <-f.writtenC:
+		default:
+			return
+		}
 	}
 }
 

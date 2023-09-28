@@ -34,7 +34,7 @@ const (
 	// We do not need to exchange the entire data of node.
 	defaultPushPullInterval  = 0
 	defaultGossipInterval    = time.Second
-	defaultUDPBufferSize     = 64 * 1024
+	defaultUDPBufferSize     = 4 * 1024 * 1024 // 4MB
 	defaultHandoffQueueDepth = 4096
 )
 
