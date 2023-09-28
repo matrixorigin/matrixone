@@ -32,7 +32,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -70,118 +69,90 @@ func (tp Tuple) String() string {
 }
 
 func (tp Tuple) ErrString() string {
-	var res strings.Builder
-	if len(tp) > 1 {
-		res.WriteString("(")
+	res := ""
+	if len(tp) != 1 {
+		res = "("
 	}
 	for i, t := range tp {
 		switch t := t.(type) {
 		case bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
-			res.WriteString(fmt.Sprintf("%v", t))
+			res += fmt.Sprintf("%v", t)
 		case []byte:
-			res.WriteString(*(*string)(unsafe.Pointer(&t)))
+			res += *(*string)(unsafe.Pointer(&t))
 		case Date:
-			res.WriteString(fmt.Sprintf("%v", t.String()))
+			res += fmt.Sprintf("%v", t.String())
 		case Time:
-			res.WriteString(fmt.Sprintf("%v", t.String()))
+			res += fmt.Sprintf("%v", t.String())
 		case Datetime:
-			res.WriteString(fmt.Sprintf("%v", t.String()))
+			res += fmt.Sprintf("%v", t.String())
 		case Timestamp:
-			res.WriteString(fmt.Sprintf("%v", t.String()))
+			res += fmt.Sprintf("%v", t.String())
 		case Decimal64:
-			res.WriteString(fmt.Sprintf("%v", t.Format(0)))
+			res += fmt.Sprintf("%v", t.Format(0))
 		case Decimal128:
-			res.WriteString(fmt.Sprintf("%v", t.Format(0)))
+			res += fmt.Sprintf("%v", t.Format(0))
 		default:
-			res.WriteString(fmt.Sprintf("%v", t))
+			res += fmt.Sprintf("%v", t)
 		}
 		if i != len(tp)-1 {
-			res.WriteString(",")
+			res += ","
 		}
 	}
-	if len(tp) > 1 {
-		res.WriteString(")")
-	}
-	return res.String()
-}
-
-func (tp Tuple) SQLStrings() []string {
-	res := make([]string, 0, len(tp))
-	for _, t := range tp {
-		switch t := t.(type) {
-		case bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
-			res = append(res, fmt.Sprintf("%v", t))
-		case []byte:
-			s := *(*string)(unsafe.Pointer(&t))
-			res = append(res, "'"+s+"'")
-		case Date:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
-		case Time:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
-		case Datetime:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
-		case Timestamp:
-			res = append(res, fmt.Sprintf("'%v'", t.String()))
-		case Decimal64:
-			res = append(res, fmt.Sprintf("%v", t.Format(0)))
-		case Decimal128:
-			res = append(res, fmt.Sprintf("%v", t.Format(0)))
-		default:
-			res = append(res, fmt.Sprintf("%v", t))
-		}
+	if len(tp) != 1 {
+		res += ")"
 	}
 	return res
 }
 
 func printTuple(tuple Tuple) string {
-	var res strings.Builder
+	res := "("
 	for i, t := range tuple {
 		switch t := t.(type) {
 		case bool:
-			res.WriteString(fmt.Sprintf("(bool: %v)", t))
+			res += fmt.Sprintf("(bool: %v)", t)
 		case int8:
-			res.WriteString(fmt.Sprintf("(int8: %v)", t))
+			res += fmt.Sprintf("(int8: %v)", t)
 		case int16:
-			res.WriteString(fmt.Sprintf("(int16: %v)", t))
+			res += fmt.Sprintf("(int16: %v)", t)
 		case int32:
-			res.WriteString(fmt.Sprintf("(int32: %v)", t))
+			res += fmt.Sprintf("(int32: %v)", t)
 		case int64:
-			res.WriteString(fmt.Sprintf("(int64: %v)", t))
+			res += fmt.Sprintf("(int64: %v)", t)
 		case uint8:
-			res.WriteString(fmt.Sprintf("(uint8: %v)", t))
+			res += fmt.Sprintf("(uint8: %v)", t)
 		case uint16:
-			res.WriteString(fmt.Sprintf("(uint16: %v)", t))
+			res += fmt.Sprintf("(uint16: %v)", t)
 		case uint32:
-			res.WriteString(fmt.Sprintf("(uint32: %v)", t))
+			res += fmt.Sprintf("(uint32: %v)", t)
 		case uint64:
-			res.WriteString(fmt.Sprintf("(uint64: %v)", t))
+			res += fmt.Sprintf("(uint64: %v)", t)
 		case Date:
-			res.WriteString(fmt.Sprintf("(date: %v)", t.String()))
+			res += fmt.Sprintf("(date: %v)", t.String())
 		case Time:
-			res.WriteString(fmt.Sprintf("(time: %v)", t.String()))
+			res += fmt.Sprintf("(time: %v)", t.String())
 		case Datetime:
-			res.WriteString(fmt.Sprintf("(datetime: %v)", t.String()))
+			res += fmt.Sprintf("(datetime: %v)", t.String())
 		case Timestamp:
-			res.WriteString(fmt.Sprintf("(timestamp: %v)", t.String()))
+			res += fmt.Sprintf("(timestamp: %v)", t.String())
 		case Decimal64:
-			res.WriteString(fmt.Sprintf("(decimal64: %v)", t.Format(0)))
+			res += fmt.Sprintf("(decimal64: %v)", t.Format(0))
 		case Decimal128:
-			res.WriteString(fmt.Sprintf("(decimal128: %v)", t.Format(0)))
+			res += fmt.Sprintf("(decimal128: %v)", t.Format(0))
 		case []byte:
-			res.WriteString(fmt.Sprintf("([]byte: %v)", t))
+			res += fmt.Sprintf("([]byte: %v)", t)
 		case float32:
-			res.WriteString(fmt.Sprintf("(float32: %v)", t))
+			res += fmt.Sprintf("(float32: %v)", t)
 		case float64:
-			res.WriteString(fmt.Sprintf("(float64: %v)", t))
+			res += fmt.Sprintf("(float64: %v)", t)
 		default:
-			res.WriteString(fmt.Sprintf("(unorganizedType: %v)", t))
+			res += fmt.Sprintf("(unorganizedType: %v)", t)
 		}
 		if i != len(tuple)-1 {
-			res.WriteString(",")
+			res += ","
 		}
 	}
-	res.WriteString(")")
-	return res.String()
+	res += ")"
+	return res
 }
 
 const nilCode = 0x00
