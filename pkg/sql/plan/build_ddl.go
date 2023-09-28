@@ -1207,7 +1207,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 	if len(secondaryIndexInfos) != 0 {
-		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
+		_, err = buildSecondaryIndexTable(createTable, secondaryIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
@@ -1246,6 +1246,11 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			Name: indexTableName,
 		}
 		indexParts := make([]string, 0)
+
+		err = checkIndexKeypartSupportability(ctx.GetContext(), indexInfo.KeyParts)
+		if err != nil {
+			return err
+		}
 
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
@@ -1340,57 +1345,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
-func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, ctx CompilerContext) error {
-	nameCount := make(map[string]int)
-
-	for _, indexInfo := range indexInfos {
-		indexDef := &plan.IndexDef{}
-		indexDef.Unique = false
-
-		indexParts := make([]string, 0)
-
-		for _, keyPart := range indexInfo.KeyParts {
-			name := keyPart.ColName.Parts[0]
-			if _, ok := colMap[name]; !ok {
-				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
-			}
-			if colMap[name].Typ.Id == int32(types.T_blob) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", name))
-			}
-			if colMap[name].Typ.Id == int32(types.T_text) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", name))
-			}
-			if colMap[name].Typ.Id == int32(types.T_json) {
-				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
-			}
-			indexParts = append(indexParts, name)
-		}
-
-		if indexInfo.Name == "" {
-			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
-			nameCount[firstPart]++
-			count := nameCount[firstPart]
-			indexName := firstPart
-			if count > 1 {
-				indexName = firstPart + "_" + strconv.Itoa(count)
-			}
-			indexDef.IndexName = indexName
-		} else {
-			indexDef.IndexName = indexInfo.Name
-		}
-		indexDef.IndexTableName = ""
-		indexDef.Parts = indexParts
-		indexDef.TableExist = false
-		if indexInfo.IndexOption != nil {
-			indexDef.Comment = indexInfo.IndexOption.Comment
-		} else {
-			indexDef.Comment = ""
-		}
-		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
-	}
-	return nil
-}
-
 func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
 	truncateTable := &plan.TruncateTable{}
 
@@ -1456,6 +1410,158 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			},
 		},
 	}, nil
+}
+
+func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) (tableExists bool, err error) {
+	nameCount := make(map[string]int)
+
+	for _, indexInfo := range indexInfos {
+
+		err = checkIndexKeypartSupportability(ctx.GetContext(), indexInfo.KeyParts)
+		if err != nil {
+			return false, err
+		}
+
+		switch indexInfo.KeyType {
+		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
+			tableExists = true // stating that secondary index table exists and need to build during compile.
+			indexDef := &plan.IndexDef{}
+			indexDef.Unique = false // stating that this is not a unique index.
+			indexDef.TableExist = true
+
+			// 1.a secondary index table def (with name)
+			indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+			if err != nil {
+				return false, err
+			}
+			tableDef := &TableDef{
+				Name: indexTableName,
+			}
+
+			// 1.b.i check index column types and build column parts
+			indexParts := make([]string, 0)
+			for _, keyPart := range indexInfo.KeyParts {
+				name := keyPart.ColName.Parts[0]
+				if _, ok := colMap[name]; !ok {
+					return false, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
+				}
+				if colMap[name].Typ.Id == int32(types.T_blob) {
+					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", name))
+				}
+				if colMap[name].Typ.Id == int32(types.T_text) {
+					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", name))
+				}
+				if colMap[name].Typ.Id == int32(types.T_json) {
+					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
+				}
+				if colMap[name].Typ.Id == int32(types.T_array_float32) {
+					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECF32 column '%s' cannot be in index", name))
+				}
+				if colMap[name].Typ.Id == int32(types.T_array_float64) {
+					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECF64 column '%s' cannot be in index", name))
+				}
+				indexParts = append(indexParts, name)
+
+			}
+
+			// 1.b.ii add PK column to the "end of indexParts" irrespective of whether it is already present or not.
+			{
+				// add to indexParts
+				indexParts = append(indexParts, pkeyName)
+
+				//TODO: need to verify (arjun)
+				// add to KeyParts (modify indexInfo built from tree.stmt)
+				//name, err := tree.NewUnresolvedName(nil, pkeyName)
+				//if err != nil {
+				//	return false, err
+				//}
+				//indexInfo.KeyParts = append(indexInfo.KeyParts, &tree.KeyPart{
+				//	ColName: name,
+				//})
+			}
+
+			// 1.c build index table column def
+			{
+
+				// 1.c.i) add index columns to index table
+				keyName := catalog.IndexTableIndexColName
+				colDef := &ColDef{
+					Name: keyName,
+					Alg:  plan.CompressType_Lz4,
+					Typ: &Type{
+						Id:    int32(types.T_varchar),
+						Width: types.MaxVarcharLen,
+					},
+					Default: &plan.Default{
+						NullAbility:  false,
+						Expr:         nil,
+						OriginString: "",
+					},
+				}
+				tableDef.Cols = append(tableDef.Cols, colDef)
+				tableDef.Pkey = &PrimaryKeyDef{
+					Names:       []string{keyName},
+					PkeyColName: keyName,
+				}
+
+				// 1.c.ii) add tablePK column to index table
+				if pkeyName == "" {
+					return false, moerr.NewInternalErrorNoCtx("table needs a PK for secondary index to work")
+				} else {
+					colDef := &ColDef{
+						Name: catalog.IndexTablePrimaryColName,
+						Alg:  plan.CompressType_Lz4,
+						Typ:  colMap[pkeyName].Typ,
+						Default: &plan.Default{
+							NullAbility:  false,
+							Expr:         nil,
+							OriginString: "",
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, colDef)
+				}
+
+			}
+
+			// 1.d Update indexInfo details (IndexName,IndexAlgo,IndexTables etc)
+			if indexInfo.Name == "" {
+				firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
+				nameCount[firstPart]++
+				count := nameCount[firstPart]
+				indexName := firstPart
+				if count > 1 {
+					indexName = firstPart + "_" + strconv.Itoa(count)
+				}
+				indexDef.IndexName = indexName
+			} else {
+				indexDef.IndexName = indexInfo.Name
+			}
+			indexDef.IndexTableName = indexTableName
+			indexDef.Parts = indexParts
+			if indexInfo.IndexOption != nil {
+				//TODO: later make IndexOption as JSON. (separate PR)
+				indexDef.Comment = indexInfo.IndexOption.Comment
+			} else {
+				indexDef.Comment = ""
+			}
+
+			indexDef.IndexAlgo = indexInfo.KeyType.ToString()
+			indexDef.IndexAlgoTableType = ""
+
+			// 1.e update createTable
+			createTable.IndexTables = append(createTable.IndexTables, tableDef)
+			createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
+
+		case tree.INDEX_TYPE_IVFFLAT:
+			{
+				//create index entry 1
+			}
+			{
+				// create index entry 2
+			}
+		}
+	}
+	return tableExists, nil
 }
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
@@ -1691,6 +1797,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
+			KeyType:     stmt.IndexOption.IType,
 		}
 	default:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
@@ -1710,18 +1817,23 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
+	// `CreateIndex.TableDef` will hold the original table definition
+	// `CreateIndex.Index` will hold the CreateTable request having,
+	// - table_def : containing all IndexDefs[]
+	// - index_tables : contains auxiliary tables[]
 	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 	if uIdx != nil {
 		if err := buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
+		// TableExist=true signifies that, we need to create an auxiliary table for this unique index in the `/compile` pkg.
 		createIndex.TableExist = true
 	}
 	if sIdx != nil {
-		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, ctx); err != nil {
+		var err error
+		if createIndex.TableExist, err = buildSecondaryIndexTable(indexInfo, []*tree.Index{sIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
-		createIndex.TableExist = false
 	}
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
@@ -2022,6 +2134,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					return nil, err
 				}
 
+				// TODO: should we have def.GetIndexName()
 				indexName := def.Name
 
 				constrNames := map[string]bool{}
@@ -2044,7 +2157,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, ctx); err != nil {
+				var tableExists bool
+				if tableExists, err = buildSecondaryIndexTable(indexInfo, []*tree.Index{def}, colMap, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
 
@@ -2055,7 +2169,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							TableName:             tableName,
 							OriginTablePrimaryKey: oriPriKeyName,
 							IndexInfo:             indexInfo,
-							IndexTableExist:       false,
+							IndexTableExist:       tableExists,
 						},
 					},
 				}
@@ -2167,6 +2281,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					// NOTE: alterAddCol won't support adding Index to the column.
+					// It will be handled by alterAddIndex.
+					// SQL:
+					// ALTER TABLE your_table_name
+					// ADD new_column_name data_type,
+					// ADD INDEX (new_column_name);
 					return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport add unique index constraints when adding new column")
 					//uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 					//	KeyParts: []*tree.KeyPart{

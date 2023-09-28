@@ -38,6 +38,12 @@ func checkDropColumnWithIndex(colName string, indexes []*plan.IndexDef, ctx Comp
 					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with unique index covered now", colName)
 				}
 			}
+		} else if !indexInfo.Unique && indexInfo.TableExist {
+			for _, column := range indexInfo.Parts {
+				if column == colName {
+					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with secondary index covered now", colName)
+				}
+			}
 		}
 	}
 	return nil
