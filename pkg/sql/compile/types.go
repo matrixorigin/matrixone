@@ -216,8 +216,6 @@ type Compile struct {
 	cnLabel map[string]string
 
 	buildPlanFunc func() (*plan2.Plan, error)
-
-	fuzzy *fuzzyCheck
 }
 
 type runtimeFilterReceiver struct {
@@ -229,18 +227,4 @@ type RemoteReceivRegInfo struct {
 	Idx      int
 	Uuid     uuid.UUID
 	FromAddr string
-}
-
-type fuzzyCheck struct {
-	db        string
-	tbl       string
-	attr      string
-	condition string
-
-	// handle with primary key(a, b, ...) or unique key (a, b, ...)
-	isCompound   bool
-	col          *plan.ColDef
-	compoundCols []*plan.ColDef
-
-	cnt int
 }

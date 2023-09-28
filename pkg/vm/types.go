@@ -82,7 +82,6 @@ const (
 	MergeDelete
 	Right
 	OnDuplicateKey
-	FuzzyFilter
 	PreInsert
 	PreInsertUnique
 	// LastInstructionOp is not a true operator and must set at last.
