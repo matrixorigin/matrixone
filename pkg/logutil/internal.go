@@ -77,9 +77,9 @@ func replaceGlobalLogger(logger *zap.Logger) {
 }
 
 type LogConfig struct {
-	Level      string `toml:"level"`
-	Format     string `toml:"format"`
-	Filename   string `toml:"filename"`
+	Level      string `toml:"level" user_setting:"basic"`
+	Format     string `toml:"format" user_setting:"basic"`
+	Filename   string `toml:"filename" user_setting:"advanced"`
 	MaxSize    int    `toml:"max-size"`
 	MaxDays    int    `toml:"max-days"`
 	MaxBackups int    `toml:"max-backups"`
