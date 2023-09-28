@@ -531,7 +531,6 @@ func checkListPartitionValue(partitionBinder *PartitionBinder, partitionDef *pla
 func formatListPartitionValue(binder *PartitionBinder, tblInfo *TableDef, pi *plan.PartitionByDef) ([]string, error) {
 	defs := pi.Partitions
 	var colTps []*Type
-	cols := make([]*ColDef, 0)
 	if pi.PartitionExpr != nil {
 		tp := types.T_int64
 		if isPartExprUnsigned(pi) {
@@ -548,7 +547,6 @@ func formatListPartitionValue(binder *PartitionBinder, tblInfo *TableDef, pi *pl
 				return nil, moerr.NewFieldNotFoundPart(binder.GetContext())
 			}
 			colTps = append(colTps, colInfo.Typ)
-			cols = append(cols, colInfo)
 		}
 	}
 

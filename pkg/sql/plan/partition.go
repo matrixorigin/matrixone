@@ -601,7 +601,7 @@ func checkPartitionExprType(ctx context.Context, _ *PartitionBinder, _ *TableDef
 			return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
 		}
 
-		if partitionDef.Type == plan.PartitionType_LIST && !t.IsInteger() {
+		if partitionDef.Type == plan.PartitionType_LIST {
 			if !t.IsInteger() {
 				if _, ok := expr.Expr.(*plan.Expr_Col); ok {
 					return moerr.NewFieldTypeNotAllowedAsPartitionField(ctx, partitionDef.PartitionExpr.ExprStr)
