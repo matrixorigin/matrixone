@@ -3328,6 +3328,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, childId)
 	case "mo_locks":
 		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, childId)
+	case "mo_transactions":
+		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}
