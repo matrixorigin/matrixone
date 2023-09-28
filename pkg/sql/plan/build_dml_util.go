@@ -425,7 +425,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertSecondaryTableDef.Cols = append(insertSecondaryTableDef.Cols[:j], insertSecondaryTableDef.Cols[j+1:]...)
 							}
 						}
-						err = makeInsertPlan(ctx, builder, bindCtx, secondaryObjRef, insertSecondaryTableDef, 1, preSKStep, false, false, true, true, nil, false)
+						err = makeInsertPlan(ctx, builder, bindCtx, secondaryObjRef, insertSecondaryTableDef, 1, preSKStep, false, false, true, true, nil, false, hasOnDup)
 						if err != nil {
 							return err
 						}
@@ -984,7 +984,7 @@ func makeInsertPlan(
 					return err
 				}
 
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil, false)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil, false, false)
 				if err != nil {
 					return err
 				}
