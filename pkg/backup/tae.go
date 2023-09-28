@@ -20,12 +20,14 @@ import (
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"os"
@@ -200,6 +202,14 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	}
 	taeFileList = append(taeFileList, sizeList...)
 	sizeList, err = CopyDir(ctx, srcFs, dstFs, "gc")
+	if err != nil {
+		return err
+	}
+	location, err := blockio.EncodeLocationFromString(backup)
+	if err != nil {
+		return err
+	}
+	_, err = checkpoint.MergeCkpMeta(ctx, dstFs, location, types.TS{}, types.TS{})
 	if err != nil {
 		return err
 	}

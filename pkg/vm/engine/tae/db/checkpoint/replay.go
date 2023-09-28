@@ -15,7 +15,9 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sort"
 	"sync"
 	"time"
@@ -43,6 +45,75 @@ type metaFile struct {
 	index int
 	start types.TS
 	end   types.TS
+}
+
+func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, location objectio.Location, start, end types.TS) (string, error) {
+	dirs, err := fs.List(ctx, CheckpointDir)
+	if err != nil {
+		return "", err
+	}
+	if len(dirs) == 0 {
+		return "", nil
+	}
+	metaFiles := make([]*metaFile, 0)
+	for i, dir := range dirs {
+		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		metaFiles = append(metaFiles, &metaFile{
+			start: start,
+			end:   end,
+			index: i,
+		})
+	}
+	sort.Slice(metaFiles, func(i, j int) bool {
+		return metaFiles[i].end.Less(metaFiles[j].end)
+	})
+	targetIdx := metaFiles[len(metaFiles)-1].index
+	dir := dirs[targetIdx]
+	reader, err := blockio.NewFileReader(fs, CheckpointDir+dir.Name)
+	if err != nil {
+		return "", err
+	}
+	bats, err := reader.LoadAllColumns(ctx, nil, common.DefaultAllocator)
+	if err != nil {
+		return "", err
+	}
+	bat := containers.NewBatch()
+	defer bat.Close()
+	colNames := CheckpointSchema.Attrs()
+	colTypes := CheckpointSchema.Types()
+	for i := range bats[0].Vecs {
+		if len(bats) == 0 {
+			continue
+		}
+		var vec containers.Vector
+		if bats[0].Vecs[i].Length() == 0 {
+			vec = containers.MakeVector(colTypes[i])
+		} else {
+			vec = containers.ToTNVector(bats[0].Vecs[i])
+		}
+		bat.AddVector(colNames[i], vec)
+	}
+	last := bat.Vecs[0].Length() - 1
+	bat.Vecs[0].Append(start, false)
+	bat.Vecs[1].Append(end, false)
+	bat.Vecs[2].Append(location, false)
+	bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
+	bat.GetVectorByName(CheckpointAttr_Version).Append(bat.Vecs[4].Get(last), false)
+	bat.GetVectorByName(CheckpointAttr_AllLocations).Append(location, false)
+	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.Vecs[5].Get(last), false)
+	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.Vecs[6].Get(last), false)
+	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, start, end)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
+	if err != nil {
+		return "", err
+	}
+	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
+		return "", err
+	}
+
+	// TODO: checkpoint entry should maintain the location
+	_, err = writer.WriteEnd(ctx)
+	return name, err
 }
 
 func (r *runner) Replay(dataFactory catalog.DataFactory) (
