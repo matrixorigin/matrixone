@@ -93,8 +93,13 @@ var pool = sync.Pool{
 }
 
 // New is used to new an object of compile
-func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
+func New(
+	addr, db, sql, tenant, uid string,
+	ctx context.Context,
+	e engine.Engine,
+	proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string,
+	tag11768 bool, // if tag11768 is true, it will build a new mpool to instead of the old one.
+) *Compile {
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
@@ -103,6 +108,18 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
+	{
+		if tag11768 {
+			// [tag-11768]
+			m, err := mpool.NewMPool(uuid.Must(uuid.NewUUID()).String(), 0, mpool.NoFixed)
+			if err != nil {
+				panic(err)
+			}
+			c.proc.SetMp(m)
+			c.tag11768 = true
+		}
+	}
+
 	c.stmt = stmt
 	c.addr = addr
 	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
@@ -128,6 +145,13 @@ func putCompile(c *Compile) {
 	}
 
 	c.proc.CleanValueScanBatchs()
+	// XXX delete mpool here to avoid memory leak.
+	// not a true leak, but some bug will cause the record number of using memory incorrect.
+	// search the `[tag-11768]` to found all the codes harked for this problem.
+	if c.tag11768 {
+		mpool.ForceDeleteMPool(c.proc.Mp())
+	}
+
 	c.clear()
 	pool.Put(c)
 }
@@ -149,7 +173,8 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
-	c.fuzzy = nil
+	c.tag11768 = false
+
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -347,37 +372,22 @@ func (c *Compile) run(s *Scope) error {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	var cc *Compile
-
-	result = &util2.RunResult{
-		AffectRows: 0,
-	}
-
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer task.End()
-
 	defer func() {
-		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-		if cc != nil {
-			if cc.fuzzy != nil && cc.fuzzy.cnt > 0 && err == nil {
-				err = cc.fuzzy.backgroundSQLCheck(cc)
-			}
-		} else {
-			if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
-				err = c.fuzzy.backgroundSQLCheck(c)
-			}
-		}
-
 		putCompile(c)
 		putCompile(cc)
 	}()
-
+	result := &util2.RunResult{
+		AffectRows: 0,
+	}
 	if c.proc.TxnOperator != nil {
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
-	if err = c.runOnce(); err != nil {
+	if err := c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
 		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
@@ -398,18 +408,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 			// improved to refresh expression in the future.
-			cc = New(
-				c.addr,
-				c.db,
-				c.sql,
-				c.tenant,
-				c.uid,
-				c.proc.Ctx,
-				c.e,
-				c.proc,
-				c.stmt,
-				c.isInternal,
-				c.cnLabel)
+			cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, false)
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				pn, err := c.buildPlanFunc()
 				if err != nil {
@@ -417,11 +416,11 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 				}
 				c.pn = pn
 			}
-			if err = cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
 				c.fatalLog(1, err)
 				return nil, err
 			}
-			if err = cc.runOnce(); err != nil {
+			if err := cc.runOnce(); err != nil {
 				c.fatalLog(1, err)
 				return nil, err
 			}
@@ -437,7 +436,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 	}
-	return result, err
+	return result, nil
 }
 
 // run once
@@ -1025,19 +1024,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Arg: constructOnduplicateKey(n, c.e),
 		}
 		return []*Scope{rs}, nil
-	case plan.Node_FUZZY_FILTER:
-		curr := c.anal.curr
-		c.setAnalyzeCurrent(nil, int(n.Children[0]))
-		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
-		if err != nil {
-			return nil, err
-		}
-		ss, err = c.compileFuzzyFilter(n, ss)
-		if err != nil {
-			return nil, err
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
 	case plan.Node_PRE_INSERT_UK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
@@ -2338,47 +2324,6 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		Arg: constructMergeLimit(n, c.proc),
 	}
 	return []*Scope{rs}
-}
-
-func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	if len(ss) != 1 {
-		panic("fuzzy filter should have only one prescope")
-	}
-
-	arg := constructFuzzyFilter()
-	ss[0].appendInstruction(vm.Instruction{
-		Op:  vm.FuzzyFilter,
-		Idx: c.anal.curr,
-		Arg: arg,
-	})
-
-	outData, err := newFuzzyCheck(n)
-	if err != nil {
-		return nil, err
-	}
-
-	// wrap the collision key into c.fuzzy, for more information,
-	// please refer fuzzyCheck.go
-	ss[0].appendInstruction(vm.Instruction{
-		Op: vm.Output,
-		Arg: &output.Argument{
-			Data: outData,
-			Func: func(data any, bat *batch.Batch) error {
-				if bat == nil || bat.IsEmpty() {
-					return nil
-				}
-				c.fuzzy = data.(*fuzzyCheck)
-				// the batch will contain the key that fuzzyCheck
-				if err := c.fuzzy.fill(c.ctx, bat); err != nil {
-					return err
-				}
-
-				return nil
-			},
-		},
-	})
-
-	return ss, nil
 }
 
 func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {

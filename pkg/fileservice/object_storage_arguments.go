@@ -119,5 +119,10 @@ func (o *ObjectStorageArguments) validate() error {
 		}
 	}
 
+	// role session name
+	if o.RoleSessionName == "" {
+		o.RoleSessionName = "mo-service"
+	}
+
 	return nil
 }
