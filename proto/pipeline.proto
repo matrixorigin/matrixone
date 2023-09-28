@@ -176,6 +176,10 @@ message OnDuplicateKey{
   map<string, plan.Expr> on_duplicate_expr  = 3;
 }
 
+message FuzzyFilter {
+
+}
+
 message Join {
   uint64 ibucket = 1;
   uint64 nbucket = 2;
