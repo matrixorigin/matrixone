@@ -739,8 +739,7 @@ func (it IndexType) ToString() string {
 	case INDEX_TYPE_IVFFLAT:
 		return "ivfflat"
 	case INDEX_TYPE_INVALID:
-		// keep it "" so that when it converted to SQL string, it is not shown.
-		return ""
+		return "invalid"
 	default:
 		return "Unknown IndexType"
 	}
