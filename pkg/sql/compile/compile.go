@@ -1045,6 +1045,27 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
+	case plan.Node_PRE_INSERT_SK:
+		curr := c.anal.curr
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			preInsertSkArg, err := constructPreInsertSk(n, c.proc)
+			if err != nil {
+				return nil, err
+			}
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.PreInsertSecondaryIndex,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     preInsertSkArg,
+			})
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
 	case plan.Node_PRE_INSERT:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
