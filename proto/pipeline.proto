@@ -373,8 +373,8 @@ message Instruction{
   Shuffle shuffle = 33;
   Merge merge = 34;
   StreamScan stream_scan = 35;
-
-  PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
+  FuzzyFilter fuzzy_filter = 36;
+  PreInsertSecondaryIndex pre_insert_secondary_index  = 37;
 }
 
 message AnalysisList {
@@ -471,11 +471,13 @@ message UuidToRegIdx {
 
 message RuntimeFilter {
   enum RuntimeFilterType {
-    NO_FILTER = 0;
-    IN = 1;
-    BITMAP = 2;
-    MIN_MAX = 3;
-    BINARY_FUSE = 4;
+    IN = 0;
+    BITMAP = 1;
+    MIN_MAX = 2;
+    BINARY_FUSE = 3;
+
+    PASS = 100;
+    DROP = 101;
   }
 
   RuntimeFilterType typ = 1;

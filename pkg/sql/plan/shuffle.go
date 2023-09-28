@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	HashMapSizeForShuffle           = 250000
+	HashMapSizeForShuffle           = 160000
+	threshHoldForHybirdShuffle      = 4000000
 	MAXShuffleDOP                   = 64
 	ShuffleThreshHold               = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
@@ -70,6 +71,10 @@ func VarlenaToUint64(v *types.Varlena, area []byte) uint64 {
 
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
+	if lenBytes == 0 {
+		// always hash empty string to first bucket
+		return 0
+	}
 	//sample five bytes
 	h := (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1]))
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
@@ -93,6 +98,8 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint32(zm.GetMinBuf())), upplerLimit)
 	case types.T_uint16:
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint16(zm.GetMinBuf())), upplerLimit)
+	case types.T_varchar, types.T_char, types.T_text:
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), ByteSliceToUint64(zm.GetMinBuf()), upplerLimit)
 	}
 	panic("unsupported shuffle type!")
 }
@@ -421,7 +428,7 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
 			return
 		}
-		if node.Stats.HashmapStats.HashmapSize <= HashMapSizeForShuffle*16 {
+		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false
 			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
 				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
