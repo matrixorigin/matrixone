@@ -92,20 +92,6 @@ func (mr *MockComputationWrapperMockRecorder) Compile(requestCtx, u, fill interf
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Compile", reflect.TypeOf((*MockComputationWrapper)(nil).Compile), requestCtx, u, fill)
 }
 
-// GetAffectedRows mocks base method.
-func (m *MockComputationWrapper) GetAffectedRows() uint64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetAffectedRows")
-	ret0, _ := ret[0].(uint64)
-	return ret0
-}
-
-// GetAffectedRows indicates an expected call of GetAffectedRows.
-func (mr *MockComputationWrapperMockRecorder) GetAffectedRows() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAffectedRows", reflect.TypeOf((*MockComputationWrapper)(nil).GetAffectedRows))
-}
-
 // GetAst mocks base method.
 func (m *MockComputationWrapper) GetAst() tree.Statement {
 	m.ctrl.T.Helper()
