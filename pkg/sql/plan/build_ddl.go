@@ -1247,6 +1247,11 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		}
 		indexParts := make([]string, 0)
 
+		err = checkIndexKeypartSupportability(ctx.GetContext(), indexInfo.KeyParts)
+		if err != nil {
+			return err
+		}
+
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -1411,6 +1416,12 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 	nameCount := make(map[string]int)
 
 	for _, indexInfo := range indexInfos {
+
+		err = checkIndexKeypartSupportability(ctx.GetContext(), indexInfo.KeyParts)
+		if err != nil {
+			return false, err
+		}
+
 		switch indexInfo.KeyType {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
 			tableExists = true // stating that secondary index table exists and need to build during compile.
@@ -1427,7 +1438,7 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 				Name: indexTableName,
 			}
 
-			// 1.b check index column types and build column parts
+			// 1.b.i check index column types and build column parts
 			indexParts := make([]string, 0)
 			for _, keyPart := range indexInfo.KeyParts {
 				name := keyPart.ColName.Parts[0]
@@ -1450,58 +1461,53 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECF64 column '%s' cannot be in index", name))
 				}
 				indexParts = append(indexParts, name)
+
+			}
+
+			// 1.b.ii add PK column to the "end of indexParts" irrespective of whether it is already present or not.
+			{
+				// add to indexParts
+				indexParts = append(indexParts, pkeyName)
+
+				//TODO: need to verify (arjun)
+				// add to KeyParts (modify indexInfo built from tree.stmt)
+				//name, err := tree.NewUnresolvedName(nil, pkeyName)
+				//if err != nil {
+				//	return false, err
+				//}
+				//indexInfo.KeyParts = append(indexInfo.KeyParts, &tree.KeyPart{
+				//	ColName: name,
+				//})
 			}
 
 			// 1.c build index table column def
 			{
+
 				// 1.c.i) add index columns to index table
-				var keyName string
-				if len(indexInfo.KeyParts) == 1 {
-					keyName = catalog.IndexTableIndexColName
-					colDef := &ColDef{
-						Name: keyName,
-						Alg:  plan.CompressType_Lz4,
-						Typ: &Type{
-							Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
-							Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
-						},
-						//TODO: check if this should be true
-						// If PK, then can, the column be nullable?
-						Default: &plan.Default{
-							NullAbility:  false,
-							Expr:         nil,
-							OriginString: "",
-						},
-					}
-					tableDef.Cols = append(tableDef.Cols, colDef)
-					tableDef.Pkey = &PrimaryKeyDef{
-						Names:       []string{keyName},
-						PkeyColName: keyName,
-					}
-				} else {
-					keyName = catalog.IndexTableIndexColName
-					colDef := &ColDef{
-						Name: keyName,
-						Alg:  plan.CompressType_Lz4,
-						Typ: &Type{
-							Id:    int32(types.T_varchar),
-							Width: types.MaxVarcharLen,
-						},
-						Default: &plan.Default{
-							NullAbility:  false,
-							Expr:         nil,
-							OriginString: "",
-						},
-					}
-					tableDef.Cols = append(tableDef.Cols, colDef)
-					tableDef.Pkey = &PrimaryKeyDef{
-						Names:       []string{keyName},
-						PkeyColName: keyName,
-					}
+				keyName := catalog.IndexTableIndexColName
+				colDef := &ColDef{
+					Name: keyName,
+					Alg:  plan.CompressType_Lz4,
+					Typ: &Type{
+						Id:    int32(types.T_varchar),
+						Width: types.MaxVarcharLen,
+					},
+					Default: &plan.Default{
+						NullAbility:  false,
+						Expr:         nil,
+						OriginString: "",
+					},
+				}
+				tableDef.Cols = append(tableDef.Cols, colDef)
+				tableDef.Pkey = &PrimaryKeyDef{
+					Names:       []string{keyName},
+					PkeyColName: keyName,
 				}
 
 				// 1.c.ii) add tablePK column to index table
-				if pkeyName != "" {
+				if pkeyName == "" {
+					return false, moerr.NewInternalErrorNoCtx("table needs a PK for secondary index to work")
+				} else {
 					colDef := &ColDef{
 						Name: catalog.IndexTablePrimaryColName,
 						Alg:  plan.CompressType_Lz4,
@@ -1513,9 +1519,8 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 						},
 					}
 					tableDef.Cols = append(tableDef.Cols, colDef)
-				} else {
-					return false, moerr.NewInternalErrorNoCtx("table needs a PK for secondary index to work")
 				}
+
 			}
 
 			// 1.d Update indexInfo details (IndexName,IndexAlgo,IndexTables etc)
