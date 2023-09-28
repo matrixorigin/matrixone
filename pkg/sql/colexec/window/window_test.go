@@ -101,26 +101,19 @@ func TestWindow(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		// tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
+
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 
-		// tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 
-		// tc.proc.Reg.InputBatch = &batch.Batch{}
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 
-		// tc.proc.Reg.InputBatch = nil
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 
-		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-		}
-		// tc.proc.Reg.InputBatch = nil
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 	}

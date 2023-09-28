@@ -111,10 +111,10 @@ func BenchmarkBuild(b *testing.B) {
 				ok, err := tc.arg.Call(tc.proc)
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
-				mp := tc.proc.Reg.InputBatch.AuxData.(*hashmap.JoinMap)
+				mp := ok.Batch.AuxData.(*hashmap.JoinMap)
 				tc.proc.Reg.MergeReceivers[0].Ch <- nil
 				mp.Free()
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				ok.Batch.Clean(tc.proc.Mp())
 				break
 			}
 		}

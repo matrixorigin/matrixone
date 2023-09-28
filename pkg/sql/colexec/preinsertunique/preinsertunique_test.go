@@ -61,7 +61,7 @@ func TestPreInsertUnique(t *testing.T) {
 	// (1, 11, 23)
 	// (2, 22, 23)
 	// (3, 33, 23)
-	inputBatch := &batch.Batch{
+	testBatch := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 3}, nil),
 			testutil.MakeInt64Vector([]int64{11, 22, 33}, nil),
@@ -69,7 +69,7 @@ func TestPreInsertUnique(t *testing.T) {
 		},
 		Cnt: 1,
 	}
-	inputBatch.SetRowCount(3)
+	testBatch.SetRowCount(3)
 
 	argument := Argument{
 		PreInsertCtx: &plan.PreInsertUkCtx{
@@ -86,7 +86,7 @@ func TestPreInsertUnique(t *testing.T) {
 	}
 
 	types.T_int64.ToType()
-	resetChildren(&argument, inputBatch)
+	resetChildren(&argument, testBatch)
 	_, err := argument.Call(proc)
 	require.NoError(t, err)
 }

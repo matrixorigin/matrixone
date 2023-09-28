@@ -97,7 +97,6 @@ func TestInsertOperator(t *testing.T) {
 		},
 	}
 	resetChildren(&argument1, batch1)
-	// proc.Reg.InputBatch = batch1
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
 	result, err := argument1.Call(proc)

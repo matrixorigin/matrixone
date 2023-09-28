@@ -61,7 +61,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 
 	case reg.Ch <- bat:
-		result.Batch = nil
+		// result.Batch = nil
 		return result, nil
 	}
 }

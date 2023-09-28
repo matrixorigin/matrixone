@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -69,14 +68,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, e
 	}
 
-	bat := proc.InputBatch()
+	bat := result.Batch
 	if bat == nil {
 		result.Status = vm.ExecStop
 		return result, e
 	}
 	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
 		return result, e
 	}
 
@@ -85,7 +82,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}
 	for i := range tblArg.retSchema {
-		if proc.InputBatch().GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
+		if bat.GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
 			result.Status = vm.ExecStop
 			return result, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.Name)
 		}

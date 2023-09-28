@@ -160,7 +160,6 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 		}
 	}
 	result.Batch = ctr.batWaitForSort
-	// proc.SetInputBatch(ctr.batWaitForSort)
 	ctr.batWaitForSort = nil
 	return nil
 }
@@ -257,23 +256,4 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	panic("bug")
-	// ctr := arg.ctr
-
-	// bat := proc.InputBatch()
-	// result := vm.NewCallResult()
-	// if bat == nil {
-	// 	result.Status = vm.ExecStop
-	// 	return result, ctr.sortAndSend(proc)
-	// }
-
-	// enoughToSend, err := ctr.appendBatch(proc, bat)
-	// if err != nil {
-	// 	return result, err
-	// }
-	// if enoughToSend {
-	// 	return result, ctr.sortAndSend(proc)
-	// }
-
-	// proc.SetInputBatch(batch.EmptyBatch)
-	// return result, nil
 }

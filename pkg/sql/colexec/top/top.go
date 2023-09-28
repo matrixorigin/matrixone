@@ -99,19 +99,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	if ctr.state == vm.Eval {
-		if ctr.bat == nil {
-			ctr.state = vm.End
-			result.Batch = nil
-			result.Status = vm.ExecStop
-			return result, nil
-		}
-
-		err := ctr.eval(ap.Limit, proc, &result)
-		if err != nil {
-			return result, err
+		if ctr.bat != nil {
+			err := ctr.eval(ap.Limit, proc, &result)
+			if err != nil {
+				return result, err
+			}
 		}
 		ctr.state = vm.End
-		return result, err
+		return result, nil
 	}
 
 	if ctr.state == vm.End {

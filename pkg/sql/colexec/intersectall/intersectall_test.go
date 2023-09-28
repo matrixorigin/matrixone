@@ -89,7 +89,7 @@ func TestIntersectAll(t *testing.T) {
 			require.Equal(t, 3, len(result.Vecs))
 			result.Clean(c.proc.Mp())
 		} /*else {
-			c.proc.InputBatch().Clean(c.proc.Mp())
+			result.Clean(c.proc.Mp())
 		}*/
 	}
 	require.Equal(t, 2, cnt) // 1 row

@@ -97,10 +97,12 @@ func TestMark(t *testing.T) {
 	   	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 	   	tc.proc.Reg.MergeReceivers[1].Ch <- bat
 	   	for {
-	   		if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
-	   			break
-	   		}
-	   		tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			ok, err := tc.arg.Call(tc.proc)
+			if ok.Status == vm.ExecStop || err != nil {
+				cleanResult(&ok, tc.proc)
+				break
+			}
+			cleanResult(&ok, tc.proc)
 	   	}
 	   	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	   }

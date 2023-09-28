@@ -349,6 +349,7 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	var cc *Compile
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
+	// fmt.Printf("%s", DebugShowScopes(c.scope))
 	defer task.End()
 	defer func() {
 		putCompile(c)

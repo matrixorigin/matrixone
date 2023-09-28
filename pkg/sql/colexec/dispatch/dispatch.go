@@ -94,8 +94,6 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
-	// bat := proc.InputBatch()
-	// result := vm.NewCallResult()
 
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
@@ -127,7 +125,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, err
 	} else {
-		result.Batch = nil
+		// result.Batch = nil
 		return result, err
 	}
 }

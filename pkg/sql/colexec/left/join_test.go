@@ -176,10 +176,12 @@ func BenchmarkJoin(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bat
 			for {
-				if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
+				ok, err := tc.arg.Call(tc.proc)
+				if ok.Status == vm.ExecStop || err != nil {
+					cleanResult(&ok, tc.proc)
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+				cleanResult(&ok, tc.proc)
 			}
 		}
 	}

@@ -325,7 +325,6 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 		return false, nil
 
 	case dataFinished:
-		proc.SetInputBatch(nil)
 		result.Batch = nil
 		return true, nil
 	default:
