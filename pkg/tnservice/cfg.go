@@ -68,9 +68,9 @@ var (
 // Config tn store configuration
 type Config struct {
 	// DataDir data dir
-	DataDir string `toml:"-"`
+	DataDir string `toml:"-" user_setting:"basic"`
 	// UUID tn store uuid
-	UUID string `toml:"uuid"`
+	UUID string `toml:"uuid" user_setting:"basic"`
 	// ListenAddress listening address for receiving external requests.
 	ListenAddress string `toml:"listen-address"`
 	// ServiceAddress service address for communication, if this address is not set, use
@@ -83,10 +83,10 @@ type Config struct {
 	// TODO(volgariver6): The value of this field is also used to determine the version
 	// of MO. If it is not set, we use the old listen-address/service-address fields, and
 	// if it is set, we use the new policy to distribute the ports to all services.
-	PortBase int `toml:"port-base"`
+	PortBase int `toml:"port-base" user_setting:"basic"`
 	// ServiceHost is the host name/IP for the service address of RPC request. There is
 	// no port value in it.
-	ServiceHost string `toml:"service-host"`
+	ServiceHost string `toml:"service-host" user_setting:"basic"`
 
 	// HAKeeper configuration
 	HAKeeper struct {
@@ -122,7 +122,7 @@ type Config struct {
 		ListenAddress              string        `toml:"listen-address"`
 		ServiceAddress             string        `toml:"service-address"`
 		RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
-		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum"`
+		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum" user_setting:"advanced"`
 		LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 		LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
 	}

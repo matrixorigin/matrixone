@@ -39,29 +39,29 @@ var (
 // Config is the configuration of proxy server.
 type Config struct {
 	UUID          string `toml:"uuid"`
-	ListenAddress string `toml:"listen-address"`
+	ListenAddress string `toml:"listen-address" user_setting:"basic"`
 	// RebalanceInterval is the interval between two rebalance operations.
-	RebalanceInterval toml.Duration `toml:"rebalance-interval"`
+	RebalanceInterval toml.Duration `toml:"rebalance-interval" user_setting:"advanced"`
 	// RebalanceDisabled indicates that the rebalancer is disabled.
-	RebalanceDisabled bool `toml:"rebalance-disabled"`
+	RebalanceDisabled bool `toml:"rebalance-disabled" user_setting:"advanced"`
 	// RebalanceToerance indicates the rebalancer's tolerance.
 	// Connections above the avg*(1+tolerance) will be migrated to
 	// other CN servers. This value should be less than 1.
-	RebalanceToerance float64 `toml:"rebalance-tolerance"`
+	RebalanceToerance float64 `toml:"rebalance-tolerance" user_setting:"advanced"`
 
 	// Default is false. With true. Server will support tls.
 	// This value should be ths same with all CN servers, and the name
 	// of this parameter is enableTls.
-	TLSEnabled bool `toml:"tls-enabled"`
+	TLSEnabled bool `toml:"tls-enabled" user_setting:"advanced"`
 	// TSLCAFile is the file path of file that contains list of trusted
 	// SSL CAs for client.
-	TLSCAFile string `toml:"tls-ca-file"`
+	TLSCAFile string `toml:"tls-ca-file" user_setting:"advanced"`
 	// TLSCertFile is the file path of file that contains X509 certificate
 	// in PEM format for client.
-	TLSCertFile string `toml:"tls-cert-file"`
+	TLSCertFile string `toml:"tls-cert-file" user_setting:"advanced"`
 	// TLSKeyFile is the file path of file that contains X509 key in PEM
 	// format for client.
-	TLSKeyFile string `toml:"tls-key-file"`
+	TLSKeyFile string `toml:"tls-key-file" user_setting:"advanced"`
 	// InternalCIDRs is the config which indicates that the CIDR list of
 	// internal network. The addresses outside the range are external
 	// addresses.
