@@ -520,7 +520,7 @@ func TestContextDeadlineAndCancel(t *testing.T) {
 	require.Equal(t, context.DeadlineExceeded, deadlineCtx.Err())
 }
 
-func TestWithFSSpan(t *testing.T) {
+func TestMOTracer_FSSpanIsEnable(t *testing.T) {
 
 	tracer := &MOTracer{
 		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
@@ -540,7 +540,6 @@ func TestWithFSSpan(t *testing.T) {
 
 	assert.True(t, tracer.IsEnable(trace.WithKind(trace.SpanKindLocalFSVis)))
 	assert.False(t, ok)
-	assert.True(t, span.(*MOSpan).NeedRecord())
 	span.End()
 
 	_, span = tracer.Start(context.Background(), "test", trace.WithKind(
@@ -550,11 +549,49 @@ func TestWithFSSpan(t *testing.T) {
 	assert.True(t, ok)
 	span.End()
 
+}
+
+func TestMOSpan_NeedRecord(t *testing.T) {
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "motrace_test"},
+		provider:     defaultMOTracerProvider(),
+	}
+
+	tracer.provider.enable = true
 	tracer.provider.longSpanTime = time.Millisecond * 20
-	_, span = tracer.Start(ctx, "test")
+
+	// ctx has deadline
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	defer cancel()
+
+	_, span := tracer.Start(ctx, "normal span")
 	time.Sleep(time.Millisecond * 30)
-	assert.False(t, span.(*MOSpan).NeedRecord())
+	// deadline not expired, no need to record
+	require.False(t, span.(*MOSpan).NeedRecord())
 	span.End()
+
+	_, span = tracer.Start(ctx, "normal span")
+	time.Sleep(time.Second)
+	span.(*MOSpan).EndTime = time.Now()
+	// ctx expired, record
+	require.True(t, span.(*MOSpan).NeedRecord())
+	span.End()
+
+	trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(true)
+	_, span = tracer.Start(ctx, "mo_ctl controlled span",
+		trace.WithKind(trace.SpanKindStatement))
+	// ctx expired, but not to record
+	trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(false)
+	require.False(t, span.(*MOSpan).NeedRecord())
+	span.End()
+
+	trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(true)
+	_, span = tracer.Start(ctx, "mo_ctl controlled span",
+		trace.WithKind(trace.SpanKindStatement))
+	// record
+	require.True(t, span.(*MOSpan).NeedRecord())
+	span.End()
+
 }
 
 func TestMOCtledKindOverwrite(t *testing.T) {
