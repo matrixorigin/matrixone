@@ -40,7 +40,7 @@ func TestMPool(t *testing.T) {
 		a[0] = 0xF0
 		require.True(t, a[1] == 0, "allocation result not zeroed.")
 		a[i*10-1] = 0xBA
-		a, err = m.Realloc(a, i*20)
+		a, err = m.reAlloc(a, i*20)
 		require.True(t, err == nil, "realloc failure %v", err)
 		require.True(t, len(a) == i*20, "allocation i size error")
 		require.True(t, a[0] == 0xF0, "reallocation not copied")
@@ -51,8 +51,9 @@ func TestMPool(t *testing.T) {
 	}
 
 	require.True(t, nb0 == m.CurrNB(), "leak")
-	// 30 -- we realloc, therefore, 10 + 20, need alloc first, then copy.
-	require.True(t, hw0+10000*30 == m.Stats().HighWaterMark.Load(), "hw")
+	// 30 -- we realloc, need alloc first, then copy.
+	// therefore, (10 + 20) * max(i) and 2 header size (old and new), is the high water.
+	require.True(t, (hw0+10000*30+2*kMemHdrSz) == m.Stats().HighWaterMark.Load(), "hw")
 	// >, because some alloc is absorbed by fixed pool
 	require.True(t, nalloc0+10000*2 > m.Stats().NumAlloc.Load(), "alloc")
 	require.True(t, nalloc0-nfree0 == m.Stats().NumAlloc.Load()-m.Stats().NumFree.Load(), "free")
@@ -113,4 +114,39 @@ func TestMP(t *testing.T) {
 	}
 	wg.Wait()
 
+}
+
+func TestMpoolReAllocate(t *testing.T) {
+	m := MustNewZero()
+	d1, err := m.Alloc(1023)
+	require.NoError(t, err)
+	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
+
+	d2, err := m.reAlloc(d1, cap(d1)-1)
+	require.NoError(t, err)
+	require.Equal(t, cap(d1), cap(d2))
+	require.Equal(t, int64(cap(d1)+kMemHdrSz), m.CurrNB())
+
+	d3, err := m.reAlloc(d2, cap(d2)+1025)
+	require.NoError(t, err)
+	require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
+
+	if cap(d3) > 5 {
+		d3 = d3[:cap(d3)-4]
+		d3_1, err := m.Grow(d3, cap(d3)-2)
+		require.NoError(t, err)
+		require.Equal(t, cap(d3), cap(d3_1))
+		require.Equal(t, int64(cap(d3)+kMemHdrSz), m.CurrNB())
+		d3 = d3_1
+	}
+
+	d4, err := m.Grow(d3, cap(d3)+10)
+	require.NoError(t, err)
+	require.Equal(t, int64(cap(d4)+kMemHdrSz), m.CurrNB())
+
+	if cap(d4) > 0 {
+		d4 = d4[:cap(d4)-1]
+	}
+	m.Free(d4)
+	require.Equal(t, int64(0), m.CurrNB())
 }

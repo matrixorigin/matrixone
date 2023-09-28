@@ -216,6 +216,9 @@ type Compile struct {
 	cnLabel map[string]string
 
 	buildPlanFunc func() (*plan2.Plan, error)
+
+	// [tag-11768] a hack for resolving mpool leak bug temporarily.
+	tag11768 bool
 }
 
 type runtimeFilterReceiver struct {
