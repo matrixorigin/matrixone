@@ -21,16 +21,17 @@ import (
 
 type abc struct {
 	A string
-	B string
+	B string `user_setting:"advanced"`
 }
 
 type kkk struct {
-	kk string
+	kk string `user_setting:"basic"`
 	jj string
 }
 
 type def struct {
-	DDD []kkk
+	FFF *abc  `user_setting:"advanced"`
+	DDD []kkk `user_setting:"advanced"`
 	ABC []abc `toml:"abc"`
 	EEE [3]abc
 	MMM map[string]string
@@ -60,17 +61,19 @@ func Test_flatten(t *testing.T) {
 			"abcd": {"a", "a1"},
 		},
 		PPP: &abc{"a", "a1"},
+		FFF: &abc{"a", "a1"},
 	}
 	exp := newExporter()
-	err := flatten(cf1, "", "", exp)
+	err := flatten(cf1, "", "", "", exp)
 	assert.NoError(t, err)
-	err = flatten(&cf1, "", "", exp)
+	err = flatten(&cf1, "", "", "", exp)
 	assert.NoError(t, err)
 
 	k := kkk{
 		"abc",
 		"def",
 	}
-	err = flatten(k, "", "", exp)
+	err = flatten(k, "", "", "", exp)
 	assert.NoError(t, err)
+	exp.Print()
 }
