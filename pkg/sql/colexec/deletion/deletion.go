@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -150,9 +149,9 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 
 	if arg.ctr.state == vm.End {
 		return result, nil
-	} else {
-		return result, moerr.NewInternalError(proc.Ctx, "")
 	}
+
+	panic("bug")
 
 }
 

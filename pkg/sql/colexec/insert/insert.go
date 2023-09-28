@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -151,9 +150,9 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 
 	if arg.ctr.state == vm.End {
 		return result, nil
-	} else {
-		return result, moerr.NewInternalError(proc.Ctx, "")
 	}
+
+	panic("bug")
 }
 
 func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) {

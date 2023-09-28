@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -232,9 +231,9 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 
 	if ctr.state == vm.End {
 		return result, nil
-	} else {
-		return result, moerr.NewInternalError(proc.Ctx, "")
 	}
+
+	panic("bug")
 }
 
 func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr *container) (err error) {

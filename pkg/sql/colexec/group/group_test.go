@@ -107,6 +107,7 @@ func TestGroup(t *testing.T) {
 		result, err := tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 		cleanResult(&result, tc.proc)
+		tc.arg.ctr.cleanHashMap()
 
 		testBat = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
 		resetChildren(tc.arg, testBat)
