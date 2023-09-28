@@ -47,13 +47,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return sendOneBatch(ap, proc, true), nil
 	}
 
-	bat := proc.InputBatch()
-	if bat == nil {
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	bat := result.Batch
+	if bat == nil || result.Batch.Last() {
 		return sendOneBatch(ap, proc, true), nil
 	}
 	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
 		return sendOneBatch(ap, proc, false), nil
 	}
 	if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
@@ -197,7 +199,7 @@ func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) vm.CallRes
 		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].RowCount() > threshHold {
 			if !findOneBatch {
 				findOneBatch = true
-				proc.SetInputBatch(ap.ctr.shuffledBats[i])
+				result.Batch = ap.ctr.shuffledBats[i]
 				ap.ctr.shuffledBats[i] = nil
 			} else {
 				if isEnding {
@@ -210,9 +212,7 @@ func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) vm.CallRes
 			}
 		}
 	}
-	if !findOneBatch {
-		proc.SetInputBatch(batch.EmptyBatch)
-	}
+
 	ap.ctr.state = input
 	if isEnding {
 		result.Status = vm.ExecStop
@@ -383,12 +383,13 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, sels [][]int32, proc
 
 func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (vm.CallResult, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
-	result := vm.NewCallResult()
+
 	if groupByVec.GetSorted() {
 		ok, regIndex := allBatchInOneRange(ap, bat)
 		if ok {
+			result := vm.NewCallResult()
 			bat.ShuffleIDX = int(regIndex)
-			proc.SetInputBatch(bat)
+			result.Batch = bat
 			return result, nil
 		}
 	}
@@ -396,14 +397,16 @@ func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (vm.Cal
 	sels := getShuffledSelsByRange(ap, bat)
 	for i := range sels {
 		if len(sels[i]) == bat.RowCount() {
+			result := vm.NewCallResult()
 			bat.ShuffleIDX = i
-			proc.SetInputBatch(bat)
+			result.Batch = bat
 			return result, nil
 		}
 	}
 
 	err := genShuffledBatsByRange(ap, bat, sels, proc)
 	if err != nil {
+		result := vm.NewCallResult()
 		return result, err
 	}
 	return sendOneBatch(ap, proc, false), nil
