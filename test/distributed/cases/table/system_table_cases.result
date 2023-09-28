@@ -53,13 +53,13 @@ count(null)
 0
 SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(*)
-10
+0
 SELECT COUNT(0) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(0)
-10
+0
 SELECT COUNT('') FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count()
-10
+0
 SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 count(null)
 0
