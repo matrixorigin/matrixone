@@ -21,6 +21,7 @@ import (
 	"errors"
 	gotrace "runtime/trace"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -165,16 +166,21 @@ type txnOperator struct {
 
 	mu struct {
 		sync.RWMutex
+		waitActive   bool
 		closed       bool
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
 		callbacks    map[EventType][]func(txn.TxnMeta)
 		retry        bool
+
+		lockSeq   uint64
+		waitLocks map[uint64]Lock
 	}
 	workspace       Workspace
 	timestampWaiter TimestampWaiter
 	clock           clock.Clock
+	createAt        time.Time
 }
 
 func newTxnOperator(
@@ -186,6 +192,7 @@ func newTxnOperator(
 	tc.mu.txn = txnMeta
 	tc.txnID = txnMeta.ID
 	tc.clock = clock
+	tc.createAt = time.Now()
 	for _, opt := range options {
 		opt(tc)
 	}
@@ -220,11 +227,21 @@ func (tc *txnOperator) isUserTxn() bool {
 	return tc.option.user
 }
 
+func (tc *txnOperator) setWaitActive(v bool) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.mu.waitActive = v
+}
+
 func (tc *txnOperator) waitActive(ctx context.Context) error {
 	if tc.waiter == nil {
 		return nil
 	}
-	defer tc.waiter.close()
+	tc.setWaitActive(true)
+	defer func() {
+		tc.waiter.close()
+		tc.setWaitActive(false)
+	}()
 	return tc.waiter.wait(ctx)
 }
 
@@ -928,4 +945,54 @@ func (tc *txnOperator) closeLocked() {
 		tc.mu.closed = true
 		tc.triggerEventLocked(ClosedEvent)
 	}
+}
+
+func (tc *txnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if tc.mu.waitLocks == nil {
+		tc.mu.waitLocks = make(map[uint64]Lock)
+	}
+
+	seq := tc.mu.lockSeq
+	tc.mu.lockSeq++
+
+	tc.mu.waitLocks[seq] = Lock{
+		TableID: tableID,
+		Rows:    rows,
+		Options: opt,
+	}
+	return seq
+}
+
+func (tc *txnOperator) RemoveWaitLock(key uint64) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	delete(tc.mu.waitLocks, key)
+}
+
+func (tc *txnOperator) GetOverview() TxnOverview {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	return TxnOverview{
+		CreateAt:  tc.createAt,
+		Meta:      tc.mu.txn,
+		UserTxn:   tc.option.user,
+		WaitLocks: tc.getWaitLocksLocked(),
+	}
+}
+
+func (tc *txnOperator) getWaitLocksLocked() []Lock {
+
+	if tc.mu.waitLocks == nil {
+		return nil
+	}
+
+	values := make([]Lock, 0, len(tc.mu.waitLocks))
+	for _, l := range tc.mu.waitLocks {
+		values = append(values, l)
+	}
+	return values
 }
