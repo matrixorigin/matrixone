@@ -120,7 +120,7 @@ spec:
           cpu: 8
           memory: 16Gi
       cnLabels:
-        - key: "test_model"
+        - key: "test_mode"
           values: ["tp"]
     - name: ap
       cacheVolume:
@@ -160,6 +160,6 @@ spec:
           cpu: 8
           memory: 16Gi
       cnLabels:
-        - key: "test_model"
+        - key: "test_mode"
           values: ["ap"]
   version: imagetag
