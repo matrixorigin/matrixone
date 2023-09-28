@@ -209,7 +209,6 @@ func (n *Bitmap) IsEmpty() bool {
 func (n *Bitmap) Add(row uint64) {
 	n.data[row>>6] |= 1 << (row & 0x3F)
 	n.emptyFlag.Store(kEmptyFlagNotEmpty)
-
 }
 
 func (n *Bitmap) AddMany(rows []uint64) {
@@ -217,7 +216,6 @@ func (n *Bitmap) AddMany(rows []uint64) {
 		n.data[row>>6] |= 1 << (row & 0x3F)
 	}
 	n.emptyFlag.Store(kEmptyFlagNotEmpty)
-
 }
 
 func (n *Bitmap) Remove(row uint64) {

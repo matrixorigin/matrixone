@@ -1290,6 +1290,9 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 	//loaded := false
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
+		if seg.SortHint < tbl.dedupedSegmentHint {
+			break
+		}
 		{
 			seg.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
@@ -1331,6 +1334,11 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload()
+			if seg.SortHint == tbl.dedupedSegmentHint {
+				if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
+					break
+				}
+			}
 			{
 				blk.RLock()
 				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()

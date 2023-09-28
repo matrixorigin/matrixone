@@ -177,6 +177,8 @@ type StatementInfo struct {
 
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
+	ConnType statistic.ConnType `json:"-"` // see frontend.RecordStatement
+
 	// flow ctrl
 	// #		|case 1 |case 2 |case 3 |case 4|
 	// end		| false | false | true  | true |  (set true at EndStatement)
@@ -415,6 +417,7 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 	} else {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
 		s.statsArray.InitIfEmpty().Add(&statsArray)
+		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
 		return s.statsArray.ToJsonString()

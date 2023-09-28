@@ -22,12 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -241,6 +239,11 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 		ctr.multiSels = make([][]int32, count)
 	}
 
+	var (
+		cardinality uint64
+		sels        []int32
+	)
+
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -291,7 +294,39 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 				ctr.multiSels[ai] = append(ctr.multiSels[ai], int32(i+k))
 			}
 		}
+
+		if len(ap.RuntimeFilterSenders) > 0 && ap.RuntimeFilterSenders[0].Spec.Expr != nil {
+			if len(ap.ctr.uniqueJoinKeys) == 0 {
+				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.vecs))
+				for j, vec := range ctr.vecs {
+					ap.ctr.uniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
+				}
+			}
+
+			if ap.HashOnPK {
+				for j, vec := range ctr.vecs {
+					ap.ctr.uniqueJoinKeys[j].UnionBatch(vec, int64(i), n, nil, proc.Mp())
+				}
+			} else {
+				if sels == nil {
+					sels = make([]int32, hashmap.UnitLimit)
+				}
+
+				sels = sels[:0]
+				for j, v := range vals[:n] {
+					if v > cardinality {
+						sels = append(sels, int32(i+j))
+						cardinality = v
+					}
+				}
+
+				for j, vec := range ctr.vecs {
+					ap.ctr.uniqueJoinKeys[j].Union(vec, sels, proc.Mp())
+				}
+			}
+		}
 	}
+
 	return nil
 }
 
@@ -320,11 +355,19 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	}
 
-	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {
-		runtimeFilter := &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_NO_FILTER,
-		}
+	var runtimeFilter *pipeline.RuntimeFilter
 
+	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {
+		runtimeFilter = &pipeline.RuntimeFilter{
+			Typ: pipeline.RuntimeFilter_PASS,
+		}
+	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
+		runtimeFilter = &pipeline.RuntimeFilter{
+			Typ: pipeline.RuntimeFilter_DROP,
+		}
+	}
+
+	if runtimeFilter != nil {
 		select {
 		case <-proc.Ctx.Done():
 			ctr.state = End
@@ -336,20 +379,6 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	}
 
-	vec := ctr.vecs[0]
-	if ctr.inputBatchRowCount == 0 || vec == nil || vec.Length() == 0 {
-		select {
-		case <-proc.Ctx.Done():
-			ctr.state = End
-
-		case ap.RuntimeFilterSenders[0].Chan <- nil:
-			ctr.state = Eval
-		}
-
-		return nil
-	}
-
-	var runtimeFilter *pipeline.RuntimeFilter
 	var hashmapCount uint64
 	if ctr.keyWidth <= 8 {
 		hashmapCount = ctr.intHashMap.GroupCount()
@@ -357,64 +386,49 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		hashmapCount = ctr.strHashMap.GroupCount()
 	}
 
-	var sels []int32
-	if !ap.HashOnPK {
-		sels = make([]int32, 0, hashmapCount)
-		for _, sel := range ctr.multiSels {
-			if len(sel) > 0 {
-				sels = append(sels, sel[0])
-			}
-		}
-	}
-
 	inFilterCardLimit := int64(plan.InFilterCardLimit)
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
 	if ok {
 		inFilterCardLimit = v.(int64)
 	}
-	bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
-	v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
-	if ok {
-		bloomFilterCardLimit = v.(int64)
-	}
+	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
+	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
+	//if ok {
+	//	bloomFilterCardLimit = v.(int64)
+	//}
 
-	// Composite primary key
-	if len(ctr.vecs) > 1 && hashmapCount <= uint64(bloomFilterCardLimit) {
-		bat := batch.NewWithSize(len(ctr.vecs))
-		bat.SetRowCount(ctr.vecs[0].Length())
-		copy(bat.Vecs, ctr.vecs)
-
-		newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSenders[0].Spec.Expr, []*batch.Batch{bat})
-		if err != nil {
-			return err
-		}
-
-		vec = newVec
-	}
+	vec := ctr.uniqueJoinKeys[0]
 
 	defer func() {
-		if vec != ctr.vecs[0] {
-			vec.Free(proc.Mp())
-			vec = nil
-		}
+		vec.Free(proc.Mp())
+		ctr.uniqueJoinKeys = nil
 	}()
 
-	var err error
-	if hashmapCount <= uint64(inFilterCardLimit) {
-		var inList *vector.Vector
-		if ap.HashOnPK {
-			if inList, err = vec.Dup(proc.Mp()); err != nil {
-				return err
-			}
-		} else {
-			inList = vector.NewVec(*vec.GetType())
-			if err = inList.Union(vec, sels, proc.Mp()); err != nil {
-				return err
-			}
+	if hashmapCount > uint64(inFilterCardLimit) {
+		runtimeFilter = &pipeline.RuntimeFilter{
+			Typ: pipeline.RuntimeFilter_PASS,
 		}
-		defer inList.Free(proc.Mp())
-		colexec.SortInFilter(inList)
-		data, err := inList.MarshalBinary()
+	} else {
+		// Composite primary key
+		if len(ctr.uniqueJoinKeys) > 1 {
+			bat := batch.NewWithSize(len(ctr.uniqueJoinKeys))
+			bat.SetRowCount(vec.Length())
+			copy(bat.Vecs, ctr.uniqueJoinKeys)
+
+			newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSenders[0].Spec.Expr, []*batch.Batch{bat})
+			if err != nil {
+				return err
+			}
+
+			for i := range ctr.uniqueJoinKeys {
+				ctr.uniqueJoinKeys[i].Free(proc.Mp())
+			}
+
+			vec = newVec
+		}
+
+		colexec.SortInFilter(vec)
+		data, err := vec.MarshalBinary()
 		if err != nil {
 			return err
 		}
@@ -422,29 +436,6 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		runtimeFilter = &pipeline.RuntimeFilter{
 			Typ:  pipeline.RuntimeFilter_IN,
 			Data: data,
-		}
-	} else if hashmapCount <= uint64(bloomFilterCardLimit) {
-		zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
-		if ap.HashOnPK {
-			length := vec.Length()
-			for i := 0; i < length; i++ {
-				bs := vec.GetRawBytesAt(i)
-				index.UpdateZM(zm, bs)
-			}
-		} else {
-			for i := range sels {
-				bs := vec.GetRawBytesAt(int(sels[i]))
-				index.UpdateZM(zm, bs)
-			}
-		}
-
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ:  pipeline.RuntimeFilter_MIN_MAX,
-			Data: zm,
-		}
-	} else {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_NO_FILTER,
 		}
 	}
 

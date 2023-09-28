@@ -56,6 +56,7 @@ package vm
 
 // 	Deletion:        deletion.String,
 // 	Insert:          insert.String,
+//  FuzzyFilter:     fuzzyfilter.String,
 // 	OnDuplicateKey:  onduplicatekey.String,
 // 	PreInsert:       preinsert.String,
 // 	PreInsertUnique: preinsertunique.String,
@@ -117,6 +118,7 @@ package vm
 
 // 	Deletion:        deletion.Prepare,
 // 	Insert:          insert.Prepare,
+//  FuzzyFilter:     fuzzyfilter.Prepare,
 // 	OnDuplicateKey:  onduplicatekey.Prepare,
 // 	PreInsert:       preinsert.Prepare,
 // 	PreInsertUnique: preinsertunique.Prepare,
@@ -178,6 +180,7 @@ package vm
 
 // 	Deletion: deletion.Call,
 // 	Insert:   insert.Call,
+//  FuzzyFilter: fuzzyfilter.Call,
 // 	External: external.Call,
 
 // 	OnDuplicateKey:  onduplicatekey.Call,

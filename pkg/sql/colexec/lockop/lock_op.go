@@ -410,6 +410,9 @@ func doLock(
 		}
 	}
 
+	key := txnOp.AddWaitLock(tableID, rows, options)
+	defer txnOp.RemoveWaitLock(key)
+
 	result, err := lockService.Lock(
 		ctx,
 		tableID,
