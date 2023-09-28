@@ -56,6 +56,14 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 	if err = handleAddColumnPosition(ctx.GetContext(), tableDef, newCol, spec.Position); err != nil {
 		return err
 	}
+
+	if !newCol.Default.NullAbility && len(newCol.Default.OriginString) == 0 {
+		alterCtx.alterColMap[newCol.Name] = selectExpr{
+			sexprType: constValue,
+			sexprStr:  buildNotNullColumnVal(newCol),
+		}
+	}
+
 	return nil
 }
 

@@ -209,6 +209,19 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
+func transferSessionConnType2StatisticConnType(c ConnType) statistic.ConnType {
+	switch c {
+	case ConnTypeUnset:
+		return statistic.ConnTypeUnknown
+	case ConnTypeInternal:
+		return statistic.ConnTypeInternal
+	case ConnTypeExternal:
+		return statistic.ConnTypeExternal
+	default:
+		panic("unknown connection type")
+	}
+}
+
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
 	// set StatementID
 	var stmID uuid.UUID
@@ -277,6 +290,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
+	stm.ConnType = transferSessionConnType2StatisticConnType(ses.connType)
 	if sqlType == constant.InternalSql && isCmdFieldListSql(envStmt) {
 		// fix original issue #8165
 		stm.User = ""
@@ -1193,16 +1207,6 @@ func (mce *MysqlCmdExecutor) handleDeallocate(ctx context.Context, st *tree.Deal
 	return doDeallocate(ctx, mce.GetSession(), st)
 }
 
-func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree.CreateConnector) error {
-	//todo: handle Create connector
-	return nil
-}
-
-func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.DropConnector) error {
-	//todo: handle Create connector
-	return nil
-}
-
 // handleReset
 func (mce *MysqlCmdExecutor) handleReset(ctx context.Context, st *tree.Reset) error {
 	return doReset(ctx, mce.GetSession(), st)
@@ -1518,6 +1522,18 @@ func (mce *MysqlCmdExecutor) handleShowBackendServers(ctx context.Context, cwInd
 	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
 		return moerr.NewInternalError(ses.requestCtx, "routine send response failed, error: %v ", err)
+	}
+	return err
+}
+
+func (mce *MysqlCmdExecutor) handleEmptyStmt(ctx context.Context, stmt *tree.EmptyStmt) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	resp := NewGeneralOkResponse(COM_QUERY, mce.ses.GetServerStatus())
+	if err = proto.SendResponse(ctx, resp); err != nil {
+		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 	}
 	return err
 }
@@ -2685,15 +2701,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 					}
 				}
 
-			case *tree.SetVar, *tree.SetTransaction, *tree.BackupStart:
+			case *tree.SetVar, *tree.SetTransaction, *tree.BackupStart, *tree.CreateConnector, *tree.DropConnector,
+				*tree.PauseDaemonTask, *tree.ResumeDaemonTask, *tree.CancelDaemonTask:
 				resp := mce.setResponse(i, len(cws), rspLen)
 				if err = proto.SendResponse(requestCtx, resp); err != nil {
 					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
 				}
-			case *tree.CreateConnector:
-				// todo : Create and run Connector
-			case *tree.DropConnector:
-				// todo : Drop Connector
 			case *tree.Deallocate:
 				//we will not send response in COM_STMT_CLOSE command
 				if ses.GetCmd() != COM_STMT_CLOSE {
@@ -2905,10 +2918,33 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err != nil {
 			return err
 		}
+	case *tree.PauseDaemonTask:
+		selfHandle = true
+		err = mce.handlePauseDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
+	case *tree.CancelDaemonTask:
+		selfHandle = true
+		err = mce.handleCancelDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
+	case *tree.ResumeDaemonTask:
+		selfHandle = true
+		err = mce.handleResumeDaemonTask(requestCtx, st)
+		if err != nil {
+			return err
+		}
 	case *tree.DropConnector:
 		selfHandle = true
 		err = mce.handleDropConnector(requestCtx, st)
 		if err != nil {
+			return err
+		}
+	case *tree.ShowConnectors:
+		selfHandle = true
+		if err = mce.handleShowConnectors(requestCtx, i, len(cws)); err != nil {
 			return err
 		}
 	case *tree.Deallocate:
@@ -3144,6 +3180,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.BackupStart:
 		selfHandle = true
 		if err = mce.handleStartBackup(requestCtx, st); err != nil {
+			return err
+		}
+	case *tree.EmptyStmt:
+		selfHandle = true
+		if err = mce.handleEmptyStmt(requestCtx, st); err != nil {
 			return err
 		}
 	}
@@ -3516,6 +3557,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
 		SqlHelper:     ses.GetSqlHelper(),
+		Buf:           ses.GetBuffer(),
 	}
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
@@ -3614,6 +3656,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 				logStatementStatus(requestCtx, ses, stmt, fail, err)
 				return err
 			}
+		}
+
+		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		proc.UnixTime = time.Now().UnixNano()
+		if ses.proc != nil {
+			ses.proc.UnixTime = proc.UnixTime
 		}
 
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly)
@@ -3725,6 +3773,11 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 	singleStatement := len(stmtExecs) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, exec := range stmtExecs {
+		// update UnixTime for new query, which is used for now() / CURRENT_TIMESTAMP
+		proc.UnixTime = time.Now().UnixNano()
+		if ses.proc != nil {
+			ses.proc.UnixTime = proc.UnixTime
+		}
 		err = Execute(requestCtx, ses, proc, exec, beginInstant, sqlRecord[i], "", singleStatement)
 		if err != nil {
 			return err

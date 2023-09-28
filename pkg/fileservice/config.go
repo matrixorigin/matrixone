@@ -38,7 +38,7 @@ type Config struct {
 	// Backend fileservice backend. [MEM|DISK|DISK-ETL|S3|MINIO]
 	Backend string `toml:"backend"`
 	// S3 used to create fileservice using s3 as the backend
-	S3 S3Config `toml:"s3"`
+	S3 ObjectStorageArguments `toml:"s3"`
 	// Cache specifies configs for cache
 	Cache CacheConfig `toml:"cache"`
 	// DataDir used to create fileservice using DISK as the backend

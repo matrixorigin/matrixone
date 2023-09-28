@@ -87,7 +87,11 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	handleClusterByKey(ctx.GetContext(), alterPlan, newColName, originalColName)
 
 	delete(alterCtx.alterColMap, col.Name)
-	alterCtx.alterColMap[newCol.Name] = col.Name
+	alterCtx.alterColMap[newCol.Name] = selectExpr{
+		sexprType: columnName,
+		sexprStr:  col.Name,
+	}
+
 	if tmpCol, ok := alterCtx.changColDefMap[col.ColId]; ok {
 		tmpCol.Name = newCol.Name
 	}

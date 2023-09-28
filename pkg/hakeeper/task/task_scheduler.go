@@ -87,7 +87,7 @@ func (s *scheduler) StopScheduleCronTask() {
 	}
 }
 
-func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
+func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 	ts := s.taskServiceGetter()
 	if ts == nil {
 		return nil
@@ -95,7 +95,7 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
 	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
 	defer cancel()
 
-	tasks, err := ts.QueryTask(ctx, taskservice.WithTaskStatusCond(taskservice.EQ, status))
+	tasks, err := ts.QueryAsyncTask(ctx, taskservice.WithTaskStatusCond(status))
 	if err != nil {
 		runtime.ProcessLevelRuntime().Logger().Error("failed to query tasks",
 			zap.String("status", status.String()),
@@ -105,7 +105,7 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
 	return tasks
 }
 
-func (s *scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
+func (s *scheduler) allocateTasks(tasks []task.AsyncTask, orderedCN *cnMap) {
 	ts := s.taskServiceGetter()
 	if ts == nil {
 		return
@@ -116,7 +116,7 @@ func (s *scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 	}
 }
 
-func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, orderedCN *cnMap) {
+func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.AsyncTask, orderedCN *cnMap) {
 	runner := orderedCN.min()
 	if runner == "" {
 		runtime.ProcessLevelRuntime().Logger().Warn("no CN available")
@@ -135,7 +135,7 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (*cnMap, []task.Task) {
+func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN []string) (*cnMap, []task.AsyncTask) {
 	orderedMap := newOrderedMap(workingCN)
 	n := 0
 	for _, t := range tasks {
@@ -148,7 +148,7 @@ func getCNOrderedAndExpiredTasks(tasks []task.Task, workingCN []string) (*cnMap,
 	if n == 0 {
 		return orderedMap, nil
 	}
-	expired := make([]task.Task, 0, n)
+	expired := make([]task.AsyncTask, 0, n)
 	for _, t := range tasks {
 		if !contains(workingCN, t.TaskRunner) {
 			expired = append(expired, t)

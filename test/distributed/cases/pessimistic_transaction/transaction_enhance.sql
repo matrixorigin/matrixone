@@ -395,8 +395,8 @@ alter table atomic_table_12_5 add index key1(c1);
 begin;
 alter table atomic_table_12_5 rename column c1 to clNew;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into atomic_table_12_5 values (8,"h");
 show create table atomic_table_12_5;
 select * from atomic_table_12_5;
@@ -428,8 +428,8 @@ insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 add constraint primary key (col1);
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into alter01 values (5,"h");
 select * from alter01;
 -- @session
@@ -445,8 +445,8 @@ insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 drop primary key;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into alter01 values (5,"h");
 select * from alter01;
 -- @session

@@ -19,7 +19,8 @@
  option go_package = "github.com/matrixorigin/matrixone/pkg/pb/task";
  
  import "github.com/gogo/protobuf/gogoproto/gogo.proto";
- 
+import "google/protobuf/timestamp.proto";
+
  option (gogoproto.goproto_enum_prefix_all) = true;
  
  // TaskStatus task status
@@ -30,6 +31,21 @@
      Running   = 1;
      // Completed the task has been completed.
      Completed = 2;
+     // Paused is the state that the task has been paused by user.
+     Paused = 3;
+     // Error is the state that the task encounters some kind of error.
+     Error = 4;
+     // Canceled is the state that the task is canceled by user.
+     Canceled = 5;
+     // ResumeRequested is the state that resume request has been proposed to
+     // the task and has not been resume.
+     ResumeRequested = 6;
+     // PauseRequested is the state that pause request has been proposed to
+     // the task and has not been paused.
+     PauseRequested = 7;
+     // CancelRequested is the state that cancel request has been proposed to
+     // the task and has not been canceled.
+     CancelRequested = 8;
  }
 
  // TaskCode task code
@@ -42,6 +58,8 @@
    MetricLogMerge = 2;
    // MetricStorageUsage handle metric server_storage_usage collection
    MetricStorageUsage = 3;
+   // ConnectorKafkaSink is for the streaming connector task.
+   ConnectorKafkaSink = 4;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
@@ -86,7 +104,7 @@
  }
  
  // Task task execute info.
- message Task {
+ message AsyncTask {
      uint64        ID            = 1;
      // TaskMetadata task metadata
      TaskMetadata  Metadata      = 2 [(gogoproto.nullable) = false];
@@ -124,4 +142,46 @@
      int64         CreateAt      = 6;
      // CreateAt time of the cron task created. Unix timestamp in ms
      int64         UpdateAt      = 7;
+ }
+
+enum TaskType {
+  Unknown = 0 [(gogoproto.enumvalue_customname) = "TypeUnknown"];
+  KafkaSinkConnector = 1 [(gogoproto.enumvalue_customname) = "TypeKafkaSinkConnector"];
+}
+
+message ConnectorDetails {
+  string TableName = 1;
+  map<string, string> Options = 2;
+}
+
+message Details {
+  string Description = 1;
+  uint32 AccountID = 2;
+  string Account = 3;
+  string Username = 4;
+  string Error = 5;
+  oneof Details {
+    ConnectorDetails Connector = 10;
+  }
+}
+
+ message DaemonTask {
+   uint64 ID = 1;
+   TaskMetadata Metadata = 2 [(gogoproto.nullable) = false];
+   uint32 AccountID = 3;
+   string Account = 4;
+   TaskType TaskType = 5;
+   string TaskRunner = 6;
+   TaskStatus TaskStatus = 7;
+   google.protobuf.Timestamp LastHeartbeat = 8
+     [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+   Details Details = 9;
+   google.protobuf.Timestamp CreateAt = 10
+     [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+   google.protobuf.Timestamp UpdateAt = 11
+     [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+   google.protobuf.Timestamp EndAt = 12
+     [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+   google.protobuf.Timestamp LastRun = 13
+     [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
  }

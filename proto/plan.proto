@@ -976,6 +976,7 @@ message DataDefinition {
 		ALTER_SEQUENCE		= 30;
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
+		SHOW_CONNECTORS = 33;
 
 	}
 	//DataDefinition type
