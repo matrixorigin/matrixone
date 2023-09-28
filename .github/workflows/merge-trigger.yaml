@@ -895,6 +895,9 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
+          sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' mo.yml
+          cat mo.yml
+          echo "======================================"
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1          
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
@@ -914,6 +917,7 @@ jobs:
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/head/dump-stacks.log ${{ github.workspace }}/upload/          
       - name: check data race
+        if: ${{ always() || cancelled() }}
         run: |
           cat ${{ github.workspace }}/upload/mo-service.log | grep -C2 'DATA RACE' || true
           if [ "$(cat ${{ github.workspace }}/upload/mo-service.log |grep 'DATA RACE' | grep -v "grep" | wc -l)" -gt 0 ]; then exit 1; fi        
