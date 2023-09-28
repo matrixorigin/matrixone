@@ -868,6 +868,8 @@ var (
 				database_id bigint unsigned not null,
 				name 		varchar(64) not null,
 				type        varchar(11) not null,
+    			algorithm	varchar(11),
+    			algorithm_table_type varchar(64),
 				is_visible  tinyint not null,
 				hidden      tinyint not null,
 				comment 	varchar(2048) not null,
@@ -1985,7 +1987,7 @@ func getSqlForSpBody(ctx context.Context, name string, db string) (string, error
 	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
 }
 
-// isClusterTable decides a table is the index table or not
+// isIndexTable decides a table is the index table or not
 func isIndexTable(name string) bool {
 	return strings.HasPrefix(name, catalog.IndexTableNamePrefix)
 }
@@ -7641,6 +7643,42 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		return err
 	}
 
+	//TODO: need to see how we can reuse the bootstrap.go initialization.
+	// when the database is already initialized. Will be handled in separate PR.
+	executeConditionalUpgrades := func() error {
+		ctx, span = trace.Debug(ctx, "executeConditionalUpgrades")
+		defer span.End()
+		conditionalUpgradeSQLs := []struct {
+			ifEmpty string
+			then    string
+		}{
+			{
+				//TODO: check if 'after type' will work or not?
+				ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
+				then:    fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after type;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
+			},
+			{
+				ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType),
+				then:    fmt.Sprintf(`alter table %s.%s add column %s varchar(64) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName),
+			},
+		}
+
+		for _, conditionalUpgradeSQL := range conditionalUpgradeSQLs {
+			err = bh.Exec(newTenantCtx, conditionalUpgradeSQL.ifEmpty)
+			if err != nil {
+				return err
+			}
+			//TODO: check if we can use GetExecResultSet() instead of GetExecResultBatches()
+			if len(bh.GetExecResultSet()) == 0 {
+				if err = bh.Exec(newTenantCtx, conditionalUpgradeSQL.then); err != nil {
+					return err
+				}
+			}
+		}
+		// TODO: check if we need err = finishTxn(ctx, bh, err)
+		return nil
+	}
+
 	createNewAccount := func() error {
 		err = bh.Exec(ctx, "begin;")
 		defer func() {
@@ -7660,7 +7698,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			if !ca.IfNotExists { //do nothing
 				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
 			}
-			return err
+
+			return executeConditionalUpgrades()
 		} else {
 			newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 			if err != nil {

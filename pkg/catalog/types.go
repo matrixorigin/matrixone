@@ -38,10 +38,11 @@ const (
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
-	IndexTableIndexColName   = "__mo_index_idx_col"
-	IndexTablePrimaryColName = "__mo_index_pri_col"
-	ExternalFilePath         = "__mo_filepath"
-	IndexTableNamePrefix     = "__mo_index_unique__"
+	IndexTableIndexColName     = "__mo_index_idx_col"
+	IndexTablePrimaryColName   = "__mo_index_pri_col"
+	ExternalFilePath           = "__mo_filepath"
+	IndexTableNamePrefix       = "__mo_index_"
+	UniqueIndexTableNamePrefix = "__mo_index_unique__"
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 )
@@ -169,6 +170,10 @@ const (
 	SystemColAttr_Seqnum          = "attr_seqnum"
 	SystemColAttr_EnumValues      = "attr_enum"
 
+	// 'mo_indexes' table
+	IndexAlgoName      = "algorithm"
+	IndexAlgoTableType = "algorithm_table_type"
+
 	BlockMeta_ID              = "block_id"
 	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
@@ -205,6 +210,10 @@ const (
 		the table partitioned has multiple partition tables
 	*/
 	SystemPartitionRel = "partition"
+
+	// Secondary Index Relations
+	SystemSecondaryIndex_IvfCentroidsRel        = "ivf_centroids"
+	SystemSecondaryIndex_IvfCentroidsMappingRel = "ivf_centroids_mapping"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
