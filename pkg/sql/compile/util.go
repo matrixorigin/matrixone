@@ -75,8 +75,8 @@ var (
 	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
 )
 
-// genCreateIndexTableSql: Generate ddl statements for creating index table
-func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+// genCreateSecondaryIndexTableSqlForUniqueIndex: Generate ddl statements for creating index table
+func genCreateSecondaryIndexTableSqlForUniqueIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
@@ -108,8 +108,73 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
-// genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
-func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+func genCreateSecondaryIndexTableSqlForBTreeIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	var sql string
+	planCols := indexTableDef.GetCols()
+	for i, planCol := range planCols {
+		if i == 1 {
+			sql += ","
+		}
+		sql += planCol.Name + " "
+		typeId := types.T(planCol.Typ.Id)
+		switch typeId {
+		case types.T_char:
+			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+		case types.T_varchar:
+			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+		case types.T_binary:
+			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+		case types.T_varbinary:
+			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+		case types.T_decimal64:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_decimal128:
+			sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		//No need to include T_array here as T_array will not be used as BTREE index column.
+		default:
+			sql += typeId.String()
+		}
+		if i == 0 {
+			sql += " primary key"
+		}
+	}
+	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
+}
+
+func genInsertIntoSecondaryIndexTableSqlForBTreeIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	// insert data into index table
+	var insertSQL string
+	temp := partsToColsStr(indexDef.Parts)
+	if originTableDef.Pkey == nil || len(originTableDef.Pkey.PkeyColName) == 0 {
+		// make it error
+		panic("primary key required for secondary index")
+	} else {
+		pkeyName := originTableDef.Pkey.PkeyColName
+		var pKeyMsg string
+		if pkeyName == catalog.CPrimaryKeyColName {
+			pKeyMsg = "serial("
+			for i, part := range originTableDef.Pkey.Names {
+				if i == 0 {
+					pKeyMsg += part
+				} else {
+					pKeyMsg += "," + part
+				}
+			}
+			pKeyMsg += ")"
+		} else {
+			pKeyMsg = pkeyName
+		}
+		if len(indexDef.Parts) == 1 {
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+		} else {
+			insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+		}
+	}
+	return insertSQL
+}
+
+// genInsertIntoSecondaryIndexTableSqlForUniqueIndex: Generate an insert statement for inserting data into the index table
+func genInsertIntoSecondaryIndexTableSqlForUniqueIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)
@@ -188,25 +253,31 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					}
 					fmt.Fprintf(buffer, "'%s', ", index_type)
 
-					// 6. index visible
+					//6. algorithm
+					fmt.Fprintf(buffer, "'%s', ", indexdef.IndexAlgo)
+
+					//7. algorithm_table_type
+					fmt.Fprintf(buffer, "'%s', ", indexdef.IndexAlgoTableType)
+
+					// 8. index visible
 					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
 
-					// 7. index vec_hidden
+					// 9. index vec_hidden
 					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
 
-					// 8. index vec_comment
+					// 10. index vec_comment
 					fmt.Fprintf(buffer, "'%s', ", indexdef.Comment)
 
-					// 9. index vec_column_name
+					// 11. index vec_column_name
 					fmt.Fprintf(buffer, "'%s', ", part)
 
-					// 10. index vec_ordinal_position
+					// 12. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
-					// 11. index vec_options
+					// 13. index vec_options
 					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
-					// 12. index vec_index_table
+					// 14. index vec_index_table
 					if indexdef.TableExist {
 						fmt.Fprintf(buffer, "'%s')", indexdef.IndexTableName)
 					} else {
@@ -243,25 +314,31 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					// 5.index_type
 					fmt.Fprintf(buffer, "'%s', ", INDEX_TYPE_PRIMARY)
 
-					// 6. index visible
-					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
-
-					// 7. index vec_hidden
-					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
-
-					// 8. index vec_comment
+					//6. algorithm
 					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
 
-					// 9. index vec_column_name
+					//7. algorithm_table_type
+					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+
+					// 8. index visible
+					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
+
+					// 9. index vec_hidden
+					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
+
+					// 10. index vec_comment
+					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+
+					// 11. index vec_column_name
 					fmt.Fprintf(buffer, "'%s', ", colName)
 
-					// 10. index vec_ordinal_position
+					// 12. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
-					// 11. index vec_options
+					// 13. index vec_options
 					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
-					// 12. index vec_index_table
+					// 14. index vec_index_table
 					fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 				}
 			}

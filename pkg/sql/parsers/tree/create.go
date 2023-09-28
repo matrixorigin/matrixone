@@ -736,6 +736,11 @@ func (it IndexType) ToString() string {
 		return "bsi"
 	case INDEX_TYPE_ZONEMAP:
 		return "zonemap"
+	case INDEX_TYPE_IVFFLAT:
+		return "ivfflat"
+	case INDEX_TYPE_INVALID:
+		// keep it "" so that when it converted to SQL string, it is not shown.
+		return ""
 	default:
 		return "Unknown IndexType"
 	}
@@ -748,6 +753,7 @@ const (
 	INDEX_TYPE_RTREE
 	INDEX_TYPE_BSI
 	INDEX_TYPE_ZONEMAP
+	INDEX_TYPE_IVFFLAT
 )
 
 type VisibleType int
@@ -782,6 +788,10 @@ type IndexOption struct {
 
 // Must follow the following sequence when test
 func (node *IndexOption) Format(ctx *FmtCtx) {
+	if node.KeyBlockSize != 0 || node.ParserName != "" ||
+		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID {
+		ctx.WriteByte(' ')
+	}
 	if node.KeyBlockSize != 0 {
 		ctx.WriteString("KEY_BLOCK_SIZE ")
 		ctx.WriteString(strconv.FormatUint(node.KeyBlockSize, 10))
@@ -2019,7 +2029,6 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(")")
 	if node.IndexOption != nil {
-		ctx.WriteByte(' ')
 		node.IndexOption.Format(ctx)
 	}
 }
