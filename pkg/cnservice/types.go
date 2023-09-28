@@ -107,10 +107,10 @@ type Config struct {
 	// TODO(volgariver6): The value of this field is also used to determine the version
 	// of MO. If it is not set, we use the old listen-address/service-address fields, and
 	// if it is set, we use the new policy to distribute the ports to all services.
-	PortBase int `toml:"port-base"`
+	PortBase int `toml:"port-base" user_setting:"basic"`
 	// ServiceHost is the host name/IP for the service address of RPC request. There is
 	// no port value in it.
-	ServiceHost string `toml:"service-host"`
+	ServiceHost string `toml:"service-host" user_setting:"basic"`
 
 	// FileService file service configuration
 
@@ -178,9 +178,9 @@ type Config struct {
 	Txn struct {
 		// Isolation txn isolation. SI or RC
 		// when Isolation is not set. we will set SI when Mode is optimistic, RC when Mode is pessimistic
-		Isolation string `toml:"isolation"`
+		Isolation string `toml:"isolation" user_setting:"advanced"`
 		// Mode txn mode. optimistic or pessimistic, default is pessimistic
-		Mode string `toml:"mode"`
+		Mode string `toml:"mode" user_setting:"advanced"`
 		// EnableSacrificingFreshness In Push Mode, the transaction is not guaranteed
 		// to see the latest commit data, and the latest Logtail commit timestamp received
 		// by the current CN + 1 is used as the start time of the transaction. But it will
