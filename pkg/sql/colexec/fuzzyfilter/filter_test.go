@@ -20,7 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -46,35 +48,65 @@ var (
 func init() {
 	tcs = []fuzzyTestCase{
 		{
-			arg:  new(Argument),
+			arg: &Argument{
+				info: &vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
 		},
 		{
-			arg:  new(Argument),
+			arg: &Argument{
+				info: &vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_date.ToType(),
 			},
 		},
 		{
-			arg:  new(Argument),
+			arg: &Argument{
+				info: &vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_float32.ToType(),
 			},
 		},
 		{
-			arg:  new(Argument),
+			arg: &Argument{
+				info: &vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_varchar.ToType(),
 			},
 		},
 		{
-			arg:  new(Argument),
+			arg: &Argument{
+				info: &vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
+			},
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_binary.ToType(),
@@ -86,24 +118,28 @@ func init() {
 func TestString(t *testing.T) {
 	for _, tc := range tcs {
 		buf := new(bytes.Buffer)
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 		require.Equal(t, " fuzzy check duplicate constraint", buf.String())
 	}
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestFuzzyFilter(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, rowCnt)
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+
+		testBatch := newBatch(t, tc.types, tc.proc, rowCnt)
+		resetChildren(tc.arg, testBatch)
+		result, err := tc.arg.Call(tc.proc)
+		cleanResult(&result, tc.proc)
+
 		require.NoError(t, err)
 		require.LessOrEqual(t, tc.arg.collisionCnt, fkCnt, "collision cnt is too high, sth must went wrong")
 	}
@@ -117,4 +153,26 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 	pkAttr[0] = "pkCol"
 	bat.SetAttributes(pkAttr)
 	return bat
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
+	arg.state = vm.Build
+}
+
+func cleanResult(result *vm.CallResult, proc *process.Process) {
+	if result.Batch != nil {
+		result.Batch.Clean(proc.Mp())
+		result.Batch = nil
+	}
 }

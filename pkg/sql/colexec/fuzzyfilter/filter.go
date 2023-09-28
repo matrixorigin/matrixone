@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,70 +55,74 @@ const (
 	hashCnt   = 3
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" fuzzy check duplicate constraint")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
-	ap.filter = bloom.New(bloomSize, hashCnt)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	arg.filter = bloom.New(bloomSize, hashCnt)
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 
-	ap := arg.(*Argument)
-	bat := proc.InputBatch()
-	anal.Input(bat, isFirst)
+	if arg.state == vm.Build {
+		for {
+			result, err := arg.children[0].Call(proc)
+			if err != nil {
+				return result, err
+			}
+			if result.Batch == nil {
+				arg.state = vm.Eval
+				break
+			}
+			if result.Batch.IsEmpty() {
+				continue
+			}
+			bat := result.Batch
 
-	if bat == nil {
+			if arg.rbat == nil {
+				if err := generateRbat(proc, arg, bat); err != nil {
+					return result, err
+				}
+			}
+
+			pkCol := bat.GetVector(0)
+			rowCnt := bat.RowCount()
+			for i := 0; i < rowCnt; i++ {
+				var bytes = pkCol.GetRawBytesAt(i)
+				if arg.filter.Test(bytes) {
+					appendCollisionKey(proc, arg, i, bat)
+					arg.collisionCnt++
+				} else {
+					arg.filter.Add(bytes)
+				}
+			}
+		}
+	}
+
+	result := vm.NewCallResult()
+	if arg.state == vm.Eval {
 		// this will happen in such case:create unique index from a table that unique col have no data
-		if ap.rbat == nil {
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+		if arg.rbat != nil {
+			arg.rbat.SetRowCount(arg.collisionCnt)
+			if arg.collisionCnt > 0 {
+				result.Batch = arg.rbat
+				arg.rbat = nil
+			}
 		}
-
-		ap.rbat.SetRowCount(ap.collisionCnt)
-		if ap.collisionCnt == 0 {
-			// case 1: pass duplicate constraint
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
-		} else {
-			// case 2: send collisionKeys to output operator to run background SQL
-			proc.SetInputBatch(ap.rbat)
-			return process.ExecStop, nil
-		}
+		arg.state = vm.End
+		return result, nil
 	}
 
-	rowCnt := bat.RowCount()
-	if rowCnt == 0 {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+	if arg.state == vm.End {
+		return result, nil
 	}
 
-	if ap.rbat == nil {
-		if err := generateRbat(proc, ap, bat); err != nil {
-			return process.ExecStop, err
-		}
-	}
-
-	pkCol := bat.GetVector(0)
-	for i := 0; i < rowCnt; i++ {
-		var bytes = pkCol.GetRawBytesAt(i)
-		if ap.filter.Test(bytes) {
-			appendCollisionKey(proc, ap, i, bat)
-			ap.collisionCnt++
-		} else {
-			ap.filter.Add(bytes)
-		}
-	}
-
-	proc.SetInputBatch(batch.EmptyBatch)
-	return process.ExecNext, nil
+	panic("bug")
 }
 
 // appendCollisionKey will append collision key into rbat
