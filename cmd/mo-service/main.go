@@ -229,6 +229,7 @@ func startCNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getCNServiceConfig()
+		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
@@ -236,6 +237,7 @@ func startCNService(
 			gossipNode,
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
+			cnservice.WithConfigData(commonConfigKVMap),
 		)
 		if err != nil {
 			panic(err)
@@ -280,13 +282,14 @@ func startTNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
-
+		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
 			perfCounterSet,
 			&c,
 			r,
 			fileService,
-			shutdownC)
+			shutdownC,
+			tnservice.WithConfigData(commonConfigKVMap))
 		if err != nil {
 			panic(err)
 		}
@@ -309,9 +312,11 @@ func startLogService(
 	shutdownC chan struct{},
 ) error {
 	lscfg := cfg.getLogServiceConfig()
+	commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 	s, err := logservice.NewService(lscfg, fileService,
 		shutdownC,
-		logservice.WithRuntime(runtime.ProcessLevelRuntime()))
+		logservice.WithRuntime(runtime.ProcessLevelRuntime()),
+		logservice.WithConfigData(commonConfigKVMap))
 	if err != nil {
 		panic(err)
 	}
