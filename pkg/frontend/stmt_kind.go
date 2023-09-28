@@ -168,7 +168,8 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		*tree.ShowPublications,
 		*tree.ShowSubscriptions,
 		*tree.ShowCreatePublications,
-		*tree.ShowBackendServers:
+		*tree.ShowBackendServers,
+		*tree.ShowConnectors:
 		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:

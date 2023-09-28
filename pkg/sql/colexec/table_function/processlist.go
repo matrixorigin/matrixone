@@ -31,7 +31,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/pkg/errors"
 )
 
 func processlistPrepare(proc *process.Process, arg *Argument) error {
@@ -185,54 +184,26 @@ func fetchSessions(ctx context.Context, tenant string, user string, qs queryserv
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
-	nodesLeft := len(nodes)
 
-	type nodeResponse struct {
-		nodeAddr string
-		response interface{}
-		err      error
-	}
-	responseChan := make(chan nodeResponse, nodesLeft)
-
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
 	var retErr error
 	var sessions []*status.Session
-	for _, node := range nodes {
-		// Invalid node address, ignore it.
-		if len(node) == 0 {
-			nodesLeft--
-			continue
-		}
 
-		go func(addr string) {
-			req := qs.NewRequest(query.CmdMethod_ShowProcessList)
-			req.ShowProcessListRequest = &query.ShowProcessListRequest{
-				Tenant:    tenant,
-				SysTenant: sysTenant,
-			}
-			resp, err := qs.SendMessage(ctx, addr, req)
-			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
-		}(node)
+	genRequest := func() *query.Request {
+		req := qs.NewRequest(query.CmdMethod_ShowProcessList)
+		req.ShowProcessListRequest = &query.ShowProcessListRequest{
+			Tenant:    tenant,
+			SysTenant: sysTenant,
+		}
+		return req
 	}
 
-	// Wait for all responses.
-	for nodesLeft > 0 {
-		select {
-		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
-			} else {
-				queryResp, ok := res.response.(*query.Response)
-				if ok && queryResp.ShowProcessListResponse != nil {
-					sessions = append(sessions, queryResp.ShowProcessListResponse.Sessions...)
-				}
-			}
-		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp != nil && rsp.ShowProcessListResponse != nil {
+			sessions = append(sessions, rsp.ShowProcessListResponse.Sessions...)
 		}
-		nodesLeft--
 	}
+
+	retErr = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, nil)
 
 	// Sort by session start time.
 	sort.Slice(sessions, func(i, j int) bool {

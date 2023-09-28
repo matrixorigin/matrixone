@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -103,6 +105,7 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
@@ -114,7 +117,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, cli, aicm)
+		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(&receiver)
@@ -706,6 +709,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
+	case *fuzzyfilter.Argument:
+		in.FuzzyFilter = &pipeline.FuzzyFilter{}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName: t.SchemaName,
@@ -1114,6 +1119,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
+	case vm.FuzzyFilter:
+		// t := opr.GetFuzzyFilter()
+		v.Arg = new(fuzzyfilter.Argument)
 	case vm.Anti:
 		t := opr.GetAnti()
 		v.Arg = &anti.Argument{
@@ -1498,7 +1506,7 @@ func convertToPipelineAggregates(ags []agg.Aggregate) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     int32(a.Op),
+			Op:     a.Op,
 			Dist:   a.Dist,
 			Expr:   a.E,
 			Config: a.Config,
@@ -1512,7 +1520,7 @@ func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
 	result := make([]agg.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = agg.Aggregate{
-			Op:     int(a.Op),
+			Op:     a.Op,
 			Dist:   a.Dist,
 			E:      a.Expr,
 			Config: a.Config,

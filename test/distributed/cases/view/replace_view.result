@@ -1,0 +1,29 @@
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values (1, 11), (2, 22), (3, 33);
+insert into t2 values (1, "aa"), (2, "bb");
+no such table replace_view.t2
+create view v1 as select * from t1;
+select * from v1;
+a    b
+1    11
+2    22
+3    33
+select * from v1 where a > 1;
+a    b
+2    22
+3    33
+create view v1 as select * from t1 where a > 1;
+table v1 already exists
+select * from v1;
+a    b
+1    11
+2    22
+3    33
+create or replace view v1 as select * from t1 where a > 1;
+select * from v1;
+a    b
+2    22
+3    33
+drop table t1;
+drop view v1;

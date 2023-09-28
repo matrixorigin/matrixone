@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"hash/fnv"
 	"math"
 	"net"
@@ -42,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/version"
+	"go.uber.org/zap"
 )
 
 var (
@@ -66,6 +66,22 @@ type LaunchConfig struct {
 	CNServiceConfigsFiles []string `toml:"cnservices"`
 	// CNServiceConfigsFiles log service config files
 	ProxyServiceConfigsFiles []string `toml:"proxy-services"`
+	// Dynamic dynamic cn service config
+	Dynamic Dynamic `toml:"dynamic"`
+}
+
+// Dynamic dynamic cn config
+type Dynamic struct {
+	// Enable enable dynamic cn config
+	Enable bool `toml:"enable"`
+	// CtlAddress http server port for ctl dynamic cn
+	CtlAddress string `toml:"ctl-address"`
+	// CNTemplate cn template file
+	CNTemplate string `toml:"cn-template"`
+	// ServiceCount how many cn services to start
+	ServiceCount int `toml:"service-count"`
+	// CpuCount how many cpu can used pr cn instance
+	CpuCount int `toml:"cpu-count"`
 }
 
 // Config mo-service configuration
@@ -199,7 +215,13 @@ func (c *Config) defaultFileServiceDataDir(name string) string {
 	return filepath.Join(c.DataDir, strings.ToLower(name))
 }
 
-func (c *Config) createFileService(ctx context.Context, defaultName string, perfCounterSet *perfcounter.CounterSet, serviceType metadata.ServiceType, nodeUUID string) (*fileservice.FileServices, error) {
+func (c *Config) createFileService(
+	ctx context.Context,
+	defaultName string,
+	perfCounterSet *perfcounter.CounterSet,
+	serviceType metadata.ServiceType,
+	nodeUUID string,
+) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
@@ -260,7 +282,7 @@ func (c *Config) createFileService(ctx context.Context, defaultName string, perf
 
 	// set distributed cache callbacks
 	for i, config := range c.FileServices {
-		c.setDistributedCacheCallbacks(&config)
+		c.setCacheCallbacks(&config)
 		c.FileServices[i] = config
 	}
 
@@ -466,14 +488,6 @@ func (c *Config) mustGetServiceUUID() string {
 	panic("impossible")
 }
 
-func (c *Config) setDistributedCacheCallbacks(fsConfig *fileservice.Config) {
-
-	fsConfig.Cache.PostSet = append(fsConfig.Cache.PostSet, func(key fileservice.CacheKey, value fileservice.CacheData) {
-		//TODO
-	})
-
-	fsConfig.Cache.PostEvict = append(fsConfig.Cache.PostEvict, func(key fileservice.CacheKey, value fileservice.CacheData) {
-		//TODO
-	})
-
+func (c *Config) setCacheCallbacks(fsConfig *fileservice.Config) {
+	fsConfig.Cache.SetRemoteCacheCallback()
 }

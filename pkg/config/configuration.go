@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -670,6 +671,8 @@ type ParameterUnit struct {
 	// HAKeeper client, which is used to get connection ID
 	// from HAKeeper currently.
 	HAKeeperClient logservice.CNHAKeeperClient
+
+	TaskService taskservice.TaskService
 }
 
 func NewParameterUnit(
