@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
@@ -45,6 +47,9 @@ type SegmentEntry struct {
 
 type SegStat struct {
 	// min max etc. later
+	Loaded         bool
+	OriginSize     int
+	SortKeyZonemap index.ZM
 	Rows           int
 	Dels           int
 	SameDelsStreak int
@@ -134,6 +139,41 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 		return 1
 	}
 	return 0
+}
+
+// LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
+func (entry *SegmentEntry) LoadObjectInfo() error {
+	if entry.Stat.Loaded {
+		return nil
+	}
+	entry.RLock()
+	blk := entry.link.GetHead().GetPayload()
+	entry.RUnlock()
+	if blk == nil {
+		return nil
+	}
+	schema := blk.GetSchema()
+	loc := blk.GetMetaLoc()
+	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, blk.blkData.GetFs().Service)
+	if err != nil {
+		return err
+	}
+
+	meta := objMeta.MustDataMeta()
+
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		colmata := meta.MustGetColumn(uint16(col.SeqNum))
+		entry.Stat.OriginSize += int(colmata.Location().OriginSize())
+	}
+	if schema.HasSortKey() {
+		col := schema.GetSingleSortKey()
+		entry.Stat.SortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
+	}
+	entry.Stat.Loaded = true
+	return nil
 }
 
 func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {
