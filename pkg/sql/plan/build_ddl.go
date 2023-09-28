@@ -1467,7 +1467,7 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 			// 1.b.ii add PK column to the "end of indexParts" irrespective of whether it is already present or not.
 			{
 				// add to indexParts
-				indexParts = append(indexParts, pkeyName)
+				//indexParts = append(indexParts, pkeyName)
 
 				//TODO: need to verify (arjun)
 				// add to KeyParts (modify indexInfo built from tree.stmt)
@@ -1484,24 +1484,49 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 			{
 
 				// 1.c.i) add index columns to index table
-				keyName := catalog.IndexTableIndexColName
-				colDef := &ColDef{
-					Name: keyName,
-					Alg:  plan.CompressType_Lz4,
-					Typ: &Type{
-						Id:    int32(types.T_varchar),
-						Width: types.MaxVarcharLen,
-					},
-					Default: &plan.Default{
-						NullAbility:  false,
-						Expr:         nil,
-						OriginString: "",
-					},
-				}
-				tableDef.Cols = append(tableDef.Cols, colDef)
-				tableDef.Pkey = &PrimaryKeyDef{
-					Names:       []string{keyName},
-					PkeyColName: keyName,
+				var keyName string
+				if len(indexInfo.KeyParts) == 1 {
+					keyName = catalog.IndexTableIndexColName
+					colDef := &ColDef{
+						Name: keyName,
+						Alg:  plan.CompressType_Lz4,
+						Typ: &Type{
+							Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+							Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
+						},
+						//TODO: check if this should be true
+						// If PK, then can, the column be nullable?
+						Default: &plan.Default{
+							NullAbility:  false,
+							Expr:         nil,
+							OriginString: "",
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, colDef)
+					tableDef.Pkey = &PrimaryKeyDef{
+						Names:       []string{keyName},
+						PkeyColName: keyName,
+					}
+				} else {
+					keyName = catalog.IndexTableIndexColName
+					colDef := &ColDef{
+						Name: keyName,
+						Alg:  plan.CompressType_Lz4,
+						Typ: &Type{
+							Id:    int32(types.T_varchar),
+							Width: types.MaxVarcharLen,
+						},
+						Default: &plan.Default{
+							NullAbility:  false,
+							Expr:         nil,
+							OriginString: "",
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, colDef)
+					tableDef.Pkey = &PrimaryKeyDef{
+						Names:       []string{keyName},
+						PkeyColName: keyName,
+					}
 				}
 
 				// 1.c.ii) add tablePK column to index table
