@@ -53,6 +53,8 @@ jobs:
       mo_svc_ip: ${{ steps.get_mo_addr.outputs.mo_svc_ip }}
       cn_0: ${{ steps.get_mo_addr.outputs.cn_0 }}
       cn_1: ${{ steps.get_mo_addr.outputs.cn_1 }}
+      cn_0_ip: ${{ steps.get_mo_addr.outputs.cn_0_ip }}
+      cn_1_ip: ${{ steps.get_mo_addr.outputs.cn_1_ip }}
     steps:
       - name: Checkout Matrixorigin/Matrixone
         uses: actions/checkout@v3
@@ -111,10 +113,15 @@ jobs:
         id: get_mo_addr
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
-          mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
+          mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP" | grep "ap" | awk '{print $3}')
           echo mo_svc_ip=$mo_svc_ip
           echo "mo_svc_ip=${mo_svc_ip}" >> $GITHUB_OUTPUT
-          kubectl get pod -n mo-checkin-regression-${{ github.event.pull_request.number }} -l matrixorigin.io/component=CNSet | awk 'NR>1{arr[a++]=$1} END {for(i in arr){system("echo cn_"i"="arr[i]" >> $GITHUB_OUTPUT")}}'    
+          kubectl get pod -n mo-checkin-regression-${{ github.event.pull_request.number }} -l matrixorigin.io/component=CNSet | awk 'NR>1{arr[a++]=$1} END {for(i in arr){system("echo cn_"i"="arr[i]" >> $GITHUB_OUTPUT")}}'
+
+          cn_0_ip=$mo_svc_ip
+          cn_1_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP" | grep "tp" | awk '{print $3}')
+          echo "cn_0_ip=${cn_0_ip}" >> $GITHUB_OUTPUT
+          echo "cn_1_ip=${cn_1_ip}" >> $GITHUB_OUTPUT
       - name: Prepare Data in cn-0
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
@@ -246,7 +253,7 @@ jobs:
       - name: Create Account for Test
         id: account_for_ssb_and_tpch
         run: |
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account ssb_tpch_test admin_name = 'admin' identified by '111' comment 'for ssb and tpch test';"
+          mysql -h ${{ needs.setup_mo_test_env.outputs.cn_0_ip }} -P 6001 -udump -p111 -e "create account ssb_tpch_test admin_name = 'admin' identified by '111' comment 'for ssb and tpch test';"
           echo "ssb_tpch_account=ssb_tpch_test:admin" >> $GITHUB_OUTPUT
           echo "ssb_tpch_password=111" >> $GITHUB_OUTPUT
 
@@ -261,11 +268,11 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
           sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/ssb_10`
-          ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/ssb_10 -r -m -g | tee report/mo-load-data-ssb.log
+          ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.cn_0_ip }} -c cases/00_from_s3/ssb_10 -r -m -g | tee report/mo-load-data-ssb.log
           # start test
           cd $GITHUB_WORKSPACE/mo-ssb
           mkdir -p report
-          ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/mo-ssb.log
+          ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.cn_0_ip }} -q all -s 10 -t 5 | tee report/mo-ssb.log
 
       # start tpch test
       - name: Load TPCH 10G Test Data
@@ -280,7 +287,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
           sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpch_10`
-          ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
+          ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.cn_0_ip }} -c cases/00_from_s3/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
 
       - name: Start TPCH 10G Test
         if: ${{ always() && !cancelled() && steps.load_tpch_data.conclusion == 'success' }}
@@ -292,7 +299,7 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tpch
           mkdir -p report
-          ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/tpch.log
+          ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.cn_0_ip }} -q all -s 10 -t 5 | tee report/tpch.log
 
       - name: Collect Upload files
         if: ${{ always() && !cancelled() }}
@@ -378,15 +385,15 @@ jobs:
       - name: Create Account for Test
         id: account_for_sysbench
         run: |
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account sysbench_test admin_name = 'admin' identified by '111' comment 'for sysbench test';"
+          mysql -h ${{ needs.setup_mo_test_env.outputs.cn_1_ip }} -P 6001 -udump -p111 -e "create account sysbench_test admin_name = 'admin' identified by '111' comment 'for sysbench test';"
           echo "sysbench_account=sysbench_test:admin" >> $GITHUB_OUTPUT
           echo "sysbench_password=111" >> $GITHUB_OUTPUT
 
  
       # start sysbench test
-      - name: Start OLTP Insert Test With 100 Threads
+      - name: Start OLTP Mixed Test With 100 Threads
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -395,80 +402,23 @@ jobs:
 
           cd $GITHUB_WORKSPACE/mo-load
           mkdir -p report
-          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' mo.yml
+          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.cn_1_ip }}/g' mo.yml
           sed -i 's/name: "dump"$/name: "${{ steps.account_for_sysbench.outputs.sysbench_account }}"/g' mo.yml
           sed -i 's/password: "111"$/password: "${{ steps.account_for_sysbench.outputs.sysbench_password }}"/g' mo.yml
           
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-insert.log
+          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-mix.log
           sleep 10
           
           echo ''
           echo 'Start OLTP Insert Test With 100 threads'
-          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-insert.log
+          ./start.sh -c cases/sysbench/mixed_10_100000 -t 100 -d 20 -g -b sbtest | tee report/oltp-mix.log
 
-      - name: Start OLTP Delete Test With 100 Threads
-        if: ${{ always() && !cancelled() }}
-        timeout-minutes: 15
-        run: |
-          set -uo pipefail
-          export LC_ALL="C.UTF-8"
-          locale
-          sleep 60s
-          
-          cd $GITHUB_WORKSPACE/mo-load
-          mkdir -p report
-          echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-delete.log
-          sleep 10
-          
-          echo ''
-          echo 'Start OLTP Delete Test With 100 threads'
-          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-delete.log
-          
-      - name: Start OLTP Update Test With 100 Threads
-        if: ${{ always() && !cancelled()  }}
-        timeout-minutes: 15
-        run: |
-          set -uo pipefail
-          export LC_ALL="C.UTF-8"
-          locale
-          sleep 60s
-          
-          cd $GITHUB_WORKSPACE/mo-load
-          mkdir -p report
-          echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-update.log
-          sleep 10
-          
-          echo ''
-          echo 'Start OLTP UPDATE Test With 100 threads'
-          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-update.log
-
-      - name: Start OLTP Point Select Test With 100 Threads
-        if: ${{ always() && !cancelled()  }}
-        timeout-minutes: 15
-        run: |
-          set -uo pipefail
-          export LC_ALL="C.UTF-8"
-          locale
-          sleep 60s
-          
-          cd $GITHUB_WORKSPACE/mo-load
-          mkdir -p report
-          echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-select.log
-          sleep 10
-          
-          echo ''
-          echo 'Start OLTP Point Select Test With 100 threads'
-          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-select.log
-     
       - name: Result Summary
         if: ${{ always() && !cancelled()  }}
         run: |
           cd $GITHUB_WORKSPACE/mo-load
-          files=("report/oltp-insert.log" "report/oltp-delete.log" "report/oltp-update.log" "report/oltp-select.log")
+          files=("report/oltp-mix.log")
           for filename in "${files[@]}"
           do
               if [ ! -f $filename ]; then
@@ -565,7 +515,7 @@ jobs:
       - name: Create Account for Test
         id: account_for_tpcc
         run: |
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account tpcc_test admin_name = 'admin' identified by '111' comment 'for tpcc test';"
+          mysql -h ${{ needs.setup_mo_test_env.outputs.cn_1_ip }} -P 6001 -udump -p111 -e "create account tpcc_test admin_name = 'admin' identified by '111' comment 'for tpcc test';"
           echo "tpcc_account=tpcc_test:admin" >> $GITHUB_OUTPUT
           echo "tpcc_password=111" >> $GITHUB_OUTPUT
 
@@ -583,7 +533,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
           sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpcc_10`
-          ./load.sh -u ${{ steps.account_for_tpcc.outputs.tpcc_account }} -p ${{ steps.account_for_tpcc.outputs.tpcc_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
+          ./load.sh -u ${{ steps.account_for_tpcc.outputs.tpcc_account }} -p ${{ steps.account_for_tpcc.outputs.tpcc_password }} -h ${{ needs.setup_mo_test_env.outputs.cn_1_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
           
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
@@ -598,7 +548,7 @@ jobs:
           sed -i '/.*terminals=*/c\terminals=100' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
-          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
+          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.cn_1_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=15' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062,9999' props_10.mo
           sed -i 's/user=.*/user=${{ steps.account_for_tpcc.outputs.tpcc_account }}/g' props_10.mo
@@ -610,7 +560,7 @@ jobs:
         if: ${{ always() && !cancelled()  }}
         run: |
           cd $GITHUB_WORKSPACE/mo-tpcc
-          files=("report/tpcc-benchmark-10-10.log" "report/tpcc-benchmark-10-50.log" "report/tpcc-benchmark-10-100.log")
+          files=("report/tpcc-benchmark-10-100.log")
           for filename in "${files[@]}"
           do
               if [ ! -f $filename ]; then
