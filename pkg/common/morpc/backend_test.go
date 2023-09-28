@@ -58,6 +58,27 @@ func TestSend(t *testing.T) {
 	)
 }
 
+func TestReadTimeout(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			// no response
+			return nil
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req)
+			assert.NoError(t, err)
+			defer f.Close()
+
+			_, err = f.Get()
+			assert.Error(t, err)
+		},
+		WithBackendReadTimeout(time.Millisecond*200),
+	)
+}
+
 func TestSendWithPayloadCannotTimeout(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
@@ -705,6 +726,37 @@ func TestWaitingFutureMustGetClosedError(t *testing.T) {
 			_, err = f.Get()
 			assert.Error(t, err)
 			assert.Equal(t, backendClosed, err)
+		},
+	)
+}
+
+func TestIssue11838(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			if seq == 100 {
+				return backendClosed
+			}
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
+			defer cancel()
+
+			var futures []*Future
+			for i := 0; i < 10000; i++ {
+				req := newTestMessage(uint64(i))
+				f, err := b.Send(ctx, req)
+				if err == nil {
+					futures = append(futures, f)
+				}
+			}
+
+			for _, f := range futures {
+				_, err := f.Get()
+				if err == nil {
+					f.Close()
+				}
+			}
 		},
 	)
 }
