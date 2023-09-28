@@ -287,7 +287,7 @@ func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
 	ok, err := tc.barg.Call(tc.proc)
 	require.NoError(t, err)
 	require.Equal(t, true, ok)
-	return tc.proc.Reg.InputBatch
+	return ok.Batch
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
