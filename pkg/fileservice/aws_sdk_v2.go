@@ -574,18 +574,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 			params.Range = &rang
 			output, err := doWithRetry(
 				"s3 get object",
-				func() (out *s3.GetObjectOutput, err error) {
-					_, span := trace.Start(ctx, "s3Client.GetObject", trace.WithKind(trace.SpanKindRemoteFSVis))
-					defer func() {
-						size := int64(0)
-						if out != nil {
-							size = out.ContentLength
-						}
-						span.End(trace.WithFSReadWriteExtra(*params.Key, err, size))
-					}()
-
-					out, err = a.client.GetObject(ctx, params, optFns...)
-					return
+				func() (*s3.GetObjectOutput, error) {
+					return a.client.GetObject(ctx, params, optFns...)
 				},
 				maxRetryAttemps,
 				isRetryableError,

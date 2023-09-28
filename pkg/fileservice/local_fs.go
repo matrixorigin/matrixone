@@ -286,9 +286,6 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	default:
 	}
 
-	ctx, span := trace.Start(ctx, "LocalFS.Read", trace.WithKind(trace.SpanKindStatement))
-	defer span.End()
-
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
@@ -372,13 +369,6 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) (err error) {
 		// all cache hit
 		return nil
 	}
-
-	// collect read info only when cache missing
-	size := vector.EntriesSize()
-	ctx, span := trace.Start(ctx, "LocalFS.read", trace.WithKind(trace.SpanKindLocalFSVis))
-	defer func() {
-		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
-	}()
 
 	t0 := time.Now()
 	defer func() {
