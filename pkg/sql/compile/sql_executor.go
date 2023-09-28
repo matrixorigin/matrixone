@@ -211,6 +211,10 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.SessionInfo.Buf = exec.s.buf
+	defer func() {
+		proc.CleanValueScanBatchs()
+		proc.FreeVectors()
+	}()
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
@@ -219,18 +223,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
-	c := New(
-		exec.s.addr,
-		exec.opts.Database(),
-		sql,
-		"",
-		"",
-		exec.ctx,
-		exec.s.eng,
-		proc,
-		stmts[0],
-		false,
-		nil)
+	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, false)
 
 	result := executor.NewResult(exec.s.mp)
 	var batches []*batch.Batch
