@@ -339,7 +339,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
 	}
-	cwft.proc.Ctx = requestCtx
+	cwft.proc.Ctx = txnCtx
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
 
 	var tenant string
@@ -353,7 +353,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.ses.GetSql(),
 		tenant,
 		cwft.ses.GetUserName(),
-		requestCtx,
+		txnCtx,
 		cwft.ses.GetStorage(),
 		cwft.proc,
 		cwft.stmt,
