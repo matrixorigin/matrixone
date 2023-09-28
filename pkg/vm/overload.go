@@ -16,8 +16,6 @@ package vm
 
 import (
 	"bytes"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -115,7 +113,6 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 
 	Deletion:        deletion.String,
 	Insert:          insert.String,
-	FuzzyFilter:     fuzzyfilter.String,
 	OnDuplicateKey:  onduplicatekey.String,
 	PreInsert:       preinsert.String,
 	PreInsertUnique: preinsertunique.String,
@@ -178,7 +175,6 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Deletion:        deletion.Prepare,
 	Insert:          insert.Prepare,
 	OnDuplicateKey:  onduplicatekey.Prepare,
-	FuzzyFilter:     fuzzyfilter.Prepare,
 	PreInsert:       preinsert.Prepare,
 	PreInsertUnique: preinsertunique.Prepare,
 	External:        external.Prepare,
@@ -242,7 +238,6 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecSt
 	External: external.Call,
 
 	OnDuplicateKey:  onduplicatekey.Call,
-	FuzzyFilter:     fuzzyfilter.Call,
 	PreInsert:       preinsert.Call,
 	PreInsertUnique: preinsertunique.Call,
 
