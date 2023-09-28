@@ -81,41 +81,85 @@ spec:
       level = "info"
       format = "json"
       max-size = 512
-  tp:
-    cacheVolume:
-      size: 100Gi
-      storageClassName: gp3
-    sharedStorageCache:
-      memoryCacheSize: 1Gi
-      diskCacheSize: 100Gi
-    config: |
-      [cn.Engine]
-      type = "distributed-tae"
-      [log]
-      level = "info"
-      format = "json"
-      max-size = 512
-      [cn.rpc]
-      send-queue-size = 2
-      busy-queue-size = 1
-      [cn.ctl.address]
-      listen-address = "0.0.0.0:19958"
-    replicas: 2
-    overlay:
-      tolerations:
-      - effect: NoSchedule
-        key: role/mo-big-data-pr
-        operator: Exists    
-      imagePullSecrets:
-      - name: dockerhub
-      env:
-      - name: GOMEMLIMIT
-        value: "8000MiB"
-    resources:
-      requests:
-        cpu: 6
-        memory: 15Gi
-      limits:
-        cpu: 8
-        memory: 16Gi
+  cnGroups:
+    - name: tp
+      cacheVolume:
+        size: 100Gi
+        storageClassName: gp3
+      sharedStorageCache:
+        memoryCacheSize: 1Gi
+        diskCacheSize: 100Gi
+      config: |
+        [cn.Engine]
+        type = "distributed-tae"
+        [log]
+        level = "info"
+        format = "json"
+        max-size = 512
+        [cn.rpc]
+        send-queue-size = 2
+        busy-queue-size = 1
+        [cn.ctl.address]
+        listen-address = "0.0.0.0:19958"
+      replicas: 1
+      overlay:
+        tolerations:
+        - effect: NoSchedule
+          key: role/mo-big-data-pr
+          operator: Exists    
+        imagePullSecrets:
+        - name: dockerhub
+        env:
+        - name: GOMEMLIMIT
+          value: "8000MiB"
+      resources:
+        requests:
+          cpu: 6
+          memory: 15Gi
+        limits:
+          cpu: 8
+          memory: 16Gi
+      cnLabels:
+        - key: "test_model"
+          values: ["tp"]
+    - name: ap
+      cacheVolume:
+        size: 100Gi
+        storageClassName: gp3
+      sharedStorageCache:
+        memoryCacheSize: 1Gi
+        diskCacheSize: 100Gi
+      config: |
+        [cn.Engine]
+        type = "distributed-tae"
+        [log]
+        level = "info"
+        format = "json"
+        max-size = 512
+        [cn.rpc]
+        send-queue-size = 2
+        busy-queue-size = 1
+        [cn.ctl.address]
+        listen-address = "0.0.0.0:19958"
+      replicas: 1
+      overlay:
+        tolerations:
+        - effect: NoSchedule
+          key: role/mo-big-data-pr
+          operator: Exists    
+        imagePullSecrets:
+        - name: dockerhub
+        env:
+        - name: GOMEMLIMIT
+          value: "8000MiB"
+      resources:
+        requests:
+          cpu: 6
+          memory: 15Gi
+        limits:
+          cpu: 8
+          memory: 16Gi
+      cnLabels:
+        - key: "test_model"
+          values: ["ap"]
   version: imagetag
