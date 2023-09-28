@@ -52,9 +52,9 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(_ *process.Process) error {
 	ap := arg
-	arg.ctr.state = vm.Build
 	if ap.RemoteDelete {
 		ap.ctr = new(container)
+		ap.ctr.state = vm.Build
 		ap.ctr.blockId_type = make(map[string]int8)
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
 		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerSegment)}

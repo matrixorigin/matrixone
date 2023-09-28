@@ -199,6 +199,10 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 		}
 	}
 
+	if arg.InsertCtx.AddAffectedRows {
+		affectedRows := uint64(insertBat.Vecs[0].Length())
+		atomic.AddUint64(&arg.affectedRows, affectedRows)
+	}
 	// `insertBat` does not include partition expression columns
 	insertBat.Clean(proc.GetMPool())
 	return result, nil
