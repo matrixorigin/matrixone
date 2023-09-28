@@ -488,8 +488,13 @@ func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *i
 				func() (obj *minio.Object, err error) {
 					_, span := trace.Start(ctx, "MinioSDKClient.GetObject", trace.WithKind(trace.SpanKindRemoteFSVis))
 					defer func() {
-						info, _ := obj.Stat()
-						span.End(trace.WithFSReadWriteExtra(key, err, info.Size))
+						size := int64(0)
+						if obj != nil {
+							info, _ := obj.Stat()
+							size = info.Size
+						}
+
+						span.End(trace.WithFSReadWriteExtra(key, err, size))
 					}()
 
 					obj, err = a.client.GetObject(ctx, a.bucket, key, minio.GetObjectOptions{})
