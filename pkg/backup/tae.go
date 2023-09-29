@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -137,40 +136,38 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			}
 		}
 	}
-	if backup != "" {
-		ckpStr := strings.Split(backup, ":")
-		if len(ckpStr) != 2 {
-			return moerr.NewInternalError(ctx, "invalid checkpoint string")
-		}
-		metaLoc := ckpStr[0]
-		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
-		if err != nil {
-			return err
-		}
-		key, err := blockio.EncodeLocationFromString(metaLoc)
-		if err != nil {
-			return err
-		}
-		locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
-		if err != nil {
-			return err
-		}
-		table.UpdateTable(data)
-		gcFiles := table.SoftGC()
-		mergeGCFile(gcFiles, gcFileMap)
-		for _, location := range locations {
-			if files[location.Name().String()] == nil {
-				dentry, err := srcFs.StatFile(ctx, location.Name().String())
-				if err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
-						isGC(gcFileMap, location.Name().String()) {
-						continue
-					} else {
-						return err
-					}
+	ckpStr := strings.Split(backup, ":")
+	if len(ckpStr) != 2 {
+		return moerr.NewInternalError(ctx, "invalid checkpoint string")
+	}
+	metaLoc := ckpStr[0]
+	version, err := strconv.ParseUint(ckpStr[1], 10, 32)
+	if err != nil {
+		return err
+	}
+	key, err := blockio.EncodeLocationFromString(metaLoc)
+	if err != nil {
+		return err
+	}
+	locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
+	if err != nil {
+		return err
+	}
+	table.UpdateTable(data)
+	gcFiles := table.SoftGC()
+	mergeGCFile(gcFiles, gcFileMap)
+	for _, location := range locations {
+		if files[location.Name().String()] == nil {
+			dentry, err := srcFs.StatFile(ctx, location.Name().String())
+			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+					isGC(gcFileMap, location.Name().String()) {
+					continue
+				} else {
+					return err
 				}
-				files[location.Name().String()] = dentry
 			}
+			files[location.Name().String()] = dentry
 		}
 	}
 
@@ -206,7 +203,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	if err != nil {
 		return err
 	}
-	location, err := blockio.EncodeLocationFromString(backup)
+	location, err := blockio.EncodeLocationFromString(metaLoc)
 	if err != nil {
 		return err
 	}
