@@ -884,15 +884,6 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		} else if !indexDef.Unique {
 			// ii) Secondary Index
 
-			// 0. Pre-check: check original data is not duplicated
-			{
-				//TODO: Learn how to remove this and how PK will handle duplicates.
-				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, originalTableDef.Name, partsToColsStr(indexDef.Parts))
-				if err != nil {
-					return err
-				}
-			}
-
 			// 1. Table-Build : create auxiliary tables for secondary index.
 			if qry.TableExist {
 				indexAlgo := strings.ToLower(indexDef.IndexAlgo)

@@ -112,7 +112,7 @@ func genCreateSecondaryIndexTableSqlForBTreeIndex(indexTableDef *plan.TableDef, 
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
-		if i == 1 {
+		if i >= 1 {
 			sql += ","
 		}
 		sql += planCol.Name + " "
@@ -134,7 +134,7 @@ func genCreateSecondaryIndexTableSqlForBTreeIndex(indexTableDef *plan.TableDef, 
 		default:
 			sql += typeId.String()
 		}
-		if i == 0 {
+		if planCol.Primary {
 			sql += " primary key"
 		}
 	}
