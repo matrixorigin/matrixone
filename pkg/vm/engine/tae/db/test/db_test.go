@@ -8702,6 +8702,13 @@ func TestCollectDeletesInRange2(t *testing.T) {
 
 	txn, rel = tae.GetRelation()
 	blk = rel.MakeBlockIt().GetBlock()
+	deletes, err := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().CollectDeleteInRange(context.Background(), types.TS{}, txn.GetStartTS(), true)
+	assert.NoError(t, err)
+	assert.Equal(t, 4, deletes.Length())
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, rel = tae.GetRelation()
+	blk = rel.MakeBlockIt().GetBlock()
 	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
 	filter := handle.NewEQFilter(v1)
 	err = rel.DeleteByFilter(context.Background(), filter)
@@ -8710,7 +8717,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 
 	txn, rel = tae.GetRelation()
 	blk = rel.MakeBlockIt().GetBlock()
-	deletes, err := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().CollectDeleteInRange(context.Background(), types.TS{}, txn.GetStartTS(), true)
+	deletes, err = blk.GetMeta().(*catalog.BlockEntry).GetBlockData().CollectDeleteInRange(context.Background(), types.TS{}, txn.GetStartTS(), true)
 	assert.NoError(t, err)
 	assert.Equal(t, 5, deletes.Length())
 	assert.NoError(t, txn.Commit(context.Background()))

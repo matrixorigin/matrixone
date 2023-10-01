@@ -611,7 +611,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	bat, persistedTS, err := blk.inMemoryCollectDeleteInRange(
+	bat, minTS, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		start,
 		end,
@@ -619,8 +619,8 @@ func (blk *baseBlock) CollectDeleteInRange(
 	if err != nil {
 		return
 	}
-	if end.Greater(persistedTS) {
-		end = persistedTS
+	if !minTS.IsEmpty() && end.Greater(minTS) {
+		end = minTS
 	}
 	bat, err = blk.persistedCollectDeleteInRange(
 		ctx,
@@ -634,24 +634,9 @@ func (blk *baseBlock) CollectDeleteInRange(
 func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
-	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
-	catalogPersistedTS := blk.meta.GetDeltaPersistedTS()
+	withAborted bool) (bat *containers.Batch, minTS types.TS, err error) {
 	blk.RLock()
-	persistedTS = blk.mvcc.GetDeletesPersistedTSInMVCCChain()
-	if persistedTS.IsEmpty() {
-		persistedTS = catalogPersistedTS
-	}
-	if persistedTS.GreaterEq(end) {
-		blk.RUnlock()
-		return
-	}
-	if start.Less(persistedTS) {
-		start = persistedTS
-	}
 	rowID, ts, abort, abortedMap, deletes, minTS := blk.mvcc.CollectDeleteLocked(start.Next(), end)
-	if !minTS.IsEmpty() {
-		persistedTS = minTS.Prev()
-	}
 	blk.RUnlock()
 	if rowID == nil {
 		return
