@@ -8708,7 +8708,6 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
-	blk = rel.MakeBlockIt().GetBlock()
 	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
 	filter := handle.NewEQFilter(v1)
 	err = rel.DeleteByFilter(context.Background(), filter)
