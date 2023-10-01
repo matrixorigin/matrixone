@@ -319,6 +319,10 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 		for i := 0; i < deletes.Length(); i++ {
 			loopOp(i, rowIdVec)
 		}
+		commitTSVec := containers.NewConstFixed[types.TS](types.T_TS.ToType(), deltalocCommitTS, deletes.Length())
+		abortVec := containers.NewConstFixed[bool](types.T_bool.ToType(), false, deletes.Length())
+		deletes.AddVector(catalog.AttrCommitTs, commitTSVec)
+		deletes.AddVector(catalog.AttrAborted, abortVec)
 	} else {
 		abortVec := deletes.Vecs[3].GetDownstreamVector()
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
@@ -644,7 +648,10 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	if start.Less(persistedTS) {
 		start = persistedTS
 	}
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start.Next(), end)
+	rowID, ts, abort, abortedMap, deletes, minTS := blk.mvcc.CollectDeleteLocked(start.Next(), end)
+	if !minTS.IsEmpty() {
+		persistedTS = minTS.Prev()
+	}
 	blk.RUnlock()
 	if rowID == nil {
 		return

@@ -179,7 +179,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS,
 ) (
 	rowIDVec, commitTSVec, abortVec containers.Vector,
-	aborts *nulls.Bitmap, deletes []uint32,
+	aborts *nulls.Bitmap, deletes []uint32, minTS types.TS,
 ) {
 	if n.deletes.Load().IsEmpty() {
 		return
@@ -232,6 +232,13 @@ func (n *MVCCHandle) CollectDeleteLocked(
 						deletes = append(deletes, row)
 						rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 						commitTSVec.Append(node.GetEnd(), false)
+						if minTS.IsEmpty() {
+							minTS = node.GetEnd()
+						} else {
+							if minTS.Greater(node.GetEnd()) {
+								minTS = node.GetEnd()
+							}
+						}
 					}
 				}
 				return !before
