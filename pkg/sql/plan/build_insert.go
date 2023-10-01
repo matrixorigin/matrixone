@@ -166,6 +166,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 				TableDef:        tableDef,
 				OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
 				OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
+				IsIgnore:        rewriteInfo.onDuplicateIsIgnore,
 			},
 		}
 		lastNodeId = builder.appendNode(onDuplicateKeyNode, bindCtx)

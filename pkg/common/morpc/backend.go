@@ -118,20 +118,21 @@ func WithBackendReadTimeout(value time.Duration) BackendOption {
 }
 
 type remoteBackend struct {
-	remote      string
-	logger      *zap.Logger
-	codec       Codec
-	conn        goetty.IOSession
-	writeC      chan *Future
-	stopWriteC  chan struct{}
-	resetConnC  chan struct{}
-	stopper     *stopper.Stopper
-	readStopper *stopper.Stopper
-	closeOnce   sync.Once
-	ctx         context.Context
-	cancel      context.CancelFunc
-	cancelOnce  sync.Once
-	pingTimer   *time.Timer
+	remote       string
+	logger       *zap.Logger
+	codec        Codec
+	conn         goetty.IOSession
+	writeC       chan *Future
+	stopWriteC   chan struct{}
+	resetConnC   chan struct{}
+	stopper      *stopper.Stopper
+	readStopper  *stopper.Stopper
+	closeOnce    sync.Once
+	ctx          context.Context
+	cancel       context.CancelFunc
+	cancelOnce   sync.Once
+	pingTimer    *time.Timer
+	lastPingTime time.Time
 
 	options struct {
 		hasPayloadResponse bool
@@ -424,8 +425,16 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.pingTimer = time.NewTimer(rb.getPingTimeout())
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
+	lastScheduleTime := time.Now()
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
+		interval := time.Since(lastScheduleTime)
+		if interval > time.Second*5 {
+			getLogger().Warn("system is busy, write loop schedule interval is too large",
+				zap.Duration("interval", interval),
+				zap.Time("last-ping-trigger_time", rb.lastPingTime),
+				zap.Duration("ping-interval", rb.getPingTimeout()))
+		}
 		if len(messages) > 0 {
 			writeTimeout := time.Duration(0)
 			written := messages[:0]
@@ -461,6 +470,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		if stopped {
 			return
 		}
+		lastScheduleTime = time.Now()
 	}
 }
 
@@ -556,6 +566,7 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	messages = messages[:0]
 	select {
 	case <-rb.pingTimer.C:
+		rb.lastPingTime = time.Now()
 		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
 		// no need wait response, close immediately
 		f.Close()

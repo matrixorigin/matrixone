@@ -46,7 +46,7 @@ func TestService_RegisterServices(t *testing.T) {
 				ListenAddress              string        `toml:"listen-address"`
 				ServiceAddress             string        `toml:"service-address"`
 				RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
-				RpcEnableChecksum          bool          `toml:"rpc-enable-checksum"`
+				RpcEnableChecksum          bool          `toml:"rpc-enable-checksum" user_setting:"advanced"`
 				LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 				LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
 			}(struct {
