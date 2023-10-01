@@ -296,6 +296,7 @@ func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 	return
 }
 
+// for each deletes in [start,end]
 func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	ctx context.Context,
 	start, end types.TS,
@@ -620,7 +621,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 		return
 	}
 	if !minTS.IsEmpty() && end.Greater(minTS) {
-		end = minTS
+		end = minTS.Prev()
 	}
 	bat, err = blk.persistedCollectDeleteInRange(
 		ctx,
