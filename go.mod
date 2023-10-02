@@ -64,7 +64,6 @@ require (
 )
 
 require (
-	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
