@@ -469,6 +469,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := new(lockop.Argument)
 		*arg = *t
 		res.Arg = arg
+	case vm.FuzzyFilter:
+		t := sourceIns.Arg.(*fuzzyfilter.Argument)
+		res.Arg = t
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -533,14 +536,8 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	}
 }
 
-func constructFuzzyFilter(n *plan.Node) *fuzzyfilter.Argument {
-	tblName := n.TableDef.GetName()
-	dbName := n.ObjRef.GetSchemaName()
-
-	return &fuzzyfilter.Argument{
-		TblName: tblName,
-		DbName:  dbName,
-	}
+func constructFuzzyFilter() *fuzzyfilter.Argument {
+	return new(fuzzyfilter.Argument)
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {

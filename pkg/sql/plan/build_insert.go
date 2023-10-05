@@ -236,7 +236,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.checkInsertPkDup = checkInsertPkDup
 
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		hasOnDup := true
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, hasOnDup)
 		if err != nil {
 			return nil, err
 		}

@@ -174,8 +174,8 @@ func (c *Compile) clear() {
 	c.cnList = nil
 	c.stmt = nil
 	c.tag11768 = false
-
 	c.fuzzy = nil
+
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -445,7 +445,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			result.AffectRows = cc.getAffectedRows()
 			return result, c.proc.TxnOperator.GetWorkspace().Adjust()
 		}
-		return err
+		return result, err
 	}
 
 	result.AffectRows = c.getAffectedRows()

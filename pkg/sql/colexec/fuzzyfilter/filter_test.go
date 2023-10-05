@@ -26,14 +26,10 @@ import (
 )
 
 // can be used to check hash collision rate
-// FIXME: current implemention will meet collision in rows 1000
-
+// when the number of tests is below 200,000, the rate of false positives should be very low
 const (
-	Rows1 = 100   // default rows
-	Rows2 = 1000  // default rows
-	Rows3 = 10000 // default rows
-
-	BenchmarkRows = 1000000 // default rows for benchmark
+	rowCnt = 200000
+	fkCnt  = 1
 )
 
 // add unit tests for cases
@@ -50,13 +46,38 @@ var (
 func init() {
 	tcs = []fuzzyTestCase{
 		{
+			arg:  new(Argument),
 			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
-			arg: &Argument{
-				TblName: "tblName",
-				DbName:  "dbName",
+		},
+		{
+			arg:  new(Argument),
+			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_date.ToType(),
+			},
+		},
+		{
+			arg:  new(Argument),
+			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_float32.ToType(),
+			},
+		},
+		{
+			arg:  new(Argument),
+			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_varchar.ToType(),
+			},
+		},
+		{
+			arg:  new(Argument),
+			proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
+			types: []types.Type{
+				types.T_binary.ToType(),
 			},
 		},
 	}
@@ -77,26 +98,14 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestReturnBatchAttr(t *testing.T) {
-	tc := tcs[0]
-	err := Prepare(tc.proc, tc.arg)
-	require.NoError(t, err)
-	testBatch := newBatch(t, tc.types, tc.proc, Rows1)
-	attrCnt := int32(len(testBatch.Attrs))
-	tc.proc.Reg.InputBatch = testBatch
-
-	_, err = Call(0, tc.proc, tc.arg, false, false)
-	require.Equal(t, "dbName", tc.arg.ctr.rbat.GetVector(attrCnt).GetStringAt(0), "wrong format for batch that fuzzy filter that returns")
-	require.Equal(t, "tblName", tc.arg.ctr.rbat.GetVector(attrCnt+1).GetStringAt(0), "wrong format for batch that fuzzy filter that returns")
-}
-
 func TestFuzzyFilter(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows3)
+		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, rowCnt)
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
+		require.LessOrEqual(t, tc.arg.collisionCnt, fkCnt, "collision cnt is too high, sth must went wrong")
 	}
 }
 
