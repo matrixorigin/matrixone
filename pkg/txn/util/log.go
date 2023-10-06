@@ -107,6 +107,13 @@ func LogTxnRollback(txnMeta txn.TxnMeta) {
 	}
 }
 
+func LogTxnRollbackWithInfo(txnMeta txn.TxnMeta, info string) {
+	logger := getSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Info("txn rollback "+info, zap.String("txn", txnMeta.DebugString()))
+	}
+}
+
 // LogTxnCreated log txn created
 func LogTxnCreated(txnMeta txn.TxnMeta) {
 	logger := getSkipLogger()
