@@ -630,10 +630,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 		storageCols := planColsToExeCols(table.GetCols())
 		storageDefs, err := planDefsToExeDefs(table)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -643,12 +653,22 @@ func (s *Scope) CreateTable(c *Compile) error {
 		fkTables := qry.GetFkTables()
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		tblId := newRelation.GetTableID(c.ctx)
 
 		newTableDef, err := newRelation.TableDefs(c.ctx)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		var colNameToId = make(map[string]uint64)
@@ -682,10 +702,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = newRelation.UpdateConstraint(c.ctx, newCt)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 
@@ -694,14 +724,29 @@ func (s *Scope) CreateTable(c *Compile) error {
 			fkDbName := fkDbs[i]
 			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 			fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName, nil)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 			err = s.addRefChildTbl(c, fkRelation, tblId)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 		}
@@ -713,12 +758,27 @@ func (s *Scope) CreateTable(c *Compile) error {
 		exeCols = planColsToExeCols(planCols)
 		exeDefs, err = planDefsToExeDefs(def)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		if _, err := dbSource.Relation(c.ctx, def.Name, nil); err == nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
 		}
 		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -726,23 +786,48 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if checkIndexInitializable(dbName, tblName) {
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = c.runSql(insertSQL)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 
 		insertSQL2, err := makeInsertTablePartitionsSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = c.runSql(insertSQL2)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
