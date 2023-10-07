@@ -124,6 +124,8 @@ func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, res
 func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
 	resp.GetTxnInfoResponse = new(query.GetTxnInfoResponse)
 	txns := make([]*query.TxnInfo, 0)
+	txns = append(txns, &query.TxnInfo{})
+
 	s._txnClient.IterTxns(func(view client.TxnOverview) bool {
 		//info := &query.TxnInfo{
 		//	CreateAt: view.CreateAt,
