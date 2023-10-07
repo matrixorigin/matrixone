@@ -26,7 +26,7 @@ func (s *service) forwardLock(
 	rows [][]byte,
 	txnID []byte,
 	opts pb.LockOptions) (pb.Result, error) {
-	l, err := s.getLockTable(tableID)
+	l, err := s.getLockTableWithCreate(tableID, true)
 	if err != nil {
 		return pb.Result{}, err
 	}
