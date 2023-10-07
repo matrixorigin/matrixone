@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,68 +27,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestLockAndUnlockOnRemote(t *testing.T) {
-	runLockServiceTests(
-		t,
-		[]string{"s1", "s2"},
-		func(alloc *lockTableAllocator, s []*service) {
-			l1 := s[0]
-			l2 := s[1]
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-
-			option := pb.LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
-			}
-
-			txn1 := []byte{1}
-			txn2 := []byte{2}
-
-			table1 := uint64(1)
-			table2 := uint64(2)
-
-			// make table1 on l1, table2 on l2
-			_, err := l1.Lock(ctx, table1, [][]byte{{1}}, txn1, option)
-			require.NoError(t, err)
-			checkTxn(t, l1, txn1, "")
-			checkTxnLocks(t, l1, txn1, table1, []byte{1})
-
-			_, err = l2.Lock(ctx, table2, [][]byte{{2}}, txn2, option)
-			require.NoError(t, err)
-			checkTxn(t, l2, txn2, "")
-			checkTxnLocks(t, l2, txn2, table2, []byte{2})
-
-			// lock remote
-			_, err = l1.Lock(ctx, table2, [][]byte{{3}}, txn1, option)
-			require.NoError(t, err)
-			checkTxn(t, l1, txn1, "")
-			checkTxn(t, l2, txn1, "s1")
-			checkTxnLocks(t, l1, txn1, table1, []byte{1})
-			checkTxnLocks(t, l1, txn1, table2, []byte{3})
-
-			_, err = l2.Lock(ctx, table1, [][]byte{{4}}, txn2, option)
-			require.NoError(t, err)
-			checkTxn(t, l2, txn2, "")
-			checkTxn(t, l1, txn2, "s2")
-			checkTxnLocks(t, l2, txn2, table2, []byte{2})
-			checkTxnLocks(t, l2, txn2, table1, []byte{4})
-
-			// unlock
-			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
-			require.NoError(t, l2.Unlock(ctx, txn2, timestamp.Timestamp{}))
-
-			checkTxnNotExist(t, l1, txn1)
-			checkTxnNotExist(t, l1, txn2)
-			checkTxnNotExist(t, l2, txn1)
-			checkTxnNotExist(t, l2, txn2)
-			checkLockRemoved(t, l1, table1, [][]byte{{1}, {4}})
-			checkLockRemoved(t, l2, table2, [][]byte{{2}, {3}})
-		},
-	)
-}
 
 func TestUnlockAfterTimeoutOnRemote(t *testing.T) {
 	runLockServiceTestsWithAdjustConfig(
@@ -159,7 +96,7 @@ func TestLockBlockedOnRemote(t *testing.T) {
 	)
 }
 
-func TestLockResultWithNoConfictOnRemote(t *testing.T) {
+func TestLockResultWithNoConflictOnRemote(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1", "s2"},
@@ -188,7 +125,7 @@ func TestLockResultWithNoConfictOnRemote(t *testing.T) {
 	)
 }
 
-func TestLockResultWithConfictAndTxnCommittedOnRemote(t *testing.T) {
+func TestLockResultWithConflictAndTxnCommittedOnRemote(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1", "s2"},
@@ -221,10 +158,9 @@ func TestLockResultWithConfictAndTxnCommittedOnRemote(t *testing.T) {
 					txn2,
 					option)
 				require.NoError(t, err)
-				assert.Equal(
+				assert.True(
 					t,
-					timestamp.Timestamp{PhysicalTime: 1},
-					res.Timestamp)
+					!res.Timestamp.IsEmpty())
 			}()
 			waitWaiters(t, l1, 1, row1, 1)
 			require.NoError(t, l1.Unlock(
@@ -236,7 +172,7 @@ func TestLockResultWithConfictAndTxnCommittedOnRemote(t *testing.T) {
 	)
 }
 
-func TestLockResultWithConfictAndTxnAbortedOnRemote(t *testing.T) {
+func TestLockResultWithConflictAndTxnAbortedOnRemote(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1", "s2"},
@@ -274,59 +210,6 @@ func TestLockResultWithConfictAndTxnAbortedOnRemote(t *testing.T) {
 			waitWaiters(t, l1, 1, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			<-c
-		},
-	)
-}
-
-func TestDeadlockOnRemote(t *testing.T) {
-	runLockServiceTests(
-		t,
-		[]string{"s1", "s2", "s3"},
-		func(alloc *lockTableAllocator, s []*service) {
-			l1 := s[0]
-			l2 := s[1]
-			l3 := s[2]
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-
-			txn1 := []byte("txn1")
-			txn2 := []byte("txn2")
-			txn3 := []byte("txn3")
-			row1 := []byte{1}
-			row2 := []byte{2}
-			row3 := []byte{3}
-
-			// txn1 hold table1[row1] on l1
-			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
-			// txn2 hold table2[row2] on l2
-			mustAddTestLock(t, ctx, l2, 2, txn2, [][]byte{row2}, pb.Granularity_Row)
-			// txn3 hold table3[row3] on l3
-			mustAddTestLock(t, ctx, l3, 3, txn3, [][]byte{row3}, pb.Granularity_Row)
-
-			var wg sync.WaitGroup
-			wg.Add(3)
-			go func() {
-				defer wg.Done()
-				// txn1 try lock tabl2[row2], txn1 wait txn2
-				maybeAddTestLockWithDeadlock(t, ctx, l1, 2, txn1, [][]byte{row2},
-					pb.Granularity_Row)
-				require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
-			}()
-			go func() {
-				defer wg.Done()
-				// txn2 try lock tabl3[row3], txn2 wait txn3
-				maybeAddTestLockWithDeadlock(t, ctx, l2, 3, txn2, [][]byte{row3},
-					pb.Granularity_Row)
-				require.NoError(t, l2.Unlock(ctx, txn2, timestamp.Timestamp{}))
-			}()
-			go func() {
-				defer wg.Done()
-				// txn3 try lock tabl1[row1], txn3 wait txn1
-				maybeAddTestLockWithDeadlock(t, ctx, l3, 1, txn3, [][]byte{row1},
-					pb.Granularity_Row)
-				require.NoError(t, l3.Unlock(ctx, txn3, timestamp.Timestamp{}))
-			}()
-			wg.Wait()
 		},
 	)
 }
@@ -467,7 +350,7 @@ func TestGetLockWithBindIsStable(t *testing.T) {
 			txnID2 := []byte("txn2")
 			lt, err := l2.getLockTable(table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, []byte{1}, func(l Lock) {})
+			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 
 			checkBind(
 				t,
@@ -555,7 +438,7 @@ func TestGetLockWithBindTimeout(t *testing.T) {
 			txnID2 := []byte("txn2")
 			lt, err := l2.getLockTable(table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, []byte{1}, func(l Lock) {})
+			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 			// l2 get the bind
 			v, ok := l2.tables.Load(table)
 			assert.True(t, ok)
@@ -634,7 +517,7 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 			txnID2 := []byte("txn2")
 			lt, err := l2.getLockTable(table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, []byte{1}, func(l Lock) {})
+			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 
 			checkBind(
 				t,
@@ -696,8 +579,7 @@ func runBindChangedTests(
 
 			c.RPC.BackendOptions = append(c.RPC.BackendOptions,
 				morpc.WithBackendFilter(func(m morpc.Message, s string) bool {
-					req := m.(*pb.Request)
-					if req.Method == pb.Method_KeepLockTableBind &&
+					if req, ok := m.(*pb.Request); ok && req.Method == pb.Method_KeepLockTableBind &&
 						req.KeepLockTableBind.ServiceID == "s1" {
 						return !skip.Load()
 					}
@@ -728,7 +610,7 @@ func waitBindChanged(
 	old pb.LockTable,
 	l *service) {
 	for {
-		lt, err := l.getLockTable(old.Table)
+		lt, err := l.getLockTableWithCreate(old.Table, true)
 		require.NoError(t, err)
 		new := lt.getBind()
 		if new.Changed(old) {
@@ -736,63 +618,6 @@ func waitBindChanged(
 		}
 		time.Sleep(time.Millisecond * 100)
 	}
-}
-
-func checkLockRemoved(
-	t *testing.T,
-	l *service,
-	table uint64,
-	locks [][]byte) {
-	store, err := l.getLockTable(table)
-	require.NoError(t, err)
-	store.(*localLockTable).mu.Lock()
-	defer store.(*localLockTable).mu.Unlock()
-	for _, lock := range locks {
-		_, ok := store.(*localLockTable).mu.store.Get(lock)
-		require.False(t, ok)
-	}
-}
-
-func checkTxnNotExist(
-	t *testing.T,
-	l *service,
-	txnID []byte) {
-	txn := l.activeTxnHolder.getActiveTxn(txnID, false, "")
-	assert.Nil(t, txn)
-}
-
-func checkTxn(
-	t *testing.T,
-	l *service,
-	txnID []byte,
-	remote string) {
-	txn := l.activeTxnHolder.getActiveTxn(txnID, false, "")
-	assert.NotNil(t, txn)
-	txn.Lock()
-	defer txn.Unlock()
-	assert.Equal(t, txn.txnID, txnID)
-	assert.Equal(t, txn.remoteService, remote)
-}
-
-func checkTxnLocks(
-	t *testing.T,
-	l *service,
-	txnID []byte,
-	table uint64,
-	locks ...[]byte) {
-	txn := l.activeTxnHolder.getActiveTxn(txnID, false, "")
-	assert.NotNil(t, txn)
-	txn.Lock()
-	defer txn.Unlock()
-	assert.Equal(t, txn.txnID, txnID)
-	sp := txn.holdLocks[table].slice()
-	assert.Equal(t, len(locks), sp.len())
-	var values [][]byte
-	sp.iter(func(v []byte) bool {
-		values = append(values, v)
-		return true
-	})
-	assert.Equal(t, locks, values)
 }
 
 func checkBind(

@@ -1250,8 +1250,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
+		//-----------------------------------------------------------------
+		builder.partitionPrune(rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
+		//-----------------------------------------------------------------
+
 		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
+		determineShuffleMethod2(rootID, -1, builder)
 		determineHashOnPK(rootID, builder)
 		builder.pushdownRuntimeFilters(rootID)
 
@@ -3318,6 +3324,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
 	case "processlist", "mo_sessions":
 		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, childId)
+	case "mo_configurations":
+		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, childId)
+	case "mo_locks":
+		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

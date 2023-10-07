@@ -16,6 +16,8 @@ package tnservice
 
 import (
 	"context"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"path/filepath"
 	"strings"
 	"time"
@@ -44,11 +46,12 @@ var (
 	defaultConnectTimeout        = time.Second * 30
 	defaultHeatbeatTimeout       = time.Second * 3
 
-	defaultFlushInterval       = time.Second * 60
-	defaultScanInterval        = time.Second * 5
-	defaultIncrementalInterval = time.Minute
-	defaultGlobalMinCount      = int64(60)
-	defaultMinCount            = int64(100)
+	defaultFlushInterval         = time.Second * 60
+	defaultScanInterval          = time.Second * 5
+	defaultIncrementalInterval   = time.Minute
+	defaultGlobalMinCount        = int64(60)
+	defaultMinCount              = int64(100)
+	defaultReservedWALEntryCount = uint64(5000)
 
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
 	defaultLogtailCollectInterval     = 2 * time.Millisecond
@@ -65,9 +68,9 @@ var (
 // Config tn store configuration
 type Config struct {
 	// DataDir data dir
-	DataDir string `toml:"-"`
+	DataDir string `toml:"-" user_setting:"basic"`
 	// UUID tn store uuid
-	UUID string `toml:"uuid"`
+	UUID string `toml:"uuid" user_setting:"basic"`
 	// ListenAddress listening address for receiving external requests.
 	ListenAddress string `toml:"listen-address"`
 	// ServiceAddress service address for communication, if this address is not set, use
@@ -80,10 +83,10 @@ type Config struct {
 	// TODO(volgariver6): The value of this field is also used to determine the version
 	// of MO. If it is not set, we use the old listen-address/service-address fields, and
 	// if it is set, we use the new policy to distribute the ports to all services.
-	PortBase int `toml:"port-base"`
+	PortBase int `toml:"port-base" user_setting:"basic"`
 	// ServiceHost is the host name/IP for the service address of RPC request. There is
 	// no port value in it.
-	ServiceHost string `toml:"service-host"`
+	ServiceHost string `toml:"service-host" user_setting:"basic"`
 
 	// HAKeeper configuration
 	HAKeeper struct {
@@ -107,18 +110,19 @@ type Config struct {
 	RPC rpc.Config `toml:"rpc"`
 
 	Ckp struct {
-		FlushInterval       toml.Duration `toml:"flush-interval"`
-		ScanInterval        toml.Duration `toml:"scan-interval"`
-		MinCount            int64         `toml:"min-count"`
-		IncrementalInterval toml.Duration `toml:"incremental-interval"`
-		GlobalMinCount      int64         `toml:"global-min-count"`
+		FlushInterval         toml.Duration `toml:"flush-interval"`
+		ScanInterval          toml.Duration `toml:"scan-interval"`
+		MinCount              int64         `toml:"min-count"`
+		IncrementalInterval   toml.Duration `toml:"incremental-interval"`
+		GlobalMinCount        int64         `toml:"global-min-count"`
+		ReservedWALEntryCount uint64        `toml:"reserved-WAL-entry-count"`
 	}
 
 	LogtailServer struct {
 		ListenAddress              string        `toml:"listen-address"`
 		ServiceAddress             string        `toml:"service-address"`
 		RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
-		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum"`
+		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum" user_setting:"advanced"`
 		LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 		LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
 	}
@@ -219,6 +223,9 @@ func (c *Config) Validate() error {
 	if c.Ckp.GlobalMinCount == 0 {
 		c.Ckp.GlobalMinCount = defaultGlobalMinCount
 	}
+	if c.Ckp.ReservedWALEntryCount == 0 {
+		c.Ckp.ReservedWALEntryCount = defaultReservedWALEntryCount
+	}
 	if c.LogtailServer.ListenAddress == "" {
 		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
 	}
@@ -270,4 +277,110 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (c *Config) SetDefaultValue() {
+	foundMachineHost := ""
+	if c.DataDir == "" {
+		c.DataDir = defaultDataDir
+	}
+	c.Txn.Storage.dataDir = filepath.Join(c.DataDir, storageDir)
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultListenAddress
+	}
+	if c.ServiceAddress == "" {
+		c.ServiceAddress = defaultServiceAddress
+	} else {
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
+	}
+	if c.LockService.ListenAddress == "" {
+		c.LockService.ListenAddress = defaultLockListenAddress
+	}
+	if c.LockService.ServiceAddress == "" {
+		c.LockService.ServiceAddress = defaultLockServiceAddress
+	}
+	if c.Txn.Storage.Backend == "" {
+		c.Txn.Storage.Backend = StorageTAE
+	}
+
+	if c.Txn.ZombieTimeout.Duration == 0 {
+		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout
+	}
+	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
+		c.HAKeeper.DiscoveryTimeout.Duration = defaultDiscoveryTimeout
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = defaultHeatbeatInterval
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = defaultHeatbeatTimeout
+	}
+	if c.LogService.ConnectTimeout.Duration == 0 {
+		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
+	}
+	if c.Ckp.ScanInterval.Duration == 0 {
+		c.Ckp.ScanInterval.Duration = defaultScanInterval
+	}
+	if c.Ckp.FlushInterval.Duration == 0 {
+		c.Ckp.FlushInterval.Duration = defaultFlushInterval
+	}
+	if c.Ckp.MinCount == 0 {
+		c.Ckp.MinCount = defaultMinCount
+	}
+	if c.Ckp.IncrementalInterval.Duration == 0 {
+		c.Ckp.IncrementalInterval.Duration = defaultIncrementalInterval
+	}
+	if c.Ckp.GlobalMinCount == 0 {
+		c.Ckp.GlobalMinCount = defaultGlobalMinCount
+	}
+	if c.LogtailServer.ListenAddress == "" {
+		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
+	}
+	if c.LogtailServer.ServiceAddress == "" {
+		c.LogtailServer.ServiceAddress = defaultLogtailServiceAddress
+	}
+	if c.LogtailServer.RpcMaxMessageSize <= 0 {
+		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
+	}
+	if c.LogtailServer.LogtailCollectInterval.Duration <= 0 {
+		c.LogtailServer.LogtailCollectInterval.Duration = defaultLogtailCollectInterval
+	}
+	if c.LogtailServer.LogtailResponseSendTimeout.Duration <= 0 {
+		c.LogtailServer.LogtailResponseSendTimeout.Duration = defaultLogtailResponseSendTimeout
+	}
+	if c.Cluster.RefreshInterval.Duration == 0 {
+		c.Cluster.RefreshInterval.Duration = time.Second * 10
+	}
+
+	if c.Txn.Mode == "" {
+		c.Txn.Mode = defaultTxnMode.String()
+	}
+
+	if c.Txn.IncrementalDedup == "" {
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+			c.Txn.IncrementalDedup = "true"
+		} else {
+			c.Txn.IncrementalDedup = "false"
+		}
+	} else {
+		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
+	}
+
+	c.RPC.Adjust()
+	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
+	c.LockService.ServiceID = "tmp"
+	c.LockService.Validate()
+	c.LockService.ServiceID = c.UUID
+
+	if c.PortBase != 0 {
+		if c.ServiceHost == "" {
+			c.ServiceHost = defaultServiceHost
+		}
+	}
+}
+
+func dumpTnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	defCfg.SetDefaultValue()
+	return util.DumpConfig(cfg, defCfg)
 }

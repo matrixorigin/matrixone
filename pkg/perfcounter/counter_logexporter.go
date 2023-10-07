@@ -53,6 +53,12 @@ func (c *CounterLogExporter) Export() []zap.Field {
 		fields = append(fields, zap.Any("FileService Cache Disk Hit Rate", float64(cacheDiskHit)/float64(cacheDiskRead)))
 	}
 
+	cacheRemoteHit := c.counter.FileService.Cache.Remote.Hit.LoadW()
+	cacheRemoteRead := c.counter.FileService.Cache.Remote.Read.LoadW()
+	if cacheRemoteHit != 0 && cacheRemoteRead != 0 {
+		fields = append(fields, zap.Any("FileService Cache Remote Hit Rate", float64(cacheRemoteHit)/float64(cacheRemoteRead)))
+	}
+
 	// all fields in CounterSet
 	_ = c.counter.IterFields(func(path []string, counter *stats.Counter) error {
 		counterValue := counter.SwapW(0)

@@ -68,7 +68,6 @@ func NewLockService(cfg Config) LockService {
 	s.mu.allocating = make(map[uint64]chan struct{})
 	s.activeTxnHolder = newMapBasedTxnHandler(s.cfg.ServiceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
-		s.cfg.ServiceID,
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
 	s.clock = runtime.ProcessLevelRuntime().Clock()
@@ -95,7 +94,7 @@ func (s *service) Lock(
 	}
 
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
-	l, err := s.getLockTable(tableID)
+	l, err := s.getLockTableWithCreate(tableID, true)
 	if err != nil {
 		return pb.Result{}, err
 	}
@@ -228,7 +227,7 @@ func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
 }
 
 func (s *service) getLockTable(tableID uint64) (lockTable, error) {
-	return s.getLockTableWithCreate(tableID, true)
+	return s.getLockTableWithCreate(tableID, false)
 }
 
 func (s *service) waitLockTableBind(tableID uint64, locked bool) lockTable {
@@ -295,16 +294,12 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
-	// TODO(fagongzi): replace with swap if upgrade to go1.20
-	old, loaded := s.tables.LoadAndDelete(newBind.Table)
-	if !loaded {
-		panic("missing lock table")
+	new := s.createLockTableByBind(newBind)
+	old, loaded := s.tables.Swap(newBind.Table, new)
+	if loaded {
+		old.(lockTable).close()
 	}
-	s.tables.Store(
-		newBind.Table,
-		s.createLockTableByBind(newBind))
 	logRemoteBindChanged(s.cfg.ServiceID, old.(lockTable).getBind(), newBind)
-	old.(lockTable).close()
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -408,7 +403,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 
 		}
 	}
-	logTxnCreated(h.serviceID, txn)
+	logTxnCreated(txn)
 	return txn
 }
 

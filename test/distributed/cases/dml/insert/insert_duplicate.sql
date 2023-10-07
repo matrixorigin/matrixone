@@ -24,9 +24,8 @@ select * from indup_00;
 insert into indup_00 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
 select * from indup_00;
 
--- @bvt:issue#8498
 CREATE TABLE IF NOT EXISTS indup_01(
-    `id` INT UNSIGNED AUTO_INCREMENT,
+    `id` INT UNSIGNED,
     `act_name` VARCHAR(20) NOT NULL,
     `spu_id` VARCHAR(30) NOT NULL,
     `uv`  BIGINT NOT NULL,
@@ -34,24 +33,23 @@ CREATE TABLE IF NOT EXISTS indup_01(
     PRIMARY KEY ( `id` ),
     unique key idx_act_name_spu_id (act_name,spu_id)
 );
-insert into indup_01(act_name,spu_id,uv,update_time) values ('beijing','001',1,'2021-01-03'),('shanghai','002',2,'2022-09-23'),('guangzhou','003',3,'2022-09-23');
+insert into indup_01 values (1,'beijing','001',1,'2021-01-03'),(2,'shanghai','002',2,'2022-09-23'),(3,'guangzhou','003',3,'2022-09-23');
 select * from indup_01;
 
 -- insert unique index duplicate data part,update value() and insert
-insert into indup_01(act_name,spu_id,uv,update_time)values ('shenzheng','004',4,'2021-05-28'),('beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+insert into indup_01 values (4,'shenzheng','004',4,'2021-05-28'),(5,'beijing','010',5,'2022-10-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
 select * from indup_01;
 -- insert unique index duplicate data all,update
-insert into indup_01(act_name,spu_id,uv,update_time)values ('shanghai','002',21,'1999-09-23'),('guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
+insert into indup_01 values (6,'shanghai','002',21,'1999-09-23'),(7,'guangzhou','003',31,'1999-09-23') on duplicate key update `act_name`=VALUES(`act_name`), `spu_id`=VALUES(`spu_id`), `uv`=VALUES(`uv`);
 select * from indup_01;
 -- insert unique index duplicate data
-insert into indup_01(act_name,spu_id,uv,update_time)values ('shanghai','002',21,'1999-09-23') on duplicate key update `act_name`=NULL;
+insert into indup_01 values (8,'shanghai','002',21,'1999-09-23') on duplicate key update `act_name`=NULL;
 select * from indup_01;
 -- insert no duplicate data ,insert new data success
-insert into indup_01(act_name,spu_id,uv,update_time)values ('shanxi','005',4,'2022-10-08'),('shandong','006',6,'2022-11-22') on duplicate key update `act_name`='Hongkong';
+insert into indup_01 values (9,'shanxi','005',4,'2022-10-08'),(10,'shandong','006',6,'2022-11-22') on duplicate key update `act_name`='Hongkong';
 select * from indup_01;
 insert into indup_01 values (10,'xinjiang','008',7,NULL),(11,'hainan','009',8,NULL) on duplicate key update `act_name`='Hongkong';
 select * from indup_01;
--- @bvt:issue
 
 CREATE TABLE IF NOT EXISTS indup_02(
     col1 INT ,
@@ -185,19 +183,6 @@ select * from indup_07;
 --update out of date range
 insert into indup_07 values(24,'1','1',100) on duplicate key update col1=2147483649;
 
---transaction
--- @bvt:issue#8713
-begin;
-insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
-select * from indup_07;
-rollback ;
-select * from indup_07;
-start transaction ;
-insert into indup_07 values(22,'11','33',1), (23,'22','55',2),(33,'66','77',1) on duplicate key update col1=col1+1,col2='888';
-select * from indup_07;
-commit;
-select * from indup_07;
--- @bvt:issue
 --prepare
 prepare stmt1 from "insert into indup_07 values(?, '11', '33', 1)on duplicate key update col1=col1*10";
 set @a_var = 1;

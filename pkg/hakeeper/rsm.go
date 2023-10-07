@@ -675,6 +675,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			WorkState:          info.WorkState,
 			Labels:             info.Labels,
 			QueryAddress:       info.QueryAddress,
+			ConfigData:         info.ConfigData,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
@@ -692,6 +693,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			LogtailServerAddress: info.LogtailServerAddress,
 			LockServiceAddress:   info.LockServiceAddress,
 			CtlAddress:           info.CtlAddress,
+			ConfigData:           info.ConfigData,
 		}
 		cd.TNStores = append(cd.TNStores, n)
 	}
@@ -706,6 +708,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			State:          state,
 			ServiceAddress: info.ServiceAddress,
 			Replicas:       info.Replicas,
+			ConfigData:     info.ConfigData,
 		}
 		cd.LogStores = append(cd.LogStores, n)
 	}

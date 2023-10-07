@@ -1,0 +1,13 @@
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values (1, 11), (2, 22), (3, 33);
+insert into t2 values (1, "aa"), (2, "bb");
+create view v1 as select * from t1;
+select * from v1;
+select * from v1 where a > 1;
+create view v1 as select * from t1 where a > 1;
+select * from v1;
+create or replace view v1 as select * from t1 where a > 1;
+select * from v1;
+drop table t1;
+drop view v1;

@@ -370,7 +370,7 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		err := taskService.Create(ctx, task.TaskMetadata{ID: "1234"})
+		err := taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "1234"})
 		assert.NoError(t, err)
 
 		cnUUID := uuid.New().String()
@@ -382,7 +382,7 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		// schedule task we created to CN node
 		time.Sleep(time.Millisecond * 200)
 
-		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
+		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}

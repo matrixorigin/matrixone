@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCreate(t *testing.T) {
+func TestCreateAsyncTask(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
@@ -37,10 +37,10 @@ func TestCreate(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
 
-	v := mustGetTestTask(t, store, 1)[0]
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.True(t, v.ID > 0)
 	assert.True(t, v.CreateAt > 0)
 	assert.Equal(t, int64(0), v.CompletedAt)
@@ -71,7 +71,7 @@ func TestCreateBatch(t *testing.T) {
 
 	assert.NoError(t, s.CreateBatch(ctx, tasks))
 
-	values := mustGetTestTask(t, store, n)
+	values := mustGetTestAsyncTask(t, store, n)
 	for i := 0; i < n; i++ {
 		v := values[i]
 		assert.True(t, v.ID > 0)
@@ -97,11 +97,11 @@ func TestAllocate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	assert.Equal(t, task.TaskStatus_Running, v.Status)
 	assert.True(t, v.LastHeartbeat > 0)
 	assert.Equal(t, "r1", v.TaskRunner)
@@ -118,11 +118,11 @@ func TestReAllocate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	assert.Equal(t, task.TaskStatus_Running, v.Status)
 	assert.True(t, v.LastHeartbeat > 0)
 	assert.Equal(t, "r1", v.TaskRunner)
@@ -131,7 +131,7 @@ func TestReAllocate(t *testing.T) {
 	last := v.LastHeartbeat
 	time.Sleep(time.Millisecond)
 	assert.NoError(t, s.Allocate(ctx, v, "r2"))
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	assert.Equal(t, task.TaskStatus_Running, v.Status)
 	assert.True(t, v.LastHeartbeat > last)
 	assert.Equal(t, "r2", v.TaskRunner)
@@ -146,7 +146,7 @@ func allocateWithNotExistTask(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
-	_ = s.Allocate(ctx, task.Task{ID: 1}, "r1")
+	_ = s.Allocate(ctx, task.AsyncTask{ID: 1}, "r1")
 }
 
 func TestAllocateWithNotExistTask(t *testing.T) {
@@ -175,17 +175,17 @@ func TestAllocateWithInvalidEpoch(t *testing.T) {
 		store.Lock()
 		defer store.Unlock()
 
-		for k, v := range store.tasks {
+		for k, v := range store.asyncTasks {
 			v.Epoch++
-			store.tasks[k] = v
+			store.asyncTasks[k] = v
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	err := s.Allocate(ctx, v, "r2")
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
@@ -200,15 +200,15 @@ func TestCompleted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Complete(ctx, "r1", v,
 		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	assert.Equal(t, task.TaskStatus_Completed, v.Status)
 	assert.Equal(t, task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}, *v.ExecuteResult)
 }
@@ -223,13 +223,13 @@ func TestCompletedWithInvalidStatus(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	v.Status = task.TaskStatus_Created
-	mustUpdateTestTask(t, store, 1, []task.Task{v})
+	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
 
 	err := s.Complete(ctx, "r1", v,
 		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"})
@@ -246,13 +246,13 @@ func TestCompletedWithInvalidEpoch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	v.Epoch = 2
-	mustUpdateTestTask(t, store, 1, []task.Task{v})
+	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
 
 	v.Epoch = 1
 	err := s.Complete(ctx, "r1", v,
@@ -270,11 +270,11 @@ func TestCompletedWithInvalidTaskRunner(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	err := s.Complete(ctx, "r2", v,
 		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"})
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
@@ -290,16 +290,16 @@ func TestHeartbeat(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	lastHeartbeat := v.LastHeartbeat
 	time.Sleep(time.Millisecond * 5)
 	assert.NoError(t, s.Heartbeat(ctx, v))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	assert.True(t, v.LastHeartbeat > lastHeartbeat)
 }
 
@@ -313,13 +313,13 @@ func TestHeartbeatWithSmallEpoch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	v.Epoch = 2
-	mustUpdateTestTask(t, store, 1, []task.Task{v})
+	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
 
 	v.Epoch = 1
 	err := s.Heartbeat(ctx, v)
@@ -336,13 +336,13 @@ func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.CreateAsyncTask(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestAsyncTask(t, store, 1)[0]
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
-	v = mustGetTestTask(t, store, 1)[0]
+	v = mustGetTestAsyncTask(t, store, 1)[0]
 	v.Epoch = 2
-	mustUpdateTestTask(t, store, 1, []task.Task{v})
+	mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
 
 	v.Epoch = 3
 	assert.NoError(t, s.Heartbeat(ctx, v))
@@ -380,7 +380,7 @@ func TestQueryCronTask(t *testing.T) {
 	assert.Equal(t, 2, len(v))
 }
 
-func TestQueryTask(t *testing.T) {
+func TestQueryAsyncTask(t *testing.T) {
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
@@ -390,11 +390,11 @@ func TestQueryTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	v1 := newTestTask("t1")
-	v2 := newTestTask("t2")
-	mustAddTestTask(t, store, 2, v1, v2)
+	v1 := newTestAsyncTask("t1")
+	v2 := newTestAsyncTask("t2")
+	mustAddTestAsyncTask(t, store, 2, v1, v2)
 
-	v, err := s.QueryTask(ctx)
+	v, err := s.QueryAsyncTask(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(v))
 }
@@ -403,4 +403,114 @@ func newTestTaskMetadata(id string) task.TaskMetadata {
 	return task.TaskMetadata{
 		ID: id,
 	}
+}
+
+func TestCreateDaemonTask(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+	assert.NoError(t, s.CreateDaemonTask(ctx, newTestTaskMetadata("t1"),
+		&task.Details{
+			AccountID: 10,
+			Account:   "a1",
+			Username:  "u1",
+			Details: &task.Details_Connector{
+				Connector: &task.ConnectorDetails{
+					TableName: "d1.t1",
+					Options: map[string]string{
+						"k1": "v1",
+					},
+				},
+			},
+		}))
+
+	v := mustGetTestDaemonTask(t, store, 1)[0]
+	assert.Equal(t, uint64(0), v.ID)
+	assert.False(t, v.CreateAt.IsZero())
+	assert.Equal(t, task.TaskStatus_Created, v.TaskStatus)
+	assert.Equal(t, "", v.TaskRunner)
+	assert.True(t, v.LastHeartbeat.IsZero())
+	assert.Equal(t, newTestTaskMetadata("t1"), v.Metadata)
+	assert.Equal(t, task.TaskType_TypeKafkaSinkConnector, v.TaskType)
+	assert.Equal(t, uint32(10), v.Details.AccountID)
+	assert.Equal(t, "a1", v.Details.Account)
+	assert.Equal(t, "u1", v.Details.Username)
+	details, ok := v.Details.Details.(*task.Details_Connector)
+	assert.True(t, ok)
+	assert.Equal(t, "d1.t1", details.Connector.TableName)
+	assert.Equal(t, "v1", details.Connector.Options["k1"])
+}
+
+func TestQueryDaemonTask(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	v1 := newTestDaemonTask(1, "t1")
+	v2 := newTestDaemonTask(2, "t2")
+	mustAddTestDaemonTask(t, store, 2, v1, v2)
+
+	v, err := s.QueryDaemonTask(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(v))
+}
+
+func TestUpdateDaemonTaskTS(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	v1 := newTestDaemonTask(1, "t1")
+	mustAddTestDaemonTask(t, store, 1, v1)
+
+	v1.TaskStatus = task.TaskStatus_Running
+
+	c, err := s.UpdateDaemonTask(ctx, []task.DaemonTask{v1})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, c)
+
+	ts, err := s.QueryDaemonTask(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(ts))
+	assert.Equal(t, task.TaskStatus_Running, ts[0].TaskStatus)
+}
+
+func TestHeartbeatDaemonTask(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(runtime.DefaultRuntime(), store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	v1 := newTestDaemonTask(1, "t1")
+	v1.TaskStatus = task.TaskStatus_Running
+	mustAddTestDaemonTask(t, store, 1, v1)
+
+	v1.LastHeartbeat = time.Now()
+
+	err := s.HeartbeatDaemonTask(ctx, v1)
+	assert.NoError(t, err)
+
+	ts, err := s.QueryDaemonTask(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(ts))
+	assert.False(t, ts[0].LastHeartbeat.IsZero())
 }

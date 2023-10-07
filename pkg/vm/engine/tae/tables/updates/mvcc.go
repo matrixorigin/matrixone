@@ -177,9 +177,8 @@ func (n *MVCCHandle) IsDeletedLocked(
 // it collects all deletes in the range [start, end)
 func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS, pkType types.Type,
-) (
-	rowIDVec, commitTSVec, pkVec, abortVec containers.Vector,
-	aborts *nulls.Bitmap, deletes []uint32,
+) (rowIDVec, commitTSVec, pkVec, abortVec containers.Vector,
+	aborts *nulls.Bitmap, deletes []uint32, minTS types.TS,
 ) {
 	if n.deletes.Load().IsEmpty() {
 		return
@@ -240,6 +239,13 @@ func (n *MVCCHandle) CollectDeleteLocked(
 							deletes = append(deletes, row)
 						} else {
 							pkVec.Append(node.rowid2PK[row].Get(0), false)
+						}
+						if minTS.IsEmpty() {
+							minTS = node.GetEnd()
+						} else {
+							if minTS.Greater(node.GetEnd()) {
+								minTS = node.GetEnd()
+							}
 						}
 					}
 				}

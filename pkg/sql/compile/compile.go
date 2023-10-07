@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -91,15 +92,14 @@ var pool = sync.Pool{
 	},
 }
 
-var analPool = sync.Pool{
-	New: func() any {
-		return new(process.AnalyzeInfo)
-	},
-}
-
 // New is used to new an object of compile
-func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
+func New(
+	addr, db, sql, tenant, uid string,
+	ctx context.Context,
+	e engine.Engine,
+	proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string,
+	tag11768 bool, // if tag11768 is true, it will build a new mpool to instead of the old one.
+) *Compile {
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
@@ -108,6 +108,18 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
+	{
+		if tag11768 {
+			// [tag-11768]
+			m, err := mpool.NewMPool(uuid.Must(uuid.NewUUID()).String(), 0, mpool.NoFixed)
+			if err != nil {
+				panic(err)
+			}
+			c.proc.SetMp(m)
+			c.tag11768 = true
+		}
+	}
+
 	c.stmt = stmt
 	c.addr = addr
 	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
@@ -124,12 +136,22 @@ func putCompile(c *Compile) {
 	}
 	if c.anal != nil {
 		for i := range c.anal.analInfos {
-			analPool.Put(c.anal.analInfos[i])
+			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
 		}
 		c.anal.analInfos = nil
 	}
+	if c.scope != nil {
+		c.scope = nil
+	}
 
 	c.proc.CleanValueScanBatchs()
+	// XXX delete mpool here to avoid memory leak.
+	// not a true leak, but some bug will cause the record number of using memory incorrect.
+	// search the `[tag-11768]` to found all the codes harked for this problem.
+	if c.tag11768 {
+		mpool.ForceDeleteMPool(c.proc.Mp())
+	}
+
 	c.clear()
 	pool.Put(c)
 }
@@ -151,6 +173,8 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
+	c.tag11768 = false
+
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -317,6 +341,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropSequence(c)
 	case CreateSequence:
 		return s.CreateSequence(c)
+	case AlterSequence:
+		return s.AlterSequence(c)
 	case CreateIndex:
 		return s.CreateIndex(c)
 	case DropIndex:
@@ -382,18 +408,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 			// improved to refresh expression in the future.
-			cc = New(
-				c.addr,
-				c.db,
-				c.sql,
-				c.tenant,
-				c.uid,
-				c.proc.Ctx,
-				c.e,
-				c.proc,
-				c.stmt,
-				c.isInternal,
-				c.cnLabel)
+			cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, false)
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				pn, err := c.buildPlanFunc()
 				if err != nil {
@@ -440,7 +455,6 @@ func (c *Compile) runOnce() error {
 		})
 	}
 	wg.Wait()
-	c.scope = nil
 	close(errC)
 	for e := range errC {
 		if e != nil {
@@ -503,6 +517,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return []*Scope{{
 				Magic: DropSequence,
+				Plan:  pn,
+			}}, nil
+		case plan.DataDefinition_ALTER_SEQUENCE:
+			return []*Scope{{
+				Magic: AlterSequence,
 				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
@@ -1722,7 +1741,13 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 	// prcoess partitioned table
 	var partitionRelNames []string
 	if n.TableDef.Partition != nil {
-		partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
+		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
+			for _, partition := range n.PartitionPrune.SelectedPartitions {
+				partitionRelNames = append(partitionRelNames, partition.PartitionTableName)
+			}
+		} else {
+			partitionRelNames = append(partitionRelNames, n.TableDef.Partition.PartitionTableNames...)
+		}
 	}
 
 	s = &Scope{
@@ -2927,9 +2952,7 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 func (c *Compile) initAnalyze(qry *plan.Query) {
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		//anals[i] = new(process.AnalyzeInfo)
-		anals[i] = analPool.Get().(*process.AnalyzeInfo)
-		anals[i].Reset()
+		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
 	}
 	c.anal = &anaylze{
 		qry:       qry,
@@ -3023,26 +3046,45 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 
 	if n.TableDef.Partition != nil {
 		isPartitionTable = true
-		partitionInfo := n.TableDef.Partition
-		partitionNum := int(partitionInfo.PartitionNum)
-		partitionTableNames := partitionInfo.PartitionTableNames
-		for i := 0; i < partitionNum; i++ {
-			partTableName := partitionTableNames[i]
-			subrelation, err := db.Relation(ctx, partTableName, c.proc)
-			if err != nil {
-				return nil, err
+		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
+			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
+				partTableName := partitionItem.PartitionTableName
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				if err != nil {
+					return nil, err
+				}
+				//add partition number into catalog.BlockInfo.
+				for _, r := range subranges[1:] {
+					blkInfo := catalog.DecodeBlockInfo(r)
+					blkInfo.PartitionNum = i
+					ranges = append(ranges, r)
+				}
 			}
-			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
-			if err != nil {
-				return nil, err
+		} else {
+			partitionInfo := n.TableDef.Partition
+			partitionNum := int(partitionInfo.PartitionNum)
+			partitionTableNames := partitionInfo.PartitionTableNames
+			for i := 0; i < partitionNum; i++ {
+				partTableName := partitionTableNames[i]
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				if err != nil {
+					return nil, err
+				}
+				//add partition number into catalog.BlockInfo.
+				for _, r := range subranges[1:] {
+					blkInfo := catalog.DecodeBlockInfo(r)
+					blkInfo.PartitionNum = i
+					ranges = append(ranges, r)
+				}
 			}
-			//add partition number into catalog.BlockInfo.
-			for _, r := range subranges[1:] {
-				blkInfo := catalog.DecodeBlockInfo(r)
-				blkInfo.PartitionNum = i
-				ranges = append(ranges, r)
-			}
-			//ranges = append(ranges, subranges[1:]...)
 		}
 	}
 

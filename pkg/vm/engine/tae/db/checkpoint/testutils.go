@@ -159,7 +159,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	if err := r.doIncrementalCheckpoint(entry); err != nil {
 		return err
 	}
-	if err := r.saveCheckpoint(entry.start, entry.end); err != nil {
+	if err := r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
 		return err
 	}
 	entry.SetState(ST_Finished)

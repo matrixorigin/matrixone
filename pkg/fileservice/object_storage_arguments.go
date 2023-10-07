@@ -23,19 +23,22 @@ import (
 )
 
 type ObjectStorageArguments struct {
-	Name                string
-	Endpoint            string
-	Region              string
-	Bucket              string
-	KeyID               string
-	KeySecret           string
-	SessionToken        string
-	KeyPrefix           string
-	RoleARN             string
-	ExternalID          string
-	SharedConfigProfile string
-
-	IsMinio bool
+	BearerToken         string `toml:"bearer-token"`
+	Bucket              string `toml:"bucket"`
+	Endpoint            string `toml:"endpoint"`
+	ExternalID          string `toml:"external-id"`
+	IsMinio             bool   `toml:"is-minio"`
+	KeyID               string `toml:"key-id"`
+	KeyPrefix           string `toml:"key-prefix"`
+	KeySecret           string `toml:"key-secret"`
+	Name                string `toml:"name"`
+	RAMRole             string `toml:"ram-role"`
+	Region              string `toml:"region"`
+	RoleARN             string `toml:"role-arn"`
+	RoleSessionName     string `toml:"role-session-name"`
+	SecurityToken       string `toml:"security-token"`
+	SessionToken        string `toml:"session-token"`
+	SharedConfigProfile string `toml:"shared-config-profile"`
 }
 
 func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
@@ -45,31 +48,41 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			return moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
 		}
 
-		switch key {
-		case "endpoint":
-			o.Endpoint = value
-		case "region":
-			o.Region = value
+		switch strings.ToLower(key) {
+
+		case "bearer-token":
+			o.BearerToken = value
 		case "bucket":
 			o.Bucket = value
-		case "key":
-			o.KeyID = value
-		case "secret":
-			o.KeySecret = value
-		case "token":
-			o.SessionToken = value
-		case "prefix":
-			o.KeyPrefix = value
-		case "role-arn":
-			o.RoleARN = value
+		case "endpoint":
+			o.Endpoint = value
 		case "external-id":
 			o.ExternalID = value
+		case "is-minio", "minio":
+			o.IsMinio = value != "false" && value != "0"
+		case "key", "key-id":
+			o.KeyID = value
 		case "name":
 			o.Name = value
+		case "prefix", "key-prefix":
+			o.KeyPrefix = value
+		case "ram-role":
+			o.RAMRole = value
+		case "region":
+			o.Region = value
+		case "role-arn":
+			o.RoleARN = value
+		case "role-session-name":
+			o.RoleSessionName = value
+		case "secret", "key-secret", "secret-id":
+			o.KeySecret = value
+		case "security-token":
+			o.SecurityToken = value
 		case "shared-config-profile":
 			o.SharedConfigProfile = value
-		case "is-minio":
-			o.IsMinio = value != "false" && value != "0"
+		case "token", "session-token":
+			o.SessionToken = value
+
 		default:
 			return moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)
 		}
@@ -104,6 +117,11 @@ func (o *ObjectStorageArguments) validate() error {
 				o.Region = value
 			}
 		}
+	}
+
+	// role session name
+	if o.RoleSessionName == "" {
+		o.RoleSessionName = "mo-service"
 	}
 
 	return nil

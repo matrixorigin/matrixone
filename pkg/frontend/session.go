@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -58,6 +59,14 @@ type ShowStatementType int
 const (
 	NotShowStatement ShowStatementType = 0
 	ShowTableStatus  ShowStatementType = 1
+)
+
+type ConnType int
+
+const (
+	ConnTypeUnset    ConnType = 0
+	ConnTypeInternal ConnType = 1
+	ConnTypeExternal ConnType = 2
 )
 
 type Session struct {
@@ -215,6 +224,10 @@ type Session struct {
 
 	// requestLabel is the CN label info requested from client.
 	requestLabel map[string]string
+	// connTyp indicates the type of connection. Default is ConnTypeUnset.
+	// If it is internal connection, the value will be ConnTypeInternal, otherwise,
+	// the value will be ConnTypeExternal.
+	connType ConnType
 
 	// startedAt is the session start time.
 	startedAt time.Time
@@ -228,6 +241,8 @@ type Session struct {
 	//  nextval internally will derive two sql (a select and an update). the two sql are executed
 	//	in the same transaction.
 	derivedStmt bool
+
+	buf *buffer.Buffer
 
 	//clear this part for every statement
 	stmtProfile struct {
@@ -527,6 +542,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		blockIdx:  0,
 		planCache: newPlanCache(100),
 		startedAt: time.Now(),
+		connType:  ConnTypeUnset,
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -538,6 +554,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		ses.seqLastValue = new(string)
 	}
 
+	ses.buf = buffer.New()
 	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.uuid, _ = uuid.NewUUID()
@@ -568,6 +585,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		pu.FileService,
 		pu.LockService,
 		pu.QueryService,
+		pu.HAKeeperClient,
 		ses.GetAutoIncrCacheManager())
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -624,6 +642,10 @@ func (ses *Session) Close() {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(nil)
+	}
+	if ses.buf != nil {
+		ses.buf.Free()
+		ses.buf = nil
 	}
 }
 
@@ -1224,6 +1246,12 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	defer ses.mu.Unlock()
 	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
+}
+
+func (ses *Session) GetBuffer() *buffer.Buffer {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.buf
 }
 
 // SetSessionVar sets the value of system variable in session
