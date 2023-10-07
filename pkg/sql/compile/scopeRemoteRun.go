@@ -184,6 +184,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 			receiver.finalAnalysisInfo = c.proc.AnalInfos
 		}
 		c.proc.FreeVectors()
+		c.proc.CleanValueScanBatchs()
 		return err
 
 	default:
@@ -1122,6 +1123,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
+			IsIgnore:        t.IsIgnore,
 		}
 	case vm.Anti:
 		t := opr.GetAnti()

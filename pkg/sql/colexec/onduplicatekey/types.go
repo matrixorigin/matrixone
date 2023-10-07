@@ -54,7 +54,8 @@ type Argument struct {
 
 	IdxIdx []int32
 
-	ctr *container
+	ctr      *container
+	IsIgnore bool
 
 	info     *vm.OperatorInfo
 	children []vm.Operator

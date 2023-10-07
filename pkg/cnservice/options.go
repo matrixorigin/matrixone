@@ -68,6 +68,10 @@ func WithMessageHandle(f func(ctx context.Context,
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *service) {
-		s.config = util.NewConfigData(data)
+		if s.config == nil {
+			s.config = util.NewConfigData(data)
+		} else {
+			util.MergeConfig(s.config, data)
+		}
 	}
 }

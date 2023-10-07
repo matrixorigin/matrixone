@@ -177,6 +177,11 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			return err
 		}
 		if oldConflictIdx > -1 {
+
+			if insertArg.IsIgnore {
+				continue
+			}
+
 			// if conflict with origin row. and row_id is not equal row_id of insertBatch's inflict row. then throw error
 			if !newBatch.Vecs[rowIdIdx].GetNulls().Contains(0) {
 				oldRowId := vector.MustFixedCol[types.Rowid](insertBatch.Vecs[rowIdIdx])[oldConflictIdx]
@@ -227,6 +232,12 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 				checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 			} else {
+
+				if insertArg.IsIgnore {
+					proc.PutBatch(newBatch)
+					continue
+				}
+
 				tmpBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 				if err != nil {
 					newBatch.Clean(proc.GetMPool())

@@ -116,6 +116,15 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	return proc
 }
 
+func (wreg *WaitRegister) CleanChannel(m *mpool.MPool) {
+	for len(wreg.Ch) > 0 {
+		bat := <-wreg.Ch
+		if bat != nil {
+			bat.Clean(m)
+		}
+	}
+}
+
 func (wreg *WaitRegister) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
@@ -158,6 +167,11 @@ func (proc *Process) GetMPool() *mpool.MPool {
 
 func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
+}
+
+// [tag-11768]
+func (proc *Process) SetMp(pool *mpool.MPool) {
+	proc.mp = pool
 }
 
 func (proc *Process) GetPrepareParams() *vector.Vector {
@@ -250,19 +264,21 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return
 	}
-	for i := range bat.Vecs {
-		if bat.Vecs[i] != nil {
-			if !bat.Vecs[i].IsConst() && !bat.Vecs[i].NeedDup() {
-				vec := bat.Vecs[i]
-				if vec.Capacity() > 8192*64 {
-					// very large vectors should not put back into pool, which cause these memory can not release
-					vec.Free(proc.Mp())
-				} else if proc.vp.putVector(vec) {
-					bat.ReplaceVector(vec, nil)
-				}
-			} else {
-				bat.Vecs[i].Free(proc.Mp())
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			// very large vectors should not put back into pool, which cause these memory can not release.
+			// XXX I left the old logic here. But it's unreasonable to use the number of rows to determine if a vector's size.
+			// use Allocated() may suitable.
+			if vec.IsConst() || vec.NeedDup() || vec.Capacity() > 8192*64 {
+				vec.Free(proc.mp)
+				bat.ReplaceVector(vec, nil)
+				continue
 			}
+
+			if !proc.vp.putVector(vec) {
+				vec.Free(proc.mp)
+			}
+			bat.ReplaceVector(vec, nil)
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -308,7 +324,7 @@ func (vp *vectorPool) putVector(vec *vector.Vector) bool {
 	vp.Lock()
 	defer vp.Unlock()
 	key := uint8(vec.GetType().Oid)
-	if len(vp.vecs[key]) > VectorLimit {
+	if len(vp.vecs[key]) >= VectorLimit {
 		return false
 	}
 	vp.vecs[key] = append(vp.vecs[key], vec)
