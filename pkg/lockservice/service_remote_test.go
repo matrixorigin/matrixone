@@ -610,7 +610,7 @@ func waitBindChanged(
 	old pb.LockTable,
 	l *service) {
 	for {
-		lt, err := l.getLockTable(old.Table)
+		lt, err := l.getLockTableWithCreate(old.Table, true)
 		require.NoError(t, err)
 		new := lt.getBind()
 		if new.Changed(old) {
