@@ -39,7 +39,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	case <-proc.Ctx.Done():
 		result.Batch = nil
 		result.Status = vm.ExecStop
-		return result, nil
+		return result, proc.Ctx.Err()
 	default:
 	}
 
