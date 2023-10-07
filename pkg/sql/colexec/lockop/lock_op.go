@@ -172,17 +172,18 @@ func callBlocking(
 			return result, nil
 		}
 
-		bat := arg.rt.cachedBatches[0]
-		arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
 		if len(arg.rt.cachedBatches) == 0 {
 			arg.rt.step = stepEnd
+		} else {
+			bat := arg.rt.cachedBatches[0]
+			arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
+			result.Batch = bat
+			return result, nil
 		}
-
-		result.Batch = bat
-		return result, nil
 	}
 
 	if arg.rt.step == stepEnd {
+		result.Status = vm.ExecStop
 		arg.cleanCachedBatch(proc)
 		return result, arg.rt.retryError
 	}

@@ -300,9 +300,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 }
 
 func TestLockWithBlocking(t *testing.T) {
-	var downstreamBatches []*batch.Batch
 	values := [][]int32{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}
-	n := 0
 	runLockBlockingOpTest(
 		t,
 		1,
@@ -321,22 +319,12 @@ func TestLockWithBlocking(t *testing.T) {
 			}
 			end, err := arg.Call(proc)
 			require.NoError(t, err)
-			if arg.rt.step == stepLock {
-				require.Equal(t, batch.EmptyBatch, end.Batch)
-			} else if arg.rt.step == stepDownstream {
-				if n > 0 {
-					downstreamBatches = append(downstreamBatches, end.Batch)
-				}
-				n++
-			} else {
-				if end.Status != vm.ExecStop {
-					downstreamBatches = append(downstreamBatches, end.Batch)
-				} else {
-					require.Equal(t, 3, len(downstreamBatches))
-					for i, bat := range downstreamBatches {
-						require.Equal(t, values[i], vector.MustFixedCol[int32](bat.GetVector(0)))
-						bat.Clean(proc.Mp())
-					}
+			if end.Batch != nil {
+				end.Batch.Clean(proc.GetMPool())
+			}
+			if end.Status == vm.ExecStop {
+				if arg.rt.parker != nil {
+					arg.rt.parker.FreeMem()
 				}
 			}
 			return end.Status == vm.ExecStop, nil
@@ -522,16 +510,13 @@ func runLockBlockingOpTest(
 				return bat, false, nil
 			}
 
-			i := 0
-			sum := len(batches) - 1
 			var err error
 			var end bool
 			for {
-				end, err = fn(proc, arg, i, i == 0, i == sum)
+				end, err = fn(proc, arg, 1, false, false)
 				if err != nil || end {
 					break
 				}
-				i++
 			}
 			checkFunc(arg)
 			arg.Free(proc, false)

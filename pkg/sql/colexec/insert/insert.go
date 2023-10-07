@@ -27,28 +27,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (ap *Argument) String(buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("insert")
 }
 
-func (ap *Argument) Prepare(proc *process.Process) error {
-	ap.ctr = new(container)
-	ap.ctr.state = vm.Build
-	if ap.ToWriteS3 {
-		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+func (arg *Argument) Prepare(proc *process.Process) error {
+	arg.ctr = new(container)
+	arg.ctr.state = vm.Build
+	if arg.ToWriteS3 {
+		if len(arg.InsertCtx.PartitionTableIDs) > 0 {
 			// If the target is partition table, just only apply writers for all partitioned sub tables
-			s3Writers, err := colexec.AllocPartitionS3Writer(proc, ap.InsertCtx.TableDef)
+			s3Writers, err := colexec.AllocPartitionS3Writer(proc, arg.InsertCtx.TableDef)
 			if err != nil {
 				return err
 			}
-			ap.ctr.partitionS3Writers = s3Writers
+			arg.ctr.partitionS3Writers = s3Writers
 		} else {
 			// If the target is not partition table, you only need to operate the main table
-			s3Writer, err := colexec.AllocS3Writer(proc, ap.InsertCtx.TableDef)
+			s3Writer, err := colexec.AllocS3Writer(proc, arg.InsertCtx.TableDef)
 			if err != nil {
 				return err
 			}
-			ap.ctr.s3Writer = s3Writer
+			arg.ctr.s3Writer = s3Writer
 		}
 	}
 	return nil
@@ -56,12 +56,12 @@ func (ap *Argument) Prepare(proc *process.Process) error {
 
 // first parameter: true represents whether the current pipeline has ended
 // first parameter: false
-func (ap *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	defer analyze(proc, ap.info.Idx)()
-	if ap.ToWriteS3 {
-		return ap.insert_s3(proc)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	defer analyze(proc, arg.info.Idx)()
+	if arg.ToWriteS3 {
+		return arg.insert_s3(proc)
 	}
-	return ap.insert_table(proc)
+	return arg.insert_table(proc)
 }
 
 func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {

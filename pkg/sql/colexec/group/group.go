@@ -160,11 +160,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	return ap.ctr.processWithGroup(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
 }
 
-func (ctr *container) generateAggStructures(ap *Argument) error {
+func (ctr *container) generateAggStructures(arg *Argument) error {
 	var err error
 	i := 0
-	for i < len(ap.Aggs) {
-		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(ap.Aggs[i].Op, ap.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, ap.Aggs[i].Config); err != nil {
+	for i < len(arg.Aggs) {
+		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config); err != nil {
 			ctr.bat = nil
 			return err
 		}

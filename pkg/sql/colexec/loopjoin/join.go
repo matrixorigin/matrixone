@@ -24,32 +24,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (ap *Argument) String(buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" loop join ")
 }
 
-func (ap *Argument) Prepare(proc *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	var err error
 
-	ap.ctr = new(container)
-	ap.ctr.InitReceiver(proc, false)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
 
-	if ap.Cond != nil {
-		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	if arg.Cond != nil {
+		arg.ctr.expr, err = colexec.NewExpressionExecutor(proc, arg.Cond)
 	}
 	return err
 }
 
-func (ap *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(ap.info.Idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ctr := ap.ctr
+	ctr := arg.ctr
 	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, anal); err != nil {
+			if err := ctr.build(arg, proc, anal); err != nil {
 				return result, err
 			}
 			if ctr.bat == nil {
@@ -77,7 +77,7 @@ func (ap *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
-			err = ctr.probe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast, &result)
+			err = ctr.probe(bat, arg, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
 			proc.PutBatch(bat)
 			return result, err
 		default:

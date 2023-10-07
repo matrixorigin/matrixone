@@ -360,17 +360,17 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 	return nil
 }
 
-func makeArgFs(ap *Argument) {
-	ap.ctr.desc = make([]bool, len(ap.Fs))
-	ap.ctr.nullsLast = make([]bool, len(ap.Fs))
-	for i, f := range ap.Fs {
-		ap.ctr.desc[i] = f.Flag&plan.OrderBySpec_DESC != 0
+func makeArgFs(arg *Argument) {
+	arg.ctr.desc = make([]bool, len(arg.Fs))
+	arg.ctr.nullsLast = make([]bool, len(arg.Fs))
+	for i, f := range arg.Fs {
+		arg.ctr.desc[i] = f.Flag&plan.OrderBySpec_DESC != 0
 		if f.Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
-			ap.ctr.nullsLast[i] = false
+			arg.ctr.nullsLast[i] = false
 		} else if f.Flag&plan.OrderBySpec_NULLS_LAST != 0 {
-			ap.ctr.nullsLast[i] = true
+			arg.ctr.nullsLast[i] = true
 		} else {
-			ap.ctr.nullsLast[i] = ap.ctr.desc[i]
+			arg.ctr.nullsLast[i] = arg.ctr.desc[i]
 		}
 	}
 }

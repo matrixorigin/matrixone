@@ -61,13 +61,13 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
 }
 
-func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := ap.ctr
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	ctr := arg.ctr
 	if ctr != nil {
 		ctr.FreeAllReg()
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
-		ap.ctr = nil
+		arg.ctr = nil
 	}
 }
 
