@@ -390,10 +390,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	if err := c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
-		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
-		if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-			c.proc.TxnOperator.Txn().IsRCIsolation() {
+		if c.ifNeedRerun(err) {
 			c.proc.TxnOperator.ResetRetry(true)
 			c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
@@ -439,6 +436,16 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	return result, nil
 }
 
+// if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
+func (c *Compile) ifNeedRerun(err error) bool {
+	if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+		c.proc.TxnOperator.Txn().IsRCIsolation() {
+		return true
+	}
+	return false
+}
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -456,12 +463,22 @@ func (c *Compile) runOnce() error {
 	}
 	wg.Wait()
 	close(errC)
+
+	errList := make([]error, 0, len(c.scope))
 	for e := range errC {
 		if e != nil {
-			return e
+			errList = append(errList, e)
+			if c.ifNeedRerun(e) {
+				return e
+			}
 		}
 	}
-	return nil
+
+	if len(errList) == 0 {
+		return nil
+	} else {
+		return errList[0]
+	}
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
