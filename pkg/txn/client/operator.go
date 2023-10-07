@@ -417,18 +417,20 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
 	defer task.End()
 	util.LogTxnCommit(tc.getTxnMeta(false))
-
+	defer util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "exit")
 	if tc.option.readyOnly {
+		util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "step 1")
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
 		tc.closeLocked()
 		return nil
 	}
-
+	util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "step 2")
 	result, err := tc.doWrite(ctx, nil, true)
 	if err != nil {
 		return err
 	}
+	util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "step 3")
 	if result != nil {
 		result.Release()
 	}

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -120,6 +121,17 @@ func (th *TxnHandler) GetTxnClient() TxnClient {
 // NewTxnOperator creates a new txn operator using TxnClient
 func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	var err error
+	sessionInfo := th.ses.GetDebugString()
+	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+		if th.txnOperator != nil {
+			txnId := th.txnOperator.Txn().DebugString()
+			logInfof(sessionInfo, "NewTxnOperator txnId:%s", txnId)
+			defer func() {
+				logInfof(sessionInfo, "NewTxnOperator exit txnId:%s", txnId)
+			}()
+		}
+
+	}
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	if th.txnClient == nil {
@@ -142,8 +154,9 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
+	stack := string(debug.Stack())
 	opts = append(opts,
-		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
+		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p (%s) [%s]", th.ses, sessionInfo, stack)))
 
 	if th.ses != nil && th.ses.GetFromRealUser() {
 		opts = append(opts,
@@ -309,11 +322,11 @@ func (th *TxnHandler) CommitTxn() error {
 		}
 	}()
 
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
 		txnId := txnOp.Txn().DebugString()
-		logDebugf(sessionInfo, "CommitTxn txnId:%s", txnId)
+		logInfof(sessionInfo, "CommitTxn txnId:%s", txnId)
 		defer func() {
-			logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
+			logInfof(sessionInfo, "CommitTxn exit txnId:%s", txnId)
 		}()
 	}
 	if txnOp != nil {
@@ -370,11 +383,11 @@ func (th *TxnHandler) RollbackTxn() error {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 		}
 	}()
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
 		txnId := txnOp.Txn().DebugString()
-		logDebugf(sessionInfo, "RollbackTxn txnId:%s", txnId)
+		logInfof(sessionInfo, "RollbackTxn txnId:%s", txnId)
 		defer func() {
-			logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
+			logInfof(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
 		}()
 	}
 	if txnOp != nil {
