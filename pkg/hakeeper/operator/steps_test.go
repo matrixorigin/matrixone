@@ -40,11 +40,40 @@ func TestIsFinish(t *testing.T) {
 
 	tnState := pb.TNState{}
 	cnState := pb.CNState{}
+	proxyState := pb.ProxyState{}
 
-	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, tnState, cnState))
-	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, tnState, cnState))
-	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.IsFinish(logState, tnState, cnState))
-	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.IsFinish(logState, tnState, cnState))
+	assert.False(t, AddLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.
+		IsFinish(ClusterState{
+			LogState:   logState,
+			TNState:    tnState,
+			CNState:    cnState,
+			ProxyState: proxyState,
+		}),
+	)
+	assert.True(t, AddLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.
+		IsFinish(ClusterState{
+			LogState:   logState,
+			TNState:    tnState,
+			CNState:    cnState,
+			ProxyState: proxyState,
+		}),
+	)
+	assert.False(t, RemoveLogService{Replica: Replica{UUID: "c", ShardID: 1, ReplicaID: 3}}.
+		IsFinish(ClusterState{
+			LogState:   logState,
+			TNState:    tnState,
+			CNState:    cnState,
+			ProxyState: proxyState,
+		}),
+	)
+	assert.True(t, RemoveLogService{Replica: Replica{UUID: "d", ShardID: 1, ReplicaID: 4}}.
+		IsFinish(ClusterState{
+			LogState:   logState,
+			TNState:    tnState,
+			CNState:    cnState,
+			ProxyState: proxyState,
+		}),
+	)
 }
 
 func TestAddLogService(t *testing.T) {
@@ -88,7 +117,12 @@ func TestAddLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.TNState{}, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
 	}
 }
 
@@ -134,7 +168,12 @@ func TestRemoveLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.TNState{}, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
 	}
 }
 
@@ -187,7 +226,12 @@ func TestStartLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.TNState{}, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
 	}
 }
 
@@ -238,7 +282,12 @@ func TestStopLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.TNState{}, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   c.state,
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
 	}
 }
 
@@ -286,7 +335,12 @@ func TestAddTnReplica(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(pb.LogState{}, c.state, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   pb.LogState{},
+			TNState:    c.state,
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
 	}
 }
 
@@ -334,6 +388,53 @@ func TestRemoveTnReplica(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(pb.LogState{}, c.state, pb.CNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   pb.LogState{},
+			TNState:    c.state,
+			CNState:    pb.CNState{},
+			ProxyState: pb.ProxyState{},
+		}))
+	}
+}
+
+func TestDeleteProxyStore(t *testing.T) {
+	cases := []struct {
+		desc     string
+		command  DeleteProxyStore
+		state    pb.ProxyState
+		expected bool
+	}{
+		{
+			desc: "delete proxy store not finished",
+			command: DeleteProxyStore{
+				StoreID: "a",
+			},
+			state: pb.ProxyState{
+				Stores: map[string]pb.ProxyStore{"a": {
+					UUID: "a",
+				}},
+			},
+			expected: false,
+		},
+		{
+			desc: "delete proxy store finished",
+			command: DeleteProxyStore{
+				StoreID: "a",
+			},
+			state: pb.ProxyState{
+				Stores: map[string]pb.ProxyStore{},
+			},
+			expected: true,
+		},
+	}
+
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		assert.Equal(t, c.expected, c.command.IsFinish(ClusterState{
+			LogState:   pb.LogState{},
+			TNState:    pb.TNState{},
+			CNState:    pb.CNState{},
+			ProxyState: c.state,
+		}))
 	}
 }
