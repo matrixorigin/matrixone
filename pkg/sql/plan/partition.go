@@ -37,6 +37,16 @@ const (
 			the number of subpartitions—discussed later in this section—is included in this maximum.)
 	*/
 	PartitionCountLimit = 1024
+
+	/*
+		    https://dev.mysql.com/doc/refman/8.0/en/create-table.html
+			1. KEY(column_list): the column_list argument is simply a list of 1 or more table columns (maximum: 16).
+			2. RANGE COLUMNS(column_list): The maximum number of columns that can be referenced in the column_list
+				and value_list is 16.
+			3. LIST COLUMNS(column_list): The maximum number of columns that can be used in the column_list and
+				in the elements making up the value_list is 16.
+	*/
+	PartitionColumnsLimit = 16
 )
 
 type partitionBuilder interface {
@@ -712,6 +722,10 @@ func checkPartitionDefines(ctx context.Context, partitionBinder *PartitionBinder
 		return err
 	}
 
+	if err = checkPartitionColumnsCount(ctx, partitionDef); err != nil {
+		return err
+	}
+
 	if err = checkPartitionColumnsUnique(ctx, partitionDef); err != nil {
 		return err
 	}
@@ -729,8 +743,6 @@ func checkPartitionDefines(ctx context.Context, partitionBinder *PartitionBinder
 	switch partitionDef.Type {
 	case plan.PartitionType_RANGE, plan.PartitionType_RANGE_COLUMNS:
 		err = checkPartitionByRange(partitionBinder, partitionDef, tableDef)
-	case plan.PartitionType_HASH:
-		// TODO
 	case plan.PartitionType_LIST, plan.PartitionType_LIST_COLUMNS:
 		err = checkPartitionByList(partitionBinder, partitionDef, tableDef)
 	}
@@ -750,6 +762,14 @@ func checkPartitionColumnsUnique(ctx context.Context, pi *plan.PartitionByDef) e
 			}
 			columnsMap[column] = struct{}{}
 		}
+	}
+	return nil
+}
+
+// checkPartitionColumns Check if the number of partition columns exceeds the limit
+func checkPartitionColumnsCount(ctx context.Context, pi *plan.PartitionByDef) error {
+	if pi.PartitionColumns != nil && len(pi.PartitionColumns.PartitionColumns) > PartitionColumnsLimit {
+		return moerr.NewErrTooManyPartitionFuncFields(ctx, "list of partition fields")
 	}
 	return nil
 }
