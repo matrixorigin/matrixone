@@ -203,15 +203,23 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	if err != nil {
 		return err
 	}
+	taeFileList = append(taeFileList, sizeList...)
 	location, err := blockio.EncodeLocationFromString(metaLoc)
 	if err != nil {
 		return err
 	}
-	_, err = checkpoint.MergeCkpMeta(ctx, dstFs, location, types.TS{}, types.TS{})
+	file, err := checkpoint.MergeCkpMeta(ctx, dstFs, location, types.TS{}, types.TS{})
 	if err != nil {
 		return err
 	}
-	taeFileList = append(taeFileList, sizeList...)
+	dentry, err := dstFs.StatFile(ctx, file)
+	if err != nil {
+		return err
+	}
+	taeFileList = append(taeFileList, &taeFile{
+		path: dentry.Name,
+		size: dentry.Size,
+	})
 	//save tae files size
 	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime)
 	if err != nil {
