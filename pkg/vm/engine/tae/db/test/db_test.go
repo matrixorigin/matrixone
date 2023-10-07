@@ -8727,35 +8727,51 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	options.WithCheckpointGlobalMinCount(3)(opts)
+	options.WithCheckpointGlobalMinCount(2)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(2, 1)
-	schema.BlockMaxRows = 50
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 50)
-	defer bat.Close()
-	bats := bat.Split(50)
 
-	tae.CreateRelAndAppend(bats[0], true)
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db1", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
 	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
 	assert.Equal(t, 1, len(entries))
 
-	tae.DoAppend(bats[1])
+	tae.Restart(context.Background())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db2", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
 	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
 	assert.Equal(t, 2, len(entries))
 
-	tae.DoAppend(bats[2])
+	tae.Restart(context.Background())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db3", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutils.WaitExpect(10000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
@@ -8766,6 +8782,9 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	})
 
 	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
 	assert.Equal(t, 1, len(entries))
 
 }
