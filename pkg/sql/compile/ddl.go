@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -115,7 +116,7 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -204,7 +205,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	if c.proc.TxnOperator.Txn().IsPessimistic() {
 		var retryErr error
 		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName); err != nil {
+		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
@@ -571,7 +572,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -1098,7 +1099,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName); e != nil {
+		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1239,7 +1240,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 		return err
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -1291,7 +1292,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName); e != nil {
+		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -1529,7 +1530,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -1609,7 +1610,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return moerr.NewInternalError(c.ctx, "sequence %s not exists", tblName)
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -2178,7 +2179,8 @@ func lockRows(
 	eng engine.Engine,
 	proc *process.Process,
 	rel engine.Relation,
-	vec *vector.Vector) error {
+	vec *vector.Vector,
+	lockMode lock.LockMode) error {
 
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
@@ -2191,7 +2193,8 @@ func lockRows(
 		proc,
 		id,
 		vec,
-		*vec.GetType())
+		*vec.GetType(),
+		lockMode)
 	return err
 }
 
@@ -2280,13 +2283,13 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	return nil
 }
 
-func lockMoTable(c *Compile, dbName string, tblName string) error {
+func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
@@ -2295,7 +2298,8 @@ func lockMoTable(c *Compile, dbName string, tblName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec); err != nil {
+	defer vec.Free(c.proc.Mp())
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
 		return err
 	}
 	return nil
