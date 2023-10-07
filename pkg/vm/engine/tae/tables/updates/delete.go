@@ -387,7 +387,7 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 			if sn, err = pk.WriteTo(w); err != nil {
 				return
 			}
-			n += int64(sn2)
+			n += int64(sn)
 		}
 	case NT_Persisted:
 		if sn, err = objectio.WriteBytes(node.deltaloc, w); err != nil {
@@ -449,6 +449,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 					return
 				}
 				node.rowid2PK[row] = pk
+				n += int64(sn2)
 			}
 		}
 	case NT_Persisted:
