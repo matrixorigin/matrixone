@@ -219,6 +219,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// statement ID and updating snapshot TS.
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
 	txnOp := cwft.proc.TxnOperator
+	cwft.ses.SetTxnId(txnOp.Txn().ID)
 	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
 		ok, _ := cwft.ses.GetTxnHandler().calledStartStmt()
 		if !ok {
@@ -353,6 +354,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.stmt,
 		cwft.ses.isInternal,
 		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
+		true,
 	)
 	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
 		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)

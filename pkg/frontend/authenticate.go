@@ -20,12 +20,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"math"
 	"math/bits"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,7 +52,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	errors2 "github.com/pkg/errors"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -132,7 +133,10 @@ func (ti *TenantInfo) SetDefaultRoleID(id uint32) {
 }
 
 func (ti *TenantInfo) IsSysTenant() bool {
-	return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+	if ti != nil {
+		return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
+	}
+	return false
 }
 
 func (ti *TenantInfo) IsDefaultRole() bool {
@@ -352,15 +356,27 @@ type initUser struct {
 }
 
 var (
-	specialUsers atomic.Value
+	specialUsers struct {
+		sync.RWMutex
+		users map[string]*initUser
+	}
 )
+
+func setSpecialUser(userName string, user *initUser) {
+	specialUsers.Lock()
+	if specialUsers.users == nil {
+		specialUsers.users = make(map[string]*initUser)
+	}
+	specialUsers.users[userName] = user
+	specialUsers.Unlock()
+}
 
 // SetSpecialUser saves the user for initialization
 // !!!NOTE: userName must not contain Colon ':'
-func SetSpecialUser(userName string, password []byte) {
+func SetSpecialUser(username string, password []byte) {
 	acc := &TenantInfo{
 		Tenant:        sysAccountName,
-		User:          userName,
+		User:          username,
 		DefaultRole:   moAdminRoleName,
 		TenantID:      sysAccountID,
 		UserID:        math.MaxUint32,
@@ -371,32 +387,18 @@ func SetSpecialUser(userName string, password []byte) {
 		account:  acc,
 		password: password,
 	}
-	users := getSpecialUsers()
-	if users == nil {
-		users = make(map[string]*initUser)
-	}
-	users[userName] = user
-
-	specialUsers.Store(users)
+	setSpecialUser(username, user)
 }
 
 // isSpecialUser checks the user is the one for initialization
 func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
-	users := getSpecialUsers()
+	specialUsers.RLock()
+	defer specialUsers.RUnlock()
 
-	if len(users) > 0 && users[userName] != nil {
-		return true, users[userName].password, users[userName].account
+	if user, ok := specialUsers.users[userName]; ok {
+		return true, user.password, user.account
 	}
 	return false, nil, nil
-}
-
-// getSpecialUsers loads the user for initialization
-func getSpecialUsers() map[string]*initUser {
-	value := specialUsers.Load()
-	if value == nil {
-		return nil
-	}
-	return value.(map[string]*initUser)
 }
 
 const (
@@ -816,6 +818,9 @@ var (
 		"mo_mysql_compatibility_mode": 0,
 		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
+		"mo_sessions":                 0,
+		"mo_configurations":           0,
+		"mo_locks":                    0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -842,6 +847,9 @@ var (
 		"mo_table_partitions":         0,
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
+		"mo_sessions":                 0,
+		"mo_configurations":           0,
+		"mo_locks":                    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1016,6 +1024,9 @@ var (
 				comment text,
 				primary key(stage_id)
 			);`,
+		`CREATE VIEW IF NOT EXISTS mo_sessions AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;`,
+		`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
+		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
 	}
 
 	//drop tables for the tenant
@@ -1029,6 +1040,9 @@ var (
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
 		`drop table if exists mo_catalog.mo_mysql_compatibility_mode;`,
 		`drop table if exists mo_catalog.mo_stages;`,
+		`drop view if exists mo_catalog.mo_sessions;`,
+		`drop view if exists mo_catalog.mo_configurations;`,
+		`drop view if exists mo_catalog.mo_locks;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql       = `delete from mo_catalog.mo_pubs;`
@@ -1418,6 +1432,12 @@ const (
 
 	// grant ownership on table
 	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
+
+	// revoke ownership on database owner
+	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s form %s;`
+
+	// revoke ownership on table owner
+	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`
 
 	// get the owner of the database
 	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
@@ -1990,6 +2010,16 @@ func getSqlForGrantOwnershipOnDatabase(dbName, roleName string) string {
 // getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
 func getSqlForGrantOwnershipOnTable(dbName, tbName, roleName string) string {
 	return fmt.Sprintf(grantOwnershipOnTableFormat, dbName, tbName, roleName)
+}
+
+// getSqlForRevokeOwnershipFromDatabase get the sql for revoke ownership on database
+func getSqlForRevokeOwnershipFromDatabase(dbName, roleName string) string {
+	return fmt.Sprintf(revokeOwnershipFromDatabaseFormat, dbName, roleName)
+}
+
+// getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
+func getSqlForRevokeOwnershipFromTable(dbName, tbName, roleName string) string {
+	return fmt.Sprintf(revokeOwnershipFromTableFormat, dbName, tbName, roleName)
 }
 
 // getSqlForGetOwnerOfDatabase get the sql for get the owner of the database
@@ -4265,58 +4295,31 @@ func postDropSuspendAccount(
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
-	nodesLeft := len(nodes)
 
-	type nodeResponse struct {
-		nodeAddr string
-		response interface{}
-		err      error
-	}
-	responseChan := make(chan nodeResponse, nodesLeft)
-
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
 	var retErr error
-	for _, node := range nodes {
-		// Invalid node address, ignore it.
-		if len(node) == 0 {
-			nodesLeft--
-			continue
+	genRequest := func() *query.Request {
+		req := qs.NewRequest(query.CmdMethod_KillConn)
+		req.KillConnRequest = &query.KillConnRequest{
+			AccountID: accountID,
+			Version:   version,
 		}
-
-		go func(addr string) {
-			req := qs.NewRequest(query.CmdMethod_KillConn)
-			req.KillConnRequest = &query.KillConnRequest{
-				AccountID: accountID,
-				Version:   version,
-			}
-			resp, err := qs.SendMessage(ctx, addr, req)
-			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
-		}(node)
+		return req
 	}
 
-	// Wait for all responses.
-	for nodesLeft > 0 {
-		select {
-		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
-			} else {
-				queryResp, ok := res.response.(*query.Response)
-
-				if !ok || (queryResp.KillConnResponse != nil && !queryResp.KillConnResponse.Success) {
-					retErr = moerr.NewInternalError(ctx,
-						fmt.Sprintf("kill connection for account %s failed on node %s",
-							accountName, res.nodeAddr))
-				}
-			}
-		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp.KillConnResponse != nil && !rsp.KillConnResponse.Success {
+			retErr = moerr.NewInternalError(ctx,
+				fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 		}
-		nodesLeft--
 	}
 
-	return retErr
+	handleInvalidResponse := func(nodeAddr string) {
+		retErr = moerr.NewInternalError(ctx,
+			fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
+	}
+
+	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	return errors.Join(err, retErr)
 }
 
 // doDropUser accomplishes the DropUser statement
@@ -5580,10 +5583,17 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
-		if st.ConnectorName != nil {
-			dbName = string(st.ConnectorName.SchemaName)
+		if st.TableName != nil {
+			dbName = string(st.TableName.SchemaName)
 		}
 	case *tree.CreateSequence:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
+	case *tree.AlterSequence:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
@@ -5701,7 +5711,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
-		*tree.ShowBackendServers, *tree.ShowStages:
+		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
+		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
@@ -5765,6 +5776,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.BackupStart:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.EmptyStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	default:
@@ -7580,7 +7594,6 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
 	var mp *mpool.MPool
-	var needCreate bool
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
@@ -7628,43 +7641,34 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		return err
 	}
 
-	createNewAccount := func() (bool, error) {
+	createNewAccount := func() error {
 		err = bh.Exec(ctx, "begin;")
 		defer func() {
 			err = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
-			return false, err
+			return err
 		}
 
+		// check account exists or not
 		exists, err = checkTenantExistsOrNot(ctx, bh, ca.Name)
 		if err != nil {
-			return false, err
+			return err
 		}
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				return false, moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
 			}
-			return false, err
+			return err
 		} else {
 			newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 			if err != nil {
-				return false, err
+				return err
 			}
 		}
-		return true, err
-	}
 
-	needCreate, err = createNewAccount()
-	if err != nil {
-		return err
-	}
-	if !needCreate {
-		return err
-	}
-
-	{
+		// create some tables and databases for new account
 		err = bh.Exec(newTenantCtx, createMoIndexesSql)
 		if err != nil {
 			return err
@@ -7693,16 +7697,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 				return err
 			}
 		}
-	}
 
-	createTablesForNewAccount := func() error {
-		err = bh.Exec(ctx, "begin;")
-		defer func() {
-			err = finishTxn(ctx, bh, err)
-		}()
-		if err != nil {
-			return err
-		}
+		// create tables for new account
 		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, ses.pu)
 		if err != nil {
 			return err
@@ -7715,10 +7711,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			return err
 		}
+
 		return err
 	}
 
-	err = createTablesForNewAccount()
+	err = createNewAccount()
 	if err != nil {
 		return err
 	}
@@ -8935,6 +8932,57 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	return err
 }
 
+func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var err error
+	var sql string
+	tenantInfo := ses.GetTenantInfo()
+	if tenantInfo == nil || tenantInfo.IsAdminRole() {
+		return err
+	}
+	currentRole := tenantInfo.GetDefaultRole()
+
+	// 1.first change to moadmin/accountAdmin
+	var tenantCtx context.Context
+	tenantInfo = ses.GetTenantInfo()
+	// if is system account
+	if tenantInfo.IsSysTenant() {
+		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	} else {
+		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+	}
+
+	// 2.grant database privilege
+	switch st := stmt.(type) {
+	case *tree.DropDatabase:
+		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), currentRole)
+	case *tree.DropTable:
+		// get database name
+		var dbName string
+		if len(st.Names[0].SchemaName) == 0 {
+			dbName = ses.GetDatabaseName()
+		} else {
+			dbName = string(st.Names[0].SchemaName)
+		}
+		// get table name
+		tableName := string(st.Names[0].ObjectName)
+		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, currentRole)
+	}
+
+	bh := ses.GetBackgroundExec(tenantCtx)
+	defer bh.Close()
+
+	err = bh.Exec(tenantCtx, sql)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
 func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[string]interface{}, err error) {
 	var sql string
 	var erArray []ExecResult
@@ -9112,56 +9160,30 @@ func postAlterSessionStatus(
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
-	nodesLeft := len(nodes)
 
-	type nodeResponse struct {
-		nodeAddr string
-		response interface{}
-		err      error
-	}
-	responseChan := make(chan nodeResponse, nodesLeft)
+	var retErr, err error
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
-	var retErr error
-	for _, node := range nodes {
-		// Invalid node address, ignore it.
-		if len(node) == 0 {
-			nodesLeft--
-			continue
+	genRequest := func() *query.Request {
+		req := qs.NewRequest(query.CmdMethod_AlterAccount)
+		req.AlterAccountRequest = &query.AlterAccountRequest{
+			TenantId: tenantId,
+			Status:   status,
 		}
-
-		go func(addr string) {
-			req := qs.NewRequest(query.CmdMethod_AlterAccount)
-			req.AlterAccountRequest = &query.AlterAccountRequest{
-				TenantId: tenantId,
-				Status:   status,
-			}
-			resp, err := qs.SendMessage(ctx, addr, req)
-			responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
-		}(node)
+		return req
 	}
 
-	// Wait for all responses.
-	for nodesLeft > 0 {
-		select {
-		case res := <-responseChan:
-			if res.err != nil && retErr != nil {
-				retErr = errors2.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
-			} else {
-				queryResp, ok := res.response.(*query.Response)
-
-				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
-					retErr = moerr.NewInternalError(ctx,
-						fmt.Sprintf("alter account status for account %s failed on node %s",
-							accountName, res.nodeAddr))
-				}
-			}
-		case <-ctx.Done():
-			retErr = moerr.NewInternalError(ctx, "context deadline exceeded")
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp.AlterAccountResponse != nil && !rsp.AlterAccountResponse.AlterSuccess {
+			retErr = moerr.NewInternalError(ctx,
+				fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
 		}
-		nodesLeft--
 	}
 
-	return retErr
+	handleInvalidResponse := func(nodeAddr string) {
+		retErr = moerr.NewInternalError(ctx,
+			fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
+	}
+
+	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	return errors.Join(err, retErr)
 }

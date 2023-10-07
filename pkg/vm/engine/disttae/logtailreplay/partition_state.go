@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -68,6 +69,10 @@ type PartitionState struct {
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
 	shared *sharedStates
+
+	// blocks deleted before minTS is hard deleted.
+	// partition state can't serve txn with snapshotTS less than minTS
+	minTS types.TS
 }
 
 // sharedStates is shared among all PartitionStates
@@ -606,18 +611,41 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 				panic(fmt.Sprintf("invalid block id. %x", rowID))
 			}
 
-			entry.DeleteTime = deleteTimeVector[i]
+			if entry.DeleteTime.IsEmpty() {
+				// apply first delete
+				entry.DeleteTime = deleteTimeVector[i]
 
-			p.blocks.Set(entry)
+				p.blocks.Set(entry)
 
-			{
-				e := BlockIndexByTSEntry{
-					Time:         entry.DeleteTime,
-					BlockID:      blockID,
-					IsDelete:     true,
-					IsAppendable: entry.EntryState,
+				{
+					e := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Set(e)
 				}
-				p.blockIndexByTS.Set(e)
+			} else {
+				// update deletetime, if incoming delete ts is less
+				if entry.DeleteTime.Greater(deleteTimeVector[i]) {
+					old := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Delete(old)
+					entry.DeleteTime = deleteTimeVector[i]
+					p.blocks.Set(entry)
+					new := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Set(new)
+				}
 			}
 
 		})
@@ -659,4 +687,60 @@ func (p *PartitionState) consumeCheckpoints(
 	}
 	p.checkpoints = p.checkpoints[:0]
 	return nil
+}
+
+func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
+	if p.minTS.Greater(ts) {
+		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
+		return
+	}
+	p.minTS = ts
+	gced := false
+	pivot := BlockIndexByTSEntry{
+		Time:     ts.Next(),
+		BlockID:  types.Blockid{},
+		IsDelete: true,
+	}
+	iter := p.blockIndexByTS.Copy().Iter()
+	ok := iter.Seek(pivot)
+	if !ok {
+		ok = iter.Last()
+	}
+	blksToDelete := ""
+	for ; ok; ok = iter.Prev() {
+		entry := iter.Item()
+		if entry.Time.Greater(ts) {
+			continue
+		}
+		if entry.IsDelete {
+			p.blockIndexByTS.Delete(entry)
+			blockPivot := BlockEntry{
+				BlockInfo: catalog.BlockInfo{
+					BlockID: entry.BlockID,
+				},
+			}
+			blkEntry, ok := p.blocks.Get(blockPivot)
+			if !ok {
+				panic("blk entry not existed")
+			}
+			createEntry := BlockIndexByTSEntry{
+				Time:         blkEntry.CreateTime,
+				BlockID:      blkEntry.BlockID,
+				IsDelete:     false,
+				IsAppendable: blkEntry.EntryState,
+			}
+			p.blockIndexByTS.Delete(createEntry)
+			p.blockIndexByTS.Delete(entry)
+			p.blocks.Delete(blkEntry)
+			if gced {
+				blksToDelete = fmt.Sprintf("%s, %v", blksToDelete, entry.BlockID.ShortStringEx())
+			} else {
+				blksToDelete = fmt.Sprintf("%s%v", blksToDelete, entry.BlockID.ShortStringEx())
+			}
+			gced = true
+		}
+	}
+	if gced {
+		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], blksToDelete)
+	}
 }

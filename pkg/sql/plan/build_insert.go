@@ -56,14 +56,13 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
-	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
-	if err != nil {
-		return nil, err
-	}
-
-	if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
-	}
+	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
+	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
+	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
@@ -167,6 +166,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 				TableDef:        tableDef,
 				OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
 				OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
+				IsIgnore:        rewriteInfo.onDuplicateIsIgnore,
 			},
 		}
 		lastNodeId = builder.appendNode(onDuplicateKeyNode, bindCtx)
