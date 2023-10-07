@@ -822,6 +822,7 @@ var (
 		"mo_configurations":           0,
 		"mo_locks":                    0,
 		"mo_variables":                0,
+		"mo_transactions":             0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -852,6 +853,7 @@ var (
 		"mo_configurations":           0,
 		"mo_locks":                    0,
 		"mo_variables":                0,
+		"mo_transactions":             0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1030,6 +1032,7 @@ var (
 		`CREATE VIEW IF NOT EXISTS mo_configurations AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_variables AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;`,
+		`CREATE VIEW IF NOT EXISTS mo_transactions AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;`,
 	}
 
 	//drop tables for the tenant
@@ -1047,6 +1050,7 @@ var (
 		`drop view if exists mo_catalog.mo_configurations;`,
 		`drop view if exists mo_catalog.mo_locks;`,
 		`drop view if exists mo_catalog.mo_variables;`,
+		`drop view if exists mo_catalog.mo_transactions;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
 	dropAutoIcrColSql     = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
