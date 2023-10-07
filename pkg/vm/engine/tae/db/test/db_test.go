@@ -8727,7 +8727,7 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	options.WithCheckpointGlobalMinCount(2)(opts)
+	options.WithCheckpointGlobalMinCount(3)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 

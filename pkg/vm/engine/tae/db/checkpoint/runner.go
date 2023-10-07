@@ -296,8 +296,8 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 		if ctx.force {
 			doCheckpoint = true
 		} else {
-			entries := r.GetAllCheckpoints()
-			if r.globalPolicy.Check(len(entries) - 1) {
+			entriesCount := r.GetPenddingIncrementalCount()
+			if r.globalPolicy.Check(entriesCount) {
 				doCheckpoint = true
 			}
 		}
