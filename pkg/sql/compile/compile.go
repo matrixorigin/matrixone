@@ -1407,11 +1407,13 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	defer span.End()
 
 	// lock table's meta
-	if err := lockMoTable(c, n.ObjRef.SchemaName, n.TableDef.Name, lock.LockMode_Shared); err != nil {
-		return nil, err
+	if n.ObjRef != nil && n.TableDef != nil {
+		if err := lockMoTable(c, n.ObjRef.SchemaName, n.TableDef.Name, lock.LockMode_Shared); err != nil {
+			return nil, err
+		}
 	}
 	// lock table, for tables with no primary key, there is no need to lock the data
-	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() &&
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() && n.TableDef != nil &&
 		n.TableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {

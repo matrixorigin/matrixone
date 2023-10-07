@@ -2298,6 +2298,7 @@ func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMo
 	if err != nil {
 		return err
 	}
+	defer vec.Free(c.proc.Mp())
 	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
 		return err
 	}
