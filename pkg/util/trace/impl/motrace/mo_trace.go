@@ -119,18 +119,13 @@ func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 	}
 
 	enable := t.provider.IsEnable()
-	// The enable state of kind, which falls within [SpanKindS3FSVis, SpanKindLocalFSVis],
-	// is managed by 'mo_ctl'
-	switch cfg.Kind {
-	case trace.SpanKindRemoteFSVis:
-		return enable && trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Load()
-	case trace.SpanKindLocalFSVis:
-		return enable && trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
-	case trace.SpanKindStatement:
-		return enable && trace.MOCtledSpanEnableConfig.EnableStatementSpan.Load()
-	default:
-		return enable
+
+	// check if is this span kind controlled by mo_ctl.
+	if has, state := trace.IsMOCtledSpan(cfg.Kind); has {
+		return enable && state
 	}
+
+	return enable
 }
 
 var _ trace.Span = (*MOHungSpan)(nil)
@@ -294,9 +289,8 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		fn()
 	}
 
-	if s.NeedRecord() {
-		s.needRecord = true
-	}
+	s.needRecord, err = s.NeedRecord()
+
 	if !s.needRecord {
 		freeMOSpan(s)
 		return
@@ -338,30 +332,23 @@ func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
 	}
 }
 
-func (s *MOSpan) NeedRecord() bool {
+func (s *MOSpan) NeedRecord() (bool, error) {
 	// if the span kind falls in mo_ctl controlled spans, we
 	// hope it ignores the long time threshold and deadline restrictions.
-	switch s.Kind {
-	case trace.SpanKindRemoteFSVis:
-		return trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Load()
-	case trace.SpanKindLocalFSVis:
-		return trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
-	case trace.SpanKindStatement:
-		return trace.MOCtledSpanEnableConfig.EnableStatementSpan.Load()
-	default:
+	if has, state := trace.IsMOCtledSpan(s.Kind); has {
+		return state, nil
 	}
-
-	// the record logic before mo_ctl controlled spans have been introduced
+	// the default logic that before mo_ctl controlled spans have been introduced
 	deadline, hasDeadline := s.ctx.Deadline()
 	s.Duration = s.EndTime.Sub(s.StartTime)
 	if hasDeadline {
 		if s.EndTime.After(deadline) {
-			return true
+			return true, s.ctx.Err()
 		}
 	} else {
-		return s.Duration >= s.LongTimeThreshold
+		return s.Duration >= s.LongTimeThreshold, nil
 	}
-	return false
+	return false, nil
 }
 
 // doProfile is sync op.

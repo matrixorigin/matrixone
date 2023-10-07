@@ -28,7 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -169,6 +169,52 @@ const (
 	FlagProfileCpu
 )
 
+var MOCtledSpanEnableConfig struct {
+	sync.Mutex
+	NameToKind  map[string]SpanKind
+	KindToState map[SpanKind]bool
+}
+
+// InitMOCtledSpan registers all mo_ctl controlled span
+func InitMOCtledSpan() {
+	MOCtledSpanEnableConfig.NameToKind = make(map[string]SpanKind)
+	MOCtledSpanEnableConfig.KindToState = make(map[SpanKind]bool)
+
+	MOCtledSpanEnableConfig.NameToKind["s3"] = SpanKindRemoteFSVis
+	MOCtledSpanEnableConfig.KindToState[SpanKindRemoteFSVis] = false
+
+	MOCtledSpanEnableConfig.NameToKind["local"] = SpanKindLocalFSVis
+	MOCtledSpanEnableConfig.KindToState[SpanKindLocalFSVis] = false
+
+	MOCtledSpanEnableConfig.NameToKind["statement"] = SpanKindStatement
+	MOCtledSpanEnableConfig.KindToState[SpanKindStatement] = false
+}
+
+// IsMOCtledSpan first checks if this kind exists in mo_ctl controlled spans,
+// if it is, return it's current state, or return not exist
+func IsMOCtledSpan(kind SpanKind) (exist bool, state bool) {
+	MOCtledSpanEnableConfig.Lock()
+	defer MOCtledSpanEnableConfig.Unlock()
+
+	if state, exist = MOCtledSpanEnableConfig.KindToState[kind]; exist {
+		return true, state
+	}
+	return false, false
+}
+
+// SetMoCtledSpanState first checks if this kind exists in mo_ctl controlled spans,
+// if it is, reset it's state to the specified and return succeed, or return not succeed
+func SetMoCtledSpanState(name string, state bool) (succeed bool) {
+	MOCtledSpanEnableConfig.Lock()
+	defer MOCtledSpanEnableConfig.Unlock()
+
+	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
+		MOCtledSpanEnableConfig.KindToState[kind] = state
+		return true
+	}
+	return false
+}
+
 // SpanConfig is a group of options for a Span.
 type SpanConfig struct {
 	SpanContext
@@ -213,12 +259,6 @@ func (c *SpanConfig) Reset() {
 	c.profileTraceDur = 0
 	c.hungThreshold = 0
 	c.Extra = nil
-}
-
-var MOCtledSpanEnableConfig struct {
-	EnableRemoteFSSpan  atomic.Bool
-	EnableLocalFSSpan   atomic.Bool
-	EnableStatementSpan atomic.Bool
 }
 
 func (c *SpanConfig) GetLongTimeThreshold() time.Duration {

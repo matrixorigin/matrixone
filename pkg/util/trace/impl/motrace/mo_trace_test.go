@@ -528,8 +528,8 @@ func TestMOTracer_FSSpanIsEnable(t *testing.T) {
 	}
 	tracer.provider.enable = true
 
-	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(true)
-	trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Store(false)
+	trace.InitMOCtledSpan()
+	trace.SetMoCtledSpanState("local", true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -559,6 +559,7 @@ func TestMOSpan_NeedRecord(t *testing.T) {
 
 	tracer.provider.enable = true
 	tracer.provider.longSpanTime = time.Millisecond * 20
+	trace.InitMOCtledSpan()
 
 	// ctx has deadline
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
@@ -567,29 +568,33 @@ func TestMOSpan_NeedRecord(t *testing.T) {
 	_, span := tracer.Start(ctx, "normal span")
 	time.Sleep(time.Millisecond * 30)
 	// deadline not expired, no need to record
-	require.False(t, span.(*MOSpan).NeedRecord())
+	ret, _ := span.(*MOSpan).NeedRecord()
+	require.False(t, ret)
 	span.End()
 
 	_, span = tracer.Start(ctx, "normal span")
 	time.Sleep(time.Second)
 	span.(*MOSpan).EndTime = time.Now()
 	// ctx expired, record
-	require.True(t, span.(*MOSpan).NeedRecord())
+	ret, _ = span.(*MOSpan).NeedRecord()
+	require.True(t, ret)
 	span.End()
 
-	trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(true)
+	trace.SetMoCtledSpanState("statement", true)
 	_, span = tracer.Start(ctx, "mo_ctl controlled span",
 		trace.WithKind(trace.SpanKindStatement))
 	// ctx expired, but not to record
-	trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(false)
-	require.False(t, span.(*MOSpan).NeedRecord())
+	trace.SetMoCtledSpanState("statement", false)
+	ret, _ = span.(*MOSpan).NeedRecord()
+	require.False(t, ret)
 	span.End()
 
-	trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(true)
+	trace.SetMoCtledSpanState("statement", true)
 	_, span = tracer.Start(ctx, "mo_ctl controlled span",
 		trace.WithKind(trace.SpanKindStatement))
 	// record
-	require.True(t, span.(*MOSpan).NeedRecord())
+	ret, _ = span.(*MOSpan).NeedRecord()
+	require.True(t, ret)
 	span.End()
 
 }
@@ -601,11 +606,13 @@ func TestMOCtledKindOverwrite(t *testing.T) {
 	}
 	tracer.provider.enable = true
 
+	trace.InitMOCtledSpan()
+
 	fctx, fspan := tracer.Start(context.Background(), "test2", trace.WithKind(trace.SpanKindRemote))
 	defer fspan.End()
 	require.Equal(t, fspan.SpanContext().Kind, trace.SpanKindRemote)
 
-	trace.MOCtledSpanEnableConfig.EnableStatementSpan.Store(true)
+	trace.SetMoCtledSpanState("statement", true)
 	// won't be overwritten
 	_, span := tracer.Start(fctx, "test3", trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
@@ -621,7 +628,8 @@ func TestMOCtledKindPassDown(t *testing.T) {
 	}
 	tracer.provider.enable = true
 
-	trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Store(true)
+	trace.InitMOCtledSpan()
+	trace.SetMoCtledSpanState("s3", true)
 	specialCtx, specialSpan := tracer.Start(context.Background(), "special span",
 		trace.WithKind(trace.SpanKindRemoteFSVis))
 	defer specialSpan.End()

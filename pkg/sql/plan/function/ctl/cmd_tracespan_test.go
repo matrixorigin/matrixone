@@ -84,8 +84,7 @@ func TestCanHandleSelfCmd(t *testing.T) {
 		sender    requestSender
 	}
 
-	trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Store(false)
-	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(false)
+	trace.InitMOCtledSpan()
 
 	initRuntime(nil, nil)
 
@@ -96,17 +95,19 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	a1.proc = new(process.Process)
 	a1.proc.QueryService = service
 	a1.service = cn
-	a1.parameter = fmt.Sprintf("%s:enable:remote_fs,local_fs", uuid)
+	a1.parameter = fmt.Sprintf("%s:enable:s3,local", uuid)
 
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
 	require.Nil(t, err)
 	require.Equal(t, ret, pb.CtlResult{
 		Method: pb.CmdMethod_TraceSpan.String(),
-		Data:   fmt.Sprintf("%s:[remote_fs local_fs] enabled, [] failed; ", uuid),
+		Data:   fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuid),
 	})
 
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableRemoteFSSpan.Load())
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load())
+	k1 := trace.MOCtledSpanEnableConfig.NameToKind["s3"]
+	k2 := trace.MOCtledSpanEnableConfig.NameToKind["local"]
+	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k1])
+	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k2])
 }
 
 func TestCanTransferQuery(t *testing.T) {
@@ -127,9 +128,10 @@ func TestCanTransferQuery(t *testing.T) {
 
 	a1.proc = new(process.Process)
 	a1.service = cn
-	a1.parameter = fmt.Sprintf("%s,%s:enable:remote_fs,local_fs", uuids[0], uuids[1])
+	a1.parameter = fmt.Sprintf("%s,%s:enable:s3,local", uuids[0], uuids[1])
 
 	initRuntime(uuids, addrs)
+	trace.InitMOCtledSpan()
 
 	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{}, nil)
 	require.Nil(t, err)
@@ -154,8 +156,8 @@ func TestCanTransferQuery(t *testing.T) {
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
 	require.Nil(t, err)
 
-	str1 := fmt.Sprintf("%s:[remote_fs local_fs] enabled, [] failed; ", uuids[0])
-	str2 := fmt.Sprintf("%s:[remote_fs local_fs] enabled, [] failed; ", uuids[1])
+	str1 := fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuids[0])
+	str2 := fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuids[1])
 
 	require.True(t, func() bool {
 		if ret.Data == str1+str2 ||
