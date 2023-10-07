@@ -179,7 +179,7 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vecto
 	if pk != nil && pk.Length() > 0 {
 		begin := start
 		for ; begin < end+1; begin++ {
-			node.rowid2PK[begin] = pk.Window(int(begin-start), 1)
+			node.rowid2PK[begin] = pk.CloneWindow(int(begin-start), 1)
 		}
 	} else {
 		panic("pk vector is empty")
