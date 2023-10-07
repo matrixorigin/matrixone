@@ -8721,3 +8721,51 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.Equal(t, 5, deletes.Length())
 	assert.NoError(t, txn.Commit(context.Background()))
 }
+
+func TestGlobalCheckpoint7(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithCheckpointGlobalMinCount(3)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+	bats := bat.Split(50)
+
+	tae.CreateRelAndAppend(bats[0], true)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	assert.Equal(t, 1, len(entries))
+
+	tae.DoAppend(bats[1])
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	assert.Equal(t, 2, len(entries))
+
+	tae.DoAppend(bats[2])
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	testutils.WaitExpect(10000, func() bool {
+		return len(tae.BGCheckpointRunner.GetAllGlobalCheckpoints()) == 1
+	})
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	assert.Equal(t, 1, len(entries))
+
+}
