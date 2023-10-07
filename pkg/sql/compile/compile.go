@@ -93,8 +93,13 @@ var pool = sync.Pool{
 }
 
 // New is used to new an object of compile
-func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
+func New(
+	addr, db, sql, tenant, uid string,
+	ctx context.Context,
+	e engine.Engine,
+	proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string,
+	tag11768 bool, // if tag11768 is true, it will build a new mpool to instead of the old one.
+) *Compile {
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
@@ -103,6 +108,18 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
+	{
+		if tag11768 {
+			// [tag-11768]
+			m, err := mpool.NewMPool(uuid.Must(uuid.NewUUID()).String(), 0, mpool.NoFixed)
+			if err != nil {
+				panic(err)
+			}
+			c.proc.SetMp(m)
+			c.tag11768 = true
+		}
+	}
+
 	c.stmt = stmt
 	c.addr = addr
 	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
@@ -128,6 +145,13 @@ func putCompile(c *Compile) {
 	}
 
 	c.proc.CleanValueScanBatchs()
+	// XXX delete mpool here to avoid memory leak.
+	// not a true leak, but some bug will cause the record number of using memory incorrect.
+	// search the `[tag-11768]` to found all the codes harked for this problem.
+	if c.tag11768 {
+		mpool.ForceDeleteMPool(c.proc.Mp())
+	}
+
 	c.clear()
 	pool.Put(c)
 }
@@ -149,6 +173,8 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
+	c.tag11768 = false
+
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -364,10 +390,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	if err := c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
-		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
-		if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-			c.proc.TxnOperator.Txn().IsRCIsolation() {
+		if c.ifNeedRerun(err) {
 			c.proc.TxnOperator.ResetRetry(true)
 			c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
@@ -382,18 +405,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 			// improved to refresh expression in the future.
-			cc = New(
-				c.addr,
-				c.db,
-				c.sql,
-				c.tenant,
-				c.uid,
-				c.proc.Ctx,
-				c.e,
-				c.proc,
-				c.stmt,
-				c.isInternal,
-				c.cnLabel)
+			cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, false)
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				pn, err := c.buildPlanFunc()
 				if err != nil {
@@ -424,6 +436,16 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	return result, nil
 }
 
+// if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
+func (c *Compile) ifNeedRerun(err error) bool {
+	if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+		c.proc.TxnOperator.Txn().IsRCIsolation() {
+		return true
+	}
+	return false
+}
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -441,12 +463,22 @@ func (c *Compile) runOnce() error {
 	}
 	wg.Wait()
 	close(errC)
+
+	errList := make([]error, 0, len(c.scope))
 	for e := range errC {
 		if e != nil {
-			return e
+			errList = append(errList, e)
+			if c.ifNeedRerun(e) {
+				return e
+			}
 		}
 	}
-	return nil
+
+	if len(errList) == 0 {
+		return nil
+	} else {
+		return errList[0]
+	}
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
