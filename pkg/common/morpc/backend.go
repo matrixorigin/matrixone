@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -769,6 +770,16 @@ func (rb *remoteBackend) resetConn() error {
 			rb.activeReadLoop(false)
 			return nil
 		}
+
+		// only retry on temp net error
+		canRetry := false
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			canRetry = true
+		}
+		if !canRetry {
+			return err
+		}
+
 		rb.logger.Error("init remote connection failed, retry later", zap.Error(err))
 
 		duration := time.Duration(0)

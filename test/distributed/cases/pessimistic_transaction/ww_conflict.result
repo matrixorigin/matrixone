@@ -54,28 +54,23 @@ a    b    c
 10    bbbb    2020-09-08 00:00:00
 drop table dis_table_02;
 drop table if exists dis_table_02;
-[unknown result because it is related to issue#11213]
 create table dis_table_02(a int not null default 10,b varchar(25) not null,c datetime,primary key (b));
-[unknown result because it is related to issue#11213]
 insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
-[unknown result because it is related to issue#11213]
 insert into dis_table_02(b,c) values ('bbbb','2020-09-08');
-[unknown result because it is related to issue#11213]
 begin;
-[unknown result because it is related to issue#11213]
 alter table dis_table_02 drop primary key;
-[unknown result because it is related to issue#11213]
 use ww_conflict;
-[unknown result because it is related to issue#11213]
 begin;
-[unknown result because it is related to issue#11213]
 insert into dis_table_02 values(10, 'aaaa', '1998-09-12');
-[unknown result because it is related to issue#11213]
 commit;
-[unknown result because it is related to issue#11213]
 select * from dis_table_02;
-[unknown result because it is related to issue#11213]
+a    b    c
+10    aaaa    2020-09-08 00:00:00
+10    bbbb    2020-09-08 00:00:00
+10    aaaa    1998-09-12 00:00:00
 select * from dis_table_02;
-[unknown result because it is related to issue#11213]
+a    b    c
+10    aaaa    2020-09-08 00:00:00
+10    bbbb    2020-09-08 00:00:00
+10    aaaa    1998-09-12 00:00:00
 drop table dis_table_02;
-[unknown result because it is related to issue#11213]
