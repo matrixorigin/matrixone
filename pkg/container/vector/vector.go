@@ -3060,69 +3060,44 @@ func (v *Vector) GetSumValue() (ok bool, sumv []byte) {
 	if v.Length() == 0 || v.AllNull() || !v.typ.IsNumeric() {
 		return
 	}
-	if v.typ.IsDecimal() {
-		if v.typ.Oid != types.T_decimal64 {
-			return
-		}
+	if v.typ.IsDecimal() && v.typ.Oid != types.T_decimal64 {
+		return
 	}
 	ok = true
 	switch v.typ.Oid {
 	case types.T_int8:
-		sumVal := IntegerGetSum[int8](v)
-		sumv = types.EncodeInt8(&sumVal)
+		sumVal := IntegerGetSum[int8, int64](v)
+		sumv = types.EncodeInt64(&sumVal)
 	case types.T_int16:
-		sumVal := IntegerGetSum[int16](v)
-		sumv = types.EncodeInt16(&sumVal)
+		sumVal := IntegerGetSum[int16, int64](v)
+		sumv = types.EncodeInt64(&sumVal)
 	case types.T_int32:
-		sumVal := IntegerGetSum[int32](v)
-		sumv = types.EncodeInt32(&sumVal)
+		sumVal := IntegerGetSum[int32, int64](v)
+		sumv = types.EncodeInt64(&sumVal)
 	case types.T_int64:
-		sumVal := IntegerGetSum[int64](v)
+		sumVal := IntegerGetSum[int64, int64](v)
 		sumv = types.EncodeInt64(&sumVal)
 	case types.T_uint8:
-		sumVal := IntegerGetSum[uint8](v)
-		sumv = types.EncodeUint8(&sumVal)
+		sumVal := IntegerGetSum[uint8, uint64](v)
+		sumv = types.EncodeUint64(&sumVal)
 	case types.T_uint16:
-		sumVal := IntegerGetSum[uint16](v)
-		sumv = types.EncodeUint16(&sumVal)
+		sumVal := IntegerGetSum[uint16, uint64](v)
+		sumv = types.EncodeUint64(&sumVal)
 	case types.T_uint32:
-		sumVal := IntegerGetSum[uint32](v)
-		sumv = types.EncodeUint32(&sumVal)
+		sumVal := IntegerGetSum[uint32, uint64](v)
+		sumv = types.EncodeUint64(&sumVal)
 	case types.T_uint64:
-		sumVal := IntegerGetSum[uint64](v)
+		sumVal := IntegerGetSum[uint64, uint64](v)
 		sumv = types.EncodeUint64(&sumVal)
 	case types.T_float32:
 		sumVal := FloatGetSum[float32](v)
-		sumv = types.EncodeFloat32(&sumVal)
+		sumv = types.EncodeFloat64(&sumVal)
 	case types.T_float64:
 		sumVal := FloatGetSum[float64](v)
 		sumv = types.EncodeFloat64(&sumVal)
 	case types.T_decimal64:
-		col := MustFixedCol[types.Decimal64](v)
-		var sumVal types.Decimal64
-		var err error
-		if v.HasNull() {
-			for i, dec := range col {
-				if v.IsNull(uint64(i)) {
-					continue
-				}
-				sumVal, err = sumVal.Add64(dec)
-				if err != nil {
-					sumVal = 0
-					sumv = types.EncodeDecimal64(&sumVal)
-					return
-				}
-			}
-		} else {
-			for _, dec := range col {
-				sumVal, err = sumVal.Add64(dec)
-				if err != nil {
-					sumVal = 0
-					sumv = types.EncodeDecimal64(&sumVal)
-					return
-				}
-			}
-		}
+		sumVal := Decimal64GetSum(v)
+		sumv = types.EncodeDecimal64(&sumVal)
 	default:
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
