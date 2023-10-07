@@ -124,19 +124,18 @@ func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, res
 func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
 	resp.GetTxnInfoResponse = new(query.GetTxnInfoResponse)
 	txns := make([]*query.TxnInfo, 0)
-	txns = append(txns, &query.TxnInfo{})
 
 	s._txnClient.IterTxns(func(view client.TxnOverview) bool {
-		//info := &query.TxnInfo{
-		//	CreateAt: view.CreateAt,
-		//	Meta:     copyTxnMeta(view.Meta),
-		//	UserTxn:  view.UserTxn,
-		//}
-		//
-		//for _, lock := range view.WaitLocks {
-		//	info.WaitLocks = append(info.WaitLocks, copyTxnInfo(lock))
-		//}
-		//txns = append(txns, info)
+		info := &query.TxnInfo{
+			CreateAt: view.CreateAt,
+			Meta:     copyTxnMeta(view.Meta),
+			UserTxn:  view.UserTxn,
+		}
+
+		for _, lock := range view.WaitLocks {
+			info.WaitLocks = append(info.WaitLocks, copyTxnInfo(lock))
+		}
+		txns = append(txns, info)
 		return true
 	})
 
