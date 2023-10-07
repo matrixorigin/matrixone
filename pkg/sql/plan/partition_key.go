@@ -71,7 +71,8 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 		}
 	}
 
-	err = buildPartitionColumns(ctx, partitionBinder, partitionDef, partitionType.ColumnList)
+	err = buildPartitionColumns(ctx, tableDef, partitionBinder, partitionDef, partitionType.ColumnList)
+	//err = buildPartitionColumns(ctx, partitionBinder, partitionDef, partitionType.ColumnList)
 	if err != nil {
 		return err
 	}

@@ -170,10 +170,7 @@ message OnDuplicateKey{
   plan.TableDef table_def                   = 1;
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
-}
-
-message FuzzyFilter {
-
+  bool is_ignore                            = 4;
 }
 
 message Join {
@@ -373,7 +370,6 @@ message Instruction{
   Shuffle shuffle = 33;
   Merge merge = 34;
   StreamScan stream_scan = 35;
-  FuzzyFilter fuzzy_filter = 36;
 }
 
 message AnalysisList {

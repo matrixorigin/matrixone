@@ -27,7 +27,7 @@ import (
 )
 
 type CacheConfig struct {
-	MemoryCapacity       *toml.ByteSize `toml:"memory-capacity"`
+	MemoryCapacity       *toml.ByteSize `toml:"memory-capacity" user_setting:"advanced"`
 	DiskPath             *string        `toml:"disk-path"`
 	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
 	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
@@ -74,7 +74,7 @@ func (c *CacheConfig) setDefaults() {
 }
 
 func (c *CacheConfig) SetRemoteCacheCallback() {
-	if c.KeyRouterFactory == nil {
+	if !c.RemoteCacheEnabled || c.KeyRouterFactory == nil {
 		return
 	}
 	c.InitKeyRouter = &sync.Once{}
