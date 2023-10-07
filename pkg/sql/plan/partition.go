@@ -167,7 +167,6 @@ func getValidPartitionCount(ctx context.Context, needPartitionDefs bool, partiti
 
 	if needPartitionDefs && len(partitionSyntaxDef.Partitions) == 0 {
 		if _, ok := partitionSyntaxDef.PartBy.PType.(*tree.ListType); ok {
-			//return 0, moerr.NewInvalidInput(ctx, "For LIST partitions each partition must be defined")
 			return 0, moerr.NewPartitionsMustBeDefined(ctx, "LIST")
 		} else {
 			return 0, moerr.NewInvalidInput(ctx, "each partition must be defined")
@@ -707,10 +706,12 @@ func findColumnInIndexCols(c string, pkcols map[string]int) bool {
 }
 
 /*
-checkPartitionDefs
-check partition name unique or not
-check partition count limitation
-check partition column name uinque
+checkPartitionDefines Check partition definition
+
+	1.check partition name unique or not
+	2.check partition count limitation
+	3.check partition columns count limitation
+	4.check partition column name uinque
 */
 func checkPartitionDefines(ctx context.Context, partitionBinder *PartitionBinder, partitionDef *plan.PartitionByDef, tableDef *TableDef) error {
 	var err error
@@ -732,10 +733,8 @@ func checkPartitionDefines(ctx context.Context, partitionBinder *PartitionBinder
 
 	if len(partitionDef.Partitions) == 0 {
 		if partitionDef.Type == plan.PartitionType_RANGE || partitionDef.Type == plan.PartitionType_RANGE_COLUMNS {
-			//return moerr.NewInvalidInput(partitionBinder.GetContext(), "range partition cannot be empty")
 			return moerr.NewPartitionsMustBeDefined(ctx, "RANGE")
 		} else if partitionDef.Type == plan.PartitionType_LIST || partitionDef.Type == plan.PartitionType_LIST_COLUMNS {
-			//return moerr.NewInvalidInput(partitionBinder.GetContext(), "list partition cannot be empty")
 			return moerr.NewPartitionsMustBeDefined(ctx, "LIST")
 		}
 	}
@@ -777,7 +776,6 @@ func checkPartitionColumnsCount(ctx context.Context, pi *plan.PartitionByDef) er
 // checkPartitionCount: check whether check partition number exceeds the limit
 func checkPartitionCount(ctx context.Context, partNum int) error {
 	if partNum > PartitionCountLimit {
-		//return moerr.NewInvalidInput(ctx, "too many (%d) partitions", partNum)
 		return moerr.NewErrTooManyPartitions(ctx)
 	}
 	return nil
@@ -843,7 +841,6 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 					uniqueKeys := make(map[string]int)
 					stringSliceToMap(indexdef.Parts, uniqueKeys)
 					if !checkUniqueKeyIncludePartKey(pkcols, uniqueKeys) {
-						//return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 						return moerr.NewUniqueKeyNeedAllFieldsInPf(partitionBinder.GetContext(), "PRIMARY KEY")
 					}
 				} else {
@@ -864,13 +861,11 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 				uniqueKeys := make(map[string]int)
 				stringSliceToMap(indexdef.Parts, uniqueKeys)
 				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, uniqueKeys) {
-					//return moerr.NewInvalidInput(partitionBinder.GetContext(), "partition key is not part of primary key")
 					return moerr.NewUniqueKeyNeedAllFieldsInPf(partitionBinder.GetContext(), "PRIMARY KEY")
 				}
 			}
 		}
 	} else {
-		//return moerr.NewInvalidInput(partitionBinder.GetContext(), "Field in list of fields for partition function not found in table")
 		return moerr.NewFieldNotFoundPart(partitionBinder.GetContext())
 	}
 	return nil
