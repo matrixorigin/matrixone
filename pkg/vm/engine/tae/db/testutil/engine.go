@@ -208,8 +208,8 @@ func (e *TestEngine) TryAppend(bat *containers.Batch) {
 }
 func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	txn, rel := e.GetRelation()
-	schema:=rel.GetMeta().(*catalog.TableEntry).GetLastestSchema()
-	pkName:=schema.GetPrimaryKey().Name
+	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchema()
+	pkName := schema.GetPrimaryKey().Name
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
