@@ -204,7 +204,7 @@ var MoSessionsView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_sessions`;",
 }
 
 var MoConfigurationsView = &table.Table{
@@ -221,7 +221,7 @@ var MoConfigurationsView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_configurations` AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_configurations`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_configurations`;",
 }
 
 var MoLocksView = &table.Table{
@@ -240,7 +240,7 @@ var MoLocksView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_locks` AS SELECT * FROM mo_locks() AS mo_locks_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_locks`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_locks`;",
 }
 
 var MoVariablesView = &table.Table{
@@ -258,7 +258,7 @@ var MoVariablesView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_variables` AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_variables`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_variables`;",
 }
 
 var SqlStatementHotspotView = &table.Table{
@@ -294,7 +294,7 @@ var MoTransactionsView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_transactions` AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_transactions`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_transactions`;",
 }
 
 var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView}
