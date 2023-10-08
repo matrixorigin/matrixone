@@ -220,6 +220,13 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 		return
 	}
 	schema := h.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	pkVal, _, err := h.table.GetValue(ctx, id, row, uint16(pkDef.Idx))
+	if err != nil {
+		return err
+	}
+	pkVec.Append(pkVal, false)
 	bat := containers.NewBatch()
 	defer bat.Close()
 	for _, def := range schema.ColDefs {
@@ -241,7 +248,7 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 		vec.Append(colVal, colValIsNull)
 		bat.AddVector(def.Name, vec)
 	}
-	if err = h.table.RangeDelete(id, row, row, nil, handle.DT_Normal); err != nil {
+	if err = h.table.RangeDelete(id, row, row, pkVec, handle.DT_Normal); err != nil {
 		return
 	}
 	err = h.Append(ctx, bat)
@@ -285,11 +292,29 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
 	id.BlockID = bid
-	return h.Txn.GetStore().RangeDelete(id, row, row, nil, handle.DT_Normal)
+	schema := h.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	val, _, err := h.table.GetValue(h.table.store.ctx, id, row, uint16(pkDef.Idx))
+	if err != nil {
+		return err
+	}
+	pkVec.Append(val, false)
+	return h.Txn.GetStore().RangeDelete(id, row, row, pkVec, handle.DT_Normal)
 }
 
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
-	return h.Txn.GetStore().RangeDelete(id, start, end, nil, dt)
+	schema := h.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	for row := start; row <= end; row++ {
+		pkVal, _, err := h.table.GetValue(h.table.store.GetContext(), id, row, uint16(pkDef.Idx))
+		if err != nil {
+			return err
+		}
+		pkVec.Append(pkVal, false)
+	}
+	return h.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
 }
 func (h *txnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
 	return h.Txn.GetStore().TryDeleteByDeltaloc(id, deltaloc)

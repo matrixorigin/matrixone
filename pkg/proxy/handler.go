@@ -16,9 +16,6 @@ package proxy
 
 import (
 	"context"
-	"net"
-	"time"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -27,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"go.uber.org/zap"
+	"net"
 )
 
 // handler is the proxy service handler.
@@ -43,7 +41,7 @@ type handler struct {
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
 	// haKeeperClient is the client to communicate with HAKeeper.
-	haKeeperClient logservice.ClusterHAKeeperClient
+	haKeeperClient logservice.ProxyHAKeeperClient
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
 }
@@ -57,22 +55,10 @@ func newProxyHandler(
 	cfg Config,
 	st *stopper.Stopper,
 	cs *counterSet,
-	testHAKeeperClient logservice.ClusterHAKeeperClient,
+	haKeeperClient logservice.ProxyHAKeeperClient,
 ) (*handler, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	var err error
-	c := testHAKeeperClient
-	if c == nil {
-		c, err = logservice.NewProxyHAKeeperClient(ctx, cfg.HAKeeper.ClientConfig)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	// Create the MO cluster.
-	mc := clusterservice.NewMOCluster(c, cfg.Cluster.RefreshInterval.Duration)
+	mc := clusterservice.NewMOCluster(haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.
@@ -112,14 +98,14 @@ func newProxyHandler(
 		}
 	}
 	return &handler{
-		ctx:            context.Background(),
+		ctx:            ctx,
 		logger:         rt.Logger(),
 		config:         cfg,
 		stopper:        st,
 		moCluster:      mc,
 		counterSet:     cs,
 		router:         ru,
-		haKeeperClient: c,
+		haKeeperClient: haKeeperClient,
 		ipNetList:      ipNetList,
 	}, nil
 }
