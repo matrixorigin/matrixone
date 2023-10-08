@@ -120,6 +120,18 @@ func (th *TxnHandler) GetTxnClient() TxnClient {
 // NewTxnOperator creates a new txn operator using TxnClient
 func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	var err error
+	sessionInfo := th.ses.GetDebugString()
+	//!!!NOTE: log the txnId before create the txn operator.
+	//if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+	//	if th.txnOperator != nil {
+	//		txnId := th.txnOperator.Txn().DebugString()
+	//		logInfof(sessionInfo, "NewTxnOperator txnId:%s", txnId)
+	//		defer func() {
+	//			logInfof(sessionInfo, "NewTxnOperator exit txnId:%s", txnId)
+	//		}()
+	//	}
+	//
+	//}
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	if th.txnClient == nil {
@@ -143,7 +155,7 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		panic("context should not be nil")
 	}
 	opts = append(opts,
-		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
+		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p (%s)", th.ses, sessionInfo)))
 
 	if th.ses != nil && th.ses.GetFromRealUser() {
 		opts = append(opts,
