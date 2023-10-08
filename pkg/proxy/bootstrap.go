@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 )
@@ -28,29 +29,31 @@ const (
 )
 
 func (h *handler) bootstrap(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*3)
-	defer cancel()
-	state, err := h.haKeeperClient.GetClusterState(ctx)
-	if err != nil {
-		panic(err)
-	}
 	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
 	retry := 0
 	getClient := func() util.HAKeeperClient {
 		return h.haKeeperClient
 	}
+	var state pb.CheckerState
+	var err error
 	for retry < int(BootstrapTimeout/BootstrapInterval) {
 		select {
 		case <-ticker.C:
+			func(ctx context.Context) {
+				ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+				defer cancel()
+				state, err = h.haKeeperClient.GetClusterState(ctx)
+				if err != nil {
+					panic(err)
+				}
+			}(ctx)
 			if state.TaskTableUser.GetUsername() != "" && state.TaskTableUser.GetPassword() != "" {
 				db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, state.TaskTableUser.GetPassword())
 				db_holder.SetSQLWriterDBAddressFunc(util.AddressFunc(getClient))
-				h.logger.Info("proxy bootstrap succeeded")
 				return
 			}
 		case <-ctx.Done():
-			h.logger.Info("proxy bootstrap interrupt for context done.")
 			return
 		}
 		retry += 1

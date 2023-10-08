@@ -49,6 +49,7 @@ func NewRSMState() HAKeeperRSMState {
 		CNState:          NewCNState(),
 		TNState:          NewTNState(),
 		LogState:         NewLogState(),
+		ProxyState:       NewProxyState(),
 		ClusterInfo:      newClusterInfo(),
 	}
 }
@@ -284,4 +285,25 @@ func (m *ScheduleCommand) LogString() string {
 	}
 
 	return s
+}
+
+// NewProxyState creates a new ProxyState.
+func NewProxyState() ProxyState {
+	return ProxyState{
+		Stores: make(map[string]ProxyStore),
+	}
+}
+
+func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
+	storeInfo, ok := s.Stores[hb.UUID]
+	if !ok {
+		storeInfo = ProxyStore{}
+	}
+	storeInfo.UUID = hb.UUID
+	storeInfo.Tick = tick
+	storeInfo.ListenAddress = hb.ListenAddress
+	if hb.ConfigData != nil {
+		storeInfo.ConfigData = hb.ConfigData
+	}
+	s.Stores[hb.UUID] = storeInfo
 }
