@@ -571,12 +571,12 @@ func logDebugf(info string, msg string, fields ...interface{}) {
 	}
 }
 
-func logInfof(info string, msg string, fields ...interface{}) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		fields = append(fields, info)
-		logutil.Infof(msg+" %s", fields...)
-	}
-}
+//func logInfof(info string, msg string, fields ...interface{}) {
+//	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+//		fields = append(fields, info)
+//		logutil.Infof(msg+" %s", fields...)
+//	}
+//}
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
