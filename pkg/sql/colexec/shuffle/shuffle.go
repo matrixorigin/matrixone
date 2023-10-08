@@ -213,6 +213,11 @@ func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) vm.CallRes
 		}
 	}
 
+	// can not return nil, put an empty batch here
+	if result.Batch == nil {
+		result.Batch = batch.EmptyBatch
+	}
+
 	ap.ctr.state = input
 	if isEnding {
 		result.Status = vm.ExecStop
