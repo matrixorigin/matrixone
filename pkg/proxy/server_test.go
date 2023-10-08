@@ -27,9 +27,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func WithHAKeeperClient(c logservice.ClusterHAKeeperClient) Option {
+func WithHAKeeperClient(c logservice.ProxyHAKeeperClient) Option {
 	return func(s *Server) {
-		s.testHAKeeperClient = c
+		s.haKeeperClient = c
 	}
 }
 
