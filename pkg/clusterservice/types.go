@@ -66,7 +66,7 @@ type MOCluster interface {
 	// ForceRefresh when other modules use the cluster information and find out that
 	// the current cache information is out of date, you can force the cache to be
 	// refreshed.
-	ForceRefresh()
+	ForceRefresh(sync bool)
 	// Close close the cluster
 	Close()
 	// DebugUpdateCNLabel updates the labels on specified CN. It is only used in mo_ctl
