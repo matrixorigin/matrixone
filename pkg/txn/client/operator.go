@@ -424,6 +424,7 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 		tc.closeLocked()
 		return nil
 	}
+
 	result, err := tc.doWrite(ctx, nil, true)
 	if err != nil {
 		return err
