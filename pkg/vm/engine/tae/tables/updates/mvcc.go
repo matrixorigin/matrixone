@@ -176,9 +176,8 @@ func (n *MVCCHandle) IsDeletedLocked(
 
 // it collects all deletes in the range [start, end)
 func (n *MVCCHandle) CollectDeleteLocked(
-	start, end types.TS,
-) (
-	rowIDVec, commitTSVec, abortVec containers.Vector,
+	start, end types.TS, pkType types.Type,
+) (rowIDVec, commitTSVec, pkVec, abortVec containers.Vector,
 	aborts *nulls.Bitmap, deletes []uint32, minTS types.TS,
 ) {
 	if n.deletes.Load().IsEmpty() {
@@ -198,6 +197,10 @@ func (n *MVCCHandle) CollectDeleteLocked(
 			commitTSVec.Close()
 		}
 		commitTSVec = containers.MakeVector(types.T_TS.ToType())
+		if pkVec != nil {
+			pkVec.Close()
+		}
+		pkVec = containers.MakeVector(pkType)
 		aborts = &nulls.Bitmap{}
 		id := n.meta.ID
 
@@ -226,12 +229,17 @@ func (n *MVCCHandle) CollectDeleteLocked(
 					}
 					for it.HasNext() {
 						row := it.Next()
-						if deletes == nil {
-							deletes = make([]uint32, 0)
-						}
-						deletes = append(deletes, row)
 						rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 						commitTSVec.Append(node.GetEnd(), false)
+						// for deleteNode V1，rowid2PK is nil after restart
+						if node.version < IOET_WALTxnCommand_DeleteNode_V2 {
+							if deletes == nil {
+								deletes = make([]uint32, 0)
+							}
+							deletes = append(deletes, row)
+						} else {
+							pkVec.Append(node.rowid2PK[row].Get(0), false)
+						}
 						if minTS.IsEmpty() {
 							minTS = node.GetEnd()
 						} else {
