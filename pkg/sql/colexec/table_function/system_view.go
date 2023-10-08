@@ -319,6 +319,23 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 			}
 		}
 
+		// fill batch for proxy
+		for _, proxyStore := range details.GetProxyStores() {
+			if proxyStore.GetConfigData() != nil {
+				err = fillMapToBatch(
+					"proxy",
+					proxyStore.GetUUID(),
+					arg.Attrs,
+					proxyStore.GetConfigData().GetContent(),
+					bat,
+					mp,
+				)
+				if err != nil {
+					return false, err
+				}
+			}
+		}
+
 		bat.SetRowCount(bat.Vecs[0].Length())
 		result.Batch = bat
 		arg.ctr.state = dataFinished

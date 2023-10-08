@@ -106,6 +106,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 		return err, true
 	}
 
+	// init all mo_ctl controlled spans
+	trace.InitMOCtledSpan()
+
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: trace.ContextField})
 	logutil.SpanFieldKey.Store(trace.SpanFieldKey)

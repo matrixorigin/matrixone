@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	DefaultTickPerSecond   = 10
-	DefaultLogStoreTimeout = 5 * time.Minute
-	DefaultTNStoreTimeout  = 10 * time.Second
-	DefaultCNStoreTimeout  = 30 * time.Second
+	DefaultTickPerSecond     = 10
+	DefaultLogStoreTimeout   = 5 * time.Minute
+	DefaultTNStoreTimeout    = 10 * time.Second
+	DefaultCNStoreTimeout    = 30 * time.Second
+	DefaultProxyStoreTimeout = 30 * time.Second
 )
 
 type Config struct {
@@ -45,6 +46,11 @@ type Config struct {
 	// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
 	// it regards the tn store as down.
 	CNStoreTimeout time.Duration
+
+	// ProxyStoreTimeout is the actual time limit between a proxy store's heartbeat.
+	// If HAKeeper does not receive two heartbeat within ProxyStoreTimeout,
+	// it regards the proxy store as down.
+	ProxyStoreTimeout time.Duration
 }
 
 func (cfg Config) Validate() error {
@@ -64,6 +70,9 @@ func (cfg *Config) Fill() {
 	if cfg.CNStoreTimeout == 0 {
 		cfg.CNStoreTimeout = DefaultCNStoreTimeout
 	}
+	if cfg.ProxyStoreTimeout == 0 {
+		cfg.ProxyStoreTimeout = DefaultProxyStoreTimeout
+	}
 }
 
 func (cfg Config) LogStoreExpired(start, current uint64) bool {
@@ -76,6 +85,10 @@ func (cfg Config) TNStoreExpired(start, current uint64) bool {
 
 func (cfg Config) CNStoreExpired(start, current uint64) bool {
 	return uint64(int(cfg.CNStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
+}
+
+func (cfg Config) ProxyStoreExpired(start, current uint64) bool {
+	return uint64(int(cfg.ProxyStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
 func (cfg Config) ExpiredTick(start uint64, timeout time.Duration) uint64 {

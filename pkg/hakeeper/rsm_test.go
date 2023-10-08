@@ -421,6 +421,11 @@ func TestClusterDetailsQuery(t *testing.T) {
 			}, ReplicaID: 3,
 		}},
 	}
+	tsm.state.ProxyState.Stores["store-4"] = pb.ProxyStore{
+		UUID:          "store-4",
+		Tick:          100,
+		ListenAddress: "proxy-addr1",
+	}
 
 	v, err := tsm.Lookup(&ClusterDetailsQuery{})
 	require.NoError(t, err)
@@ -490,6 +495,13 @@ func TestClusterDetailsQuery(t *testing.T) {
 						Epoch:    1, LeaderID: 1, Term: 1,
 					}, ReplicaID: 3,
 				}},
+			},
+		},
+		ProxyStores: []pb.ProxyStore{
+			{
+				UUID:          "store-4",
+				Tick:          100,
+				ListenAddress: "proxy-addr1",
 			},
 		},
 	}
@@ -940,4 +952,29 @@ func TestHandleDeleteCNStore(t *testing.T) {
 	assert.NoError(t, err)
 	s = tsm1.state.CNState
 	assert.Equal(t, 0, len(s.Stores))
+}
+
+func TestHandleProxyHeartbeat(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := GetTickCmd()
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := pb.ProxyHeartbeat{
+		UUID: "uuid1",
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetProxyHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s := tsm1.state.ProxyState
+	assert.Equal(t, 1, len(s.Stores))
+	info, ok := s.Stores[hb.UUID]
+	assert.True(t, ok)
+	assert.Equal(t, uint64(3), info.Tick)
 }
