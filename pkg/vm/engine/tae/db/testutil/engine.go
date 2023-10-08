@@ -208,6 +208,8 @@ func (e *TestEngine) TryAppend(bat *containers.Batch) {
 }
 func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	txn, rel := e.GetRelation()
+	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchema()
+	pkName := schema.GetPrimaryKey().Name
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
@@ -216,7 +218,11 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()
-		err = rel.DeleteByPhyAddrKeys(view.GetData(), nil)
+		pkView, err := blk.GetColumnDataByName(context.Background(), pkName)
+		assert.NoError(e.t, err)
+		defer pkView.Close()
+		pkView.ApplyDeletes()
+		err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
 		assert.NoError(e.t, err)
 		it.Next()
 	}
