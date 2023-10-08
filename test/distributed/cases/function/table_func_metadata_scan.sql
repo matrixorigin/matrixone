@@ -36,32 +36,22 @@ select approx_count(*) from t;
 drop table if exists t;
 
 -- int max value + 1, not overflow
-create table t(a int, b varchar);
-insert into t values(2147483647, null);
-insert into t values(1, "abc");
-select count(*) from t;
--- @separator:table
-select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
-select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
-select sum(a) from t;
--- @separator:table
-drop table if exists t;
-
 -- bigint max value + 1, overflow
-create table t(a bigint, b varchar);
-insert into t values(9223372036854775807, null);
-insert into t values(1, "abc");
+create table t(a int, b bigint);
+insert into t values(2147483647, 9223372036854775807);
+insert into t values(1, 1);
 select count(*) from t;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
 select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select sum(a) from t;
+select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'b') g;
+select sum(b) from t;
 -- @separator:table
 drop table if exists t;
-
-create table t(a float, b varchar);
-insert into t values(1.1, null);
-insert into t values(2.0, "abc");
+create table t(a float, b decimal(10, 8));
+insert into t values(1.1, 1);
+insert into t values(2.0, 2);
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
@@ -79,27 +69,7 @@ select count(*) from t;
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
 select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select sum(a) from t;
+select sum(bit_cast(`sum` as decimal(10, 8))) from metadata_scan('table_func_metadata_scan.t', 'b') g;
+select sum(b) from t;
 -- @separator:table
-drop table if exists t;
-
-create table t(a decimal(10, 8), b varchar);
-insert into t values(1, null);
-insert into t values(2, "abc");
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-select count(*) from t;
--- @separator:table
-select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
-select sum(bit_cast(`sum` as decimal(10, 8))) from metadata_scan('table_func_metadata_scan.t', 'a') g;
-select sum(a) from t;
 drop table if exists t;
