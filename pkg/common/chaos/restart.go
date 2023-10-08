@@ -16,7 +16,6 @@ package chaos
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"time"
 
@@ -64,11 +63,10 @@ func (t *restartTester) do(ctx context.Context) {
 	target := -1
 	actionFuncs := []func(){
 		func() {
-			target = int(rand.Int31n(int32(len(t.cfg.Restart.Targets))))
+			target = t.cfg.Restart.Targets[int(rand.Int31n(int32(len(t.cfg.Restart.Targets))))]
 			if err := t.cfg.Restart.KillFunc(target); err != nil {
 				panic(err)
 			}
-			fmt.Printf("kill cn%d\n", target)
 			timer.Reset(t.cfg.Restart.RestartInterval.Duration)
 		},
 		func() {
@@ -76,7 +74,6 @@ func (t *restartTester) do(ctx context.Context) {
 				panic(err)
 			}
 			timer.Reset(t.cfg.Restart.KillInterval.Duration)
-			fmt.Printf("restart cn%d\n", target)
 		},
 	}
 
