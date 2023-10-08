@@ -670,6 +670,22 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 && len(node.GroupBy) == 0 {
+			child.AggList = make([]*Expr, 0, len(node.AggList))
+			for _, agg := range node.AggList {
+				switch agg.Expr.(*plan.Expr_F).F.Func.ObjName {
+				case "starcount", "count", "min", "max":
+					child.AggList = append(child.AggList, DeepCopyExpr(agg))
+				default:
+					child.AggList = nil
+				}
+				if child.AggList == nil {
+					break
+				}
+			}
+		}
+
 	case plan.Node_WINDOW:
 		for _, expr := range node.WinSpecList {
 			increaseRefCnt(expr, 1, colRefCnt)
@@ -1250,15 +1266,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
-		//after determine shuffle method, never call ReCalcNodeStats again
-		determineShuffleMethod(rootID, builder)
-		determineHashOnPK(rootID, builder)
-		builder.pushdownRuntimeFilters(rootID)
-
 		//-----------------------------------------------------------------
 		builder.partitionPrune(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		//-----------------------------------------------------------------
+
+		//after determine shuffle method, never call ReCalcNodeStats again
+		determineShuffleMethod(rootID, builder)
+		determineShuffleMethod2(rootID, -1, builder)
+		determineHashOnPK(rootID, builder)
+		builder.pushdownRuntimeFilters(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
 
@@ -3323,6 +3340,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
 	case "processlist", "mo_sessions":
 		nodeId, err = builder.buildProcesslist(tbl, ctx, exprs, childId)
+	case "mo_configurations":
+		nodeId, err = builder.buildMoConfigurations(tbl, ctx, exprs, childId)
+	case "mo_locks":
+		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

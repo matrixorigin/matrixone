@@ -19,13 +19,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"math/bits"
+	"unsafe"
 )
 
 const (
-	HashMapSizeForShuffle           = 250000
+	HashMapSizeForShuffle           = 160000
+	threshHoldForHybirdShuffle      = 4000000
 	MAXShuffleDOP                   = 64
 	ShuffleThreshHold               = 50000
-	ShuffleTypeThreshHoldLowerLimit = 32
+	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
 )
 
@@ -35,8 +38,43 @@ const (
 	ShuffleToMultiMatchedReg int32 = 2
 )
 
+// convert first 8 bytes to uint64, slice might be less than 8 bytes
+func ByteSliceToUint64(bytes []byte) uint64 {
+	var result uint64 = 0
+	i := 0
+	length := len(bytes)
+	for ; i < 8; i++ {
+		result = result * 256
+		if i < length {
+			result += uint64(bytes[i])
+		}
+	}
+	return result
+}
+
+// convert first 8 bytes to uint64. vec.area must be nil
+// if varlena length less than 8 bytes, should have filled zero in varlena
+func VarlenaToUint64Inline(v *types.Varlena) uint64 {
+	return bits.ReverseBytes64(*(*uint64)(unsafe.Add(unsafe.Pointer(&v[0]), 1)))
+}
+
+// convert first 8 bytes to uint64
+func VarlenaToUint64(v *types.Varlena, area []byte) uint64 {
+	svlen := (*v)[0]
+	if svlen <= types.VarlenaInlineSize {
+		return VarlenaToUint64Inline(v)
+	} else {
+		voff, _ := v.OffsetLen()
+		return bits.ReverseBytes64(*(*uint64)(unsafe.Pointer(&area[voff])))
+	}
+}
+
 func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
+	if lenBytes == 0 {
+		// always hash empty string to first bucket
+		return 0
+	}
 	//sample five bytes
 	h := (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1]))
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
@@ -60,6 +98,8 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint32(zm.GetMinBuf())), upplerLimit)
 	case types.T_uint16:
 		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), uint64(types.DecodeUint16(zm.GetMinBuf())), upplerLimit)
+	case types.T_varchar, types.T_char, types.T_text:
+		return GetRangeShuffleIndexUnsigned(uint64(minVal), uint64(maxVal), ByteSliceToUint64(zm.GetMinBuf()), upplerLimit)
 	}
 	panic("unsupported shuffle type!")
 }
@@ -154,7 +194,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 					return
 				}
 			} else if leftCost > ShuffleTypeThreshHoldLowerLimit*rightCost {
-				n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Complex
+				n.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Hybrid
 			}
 		}
 	}
@@ -224,13 +264,10 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
-	case types.T_varchar, types.T_char, types.T_text:
-		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
-		n.Stats.HashmapStats.Shuffle = true
 	}
 }
 
@@ -259,6 +296,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	child := builder.qry.Nodes[n.Children[0]]
+
 	// for now, if agg children is agg or filter, do not allow shuffle
 	if isAggOrFilter(child, builder) {
 		return
@@ -286,20 +324,17 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
-	case types.T_varchar, types.T_char, types.T_text:
-		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
-		n.Stats.HashmapStats.Shuffle = true
 	}
 
 	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
 	if child.NodeType == plan.Node_JOIN {
 		if n.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
-			// shuffle group can follow shuffle join
-			if n.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType {
+			// shuffle group can reuse shuffle join
+			if n.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType && n.Stats.HashmapStats.ShuffleTypeForMultiCN == child.Stats.HashmapStats.ShuffleTypeForMultiCN {
 				groupHashCol, _ := GetHashColumn(n.GroupBy[n.Stats.HashmapStats.ShuffleColIdx])
 				switch exprImpl := child.OnList[child.Stats.HashmapStats.ShuffleColIdx].Expr.(type) {
 				case *plan.Expr_F:
@@ -349,6 +384,11 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
 			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
 			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstColName])
+		case types.T_char, types.T_varchar, types.T_text:
+			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
+			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
+			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstColName])
 		}
 	}
 }
@@ -369,5 +409,30 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 		determinShuffleForJoin(node, builder)
 	default:
 	}
+}
 
+// second pass of determine shuffle
+func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			determineShuffleMethod2(child, nodeID, builder)
+		}
+	}
+	if parentID == -1 {
+		return
+	}
+	parent := builder.qry.Nodes[parentID]
+
+	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			return
+		}
+		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
+			node.Stats.HashmapStats.Shuffle = false
+			if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+				parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			}
+		}
+	}
 }

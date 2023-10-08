@@ -93,10 +93,12 @@ func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 	return executing
 }
 
-func (c *Controller) RemoveFinishedOperator(logState pb.LogState, tnState pb.TNState, cnState pb.CNState) {
+func (c *Controller) RemoveFinishedOperator(
+	logState pb.LogState, tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState,
+) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
-			op.Check(logState, tnState, cnState)
+			op.Check(logState, tnState, cnState, proxyState)
 			switch op.Status() {
 			case SUCCESS, EXPIRED:
 				c.RemoveOperator(op)
@@ -106,10 +108,10 @@ func (c *Controller) RemoveFinishedOperator(logState pb.LogState, tnState pb.TNS
 }
 
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
-	tnState pb.TNState, cnState pb.CNState) (commands []pb.ScheduleCommand) {
+	tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
-		if step := op.Check(logState, tnState, cnState); step != nil {
+		if step := op.Check(logState, tnState, cnState, proxyState); step != nil {
 			commands = append(commands, generateScheduleCommand(step))
 		}
 	}
@@ -140,6 +142,10 @@ func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 		return createTaskService(st)
 	case DeleteCNStore:
 		return deleteCNStore(st)
+	case JoinGossipCluster:
+		return joinGossipCluster(st)
+	case DeleteProxyStore:
+		return deleteProxyStore(st)
 	}
 	panic("invalid schedule command")
 }
@@ -290,6 +296,26 @@ func deleteCNStore(st DeleteCNStore) pb.ScheduleCommand {
 		UUID:        st.StoreID,
 		ServiceType: pb.CNService,
 		DeleteCNStore: &pb.DeleteCNStore{
+			StoreID: st.StoreID,
+		},
+	}
+}
+
+func joinGossipCluster(st JoinGossipCluster) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.StoreID,
+		ServiceType: pb.CNService,
+		JoinGossipCluster: &pb.JoinGossipCluster{
+			Existing: st.Existing,
+		},
+	}
+}
+
+func deleteProxyStore(st DeleteProxyStore) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.StoreID,
+		ServiceType: pb.ProxyService,
+		DeleteProxyStore: &pb.DeleteProxyStore{
 			StoreID: st.StoreID,
 		},
 	}

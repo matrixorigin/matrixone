@@ -17,10 +17,13 @@ package incrservice
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 var (
@@ -92,35 +95,68 @@ func (s *sqlStore) Allocate(
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	}
+	ctxDone := func() bool {
+		select {
+		case <-ctx.Done():
+			return true
+		default:
+			return false
+		}
+	}
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
+				start := time.Now()
 				res, err := te.Exec(fetchSQL)
 				if err != nil {
 					return err
 				}
+				rows := 0
 				res.ReadRows(func(cols []*vector.Vector) bool {
 					current = executor.GetFixedRows[uint64](cols[0])[0]
 					step = executor.GetFixedRows[uint64](cols[1])[0]
+					rows++
 					return true
 				})
 				res.Close()
 
+				if rows != 1 {
+					getLogger().Fatal("BUG: read incr record invalid",
+						zap.String("fetch-sql", fetchSQL),
+						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
+						zap.Uint64("table", tableID),
+						zap.String("col", colName),
+						zap.Int("rows", rows),
+						zap.Duration("cost", time.Since(start)),
+						zap.Bool("ctx-done", ctxDone()))
+				}
+
 				next = getNext(current, count, int(step))
-				res, err = te.Exec(fmt.Sprintf(`update %s set offset = %d 
-					where table_id = %d and col_name = '%s' and offset = %d`,
+				sql := fmt.Sprintf(`update %s set offset = %d 
+				where table_id = %d and col_name = '%s' and offset = %d`,
 					incrTableName,
 					next,
 					tableID,
 					colName,
-					current))
+					current)
+				start = time.Now()
+				res, err = te.Exec(sql)
 				if err != nil {
 					return err
 				}
 
 				if res.AffectedRows == 1 {
 					ok = true
+				} else {
+					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
+						zap.String("update-sql", sql),
+						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
+						zap.Uint64("table", tableID),
+						zap.String("col", colName),
+						zap.Uint64("affected-rows", res.AffectedRows),
+						zap.Duration("cost", time.Since(start)),
+						zap.Bool("ctx-done", ctxDone()))
 				}
 				res.Close()
 				return nil

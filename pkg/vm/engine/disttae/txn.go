@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -163,9 +164,18 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			bat := txn.writes[i].bat
 			size += uint64(bat.Size())
 			// skip rowid
-			bat.Attrs = bat.Attrs[1:]
-			bat.Vecs = bat.Vecs[1:]
-			mp[key] = append(mp[key], bat)
+			//it's dangerous.
+			//bat.Attrs = bat.Attrs[1:]
+			//bat.Vecs = bat.Vecs[1:]
+			//mp[key] = append(mp[key], bat)
+
+			newBat := batch.NewWithSize(len(bat.Vecs) - 1)
+			newBat.SetAttributes(bat.Attrs[1:])
+			newBat.Vecs = bat.Vecs[1:]
+			newBat.SetRowCount(bat.Vecs[0].Length())
+			mp[key] = append(mp[key], newBat)
+			txn.toFreeBatches[key] = append(txn.toFreeBatches[key], bat)
+
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
 			// maybe this will cause that the log increments unlimitedly
@@ -220,10 +230,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		)
 		if err != nil {
 			return err
-		}
-		// free batches
-		for _, bat := range mp[key] {
-			txn.proc.PutBatch(bat)
 		}
 	}
 	if offset == 0 {
@@ -659,6 +665,7 @@ func (txn *Transaction) getCachedTable(
 
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
+	logutil.Infof("transaction commit: %s\n", txn.op.Txn().DebugString())
 	txn.IncrStatementID(ctx, true)
 	defer txn.delTransaction()
 	if txn.readOnly.Load() {
@@ -690,7 +697,6 @@ func (txn *Transaction) delTransaction() {
 	if txn.removed {
 		return
 	}
-
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue

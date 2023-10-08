@@ -16,6 +16,7 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -41,7 +42,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if c.proc.TxnOperator.Txn().IsPessimistic() {
 		var retryErr error
 		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName); err != nil {
+		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err

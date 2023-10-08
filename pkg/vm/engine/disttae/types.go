@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -93,6 +94,7 @@ type Engine struct {
 	fs         fileservice.FileService
 	ls         lockservice.LockService
 	qs         queryservice.QueryService
+	hakeeper   logservice.CNHAKeeperClient
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
@@ -172,6 +174,7 @@ type Transaction struct {
 	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
+	toFreeBatches   map[[2]string][]*batch.Batch
 
 	rollbackCount int
 	statementID   int
@@ -266,6 +269,13 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.Lock()
 	defer txn.Unlock()
+	//free batches
+	for key := range txn.toFreeBatches {
+		for _, bat := range txn.toFreeBatches[key] {
+			txn.proc.PutBatch(bat)
+		}
+		delete(txn.toFreeBatches, key)
+	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
@@ -488,7 +498,8 @@ type txnTable struct {
 	oldTableId uint64
 
 	// process for statement
-	proc *process.Process
+	//proc *process.Process
+	proc atomic.Pointer[process.Process]
 }
 
 type column struct {

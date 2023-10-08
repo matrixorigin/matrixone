@@ -77,7 +77,7 @@ message MultiArguemnt{
 }
 
 message Aggregate {
-  int32 op = 1;
+  int64 op = 1;
   bool dist = 2;
   plan.Expr expr = 3;
   bytes config =4;
@@ -170,6 +170,7 @@ message OnDuplicateKey{
   plan.TableDef table_def                   = 1;
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
+  bool is_ignore                            = 4;
 }
 
 message Join {
@@ -465,11 +466,13 @@ message UuidToRegIdx {
 
 message RuntimeFilter {
   enum RuntimeFilterType {
-    NO_FILTER = 0;
-    IN = 1;
-    BITMAP = 2;
-    MIN_MAX = 3;
-    BINARY_FUSE = 4;
+    IN = 0;
+    BITMAP = 1;
+    MIN_MAX = 2;
+    BINARY_FUSE = 3;
+
+    PASS = 100;
+    DROP = 101;
   }
 
   RuntimeFilterType typ = 1;

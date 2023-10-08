@@ -22,12 +22,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	struntime "runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -51,14 +54,19 @@ import (
 )
 
 var (
-	configFile  = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile  = flag.String("launch", "", "toml configuration used to launch mo cluster")
-	versionFlag = flag.Bool("version", false, "print version information")
-	daemon      = flag.Bool("daemon", false, "run mo-service in daemon mode")
-	withProxy   = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	configFile   = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile   = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	versionFlag  = flag.Bool("version", false, "print version information")
+	daemon       = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	withProxy    = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
 )
 
 func main() {
+	if *maxProcessor > 0 {
+		struntime.GOMAXPROCS(*maxProcessor)
+	}
+
 	flag.Parse()
 	maybePrintVersion()
 	maybeRunInDaemonMode()
@@ -122,6 +130,8 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 		detail += "ha keeper issues shutdown command"
 	}
 
+	stopAllDynamicCNServices()
+
 	logutil.GetGlobalLogger().Info(detail)
 	stopper.Stop()
 	if cnProxy != nil {
@@ -156,6 +166,23 @@ func startService(
 		return err
 	}
 
+	var gossipNode *gossip.Node
+	if st == metadata.ServiceType_CN {
+		gossipNode, err = gossip.NewNode(ctx, cfg.CN.UUID)
+		if err != nil {
+			return err
+		}
+		for i := range cfg.FileServices {
+			cfg.FileServices[i].Cache.KeyRouterFactory = gossipNode.DistKeyCacheGetter()
+			cfg.FileServices[i].Cache.CacheClient, err = client.NewCacheClient(
+				client.ClientConfig{RPC: cfg.FileServices[i].Cache.RPC},
+			)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	fs, err := cfg.createFileService(ctx, defines.LocalFileServiceName, globalCounterSet, st, uuid)
 	if err != nil {
 		return err
@@ -171,7 +198,7 @@ func startService(
 
 	switch st {
 	case metadata.ServiceType_CN:
-		return startCNService(cfg, stopper, fs, globalCounterSet)
+		return startCNService(cfg, stopper, fs, globalCounterSet, gossipNode)
 	case metadata.ServiceType_TN:
 		return startTNService(cfg, stopper, fs, globalCounterSet, shutdownC)
 	case metadata.ServiceType_LOG:
@@ -191,6 +218,7 @@ func startCNService(
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
 	perfCounterSet *perfcounter.CounterSet,
+	gossipNode *gossip.Node,
 ) error {
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
 		return err
@@ -201,12 +229,15 @@ func startCNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getCNServiceConfig()
+		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
 			fileService,
+			gossipNode,
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
+			cnservice.WithConfigData(commonConfigKVMap),
 		)
 		if err != nil {
 			panic(err)
@@ -216,6 +247,12 @@ func startCNService(
 		}
 
 		<-ctx.Done()
+		// Close the cache client which is used in file service.
+		for _, fs := range cfg.FileServices {
+			if fs.Cache.CacheClient != nil {
+				_ = fs.Cache.CacheClient.Close()
+			}
+		}
 		if err := s.Close(); err != nil {
 			panic(err)
 		}
@@ -245,13 +282,14 @@ func startTNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
-
+		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
 			perfCounterSet,
 			&c,
 			r,
 			fileService,
-			shutdownC)
+			shutdownC,
+			tnservice.WithConfigData(commonConfigKVMap))
 		if err != nil {
 			panic(err)
 		}
@@ -274,9 +312,11 @@ func startLogService(
 	shutdownC chan struct{},
 ) error {
 	lscfg := cfg.getLogServiceConfig()
+	commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 	s, err := logservice.NewService(lscfg, fileService,
 		shutdownC,
-		logservice.WithRuntime(runtime.ProcessLevelRuntime()))
+		logservice.WithRuntime(runtime.ProcessLevelRuntime()),
+		logservice.WithConfigData(commonConfigKVMap))
 	if err != nil {
 		panic(err)
 	}

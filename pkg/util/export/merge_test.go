@@ -321,7 +321,7 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 	type args struct {
 		ctx  context.Context
 		opts []MergeOption
-		task task.Task
+		task *task.AsyncTask
 	}
 	tests := []struct {
 		name string
@@ -333,7 +333,7 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 			args: args{
 				ctx:  ctx,
 				opts: []MergeOption{WithFileService(fs)},
-				task: task.Task{
+				task: &task.AsyncTask{
 					Metadata: task.TaskMetadata{
 						ID:                   "",
 						Executor:             0,

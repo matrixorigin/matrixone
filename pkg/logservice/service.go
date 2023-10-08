@@ -20,6 +20,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
 	"sync/atomic"
 
@@ -83,6 +84,8 @@ type Service struct {
 		holder         taskservice.TaskServiceHolder
 		storageFactory taskservice.TaskStorageFactory
 	}
+
+	config *util.ConfigData
 }
 
 func NewService(
@@ -95,6 +98,8 @@ func NewService(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	configKVMap, _ := dumpLogConfig(cfg)
+	opts = append(opts, WithConfigData(configKVMap))
 
 	service := &Service{
 		cfg:         cfg,
@@ -286,6 +291,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handlePatchCNStore(ctx, req), pb.LogRecordResponse{}
 	case pb.DELETE_CN_STORE:
 		return s.handleDeleteCNStore(ctx, req), pb.LogRecordResponse{}
+	case pb.PROXY_HEARTBEAT:
+		return s.handleProxyHeartbeat(ctx, req), pb.LogRecordResponse{}
 	default:
 		resp := getResponse(req)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(
@@ -499,6 +506,17 @@ func (s *Service) handleDeleteCNStore(ctx context.Context, req pb.Request) pb.Re
 	if err := s.store.deleteCNStore(ctx, *cnStore); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
+	}
+	return resp
+}
+
+func (s *Service) handleProxyHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	if cb, err := s.store.addProxyHeartbeat(ctx, *req.ProxyHeartbeat); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	} else {
+		resp.CommandBatch = &cb
 	}
 	return resp
 }

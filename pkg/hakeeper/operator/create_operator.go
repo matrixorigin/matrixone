@@ -56,3 +56,13 @@ func CreateTaskServiceOp(brief, uuid string, serviceType pb.ServiceType, user pb
 func CreateDeleteCNOp(brief, uuid string) *Operator {
 	return NewOperator(brief, 0, 0, DeleteCNStore{StoreID: uuid})
 }
+
+func JoinGossipClusterOp(brief, uuid string, existing []string) *Operator {
+	return NewOperator(brief, 0, 0,
+		JoinGossipCluster{StoreID: uuid, Existing: existing},
+	)
+}
+
+func CreateDeleteProxyOp(brief, uuid string) *Operator {
+	return NewOperator(brief, 0, 0, DeleteProxyStore{StoreID: uuid})
+}

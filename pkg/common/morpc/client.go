@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -130,9 +129,6 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 	if err := c.stopper.RunTask(c.gcInactiveTask); err != nil {
 		return nil, err
 	}
-	if err := c.stopper.RunTask(c.printActiveBackendsInfo); err != nil {
-		return nil, err
-	}
 	return c, nil
 }
 
@@ -174,6 +170,10 @@ func (c *client) maybeInitBackends() error {
 }
 
 func (c *client) Send(ctx context.Context, backend string, request Message) (*Future, error) {
+	if backend == "" {
+		return nil, moerr.NewBackendCannotConnectNoCtx()
+	}
+
 	if ctx == nil {
 		panic("client Send nil context")
 	}
@@ -336,42 +336,6 @@ func (c *client) tryCreate(backend string) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func (c *client) printActiveBackendsInfo(ctx context.Context) {
-	c.logger.Info("print active backends task started")
-	defer c.logger.Error("print active backends task stopped")
-
-	ticker := time.NewTicker(time.Second * 10)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n := 0
-			bytes := 0
-			c.mu.Lock()
-			for _, backends := range c.mu.backends {
-				n += len(backends)
-				for _, b := range backends {
-					conn := b.(*remoteBackend).conn
-					if conn != nil {
-						bytes += cap(conn.OutBuf().RawBuf())
-						if v, ok := conn.(goetty.BufferedIOSession); ok {
-							bytes += cap(v.InBuf().RawBuf())
-						}
-					}
-				}
-			}
-			c.mu.Unlock()
-			c.logger.Info("connection buffer size",
-				zap.String("tag", c.tag),
-				zap.Int("bytes", bytes),
-				zap.Int("connections", n))
-		}
 	}
 }
 

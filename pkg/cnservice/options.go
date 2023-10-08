@@ -16,14 +16,16 @@ package cnservice
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -54,10 +56,22 @@ func WithMessageHandle(f func(ctx context.Context,
 	fs fileservice.FileService,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	mAcquirer func() morpc.Message) error) Option {
 	return func(s *service) {
 		s.requestHandler = f
+	}
+}
+
+// WithConfigData saves the data from the config file
+func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
+	return func(s *service) {
+		if s.config == nil {
+			s.config = util.NewConfigData(data)
+		} else {
+			util.MergeConfig(s.config, data)
+		}
 	}
 }

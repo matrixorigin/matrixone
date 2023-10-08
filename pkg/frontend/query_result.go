@@ -129,6 +129,8 @@ func saveQueryResultMeta(ses *Session) error {
 	defer func() {
 		ses.ResetBlockIdx()
 		ses.p = nil
+		// TIPs: Session.SetTStmt() do reset the tStmt while query is DONE.
+		// Be careful, if you want to do async op.
 		ses.tStmt = nil
 		ses.curResultSize = 0
 	}()
@@ -307,7 +309,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
-		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus:
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowConnectors:
 		s.Typ = int(astShowNone)
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		s.Typ = int(astExplain)

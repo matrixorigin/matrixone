@@ -17,7 +17,6 @@ package table
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -398,12 +397,19 @@ type WhereCondition interface {
 	String() string
 }
 
+type CreateSql interface {
+	String(ctx context.Context, ifNotExists bool) string
+}
+
 type View struct {
 	Database    string
 	Table       string
 	OriginTable *Table
 	Columns     []Column
-	Condition   WhereCondition
+	// Condition will be used in View.ToCreateSql
+	Condition WhereCondition
+	// CreateSql will be used in View.ToCreateSql
+	CreateSql CreateSql
 	// SupportUserAccess default false. if true, user account can access.
 	SupportUserAccess bool
 }
@@ -420,7 +426,19 @@ func SupportUserAccess(support bool) ViewOption {
 	})
 }
 
+// ToCreateSql return create view sql.
+// If tbl.CreateSql is  not nil, return tbl.CreateSql.String(),
+// Else return
 func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
+	if tbl.CreateSql != nil {
+		return tbl.CreateSql.String(ctx, ifNotExists)
+	} else {
+		return tbl.generateCreateSql(ctx, ifNotExists)
+	}
+}
+
+// generateCreateSql generate create view sql.
+func (tbl *View) generateCreateSql(ctx context.Context, ifNotExists bool) string {
 	sb := strings.Builder{}
 	// create table
 	sb.WriteString("CREATE VIEW ")
@@ -457,6 +475,12 @@ type ViewSingleCondition struct {
 
 func (tbl *ViewSingleCondition) String() string {
 	return fmt.Sprintf("`%s` = %q", tbl.Column.Name, tbl.Table)
+}
+
+type ViewCreateSqlString string
+
+func (s ViewCreateSqlString) String(ctx context.Context, ifNotExists bool) string {
+	return string(s)
 }
 
 type ColumnField struct {
@@ -687,10 +711,7 @@ func (r *Row) ToStrings() []string {
 			}
 		case types.T_json:
 			switch r.Columns[idx].Type {
-			case TJson:
-				buf, _ := json.Marshal(r.Columns[idx].Interface)
-				col[idx] = string(buf)
-			case TVarchar, TText:
+			case TJson, TVarchar, TText:
 				val := r.Columns[idx].String
 				if len(val) == 0 {
 					val = typ.Default
@@ -733,6 +754,8 @@ func (r *Row) ParseRow(cols []string) error {
 	return nil
 }
 
+// CsvPrimaryKey return string = concat($CsvCol[PrimaryKeyColumnIdx], '-')
+// Deprecated
 func (r *Row) CsvPrimaryKey() string {
 	if len(r.Table.PrimaryKeyColumn) == 0 {
 		return ""

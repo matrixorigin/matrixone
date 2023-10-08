@@ -5,10 +5,10 @@ go 1.20
 require (
 	github.com/BurntSushi/toml v1.2.1
 	github.com/DATA-DOG/go-sqlmock v1.5.0
-	github.com/FastFilter/xorfilter v0.1.3
+	github.com/FastFilter/xorfilter v0.1.4
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/aliyun/aliyun-oss-go-sdk v2.2.9+incompatible
-	github.com/aliyun/credentials-go v1.2.7
+	github.com/aliyun/credentials-go v1.3.1
 	github.com/aws/aws-sdk-go-v2 v1.18.0
 	github.com/aws/aws-sdk-go-v2/config v1.18.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.13.24
@@ -32,6 +32,7 @@ require (
 	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.3.0
+	github.com/hashicorp/memberlist v0.3.1
 	github.com/jhump/protoreflect v1.15.2
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
@@ -53,7 +54,6 @@ require (
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/spf13/cobra v1.7.0
 	github.com/stretchr/testify v1.8.4
-	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.0.673
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
 	go.uber.org/ratelimit v0.2.0
@@ -118,7 +118,6 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.0 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
-	github.com/hashicorp/memberlist v0.3.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
 	github.com/klauspost/compress v1.16.7 // indirect

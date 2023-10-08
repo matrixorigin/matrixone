@@ -47,6 +47,7 @@ message CNStore {
   map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
   metadata.WorkState WorkState       = 10;
   string          QueryAddress       = 11;
+  ConfigData ConfigData = 12;
 }
 
 message TNStore {
@@ -62,6 +63,7 @@ message TNStore {
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 7;
   string          CtlAddress         = 8;
+  ConfigData ConfigData = 9;
 }
 
 message LogStore {
@@ -71,6 +73,7 @@ message LogStore {
   NodeState State          = 4;
 
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
+  ConfigData ConfigData = 6;
 }
 
 // LogShardInfo contains information a log shard.
@@ -110,6 +113,9 @@ message CNStoreHeartbeat {
   bool            TaskServiceCreated = 7;
   string          QueryAddress       = 8;
   string          InitWorkState      = 9;
+  string          GossipAddress      = 10;
+  bool            GossipJoined       = 11;
+  ConfigData      ConfigData         = 12;
 }
 
 
@@ -135,6 +141,8 @@ message LogStoreHeartbeat {
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
   // TaskServiceCreated task service is created at the current log node
   bool            TaskServiceCreated    = 6;
+
+  ConfigData ConfigData = 7;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -165,6 +173,7 @@ message TNStoreHeartbeat {
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
   string          CtlAddress         = 7;
+  ConfigData ConfigData = 8;
 };
 
 message RSMState {
@@ -195,6 +204,7 @@ enum MethodType {
   UPDATE_CN_WORK_STATE = 16;
   PATCH_CN_STORE = 17;
   DELETE_CN_STORE = 18;
+  PROXY_HEARTBEAT = 19;
 };
 
 enum RecordType {
@@ -268,6 +278,7 @@ message Request {
   CNWorkState CNWorkState        = 10;
   CNStateLabel CNStateLabel      = 11;
   DeleteCNStore DeleteCNStore    = 12;
+  ProxyHeartbeat ProxyHeartbeat  = 13;
 };
 
 message LogResponse {
@@ -322,6 +333,7 @@ enum HAKeeperUpdateType {
   UpdateCNWorkState = 11;
   PatchCNStore = 12;
   RemoveCNStore = 13;
+  ProxyHeartbeatUpdate = 14;
 }
 
 // HAKeeperState state transition diagram
@@ -413,6 +425,7 @@ enum ServiceType {
   LogService = 0;
   TNService  = 1;
   CNService  = 2;
+  ProxyService = 3;
 }
 
 // ScheduleCommand contains a shard schedule command.
@@ -425,6 +438,12 @@ message ScheduleCommand {
   ShutdownStore     ShutdownStore   = 5;
   CreateTaskService CreateTaskService = 6;
   DeleteCNStore     DeleteCNStore     = 7;
+  JoinGossipCluster JoinGossipCluster = 8;
+  DeleteProxyStore  DeleteProxyStore  = 9;
+}
+
+message JoinGossipCluster {
+  repeated string Existing = 1;
 }
 
 // CreateTaskService start task service at current node
@@ -437,6 +456,11 @@ message CreateTaskService {
 
 // DeleteCNStore deletes CN store from CNState to save hakeeper's memory.
 message DeleteCNStore {
+  string StoreID = 1;
+}
+
+// DeleteProxyStore deletes Proxy store from ProxyState to save hakeeper's memory.
+message DeleteProxyStore {
   string StoreID = 1;
 }
 
@@ -457,6 +481,9 @@ message CNStoreInfo {
   map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
   metadata.WorkState WorkState       = 9;
   string          QueryAddress       = 10;
+  string          GossipAddress      = 11;
+  bool            GossipJoined       = 12;
+  ConfigData      ConfigData         = 13;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -479,6 +506,7 @@ message TNStoreInfo {
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
   string CtlAddress         = 7;
+  ConfigData ConfigData = 8;
 }
 
 // TNState contains all TN details known to the HAKeeper.
@@ -487,10 +515,28 @@ message TNState {
   map<string, TNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
 }
 
+message ProxyStore {
+  string UUID = 1;
+  uint64 Tick = 2;
+  string ListenAddress = 3;
+  ConfigData ConfigData = 4;
+}
+
+message ProxyState {
+  map<string, ProxyStore> Stores = 1 [(gogoproto.nullable) = false];
+}
+
+message ProxyHeartbeat {
+  string UUID = 1;
+  string ListenAddress = 2;
+  ConfigData ConfigData = 3;
+};
+
 message ClusterDetails {
   repeated TNStore  TNStores    = 1 [(gogoproto.nullable) = false];
   repeated CNStore  CNStores    = 2 [(gogoproto.nullable) = false];
   repeated LogStore LogStores   = 3 [(gogoproto.nullable) = false];
+  repeated ProxyStore ProxyStores = 4 [(gogoproto.nullable) = false];
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
@@ -518,6 +564,7 @@ message LogStoreInfo {
   repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
 
   bool TaskServiceCreated = 6;
+  ConfigData ConfigData = 7;
 }
 
 message LogState {
@@ -545,6 +592,7 @@ message CheckerState {
   TaskTableUser TaskTableUser           = 8 [(gogoproto.nullable) = false];
   uint64 NextId                         = 9;
   map<string, uint64> NextIDByKey       = 10;
+  ProxyState ProxyState = 11 [(gogoproto.nullable) = false];
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
@@ -565,6 +613,7 @@ message HAKeeperRSMState {
   LogState LogState             = 12 [(gogoproto.nullable) = false];
   ClusterInfo ClusterInfo       = 13 [(gogoproto.nullable) = false];
   TaskTableUser TaskTableUser   = 14 [(gogoproto.nullable) = false];
+  ProxyState ProxyState         = 15 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica
@@ -589,4 +638,21 @@ message BackupData {
   uint64 NextID                   = 1;
   // NextIDByKey is IDs isolated by keys.
   map<string, uint64> NextIDByKey = 2;
+}
+
+message ConfigItem{
+  // Name is the name of config item
+  string Name = 1;
+  // CurrentValue is the current value of config item
+  string CurrentValue = 2;
+  // DefaultValue is the default value of config item
+  string DefaultValue = 3;
+  // Internal denotes the config item is internal or not
+  string Internal = 4;
+}
+
+// ConfigData is the content of config on cn,tn,log and proxy
+message ConfigData{
+  // Content is the key value of the config
+  map<string, ConfigItem> Content = 1;
 }

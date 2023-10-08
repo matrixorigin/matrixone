@@ -44,6 +44,7 @@ type LocalFS struct {
 
 	memCache    *MemCache
 	diskCache   *DiskCache
+	remoteCache *RemoteCache
 	asyncUpdate bool
 
 	perfCounterSets []*perfcounter.CounterSet
@@ -100,6 +101,16 @@ func NewLocalFS(
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
+
+	if config.RemoteCacheEnabled {
+		if config.CacheClient == nil {
+			return moerr.NewInternalError(ctx, "cache client is nil")
+		}
+		l.remoteCache = NewRemoteCache(config.CacheClient, config.KeyRouterFactory)
+		logutil.Info("fileservice: remote cache initialized",
+			zap.Any("fs-name", l.name),
+		)
+	}
 
 	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
@@ -312,9 +323,13 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
-	err = l.read(ctx, vector)
+	if l.remoteCache != nil {
+		if err := l.remoteCache.Read(ctx, vector); err != nil {
+			return err
+		}
+	}
 
-	return err
+	return l.read(ctx, vector)
 }
 
 func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
@@ -354,13 +369,6 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) (err error) {
 		// all cache hit
 		return nil
 	}
-
-	// collect read info only when cache missing
-	size := vector.EntriesSize()
-	ctx, span := trace.Start(ctx, "LocalFS.read", trace.WithKind(trace.SpanKindLocalFSVis))
-	defer func() {
-		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
-	}()
 
 	t0 := time.Now()
 	defer func() {

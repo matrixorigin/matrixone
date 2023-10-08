@@ -39,6 +39,7 @@ type S3FS struct {
 
 	memCache              *MemCache
 	diskCache             *DiskCache
+	remoteCache           *RemoteCache
 	asyncUpdate           bool
 	writeDiskCacheOnWrite bool
 
@@ -114,6 +115,17 @@ func NewS3FSOnMinio(
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
+
+	// Init the remote cache first, because the callback needs to be set for mem and disk cache.
+	if config.RemoteCacheEnabled {
+		if config.CacheClient == nil {
+			return moerr.NewInternalError(ctx, "cache client is nil")
+		}
+		s.remoteCache = NewRemoteCache(config.CacheClient, config.KeyRouterFactory)
+		logutil.Info("fileservice: remote cache initialized",
+			zap.Any("fs-name", s.name),
+		)
+	}
 
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
@@ -235,15 +247,6 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return ctx.Err()
 	default:
 	}
-
-	var err error
-	size := vector.EntriesSize()
-	ctx, span := trace.Start(ctx, "S3FS.Write", trace.WithKind(trace.SpanKindS3FSVis))
-	defer func() {
-		// cover another func to catch the err when process Write
-		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
-	}()
-
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
@@ -386,8 +389,13 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}()
 	}
 
-	err = s.read(ctx, vector)
-	return err
+	if s.remoteCache != nil {
+		if err := s.remoteCache.Read(ctx, vector); err != nil {
+			return err
+		}
+	}
+
+	return s.read(ctx, vector)
 }
 
 func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
@@ -424,13 +432,6 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		// all cache hit
 		return nil
 	}
-
-	// collect read info only when cache missing
-	size := vector.EntriesSize()
-	ctx, span := trace.Start(ctx, "S3FS.read", trace.WithKind(trace.SpanKindS3FSVis))
-	defer func() {
-		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, size))
-	}()
 
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {

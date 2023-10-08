@@ -54,7 +54,7 @@ func NewLRUCache(
 		value.Retain()
 
 		if overlapChecker != nil {
-			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
 			}
 		}
@@ -80,7 +80,7 @@ func NewLRUCache(
 		value.Release()
 
 		if overlapChecker != nil {
-			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
 			}
 		}
@@ -133,7 +133,7 @@ func (m *MemCache) Read(
 		key := CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
-			Size:   entry.Size,
+			Sz:     entry.Size,
 		}
 		bs, ok := m.cache.Get(ctx, key)
 		numRead++
@@ -179,7 +179,7 @@ func (m *MemCache) Update(
 		key := CacheKey{
 			Path:   path.File,
 			Offset: entry.Offset,
-			Size:   entry.Size,
+			Sz:     entry.Size,
 		}
 
 		m.cache.Set(ctx, key, entry.CachedData)

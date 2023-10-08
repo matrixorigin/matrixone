@@ -129,8 +129,9 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	BuildIdx   int
-	ShuffleCnt int
+	BuildIdx       int
+	ShuffleCnt     int
+	PartialResults []any
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -216,6 +217,9 @@ type Compile struct {
 	cnLabel map[string]string
 
 	buildPlanFunc func() (*plan2.Plan, error)
+
+	// [tag-11768] a hack for resolving mpool leak bug temporarily.
+	tag11768 bool
 }
 
 type runtimeFilterReceiver struct {

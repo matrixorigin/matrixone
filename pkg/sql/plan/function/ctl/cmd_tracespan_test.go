@@ -84,8 +84,7 @@ func TestCanHandleSelfCmd(t *testing.T) {
 		sender    requestSender
 	}
 
-	trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(false)
-	trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(false)
+	trace.InitMOCtledSpan()
 
 	initRuntime(nil, nil)
 
@@ -105,8 +104,10 @@ func TestCanHandleSelfCmd(t *testing.T) {
 		Data:   fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuid),
 	})
 
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Load())
-	require.Equal(t, true, trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load())
+	k1 := trace.MOCtledSpanEnableConfig.NameToKind["s3"]
+	k2 := trace.MOCtledSpanEnableConfig.NameToKind["local"]
+	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k1])
+	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k2])
 }
 
 func TestCanTransferQuery(t *testing.T) {
@@ -130,6 +131,7 @@ func TestCanTransferQuery(t *testing.T) {
 	a1.parameter = fmt.Sprintf("%s,%s:enable:s3,local", uuids[0], uuids[1])
 
 	initRuntime(uuids, addrs)
+	trace.InitMOCtledSpan()
 
 	qs1, err := queryservice.NewQueryService(uuids[0], addrs[0], morpc.Config{}, nil)
 	require.Nil(t, err)

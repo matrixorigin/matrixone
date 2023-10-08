@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -48,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
@@ -57,11 +60,15 @@ func NewService(
 	cfg *Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
+	gossipNode *gossip.Node,
 	options ...Option,
 ) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+
+	configKVMap, _ := dumpCnConfig(*cfg)
+	options = append(options, WithConfigData(configKVMap))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
@@ -85,6 +92,7 @@ func NewService(
 		fileService: fileService,
 		sessionMgr:  queryservice.NewSessionManager(),
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
+		gossipNode:  gossipNode,
 	}
 	srv.registerServices()
 	if _, err = srv.getHAKeeperClient(); err != nil {
@@ -97,6 +105,10 @@ func NewService(
 	}
 	srv.logger = logutil.Adjust(srv.logger)
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
+
+	if err := srv.initCacheServer(); err != nil {
+		return nil, err
+	}
 
 	if err := srv.initMetadata(); err != nil {
 		return nil, err
@@ -166,6 +178,7 @@ func NewService(
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
 		queryService queryservice.QueryService,
+		hakeeper logservice.CNHAKeeperClient,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
@@ -200,6 +213,12 @@ func (s *service) Start() error {
 		return err
 	}
 
+	if s.cacheServer != nil {
+		if err := s.cacheServer.Start(); err != nil {
+			return err
+		}
+	}
+
 	err := s.runMoServer()
 	if err != nil {
 		return err
@@ -225,6 +244,14 @@ func (s *service) Close() error {
 	}
 	// stop I/O pipeline
 	blockio.Stop()
+	if err := s.gossipNode.Leave(time.Second); err != nil {
+		return err
+	}
+	if s.cacheServer != nil {
+		if err := s.cacheServer.Close(); err != nil {
+			return err
+		}
+	}
 	return s.server.Close()
 }
 
@@ -332,6 +359,7 @@ func (s *service) handleRequest(
 			s.fileService,
 			s.lockService,
 			s.queryService,
+			s._hakeeperClient,
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
@@ -548,6 +576,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
 				func(txnID []byte, createAt time.Time, createBy string) {
+					// dump all goroutines to stderr
+					profile.ProfileGoroutine(os.Stderr, 2)
 					runtime.DefaultRuntime().Logger().Fatal("found leak txn",
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
@@ -630,6 +660,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s._txnClient,
 		s.fileService,
 		s.queryService,
+		s._hakeeperClient,
 		s.aicm)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 }
