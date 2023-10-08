@@ -539,7 +539,7 @@ func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (err error, locat
 		return
 	}
 	entry.SetLocation(cnLocation, tnLocation)
-	location = fmt.Sprintf("%s:%d:%s:%s:%s;", cnLocation.String(), entry.GetVersion(), entry.end.ToString(), tnLocation.String(), entry.start.ToString())
+	location = fmt.Sprintf("%s:%d:%s:%s:%s", cnLocation.String(), entry.GetVersion(), entry.end.ToString(), tnLocation.String(), entry.start.ToString())
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
 	})

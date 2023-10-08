@@ -440,7 +440,7 @@ func (h *Handle) HandleBackup(
 		return nil, err
 	}
 	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
-	locations += location
+	locations += location + ";"
 	for i := range data {
 		locations += data[i].GetLocation().String()
 		locations += ":"

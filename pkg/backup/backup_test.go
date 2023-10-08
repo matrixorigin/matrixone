@@ -100,7 +100,13 @@ func TestBackupData(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
-	db.ForceCheckpoint()
+	backupTime := time.Now().UTC()
+	currTs := types.BuildTS(backupTime.UnixNano(), 0)
+	locations := make([]string, 0)
+	locations = append(locations, backupTime.Format(time.DateTime))
+	err, location := db.ForceCheckpointForBackup(ctx, currTs, 20*time.Second)
+	locations = append(locations, location)
+	assert.Nil(t, err)
 	db.BGCheckpointRunner.DisableCheckpoint()
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpoints()
 	files := make(map[string]string, 0)
@@ -114,9 +120,6 @@ func TestBackupData(t *testing.T) {
 		}
 	}
 
-	locations := make([]string, 0)
-	backupTime := time.Now().UTC()
-	locations = append(locations, backupTime.Format(time.DateTime))
 	for _, location := range files {
 		locations = append(locations, location)
 	}

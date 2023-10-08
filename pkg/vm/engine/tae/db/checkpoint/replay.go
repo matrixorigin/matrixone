@@ -94,9 +94,9 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 		bat.AddVector(colNames[i], vec)
 	}
 	last := bat.Vecs[0].Length() - 1
-	bat.Vecs[0].Append(startTs, false)
-	bat.Vecs[1].Append(ts, false)
-	bat.Vecs[2].Append([]byte(cnLocation), false)
+	bat.GetVectorByName(CheckpointAttr_StartTS).Append(startTs, false)
+	bat.GetVectorByName(CheckpointAttr_EndTS).Append(ts, false)
+	bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
 	bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
 	bat.GetVectorByName(CheckpointAttr_Version).Append(bat.Vecs[4].Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(tnLocation), false)
