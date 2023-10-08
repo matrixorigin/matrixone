@@ -17,7 +17,6 @@ import (
 	"bytes"
 
 	"github.com/bits-and-blooms/bloom"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,17 +40,15 @@ Note:
 1. backgroud SQL may slow, so some optimizations could be applied
     1. manually check whether collision keys duplicate or not,
         if duplicate, then return error timely
-    2. shuffle between operations
 2. there is a corner case that no need to run background SQL
     on duplicate key update
 
 */
 
 const (
-	// one million item with 10 MB(byte, not bit) and 3 hash function cnt
-	// the probability of false positives  as low as 0.005%
-	bloomSize = 8 * 10 * mpool.MB
-	hashCnt   = 3
+	// false positives rate
+	fp = 0.00001
+	hashCnt = 3
 )
 
 func String(_ any, buf *bytes.Buffer) {
@@ -60,7 +57,8 @@ func String(_ any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
-	ap.filter = bloom.New(bloomSize, hashCnt)
+
+	ap.filter = bloom.NewWithEstimates(ap.EstimatedRowCnt, fp)
 	return nil
 }
 

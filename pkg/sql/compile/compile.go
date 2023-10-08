@@ -1047,7 +1047,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		ss, err = c.compileFuzzyFilter(n, ss)
+		ss, err = c.compileFuzzyFilter(n, ss, ns)
 		if err != nil {
 			return nil, err
 		}
@@ -2355,12 +2355,16 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope, ns []*plan.Node) ([]*Scope, error) {
 	if len(ss) != 1 {
 		panic("fuzzy filter should have only one prescope")
 	}
 
-	arg := constructFuzzyFilter()
+	arg, err := constructFuzzyFilter(ns[n.Children[0]])
+	if err != nil {
+		return nil, err
+	}
+
 	ss[0].appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
 		Idx: c.anal.curr,

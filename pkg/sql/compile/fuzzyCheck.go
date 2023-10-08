@@ -216,14 +216,14 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 	var duplicateCheckSql string
 	if !f.isCompound {
-		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition)
+		duplicateCheckSql = fmt.Sprintf(fuzzyNonCompoundCheck, f.attr, f.db, f.tbl, f.attr, f.condition, f.attr)
 	} else {
 		cAttrs := make([]string, len(f.compoundCols))
 		for k, c := range f.compoundCols {
 			cAttrs[k] = c.Name
 		}
 		attrs := strings.Join(cAttrs, ", ")
-		duplicateCheckSql = fmt.Sprintf(fuzzyCompoundCheck, attrs, f.db, f.tbl, f.condition, attrs)
+		duplicateCheckSql = fmt.Sprintf(fuzzyCompoundCheck, attrs, f.db, f.tbl, f.condition, cAttrs[0], attrs)
 	}
 
 	res, err := c.runSqlWithResult(duplicateCheckSql)

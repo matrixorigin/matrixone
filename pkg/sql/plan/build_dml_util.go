@@ -934,12 +934,12 @@ func makeInsertPlan(
 	// there will be some cases that no need to check
 	//  case 1: For SQL that contains on duplicate update
 	//  case 2: the only primary key is auto increment type
-	//  case 3: update SQL update pkCol with where condition is always true or always false and expr is injection(one-to-one function) (TODO)
 
 	isUpdate := updateColLength > 0
-	checkCondition := !hasOnDup && !isInsertWithoutAutoPkCol && !isUpdate && updatePkCol && !builder.qry.LoadTag
+	ifGoFuzzyFilter := !hasOnDup && !isInsertWithoutAutoPkCol && !isUpdate && updatePkCol && !builder.qry.LoadTag
+	
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
-		// !CNPrimaryCheck handle Optimistic txn mode
+		// !CNPrimaryCheck handle Optimistic txn mode confusing hack
 		if isUpdate && updatePkCol || !CNPrimaryCheck {
 			// this case only needs to check insert rows if is duplicate, same as origin
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
@@ -993,7 +993,7 @@ func makeInsertPlan(
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
 			builder.appendStep(lastNodeId)
-		} else if checkCondition {
+		} else if ifGoFuzzyFilter {
 			// need to check insert data and existing data both
 			pkList := []*Expr{
 				&plan.Expr{
@@ -1115,9 +1115,13 @@ func makeInsertPlan(
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
 			builder.appendStep(lastNodeId)
+
+			// ReCalcNodeStats(lastNodeId, builder, true, true)
 		}
 	}
 
+	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
+	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 	if CNPrimaryCheck {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
@@ -1402,7 +1406,6 @@ func makeInsertPlan(
 				}, bindCtx)
 				builder.appendStep(lastNodeId)
 			}
-
 		}
 	}
 
