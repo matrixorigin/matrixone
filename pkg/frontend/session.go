@@ -462,6 +462,15 @@ func (ses *Session) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
 	return ses.autoIncrCacheManager
 }
 
+// SetTStmt do set the Session.tStmt
+// 1. init-set at RecordStatement, which means the statement is started.
+// 2. reset at logStatementStringStatus, which means the statement is finished.
+func (ses *Session) SetTStmt(stmt *motrace.StatementInfo) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.tStmt = stmt
+}
+
 const saveQueryIdCnt = 10
 
 func (ses *Session) pushQueryId(uuid string) {
