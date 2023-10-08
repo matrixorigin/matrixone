@@ -121,16 +121,17 @@ func (th *TxnHandler) GetTxnClient() TxnClient {
 func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	var err error
 	sessionInfo := th.ses.GetDebugString()
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		if th.txnOperator != nil {
-			txnId := th.txnOperator.Txn().DebugString()
-			logInfof(sessionInfo, "NewTxnOperator txnId:%s", txnId)
-			defer func() {
-				logInfof(sessionInfo, "NewTxnOperator exit txnId:%s", txnId)
-			}()
-		}
-
-	}
+	//!!!NOTE: log the txnId before create the txn operator.
+	//if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+	//	if th.txnOperator != nil {
+	//		txnId := th.txnOperator.Txn().DebugString()
+	//		logInfof(sessionInfo, "NewTxnOperator txnId:%s", txnId)
+	//		defer func() {
+	//			logInfof(sessionInfo, "NewTxnOperator exit txnId:%s", txnId)
+	//		}()
+	//	}
+	//
+	//}
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	if th.txnClient == nil {
@@ -320,11 +321,11 @@ func (th *TxnHandler) CommitTxn() error {
 		}
 	}()
 
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		txnId := txnOp.Txn().DebugString()
-		logInfof(sessionInfo, "CommitTxn txnId:%s", txnId)
+		logDebugf(sessionInfo, "CommitTxn txnId:%s", txnId)
 		defer func() {
-			logInfof(sessionInfo, "CommitTxn exit txnId:%s", txnId)
+			logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
 		}()
 	}
 	if txnOp != nil {
@@ -381,11 +382,11 @@ func (th *TxnHandler) RollbackTxn() error {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 		}
 	}()
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		txnId := txnOp.Txn().DebugString()
-		logInfof(sessionInfo, "RollbackTxn txnId:%s", txnId)
+		logDebugf(sessionInfo, "RollbackTxn txnId:%s", txnId)
 		defer func() {
-			logInfof(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
+			logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
 		}()
 	}
 	if txnOp != nil {
