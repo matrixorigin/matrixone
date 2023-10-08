@@ -504,7 +504,8 @@ type txnTable struct {
 	oldTableId uint64
 
 	// process for statement
-	proc *process.Process
+	//proc *process.Process
+	proc atomic.Pointer[process.Process]
 }
 
 type column struct {
