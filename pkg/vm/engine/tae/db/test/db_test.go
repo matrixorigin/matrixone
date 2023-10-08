@@ -449,7 +449,15 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
-		_, err = dataBlk.RangeDelete(txn, 1, 2, nil, handle.DT_Normal)
+		pkDef := schema.GetPrimaryKey()
+		pkVec := containers.MakeVector(pkDef.Type)
+		val1, _, err := dataBlk.GetValue(ctx, txn, schema, 1, pkDef.Idx)
+		assert.NoError(t, err)
+		pkVec.Append(val1, false)
+		val2, _, err := dataBlk.GetValue(ctx, txn, schema, 2, pkDef.Idx)
+		assert.NoError(t, err)
+		pkVec.Append(val2, false)
+		_, err = dataBlk.RangeDelete(txn, 1, 2, pkVec, handle.DT_Normal)
 		assert.Nil(t, err)
 
 		view, err = dataBlk.GetColumnDataById(context.Background(), txn, readSchema, 2)
@@ -3705,8 +3713,8 @@ func TestDropCreated1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAtLocked())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAtLocked())
 
 	tae.Restart(ctx)
 }
@@ -3730,8 +3738,8 @@ func TestDropCreated2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAtLocked())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAtLocked())
 
 	tae.Restart(ctx)
 }
@@ -5403,7 +5411,11 @@ func TestMergeBlocks3(t *testing.T) {
 		view, err := blk11Handle.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		view.GetData()
 		require.NoError(t, err)
-		err = rel.DeleteByPhyAddrKeys(view.GetData(), nil)
+		pkDef := schema.GetPrimaryKey()
+		pkView, err := blk11Handle.GetColumnDataByName(context.Background(), pkDef.Name)
+		pkView.GetData()
+		require.NoError(t, err)
+		err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
 		require.NoError(t, err)
 
 		require.NoError(t, rel.DeleteByFilter(context.Background(), filter5))
