@@ -47,7 +47,7 @@ type metaFile struct {
 	end   types.TS
 }
 
-func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, location objectio.Location) (string, error) {
+func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, location objectio.Location, ts types.TS) (string, error) {
 	dirs, err := fs.List(ctx, CheckpointDir)
 	if err != nil {
 		return "", err
@@ -95,14 +95,14 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, location obje
 	}
 	last := bat.Vecs[0].Length() - 1
 	bat.Vecs[0].Append(metaFiles[len(metaFiles)-1].end, false)
-	bat.Vecs[1].Append(types.TS{}, false)
+	bat.Vecs[1].Append(ts, false)
 	bat.Vecs[2].Append([]byte(location), false)
 	bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
 	bat.GetVectorByName(CheckpointAttr_Version).Append(bat.Vecs[4].Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(location), false)
 	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.Vecs[6].Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.Vecs[7].Get(last), false)
-	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, metaFiles[len(metaFiles)-1].end, types.TS{})
+	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, metaFiles[len(metaFiles)-1].end, ts)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
 		return "", err

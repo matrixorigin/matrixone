@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -96,16 +97,18 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	var mergeLoc string
+	var mergeEnd string
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 {
+		if len(ckpStr) != 2 && i != 0 {
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
 		}
 		if i == 0 {
 			mergeLoc = ckpStr[0]
+			mergeEnd = ckpStr[2]
 		}
 		metaLoc := ckpStr[0]
 		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
@@ -173,11 +176,12 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	}
 	taeFileList = append(taeFileList, sizeList...)
 	if mergeLoc != "" {
+		end := types.StringToTS(mergeEnd)
 		location, err := blockio.EncodeLocationFromString(mergeLoc)
 		if err != nil {
 			return err
 		}
-		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, location)
+		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, location, end)
 		if err != nil {
 			return err
 		}
@@ -186,7 +190,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			return err
 		}
 		taeFileList = append(taeFileList, &taeFile{
-			path: dentry.Name,
+			path: "ckp/" + dentry.Name,
 			size: dentry.Size,
 		})
 	}
