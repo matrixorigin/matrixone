@@ -110,7 +110,8 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
-		return nil, moerr.NewInternalError(ctx, "can not get the schema")
+		errors = append(errors, moerr.NewInternalError(ctx, "can not get the schema"))
+		return nil, liberrors.Join(errors...)
 	}
 
 	// Construct and return the table
@@ -441,7 +442,8 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
-		return nil, moerr.NewInternalError(ctx, "can not get the schema %s", liberrors.Join(errors...))
+		errors = append(errors, moerr.NewInternalError(ctx, "can not get the schema"))
+		return nil, liberrors.Join(errors...)
 	}
 	return tenantInfos, nil
 }
