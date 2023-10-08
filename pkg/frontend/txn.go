@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -154,9 +153,8 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
-	stack := string(debug.Stack())
 	opts = append(opts,
-		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p (%s) [%s]", th.ses, sessionInfo, stack)))
+		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p (%s)", th.ses, sessionInfo)))
 
 	if th.ses != nil && th.ses.GetFromRealUser() {
 		opts = append(opts,

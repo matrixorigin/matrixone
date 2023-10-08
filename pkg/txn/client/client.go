@@ -212,12 +212,11 @@ func (client *txnClient) New(
 	defer task.End()
 	client.limiter.Take()
 
-	//for getting options
+	//!!!NOTE: for getting options
 	tmp := &txnOperator{}
 	for _, option := range options {
 		option(tmp)
 	}
-
 	util.LogTxnCreatedWithInfo("txnclient.new", tmp.option.createBy)
 	defer util.LogTxnCreatedWithInfo("txnclient.new exit", tmp.option.createBy)
 
@@ -225,8 +224,6 @@ func (client *txnClient) New(
 	if err != nil {
 		return nil, err
 	}
-
-	util.LogTxnCreatedWithInfo("txnclient.new step 1", tmp.option.createBy)
 
 	txnMeta := txn.TxnMeta{}
 	txnMeta.ID = client.generator.Generate()
@@ -236,8 +233,6 @@ func (client *txnClient) New(
 	if client.lockService != nil {
 		txnMeta.LockService = client.lockService.GetConfig().ServiceID
 	}
-
-	util.LogTxnCreatedWithInfo("txnclient.new step 2", tmp.option.createBy)
 
 	options = append(options,
 		WithTxnCNCoordinator(),
@@ -251,16 +246,14 @@ func (client *txnClient) New(
 	op.AppendEventCallback(ClosedEvent,
 		client.updateLastCommitTS,
 		client.closeTxn)
-	util.LogTxnCreatedWithInfo2(op.Txn(), "txnclient.new step 3", tmp.option.createBy)
+
 	if err := client.openTxn(op); err != nil {
 		return nil, err
 	}
-	util.LogTxnCreatedWithInfo2(op.Txn(), "txnclient.new step 4", tmp.option.createBy)
 	if err := op.waitActive(ctx); err != nil {
 		_ = op.Rollback(ctx)
 		return nil, err
 	}
-	util.LogTxnCreatedWithInfo2(op.Txn(), "txnclient.new 5", tmp.option.createBy)
 	return op, nil
 }
 

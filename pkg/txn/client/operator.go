@@ -419,18 +419,15 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	util.LogTxnCommit(tc.getTxnMeta(false))
 	defer util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "exit")
 	if tc.option.readyOnly {
-		util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "step 1")
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
 		tc.closeLocked()
 		return nil
 	}
-	util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "step 2")
 	result, err := tc.doWrite(ctx, nil, true)
 	if err != nil {
 		return err
 	}
-	util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "step 3")
 	if result != nil {
 		result.Release()
 	}
@@ -453,19 +450,14 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	util.LogTxnRollbackWithInfo(txnMeta, "step 1")
 	if err := tc.checkStatus(true); err != nil {
 		return err
 	}
-
-	util.LogTxnRollbackWithInfo(txnMeta, "step 2")
 
 	defer func() {
 		tc.mu.txn.Status = txn.TxnStatus_Aborted
 		tc.closeLocked()
 	}()
-
-	util.LogTxnRollbackWithInfo(txnMeta, "step 3")
 
 	if tc.needUnlockLocked() {
 		defer tc.unlock(ctx)
@@ -475,13 +467,10 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		return nil
 	}
 
-	util.LogTxnRollbackWithInfo(txnMeta, "step 4")
-
 	result, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{
 		Method:          txn.TxnMethod_Rollback,
 		RollbackRequest: &txn.TxnRollbackRequest{},
 	}}, true))
-	util.LogTxnRollbackWithInfo(txnMeta, "step 5")
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrTxnClosed) {
 			return nil
@@ -491,7 +480,6 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	if result != nil {
 		result.Release()
 	}
-	util.LogTxnRollbackWithInfo(txnMeta, "step 6")
 	return nil
 }
 
