@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"runtime/debug"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
@@ -264,18 +263,6 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
-			blkIds := "[ "
-			for _, b := range vector.MustFixedCol[types.Blockid](mustVectorFromProto(entry.Bat.Vecs[2])) {
-				blkIds += b.String() + ", "
-			}
-			blkIds += " ]"
-
-			str := fmt.Sprintf("tableName = %s, tableId = %v \n sorted = %v \n"+
-				"stack = %s", entry.TableName,
-				blkIds,
-				vector.MustFixedCol[bool](mustVectorFromProto(entry.Bat.Vecs[4])),
-				string(debug.Stack()[:]))
-			fmt.Println("-------------- HandleLogtailEntry: ", str)
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
