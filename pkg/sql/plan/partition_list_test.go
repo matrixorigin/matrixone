@@ -901,6 +901,35 @@ func TestCreateTableWithListColumnsPartition(t *testing.T) {
 			`CREATE TABLE t( a INT NULL, b INT NULL ) PARTITION BY LIST COLUMNS(a) ( PARTITION p1 VALUES IN( 0, maxvalue), PARTITION p2 VALUES IN( 2, 3), PARTITION p3 VALUES IN( 4, 5));`,
 			moerr.ErrMaxvalueInValuesIn,
 		},
+		{
+			`create table pt_table_21(
+			col1 int,
+			col2 int,
+			col3 int,
+			col4 int,
+			col5 int,
+			col6 int,
+			col7 int,
+			col8 int,
+			col9 int,
+			col10 int,
+			col11 int,
+			col12 int,
+			col13 int,
+			col14 int,
+			col15 int,
+			col16 int,
+			col17 int,
+			col18 int,
+			col19 int,
+			col20 int,
+			col21 int
+			) PARTITION BY LIST COLUMNS(col1,col2,col3, col4,col5 ,col6 ,col7 ,col8 ,col9 ,col10,col11,col12,col13,col14,col15,col16,col17) (
+				PARTITION p1 VALUES IN( (1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1), (2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2)),
+				PARTITION p2 VALUES IN( (3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3), (4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4))
+			);`,
+			moerr.ErrTooManyPartitionFuncFields,
+		},
 	}
 
 	mock := NewMockOptimizer(false)
