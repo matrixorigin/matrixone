@@ -3618,6 +3618,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 				}
 				canCache = false
 			}
+			if _, ok := cwft.stmt.(*tree.Select); ok {
+				if strings.Contains(input.getSql(), "current_timestamp") {
+					canCache = false
+				}
+			}
 		}
 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
