@@ -96,7 +96,9 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	files := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
-	var mergeLoc string
+	var cnLoc string
+	var tnLoc string
+	var mergeStart string
 	var mergeEnd string
 	for i, name := range names {
 		if len(name) == 0 {
@@ -107,8 +109,10 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
 		}
 		if i == 0 {
-			mergeLoc = ckpStr[0]
+			cnLoc = ckpStr[0]
 			mergeEnd = ckpStr[2]
+			tnLoc = ckpStr[3]
+			mergeStart = ckpStr[4]
 		}
 		metaLoc := ckpStr[0]
 		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
@@ -175,13 +179,18 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		return err
 	}
 	taeFileList = append(taeFileList, sizeList...)
-	if mergeLoc != "" {
+	if cnLoc != "" {
 		end := types.StringToTS(mergeEnd)
-		location, err := blockio.EncodeLocationFromString(mergeLoc)
+		start := types.StringToTS(mergeStart)
+		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)
 		if err != nil {
 			return err
 		}
-		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, location, end)
+		tnLocation, err := blockio.EncodeLocationFromString(tnLoc)
+		if err != nil {
+			return err
+		}
+		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, cnLocation, tnLocation, start, end)
 		if err != nil {
 			return err
 		}
@@ -237,7 +246,6 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 		Entries:     make([]fileservice.IOEntry, 1),
 		CachePolicy: fileservice.SkipAll,
 	}
-	logutil.Infof("copy file %v", dentry)
 	ioVec.Entries[0] = fileservice.IOEntry{
 		Offset: 0,
 		Size:   dentry.Size,
