@@ -16,6 +16,7 @@ package functionAgg
 
 import (
 	"bytes"
+
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,7 +31,7 @@ var (
 	}
 )
 
-func NewAggApproxCount(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+func NewAggApproxCount(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_bool:
 		return newGenericApprox[bool](overloadID, inputTypes[0], outputType, dist)
@@ -82,7 +83,7 @@ func newGenericApprox[T allTypes](overloadID int64, inputType types.Type, output
 	//if dist {
 	//	return agg.NewUnaryDistAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	//}
-	return agg.NewUnaryAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	return agg.NewUnaryAgg[T, uint64](overloadID, aggPriv, false, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 
 type sAggApproxCountDistinct[T any] struct {
