@@ -127,14 +127,16 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	rel := db.txn.getCachedTable(ctx, genTableKey(ctx, name, db.databaseId),
 		db.txn.meta.SnapshotTS)
 	if rel != nil {
-		rel.Lock()
-		defer rel.Unlock()
-		rel.proc = p
+		//rel.Lock()
+		//defer rel.Unlock()
+		//rel.proc = p
+		rel.proc.Store(p)
 		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
-		v.(*txnTable).proc = p
+		//v.(*txnTable).proc = p
+		v.(*txnTable).proc.Store(p)
 		return v.(*txnTable), nil
 	}
 
@@ -184,9 +186,11 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
 		rowids:        item.Rowids,
-		proc:          p,
-		lastTS:        txn.meta.SnapshotTS,
+		//proc:          p,
+		lastTS: txn.meta.SnapshotTS,
 	}
+	tbl.proc.Store(p)
+
 	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
