@@ -17,6 +17,7 @@ package tnservice
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
 	"time"
 
@@ -82,6 +83,17 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 	}
 }
 
+// WithConfigData saves the data from the config file
+func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
+	return func(s *store) {
+		if s.config == nil {
+			s.config = util.NewConfigData(data)
+		} else {
+			util.MergeConfig(s.config, data)
+		}
+	}
+}
+
 type store struct {
 	perfCounter         *perfcounter.CounterSet
 	cfg                 *Config
@@ -118,6 +130,8 @@ type store struct {
 	}
 
 	addressMgr address.AddressManager
+
+	config *util.ConfigData
 }
 
 // NewService create TN Service
@@ -131,6 +145,9 @@ func NewService(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+
+	configKVMap, _ := dumpTnConfig(*cfg)
+	opts = append(opts, WithConfigData(configKVMap))
 
 	// start common stuff
 	common.InitTAEMPool()

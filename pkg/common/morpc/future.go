@@ -43,14 +43,15 @@ type Future struct {
 	releaseFunc func(*Future)
 	mu          struct {
 		sync.Mutex
-		closed bool
-		ref    int
-		cb     func()
+		notified bool
+		closed   bool
+		ref      int
+		cb       func()
 	}
 }
 
 func (f *Future) init(send RPCMessage) {
-	if _, ok := send.Ctx.Deadline(); !ok {
+	if _, ok := send.Ctx.Deadline(); !ok && !send.internal {
 		panic("context deadline not set")
 	}
 	f.waiting.Store(false)
@@ -58,6 +59,7 @@ func (f *Future) init(send RPCMessage) {
 	f.id = send.Message.GetID()
 	f.mu.Lock()
 	f.mu.closed = false
+	f.mu.notified = false
 	f.mu.Unlock()
 }
 
@@ -106,7 +108,20 @@ func (f *Future) messageSent(err error) {
 
 func (f *Future) maybeReleaseLocked() {
 	if f.mu.closed && f.mu.ref == 0 && f.releaseFunc != nil {
+		f.clear()
 		f.releaseFunc(f)
+	}
+}
+
+func (f *Future) clear() {
+	for {
+		select {
+		case <-f.c:
+		case <-f.errC:
+		case <-f.writtenC:
+		default:
+			return
+		}
 	}
 }
 
@@ -118,6 +133,10 @@ func (f *Future) done(response Message, cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.mu.notified {
+		return
+	}
+
 	if !f.mu.closed && !f.timeout() {
 		if response.GetID() != f.getSendMessageID() {
 			return
@@ -127,11 +146,16 @@ func (f *Future) done(response Message, cb func()) {
 	} else if cb != nil {
 		cb()
 	}
+	f.mu.notified = true
 }
 
 func (f *Future) error(id uint64, err error, cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.mu.notified {
+		return
+	}
 
 	if !f.mu.closed && !f.timeout() {
 		if id != f.getSendMessageID() {
@@ -142,6 +166,7 @@ func (f *Future) error(id uint64, err error, cb func()) {
 	} else if cb != nil {
 		cb()
 	}
+	f.mu.notified = true
 }
 
 func (f *Future) ref() {

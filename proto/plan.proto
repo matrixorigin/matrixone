@@ -459,7 +459,7 @@ enum ShuffleMethod {
 
 enum ShuffleTypeForMultiCN {
 	Simple = 0;
-	Complex = 1;
+	Hybrid = 1;
 }
 
 message HashMapStats{
@@ -560,6 +560,7 @@ message OnDuplicateKeyCtx {
 	TableDef table_def					= 1;
 	repeated int32 on_duplicate_idx		= 2;
 	map<string, Expr> on_duplicate_expr	= 3;
+	bool is_ignore 						= 4;
 }
 
 message InsertCtx {
@@ -976,6 +977,7 @@ message DataDefinition {
 		ALTER_SEQUENCE		= 30;
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
+		SHOW_CONNECTORS = 33;
 
 	}
 	//DataDefinition type
@@ -1178,6 +1180,9 @@ message DropSequence {
 }
 
 message AlterSequence {
+	bool if_exists		=1;
+	string database 		=2;
+	TableDef table_def 		=3;
 }
 
 message CreateIndex {

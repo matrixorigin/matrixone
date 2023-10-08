@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -91,15 +93,14 @@ var pool = sync.Pool{
 	},
 }
 
-var analPool = sync.Pool{
-	New: func() any {
-		return new(process.AnalyzeInfo)
-	},
-}
-
 // New is used to new an object of compile
-func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
+func New(
+	addr, db, sql, tenant, uid string,
+	ctx context.Context,
+	e engine.Engine,
+	proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string,
+	tag11768 bool, // if tag11768 is true, it will build a new mpool to instead of the old one.
+) *Compile {
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
@@ -108,6 +109,18 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
+	{
+		if tag11768 {
+			// [tag-11768]
+			m, err := mpool.NewMPool(uuid.Must(uuid.NewUUID()).String(), 0, mpool.NoFixed)
+			if err != nil {
+				panic(err)
+			}
+			c.proc.SetMp(m)
+			c.tag11768 = true
+		}
+	}
+
 	c.stmt = stmt
 	c.addr = addr
 	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
@@ -124,12 +137,22 @@ func putCompile(c *Compile) {
 	}
 	if c.anal != nil {
 		for i := range c.anal.analInfos {
-			analPool.Put(c.anal.analInfos[i])
+			buffer.Free(c.proc.SessionInfo.Buf, c.anal.analInfos[i])
 		}
 		c.anal.analInfos = nil
 	}
+	if c.scope != nil {
+		c.scope = nil
+	}
 
 	c.proc.CleanValueScanBatchs()
+	// XXX delete mpool here to avoid memory leak.
+	// not a true leak, but some bug will cause the record number of using memory incorrect.
+	// search the `[tag-11768]` to found all the codes harked for this problem.
+	if c.tag11768 {
+		mpool.ForceDeleteMPool(c.proc.Mp())
+	}
+
 	c.clear()
 	pool.Put(c)
 }
@@ -151,6 +174,8 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
+	c.tag11768 = false
+
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
 	}
@@ -317,6 +342,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropSequence(c)
 	case CreateSequence:
 		return s.CreateSequence(c)
+	case AlterSequence:
+		return s.AlterSequence(c)
 	case CreateIndex:
 		return s.CreateIndex(c)
 	case DropIndex:
@@ -347,6 +374,11 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
+	var span trace.Span
+	sp := c.proc.GetStmtProfile()
+	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
+
 	var cc *Compile
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer task.End()
@@ -364,10 +396,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	if err := c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
-		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
-		if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-			c.proc.TxnOperator.Txn().IsRCIsolation() {
+		if c.ifNeedRerun(err) {
 			c.proc.TxnOperator.ResetRetry(true)
 			c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
@@ -382,18 +411,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 			// improved to refresh expression in the future.
-			cc = New(
-				c.addr,
-				c.db,
-				c.sql,
-				c.tenant,
-				c.uid,
-				c.proc.Ctx,
-				c.e,
-				c.proc,
-				c.stmt,
-				c.isInternal,
-				c.cnLabel)
+			cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, false)
 			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				pn, err := c.buildPlanFunc()
 				if err != nil {
@@ -424,6 +442,16 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	return result, nil
 }
 
+// if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
+func (c *Compile) ifNeedRerun(err error) bool {
+	if (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+		c.proc.TxnOperator.Txn().IsRCIsolation() {
+		return true
+	}
+	return false
+}
+
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
@@ -440,14 +468,23 @@ func (c *Compile) runOnce() error {
 		})
 	}
 	wg.Wait()
-	c.scope = nil
 	close(errC)
+
+	errList := make([]error, 0, len(c.scope))
 	for e := range errC {
 		if e != nil {
-			return e
+			errList = append(errList, e)
+			if c.ifNeedRerun(e) {
+				return e
+			}
 		}
 	}
-	return nil
+
+	if len(errList) == 0 {
+		return nil
+	} else {
+		return errList[0]
+	}
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
@@ -503,6 +540,11 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return []*Scope{{
 				Magic: DropSequence,
+				Plan:  pn,
+			}}, nil
+		case plan.DataDefinition_ALTER_SEQUENCE:
+			return []*Scope{{
+				Magic: AlterSequence,
 				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_TRUNCATE_TABLE:
@@ -1386,8 +1428,15 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
 
-	// lock table
-	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+	// lock table's meta
+	if n.ObjRef != nil && n.TableDef != nil {
+		if err := lockMoTable(c, n.ObjRef.SchemaName, n.TableDef.Name, lock.LockMode_Shared); err != nil {
+			return nil, err
+		}
+	}
+	// lock table, for tables with no primary key, there is no need to lock the data
+	if n.ObjRef != nil && c.proc.TxnOperator.Txn().IsPessimistic() && n.TableDef != nil &&
+		n.TableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		db, err := c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
 			panic(err)
@@ -2933,9 +2982,7 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 func (c *Compile) initAnalyze(qry *plan.Query) {
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		//anals[i] = new(process.AnalyzeInfo)
-		anals[i] = analPool.Get().(*process.AnalyzeInfo)
-		anals[i].Reset()
+		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
 	}
 	c.anal = &anaylze{
 		qry:       qry,

@@ -579,8 +579,7 @@ func runBindChangedTests(
 
 			c.RPC.BackendOptions = append(c.RPC.BackendOptions,
 				morpc.WithBackendFilter(func(m morpc.Message, s string) bool {
-					req := m.(*pb.Request)
-					if req.Method == pb.Method_KeepLockTableBind &&
+					if req, ok := m.(*pb.Request); ok && req.Method == pb.Method_KeepLockTableBind &&
 						req.KeepLockTableBind.ServiceID == "s1" {
 						return !skip.Load()
 					}
@@ -611,7 +610,7 @@ func waitBindChanged(
 	old pb.LockTable,
 	l *service) {
 	for {
-		lt, err := l.getLockTable(old.Table)
+		lt, err := l.getLockTableWithCreate(old.Table, true)
 		require.NoError(t, err)
 		new := lt.getBind()
 		if new.Changed(old) {

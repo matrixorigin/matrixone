@@ -396,7 +396,7 @@ use transaction_enhance;
 insert into atomic_table_12_5 values (8,"h");
 show create table atomic_table_12_5;
 Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` DOUBLE DEFAULT null,\n`c2` VARCHAR(25) DEFAULT null,\nKEY `key1` (`clnew`)\n)
+atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` DOUBLE DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`clnew`)\n)
 select * from atomic_table_12_5;
 clnew    c2
 3.0    a
@@ -405,7 +405,7 @@ clnew    c2
 8.0    h
 show create table atomic_table_12_5;
 Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` DOUBLE DEFAULT null,\n`c2` VARCHAR(25) DEFAULT null,\nKEY `key1` (`clnew`)\n)
+atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` DOUBLE DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`clnew`)\n)
 drop table if exists alter01;
 [unknown result because it is related to issue#11774]
 create table alter01(col1 int primary key,col2 varchar(25));
@@ -436,7 +436,7 @@ use transaction_enhance;
 insert into atomic_table_12_5 values (8,"h");
 show create table atomic_table_12_5;
 Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` INT DEFAULT null,\n`c2` VARCHAR(25) DEFAULT null,\nKEY `key1` (`clnew`)\n)
+atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`clnew`)\n)
 select * from atomic_table_12_5;
 clnew    c2
 3    a
@@ -445,7 +445,7 @@ clnew    c2
 8    h
 show create table atomic_table_12_5;
 Table    Create Table
-atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` INT DEFAULT null,\n`c2` VARCHAR(25) DEFAULT null,\nKEY `key1` (`clnew`)\n)
+atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`clnew`)\n)
 drop table if exists alter01;
 [unknown result because it is related to issue#11774]
 create table alter01(col1 int primary key,col2 varchar(25));
@@ -487,23 +487,23 @@ col1    col2
 5    c
 6    h
 drop table if exists alter01;
-[unknown result because it is related to issue#11213]
 create table alter01(col1 int primary key,col2 varchar(25));
-[unknown result because it is related to issue#11213]
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11213]
 begin;
-[unknown result because it is related to issue#11213]
 alter table alter01 drop primary key;
-[unknown result because it is related to issue#11213]
 use transaction_enhance;
-[unknown result because it is related to issue#11213]
 insert into alter01 values (5,"h");
-[unknown result because it is related to issue#11213]
 select * from alter01;
-[unknown result because it is related to issue#11213]
+col1    col2
+3    a
+4    b
+5    c
+5    h
 insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11213]
 select * from alter01;
-[unknown result because it is related to issue#11213]
-
+col1    col2
+3    a
+4    b
+5    c
+5    h
+6    h

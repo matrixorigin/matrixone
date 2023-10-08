@@ -370,7 +370,7 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		err := taskService.Create(ctx, task.TaskMetadata{ID: "1234"})
+		err := taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "1234"})
 		assert.NoError(t, err)
 
 		cnUUID := uuid.New().String()
@@ -382,7 +382,7 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		// schedule task we created to CN node
 		time.Sleep(time.Millisecond * 200)
 
-		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
+		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}
@@ -487,6 +487,12 @@ func TestAddHeartbeat(t *testing.T) {
 		}
 		tnMsg.Shards = append(tnMsg.Shards, pb.TNShardInfo{ShardID: 2, ReplicaID: 3})
 		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
+		assert.NoError(t, err)
+
+		proxyMsg := pb.ProxyHeartbeat{
+			UUID: store.id(),
+		}
+		_, err = store.addProxyHeartbeat(ctx, proxyMsg)
 		assert.NoError(t, err)
 	}
 	runStoreTest(t, fn)

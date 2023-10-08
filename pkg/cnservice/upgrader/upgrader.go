@@ -222,6 +222,11 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) error {
 			return err
 		}
 
+		//if there is no view, skip
+		if currentSchema == nil {
+			continue
+		}
+
 		diff, err := u.GenerateDiff(currentSchema, tbl)
 		if err != nil {
 			return err
@@ -288,7 +293,7 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 		return nil
 	}
 
-	for _, tbl := range needUpgradNewTable {
+	for _, tbl := range needUpgradeNewTable {
 		if tbl.Account == table.AccountAll {
 			for _, tenant := range tenants {
 				if err := u.upgradeFunc(ctx, tbl, false, tenant, exec); err != nil {
@@ -319,7 +324,7 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 		return nil
 	}
 
-	for _, tbl := range needUpgradNewView {
+	for _, tbl := range needUpgradeNewView {
 		if tbl.Account == table.AccountAll {
 			for _, tenant := range tenants {
 				if err := u.upgradeFunc(ctx, tbl, true, tenant, exec); err != nil {

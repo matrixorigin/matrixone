@@ -14,12 +14,14 @@ account_id    relname    relkind
 0    mo_database    r
 0    mo_increment_columns
 0    mo_indexes    r
+0    mo_locks    v
 0    mo_mysql_compatibility_mode    r
 0    mo_pubs    r
 0    mo_role    r
 0    mo_role_grant    r
 0    mo_role_privs    r
 0    mo_sessions    v
+0    mo_configurations    v
 0    mo_stages    r
 0    mo_stored_procedure    r
 0    mo_table_partitions    r
@@ -27,4 +29,5 @@ account_id    relname    relkind
 0    mo_user    r
 0    mo_user_defined_function    r
 0    mo_user_grant    r
+0    mo_variables    v
 set global enable_privilege_cache = on;

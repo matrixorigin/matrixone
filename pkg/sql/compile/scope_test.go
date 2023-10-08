@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -73,6 +75,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
 		proc := testutil.NewProcess()
+		proc.SessionInfo.Buf = buffer.New()
 		e, _, compilerCtx := testengine.New(context.Background())
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
@@ -80,7 +83,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		require.NoError(t1, err)
 		qry, err := opt.Optimize(stmts[0], false)
 		require.NoError(t1, err)
-		c := New("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil)
+		c := New("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil, false)
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, nil, func(a any, batch *batch.Batch) error {
 			return nil
 		})

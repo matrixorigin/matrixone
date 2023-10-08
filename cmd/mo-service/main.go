@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	struntime "runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -53,14 +54,19 @@ import (
 )
 
 var (
-	configFile  = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile  = flag.String("launch", "", "toml configuration used to launch mo cluster")
-	versionFlag = flag.Bool("version", false, "print version information")
-	daemon      = flag.Bool("daemon", false, "run mo-service in daemon mode")
-	withProxy   = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	configFile   = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile   = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	versionFlag  = flag.Bool("version", false, "print version information")
+	daemon       = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	withProxy    = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	maxProcessor = flag.Int("max-processor", 0, "set max processor for go runtime")
 )
 
 func main() {
+	if *maxProcessor > 0 {
+		struntime.GOMAXPROCS(*maxProcessor)
+	}
+
 	flag.Parse()
 	maybePrintVersion()
 	maybeRunInDaemonMode()
@@ -123,6 +129,8 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
 		time.Sleep(time.Second * 5)
 		detail += "ha keeper issues shutdown command"
 	}
+
+	stopAllDynamicCNServices()
 
 	logutil.GetGlobalLogger().Info(detail)
 	stopper.Stop()
@@ -221,6 +229,7 @@ func startCNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getCNServiceConfig()
+		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
@@ -228,6 +237,7 @@ func startCNService(
 			gossipNode,
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
+			cnservice.WithConfigData(commonConfigKVMap),
 		)
 		if err != nil {
 			panic(err)
@@ -272,13 +282,14 @@ func startTNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
-
+		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
 			perfCounterSet,
 			&c,
 			r,
 			fileService,
-			shutdownC)
+			shutdownC,
+			tnservice.WithConfigData(commonConfigKVMap))
 		if err != nil {
 			panic(err)
 		}
@@ -301,9 +312,11 @@ func startLogService(
 	shutdownC chan struct{},
 ) error {
 	lscfg := cfg.getLogServiceConfig()
+	commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 	s, err := logservice.NewService(lscfg, fileService,
 		shutdownC,
-		logservice.WithRuntime(runtime.ProcessLevelRuntime()))
+		logservice.WithRuntime(runtime.ProcessLevelRuntime()),
+		logservice.WithConfigData(commonConfigKVMap))
 	if err != nil {
 		panic(err)
 	}

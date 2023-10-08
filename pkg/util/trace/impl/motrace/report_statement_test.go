@@ -311,7 +311,7 @@ func (p *dummySerializableExecPlan) Stats(ctx context.Context) (statistic.StatsA
 
 func TestMergeStats(t *testing.T) {
 	e := &StatementInfo{}
-	e.statsArray.Init().WithTimeConsumed(80335).WithMemorySize(1800).WithS3IOInputCount(1).WithS3IOOutputCount(0)
+	e.statsArray.Init().WithTimeConsumed(80335).WithMemorySize(1800).WithS3IOInputCount(1).WithS3IOOutputCount(0).WithConnType(statistic.ConnTypeInternal)
 
 	n := &StatementInfo{}
 	n.statsArray.Init().WithTimeConsumed(147960).WithMemorySize(1800).WithS3IOInputCount(0).WithS3IOOutputCount(0)
@@ -321,7 +321,7 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes := []byte("[2,228295,3600.000,1,0,0]")
+	wantBytes := []byte("[3,228295,3600.000,1,0,0,1]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 	n = &StatementInfo{}
@@ -332,7 +332,7 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes = []byte("[2,228296,3601.000,1,0,0]")
+	wantBytes = []byte("[3,228296,3601.000,1,0,0,1]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 }
