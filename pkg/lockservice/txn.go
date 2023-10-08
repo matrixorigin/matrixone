@@ -128,6 +128,9 @@ func (txn *activeTxn) close(
 			// LockTable, it is a bug.
 			panic(err)
 		}
+		if l == nil {
+			continue
+		}
 
 		logTxnUnlockTable(
 			serviceID,
@@ -247,6 +250,10 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 			// the remote LockTable, it is a bug.
 			panic(err)
 		}
+		if l == nil {
+			continue
+		}
+
 		locks := lockKeys[idx]
 		hasDeadLock := false
 		locks.iter(func(lockKey []byte) bool {

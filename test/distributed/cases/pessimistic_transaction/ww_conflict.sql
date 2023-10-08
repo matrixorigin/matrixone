@@ -61,7 +61,6 @@ drop table dis_table_02;
 
 -------------------------------------------------------------
 -- alter table drop primary key
--- @bvt:issue#11213
 drop table if exists dis_table_02;
 create table dis_table_02(a int not null default 10,b varchar(25) not null,c datetime,primary key (b));
 insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
@@ -78,4 +77,3 @@ select * from dis_table_02;
 -- @session}
 select * from dis_table_02;
 drop table dis_table_02;
--- @bvt:issue

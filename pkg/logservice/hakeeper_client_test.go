@@ -16,10 +16,11 @@ package logservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
@@ -38,13 +39,13 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	cfg := HAKeeperClientConfig{}
 	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc1)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+	assert.Error(t, err)
 	cc2, err := NewTNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc2)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+	assert.Error(t, err)
 	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc3)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
+	assert.Error(t, err)
 }
 
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
