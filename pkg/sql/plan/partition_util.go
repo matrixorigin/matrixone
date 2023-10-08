@@ -238,7 +238,6 @@ func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *p
 				return err
 			}
 		case *plan.Expr_Max:
-			//return moerr.NewBadFieldError(binder.GetContext(), partitionMaxValue, "field list")
 			return moerr.NewErrMaxvalueInValuesIn(binder.GetContext())
 		default:
 			return moerr.NewPartitionFunctionIsNotAllowed(binder.GetContext())
