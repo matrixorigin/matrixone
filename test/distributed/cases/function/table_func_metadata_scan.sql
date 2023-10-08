@@ -35,6 +35,30 @@ select approx_count(*) from t;
 
 drop table if exists t;
 
+-- int max value + 1, not overflow
+create table t(a int, b varchar);
+insert into t values(2147483647, null);
+insert into t values(1, "abc");
+select count(*) from t;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
+select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
+select sum(a) from t;
+-- @separator:table
+drop table if exists t;
+
+-- bigint max value + 1, overflow
+create table t(a bigint, b varchar);
+insert into t values(9223372036854775807, null);
+insert into t values(1, "abc");
+select count(*) from t;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
+select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
+select sum(a) from t;
+-- @separator:table
+drop table if exists t;
+
 create table t(a float, b varchar);
 insert into t values(1.1, null);
 insert into t values(2.0, "abc");

@@ -55,6 +55,38 @@ select approx_count(*) from t;
 approx_count(*)
 32768
 drop table if exists t;
+create table t(a int, b varchar);
+insert into t values(2147483647, null);
+insert into t values(1, "abc");
+select count(*) from t;
+count(*)
+2
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
+mo_ctl(dn, flush, table_func_metadata_scan.t)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
+bit_cast(`sum` as bigint)
+2147483648
+select sum(a) from t;
+sum(a)
+2147483648
+drop table if exists t;
+create table t(a bigint, b varchar);
+insert into t values(9223372036854775807, null);
+insert into t values(1, "abc");
+select count(*) from t;
+count(*)
+2
+select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
+mo_ctl(dn, flush, table_func_metadata_scan.t)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t', 'a') g;
+bit_cast(`sum` as bigint)
+0
+select sum(a) from t;
+sum(a)
+-9223372036854775808
+drop table if exists t;
 create table t(a float, b varchar);
 insert into t values(1.1, null);
 insert into t values(2.0, "abc");
