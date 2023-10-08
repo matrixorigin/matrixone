@@ -28,7 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -169,6 +169,52 @@ const (
 	FlagProfileCpu
 )
 
+var MOCtledSpanEnableConfig struct {
+	sync.Mutex
+	NameToKind  map[string]SpanKind
+	KindToState map[SpanKind]bool
+}
+
+// InitMOCtledSpan registers all mo_ctl controlled span
+func InitMOCtledSpan() {
+	MOCtledSpanEnableConfig.NameToKind = make(map[string]SpanKind)
+	MOCtledSpanEnableConfig.KindToState = make(map[SpanKind]bool)
+
+	MOCtledSpanEnableConfig.NameToKind["s3"] = SpanKindRemoteFSVis
+	MOCtledSpanEnableConfig.KindToState[SpanKindRemoteFSVis] = false
+
+	MOCtledSpanEnableConfig.NameToKind["local"] = SpanKindLocalFSVis
+	MOCtledSpanEnableConfig.KindToState[SpanKindLocalFSVis] = false
+
+	MOCtledSpanEnableConfig.NameToKind["statement"] = SpanKindStatement
+	MOCtledSpanEnableConfig.KindToState[SpanKindStatement] = false
+}
+
+// IsMOCtledSpan first checks if this kind exists in mo_ctl controlled spans,
+// if it is, return it's current state, or return not exist
+func IsMOCtledSpan(kind SpanKind) (exist bool, state bool) {
+	MOCtledSpanEnableConfig.Lock()
+	defer MOCtledSpanEnableConfig.Unlock()
+
+	if state, exist = MOCtledSpanEnableConfig.KindToState[kind]; exist {
+		return true, state
+	}
+	return false, false
+}
+
+// SetMoCtledSpanState first checks if this kind exists in mo_ctl controlled spans,
+// if it is, reset it's state to the specified and return succeed, or return not succeed
+func SetMoCtledSpanState(name string, state bool) (succeed bool) {
+	MOCtledSpanEnableConfig.Lock()
+	defer MOCtledSpanEnableConfig.Unlock()
+
+	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
+		MOCtledSpanEnableConfig.KindToState[kind] = state
+		return true
+	}
+	return false
+}
+
 // SpanConfig is a group of options for a Span.
 type SpanConfig struct {
 	SpanContext
@@ -213,25 +259,6 @@ func (c *SpanConfig) Reset() {
 	c.profileTraceDur = 0
 	c.hungThreshold = 0
 	c.Extra = nil
-}
-
-var MOCtledSpanEnableConfig struct {
-	EnableS3FSSpan    atomic.Bool
-	EnableLocalFSSpan atomic.Bool
-}
-
-func (c *SpanConfig) NeedRecord(duration time.Duration) bool {
-	// if span kind in [SpanKindS3FSVis, SpanKindLocalFSVis], we
-	// hope it does record in every invoke and ignores the
-	// long time threshold restriction.
-	switch c.Kind {
-	case SpanKindS3FSVis:
-		return MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
-	case SpanKindLocalFSVis:
-		return MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
-	default:
-		return duration >= c.LongTimeThreshold
-	}
 }
 
 func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
@@ -413,6 +440,16 @@ func WithFSReadWriteExtra(fileName string, status error, size int64) SpanEndOpti
 	})
 }
 
+func WithStatementExtra(txnID uuid.UUID, stmID uuid.UUID, stm string) SpanEndOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.Extra = append(cfg.Extra,
+			zap.String("txn_id", txnID.String()),
+			zap.String("statement_id", stmID.String()),
+			zap.String("statement", stm),
+		)
+	})
+}
+
 type Resource struct {
 	m map[string]any
 }
@@ -460,9 +497,9 @@ const (
 	// SpanKindSession is a SpanKind for a Span that represents the operation
 	// start from session
 	SpanKindSession SpanKind = 3
-	// SpanKindS3FSVis is a SpanKind for a Span that needs to collect info of
-	// S3 object operation
-	SpanKindS3FSVis SpanKind = 4
+	// SpanKindRemoteFSVis is a SpanKind for a Span that needs to collect info of
+	// remote object operation
+	SpanKindRemoteFSVis SpanKind = 4
 	// SpanKindLocalFSVis is a SpanKind for a Span that needs to collect info of
 	// local object operation
 	SpanKindLocalFSVis SpanKind = 5
@@ -478,8 +515,8 @@ func (k SpanKind) String() string {
 		return "remote"
 	case SpanKindSession:
 		return "session"
-	case SpanKindS3FSVis:
-		return "s3FSOperation"
+	case SpanKindRemoteFSVis:
+		return "remoteFSOperation"
 	case SpanKindLocalFSVis:
 		return "localFSOperation"
 	default:
