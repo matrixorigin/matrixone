@@ -488,6 +488,12 @@ func TestAddHeartbeat(t *testing.T) {
 		tnMsg.Shards = append(tnMsg.Shards, pb.TNShardInfo{ShardID: 2, ReplicaID: 3})
 		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
 		assert.NoError(t, err)
+
+		proxyMsg := pb.ProxyHeartbeat{
+			UUID: store.id(),
+		}
+		_, err = store.addProxyHeartbeat(ctx, proxyMsg)
+		assert.NoError(t, err)
 	}
 	runStoreTest(t, fn)
 }
