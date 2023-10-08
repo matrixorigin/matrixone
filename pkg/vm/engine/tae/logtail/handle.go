@@ -144,8 +144,11 @@ func HandleSyncLogTailReq(
 	if err != nil {
 		return
 	}
-	if start.Less(tableEntry.GetCreatedAt()) {
-		start = tableEntry.GetCreatedAt()
+	tableEntry.RLock()
+	createTS := tableEntry.GetCreatedAtLocked()
+	tableEntry.RUnlock()
+	if start.Less(createTS) {
+		start = createTS
 	}
 
 	ckpLoc, checkpointed, err := ckpClient.CollectCheckpointsInRange(ctx, start, end)
