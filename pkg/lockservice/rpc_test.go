@@ -59,6 +59,22 @@ func TestRPCSend(t *testing.T) {
 	)
 }
 
+func TestRPCSendWithNotSupport(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			_, err := c.Send(ctx,
+				&lock.Request{
+					LockTable: lock.LockTable{ServiceID: "s1"},
+					Method:    lock.Method_Lock})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		},
+	)
+}
+
 func TestMOErrorCanHandled(t *testing.T) {
 	runRPCTests(
 		t,
