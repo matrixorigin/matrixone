@@ -129,6 +129,8 @@ func saveQueryResultMeta(ses *Session) error {
 	defer func() {
 		ses.ResetBlockIdx()
 		ses.p = nil
+		// TIPs: Session.SetTStmt() do reset the tStmt while query is DONE.
+		// Be careful, if you want to do async op.
 		ses.tStmt = nil
 		ses.curResultSize = 0
 	}()

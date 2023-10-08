@@ -506,6 +506,7 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 		motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes)
 		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
+	ses.SetTStmt(nil)
 }
 
 var logger *log.MOLogger
