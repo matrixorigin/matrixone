@@ -208,7 +208,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	if err != nil {
 		return err
 	}
-	file, err := checkpoint.MergeCkpMeta(ctx, dstFs, location, types.TS{}, types.TS{})
+	file, err := checkpoint.MergeCkpMeta(ctx, dstFs, location)
 	if err != nil {
 		return err
 	}

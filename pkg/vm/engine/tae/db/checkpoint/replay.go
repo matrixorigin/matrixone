@@ -47,7 +47,7 @@ type metaFile struct {
 	end   types.TS
 }
 
-func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, location objectio.Location, start, end types.TS) (string, error) {
+func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, location objectio.Location) (string, error) {
 	dirs, err := fs.List(ctx, CheckpointDir)
 	if err != nil {
 		return "", err
@@ -73,7 +73,6 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, location obje
 	if err != nil {
 		return "", err
 	}
-	logutil.Infof("CheckpointDir+dir.Name %s", CheckpointDir+dir.Name)
 	bats, err := reader.LoadAllColumns(ctx, nil, common.DefaultAllocator)
 	if err != nil {
 		return "", err
@@ -105,7 +104,6 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, location obje
 	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.Vecs[7].Get(last), false)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, metaFiles[len(metaFiles)-1].end, types.TS{})
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
-	logutil.Infof("NewObjectWriterSpecial %s", name)
 	if err != nil {
 		return "", err
 	}
