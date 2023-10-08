@@ -145,7 +145,11 @@ func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uin
 
 	tempRoutineMap := make(map[int64]map[*Routine]uint64, len(ar.accountId2Routine))
 	for account, rountine := range ar.accountId2Routine {
-		tempRoutineMap[account] = rountine
+		tempRountines := make(map[*Routine]uint64, len(rountine))
+		for rt, version := range rountine {
+			tempRountines[rt] = version
+		}
+		tempRoutineMap[account] = tempRountines
 	}
 	return tempRoutineMap
 }
