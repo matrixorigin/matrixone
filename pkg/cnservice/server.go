@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -49,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"go.uber.org/zap"
@@ -569,6 +571,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
 				func(txnID []byte, createAt time.Time, createBy string) {
+					// dump all goroutines to stderr
+					profile.ProfileGoroutine(os.Stderr, 2)
 					runtime.DefaultRuntime().Logger().Fatal("found leak txn",
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
