@@ -150,7 +150,12 @@ func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService)
 	}
 }
 
-func (c *cluster) ForceRefresh() {
+func (c *cluster) ForceRefresh(sync bool) {
+	if sync {
+		c.refresh()
+		return
+	}
+
 	select {
 	case c.forceRefreshC <- struct{}{}:
 	default:
@@ -187,7 +192,7 @@ func (c *cluster) waitReady() {
 }
 
 func (c *cluster) refreshTask(ctx context.Context) {
-	c.ForceRefresh()
+	c.ForceRefresh(false)
 
 	timer := time.NewTimer(c.refreshInterval)
 	defer timer.Stop()
