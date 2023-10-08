@@ -8733,3 +8733,70 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.Equal(t, 5, deletes.Length())
 	assert.NoError(t, txn.Commit(context.Background()))
 }
+
+func TestGlobalCheckpoint7(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithCheckpointGlobalMinCount(3)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db1", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 1, len(entries))
+
+	tae.Restart(context.Background())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db2", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 2, len(entries))
+
+	tae.Restart(context.Background())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db3", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	testutils.WaitExpect(10000, func() bool {
+		return len(tae.BGCheckpointRunner.GetAllGlobalCheckpoints()) == 1
+	})
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 1, len(entries))
+
+}
