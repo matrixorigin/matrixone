@@ -256,7 +256,7 @@ func (be *BaseEntryImpl[T]) CloneCommittedInRange(start, end types.TS) BaseEntry
 	}
 }
 
-func (be *BaseEntryImpl[T]) GetCreatedAt() types.TS {
+func (be *BaseEntryImpl[T]) GetCreatedAtLocked() types.TS {
 	un := be.GetLatestNodeLocked()
 	if un == nil {
 		return types.TS{}
