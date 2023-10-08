@@ -296,6 +296,7 @@ func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 	return
 }
 
+// for each deletes in [start,end]
 func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	ctx context.Context,
 	start, end types.TS,
@@ -319,6 +320,10 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 		for i := 0; i < deletes.Length(); i++ {
 			loopOp(i, rowIdVec)
 		}
+		commitTSVec := containers.NewConstFixed[types.TS](types.T_TS.ToType(), deltalocCommitTS, deletes.Length())
+		abortVec := containers.NewConstFixed[bool](types.T_bool.ToType(), false, deletes.Length())
+		deletes.AddVector(catalog.AttrCommitTs, commitTSVec)
+		deletes.AddVector(catalog.AttrAborted, abortVec)
 	} else {
 		abortVec := deletes.Vecs[3].GetDownstreamVector()
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
@@ -607,7 +612,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	bat, persistedTS, err := blk.inMemoryCollectDeleteInRange(
+	bat, minTS, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		start,
 		end,
@@ -615,8 +620,8 @@ func (blk *baseBlock) CollectDeleteInRange(
 	if err != nil {
 		return
 	}
-	if end.Greater(persistedTS) {
-		end = persistedTS
+	if !minTS.IsEmpty() && end.Greater(minTS) {
+		end = minTS.Prev()
 	}
 	bat, err = blk.persistedCollectDeleteInRange(
 		ctx,
@@ -630,21 +635,9 @@ func (blk *baseBlock) CollectDeleteInRange(
 func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
-	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
-	catalogPersistedTS := blk.meta.GetDeltaPersistedTS()
+	withAborted bool) (bat *containers.Batch, minTS types.TS, err error) {
 	blk.RLock()
-	persistedTS = blk.mvcc.GetDeletesPersistedTSInMVCCChain()
-	if persistedTS.IsEmpty() {
-		persistedTS = catalogPersistedTS
-	}
-	if persistedTS.GreaterEq(end) {
-		blk.RUnlock()
-		return
-	}
-	if start.Less(persistedTS) {
-		start = persistedTS
-	}
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start.Next(), end)
+	rowID, ts, abort, abortedMap, deletes, minTS := blk.mvcc.CollectDeleteLocked(start.Next(), end)
 	blk.RUnlock()
 	if rowID == nil {
 		return

@@ -8637,7 +8637,7 @@ func TestColumnCount(t *testing.T) {
 	tae.Catalog.GCByTS(context.Background(), txn.GetCommitTS().Next())
 }
 
-func TestCollectDeletesInRange(t *testing.T) {
+func TestCollectDeletesInRange1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
@@ -8669,4 +8669,122 @@ func TestCollectDeletesInRange(t *testing.T) {
 	assert.NoError(t, err)
 
 	tae.CheckCollectDeleteInRange()
+}
+
+func TestCollectDeletesInRange2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(false)
+
+	txn, rel := tae.GetRelation()
+	blk := rel.MakeBlockIt().GetBlock()
+	deltaLoc, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, blk.GetMeta().(*catalog.BlockEntry).GetBlockData(), schema, txn, []uint32{0, 1, 2, 3})
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, rel = tae.GetRelation()
+	blk = rel.MakeBlockIt().GetBlock()
+	ok, err := rel.TryDeleteByDeltaloc(blk.Fingerprint(), deltaLoc)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, rel = tae.GetRelation()
+	blk = rel.MakeBlockIt().GetBlock()
+	deletes, err := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().CollectDeleteInRange(context.Background(), types.TS{}, txn.GetStartTS(), true)
+	assert.NoError(t, err)
+	assert.Equal(t, 4, deletes.Length())
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, rel = tae.GetRelation()
+	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(4)
+	filter := handle.NewEQFilter(v1)
+	err = rel.DeleteByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, rel = tae.GetRelation()
+	blk = rel.MakeBlockIt().GetBlock()
+	deletes, err = blk.GetMeta().(*catalog.BlockEntry).GetBlockData().CollectDeleteInRange(context.Background(), types.TS{}, txn.GetStartTS(), true)
+	assert.NoError(t, err)
+	assert.Equal(t, 5, deletes.Length())
+	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func TestGlobalCheckpoint7(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithCheckpointGlobalMinCount(3)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db1", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 1, len(entries))
+
+	tae.Restart(context.Background())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db2", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 2, len(entries))
+
+	tae.Restart(context.Background())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db3", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	testutils.WaitExpect(10000, func() bool {
+		return len(tae.BGCheckpointRunner.GetAllGlobalCheckpoints()) == 1
+	})
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 1, len(entries))
+
 }

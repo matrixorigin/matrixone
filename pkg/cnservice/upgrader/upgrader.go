@@ -222,6 +222,11 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) error {
 			return err
 		}
 
+		//if there is no view, skip
+		if currentSchema == nil {
+			continue
+		}
+
 		diff, err := u.GenerateDiff(currentSchema, tbl)
 		if err != nil {
 			return err

@@ -54,6 +54,8 @@ type Argument struct {
 	IdxIdx []int32
 
 	ctr *container
+
+	IsIgnore bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

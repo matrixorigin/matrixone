@@ -438,7 +438,6 @@ select * from alter01;
 
 ----------------------------------------------------------
 -- alter table drop primary key column
--- @bvt:issue#11213
 drop table if exists alter01;
 create table alter01(col1 int primary key,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
@@ -452,4 +451,3 @@ select * from alter01;
 -- @session
 insert into alter01 values (6,"h");
 select * from alter01;
--- @bvt:issue
