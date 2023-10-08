@@ -296,7 +296,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stm.User = ""
 	}
 	if sqlType != constant.InternalSql {
-		ses.tStmt = stm
+		ses.SetTStmt(stm)
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
