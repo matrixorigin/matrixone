@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -91,19 +90,22 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 }
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
-	backup := names[0]
-	backupTime := names[1]
-	names = names[2:]
+	backupTime := names[0]
+	names = names[1:]
 	files := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
-	for _, name := range names {
+	var mergeLoc string
+	for i, name := range names {
 		if len(name) == 0 {
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
 		if len(ckpStr) != 2 {
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
+		}
+		if i == 0 {
+			mergeLoc = ckpStr[0]
 		}
 		metaLoc := ckpStr[0]
 		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
@@ -134,40 +136,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 				}
 				files[location.Name().String()] = dentry
 			}
-		}
-	}
-	ckpStr := strings.Split(backup, ":")
-	if len(ckpStr) != 2 {
-		return moerr.NewInternalError(ctx, "invalid checkpoint string")
-	}
-	metaLoc := ckpStr[0]
-	version, err := strconv.ParseUint(ckpStr[1], 10, 32)
-	if err != nil {
-		return err
-	}
-	key, err := blockio.EncodeLocationFromString(metaLoc)
-	if err != nil {
-		return err
-	}
-	locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
-	if err != nil {
-		return err
-	}
-	table.UpdateTable(data)
-	gcFiles := table.SoftGC()
-	mergeGCFile(gcFiles, gcFileMap)
-	for _, location := range locations {
-		if files[location.Name().String()] == nil {
-			dentry, err := srcFs.StatFile(ctx, location.Name().String())
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
-					isGC(gcFileMap, location.Name().String()) {
-					continue
-				} else {
-					return err
-				}
-			}
-			files[location.Name().String()] = dentry
 		}
 	}
 
@@ -204,22 +172,24 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		return err
 	}
 	taeFileList = append(taeFileList, sizeList...)
-	location, err := blockio.EncodeLocationFromString(metaLoc)
-	if err != nil {
-		return err
+	if mergeLoc != "" {
+		location, err := blockio.EncodeLocationFromString(mergeLoc)
+		if err != nil {
+			return err
+		}
+		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, location)
+		if err != nil {
+			return err
+		}
+		dentry, err := dstFs.StatFile(ctx, file)
+		if err != nil {
+			return err
+		}
+		taeFileList = append(taeFileList, &taeFile{
+			path: dentry.Name,
+			size: dentry.Size,
+		})
 	}
-	file, err := checkpoint.MergeCkpMeta(ctx, dstFs, location)
-	if err != nil {
-		return err
-	}
-	dentry, err := dstFs.StatFile(ctx, file)
-	if err != nil {
-		return err
-	}
-	taeFileList = append(taeFileList, &taeFile{
-		path: dentry.Name,
-		size: dentry.Size,
-	})
 	//save tae files size
 	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime)
 	if err != nil {

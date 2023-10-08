@@ -434,12 +434,13 @@ func (h *Handle) HandleBackup(
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	var locations string
-	err, locations = h.db.ForceCheckpointForBackup(ctx, currTs, timeout)
+	locations += backupTime.Format(time.DateTime) + ";"
+	err, location := h.db.ForceCheckpointForBackup(ctx, currTs, timeout)
 	if err != nil {
 		return nil, err
 	}
 	data := h.db.BGCheckpointRunner.GetAllCheckpoints()
-	locations += backupTime.Format(time.DateTime) + ";"
+	locations += location
 	for i := range data {
 		locations += data[i].GetLocation().String()
 		locations += ":"
