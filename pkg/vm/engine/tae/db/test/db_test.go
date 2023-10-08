@@ -449,7 +449,15 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
-		_, err = dataBlk.RangeDelete(txn, 1, 2, nil, handle.DT_Normal)
+		pkDef := schema.GetPrimaryKey()
+		pkVec := containers.MakeVector(pkDef.Type)
+		val1, _, err := dataBlk.GetValue(ctx, txn, schema, 1, pkDef.Idx)
+		assert.NoError(t, err)
+		pkVec.Append(val1, false)
+		val2, _, err := dataBlk.GetValue(ctx, txn, schema, 2, pkDef.Idx)
+		assert.NoError(t, err)
+		pkVec.Append(val2, false)
+		_, err = dataBlk.RangeDelete(txn, 1, 2, pkVec, handle.DT_Normal)
 		assert.Nil(t, err)
 
 		view, err = dataBlk.GetColumnDataById(context.Background(), txn, readSchema, 2)
@@ -5403,7 +5411,11 @@ func TestMergeBlocks3(t *testing.T) {
 		view, err := blk11Handle.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		view.GetData()
 		require.NoError(t, err)
-		err = rel.DeleteByPhyAddrKeys(view.GetData(), nil)
+		pkDef := schema.GetPrimaryKey()
+		pkView, err := blk11Handle.GetColumnDataByName(context.Background(), pkDef.Name)
+		pkView.GetData()
+		require.NoError(t, err)
+		err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
 		require.NoError(t, err)
 
 		require.NoError(t, rel.DeleteByFilter(context.Background(), filter5))
@@ -8720,4 +8732,71 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 5, deletes.Length())
 	assert.NoError(t, txn.Commit(context.Background()))
+}
+
+func TestGlobalCheckpoint7(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithCheckpointGlobalMinCount(3)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db1", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 1, len(entries))
+
+	tae.Restart(context.Background())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db2", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 2, len(entries))
+
+	tae.Restart(context.Background())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase("db3", "sql", "typ")
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	testutils.WaitExpect(10000, func() bool {
+		return len(tae.BGCheckpointRunner.GetAllGlobalCheckpoints()) == 1
+	})
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+	}
+	assert.Equal(t, 1, len(entries))
+
 }

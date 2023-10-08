@@ -465,5 +465,21 @@ func testDelete(tc TestCase, t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.CheckRowsByScan(bat.Length(), true)
+
+	for i := 0; i < bat.Length(); i++ {
+		txn, rel = tae.GetRelation()
+		v := testutil.GetSingleSortKeyValue(bats[i], schema, 0)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	tae.CheckCollectDeleteInRange()
+
+	tae.CheckRowsByScan(0, true)
+	tae.CompactBlocks(false)
+
+	tae.CheckRowsByScan(0, true)
 	tae.CheckReadCNCheckpoint()
 }
