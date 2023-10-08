@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
+	"runtime/debug"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -154,8 +156,13 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
+	labelUuid, _ := uuid.NewUUID()
+	stack := ""
+	if th.ses.IsBackgroundSession() {
+		stack = string(debug.Stack())
+	}
 	opts = append(opts,
-		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p (%s)", th.ses, sessionInfo)))
+		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p labelUUID:%s sesInfo(%s) background:%v stack:%s ", th.ses, labelUuid.String(), sessionInfo, th.ses.IsBackgroundSession(), stack)))
 
 	if th.ses != nil && th.ses.GetFromRealUser() {
 		opts = append(opts,
