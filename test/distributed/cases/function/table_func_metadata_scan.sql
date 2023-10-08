@@ -49,9 +49,9 @@ select bit_cast(`sum` as bigint) from metadata_scan('table_func_metadata_scan.t'
 select sum(b) from t;
 -- @separator:table
 drop table if exists t;
-create table t(a float, b decimal(10, 8));
-insert into t values(1.1, 1);
-insert into t values(2.0, 2);
+create table t(a float, b decimal(10, 8), c float(5, 2));
+insert into t values(1.1, 1, 1.11);
+insert into t values(2.0, 2, 2.22);
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
@@ -71,5 +71,7 @@ select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_sc
 select sum(a) from t;
 select sum(bit_cast(`sum` as decimal(10, 8))) from metadata_scan('table_func_metadata_scan.t', 'b') g;
 select sum(b) from t;
+select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'c') g;
+select sum(c) from t;
 -- @separator:table
 drop table if exists t;

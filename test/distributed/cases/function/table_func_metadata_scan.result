@@ -77,9 +77,9 @@ select sum(b) from t;
 sum(b)
 -9223372036854775808
 drop table if exists t;
-create table t(a float, b decimal(10, 8));
-insert into t values(1.1, 1);
-insert into t values(2.0, 2);
+create table t(a float, b decimal(10, 8), c float(5, 2));
+insert into t values(1.1, 1, 1.11);
+insert into t values(2.0, 2, 2.22);
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
@@ -110,4 +110,10 @@ sum(bit_cast(sum as decimal(10, 8)))
 select sum(b) from t;
 sum(b)
 12288
+select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'c') g;
+sum(bit_cast(sum as double))
+13639.68017578125
+select sum(c) from t;
+sum(c)
+13639.68017578125
 drop table if exists t;
