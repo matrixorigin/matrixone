@@ -261,8 +261,7 @@ func TestLabelSelector(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer func() { mc.Close() }()
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 
 	var servers []CNServer
 	mc.GetCNService(se, func(s metadata.CNService) bool {
