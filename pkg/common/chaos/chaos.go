@@ -16,7 +16,6 @@ package chaos
 
 import (
 	"database/sql"
-	"fmt"
 	"time"
 )
 
@@ -36,11 +35,9 @@ func (t *ChaosTester) waitSystemBootStrapCompleted() {
 	for {
 		ok, err := t.doCheckBootStrapCompleted()
 		if err != nil || !ok {
-			fmt.Printf("not completed: %v\n", err)
 			time.Sleep(time.Second * 5)
 			continue
 		}
-		fmt.Println("completed")
 		return
 	}
 }
