@@ -190,7 +190,17 @@ func (blk *txnBlock) getDBID() uint64 {
 }
 
 func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, nil, dt)
+	schema := blk.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	for row := start; row <= end; row++ {
+		pkVal, _, err := blk.entry.GetBlockData().GetValue(blk.table.store.GetContext(), blk.Txn, schema, int(row), pkDef.Idx)
+		if err != nil {
+			return err
+		}
+		pkVec.Append(pkVal, false)
+	}
+	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, pkVec, dt)
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaLoc objectio.Location) {
