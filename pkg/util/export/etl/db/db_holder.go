@@ -199,7 +199,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
 	if err != nil {
 		DBConnErrCount.Add(1)
-		return 0, moerr.NewInternalError(ctx, err.Error())
+		return 0, err
 	}
 
 	logger.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
