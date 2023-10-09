@@ -222,7 +222,7 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 
 	if len(errors) > 0 {
 		//panic("Upgrade failed during system startup!")
-		return moerr.NewInternalError(ctx, "Upgrade failed during system startup!", errors)
+		return moerr.NewInternalError(ctx, "Upgrade failed during system startup! "+convErrsToFormatMsg(errors))
 	}
 
 	return nil
