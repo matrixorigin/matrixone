@@ -13,7 +13,7 @@ body:
       options:
         - label: I have checked the existing issues.
           required: true
-    - type: checkboxes
+  - type: checkboxes
     attributes:
       label: Does this tech request not affect user experience?
       description: If yes, please submit a feature request issue.
