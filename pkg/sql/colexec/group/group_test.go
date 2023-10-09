@@ -16,8 +16,9 @@ package group
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
