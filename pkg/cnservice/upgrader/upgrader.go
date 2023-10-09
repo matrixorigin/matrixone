@@ -194,33 +194,33 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 
 	errors := []error{}
 
-	if err = u.UpgradeExistingView(ctx, allTenants); err != nil {
-		logutil.Errorf("upgrade existing system view failed: %s", err.Error())
-		errors = append(errors, err)
+	if errs := u.UpgradeExistingView(ctx, allTenants); len(errs) > 0 {
+		logutil.Errorf("upgrade existing system view failed")
+		errors = append(errors, errs...)
 	}
 
-	if err = u.UpgradeNewViewColumn(ctx); err != nil {
-		logutil.Errorf("upgrade new view column failed: %s", err.Error())
-		errors = append(errors, err)
+	if errs := u.UpgradeNewViewColumn(ctx); len(errs) > 0 {
+		logutil.Errorf("upgrade new view column failed")
+		errors = append(errors, errs...)
 	}
 
-	if err = u.UpgradeNewTableColumn(ctx); err != nil {
-		logutil.Errorf("upgrade new table column failed: %s", err.Error())
-		errors = append(errors, err)
+	if errs := u.UpgradeNewTableColumn(ctx); len(errs) > 0 {
+		logutil.Errorf("upgrade new table column failed")
+		errors = append(errors, errs...)
 	}
 
-	if err = u.UpgradeNewTable(ctx, allTenants); err != nil {
-		logutil.Errorf("upgrade new table failed: %s", err.Error())
-		errors = append(errors, err)
+	if errs := u.UpgradeNewTable(ctx, allTenants); len(errs) > 0 {
+		logutil.Errorf("upgrade new table failed")
+		errors = append(errors, errs...)
 	}
 
-	if err = u.UpgradeNewView(ctx, allTenants); err != nil {
-		logutil.Errorf("upgrade new system view failed: %s", err.Error())
-		errors = append(errors, err)
+	if errs := u.UpgradeNewView(ctx, allTenants); len(errs) > 0 {
+		logutil.Errorf("upgrade new system view failed")
+		errors = append(errors, errs...)
 	}
 
 	if len(errors) > 0 {
-		//panic("Upgrade failed during system startup!")
+		//panic("Upgrade failed during system startup! " + convErrsToFormatMsg(errors))
 		return moerr.NewInternalError(ctx, "Upgrade failed during system startup! "+convErrsToFormatMsg(errors))
 	}
 
@@ -228,16 +228,19 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 }
 
 // UpgradeNewViewColumn the newly added columns in the system table
-func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) error {
+func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
+	errors := []error{}
 	for _, tbl := range registeredViews {
 		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
 		if err != nil {
-			return err
+			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+			continue
+			//return err
 		}
 
 		//if there is no view, skip
@@ -247,7 +250,9 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) error {
 
 		diff, err := u.GenerateDiff(currentSchema, tbl)
 		if err != nil {
-			return err
+			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+			continue
+			//return err
 		} else if len(diff.AddedColumns) == 0 {
 			continue
 		}
@@ -265,57 +270,78 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) error {
 
 		// Execute upgrade SQL
 		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-			return err
+			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+			continue
+			//return err
 		}
+	}
+
+	if len(errors) > 0 {
+		return errors
 	}
 	return nil
 }
 
 // UpgradeNewTableColumn the newly added columns in the system table
-func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) error {
+func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
+	errors := []error{}
 	for _, tbl := range registeredTable {
 		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
 		if err != nil {
-			return err
+			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+			continue
+			//return err
 		}
 
 		diff, err := u.GenerateDiff(currentSchema, tbl)
 		if err != nil {
-			return err
+			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+			continue
+			//return err
 		} else if len(diff.AddedColumns) == 0 {
 			continue
 		}
 
 		upgradeSQL, err := u.GenerateUpgradeSQL(diff)
 		if err != nil {
-			return err
+			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+			continue
+			//return err
 		}
 
 		// Execute upgrade SQL
 		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-			return err
+			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
+			continue
+			//return err
 		}
+	}
+	if len(errors) > 0 {
+		return errors
 	}
 	return nil
 }
 
 // UpgradeNewTable system tables, add system tables
-func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.TenantInfo) error {
+func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.TenantInfo) []error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
+	errors := []error{}
 	for _, tbl := range needUpgradeNewTable {
 		if tbl.Account == table.AccountAll {
 			for _, tenant := range tenants {
 				if err := u.upgradeFunc(ctx, tbl, false, tenant, exec); err != nil {
-					return err
+					errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, tenant.Tenant, tenant.TenantID, err.Error()))
+					continue
+					//return err
 				}
 			}
 		} else {
@@ -327,26 +353,31 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 				DefaultRoleID: frontend.GetDefaultRoleId(),
 				DefaultRole:   frontend.GetDefaultRole(),
 			}, exec); err != nil {
-				return err
+				errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			}
 		}
-
+	}
+	if len(errors) > 0 {
+		return errors
 	}
 	return nil
 }
 
 // UpgradeNewView system tables, add system views
-func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.TenantInfo) error {
+func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.TenantInfo) []error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
+	errors := []error{}
 	for _, tbl := range needUpgradeNewView {
 		if tbl.Account == table.AccountAll {
 			for _, tenant := range tenants {
 				if err := u.upgradeFunc(ctx, tbl, true, tenant, exec); err != nil {
-					return err
+					errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, tenant.Tenant, tenant.TenantID, err.Error()))
+					continue
+					//return err
 				}
 			}
 		} else {
@@ -358,25 +389,31 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 				DefaultRoleID: frontend.GetDefaultRoleId(),
 				DefaultRole:   frontend.GetDefaultRole(),
 			}, exec); err != nil {
-				return err
+				errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			}
 		}
+	}
+	if len(errors) > 0 {
+		return errors
 	}
 	return nil
 }
 
 // UpgradeExistingView: Modify the definition of existing system views
-func (u *Upgrader) UpgradeExistingView(ctx context.Context, tenants []*frontend.TenantInfo) error {
+func (u *Upgrader) UpgradeExistingView(ctx context.Context, tenants []*frontend.TenantInfo) []error {
 	exec := u.IEFactory()
 	if exec == nil {
 		return nil
 	}
 
+	errors := []error{}
 	for _, tbl := range needUpgradeExistingView {
 		if tbl.Account == table.AccountAll {
 			for _, tenant := range tenants {
 				if err := u.upgradeWithPreDropFunc(ctx, tbl, tenant, exec); err != nil {
-					return err
+					//make upgrade error with databaseName, table/View Name, tenantID:TenantName, error message
+					errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, tenant.Tenant, tenant.TenantID, err.Error()))
+					continue
 				}
 			}
 		} else {
@@ -388,9 +425,12 @@ func (u *Upgrader) UpgradeExistingView(ctx context.Context, tenants []*frontend.
 				DefaultRoleID: frontend.GetDefaultRoleId(),
 				DefaultRole:   frontend.GetDefaultRole(),
 			}, exec); err != nil {
-				return err
+				errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			}
 		}
+	}
+	if len(errors) > 0 {
+		return errors
 	}
 	return nil
 }
