@@ -103,7 +103,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 					cs morpc.ClientSession) {
 					n++
 					if n == 1 {
-						writeResponse(ctx, cancel, resp, moerr.NewBackendClosedNoCtx(), cs)
+						writeResponse(ctx, cancel, resp, moerr.NewRPCTimeout(ctx), cs)
 						return
 					}
 					close(c)

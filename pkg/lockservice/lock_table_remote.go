@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -140,7 +141,8 @@ func (l *remoteLockTable) unlock(
 		// handleError returns nil meaning bind changed, then all locks
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
-		if err := l.handleError(txn.txnID, err); err == nil {
+		if err := l.handleError(txn.txnID, err); err == nil ||
+			!isRetryError(err) {
 			return
 		}
 	}
@@ -161,7 +163,8 @@ func (l *remoteLockTable) getLock(
 		}
 
 		// why use loop is similar to unlock
-		if err = l.handleError(txn.TxnID, err); err == nil {
+		if err = l.handleError(txn.TxnID, err); err == nil ||
+			!isRetryError(err) {
 			return
 		}
 	}
@@ -263,4 +266,8 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 	newBind := resp.NewBind
 	l.bindChangedHandler(*newBind)
 	return ErrLockTableBindChanged
+}
+
+func isRetryError(err error) bool {
+	return strings.Contains(err.Error(), "timeout")
 }

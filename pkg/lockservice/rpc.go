@@ -102,7 +102,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	for i := 0; i < 2; i++ {
 		switch request.Method {
 		case pb.Method_ForwardLock:
-			sid := request.Lock.Options.ForwardTo
+			sid := getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -113,7 +113,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_Unlock,
 			pb.Method_GetTxnLock,
 			pb.Method_KeepRemoteLock:
-			sid := request.LockTable.ServiceID
+			sid := getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -121,7 +121,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					return false
 				})
 		case pb.Method_GetWaitingList:
-			sid := request.GetWaitingList.Txn.CreatedOn
+			sid := getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
 			c.cluster.GetCNService(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
