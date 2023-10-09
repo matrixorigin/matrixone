@@ -1298,6 +1298,33 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) {
 	}
 }
 
+func (data *CheckpointData) TrimForBackup(ctx context.Context, fs fileservice.FileService, ts types.TS) error {
+	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		isAblk := data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_EntryState).Get(i).(bool)
+		if !isAblk && deltaLoc.IsEmpty() {
+			continue
+		}
+		bat, err := blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
+		if err != nil {
+			return err
+		}
+
+		if v := 0; v < bat.Vecs[0].Length() {
+			commitTs := types.TS{}
+			err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetBytesAt(v))
+			if err != nil {
+				return err
+			}
+			if !commitTs.LessEq(ts) {
+				windowCNBatch(bat, 0, uint64(v))
+			}
+		}
+	}
+	return nil
+}
+
 func (data *CheckpointData) fillInMetaBatchWithLocation(location objectio.Location) {
 	length := data.bats[MetaIDX].Vecs[2].Length()
 	insVec := containers.MakeVector(types.T_varchar.ToType())

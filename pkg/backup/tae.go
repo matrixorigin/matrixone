@@ -99,6 +99,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	var tnLoc string
 	var mergeStart string
 	var mergeEnd string
+	var mergeData *logtail.CheckpointData
 	for i, name := range names {
 		if len(name) == 0 {
 			continue
@@ -106,12 +107,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		ckpStr := strings.Split(name, ":")
 		if len(ckpStr) != 2 && i != 0 {
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
-		}
-		if i == 0 {
-			cnLoc = ckpStr[0]
-			mergeEnd = ckpStr[2]
-			tnLoc = ckpStr[3]
-			mergeStart = ckpStr[4]
 		}
 		metaLoc := ckpStr[0]
 		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
@@ -125,6 +120,13 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
 		if err != nil {
 			return err
+		}
+		if i == 0 {
+			cnLoc = ckpStr[0]
+			mergeEnd = ckpStr[2]
+			tnLoc = ckpStr[3]
+			mergeStart = ckpStr[4]
+			mergeData = data
 		}
 		table.UpdateTable(data)
 		gcFiles := table.SoftGC()

@@ -886,6 +886,7 @@ func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileServic
 		if !deltaLoc.IsEmpty() {
 			locations = append(locations, deltaLoc)
 		}
+
 	}
 	return locations, data, nil
 }
