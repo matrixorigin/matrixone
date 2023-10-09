@@ -39,25 +39,30 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 	switch {
 	case strings.Contains(strings.ToLower(dataType), "datetime"):
 		return table.TDatetime, nil
-	case strings.Contains(strings.ToLower(dataType), "bigint"):
-		if strings.Contains(strings.ToLower(dataType), "unsigned") {
-			return table.TUint64, nil
-		}
+	case strings.EqualFold(strings.ToLower(dataType), "bigint unsigned"):
+		return table.TUint64, nil
+	case strings.EqualFold(strings.ToLower(dataType), "bigint"):
 		return table.TInt64, nil
-	case strings.Contains(strings.ToLower(dataType), "double"):
+	case strings.EqualFold(strings.ToLower(dataType), "int unsigned"):
+		return table.TUint32, nil
+	case strings.EqualFold(strings.ToLower(dataType), "int"):
+		return table.TUint32, nil
+	case strings.EqualFold(strings.ToLower(dataType), "double"):
 		return table.TFloat64, nil
-	case strings.Contains(strings.ToLower(dataType), "json"):
+	case strings.EqualFold(strings.ToLower(dataType), "json"):
 		return table.TJson, nil
-	case strings.Contains(strings.ToLower(dataType), "text"):
+	case strings.EqualFold(strings.ToLower(dataType), "text"):
 		return table.TText, nil
 	case strings.Contains(strings.ToLower(dataType), "varchar"):
 		return table.TVarchar, nil
+	case strings.Contains(strings.ToLower(dataType), "char"):
+		return table.TChar, nil
 	case strings.Contains(strings.ToLower(dataType), "bytes"):
 		return table.TBytes, nil
-	case strings.Contains(strings.ToLower(dataType), "uuid"):
+	case strings.EqualFold(strings.ToLower(dataType), "uuid"):
 		return table.TUuid, nil
-	case strings.Contains(strings.ToLower(dataType), "int unsigned"):
-		return table.TUint64, nil
+	case strings.EqualFold(strings.ToLower(dataType), "bool"):
+		return table.TBool, nil
 	default:
 		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type")
 	}
@@ -148,6 +153,7 @@ func (u *Upgrader) GenerateDiff(currentSchema *table.Table, expectedSchema *tabl
 	// If no differences, return an empty SchemaDiff and nil error
 	return table.SchemaDiff{}, nil
 }
+
 func (u *Upgrader) GenerateUpgradeSQL(diff table.SchemaDiff) (string, error) {
 	if len(diff.AddedColumns) == 0 {
 		return "", moerr.NewInternalError(context.Background(), "no added columns in schema diff")
@@ -187,25 +193,38 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		return err
 	}
 
+	errors := []error{}
+
+	if err = u.UpgradeExistingView(ctx, allTenants); err != nil {
+		logutil.Errorf("upgrade existing system view failed: %s", err.Error())
+		errors = append(errors, err)
+	}
+
 	if err = u.UpgradeNewViewColumn(ctx); err != nil {
 		logutil.Errorf("upgrade new view column failed: %s", err.Error())
-		return err
+		errors = append(errors, err)
 	}
 
 	if err = u.UpgradeNewTableColumn(ctx); err != nil {
 		logutil.Errorf("upgrade new table column failed: %s", err.Error())
-		return err
+		errors = append(errors, err)
 	}
 
 	if err = u.UpgradeNewTable(ctx, allTenants); err != nil {
 		logutil.Errorf("upgrade new table failed: %s", err.Error())
-		return err
+		errors = append(errors, err)
 	}
 
 	if err = u.UpgradeNewView(ctx, allTenants); err != nil {
 		logutil.Errorf("upgrade new system view failed: %s", err.Error())
-		return err
+		errors = append(errors, err)
 	}
+
+	if len(errors) > 0 {
+		//panic("Upgrade failed during system startup!")
+		return moerr.NewInternalError(ctx, "Upgrade failed during system startup!", errors)
+	}
+
 	return nil
 }
 
@@ -347,10 +366,40 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 	return nil
 }
 
+// UpgradeExistingView: Modify the definition of existing system views
+func (u *Upgrader) UpgradeExistingView(ctx context.Context, tenants []*frontend.TenantInfo) error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	for _, tbl := range needUpgradeExistingView {
+		if tbl.Account == table.AccountAll {
+			for _, tenant := range tenants {
+				if err := u.upgradeWithPreDropFunc(ctx, tbl, tenant, exec); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := u.upgradeWithPreDropFunc(ctx, tbl, &frontend.TenantInfo{
+				Tenant:        frontend.GetDefaultTenant(),
+				TenantID:      catalog.System_Account,
+				User:          frontend.GetUserRoot(),
+				UserID:        frontend.GetUserRootId(),
+				DefaultRoleID: frontend.GetDefaultRoleId(),
+				DefaultRole:   frontend.GetDefaultRole(),
+			}, exec); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Check if the table exists
 func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecutor, opts *ie.OptsBuilder, database, tbl string) (bool, error) {
 	// Query mo_catalog.mo_tables to get table info
-	query := fmt.Sprintf("select rel_id, relname from `mo_catalog`.`mo_tables` where reldatabase = '%s' and relname = '%s'", database, tbl)
+	query := fmt.Sprintf("select rel_id, relname from `mo_catalog`.`mo_tables` where account_id = current_account_id() and reldatabase = '%s' and relname = '%s'", database, tbl)
 
 	// Execute the query
 	result := exec.Query(ctx, query, opts.Finish())
@@ -365,6 +414,32 @@ func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecu
 		return false, nil
 	} else {
 		return true, nil
+	}
+}
+
+func (u *Upgrader) CheckViewDefineIsValid(ctx context.Context, exec ie.InternalExecutor, opts *ie.OptsBuilder, database, view, newViewDef string) (bool, error) {
+	// Query mo_catalog.mo_tables to get table info
+	dbName := strings.ToLower(database)
+	viewName := strings.ToLower(view)
+	query := fmt.Sprintf("select rel_createsql from mo_catalog.mo_tables where account_id = current_account_id() and relkind = 'v' and reldatabase = '%s' and relname = '%s'", dbName, viewName)
+
+	// Execute the query
+	result := exec.Query(ctx, query, opts.Finish())
+
+	// Check for errors
+	if err := result.Error(); err != nil {
+		return false, err
+	}
+
+	cnt := result.RowCount()
+	if cnt == 0 {
+		return false, nil
+	} else {
+		curViewDef, err := result.StringValueByName(ctx, 0, "rel_createsql")
+		if err != nil {
+			return false, moerr.NewInternalError(ctx, "can not get the view define")
+		}
+		return curViewDef == newViewDef, nil
 	}
 }
 
@@ -458,6 +533,46 @@ func (u *Upgrader) upgradeFunc(ctx context.Context, tbl *table.Table, isView boo
 	// Execute upgrade SQL
 	if err = exec.Exec(ctx, sql, opts.Finish()); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (u *Upgrader) upgradeWithPreDropFunc(ctx context.Context, tbl *table.Table, tenant *frontend.TenantInfo, exec ie.InternalExecutor) error {
+	// Switch Tenants
+	ctx = attachAccount(ctx, tenant)
+	opts := makeOptions(tenant)
+
+	isValid, err := u.CheckViewDefineIsValid(ctx, exec, opts, tbl.Database, tbl.Table, tbl.CreateViewSql)
+	if err != nil {
+		return err
+	}
+
+	if !isValid {
+		/*
+			stmt := []string{
+				"begin;",
+				appendSemicolon(fmt.Sprintf("drop view if exists `%s`.`%s`", tbl.Database, tbl.Table)), //drop existing view definitions
+				appendSemicolon(tbl.CreateViewSql), //recreate view
+				"commit;",
+			}
+			// alter view
+			upgradeSQL := strings.Join(stmt, "\n")
+
+			// Execute upgrade SQL
+			if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
+				return err
+			}
+		*/
+		// Delete existing view definitions
+		if err = exec.Exec(ctx, fmt.Sprintf("drop view if exists `%s`.`%s`", tbl.Database, tbl.Table), opts.Finish()); err != nil {
+			return err
+		}
+
+		// Execute upgrade SQL
+		if err := exec.Exec(ctx, tbl.CreateViewSql, opts.Finish()); err != nil {
+			return err
+		}
+
 	}
 	return nil
 }
