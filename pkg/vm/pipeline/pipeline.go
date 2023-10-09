@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -72,6 +73,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		select {
 		case <-proc.Ctx.Done():
 			proc.SetInputBatch(nil)
+			logutil.Infof("proc context done during scan: %v", proc.Ctx.Err())
 			return true, proc.Ctx.Err()
 		default:
 		}

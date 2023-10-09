@@ -15,10 +15,12 @@
 package colexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // isMergeType means the receiver operator receive batch from all regs or single by some order
@@ -46,6 +48,7 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
+		logutil.Infof("proc context done during receive from single: %v", r.proc.Ctx.Err())
 		return nil, true, nil
 	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
 		if !ok {
@@ -60,6 +63,7 @@ func (r *ReceiverOperator) ReceiveFromSingleRegNonBlock(regIdx int, analyze proc
 	defer analyze.WaitStop(start)
 	select {
 	case <-r.proc.Ctx.Done():
+		logutil.Infof("proc context done during receive from single: %v", r.proc.Ctx.Err())
 		return nil, true, nil
 	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
 		if !ok || bat == nil {

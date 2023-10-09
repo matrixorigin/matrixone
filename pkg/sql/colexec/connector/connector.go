@@ -16,7 +16,9 @@ package connector
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -46,10 +48,12 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	select {
 	case <-proc.Ctx.Done():
 		proc.PutBatch(bat)
+		logutil.Infof("proc context done during connector send: %v", proc.Ctx.Err())
 		return process.ExecStop, nil
 
 	case <-reg.Ctx.Done():
 		proc.PutBatch(bat)
+		logutil.Infof("reg.Ctx done during connector send: %v", reg.Ctx.Err())
 		return process.ExecStop, nil
 
 	case reg.Ch <- bat:

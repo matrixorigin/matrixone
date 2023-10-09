@@ -124,6 +124,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	select {
 	case <-proc.Ctx.Done():
 		proc.SetInputBatch(nil)
+		logutil.Infof("proc context done during external scan: %v", proc.Ctx.Err())
 		return process.ExecStop, nil
 	default:
 	}

@@ -17,11 +17,13 @@ package dispatch
 import (
 	"bytes"
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -143,6 +145,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 		case <-proc.Ctx.Done():
 			timeoutCancel()
 			arg.ctr.prepared = true
+			logutil.Infof("proc context done during dispatch: %v", proc.Ctx.Err())
 			return true, nil
 
 		case csinfo := <-proc.DispatchNotifyCh:

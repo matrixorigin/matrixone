@@ -89,6 +89,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 	select {
 	case <-s.Proc.Ctx.Done():
+		logutil.Infof("pipeline stop by %v", s.Proc.Ctx.Err())
 		err = nil
 	default:
 	}
@@ -200,6 +201,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():
+		logutil.Infof("pipeline stop by %v", s.Proc.Ctx.Err())
 		// if context has done, it means other pipeline stop the query normally.
 		// so there is no need to return the error again.
 		return nil

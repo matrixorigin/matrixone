@@ -16,9 +16,11 @@ package dispatch
 
 import (
 	"context"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -60,6 +62,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		select {
 		case <-proc.Ctx.Done():
 			handleUnsent(proc, bat, refCountAdd, int64(i))
+			logutil.Infof("proc context done during dispatch: %v", proc.Ctx.Err())
 			return true, nil
 
 		case <-reg.Ctx.Done():
@@ -110,9 +113,11 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 			if bat != nil && bat.RowCount() != 0 {
 				select {
 				case <-proc.Ctx.Done():
+					logutil.Infof("proc context done during shuffle: %v", proc.Ctx.Err())
 					return nil
 
 				case <-reg.Ctx.Done():
+					logutil.Infof("proc context done during shuffle: %v", reg.Ctx.Err())
 					return nil
 
 				case reg.Ch <- bat:
@@ -147,9 +152,11 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 			if bat != nil && bat.RowCount() != 0 {
 				select {
 				case <-proc.Ctx.Done():
+					logutil.Infof("proc context done during shuffle: %v", proc.Ctx.Err())
 					return nil
 
 				case <-reg.Ctx.Done():
+					logutil.Infof("proc context done during shuffle: %v", reg.Ctx.Err())
 					return nil
 
 				case reg.Ch <- bat:
@@ -170,9 +177,11 @@ func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 			if bat != nil && bat.RowCount() != 0 {
 				select {
 				case <-proc.Ctx.Done():
+					logutil.Infof("proc context done during shuffle: %v", proc.Ctx.Err())
 					return nil
 
 				case <-reg.Ctx.Done():
+					logutil.Infof("proc context done during shuffle: %v", reg.Ctx.Err())
 					return nil
 
 				case reg.Ch <- bat:
@@ -236,6 +245,7 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		reg := ap.LocalRegs[sendto]
 		select {
 		case <-proc.Ctx.Done():
+			logutil.Infof("proc context done during dispatch: %v", proc.Ctx.Err())
 			return true, nil
 
 		case <-reg.Ctx.Done():
@@ -270,6 +280,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	}
 	select {
 	case <-proc.Ctx.Done():
+		logutil.Infof("proc context done during dispatch: %v", proc.Ctx.Err())
 		return true, nil
 
 	default:
