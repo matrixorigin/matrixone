@@ -58,6 +58,9 @@ func (t *ChaosTester) doCheckBootStrapCompleted() (bool, error) {
 	defer func() {
 		_ = res.Close()
 	}()
+	if res.Err() != nil {
+		return false, res.Err()
+	}
 
 	var name string
 	for res.Next() {
