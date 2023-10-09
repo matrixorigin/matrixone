@@ -25,14 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// can be used to check hash collision rate
-// when the number of tests is below 200,000, the rate of false positives should be very low
-const (
-	rowCnt = 200000
-	fkCnt  = 1
-)
-
-// add unit tests for cases
 type fuzzyTestCase struct {
 	arg   *Argument
 	types []types.Type
@@ -40,10 +32,25 @@ type fuzzyTestCase struct {
 }
 
 var (
+	rowCnts []float64
+
+	referM []float64
+
 	tcs []fuzzyTestCase
 )
 
 func init() {
+	rowCnts = []float64{100000, 500000, 1000000, 5000000, 10000000}
+
+	// https://hur.st/bloomfilter/?n=100000&p=0.00001&m=&k=3
+	referM = []float64{
+		13774223,
+		68871111,
+		137742221,
+		688711101,
+		1377422201,
+	}
+
 	tcs = []fuzzyTestCase{
 		{
 			arg:  new(Argument),
@@ -98,14 +105,25 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
+func TestEstimate(t *testing.T) {
+	for i, r := range rowCnts {
+		m := EstimateBitsNeed(r, k, p)
+		require.LessOrEqual(t, referM[i], m, "The estimated number of bits required is too small")
+	}
+}
+
 func TestFuzzyFilter(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, rowCnt)
-		_, err = Call(0, tc.proc, tc.arg, false, false)
-		require.NoError(t, err)
-		require.LessOrEqual(t, tc.arg.collisionCnt, fkCnt, "collision cnt is too high, sth must went wrong")
+		for _, r := range rowCnts {
+			tc.arg.N = r
+			err := Prepare(tc.proc, tc.arg)
+			require.NoError(t, err)
+			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, int64(r))
+			_, err = Call(0, tc.proc, tc.arg, false, false)
+			require.NoError(t, err)
+			t.Logf("Estimated row count is %f, collisionCnt is %d, fp is %f", tc.arg.N, tc.arg.collisionCnt, float64(tc.arg.collisionCnt)/float64(tc.arg.N))
+			require.LessOrEqual(t, float64(tc.arg.collisionCnt)/float64(tc.arg.N), 1.1*p, "collision cnt is too high, sth must went wrong")
+		}
 	}
 }
 

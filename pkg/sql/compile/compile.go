@@ -2360,10 +2360,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ss []*Scope, ns []*plan.Node)
 		panic("fuzzy filter should have only one prescope")
 	}
 
-	arg, err := constructFuzzyFilter(ns[n.Children[0]])
-	if err != nil {
-		return nil, err
-	}
+	arg := constructFuzzyFilter(ns[n.Children[0]])
 
 	ss[0].appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,

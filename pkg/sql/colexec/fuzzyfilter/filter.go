@@ -15,8 +15,11 @@ package fuzzyfilter
 
 import (
 	"bytes"
+	// "fmt"
+	"math"
 
 	"github.com/bits-and-blooms/bloom"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,18 +41,26 @@ if the final bloom filter claim that
 
 Note:
 1. backgroud SQL may slow, so some optimizations could be applied
-    1. manually check whether collision keys duplicate or not,
+    manually check whether collision keys duplicate or not,
         if duplicate, then return error timely
 2. there is a corner case that no need to run background SQL
     on duplicate key update
-
 */
 
 const (
-	// false positives rate
-	fp = 0.00001
-	hashCnt = 3
+	// Probability of false positives
+	p float64 = 0.00001
+	// Number of hash functions
+	k uint = 3
 )
+
+// EstimateBitsNeed return the Number of bits should have in the filter
+// by the formula: p = pow(1 - exp(-k / (m / n)), k)
+//
+//	==> m = - kn / ln(1 - p^(1/k)), use k * (1.001 * n) instead of kn to overcome floating point errors
+func EstimateBitsNeed(n float64, k uint, p float64) float64 {
+	return -float64(k) * math.Ceil(1.001*n) / math.Log(1-math.Pow(p, 1.0/float64(k)))
+}
 
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" fuzzy check duplicate constraint")
@@ -57,8 +68,12 @@ func String(_ any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
-
-	ap.filter = bloom.NewWithEstimates(ap.EstimatedRowCnt, fp)
+	e := EstimateBitsNeed(ap.N, k, p)
+	m := uint(math.Ceil(e))
+	if float64(m) < e {
+		return moerr.NewInternalErrorNoCtx("Overflow occurred when estimating size of fuzzy filter")
+	}
+	ap.filter = bloom.New(m, k)
 	return nil
 }
 
@@ -78,6 +93,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			return process.ExecStop, nil
 		}
 
+		// fmt.Printf("Estimated row count is %f, collisionCnt is %d, fp is %f\n", ap.N, ap.collisionCnt, float64(ap.collisionCnt)/float64(ap.N))
 		ap.rbat.SetRowCount(ap.collisionCnt)
 		if ap.collisionCnt == 0 {
 			// case 1: pass duplicate constraint

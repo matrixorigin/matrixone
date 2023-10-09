@@ -20,11 +20,12 @@ import (
 )
 
 type Argument struct {
-	EstimatedRowCnt uint
-	
-	collisionCnt    int
-	filter          *bloom.BloomFilter
-	rbat            *batch.Batch
+	// Number of items in the filter
+	N float64
+
+	collisionCnt int
+	filter       *bloom.BloomFilter
+	rbat         *batch.Batch
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -33,9 +34,4 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.rbat != nil {
 		arg.rbat.Clean(proc.GetMPool())
 	}
-}
-
-
-func Estimated() {
-
 }

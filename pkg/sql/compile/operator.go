@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -537,15 +536,10 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	}
 }
 
-func constructFuzzyFilter(n *plan.Node) (*fuzzyfilter.Argument, error) {
-	e := uint(math.Ceil(n.Stats.Outcnt))
-	if float64(e) < n.Stats.Outcnt {
-		return nil, moerr.NewInternalErrorNoCtx("Overflow found when estimating size of fuzzy filter")
-	}
-
+func constructFuzzyFilter(n *plan.Node) *fuzzyfilter.Argument {
 	return &fuzzyfilter.Argument{
-		EstimatedRowCnt: e,
-	}, nil
+		N: n.Stats.Outcnt,
+	}
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
