@@ -245,7 +245,7 @@ func (rb *remoteBackend) adjust() {
 		rb.options.batchSendSize = 8
 	}
 	if rb.options.connectTimeout == 0 {
-		rb.options.connectTimeout = time.Second * 10
+		rb.options.connectTimeout = time.Second * 5
 	}
 	if rb.options.streamBufferSize == 0 {
 		rb.options.streamBufferSize = 16
@@ -776,12 +776,13 @@ func (rb *remoteBackend) resetConn() error {
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			canRetry = true
 		}
+		rb.logger.Error("init remote connection failed, retry later",
+			zap.Bool("can-retry", canRetry),
+			zap.Error(err))
+
 		if !canRetry {
 			return err
 		}
-
-		rb.logger.Error("init remote connection failed, retry later", zap.Error(err))
-
 		duration := time.Duration(0)
 		for {
 			time.Sleep(sleep)
