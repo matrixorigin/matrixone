@@ -177,8 +177,21 @@ func (zm ZM) GetSum() any {
 	if !zm.IsInited() {
 		return nil
 	}
-	buf := zm.GetSumBuf()
-	return zm.getValue(buf)
+	return zm.decodeSum()
+}
+
+func (zm ZM) decodeSum() any {
+	switch types.T(zm[63]) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return types.DecodeInt64(zm.GetSumBuf())
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return types.DecodeUint64(zm.GetSumBuf())
+	case types.T_float32, types.T_float64:
+		return types.DecodeFloat64(zm.GetSumBuf())
+	case types.T_decimal64:
+		return types.DecodeDecimal64(zm.GetSumBuf())
+	}
+	return nil
 }
 
 func (zm ZM) GetMinBuf() []byte {
@@ -191,7 +204,7 @@ func (zm ZM) GetMaxBuf() []byte {
 
 func (zm ZM) GetSumBuf() []byte {
 	if zm.supportSum() {
-		return zm[8 : 8+zm[30]&0x1f]
+		return zm[8:16]
 	}
 	return nil
 }
@@ -1163,6 +1176,12 @@ func BatchUpdateZM(zm ZM, vec *vector.Vector) (err error) {
 		UpdateZM(zm, maxv)
 	}
 	return
+}
+
+func SetZMSum(zm ZM, vec *vector.Vector) {
+	if ok, sumv := vec.GetSumValue(); ok {
+		zm.SetSum(sumv)
+	}
 }
 
 func EncodeZM(zm *ZM) []byte {
