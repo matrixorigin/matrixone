@@ -62,6 +62,13 @@ jobs:
           fetch-depth: '3'
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
+      - uses: thiagodnf/yaml-schema-checker@v0.0.10
+        name: Check Issue Template
+        with:
+          jsonSchemaFile: .github/ISSUE_TEMPLATE/schema.json
+          yamlFiles: |
+            .github/ISSUE_TEMPLATE/*.yml
+            .github/ISSUE_TEMPLATE/*.yaml
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
@@ -258,19 +265,3 @@ jobs:
         temperature: 0.2
         review_per_file: false
         comment_per_file: false      
-
-  issue-template-check:
-    name: Issue Template Check
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-      with:
-        repository: ${{ github.event.pull_request.head.repo.full_name }}
-        ref: ${{ github.event.pull_request.head.ref }}
-    - uses: thiagodnf/yaml-schema-checker@v0.0.10
-      name: Check Issue Template
-      with:
-        jsonSchemaFile: .github/ISSUE_TEMPLATE/schema.json
-        yamlFiles: |
-          .github/ISSUE_TEMPLATE/*.yml
-          .github/ISSUE_TEMPLATE/*.yaml
