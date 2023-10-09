@@ -303,8 +303,8 @@ func init() {
 	registerCheckpointDataReferVersion(CheckpointVersion4, checkpointDataSchemas_V4[:])
 	registerCheckpointDataReferVersion(CheckpointVersion5, checkpointDataSchemas_V5[:])
 	registerCheckpointDataReferVersion(CheckpointVersion6, checkpointDataSchemas_V6[:])
-	registerCheckpointDataReferVersion(CheckpointVersion7, checkpointDataSchemas_V6[:])
-	registerCheckpointDataReferVersion(CheckpointVersion8, checkpointDataSchemas_V6[:])
+	registerCheckpointDataReferVersion(CheckpointVersion7, checkpointDataSchemas_V7[:])
+	registerCheckpointDataReferVersion(CheckpointVersion8, checkpointDataSchemas_V8[:])
 	checkpointDataSchemas_Curr = checkpointDataSchemas_V8
 }
 
