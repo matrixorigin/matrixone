@@ -331,19 +331,53 @@ func TestZM(t *testing.T) {
 }
 
 func TestZMSum(t *testing.T) {
-	zm := NewZM(types.T_int64, 0)
+	testIntSum(t, types.T_int8)
+	testIntSum(t, types.T_int16)
+	testIntSum(t, types.T_int32)
+	testIntSum(t, types.T_int64)
+	testUIntSum(t, types.T_uint8)
+	testUIntSum(t, types.T_uint16)
+	testUIntSum(t, types.T_uint32)
+	testUIntSum(t, types.T_uint64)
+	testFloatSum(t, types.T_float32)
+	testFloatSum(t, types.T_float64)
+	testDecimal64Sum(t)
+}
+
+func testIntSum(t *testing.T, zmType types.T) {
+	zm := NewZM(zmType, 0)
 	zm.setInited()
 	require.Equal(t, int64(0), zm.GetSum())
-	int64v := int64(100)
-	zm.SetSum(types.EncodeInt64(&int64v))
-	require.Equal(t, int64v, zm.GetSum())
+	sum := int64(100)
+	zm.SetSum(types.EncodeFixed(sum))
+	require.Equal(t, sum, zm.GetSum())
+}
 
-	zm2 := NewZM(types.T_int8, 0)
-	zm2.setInited()
-	require.Equal(t, int8(0), zm2.GetSum())
-	int8v := int8(100)
-	zm2.SetSum(types.EncodeInt8(&int8v))
-	require.Equal(t, int8v, zm2.GetSum())
+func testUIntSum(t *testing.T, zmType types.T) {
+	zm := NewZM(zmType, 0)
+	zm.setInited()
+	require.Equal(t, uint64(0), zm.GetSum())
+	sum := uint64(100)
+	zm.SetSum(types.EncodeFixed(sum))
+	require.Equal(t, sum, zm.GetSum())
+}
+
+func testFloatSum(t *testing.T, zmType types.T) {
+	zm := NewZM(zmType, 0)
+	zm.setInited()
+	require.Equal(t, float64(0), zm.GetSum())
+	sum := float64(100)
+	zm.SetSum(types.EncodeFixed(sum))
+	require.Equal(t, sum, zm.GetSum())
+}
+
+func testDecimal64Sum(t *testing.T) {
+	zm := NewZM(types.T_decimal64, 0)
+	zm.setInited()
+	require.Equal(t, types.Decimal64(0), zm.GetSum())
+	sum := types.Decimal64(100)
+	zm.SetSum(types.EncodeFixed(sum))
+	require.Equal(t, sum, zm.GetSum())
 }
 
 func BenchmarkZM(b *testing.B) {

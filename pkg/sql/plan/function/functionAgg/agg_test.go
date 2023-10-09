@@ -16,23 +16,24 @@ package functionAgg
 
 import (
 	"fmt"
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 )
 
 func testUnaryAggSupported(
-	newAgg func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error),
+	newAgg func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error),
 	paramSupported []types.T, getReturnType func(typ []types.Type) types.Type) error {
 	for _, t := range paramSupported {
 		inputs := []types.Type{t.ToType()}
 
-		_, err := newAgg(0, false, inputs, getReturnType(inputs), nil)
+		_, err := newAgg(0, false, inputs, getReturnType(inputs), nil, nil)
 		if err != nil {
 			return err
 		}

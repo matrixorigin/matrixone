@@ -163,12 +163,23 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 func (ctr *container) generateAggStructures(arg *Argument) error {
 	var err error
 	i := 0
-	for i < len(arg.Aggs) {
-		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config); err != nil {
-			ctr.bat = nil
-			return err
+	if arg.PartialResults == nil {
+		for i < len(arg.Aggs) {
+			if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config, nil); err != nil {
+				ctr.bat = nil
+				return err
+			}
+			i++
 		}
-		i++
+	} else {
+		for i < len(arg.Aggs) {
+			if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config, arg.PartialResults[i]); err != nil {
+				ctr.bat = nil
+				return err
+			}
+			i++
+		}
+		arg.PartialResults = nil
 	}
 
 	return nil
