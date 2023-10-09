@@ -325,6 +325,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 	} else {
 		return newRemoteLockTable(
 			s.serviceID,
+			s.cfg.RemoteLockTimeout.Duration,
 			bind,
 			s.remote.client,
 			s.handleBindChanged)

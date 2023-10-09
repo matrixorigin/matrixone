@@ -17,7 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
-	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,6 +32,7 @@ import (
 // And the remoteLockTable acts as a proxy for this LockTable locally.
 type remoteLockTable struct {
 	logger             *log.MOLogger
+	removeLockTimeout  time.Duration
 	serviceID          string
 	bind               pb.LockTable
 	client             Client
@@ -40,6 +41,7 @@ type remoteLockTable struct {
 
 func newRemoteLockTable(
 	serviceID string,
+	removeLockTimeout time.Duration,
 	binding pb.LockTable,
 	client Client,
 	bindChangedHandler func(pb.LockTable)) *remoteLockTable {
@@ -49,6 +51,7 @@ func newRemoteLockTable(
 		With(zap.String("binding", binding.DebugString()))
 	l := &remoteLockTable{
 		logger:             logger,
+		removeLockTimeout:  removeLockTimeout,
 		serviceID:          serviceID,
 		client:             client,
 		bind:               binding,
@@ -124,6 +127,7 @@ func (l *remoteLockTable) unlock(
 		l.serviceID,
 		txn,
 		l.bind)
+	st := time.Now()
 	for {
 		err := l.doUnlock(txn, commitTS)
 		if err == nil {
@@ -142,7 +146,10 @@ func (l *remoteLockTable) unlock(
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
 		if err := l.handleError(txn.txnID, err); err == nil ||
-			!isRetryError(err) {
+			!isRetryError(err) ||
+			// if retry cost > keepRemoteLockDuration, remote lock will
+			// dropped by timeout.
+			time.Since(st) > l.removeLockTimeout {
 			return
 		}
 	}
@@ -152,6 +159,7 @@ func (l *remoteLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) {
+	st := time.Now()
 	for {
 		lock, ok, err := l.doGetLock(key, txn)
 		if err == nil {
@@ -164,7 +172,10 @@ func (l *remoteLockTable) getLock(
 
 		// why use loop is similar to unlock
 		if err = l.handleError(txn.TxnID, err); err == nil ||
-			!isRetryError(err) {
+			!isRetryError(err) ||
+			// if retry cost > keepRemoteLockDuration, remote lock will
+			// dropped by timeout.
+			time.Since(st) > l.removeLockTimeout {
 			return
 		}
 	}
@@ -269,5 +280,9 @@ func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {
 }
 
 func isRetryError(err error) bool {
-	return strings.Contains(err.Error(), "timeout")
+	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+		return false
+	}
+	return true
 }
