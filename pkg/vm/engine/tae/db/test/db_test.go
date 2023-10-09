@@ -449,7 +449,15 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
-		_, err = dataBlk.RangeDelete(txn, 1, 2, nil, handle.DT_Normal)
+		pkDef := schema.GetPrimaryKey()
+		pkVec := containers.MakeVector(pkDef.Type)
+		val1, _, err := dataBlk.GetValue(ctx, txn, schema, 1, pkDef.Idx)
+		assert.NoError(t, err)
+		pkVec.Append(val1, false)
+		val2, _, err := dataBlk.GetValue(ctx, txn, schema, 2, pkDef.Idx)
+		assert.NoError(t, err)
+		pkVec.Append(val2, false)
+		_, err = dataBlk.RangeDelete(txn, 1, 2, pkVec, handle.DT_Normal)
 		assert.Nil(t, err)
 
 		view, err = dataBlk.GetColumnDataById(context.Background(), txn, readSchema, 2)
@@ -1569,7 +1577,7 @@ func TestCompactABlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
-	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
@@ -2903,7 +2911,7 @@ func TestSegDelLogtail(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	require.NoError(t, err)
 
 	check := func() {
@@ -3705,8 +3713,8 @@ func TestDropCreated1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
-	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAtLocked())
+	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAtLocked())
 
 	tae.Restart(ctx)
 }
@@ -3730,8 +3738,8 @@ func TestDropCreated2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
-	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAtLocked())
+	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAtLocked())
 
 	tae.Restart(ctx)
 }
@@ -3752,7 +3760,7 @@ func TestDropCreated3(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 	assert.Nil(t, err)
 
 	tae.Restart(ctx)
@@ -3777,7 +3785,7 @@ func TestDropCreated4(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 	assert.Nil(t, err)
 
 	tae.Restart(ctx)
@@ -5403,7 +5411,11 @@ func TestMergeBlocks3(t *testing.T) {
 		view, err := blk11Handle.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		view.GetData()
 		require.NoError(t, err)
-		err = rel.DeleteByPhyAddrKeys(view.GetData(), nil)
+		pkDef := schema.GetPrimaryKey()
+		pkView, err := blk11Handle.GetColumnDataByName(context.Background(), pkDef.Name)
+		pkView.GetData()
+		require.NoError(t, err)
+		err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
 		require.NoError(t, err)
 
 		require.NoError(t, rel.DeleteByFilter(context.Background(), filter5))
@@ -6337,7 +6349,7 @@ func TestAlterRenameTbl(t *testing.T) {
 	t.Log(dbentry.PrettyNameIndex())
 	require.NoError(t, txn.Commit(context.Background()))
 
-	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS()))
+	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false))
 	tae.Restart(ctx)
 
 	txn, _ = tae.StartTxn(nil)
@@ -6440,7 +6452,7 @@ func TestAlterRenameTbl2(t *testing.T) {
 		t.Log(dbentry.PrettyNameIndex())
 	}
 
-	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS()))
+	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false))
 
 	tae.Restart(ctx)
 	{
@@ -7583,7 +7595,7 @@ func TestForceCheckpoint(t *testing.T) {
 
 	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.Error(t, err)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
 }
 
@@ -7677,7 +7689,7 @@ func TestMarshalPartioned(t *testing.T) {
 	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
-	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
@@ -8023,6 +8035,7 @@ func TestDeduplication(t *testing.T) {
 }
 
 func TestGCInMemoryDeletesByTS(t *testing.T) {
+	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 

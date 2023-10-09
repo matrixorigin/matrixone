@@ -55,7 +55,7 @@ func (s *sqlStore) Create(
 	tableID uint64,
 	cols []AutoColumn,
 	txnOp client.TxnOperator) error {
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp).WithWaitCommittedLogApplied()
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	}
