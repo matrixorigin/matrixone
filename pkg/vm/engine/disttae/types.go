@@ -16,7 +16,9 @@ package disttae
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -183,6 +185,8 @@ type Transaction struct {
 	startStatementCalled bool
 	incrStatementCalled  bool
 	syncCommittedTSCount uint64
+	//!!!NOTE: record the last call stack of StartStatement
+	startStatementLastCallStack []byte
 }
 
 type Pos struct {
@@ -239,10 +243,14 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 
 func (txn *Transaction) StartStatement() {
 	if txn.startStatementCalled {
-		logutil.Fatal("BUG: StartStatement called twice")
+		currentStack := string(debug.Stack())
+		logutil.Fatal("BUG: StartStatement called twice",
+			zap.String("currentStack", currentStack),
+			zap.String("lastCallback", string(txn.startStatementLastCallStack)))
 	}
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false
+	txn.startStatementLastCallStack = debug.Stack()
 }
 
 func (txn *Transaction) EndStatement() {
