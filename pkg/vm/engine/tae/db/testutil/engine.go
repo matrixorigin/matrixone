@@ -123,14 +123,14 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 func (e *TestEngine) ForceCheckpoint() {
 	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS())
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(e.t, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
 	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), 20*time.Second)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS())
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(e.t, err)
 }
 
@@ -283,7 +283,7 @@ func (e *TestEngine) IncrementalCheckpoint(
 		flushed := e.DB.BGCheckpointRunner.IsAllChangesFlushed(types.TS{}, end, true)
 		assert.True(e.t, flushed)
 	}
-	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end)
+	err := e.DB.BGCheckpointRunner.ForceIncrementalCheckpoint(end, false)
 	assert.NoError(e.t, err)
 	if truncate {
 		lsn := e.DB.BGCheckpointRunner.MaxLSNInRange(end)
