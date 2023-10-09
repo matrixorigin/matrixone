@@ -99,6 +99,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
 			return nil, err
 		}
+		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
 		w.writer.UpdateBlockZM(int(block.GetID()), seqnums[i], zm)
 		// update object zonemap
