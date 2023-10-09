@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
-const viewDefineSQL = `select rel_createsql from mo_catalog.mo_tables where account_id = current_account_id() and relkind = 'v' and relname = '%s';`
-
 var (
 	// mo_table_partitions;
 	MoTablePartitionsTable = &table.Table{

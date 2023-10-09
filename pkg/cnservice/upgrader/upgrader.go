@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -575,22 +574,4 @@ func (u *Upgrader) upgradeWithPreDropFunc(ctx context.Context, tbl *table.Table,
 
 	}
 	return nil
-}
-
-func attachAccount(ctx context.Context, tenant *frontend.TenantInfo) context.Context {
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, tenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
-	return ctx
-}
-
-func makeOptions(tenant *frontend.TenantInfo) *ie.OptsBuilder {
-	return ie.NewOptsBuilder().AccountId(tenant.GetTenantID()).UserId(tenant.GetUserID()).DefaultRoleId(tenant.GetDefaultRoleID())
-}
-
-func appendSemicolon(s string) string {
-	if !strings.HasSuffix(s, ";") {
-		return s + ";"
-	}
-	return s
 }
