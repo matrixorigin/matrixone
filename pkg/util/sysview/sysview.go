@@ -187,31 +187,7 @@ var (
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
 			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
-		//"CREATE TABLE IF NOT EXISTS COLUMNS(" +
-		//	"TABLE_CATALOG varchar(64)," +
-		//	"TABLE_SCHEMA varchar(64)," +
-		//	"TABLE_NAME varchar(64)," +
-		//	"COLUMN_NAME varchar(64)," +
-		//	"ORDINAL_POSITION int unsigned," +
-		//	"COLUMN_DEFAULT text," +
-		//	"IS_NULLABLE varchar(3)," +
-		//	"DATA_TYPE longtext," +
-		//	"CHARACTER_MAXIMUM_LENGTH bigint," +
-		//	"CHARACTER_OCTET_LENGTH bigint," +
-		//	"NUMERIC_PRECISION bigint unsigned," +
-		//	"NUMERIC_SCALE bigint unsigned," +
-		//	"DATETIME_PRECISION int unsigned," +
-		//	"CHARACTER_SET_NAME varchar(64)," +
-		//	"COLLATION_NAME varchar(64)," +
-		//	"COLUMN_TYPE mediumtext," +
-		//	"COLUMN_KEY varchar(10)," +
-		//	"EXTRA varchar(256)," +
-		//	"`PRIVILEGES` varchar(154)," +
-		//	"COLUMN_COMMENT text," +
-		//	"GENERATION_EXPRESSION longtext," +
-		//	"SRS_ID int unsigned" +
-		//	");",
-
+		
 		"CREATE TABLE IF NOT EXISTS PROFILING (" +
 			"QUERY_ID int NOT NULL DEFAULT '0'," +
 			"SEQ int NOT NULL DEFAULT '0'," +
@@ -239,14 +215,7 @@ var (
 			"PRIVILEGE_TYPE varchar(64) NOT NULL DEFAULT ''," +
 			"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 			");",
-		//"CREATE TABLE IF NOT EXISTS SCHEMATA (" +
-		//	"CATALOG_NAME varchar(64)," +
-		//	"SCHEMA_NAME varchar(64)," +
-		//	"DEFAULT_CHARACTER_SET_NAME varchar(64)," +
-		//	"DEFAULT_COLLATION_NAME varchar(64)," +
-		//	"SQL_PATH binary(0)," +
-		//	"DEFAULT_ENCRYPTION varchar(10)" +
-		//	");",
+
 		"CREATE VIEW SCHEMATA AS SELECT " +
 			"dat_catalog_name AS CATALOG_NAME," +
 			"datname AS SCHEMA_NAME," +
