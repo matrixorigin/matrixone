@@ -262,8 +262,11 @@ jobs:
   issue-template-check:
     name: Issue Template Check
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
     steps:
+    - uses: actions/checkout@v3
+      with:
+        repository: ${{ github.event.pull_request.head.repo.full_name }}
+        ref: ${{ github.event.pull_request.head.ref }}
     - uses: thiagodnf/yaml-schema-checker@v0.0.10
       name: Check Issue Template
       with:
