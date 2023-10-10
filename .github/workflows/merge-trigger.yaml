@@ -53,6 +53,7 @@ jobs:
       mo_svc_ip: ${{ steps.get_mo_addr.outputs.mo_svc_ip }}
       cn_0: ${{ steps.get_mo_addr.outputs.cn_0 }}
       cn_1: ${{ steps.get_mo_addr.outputs.cn_1 }}
+      cn_ips: ${{ steps.get_mo_addr.outputs.cn_ips }}
     steps:
       - name: Checkout Matrixorigin/Matrixone
         uses: actions/checkout@v3
@@ -114,7 +115,9 @@ jobs:
           mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
           echo mo_svc_ip=$mo_svc_ip
           echo "mo_svc_ip=${mo_svc_ip}" >> $GITHUB_OUTPUT
-          kubectl get pod -n mo-checkin-regression-${{ github.event.pull_request.number }} -l matrixorigin.io/component=CNSet | awk 'NR>1{arr[a++]=$1} END {for(i in arr){system("echo cn_"i"="arr[i]" >> $GITHUB_OUTPUT")}}'    
+          kubectl get pod -n mo-checkin-regression-${{ github.event.pull_request.number }} -l matrixorigin.io/component=CNSet | awk 'NR>1{arr[a++]=$1} END {for(i in arr){system("echo cn_"i"="arr[i]" >> $GITHUB_OUTPUT")}}'
+          cn_ips=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{.items[*].status.podIP}' | sed 's/ /,/g')
+          echo "cn_ips=$cn_ips"  >>  $GITHUB_OUTPUT
       - name: Prepare Data in cn-0
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
@@ -173,8 +176,7 @@ jobs:
           locale
           sed -i "s/127.0.0.1:6001/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}:6001/" ./mo-tester/mo.yml
           sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' ./mo-tester/mo.yml
-          cn_ips=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{.items[*].status.podIP}' | sed 's/ /,/g')
-          sed -i.bak "s/  serverIP: \"127.0.0.1\"/  serverIP: \"$cn_ips\"/g" mo.yml
+          sed -i.bak 's/  serverIP: "127.0.0.1"/  serverIP: "${{ needs.setup_mo_test_env.outputs.cn_ips }}"/g' ./mo-tester/mo.yml
           sed -i 's/waittime:.*/waittime: 2000/g' ./mo-tester/run.yml
           cat ./mo-tester/mo.yml
           echo "=========================="
