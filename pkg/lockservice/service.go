@@ -159,6 +159,10 @@ func (s *service) Unlock(
 	return nil
 }
 
+func (s *service) GetServiceID() string {
+	return s.serviceID
+}
+
 func (s *service) GetConfig() Config {
 	return s.cfg
 }
