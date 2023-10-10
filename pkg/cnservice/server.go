@@ -677,11 +677,13 @@ func (s *service) initIncrService() {
 		panic(err)
 	}
 	incrService := incrservice.NewIncrService(
+		s.cfg.UUID,
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
 		runtime.AutoIncrmentService,
 		incrService)
+	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
 }
 
 func (s *service) bootstrap() error {

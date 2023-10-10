@@ -208,7 +208,7 @@ func runServiceTests(
 		ops := make([]client.TxnOperator, 0, n)
 		for i := 0; i < n; i++ {
 			store := NewMemStore()
-			ss = append(ss, NewIncrService(store, Config{CountPerAllocate: 1}).(*service))
+			ss = append(ss, NewIncrService("", store, Config{CountPerAllocate: 1}).(*service))
 
 			op, err := tc.New(ctx, timestamp.Timestamp{})
 			require.NoError(t, err)
