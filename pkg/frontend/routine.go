@@ -209,7 +209,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses = rt.getSession()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
-	tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
+	nodeCtx := cancelRequestCtx
+	if ses.getRoutineManager().baseService != nil {
+		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
+	}
+	tenantCtx := context.WithValue(nodeCtx, defines.TenantIDKey{}, tenant.GetTenantID())
 	tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
 	tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 	ses.SetRequestContext(tenantCtx)
