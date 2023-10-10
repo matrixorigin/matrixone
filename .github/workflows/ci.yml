@@ -172,7 +172,10 @@ jobs:
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e optimistic 2>&1
+          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
+          cat mo.yml
+          echo "============================="
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e optimistic 2>&1
       - name: Stop MO Service
         id: test_bvt_stop
         if: ${{ steps.ut-pr.outputs.paths != '' }}
