@@ -890,3 +890,121 @@ func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileServic
 	}
 	return locations, data, nil
 }
+
+type fileData struct {
+	data []blockData
+	name objectio.ObjectName
+	isChange bool
+}
+
+type blockData struct {
+	num uint16
+	row uint32
+	blockType objectio.DataMetaType
+	data *batch.Batch
+}
+
+func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32, ts types.TS, files map[string]*fileservice.DirEntry) (*CheckpointData, error) {
+	objectsData := make(map[string]*fileData, 0)
+	data := NewCheckpointData()
+	reader, err := blockio.NewObjectReader(fs, location)
+	if err != nil {
+		return nil, err
+	}
+	err = data.readMetaBatch(ctx, version, reader, nil)
+	if err != nil {
+		return nil, err
+	}
+	err = data.readAll(ctx, version, fs)
+	if err != nil {
+		return nil, err
+	}
+	isCkpChange := false
+	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		isAblk := data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_EntryState).Get(i).(bool)
+		if !isAblk && deltaLoc.IsEmpty() {
+			continue
+		}
+
+		bat, err := blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
+		if err != nil {
+			return  nil, err
+		}
+		isChange := false
+		if v := 0; v < bat.Vecs[0].Length() {
+			commitTs := types.TS{}
+			err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetBytesAt(v))
+			if err != nil {
+				return nil, err
+			}
+			if !commitTs.LessEq(ts) {
+				windowCNBatch(bat, 0, uint64(v))
+				isChange = true
+				isCkpChange = true
+			}
+		}
+
+		if objectsData[metaLoc.Name().String()] == nil {
+			objectsData[metaLoc.Name().String()] = &fileData{
+				name: metaLoc.Name(),
+				data: make([]blockData,0),
+				isChange: isChange,
+			}
+		}
+
+		objectsData[metaLoc.Name().String()].data = append(objectsData[metaLoc.Name().String()].data, blockData{
+			num: metaLoc.ID(),
+			row: uint32(i),
+			data: bat,
+		})
+		if isCkpChange {
+			for fileName, objectData := range objectsData {
+				if objectData.isChange {
+					writer, err := blockio.NewBlockWriter(fs, fileName)
+					sort.Slice(objectData.data, func(i, j int) bool {
+						return objectData.data[i].num < objectData.data[j].num
+					})
+					for _, block := range objectData.data {
+						if block.blockType == objectio.SchemaData {
+							_, err = writer.WriteBatch(block.data)
+							if err != nil {
+								return nil, err
+							}
+						} else if block.blockType == objectio.SchemaTombstone {
+							_, err = writer.WriteTombstoneBatch(block.data)
+							if err != nil {
+								return nil, err
+							}
+						}
+					}
+
+					blocks, extent, err := writer.Sync(ctx)
+					if err != nil {
+						return nil, err
+					}
+
+					for row, block := range blocks {
+						blockLocation := objectio.BuildLocation(objectData.name, extent,0, block.GetID())
+						if objectData.data[row].blockType == objectio.SchemaData {
+							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Update(int(objectData.data[i].row), []byte(blockLocation), false)
+						}
+						if objectData.data[row].blockType == objectio.SchemaTombstone {
+							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Update(int(objectData.data[i].row), []byte(blockLocation), false)
+						}
+					}
+
+
+				}
+			}
+			cnLocation, dnLocation, err := data.WriteTo(fs, 10000)
+			if err != nil {
+				return nil, err
+			}
+
+		}
+
+	}
+	return  data, nil
+}

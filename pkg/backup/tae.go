@@ -91,21 +91,18 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
 	backupTime := names[0]
-	names = names[1:]
+	suffix := names[1]
+	names = names[2:]
 	files := make(map[string]*fileservice.DirEntry, 0)
+	suffixFiles := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
-	var cnLoc string
-	var tnLoc string
-	var mergeStart string
-	var mergeEnd string
-	var mergeData *logtail.CheckpointData
-	for i, name := range names {
+	for _, name := range names {
 		if len(name) == 0 {
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 && i != 0 {
+		if len(ckpStr) != 2 {
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
 		}
 		metaLoc := ckpStr[0]
@@ -120,13 +117,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
 		if err != nil {
 			return err
-		}
-		if i == 0 {
-			cnLoc = ckpStr[0]
-			mergeEnd = ckpStr[2]
-			tnLoc = ckpStr[3]
-			mergeStart = ckpStr[4]
-			mergeData = data
 		}
 		table.UpdateTable(data)
 		gcFiles := table.SoftGC()
@@ -180,7 +170,45 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		return err
 	}
 	taeFileList = append(taeFileList, sizeList...)
-	if cnLoc != "" {
+	if suffix != "" {
+		var mergeData *logtail.CheckpointData
+		ckpStr := strings.Split(suffix, ":")
+		if len(ckpStr) != 5 {
+			return moerr.NewInternalError(ctx, "invalid checkpoint string")
+		}
+		cnLoc := ckpStr[0]
+		mergeEnd := ckpStr[2]
+		tnLoc := ckpStr[3]
+		mergeStart := ckpStr[4]
+		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
+		if err != nil {
+			return err
+		}
+		key, err := blockio.EncodeLocationFromString(cnLoc)
+		if err != nil {
+			return err
+		}
+		locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
+		if err != nil {
+			return err
+		}
+		table.UpdateTable(data)
+		gcFiles := table.SoftGC()
+		mergeGCFile(gcFiles, gcFileMap)
+		for _, location := range locations {
+			if files[location.Name().String()] == nil && suffixFiles[location.Name().String()] == nil {
+				dentry, err := srcFs.StatFile(ctx, location.Name().String())
+				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+						isGC(gcFileMap, location.Name().String()) {
+						continue
+					} else {
+						return err
+					}
+				}
+				suffixFiles[location.Name().String()] = dentry
+			}
+		}
 		end := types.StringToTS(mergeEnd)
 		start := types.StringToTS(mergeStart)
 		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)

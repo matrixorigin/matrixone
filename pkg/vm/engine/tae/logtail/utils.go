@@ -1298,7 +1298,7 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) {
 	}
 }
 
-func (data *CheckpointData) TrimForBackup(ctx context.Context, fs fileservice.FileService, ts types.TS) error {
+func (data *CheckpointData) TrimForBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, ts types.TS) error {
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
 		deltaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		metaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
@@ -1306,7 +1306,7 @@ func (data *CheckpointData) TrimForBackup(ctx context.Context, fs fileservice.Fi
 		if !isAblk && deltaLoc.IsEmpty() {
 			continue
 		}
-		bat, err := blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
+		bat, err := blockio.LoadOneBlock(ctx, srcFs, metaLoc, objectio.SchemaData)
 		if err != nil {
 			return err
 		}
