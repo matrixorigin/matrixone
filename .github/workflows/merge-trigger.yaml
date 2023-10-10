@@ -176,7 +176,7 @@ jobs:
           locale
           sed -i "s/127.0.0.1:6001/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}:6001/" ./mo-tester/mo.yml
           sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' ./mo-tester/mo.yml
-          sed -i.bak 's/  serverIP: "127.0.0.1"/  serverIP: "${{ needs.setup_mo_test_env.outputs.cn_ips }}"/g' ./mo-tester/mo.yml
+          sed -i 's/  serverIP: "127.0.0.1"/  serverIP: "${{ needs.setup_mo_test_env.outputs.cn_ips }}"/g' ./mo-tester/mo.yml
           sed -i 's/waittime:.*/waittime: 2000/g' ./mo-tester/run.yml
           cat ./mo-tester/mo.yml
           echo "=========================="
