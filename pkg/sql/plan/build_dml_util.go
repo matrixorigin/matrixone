@@ -2012,7 +2012,8 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 	}
 
-	if !isUpdate {
+	// For inserts with no primary key, no additional locks are required
+	if !isUpdate && !(tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName) {
 		if lockNodeId, ok := appendLockNode(
 			builder,
 			bindCtx,
