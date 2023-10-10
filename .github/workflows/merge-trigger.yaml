@@ -722,7 +722,7 @@ jobs:
           locale
           
           cd $GITHUB_WORKSPACE/mo-tester
-          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
+          sed -i '' 's/  port: [0-9]*/  port: 12345/g' mo.yml
           cat mo.yml
           echo "===================="
 
