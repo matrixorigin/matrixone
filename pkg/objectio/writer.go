@@ -180,7 +180,8 @@ func (w *objectWriterV1) prepareDataMeta(objectMeta objectDataMetaV1, blocks []b
 	maxSeqnum := uint16(0)
 	var seqnums *Seqnums
 	if len(blocks) == 0 {
-		logutil.Warn("object io: no block needs to be written")
+		// This warning is not actionable.   Should we simply return error?
+		// logutil.Warn("object io: no block needs to be written")
 	} else {
 		columnCount = blocks[0].meta.GetColumnCount()
 		metaColCnt = blocks[0].meta.GetMetaColumnCount()
