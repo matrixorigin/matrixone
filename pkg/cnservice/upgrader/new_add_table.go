@@ -221,7 +221,7 @@ var MoSessionsView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_sessions`;",
 }
 
 var MoConfigurationsView = &table.Table{
@@ -238,7 +238,7 @@ var MoConfigurationsView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_configurations` AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_configurations`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_configurations`;",
 }
 
 var MoLocksView = &table.Table{
@@ -257,7 +257,7 @@ var MoLocksView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_locks` AS SELECT * FROM mo_locks() AS mo_locks_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_locks`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_locks`;",
 }
 
 var MoVariablesView = &table.Table{
@@ -275,7 +275,7 @@ var MoVariablesView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_variables` AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_variables`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_variables`;",
 }
 
 var SqlStatementHotspotView = &table.Table{
@@ -289,5 +289,30 @@ var SqlStatementHotspotView = &table.Table{
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
 
-var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView}
-var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView}
+var MoTransactionsView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_transactions",
+	Columns: []table.Column{
+		table.StringColumn("cn_id", "the cn id which cn lock stays on"),
+		table.StringColumn("txn_id", "the txn id which txn holds the lock"),
+		table.StringColumn("create_ts", "the timestamp of the creation of the txn"),
+		table.StringColumn("snapshot_ts", "the snapshot timestamp"),
+		table.StringColumn("prepared_ts", "the prepared timestamp"),
+		table.StringColumn("commit_ts", "the commit timestamp"),
+		table.StringColumn("txn_mode", "pessimistic or optimistic"),
+		table.StringColumn("isolation", "the txn isolation"),
+		table.StringColumn("user_txn", "the user txn or not"),
+		table.StringColumn("txn_status", "the txn status(active, committed, aborting, aborted). (distributed txn, prepared, committing"),
+		table.StringColumn("table_id", "the table id"),
+		table.StringColumn("lock_key", "point or range"),
+		table.StringColumn("lock_content", "the content the clock is on"),
+		table.StringColumn("lock_mode", "shared or exclusive"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_transactions` AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;",
+	//actually drop view here
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_transactions`;",
+}
+
+var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView}
+var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView}
