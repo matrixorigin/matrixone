@@ -15,6 +15,7 @@
 package mergelimit
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
@@ -36,6 +37,7 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+	buf      *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -49,5 +51,9 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr != nil {
 		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
+	}
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
 	}
 }

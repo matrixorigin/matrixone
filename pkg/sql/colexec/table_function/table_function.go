@@ -68,21 +68,25 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, e
 	}
 
-	bat := result.Batch
-	if bat == nil {
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+	arg.buf = result.Batch
+	if arg.buf == nil {
 		result.Status = vm.ExecStop
 		return result, e
 	}
-	if bat.IsEmpty() {
+	if arg.buf.IsEmpty() {
 		return result, e
 	}
 
-	if bat.VectorCount() != len(tblArg.retSchema) {
+	if arg.buf.VectorCount() != len(tblArg.retSchema) {
 		result.Status = vm.ExecStop
 		return result, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}
 	for i := range tblArg.retSchema {
-		if bat.GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
+		if arg.buf.GetVector(int32(i)).GetType().Oid != tblArg.retSchema[i].Oid {
 			result.Status = vm.ExecStop
 			return result, moerr.NewInternalError(proc.Ctx, "table function %s return type mismatch", tblArg.Name)
 		}

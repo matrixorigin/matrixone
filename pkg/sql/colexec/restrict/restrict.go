@@ -44,6 +44,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
@@ -51,23 +55,22 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
 		return result, nil
 	}
-	bat := result.Batch
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+	arg.buf = result.Batch
 
-	ap := arg
-	anal := proc.GetAnalyze(arg.info.Idx)
-	anal.Start()
-	defer anal.Stop()
-	anal.Input(bat, arg.info.IsFirst)
+	anal.Input(arg.buf, arg.info.IsFirst)
 
 	var sels []int64
-	for i := range ap.ctr.executors {
-		if bat.IsEmpty() {
+	for i := range arg.ctr.executors {
+		if arg.buf.IsEmpty() {
 			break
 		}
 
-		vec, err := ap.ctr.executors[i].Eval(proc, []*batch.Batch{bat})
+		vec, err := arg.ctr.executors[i].Eval(proc, []*batch.Batch{arg.buf})
 		if err != nil {
-			bat.Clean(proc.Mp())
 			result.Batch = nil
 			return result, err
 		}
@@ -84,11 +87,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
-				bat, err = tryDupBatch(proc, bat)
+				arg.buf, err = tryDupBatch(proc, arg.buf)
 				if err != nil {
 					return result, err
 				}
-				bat.Shrink(nil)
+				arg.buf.Shrink(nil)
 			}
 		} else {
 			if sels == nil {
@@ -112,11 +115,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 				}
 			}
-			bat, err = tryDupBatch(proc, bat)
+			arg.buf, err = tryDupBatch(proc, arg.buf)
 			if err != nil {
 				return result, err
 			}
-			bat.Shrink(sels)
+			arg.buf.Shrink(sels)
 		}
 	}
 
@@ -126,12 +129,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `
 	// but not use the IsEnd flag to do the clean work.
-	if ap.IsEnd {
-		bat.Clean(proc.Mp())
+	if arg.IsEnd {
 		result.Batch = nil
 	} else {
-		anal.Output(bat, arg.info.IsLast)
-		result.Batch = bat
+		anal.Output(arg.buf, arg.info.IsLast)
+		if arg.buf == result.Batch {
+			arg.buf = nil
+		} else {
+			result.Batch = arg.buf
+		}
 	}
 	return result, nil
 }

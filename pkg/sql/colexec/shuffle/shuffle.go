@@ -158,7 +158,7 @@ func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, reg
 
 func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process) error {
 	//release old bats
-	defer proc.PutBatch(bat)
+	// defer proc.PutBatch(bat)
 	shuffledBats := ap.ctr.shuffledBats
 	sels := getShuffledSelsByHash(ap, bat)
 
@@ -357,7 +357,7 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 
 func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, sels [][]int32, proc *process.Process) error {
 	//release old bats
-	defer proc.PutBatch(bat)
+	// defer proc.PutBatch(bat)
 	shuffledBats := ap.ctr.shuffledBats
 
 	//generate new shuffled bats

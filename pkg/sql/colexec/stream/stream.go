@@ -60,15 +60,20 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	_, span := trace.Start(proc.Ctx, "StreamCall")
 	defer span.End()
-	p := arg
+
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
 	result := vm.NewCallResult()
-	b, err := mokafka.RetrieveData(proc.Ctx, p.Configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+	var err error
+	arg.buf, err = mokafka.RetrieveData(proc.Ctx, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
 	if err != nil {
 		result.Status = vm.ExecStop
 		return result, err
 	}
 
-	result.Batch = b
+	result.Batch = arg.buf
 	//todo: change to process.ExecNext
 	result.Status = vm.ExecStop
 	return result, nil

@@ -133,6 +133,7 @@ func callBlocking(
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
+	needRemoveCachedBatches := true
 	if arg.rt.step == stepLock {
 		for {
 			bat, err := arg.getBatch(proc, anal, isFirst)
@@ -143,6 +144,7 @@ func callBlocking(
 			// no input batch any more, means all lock performed.
 			if bat == nil {
 				arg.rt.step = stepDownstream
+				needRemoveCachedBatches = false
 				if len(arg.rt.cachedBatches) == 0 {
 					arg.rt.step = stepEnd
 				}
@@ -151,7 +153,6 @@ func callBlocking(
 
 			// skip empty batch
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 
@@ -175,9 +176,12 @@ func callBlocking(
 		if len(arg.rt.cachedBatches) == 0 {
 			arg.rt.step = stepEnd
 		} else {
-			bat := arg.rt.cachedBatches[0]
-			arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
-			result.Batch = bat
+			if needRemoveCachedBatches {
+				bat := arg.rt.cachedBatches[0]
+				arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
+				proc.PutBatch(bat)
+			}
+			result.Batch = arg.rt.cachedBatches[0]
 			return result, nil
 		}
 	}

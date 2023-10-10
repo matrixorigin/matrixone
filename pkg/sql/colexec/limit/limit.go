@@ -33,6 +33,11 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 
 // Call returning only the first n tuples from its input
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	ap := arg
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
@@ -41,16 +46,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-
-	ap := arg
-	anal := proc.GetAnalyze(arg.info.Idx)
-	anal.Start()
-	defer anal.Stop()
 	anal.Input(bat, arg.info.IsFirst)
 
 	if ap.Seen >= ap.Limit {
 		result.Batch = nil
-		proc.PutBatch(bat)
 		result.Status = vm.ExecStop
 		return result, nil
 	}
@@ -61,7 +60,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.Seen = newSeen
 		anal.Output(bat, arg.info.IsLast)
 
-		result.Batch = bat
 		result.Status = vm.ExecStop
 		return result, nil
 	}

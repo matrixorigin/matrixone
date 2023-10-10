@@ -95,6 +95,10 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 	if arg.ctr.state == vm.Eval {
 		// ToDo: CNBlock Compaction
 		// blkId,delta_metaLoc,type
+		if arg.resBat != nil {
+			proc.PutBatch(arg.resBat)
+			arg.resBat = nil
+		}
 		resBat := batch.NewWithSize(5)
 		resBat.Attrs = []string{
 			catalog.BlockMeta_Delete_ID,
@@ -103,10 +107,10 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 			catalog.BlockMeta_Partition,
 			catalog.BlockMeta_Deletes_Length,
 		}
-		resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
-		resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
-		resBat.SetVector(3, vector.NewVec(types.T_int32.ToType()))
+		resBat.SetVector(0, proc.GetVector(types.T_text.ToType()))
+		resBat.SetVector(1, proc.GetVector(types.T_text.ToType()))
+		resBat.SetVector(2, proc.GetVector(types.T_int8.ToType()))
+		resBat.SetVector(3, proc.GetVector(types.T_int32.ToType()))
 
 		for pidx, blockId_rowIdBatch := range arg.ctr.partitionId_blockId_rowIdBatch {
 			for blkid, bat := range blockId_rowIdBatch {
@@ -142,6 +146,7 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 		resBat.SetRowCount(resBat.Vecs[0].Length())
 		resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, resBat.RowCount(), proc.GetMPool()))
 
+		arg.resBat = resBat
 		result.Batch = resBat
 		arg.ctr.state = vm.End
 		return result, nil
@@ -203,8 +208,7 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 		}
 		delBatch.Clean(proc.GetMPool())
 	}
-
-	result.Batch = batch.EmptyBatch
+	// result.Batch = batch.EmptyBatch
 
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&arg.affectedRows, affectedRows)

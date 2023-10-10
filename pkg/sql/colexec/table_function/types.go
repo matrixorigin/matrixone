@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -41,6 +42,7 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+	buf      *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -60,6 +62,10 @@ type container struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if arg.ctr != nil {
 		arg.ctr.cleanExecutors()
+	}
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
 	}
 }
 

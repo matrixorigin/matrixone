@@ -77,15 +77,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 			if bat.IsEmpty() {
-				result.Batch = bat
 				continue
 			}
 
-			if ctr.bat == nil || ctr.bat.IsEmpty() {
-				result.Batch, err = ctr.emptyProbe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
-			} else {
-				result.Batch, err = ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+			if arg.buf != nil {
+				proc.PutBatch(arg.buf)
+				arg.buf = nil
 			}
+			if ctr.bat == nil || ctr.bat.IsEmpty() {
+				arg.buf, err = ctr.emptyProbe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+			} else {
+				arg.buf, err = ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+			}
+			result.Batch = arg.buf
 			return result, err
 
 		default:

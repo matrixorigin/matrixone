@@ -200,7 +200,7 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 				continue
 			}
 			bat := result.Batch
-			defer bat.Clean(proc.Mp())
+			// defer bat.Clean(proc.Mp())
 			anal.Input(bat, isFirst)
 
 			if err := ctr.evalAggVector(bat, proc); err != nil {
@@ -235,7 +235,6 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 		}
 
 		result.Batch = ctr.bat
-		ctr.bat = nil
 		ctr.state = vm.End
 		return result, nil
 	}
@@ -278,7 +277,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				continue
 			}
 			bat := result.Batch
-			defer bat.Clean(proc.Mp())
+			// defer bat.Clean(proc.Mp())
 			anal.Input(bat, isFirst)
 
 			if err = ctr.evalAggVector(bat, proc); err != nil {
@@ -371,7 +370,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		}
 
 		result.Batch = ctr.bat
-		ctr.bat = nil
 		ctr.state = vm.End
 		return result, nil
 	}

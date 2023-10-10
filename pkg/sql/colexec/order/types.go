@@ -48,6 +48,7 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 type container struct {
 	state          vm.CtrState
 	batWaitForSort *batch.Batch
+	rbat           *batch.Batch
 
 	desc      []bool // ds[i] == true: the attrs[i] are in descending order
 	nullsLast []bool
@@ -69,6 +70,10 @@ func (arg *Argument) Free(proc *process.Process, _ bool) {
 		if ctr.batWaitForSort != nil {
 			ctr.batWaitForSort.Clean(proc.Mp())
 			ctr.batWaitForSort = nil
+		}
+		if ctr.rbat != nil {
+			ctr.rbat.Clean(proc.Mp())
+			ctr.rbat = nil
 		}
 		ctr.resultOrderList = nil
 	}

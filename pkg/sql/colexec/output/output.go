@@ -45,6 +45,5 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, err
 	}
-	proc.PutBatch(bat)
 	return result, nil
 }

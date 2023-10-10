@@ -44,7 +44,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	defer proc.PutBatch(bat)
 
 	if err := ap.Split(proc, bat); err != nil {
 		return result, err

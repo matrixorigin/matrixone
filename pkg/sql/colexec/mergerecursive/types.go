@@ -35,6 +35,7 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+	buf      *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -49,5 +50,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	for _, b := range arg.ctr.bats {
 		b.Clean(proc.Mp())
 		arg.ctr.bats = nil
+	}
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
 	}
 }

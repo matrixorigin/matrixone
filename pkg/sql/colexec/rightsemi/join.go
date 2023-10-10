@@ -159,10 +159,14 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		}
 	}
 
-	rbat := batch.NewWithSize(len(ap.Result))
+	if ctr.rbat != nil {
+		proc.PutBatch(ctr.rbat)
+		ctr.rbat = nil
+	}
+	ctr.rbat = batch.NewWithSize(len(ap.Result))
 
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
+		ctr.rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
 	}
 
 	count := ctr.matched.Count()
@@ -174,15 +178,14 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 	}
 
 	for j, pos := range ap.Result {
-		if err := rbat.Vecs[j].Union(ctr.bat.Vecs[pos], sels, proc.Mp()); err != nil {
-			rbat.Clean(proc.Mp())
+		if err := ctr.rbat.Vecs[j].Union(ctr.bat.Vecs[pos], sels, proc.Mp()); err != nil {
 			return false, err
 		}
 	}
-	rbat.AddRowCount(len(sels))
+	ctr.rbat.AddRowCount(len(sels))
 
-	analyze.Output(rbat, isLast)
-	result.Batch = rbat
+	analyze.Output(ctr.rbat, isLast)
+	result.Batch = ctr.rbat
 	return false, nil
 }
 

@@ -69,8 +69,12 @@ func TestConnector(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bat := newBatch(t, tc.types, tc.proc, Rows)
-		resetChildren(tc.arg, bat)
+
+		bats := []*batch.Batch{
+			newBatch(t, tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
 		/*{
 			for _, vec := range bat.Vecs {
 				if vec.IsOriginal() {
@@ -78,12 +82,6 @@ func TestConnector(t *testing.T) {
 				}
 			}
 		}*/
-		_, _ = tc.arg.Call(tc.proc)
-
-		resetChildren(tc.arg, batch.EmptyBatch)
-		_, _ = tc.arg.Call(tc.proc)
-
-		resetChildren(tc.arg, nil)
 		_, _ = tc.arg.Call(tc.proc)
 		for len(tc.arg.Reg.Ch) > 0 {
 			bat := <-tc.arg.Reg.Ch
@@ -96,6 +94,7 @@ func TestConnector(t *testing.T) {
 			bat.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false)
+		tc.arg.children[0].Free(tc.proc, false)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -129,16 +128,16 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *Argument, bats []*batch.Batch) {
 	if len(arg.children) == 0 {
 		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+			Batchs: bats,
 		})
 
 	} else {
 		arg.children = arg.children[:0]
 		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+			Batchs: bats,
 		})
 	}
 }

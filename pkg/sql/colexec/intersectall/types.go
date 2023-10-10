@@ -16,6 +16,7 @@ package intersectall
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +41,8 @@ type container struct {
 
 	inserted      []uint8
 	resetInserted []uint8
+
+	buf *batch.Batch
 }
 
 type Argument struct {
@@ -66,6 +69,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanHashMap()
+		if ctr.buf != nil {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		}
 	}
 }
 

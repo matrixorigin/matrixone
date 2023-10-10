@@ -31,6 +31,14 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
+
+	select {
+	case <-proc.Ctx.Done():
+		result.Status = vm.ExecStop
+		return result, proc.Ctx.Err()
+	default:
+	}
+
 	if arg.idx < len(arg.Batchs) {
 		result.Batch = arg.Batchs[arg.idx]
 		if arg.idx > 0 {
