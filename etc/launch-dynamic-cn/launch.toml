@@ -20,3 +20,13 @@ cn-template = "./etc/launch-dynamic-cn/cn.toml.base"
 service-count = 2
 # how many cpu can used pr cn instance
 cpu-count = 2
+
+[dynamic.chaos]
+enable = false
+
+# random restart nodes tester
+[dynamic.chaos.restart]
+kill-interval = "10s"
+restart-interval = "5s"
+targets = [0, 1]
+
