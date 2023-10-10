@@ -41,9 +41,29 @@ var (
     		  PRIMARY KEY table_id (table_id, name)
 			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS),
 	}
+
+	MoStagesTable = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_CATALOG,
+		Table:    catalog.MO_STAGES,
+		CreateTableSql: fmt.Sprintf(`CREATE TABLE %s.%s (
+			stage_id int unsigned auto_increment,
+			stage_name varchar(64),
+			url text,
+			stage_credentials text,
+			stage_status varchar(64),
+			created_time timestamp,
+			comment text,
+			primary key(stage_id)
+		  );`, catalog.MO_CATALOG, catalog.MO_STAGES),
+	}
 )
 
-var needUpgradNewTable = []*table.Table{MoTablePartitionsTable}
+var needUpgradeNewTable = []*table.Table{
+	MoTablePartitionsTable,
+	SysDaemonTaskTable,
+	MoStagesTable,
+}
 
 var PARTITIONSView = &table.Table{
 	Account:  table.AccountAll,
