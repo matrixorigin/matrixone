@@ -4317,7 +4317,7 @@ func postDropSuspendAccount(
 			} else {
 				queryResp, ok := res.response.(*query.Response)
 
-				if !ok || (queryResp.KillConnResponse != nil && !queryResp.KillConnResponse.Success) {
+				if !ok || (queryResp != nil && queryResp.KillConnResponse != nil && !queryResp.KillConnResponse.Success) {
 					retErr = moerr.NewInternalError(ctx,
 						fmt.Sprintf("kill connection for account %s failed on node %s",
 							accountName, res.nodeAddr))
@@ -9204,7 +9204,7 @@ func postAlterSessionStatus(
 			} else {
 				queryResp, ok := res.response.(*query.Response)
 
-				if !ok || (queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
+				if !ok || (queryResp != nil && queryResp.AlterAccountResponse != nil && !queryResp.AlterAccountResponse.AlterSuccess) {
 					retErr = moerr.NewInternalError(ctx,
 						fmt.Sprintf("alter account status for account %s failed on node %s",
 							accountName, res.nodeAddr))
