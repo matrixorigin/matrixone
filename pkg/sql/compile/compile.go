@@ -449,6 +449,9 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		return nil, c.proc.Ctx.Err()
 	}
 	result.AffectRows = c.getAffectedRows()
+	if c.proc.TxnOperator != nil {
+		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
+	}
 	return result, nil
 }
 
