@@ -173,6 +173,8 @@ jobs:
           locale
           sed -i "s/127.0.0.1:6001/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}:6001/" ./mo-tester/mo.yml
           sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' ./mo-tester/mo.yml
+          cn_ips=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{.items[*].status.podIP}' | sed 's/ /,/g')
+          sed -i.bak "s/  serverIP: \"127.0.0.1\"/  serverIP: \"$cn_ips\"/g" mo.yml
           sed -i 's/waittime:.*/waittime: 2000/g' ./mo-tester/run.yml
           cat ./mo-tester/mo.yml
           echo "=========================="
@@ -180,7 +182,7 @@ jobs:
           echo "=========================="
           
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e optimistic 2>&1
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e optimistic 2>&1
           rm -rf .git lib
       - name: Collect Upload files
         if: ${{ always() || cancelled() }}
@@ -720,7 +722,11 @@ jobs:
           locale
           
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s  $GITHUB_WORKSPACE/matrixone/test/distributed/resources -e optimistic 2>&1
+          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
+          cat mo.yml
+          echo "===================="
+
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s  $GITHUB_WORKSPACE/matrixone/test/distributed/resources -e optimistic 2>&1
 
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
@@ -896,9 +902,11 @@ jobs:
           locale
           cd $GITHUB_WORKSPACE/mo-tester
           sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' mo.yml
+          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
           cat mo.yml
           echo "======================================"
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1          
+          
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1          
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
