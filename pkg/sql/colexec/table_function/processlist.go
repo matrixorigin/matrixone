@@ -224,7 +224,7 @@ func fetchSessions(ctx context.Context, tenant string, user string, qs queryserv
 				retErr = errors.Wrapf(res.err, "failed to get result from %s", res.nodeAddr)
 			} else {
 				queryResp, ok := res.response.(*query.Response)
-				if ok && queryResp.ShowProcessListResponse != nil {
+				if ok && queryResp != nil && queryResp.ShowProcessListResponse != nil {
 					sessions = append(sessions, queryResp.ShowProcessListResponse.Sessions...)
 					qs.Release(queryResp)
 				}
