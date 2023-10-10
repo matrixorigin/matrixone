@@ -38,7 +38,7 @@ func (s *service) forwardLock(
 	req.LockTable = l.getBind()
 	req.Lock.Options = opts
 	req.Lock.TxnID = txnID
-	req.Lock.ServiceID = s.cfg.ServiceID
+	req.Lock.ServiceID = s.serviceID
 	req.Lock.Rows = rows
 
 	resp, err := s.remote.client.Send(ctx, req)

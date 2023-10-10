@@ -292,7 +292,7 @@ func (r *taskRunner) Attach(ctx context.Context, taskID uint64, routine ActiveRo
 	if !ok {
 		return moerr.NewErrTaskNotFound(ctx, taskID)
 	}
-	t.activeRoutine = routine
+	t.activeRoutine.Store(&routine)
 	return nil
 }
 
