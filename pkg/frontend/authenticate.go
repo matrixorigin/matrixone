@@ -4302,7 +4302,7 @@ func postDropSuspendAccount(
 	}
 
 	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
-		if rsp.KillConnResponse != nil && !rsp.KillConnResponse.Success {
+		if rsp != nil && rsp.KillConnResponse != nil && !rsp.KillConnResponse.Success {
 			retErr = moerr.NewInternalError(ctx,
 				fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 		}
@@ -9168,7 +9168,7 @@ func postAlterSessionStatus(
 	}
 
 	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
-		if rsp.AlterAccountResponse != nil && !rsp.AlterAccountResponse.AlterSuccess {
+		if rsp != nil && rsp.AlterAccountResponse != nil && !rsp.AlterAccountResponse.AlterSuccess {
 			retErr = moerr.NewInternalError(ctx,
 				fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
 		}
