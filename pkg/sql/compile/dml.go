@@ -54,7 +54,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		}
 
 		// keep old offset.
-		err = incrservice.GetAutoIncrementService().Reset(
+		err = incrservice.GetAutoIncrementService(c.ctx).Reset(
 			c.ctx,
 			oldId,
 			newId,

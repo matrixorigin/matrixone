@@ -93,7 +93,7 @@ func getCurrentValue(
 	ctx context.Context,
 	tableID uint64,
 	col string) (uint64, error) {
-	return incrservice.GetAutoIncrementService().CurrentValue(
+	return incrservice.GetAutoIncrementService(ctx).CurrentValue(
 		ctx,
 		tableID,
 		col)
