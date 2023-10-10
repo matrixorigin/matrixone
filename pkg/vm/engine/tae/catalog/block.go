@@ -236,7 +236,7 @@ func (entry *BlockEntry) StringWithLevel(level common.PPLevel) string {
 func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s]BLK[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.ID.ShortString(), entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+			entry.state.Repr(), entry.ID.ShortString(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
 	}
 	return fmt.Sprintf("[%s]BLK[%s]%s", entry.state.Repr(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
 }
