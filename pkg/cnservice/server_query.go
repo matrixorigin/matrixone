@@ -16,13 +16,14 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 func (s *service) initQueryService() {
@@ -40,6 +41,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_AlterAccount, s.handleAlterAccount, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_TraceSpan, s.handleTraceSpan, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetLockInfo, s.handleGetLockInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetTxnInfo, s.handleGetTxnInfo, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -119,6 +121,29 @@ func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, res
 	return nil
 }
 
+func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+	resp.GetTxnInfoResponse = new(query.GetTxnInfoResponse)
+	txns := make([]*query.TxnInfo, 0)
+
+	s._txnClient.IterTxns(func(view client.TxnOverview) bool {
+		info := &query.TxnInfo{
+			CreateAt: view.CreateAt,
+			Meta:     copyTxnMeta(view.Meta),
+			UserTxn:  view.UserTxn,
+		}
+
+		for _, lock := range view.WaitLocks {
+			info.WaitLocks = append(info.WaitLocks, copyTxnInfo(lock))
+		}
+		txns = append(txns, info)
+		return true
+	})
+
+	resp.GetTxnInfoResponse.CnId = s.metadata.UUID
+	resp.GetTxnInfoResponse.TxnInfoList = txns
+	return nil
+}
+
 func copyKeys(src [][]byte) [][]byte {
 	dst := make([][]byte, 0, len(src))
 	for _, s := range src {
@@ -134,5 +159,41 @@ func copyWaitTxn(src pblock.WaitTxn) *pblock.WaitTxn {
 	dst.TxnID = make([]byte, len(src.TxnID))
 	copy(dst.TxnID, src.GetTxnID())
 	dst.CreatedOn = src.GetCreatedOn()
+	return dst
+}
+
+func copyBytes(src []byte) []byte {
+	dst := make([]byte, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func copyTxnMeta(src txn.TxnMeta) *txn.TxnMeta {
+	dst := &txn.TxnMeta{
+		ID:         copyBytes(src.GetID()),
+		Status:     src.GetStatus(),
+		SnapshotTS: src.GetSnapshotTS(),
+		PreparedTS: src.GetPreparedTS(),
+		CommitTS:   src.GetCommitTS(),
+		Mode:       src.GetMode(),
+		Isolation:  src.GetIsolation(),
+	}
+	return dst
+}
+
+func copyLockOptions(src pblock.LockOptions) *pblock.LockOptions {
+	dst := &pblock.LockOptions{
+		Granularity: src.GetGranularity(),
+		Mode:        src.GetMode(),
+	}
+	return dst
+}
+
+func copyTxnInfo(src client.Lock) *query.TxnLockInfo {
+	dst := &query.TxnLockInfo{
+		TableId: src.TableID,
+		Rows:    copyKeys(src.Rows),
+		Options: copyLockOptions(src.Options),
+	}
 	return dst
 }

@@ -36,7 +36,7 @@ func TestParseDataTypeToColType(t *testing.T) {
 		err    error
 	}{
 		{"datetime", table.TDatetime, nil},
-		{"unrecognizedType", table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type")},
+		{"unrecognizedType", table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type unrecognizedtype")},
 	}
 
 	for _, test := range tests {

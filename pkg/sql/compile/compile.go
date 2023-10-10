@@ -85,6 +85,8 @@ const (
 
 var (
 	ncpu = runtime.NumCPU()
+
+	ctxCancelError = context.Canceled.Error()
 )
 
 var pool = sync.Pool{
@@ -258,6 +260,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			s.NodeInfo.Addr = c.addr
 		}
 	}
+	if c.shouldReturnCtxErr() {
+		return c.proc.Ctx.Err()
+	}
 	return nil
 }
 
@@ -375,66 +380,74 @@ func (c *Compile) run(s *Scope) error {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	var span trace.Span
+	var cc *Compile // compile structure for rerun.
+	var result = &util2.RunResult{}
+	var err error
+
 	sp := c.proc.GetStmtProfile()
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
-	defer span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
-
-	var cc *Compile
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
-	defer task.End()
 	defer func() {
 		putCompile(c)
 		putCompile(cc)
+
+		task.End()
+		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
 	}()
-	result := &util2.RunResult{
-		AffectRows: 0,
-	}
+
 	if c.proc.TxnOperator != nil {
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
-	if err := c.runOnce(); err != nil {
+	if err = c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
-		if c.ifNeedRerun(err) {
-			c.proc.TxnOperator.ResetRetry(true)
-			c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
-
-			// clear the workspace of the failed statement
-			if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
-				return nil, e
-			}
-			//  increase the statement id
-			if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
-				return nil, e
-			}
-
-			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
-			// improved to refresh expression in the future.
-			cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, false)
-			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				pn, err := c.buildPlanFunc()
-				if err != nil {
-					return nil, err
-				}
-				c.pn = pn
-			}
-			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
-				c.fatalLog(1, err)
-				return nil, err
-			}
-			if err := cc.runOnce(); err != nil {
-				c.fatalLog(1, err)
-				return nil, err
-			}
-			// set affectedRows to old compile to return
-			c.setAffectedRows(cc.getAffectedRows())
-			result.AffectRows = cc.getAffectedRows()
-			return result, c.proc.TxnOperator.GetWorkspace().Adjust()
+		if !c.ifNeedRerun(err) {
+			return nil, err
 		}
-		return nil, err
+		c.proc.TxnOperator.ResetRetry(true)
+		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
+
+		// clear the workspace of the failed statement
+		if e := c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); e != nil {
+			return nil, e
+		}
+
+		// increase the statement id
+		if e := c.proc.TxnOperator.GetWorkspace().IncrStatementID(c.ctx, false); e != nil {
+			return nil, e
+		}
+
+		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
+		// improved to refresh expression in the future.
+		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, false)
+		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+			pn, e := c.buildPlanFunc()
+			if e != nil {
+				return nil, e
+			}
+			c.pn = pn
+		}
+		if err = cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+			c.fatalLog(1, err)
+			return nil, err
+		}
+		if err = cc.runOnce(); err != nil {
+			c.fatalLog(1, err)
+			return nil, err
+		}
+		err = c.proc.TxnOperator.GetWorkspace().Adjust()
+		if err != nil {
+			c.fatalLog(1, err)
+			return nil, err
+		}
+		// set affectedRows to old compile to return
+		c.setAffectedRows(cc.getAffectedRows())
 	}
 
+	if c.shouldReturnCtxErr() {
+		return nil, c.proc.Ctx.Err()
+	}
 	result.AffectRows = c.getAffectedRows()
 	if c.proc.TxnOperator != nil {
 		return result, c.proc.TxnOperator.GetWorkspace().Adjust()
@@ -485,6 +498,15 @@ func (c *Compile) runOnce() error {
 	} else {
 		return errList[0]
 	}
+}
+
+// shouldReturnCtxErr return true only if the ctx has error and the error is not canceled.
+// maybe deadlined or other error.
+func (c *Compile) shouldReturnCtxErr() bool {
+	if e := c.proc.Ctx.Err(); e != nil && e.Error() != ctxCancelError {
+		return true
+	}
+	return false
 }
 
 func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, error) {
