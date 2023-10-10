@@ -1097,7 +1097,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 		// lock table's meta
-		if n.InsertCtx.Ref != nil && n.InsertCtx.TableDef != nil {
+		if n.InsertCtx.Ref != nil && n.InsertCtx.TableDef != nil && n.InsertCtx.Ref.SchemaName != catalog.MO_CATALOG {
 			if err := lockMoTable(c, n.InsertCtx.Ref.SchemaName, n.InsertCtx.TableDef.Name, lock.LockMode_Shared); err != nil {
 				return nil, err
 			}
