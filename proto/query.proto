@@ -20,6 +20,9 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/query";
 
 import "status.proto";
 import "lock.proto";
+import "txn.proto";
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
 
 enum CmdMethod {
   // Query is the common query command.
@@ -35,6 +38,8 @@ enum CmdMethod {
   TraceSpan = 4;
   // GetLockInfo gets the lock info from the cn
   GetLockInfo = 5;
+  // GetTxnInfo gets the txn info from the cn
+  GetTxnInfo = 6;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -70,6 +75,8 @@ message Request {
   TraceSpanRequest TraceSpanRequest = 7;
   // GetLockInfoRequest is the request for getting the lock from the cn
   GetLockInfoRequest GetLockInfoRequest = 8;
+  // GetTxnInfoRequest is the request for getting the txn info from the cn
+  GetTxnInfoRequest GetTxnInfoRequest = 9;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -95,6 +102,8 @@ message Response {
   TraceSpanResponse TraceSpanResponse = 7;
   // GetLockInfoResponse is the response of GetLockInfo
   GetLockInfoResponse GetLockInfoResponse = 8;
+  // GetTxnInfoResponse is the response to GetTxnInfo
+  GetTxnInfoResponse GetTxnInfoResponse = 9;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -146,4 +155,35 @@ message LockInfo{
 message GetLockInfoResponse{
   string CnId = 1;
   repeated LockInfo LockInfoList = 2;
+}
+
+message GetTxnInfoRequest{}
+
+message TxnLockInfo{
+  // TableId is the id of the table
+  uint64 TableId = 1;
+  // Rows
+  // - point/row lock : all point lock keys
+  // - rang lock : start,end,start,end
+  repeated bytes Rows = 2;
+  // Options
+  // - type : point or range
+  // - mode : shared or exclusive
+  lock.LockOptions Options = 3;
+}
+
+message TxnInfo{
+  // CreateAt is the create time of the txn
+  google.protobuf.Timestamp CreateAt = 1
+  [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+  txn.TxnMeta Meta= 2;
+  // UserTxn denotes it is the user txn or not
+  bool UserTxn = 3;
+  // WaitLocks denotes the locks that the txn is waiting on
+  repeated TxnLockInfo WaitLocks = 4;
+}
+
+message GetTxnInfoResponse{
+  string CnId = 1;
+  repeated TxnInfo TxnInfoList = 2;
 }
