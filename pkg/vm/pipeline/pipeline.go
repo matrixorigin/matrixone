@@ -16,6 +16,7 @@ package pipeline
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -71,7 +72,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		select {
 		case <-proc.Ctx.Done():
 			proc.SetInputBatch(nil)
-			return true, nil
+			return true, proc.Ctx.Err()
 		default:
 		}
 		// read data from storage engine

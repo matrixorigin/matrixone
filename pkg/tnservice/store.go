@@ -86,7 +86,11 @@ func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 // WithConfigData saves the data from the config file
 func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *store) {
-		s.config = util.NewConfigData(data)
+		if s.config == nil {
+			s.config = util.NewConfigData(data)
+		} else {
+			util.MergeConfig(s.config, data)
+		}
 	}
 }
 

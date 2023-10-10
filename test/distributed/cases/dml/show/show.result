@@ -241,6 +241,7 @@ mo_database
 mo_columns
 mo_tables
 mo_locks
+mo_variables
 show table_number from mo_catalog;
 Number of tables in mo_catalog
 19

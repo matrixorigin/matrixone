@@ -68,11 +68,28 @@ var (
 			details                     blob)`,
 			catalog.MOTaskDB, catalog.MOSysDaemonTask),
 	}
+
+	MoStagesTable = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_CATALOG,
+		Table:    catalog.MO_STAGES,
+		CreateTableSql: fmt.Sprintf(`CREATE TABLE %s.%s (
+			stage_id int unsigned auto_increment,
+			stage_name varchar(64),
+			url text,
+			stage_credentials text,
+			stage_status varchar(64),
+			created_time timestamp,
+			comment text,
+			primary key(stage_id)
+		  );`, catalog.MO_CATALOG, catalog.MO_STAGES),
+	}
 )
 
 var needUpgradeNewTable = []*table.Table{
 	MoTablePartitionsTable,
 	SysDaemonTaskTable,
+	MoStagesTable,
 }
 
 var PARTITIONSView = &table.Table{
@@ -243,6 +260,24 @@ var MoLocksView = &table.Table{
 	CreateTableSql: "drop view `mo_catalog`.`mo_locks`;",
 }
 
+var MoVariablesView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_variables",
+	Columns: []table.Column{
+		table.StringColumn("configuration_id", "the id of configuration"),
+		table.StringColumn("account_id", ""),
+		table.StringColumn("account_name", ""),
+		table.StringColumn("dat_name", "database name"),
+		table.StringColumn("variable_name", "the name of variable"),
+		table.StringColumn("variable_value", "the value of variable"),
+		table.StringColumn("system_variables", "is system variable or not"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_variables` AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;",
+	//actually drop view here
+	CreateTableSql: "drop view `mo_catalog`.`mo_variables`;",
+}
+
 var SqlStatementHotspotView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_SYSTEM,
@@ -254,5 +289,5 @@ var SqlStatementHotspotView = &table.Table{
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
 
-var registeredViews = []*table.Table{processlistView, MoLocksView}
-var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView}
+var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView}
+var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView}

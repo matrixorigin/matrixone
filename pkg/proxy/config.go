@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
@@ -34,34 +36,38 @@ var (
 	defaultRebalanceInterval = 30 * time.Second
 	// The default value of rebalnce tolerance.
 	defaultRebalanceTolerance = 0.3
+	// The default value of heartbeat interval.
+	defaultHeartbeatInterval = time.Second * 3
+	// The default value of heartbeat timeout.
+	defaultHeartbeatTimeout = time.Second * 3
 )
 
 // Config is the configuration of proxy server.
 type Config struct {
 	UUID          string `toml:"uuid"`
-	ListenAddress string `toml:"listen-address"`
+	ListenAddress string `toml:"listen-address" user_setting:"basic"`
 	// RebalanceInterval is the interval between two rebalance operations.
-	RebalanceInterval toml.Duration `toml:"rebalance-interval"`
+	RebalanceInterval toml.Duration `toml:"rebalance-interval" user_setting:"advanced"`
 	// RebalanceDisabled indicates that the rebalancer is disabled.
-	RebalanceDisabled bool `toml:"rebalance-disabled"`
+	RebalanceDisabled bool `toml:"rebalance-disabled" user_setting:"advanced"`
 	// RebalanceToerance indicates the rebalancer's tolerance.
 	// Connections above the avg*(1+tolerance) will be migrated to
 	// other CN servers. This value should be less than 1.
-	RebalanceToerance float64 `toml:"rebalance-tolerance"`
+	RebalanceToerance float64 `toml:"rebalance-tolerance" user_setting:"advanced"`
 
 	// Default is false. With true. Server will support tls.
 	// This value should be ths same with all CN servers, and the name
 	// of this parameter is enableTls.
-	TLSEnabled bool `toml:"tls-enabled"`
+	TLSEnabled bool `toml:"tls-enabled" user_setting:"advanced"`
 	// TSLCAFile is the file path of file that contains list of trusted
 	// SSL CAs for client.
-	TLSCAFile string `toml:"tls-ca-file"`
+	TLSCAFile string `toml:"tls-ca-file" user_setting:"advanced"`
 	// TLSCertFile is the file path of file that contains X509 certificate
 	// in PEM format for client.
-	TLSCertFile string `toml:"tls-cert-file"`
+	TLSCertFile string `toml:"tls-cert-file" user_setting:"advanced"`
 	// TLSKeyFile is the file path of file that contains X509 key in PEM
 	// format for client.
-	TLSKeyFile string `toml:"tls-key-file"`
+	TLSKeyFile string `toml:"tls-key-file" user_setting:"advanced"`
 	// InternalCIDRs is the config which indicates that the CIDR list of
 	// internal network. The addresses outside the range are external
 	// addresses.
@@ -71,6 +77,10 @@ type Config struct {
 	HAKeeper struct {
 		// ClientConfig is HAKeeper client configuration.
 		ClientConfig logservice.HAKeeperClientConfig
+		// HeartbeatInterval heartbeat interval to send message to HAKeeper. Default is 1s.
+		HeartbeatInterval toml.Duration `toml:"hakeeper-heartbeat-interval"`
+		// HeartbeatTimeout heartbeat request timeout. Default is 3s.
+		HeartbeatTimeout toml.Duration `toml:"hakeeper-heartbeat-timeout"`
 	}
 	// Cluster is the configuration of MO Cluster.
 	Cluster struct {
@@ -131,10 +141,9 @@ func WithTLSKeyFile(f string) Option {
 }
 
 // WithConfigData saves the data from the config file
-func WithConfigData(data []byte) Option {
+func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *Server) {
-		s.configData = make([]byte, len(data))
-		copy(s.configData, data)
+		s.configData = util.NewConfigData(data)
 	}
 }
 
@@ -157,6 +166,12 @@ func (c *Config) FillDefault() {
 			c.Plugin.Timeout = time.Second
 		}
 	}
+	if c.HAKeeper.HeartbeatInterval.Duration == 0 {
+		c.HAKeeper.HeartbeatInterval.Duration = defaultHeartbeatInterval
+	}
+	if c.HAKeeper.HeartbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeartbeatTimeout.Duration = defaultHeartbeatTimeout
+	}
 }
 
 // Validate validates the configuration of proxy server.
@@ -171,4 +186,9 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func dumpProxyConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	return util.DumpConfig(cfg, defCfg)
 }

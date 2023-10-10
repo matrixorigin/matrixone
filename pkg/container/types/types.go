@@ -488,6 +488,10 @@ func (t Type) IsDecimal() bool {
 	}
 }
 
+func (t Type) IsNumeric() bool {
+	return t.IsIntOrUint() || t.IsFloat() || t.IsDecimal()
+}
+
 func (t Type) IsTemporal() bool {
 	switch t.Oid {
 	case T_date, T_time, T_datetime, T_timestamp, T_interval:
@@ -497,7 +501,7 @@ func (t Type) IsTemporal() bool {
 }
 
 func (t Type) IsNumericOrTemporal() bool {
-	return t.IsIntOrUint() || t.IsFloat() || t.IsDecimal() || t.IsTemporal()
+	return t.IsNumeric() || t.IsTemporal()
 }
 
 func (t Type) String() string {

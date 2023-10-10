@@ -296,6 +296,7 @@ func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 	return
 }
 
+// for each deletes in [start,end]
 func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	ctx context.Context,
 	start, end types.TS,
@@ -319,6 +320,10 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 		for i := 0; i < deletes.Length(); i++ {
 			loopOp(i, rowIdVec)
 		}
+		commitTSVec := containers.NewConstFixed[types.TS](types.T_TS.ToType(), deltalocCommitTS, deletes.Length())
+		abortVec := containers.NewConstFixed[bool](types.T_bool.ToType(), false, deletes.Length())
+		deletes.AddVector(catalog.AttrCommitTs, commitTSVec)
+		deletes.AddVector(catalog.AttrAborted, abortVec)
 	} else {
 		abortVec := deletes.Vecs[3].GetDownstreamVector()
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
@@ -607,7 +612,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	bat, persistedTS, err := blk.inMemoryCollectDeleteInRange(
+	bat, minTS, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		start,
 		end,
@@ -615,8 +620,8 @@ func (blk *baseBlock) CollectDeleteInRange(
 	if err != nil {
 		return
 	}
-	if end.Greater(persistedTS) {
-		end = persistedTS
+	if !minTS.IsEmpty() && end.Greater(minTS) {
+		end = minTS.Prev()
 	}
 	bat, err = blk.persistedCollectDeleteInRange(
 		ctx,
@@ -630,38 +635,29 @@ func (blk *baseBlock) CollectDeleteInRange(
 func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
-	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
-	catalogPersistedTS := blk.meta.GetDeltaPersistedTS()
+	withAborted bool) (bat *containers.Batch, minTS types.TS, err error) {
 	blk.RLock()
-	persistedTS = blk.mvcc.GetDeletesPersistedTSInMVCCChain()
-	if persistedTS.IsEmpty() {
-		persistedTS = catalogPersistedTS
-	}
-	if persistedTS.GreaterEq(end) {
-		blk.RUnlock()
-		return
-	}
-	if start.Less(persistedTS) {
-		start = persistedTS
-	}
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start.Next(), end)
+	schema := blk.meta.GetSchema()
+	pkDef := schema.GetPrimaryKey()
+	rowID, ts, pk, abort, abortedMap, deletes, minTS := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type)
 	blk.RUnlock()
 	if rowID == nil {
 		return
 	}
-	schema := blk.meta.GetSchema()
-	pkDef := schema.GetPrimaryKey()
-	pkVec := containers.MakeVector(pkDef.Type)
-	pkIdx := pkDef.Idx
-	blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
-		pkVec.Append(v, false)
-		return nil
-	}, deletes)
+	// for deleteNode version less than 2, pk doesn't exist in memory
+	// collect pk by block.Foreach
+	if len(deletes) != 0 {
+		pkIdx := pkDef.Idx
+		blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
+			pk.Append(v, false)
+			return nil
+		}, deletes)
+	}
 	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
-	bat.AddVector(pkDef.Name, pkVec)
+	bat.AddVector(pkDef.Name, pk)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {

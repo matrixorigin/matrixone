@@ -61,19 +61,10 @@ func (p *timeBasedPolicy) Check(last types.TS) bool {
 
 type countBasedPolicy struct {
 	minCount int
-	current  int
 }
 
-func (p *countBasedPolicy) Check() bool {
-	return p.current >= p.minCount
-}
-
-func (p *countBasedPolicy) Add(cnt int) {
-	p.current++
-}
-
-func (p *countBasedPolicy) Reset() {
-	p.current = 0
+func (p *countBasedPolicy) Check(current int) bool {
+	return current >= p.minCount
 }
 
 type globalCheckpointContext struct {
@@ -305,8 +296,8 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 		if ctx.force {
 			doCheckpoint = true
 		} else {
-			r.globalPolicy.Add(1)
-			if r.globalPolicy.Check() {
+			entriesCount := r.GetPenddingIncrementalCount()
+			if r.globalPolicy.Check(entriesCount) {
 				doCheckpoint = true
 			}
 		}
@@ -322,7 +313,6 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 				continue
 			}
 			logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
-			r.globalPolicy.Reset()
 		}
 	}
 }
