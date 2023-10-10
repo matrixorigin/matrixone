@@ -59,9 +59,8 @@ var (
 	}
 )
 
-var needUpgradeNewTable = []*table.Table{
+var needUpgradNewTable = []*table.Table{
 	MoTablePartitionsTable,
-	SysDaemonTaskTable,
 	MoStagesTable,
 }
 
