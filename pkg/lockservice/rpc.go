@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -145,7 +144,8 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		}
 	}
 	if address == "" {
-		logutil.Fatalf("cannot find lockservice address", zap.String("request", request.DebugString()))
+		getLogger().Error("cannot find lockservice address",
+			zap.String("request", request.DebugString()))
 	}
 	return c.client.Send(ctx, address, request)
 }
