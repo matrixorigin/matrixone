@@ -244,8 +244,12 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
 	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm, nil)
-	ses.SetRequestContext(routine.getCancelRoutineCtx())
-	ses.SetConnectContext(routine.getCancelRoutineCtx())
+	cancelCtx := routine.getCancelRoutineCtx()
+	if rm.baseService != nil {
+		cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, rm.baseService.ID())
+	}
+	ses.SetRequestContext(cancelCtx)
+	ses.SetConnectContext(cancelCtx)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)

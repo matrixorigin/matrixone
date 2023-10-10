@@ -1328,7 +1328,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		oldId = rel.GetTableID(c.ctx)
 	}
-	err = incrservice.GetAutoIncrementService().Reset(
+	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
 		c.ctx,
 		oldId,
 		newId,
@@ -1479,7 +1479,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := incrservice.GetAutoIncrementService().Delete(
+			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
 				c.proc.TxnOperator)
@@ -1507,7 +1507,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := incrservice.GetAutoIncrementService().Delete(
+			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
 				c.proc.TxnOperator)
@@ -2349,7 +2349,7 @@ func maybeCreateAutoIncrement(
 	if len(cols) == 0 {
 		return nil
 	}
-	return incrservice.GetAutoIncrementService().Create(
+	return incrservice.GetAutoIncrementService(ctx).Create(
 		ctx,
 		def.TblId,
 		cols,
