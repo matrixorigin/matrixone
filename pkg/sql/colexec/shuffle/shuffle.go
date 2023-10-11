@@ -47,11 +47,20 @@ func findBatchToSend(ap *Argument, threshHold int) int {
 	return -1
 }
 
+// there are two ways for shuffle to send a batch
+// if a batch belongs to one bucket, send this batch directly, and shuffle need to do nothing
+// else split this batch into pieces, write data into pool. if one bucket is full, send this bucket.
+// next time, set this bucket rowcount to 0 and reuse it
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	var index = -1
 
-	//do output
+	// clean last sent batch
+	if ap.ctr.lastSentIdx != -1 {
+		ap.ctr.shuffledBats[ap.ctr.lastSentIdx].SetRowCount(0)
+	}
+
+	//find output
 	if ap.ctr.ending {
 		index = findBatchToSend(ap, 0)
 		if index == -1 {
@@ -91,7 +100,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
-		// do output again
+		// find output again
 		if ap.ctr.ending {
 			index = findBatchToSend(ap, 0)
 			if index == -1 {
@@ -104,13 +113,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
+	// do output
 	result := vm.NewCallResult()
 	result.Batch = ap.ctr.shuffledBats[index]
-	ap.ctr.shuffledBats[index] = nil
+	ap.ctr.lastSentIdx = index
 	return result, nil
 }
 
 func (arg *Argument) initShuffle() {
+	arg.ctr.lastSentIdx = -1
 	if arg.ctr.sels == nil {
 		arg.ctr.sels = make([][]int32, arg.AliveRegCnt)
 		for i := 0; i < int(arg.AliveRegCnt); i++ {
@@ -325,11 +336,7 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 }
 
 func putBatchIntoShuffledPoolsBySels(ap *Argument, bat *batch.Batch, sels [][]int32, proc *process.Process) error {
-	//release old bats
-	defer proc.PutBatch(bat)
 	shuffledBats := ap.ctr.shuffledBats
-
-	//generate new shuffled bats
 	for regIndex := range shuffledBats {
 		lenSels := len(sels[regIndex])
 		if lenSels > 0 {
@@ -351,7 +358,6 @@ func putBatchIntoShuffledPoolsBySels(ap *Argument, bat *batch.Batch, sels [][]in
 			b.AddRowCount(lenSels)
 		}
 	}
-
 	return nil
 }
 

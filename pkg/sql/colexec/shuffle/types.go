@@ -48,6 +48,7 @@ type container struct {
 	ending       bool
 	sels         [][]int32
 	shuffledBats []*batch.Batch
+	lastSentIdx  int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
