@@ -135,6 +135,7 @@ func (c *ColType) String(scale int) string {
 		panic(fmt.Sprintf("not support ColType: %v", c))
 	}
 }
+
 func StringColumn(name, comment string) Column {
 	return Column{
 		Name:    name,

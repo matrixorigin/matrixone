@@ -17,11 +17,45 @@ package upgrader
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"strings"
 )
+
+func ParseDataTypeToColType(dataType string) (table.ColType, error) {
+	dataTypeStr := strings.ToLower(dataType)
+	switch {
+	case strings.Contains(dataTypeStr, "datetime"):
+		return table.TDatetime, nil
+	case strings.EqualFold(dataTypeStr, "bigint unsigned"):
+		return table.TUint64, nil
+	case strings.EqualFold(dataTypeStr, "bigint"):
+		return table.TInt64, nil
+	case strings.EqualFold(dataTypeStr, "int unsigned"):
+		return table.TUint32, nil
+	case strings.EqualFold(dataTypeStr, "int"):
+		return table.TUint32, nil
+	case strings.EqualFold(dataTypeStr, "double"):
+		return table.TFloat64, nil
+	case strings.EqualFold(dataTypeStr, "json"):
+		return table.TJson, nil
+	case strings.EqualFold(dataTypeStr, "text"):
+		return table.TText, nil
+	case strings.Contains(dataTypeStr, "varchar"):
+		return table.TVarchar, nil
+	case strings.Contains(dataTypeStr, "char"):
+		return table.TChar, nil
+	case strings.EqualFold(dataTypeStr, "uuid"):
+		return table.TUuid, nil
+	case strings.EqualFold(dataTypeStr, "bool"):
+		return table.TBool, nil
+	default:
+		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type %s", dataTypeStr)
+	}
+}
 
 func attachAccount(ctx context.Context, tenant *frontend.TenantInfo) context.Context {
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())

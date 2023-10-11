@@ -16,6 +16,7 @@ package upgrader
 
 import (
 	"context"
+	liberrors "errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,39 +33,6 @@ var registeredTable = []*table.Table{motrace.SingleRowLogTable}
 
 type Upgrader struct {
 	IEFactory func() ie.InternalExecutor
-}
-
-func ParseDataTypeToColType(dataType string) (table.ColType, error) {
-	switch {
-	case strings.Contains(strings.ToLower(dataType), "datetime"):
-		return table.TDatetime, nil
-	case strings.EqualFold(strings.ToLower(dataType), "bigint unsigned"):
-		return table.TUint64, nil
-	case strings.EqualFold(strings.ToLower(dataType), "bigint"):
-		return table.TInt64, nil
-	case strings.EqualFold(strings.ToLower(dataType), "int unsigned"):
-		return table.TUint32, nil
-	case strings.EqualFold(strings.ToLower(dataType), "int"):
-		return table.TUint32, nil
-	case strings.EqualFold(strings.ToLower(dataType), "double"):
-		return table.TFloat64, nil
-	case strings.EqualFold(strings.ToLower(dataType), "json"):
-		return table.TJson, nil
-	case strings.EqualFold(strings.ToLower(dataType), "text"):
-		return table.TText, nil
-	case strings.Contains(strings.ToLower(dataType), "varchar"):
-		return table.TVarchar, nil
-	case strings.Contains(strings.ToLower(dataType), "char"):
-		return table.TChar, nil
-	case strings.Contains(strings.ToLower(dataType), "bytes"):
-		return table.TBytes, nil
-	case strings.EqualFold(strings.ToLower(dataType), "uuid"):
-		return table.TUuid, nil
-	case strings.EqualFold(strings.ToLower(dataType), "bool"):
-		return table.TBool, nil
-	default:
-		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type")
-	}
 }
 
 func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecutor, database, tbl string) (*table.Table, error) {
@@ -108,7 +76,8 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
-		return nil, moerr.NewInternalError(ctx, "can not get the schema")
+		errors = append(errors, moerr.NewInternalError(ctx, "can not get the schema"))
+		return nil, liberrors.Join(errors...)
 	}
 
 	// Construct and return the table
@@ -435,7 +404,7 @@ func (u *Upgrader) UpgradeExistingView(ctx context.Context, tenants []*frontend.
 	return nil
 }
 
-// Check if the table exists
+// CheckSchemaIsExist Check if the table exists
 func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecutor, opts *ie.OptsBuilder, database, tbl string) (bool, error) {
 	// Query mo_catalog.mo_tables to get table info
 	query := fmt.Sprintf("select rel_id, relname from `mo_catalog`.`mo_tables` where account_id = current_account_id() and reldatabase = '%s' and relname = '%s'", database, tbl)
@@ -456,6 +425,7 @@ func (u *Upgrader) CheckSchemaIsExist(ctx context.Context, exec ie.InternalExecu
 	}
 }
 
+// CheckViewDefineIsValid Check if the definition of the view is the latest version and valid
 func (u *Upgrader) CheckViewDefineIsValid(ctx context.Context, exec ie.InternalExecutor, opts *ie.OptsBuilder, database, view, newViewDef string) (bool, error) {
 	// Query mo_catalog.mo_tables to get table info
 	dbName := strings.ToLower(database)
@@ -549,7 +519,8 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
-		return nil, moerr.NewInternalError(ctx, "can not get the schema")
+		errors = append(errors, moerr.NewInternalError(ctx, "can not get the schema"))
+		return nil, liberrors.Join(errors...)
 	}
 	return tenantInfos, nil
 }
@@ -576,6 +547,7 @@ func (u *Upgrader) upgradeFunc(ctx context.Context, tbl *table.Table, isView boo
 	return nil
 }
 
+// upgradeWithPreDropFunc Pre deletion operation is required before upgrading
 func (u *Upgrader) upgradeWithPreDropFunc(ctx context.Context, tbl *table.Table, tenant *frontend.TenantInfo, exec ie.InternalExecutor) error {
 	// Switch Tenants
 	ctx = attachAccount(ctx, tenant)
