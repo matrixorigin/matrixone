@@ -411,4 +411,7 @@ if __name__ == '__main__':
     )
     parser.add_argument('--address', default='[::]:50051', help='address')
     ARGS = parser.parse_args()
+
+    log.info('python server start')
+
     run()
