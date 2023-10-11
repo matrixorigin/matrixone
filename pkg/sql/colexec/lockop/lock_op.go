@@ -412,7 +412,7 @@ func doLock(
 		}
 	} else {
 		// FIXME: in launch model, multi-cn will use same process level runtime. So lockservice will be wrong.
-		if txn.LockService != lockService.GetConfig().ServiceID {
+		if txn.LockService != lockService.GetServiceID() {
 			lockService = lockservice.GetLockServiceByServiceID(txn.LockService)
 		}
 	}

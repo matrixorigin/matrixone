@@ -19,14 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	_ "github.com/go-sql-driver/mysql"
-	"go.uber.org/zap"
 )
 
 const MAX_INSERT_TIME = 3 * time.Second
@@ -38,8 +34,6 @@ type DefaultSqlWriter struct {
 	tbl       *table.Table
 	buffer    [][]string
 	mux       sync.Mutex
-
-	logger *log.MOLogger
 }
 
 func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *DefaultSqlWriter {
@@ -47,7 +41,6 @@ func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *Defaul
 		ctx:       ctx,
 		csvWriter: csv,
 		tbl:       tbl,
-		logger:    runtime.ProcessLevelRuntime().Logger().With(logutil.Discardable()),
 	}
 }
 
@@ -65,7 +58,6 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 }
 
 func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
-	now := time.Now()
 	sw.mux.Lock()
 	defer sw.mux.Unlock()
 
@@ -75,11 +67,9 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	cnt, err = db_holder.WriteRowRecords(sw.buffer, sw.tbl, MAX_INSERT_TIME)
 
 	if err != nil {
-		sw.logger.Debug("sqlWriter WriteRowRecords failed", zap.Int("cnt", cnt), zap.Error(err), zap.Duration("time", time.Since(now)))
 		sw.dumpBufferToCSV()
 	}
 	_, err = sw.csvWriter.FlushAndClose()
-	sw.logger.Debug("sqlWriter flushBuffer finished", zap.Int("cnt", cnt), zap.Error(err), zap.Duration("time", time.Since(now)))
 	return cnt, err
 }
 

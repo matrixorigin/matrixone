@@ -66,12 +66,14 @@ func TestKeeper(t *testing.T) {
 			m.Store(0,
 				newRemoteLockTable(
 					"s1",
+					time.Second,
 					pb.LockTable{ServiceID: "s2"},
 					c,
 					func(lt pb.LockTable) {}))
 			m.Store(1,
 				newRemoteLockTable(
 					"s1",
+					time.Second,
 					pb.LockTable{ServiceID: "s1"},
 					c,
 					func(lt pb.LockTable) {}))
@@ -138,6 +140,7 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 			m.Store(3,
 				newRemoteLockTable(
 					"s1",
+					time.Second,
 					pb.LockTable{ServiceID: "s2"},
 					c,
 					func(lt pb.LockTable) {}))

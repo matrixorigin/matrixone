@@ -53,7 +53,7 @@ func New(
 		TxnClient:    txnClient,
 		TxnOperator:  txnOperator,
 		FileService:  fileService,
-		IncrService:  incrservice.GetAutoIncrementService(),
+		IncrService:  incrservice.GetAutoIncrementService(ctx),
 		UnixTime:     time.Now().UnixNano(),
 		LastInsertID: new(uint64),
 		LockService:  lockService,
