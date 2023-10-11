@@ -41,6 +41,7 @@ mo_sessions
 mo_configurations
 mo_locks
 mo_variables
+mo_transactions
 create database t;
 internal error: do not have privilege to execute the statement
 grant create database on account * to r1;

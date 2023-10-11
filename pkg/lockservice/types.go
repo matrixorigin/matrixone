@@ -83,6 +83,8 @@ type LockStorage interface {
 // Lock, a set of background goroutines are notified to start a deadlock detection for all
 // transactions in the Lock's wait queue.
 type LockService interface {
+	// GetServiceID return service id
+	GetServiceID() string
 	// GetConfig returns the lockservice config
 	GetConfig() Config
 	// Lock locks rows(row or row range determined by the Granularity in options) a table. Lockservice

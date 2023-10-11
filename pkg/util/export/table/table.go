@@ -58,6 +58,7 @@ const (
 	TVarchar
 	TBytes // only used in ColumnField
 	TUuid  // only used in ColumnField
+	TBool
 )
 
 func (c *ColType) ToType() types.Type {
@@ -78,7 +79,9 @@ func (c *ColType) ToType() types.Type {
 		return types.T_text.ToType()
 	case TVarchar:
 		return types.T_varchar.ToType()
-		//TODO : Need to see how T_array should be included in this class.
+	//TODO : Need to see how T_array should be included in this class.
+	case TBool:
+		return types.T_bool.ToType()
 	case TSkip:
 		fallthrough
 	default:
@@ -105,6 +108,8 @@ func (c *ColType) String(scale int) string {
 			scale = 1024
 		}
 		return fmt.Sprintf("VARCHAR(%d)", scale)
+	case TBool:
+		return "bool"
 	case TSkip:
 		panic("not support SkipType")
 	default:
@@ -211,6 +216,15 @@ func UInt64Column(name, comment string) Column {
 		Name:    name,
 		ColType: TUint64,
 		Default: "0",
+		Comment: comment,
+	}
+}
+
+func BoolColumn(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TBool,
+		Default: "false",
 		Comment: comment,
 	}
 }

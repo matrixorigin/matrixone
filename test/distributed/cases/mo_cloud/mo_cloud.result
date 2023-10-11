@@ -632,6 +632,7 @@ mo_catalog    mo_stages    r    accountadmin
 mo_catalog    mo_stored_procedure    r    accountadmin
 mo_catalog    mo_table_partitions    r    accountadmin
 mo_catalog    mo_tables    r    -
+mo_catalog    mo_transactions    v    accountadmin
 mo_catalog    mo_user    r    accountadmin
 mo_catalog    mo_user_defined_function    r    accountadmin
 mo_catalog    mo_user_grant    r    accountadmin
