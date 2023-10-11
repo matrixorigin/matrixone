@@ -163,13 +163,13 @@ func (e *MergeExecutor) ExecuteFor(tid uint64, tblName string, delSegs []*catalo
 	logMergeTask(e.tableName, delSegs, msegs)
 }
 
-func (ml *MergeExecutor) checkMemAvail(msegs []*catalog.SegmentEntry) bool {
-	merging := int(atomic.LoadInt64(&ml.activeEstimateBytes))
+func (e *MergeExecutor) checkMemAvail(msegs []*catalog.SegmentEntry) bool {
+	merging := int(atomic.LoadInt64(&e.activeEstimateBytes))
 	consume := estimateMergeConsume(msegs)
-	left := ml.memAvail - consume - merging
-	sufficient := left > ml.memSpare
+	left := e.memAvail - consume - merging
+	sufficient := left > e.memSpare
 	if !sufficient {
-		logutil.Infof("mergeblocks skip %s, estimate cost %s", ml.tableName, humanReadableBytes(consume))
+		logutil.Infof("mergeblocks skip %s, estimate cost %s", e.tableName, humanReadableBytes(consume))
 	}
 	return sufficient
 }
