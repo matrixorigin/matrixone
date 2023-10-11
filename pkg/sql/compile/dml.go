@@ -16,6 +16,7 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 )
@@ -24,6 +25,9 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 
+	if err := lockMoTable(c, arg.DeleteCtx.Ref.SchemaName, arg.DeleteCtx.Ref.ObjName, lock.LockMode_Shared); err != nil {
+		return 0, err
+	}
 	if arg.DeleteCtx.CanTruncate {
 		var err error
 		var affectRows int64
@@ -76,6 +80,10 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 func (s *Scope) Insert(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
+	// lock table's meta
+	if err := lockMoTable(c, arg.InsertCtx.Ref.SchemaName, arg.InsertCtx.Ref.ObjName, lock.LockMode_Shared); err != nil {
+		return 0, err
+	}
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}

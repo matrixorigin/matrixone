@@ -48,15 +48,14 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
 	defer span.End()
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
 		return moerr.NewDBAlreadyExists(c.ctx, dbName)
-	}
-
-	if err := lockMoDatabase(c, dbName); err != nil {
-		return err
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
@@ -72,15 +71,14 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
 		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
-	}
-
-	if err := lockMoDatabase(c, dbName); err != nil {
-		return err
 	}
 
 	err := c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
@@ -103,6 +101,12 @@ func (s *Scope) AlterView(c *Compile) error {
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
@@ -114,10 +118,6 @@ func (s *Scope) AlterView(c *Compile) error {
 		if qry.GetIfExists() {
 			return nil
 		}
-		return err
-	}
-
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -186,6 +186,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 	tblName := qry.GetTableDef().GetName()
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -201,34 +207,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	oldDefs, err := rel.TableDefs(c.ctx)
 	if err != nil {
 		return err
-	}
-
-	if c.proc.TxnOperator.Txn().IsPessimistic() {
-		var retryErr error
-		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
-			}
-			retryErr = err
-		}
-
-		// 2. lock origin table
-		var partitionTableNames []string
-		if tableDef.Partition != nil {
-			partitionTableNames = tableDef.Partition.PartitionTableNames
-		}
-		if err = lockTable(c.ctx, c.e, c.proc, rel, dbName, partitionTableNames, true); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
-			}
-			retryErr = err
-		}
-		if retryErr != nil {
-			return retryErr
-		}
 	}
 
 	tblId := rel.GetTableID(c.ctx)
@@ -550,6 +528,23 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
@@ -600,15 +595,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
 		}
-	}
-
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		getLogger().Info("createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.Error(err),
-		)
-		return err
 	}
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
@@ -1213,6 +1199,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
 
 	if rel, err = dbSource.Relation(c.ctx, tblName, nil); err != nil {
 		var e error // avoid contamination of error messages
@@ -1229,13 +1221,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
 		// before dropping table, lock it.
 		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -1370,6 +1355,9 @@ func (s *Scope) DropSequence(c *Compile) error {
 		return err
 	}
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
@@ -1400,6 +1388,12 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 		return err
 	}
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
 
 	if rel, err = dbSource.Relation(c.ctx, tblName, nil); err != nil {
 		var e error // avoid contamination of error messages
@@ -1422,13 +1416,6 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return e
-			}
-			err = e
-		}
 		// before dropping table, lock it.
 		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, qry.PartitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -1644,6 +1631,13 @@ func (s *Scope) CreateSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
@@ -1658,10 +1652,6 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		}
 		// Just report table exists error.
 		return moerr.NewTableAlreadyExists(c.ctx, tblName)
-	}
-
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		return err
 	}
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
@@ -1709,6 +1699,13 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
@@ -1738,10 +1735,6 @@ func (s *Scope) AlterSequence(c *Compile) error {
 			return nil
 		}
 		return moerr.NewInternalError(c.ctx, "sequence %s not exists", tblName)
-	}
-
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		return err
 	}
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
@@ -2308,20 +2301,18 @@ func lockTable(
 func lockRows(
 	eng engine.Engine,
 	proc *process.Process,
-	rel engine.Relation,
 	vec *vector.Vector,
+	tableID uint64,
 	lockMode lock.LockMode) error {
 
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
 	}
 
-	id := rel.GetTableID(proc.Ctx)
-
 	err := lockop.LockRows(
 		eng,
 		proc,
-		id,
+		tableID,
 		vec,
 		*vec.GetType(),
 		lockMode)
@@ -2404,32 +2395,25 @@ func getLockVector(proc *process.Process, accountId uint32, names []string) (*ve
 	return vec, nil
 }
 
-func lockMoDatabase(c *Compile, dbName string) error {
-	dbRel, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
-	if err != nil {
-		return err
-	}
+func lockMoDatabase(c *Compile, dbName string, lockMode lock.LockMode) error {
 	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName})
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
+	defer vec.Free(c.proc.Mp())
+	if err := lockRows(c.e, c.proc, vec, catalog.MO_DATABASE_ID, lockMode); err != nil {
 		return err
 	}
 	return nil
 }
 
 func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
-	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
-	if err != nil {
-		return err
-	}
 	vec, err := getLockVector(c.proc, c.proc.SessionInfo.AccountId, []string{dbName, tblName})
 	if err != nil {
 		return err
 	}
 	defer vec.Free(c.proc.Mp())
-	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
+	if err := lockRows(c.e, c.proc, vec, catalog.MO_TABLES_ID, lockMode); err != nil {
 		return err
 	}
 	return nil

@@ -29,6 +29,13 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
+	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		return err
+	}
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -41,14 +48,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	if c.proc.TxnOperator.Txn().IsPessimistic() {
 		var retryErr error
-		// 1. lock origin table metadata in catalog
-		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return err
-			}
-			retryErr = err
-		}
 
 		// 2. lock origin table
 		var partitionTableNames []string
