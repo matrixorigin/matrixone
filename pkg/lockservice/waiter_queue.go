@@ -54,7 +54,7 @@ type sliceBasedWaiterQueue struct {
 func (q *sliceBasedWaiterQueue) moveTo(to waiterQueue) {
 	q.iter(func(w *waiter) bool {
 		to.put(w)
-		w.close(false)
+		w.close()
 		return true
 	})
 }
@@ -93,7 +93,7 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 			break
 		}
 		// already completed
-		w.close(false)
+		w.close()
 		skipAt = i
 	}
 	q.waiters = append(q.waiters[:0], q.waiters[skipAt+1:]...)
@@ -117,7 +117,7 @@ func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
 	for _, w := range q.waiters {
 		if w.isTxn(txnID) {
 			w.notify(notifyValue{})
-			w.close(false)
+			w.close()
 			continue
 		}
 		newWaiters = append(newWaiters, w)
@@ -167,7 +167,7 @@ func (q *sliceBasedWaiterQueue) rollbackChange() {
 
 	n := len(q.waiters)
 	for i := q.beginChangeIdx; i < n; i++ {
-		q.waiters[i].close(false)
+		q.waiters[i].close()
 		q.waiters[i] = nil
 	}
 	q.waiters = q.waiters[:q.beginChangeIdx]
@@ -213,7 +213,7 @@ func (q *sliceBasedWaiterQueue) close(value notifyValue) {
 	for i := 0; i < idx; i++ {
 		w := q.waiters[i]
 		w.notify(value)
-		w.close(value.err == ErrLockTableNotFound)
+		w.close()
 	}
 	q.doResetLocked()
 }
