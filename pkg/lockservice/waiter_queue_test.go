@@ -28,7 +28,7 @@ func TestPut(t *testing.T) {
 	q := newWaiterQueue()
 	defer q.close(notifyValue{})
 	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-	defer w.close(false)
+	defer w.close(true)
 	q.put(w)
 	assert.Equal(t, 1, q.size())
 }
@@ -38,11 +38,11 @@ func TestReset(t *testing.T) {
 	defer q.close(notifyValue{})
 
 	w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-	defer w1.close(false)
+	defer w1.close(true)
 	w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
-	defer w2.close(false)
+	defer w2.close(true)
 	w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
-	defer w3.close(false)
+	defer w3.close(true)
 
 	q.put(w1, w2, w3)
 	assert.Equal(t, 3, q.size())
@@ -56,11 +56,11 @@ func TestIterTxns(t *testing.T) {
 	defer q.close(notifyValue{})
 
 	w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-	defer w1.close(false)
+	defer w1.close(true)
 	w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
-	defer w2.close(false)
+	defer w2.close(true)
 	w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
-	defer w3.close(false)
+	defer w3.close(true)
 
 	q.put(w1, w2, w3)
 
@@ -79,12 +79,12 @@ func TestIterTxnsCannotReadUncommitted(t *testing.T) {
 	defer q.close(notifyValue{})
 
 	w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-	defer w1.close(false)
+	defer w1.close(true)
 
 	q.put(w1)
 
 	w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
-	defer w2.close(false)
+	defer w2.close(true)
 	q.beginChange()
 	q.put(w2)
 
@@ -102,7 +102,7 @@ func TestChange(t *testing.T) {
 	defer q.close(notifyValue{})
 
 	w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-	defer w1.close(false)
+	defer w1.close(true)
 
 	q.put(w1)
 
@@ -110,9 +110,9 @@ func TestChange(t *testing.T) {
 	assert.Equal(t, 1, q.beginChangeIdx)
 
 	w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
-	defer w2.close(false)
+	defer w2.close(true)
 	w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
-	defer w3.close(false)
+	defer w3.close(true)
 
 	q.put(w2, w3)
 	assert.Equal(t, 3, len(q.waiters))
@@ -125,9 +125,9 @@ func TestChange(t *testing.T) {
 	assert.Equal(t, 1, q.beginChangeIdx)
 
 	w4 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w4")})
-	defer w4.close(false)
+	defer w4.close(true)
 	w5 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w5")})
-	defer w5.close(false)
+	defer w5.close(true)
 
 	q.put(w4, w5)
 	assert.Equal(t, 3, len(q.waiters))
@@ -142,7 +142,7 @@ func TestChangeRef(t *testing.T) {
 	defer q.close(notifyValue{})
 
 	w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
-	defer w1.close(false)
+	defer w1.close(true)
 
 	q.beginChange()
 	q.put(w1)
@@ -163,7 +163,7 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	// w1 will skipped
 	w1 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w1")})
 	w1.setStatus(completed)
-	defer w1.close(false)
+	defer w1.close(true)
 
 	// w2 get the notify
 	w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
@@ -171,7 +171,7 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	w2.setStatus(blocking)
 	defer func() {
 		w2.wait(context.Background())
-		w2.close(false)
+		w2.close(true)
 	}()
 
 	// w3 get notify when queue closed
@@ -180,7 +180,7 @@ func TestSkipCompletedWaiters(t *testing.T) {
 	w3.setStatus(blocking)
 	defer func() {
 		w3.wait(context.Background())
-		w3.close(false)
+		w3.close(true)
 	}()
 
 	q.put(w1, w2, w3)
