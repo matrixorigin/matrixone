@@ -811,6 +811,7 @@ func TestManyRowLockInManyGoroutines(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
+					lt.deadlockCheckWaitDuration = time.Second * 5
 					option := newTestRowExclusiveOptions()
 					rows := newTestRows(1, 2, 3, 4, 5, 6)
 
@@ -846,6 +847,8 @@ func TestManyRangeLockInManyGoroutines(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
+					lt.deadlockCheckWaitDuration = time.Second * 5
+
 					option := newTestRangeExclusiveOptions()
 					rows := newTestRows(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 

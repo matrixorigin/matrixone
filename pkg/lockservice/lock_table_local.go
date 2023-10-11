@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -34,12 +35,13 @@ const (
 
 // a localLockTable instance manages the locks on a table
 type localLockTable struct {
-	bind     pb.LockTable
-	fsp      *fixedSlicePool
-	detector *detector
-	clock    clock.Clock
-	events   *waiterEvents
-	mu       struct {
+	bind                      pb.LockTable
+	fsp                       *fixedSlicePool
+	detector                  *detector
+	deadlockCheckWaitDuration time.Duration
+	clock                     clock.Clock
+	events                    *waiterEvents
+	mu                        struct {
 		sync.RWMutex
 		closed           bool
 		store            LockStorage
@@ -105,8 +107,7 @@ func (l *localLockTable) doLock(
 			if err != nil {
 				logLocalLockFailed(c.txn, table, c.rows, c.opts, err)
 				if c.w != nil {
-					c.w.disableNotify()
-					c.w.close()
+					c.w.close(true)
 				}
 				c.done(err)
 				return
@@ -133,20 +134,35 @@ func (l *localLockTable) doLock(
 		// wait result. Because during wait, deadlock detection may be triggered, and need call txn.fetchWhoWaitingMe,
 		// or other concurrent txn method.
 		oldTxnID := c.txn.txnID
+
 		c.txn.Unlock()
-		v := c.w.wait(c.ctx)
+		var v notifyValue
+	OUTER:
+		for {
+			v = c.w.wait(c.ctx)
+			if !v.maybeDeadlock {
+				break
+			}
+			for _, holder := range c.w.waitFor {
+				if err := l.detector.check(holder, c.w.txn); err != nil {
+					v.err = err
+					break OUTER
+				}
+			}
+			c.w.resetTimer(l.deadlockCheckWaitDuration)
+		}
 		c.txn.Lock()
 
 		logLocalLockWaitOnResult(c.txn, table, c.rows[c.idx], c.opts, c.w, v)
 		if v.err != nil {
 			// TODO: c.w's ref is 2, after close is 1. leak.
-			c.w.close()
+			c.w.close(false)
 			c.done(v.err)
 			return
 		}
 		// txn closed between Unlock and get Lock again
 		if !bytes.Equal(oldTxnID, c.txn.txnID) {
-			c.w.close()
+			c.w.close(false)
 			c.done(ErrTxnNotFound)
 			return
 		}
@@ -287,8 +303,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			hold, newHolder := lock.tryHold(c)
 			if hold {
 				if c.w != nil {
-					c.w.disableNotify()
-					c.w.close()
+					c.w.close(true)
 					c.w = nil
 				}
 				// only new holder can added lock into txn.
@@ -305,7 +320,8 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			}
 
 			c.offset = idx
-			return l.handleLockConflictLocked(c, key, lock)
+			l.handleLockConflictLocked(c, key, lock)
+			return nil
 		}
 		l.addRowLockLocked(c, row)
 		// lock added, need create new waiter next time
@@ -335,7 +351,8 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 		if len(conflict) > 0 {
 			c.w = acquireWaiter(c.waitTxn)
 			c.offset = i
-			return l.handleLockConflictLocked(c, conflict, conflictWith)
+			l.handleLockConflictLocked(c, conflict, conflictWith)
+			return nil
 		}
 
 		// lock added, need create new waiter next time
@@ -363,16 +380,8 @@ func (l *localLockTable) addRowLockLocked(
 func (l *localLockTable) handleLockConflictLocked(
 	c *lockContext,
 	key []byte,
-	conflictWith Lock) error {
-	var err error
-	conflictWith.waiters.beginChange()
+	conflictWith Lock) {
 	defer func() {
-		if err != nil {
-			conflictWith.waiters.rollbackChange()
-			return
-		}
-		conflictWith.waiters.commitChange()
-
 		if c.opts.async {
 			l.events.add(c)
 		}
@@ -384,12 +393,11 @@ func (l *localLockTable) handleLockConflictLocked(
 
 	// added to waiters list, and wait for notify
 	conflictWith.addWaiter(c.w)
+	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
-		if err = l.detector.check(txn.TxnID, c.waitTxn); err != nil {
-			return err
-		}
+		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
-	return err
+	c.w.resetTimer(l.deadlockCheckWaitDuration)
 }
 
 func (l *localLockTable) addRangeLockLocked(
