@@ -87,6 +87,9 @@ const (
 
 	BLKCNMetaInsertIDX
 
+	BLKAccInsIDX
+	BLKAccDelIDX
+
 	TNMetaIDX
 )
 
