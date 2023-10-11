@@ -22,7 +22,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -76,9 +75,6 @@ type waiter struct {
 	c        chan notifyValue
 	event    event
 
-	waitFor [][]byte
-	timer   *time.Timer
-
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
 }
@@ -112,15 +108,12 @@ func (w *waiter) ref() int32 {
 	return w.refCount.Add(1)
 }
 
-func (w *waiter) close(clear bool) {
+func (w *waiter) close() {
 	n := w.refCount.Add(-1)
 	if n < 0 {
 		panic("BUG: invalid ref count, " + w.String())
 	}
 	if n == 0 {
-		if clear {
-			w.disableNotify()
-		}
 		w.reset()
 	}
 }
@@ -196,9 +189,6 @@ func (w *waiter) wait(ctx context.Context) notifyValue {
 			return v
 		default:
 		}
-	case <-w.timer.C:
-		w.timer.Stop()
-		return notifyValue{maybeDeadlock: true}
 	}
 
 	w.beforeSwapStatusAdjustFunc()
@@ -247,14 +237,6 @@ func (w *waiter) notify(value notifyValue) bool {
 	}
 }
 
-func (w *waiter) resetTimer(d time.Duration) {
-	if w.timer == nil {
-		w.timer = time.NewTimer(d)
-	} else {
-		w.timer.Reset(d)
-	}
-}
-
 func (w *waiter) reset() {
 	notifies := len(w.c)
 	if notifies > 0 {
@@ -263,23 +245,17 @@ func (w *waiter) reset() {
 			notifies))
 	}
 
-	if w.timer != nil {
-		w.timer.Stop()
-	}
-	w.waitFor = w.waitFor[:0]
+	logWaiterContactPool(w, "put")
 	w.txn = pb.WaitTxn{}
 	w.event = event{}
 	w.setStatus(ready)
-
-	logWaiterContactPool(w, "put")
 	waiterPool.Put(w)
 }
 
 type notifyValue struct {
-	err           error
-	ts            timestamp.Timestamp
-	defChanged    bool
-	maybeDeadlock bool
+	err        error
+	ts         timestamp.Timestamp
+	defChanged bool
 }
 
 func (v notifyValue) String() string {

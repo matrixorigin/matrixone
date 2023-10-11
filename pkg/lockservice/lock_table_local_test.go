@@ -367,7 +367,6 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					var wg sync.WaitGroup
 					for _, txnID := range c.existsWaiters[i] {
 						w := acquireWaiter(pb.WaitTxn{TxnID: []byte(txnID)})
-						w.resetTimer(time.Second)
 						w.setStatus(blocking)
 						lock.waiters.put(w)
 						wg.Add(1)
