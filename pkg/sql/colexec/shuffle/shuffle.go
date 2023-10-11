@@ -200,35 +200,8 @@ func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, reg
 }
 
 func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) error {
-	//release old bats
-	defer proc.PutBatch(bat)
-	shuffledBats := ap.ctr.shuffledBats
 	sels := getShuffledSelsByHash(ap, bat)
-
-	//generate new shuffled bats
-	for regIndex := range shuffledBats {
-		lenSels := len(sels[regIndex])
-		if lenSels > 0 {
-			b := shuffledBats[regIndex]
-			if b == nil {
-				err := initShuffledBats(ap, bat, proc, regIndex)
-				if err != nil {
-					return err
-				}
-				b = shuffledBats[regIndex]
-			}
-			for vecIndex := range b.Vecs {
-				v := b.Vecs[vecIndex]
-				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
-				if err != nil {
-					return err
-				}
-			}
-			b.AddRowCount(lenSels)
-		}
-	}
-
-	return nil
+	return putBatchIntoShuffledPoolsBySels(ap, bat, sels, proc)
 }
 
 func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
@@ -351,7 +324,7 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 	return sels
 }
 
-func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, sels [][]int32, proc *process.Process) error {
+func putBatchIntoShuffledPoolsBySels(ap *Argument, bat *batch.Batch, sels [][]int32, proc *process.Process) error {
 	//release old bats
 	defer proc.PutBatch(bat)
 	shuffledBats := ap.ctr.shuffledBats
@@ -398,6 +371,6 @@ func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (*batch
 			return bat, nil
 		}
 	}
-	err := genShuffledBatsByRange(ap, bat, sels, proc)
+	err := putBatchIntoShuffledPoolsBySels(ap, bat, sels, proc)
 	return nil, err
 }
