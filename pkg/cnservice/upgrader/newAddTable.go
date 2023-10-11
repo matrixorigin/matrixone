@@ -62,7 +62,7 @@ var (
 	}
 )
 
-var needUpgradNewTable = []*table.Table{
+var needUpgradeNewTable = []*table.Table{
 	MoTablePartitionsTable,
 	MoStagesTable,
 }
@@ -166,8 +166,8 @@ var processlistView = &table.Table{
 		table.StringColumn("user", "the user name"),
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
-	//actually drop view here
-	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
+	//actually drop table here
+	CreateTableSql: "drop table if exists `information_schema`.`PROCESSLIST`;",
 }
 
 var MoSessionsView = &table.Table{
@@ -196,7 +196,7 @@ var MoSessionsView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_sessions`;",
 }
 
 var SqlStatementHotspotView = &table.Table{
@@ -212,3 +212,52 @@ var SqlStatementHotspotView = &table.Table{
 
 var needUpgradNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView}
 var registeredViews = []*table.Table{processlistView}
+
+var InformationSchemaSCHEMATA = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "SCHEMATA",
+	CreateViewSql: "CREATE VIEW information_schema.SCHEMATA AS SELECT " +
+		"dat_catalog_name AS CATALOG_NAME," +
+		"datname AS SCHEMA_NAME," +
+		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
+		"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
+		"if(true, NULL, '') AS SQL_PATH," +
+		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
+		"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))",
+}
+
+var InformationSchemaCOLUMNS = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "COLUMNS",
+	CreateViewSql: fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
+		"'def' as TABLE_CATALOG,"+
+		"att_database as TABLE_SCHEMA,"+
+		"att_relname AS TABLE_NAME,"+
+		"attname AS COLUMN_NAME,"+
+		"attnum AS ORDINAL_POSITION,"+
+		"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,"+
+		"(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
+		"mo_show_visible_bin(atttyp,2) as DATA_TYPE,"+
+		"internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
+		"internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,"+
+		"internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,"+
+		"internal_numeric_scale(atttyp) AS NUMERIC_SCALE,"+
+		"internal_datetime_scale(atttyp) AS DATETIME_PRECISION,"+
+		"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
+		"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
+		"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,"+
+		"case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,"+
+		"case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,"+
+		"'select,insert,update,references' as `PRIVILEGES`,"+
+		"att_comment as COLUMN_COMMENT,"+
+		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
+		"if(true, NULL, 0) as SRS_ID "+
+		"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+}
+
+var needUpgradeExistingView = []*table.Table{
+	InformationSchemaSCHEMATA,
+	InformationSchemaCOLUMNS,
+}
