@@ -207,16 +207,16 @@ a
 drop table t1;
 SELECT CAST(20220101 AS datetime(0)) BETWEEN 20220101 AND -1;
 CAST(20220101 AS datetime(0)) BETWEEN 20220101 AND -1
-false
+ERROR 20203 (HY000): invalid argument operator cast, bad value [BIGINT DATETIME]
 SELECT CAST(00000501 AS datetime(0)) NOT BETWEEN 100 AND -1;
 CAST(00000501 AS datetime(0)) NOT BETWEEN 100 AND -1
-true
+ERROR 20203 (HY000): invalid argument operator cast, bad value [BIGINT DATETIME]
 SELECT CAST(0 AS datetime(0)) BETWEEN 0 AND -1;
 CAST(0 AS datetime(0)) BETWEEN 0 AND -1
-NULL
+ERROR 20203 (HY000): invalid argument operator cast, bad value [BIGINT DATETIME]
 SELECT CAST(1000101 as datetime(0)) BETWEEN '1000-01-01' and '1000-01-02';
 CAST(1000101 as datetime(0)) BETWEEN '1000-01-01' and '1000-01-02'
-false
+ERROR 20203 (HY000): invalid argument operator cast, bad value [BIGINT DATETIME]
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
