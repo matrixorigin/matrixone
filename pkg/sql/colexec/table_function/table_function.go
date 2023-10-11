@@ -57,7 +57,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	case "mo_configurations":
 		f, e = moConfigurationsCall(idx, proc, tblArg, &result)
 	case "mo_transactions":
-		f, e = moTransactionsCall(idx, proc, tblArg)
+		f, e = moTransactionsCall(idx, proc, tblArg, &result)
 	default:
 		result.Status = vm.ExecStop
 		return result, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))

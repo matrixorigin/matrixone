@@ -420,7 +420,7 @@ func getPointContent(li *query.TxnLockInfo) []byte {
 	return []byte{}
 }
 
-func moTransactionsCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
 
@@ -552,7 +552,7 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 		arg.ctr.state = dataFinished
 		return false, nil
 
