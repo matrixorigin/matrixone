@@ -223,7 +223,7 @@ func (client *txnClient) New(
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
 	if client.lockService != nil {
-		txnMeta.LockService = client.lockService.GetConfig().ServiceID
+		txnMeta.LockService = client.lockService.GetServiceID()
 	}
 
 	options = append(options,

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -739,7 +740,7 @@ func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	}
 }
 
-func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error) {
+func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByTN{})
@@ -757,6 +758,9 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 		}
 		if e.bat == nil || e.bat.IsEmpty() {
 			continue
+		}
+		if e.tableId == catalog.MO_TABLES_ID && e.typ == INSERT {
+			logutil.Infof("precommit: create table: %s-%v", tid, vector.MustStrCol(e.bat.GetVector(1+catalog.MO_TABLES_REL_NAME_IDX)))
 		}
 		if v != nil {
 			e.pkChkByTN = v.(int8)
