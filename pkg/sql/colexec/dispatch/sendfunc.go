@@ -50,14 +50,14 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		}
 		bats = append(bats, bat)
 	}
-	defer func() {
-		for _, bat := range bats {
-			if bat != nil {
-				bat.Clean(proc.Mp())
-			}
-		}
-		bats = nil
-	}()
+	// defer func() {
+	// 	for _, bat := range bats {
+	// 		if bat != nil {
+	// 			bat.Clean(proc.Mp())
+	// 		}
+	// 	}
+	// 	bats = nil
+	// }()
 	// }
 
 	for i, reg := range ap.LocalRegs {
