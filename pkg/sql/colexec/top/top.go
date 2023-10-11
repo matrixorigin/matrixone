@@ -99,13 +99,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	if ctr.state == vm.Eval {
+		ctr.state = vm.End
 		if ctr.bat != nil {
 			err := ctr.eval(ap.Limit, proc, &result)
 			if err != nil {
 				return result, err
 			}
 		}
-		ctr.state = vm.End
 		return result, nil
 	}
 
@@ -236,7 +236,6 @@ func (ctr *container) eval(limit int64, proc *process.Process, result *vm.CallRe
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	result.Batch = ctr.bat
-	ctr.bat = nil
 	return nil
 }
 

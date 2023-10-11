@@ -39,4 +39,10 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	for _, bat := range arg.Batchs {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}
+	arg.Batchs = nil
 }

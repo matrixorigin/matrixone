@@ -75,20 +75,23 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 }
 
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
-	bat := batch.NewWithSize(ctr.batchList[0].VectorCount())
+	if ctr.buf != nil {
+		proc.PutBatch(ctr.buf)
+		ctr.buf = nil
+	}
+	ctr.buf = batch.NewWithSize(ctr.batchList[0].VectorCount())
 	mp := proc.Mp()
 
-	for i := range bat.Vecs {
-		bat.Vecs[i] = proc.GetVector(*ctr.batchList[0].Vecs[i].GetType())
+	for i := range ctr.buf.Vecs {
+		ctr.buf.Vecs[i] = proc.GetVector(*ctr.batchList[0].Vecs[i].GetType())
 	}
 
 	wholeLength := 0
 	for {
 		choice := ctr.pickFirstRow()
-		for j := range bat.Vecs {
-			err = bat.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], mp)
+		for j := range ctr.buf.Vecs {
+			err = ctr.buf.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], mp)
 			if err != nil {
-				bat.Clean(mp)
 				return false, err
 			}
 		}
@@ -103,12 +106,12 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 			sendOver = true
 			break
 		}
-		if bat.Size() >= maxBatchSizeToSend {
+		if ctr.buf.Size() >= maxBatchSizeToSend {
 			break
 		}
 	}
-	bat.SetRowCount(wholeLength)
-	result.Batch = bat
+	ctr.buf.SetRowCount(wholeLength)
+	result.Batch = ctr.buf
 	return sendOver, nil
 }
 
@@ -237,8 +240,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
-				result.Batch = ctr.batchList[0]
+				ctr.buf = ctr.batchList[0]
 				ctr.batchList[0] = nil
+				result.Batch = ctr.buf
 				result.Status = vm.ExecStop
 				return result, nil
 			}

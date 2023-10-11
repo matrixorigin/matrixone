@@ -89,7 +89,6 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 			if len(arg.InsertCtx.PartitionTableIDs) > 0 {
 				insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, arg.InsertCtx.Attrs, arg.InsertCtx.PartitionIndexInBatch, len(arg.InsertCtx.PartitionTableIDs))
 				if err != nil {
-					proc.PutBatch(bat)
 					return result, err
 				}
 
@@ -108,11 +107,9 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 				// write to s3.
 				bat.Attrs = append(bat.Attrs[:0], arg.InsertCtx.Attrs...)
 				if err := s3Writer.WriteS3Batch(proc, bat); err != nil {
-					proc.PutBatch(bat)
 					arg.ctr.state = vm.End
 					return result, err
 				}
-				proc.PutBatch(bat)
 			}
 		}
 	}

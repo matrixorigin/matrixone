@@ -37,14 +37,20 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ctr := ap.ctr
+
 	result := vm.NewCallResult()
+	var end bool
+	var err error
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		arg.buf, end, err = arg.ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, nil
@@ -54,28 +60,28 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-		if bat.Last() {
-			result.Batch = bat
+		if arg.buf.Last() {
+			result.Batch = arg.buf
 			return result, nil
 		}
 
-		anal.Input(bat, arg.info.IsFirst)
-		if ap.ctr.seen >= ap.Limit {
-			proc.PutBatch(bat)
+		anal.Input(arg.buf, arg.info.IsFirst)
+		if arg.ctr.seen >= arg.Limit {
+			proc.PutBatch(arg.buf)
 			continue
 		}
-		newSeen := ap.ctr.seen + uint64(bat.RowCount())
-		if newSeen < ap.Limit {
-			ap.ctr.seen = newSeen
-			anal.Output(bat, arg.info.IsLast)
-			result.Batch = bat
+		newSeen := arg.ctr.seen + uint64(arg.buf.RowCount())
+		if newSeen < arg.Limit {
+			arg.ctr.seen = newSeen
+			anal.Output(arg.buf, arg.info.IsLast)
+			result.Batch = arg.buf
 			return result, nil
 		} else {
-			num := int(newSeen - ap.Limit)
-			batch.SetLength(bat, bat.RowCount()-num)
-			ap.ctr.seen = newSeen
-			anal.Output(bat, arg.info.IsLast)
-			result.Batch = bat
+			num := int(newSeen - arg.Limit)
+			batch.SetLength(arg.buf, arg.buf.RowCount()-num)
+			arg.ctr.seen = newSeen
+			anal.Output(arg.buf, arg.info.IsLast)
+			result.Batch = arg.buf
 			return result, nil
 		}
 	}

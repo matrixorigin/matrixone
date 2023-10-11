@@ -99,10 +99,8 @@ func TestAnti(t *testing.T) {
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
-				cleanResult(&ok, tc.proc)
 				break
 			}
-			cleanResult(&ok, tc.proc)
 		}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
@@ -123,10 +121,8 @@ func TestAnti(t *testing.T) {
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
-				cleanResult(&ok, tc.proc)
 				break
 			}
-			cleanResult(&ok, tc.proc)
 		}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
@@ -173,10 +169,8 @@ func BenchmarkAnti(b *testing.B) {
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				if ok.Status == vm.ExecStop || err != nil {
-					cleanResult(&ok, tc.proc)
 					break
 				}
-				cleanResult(&ok, tc.proc)
 			}
 		}
 	}
@@ -290,11 +284,4 @@ func hashBuild(t *testing.T, tc antiTestCase) *batch.Batch {
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func cleanResult(result *vm.CallResult, proc *process.Process) {
-	if result.Batch != nil {
-		result.Batch.Clean(proc.Mp())
-		result.Batch = nil
-	}
 }

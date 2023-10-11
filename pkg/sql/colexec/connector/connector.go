@@ -30,18 +30,21 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	ap := arg
-	reg := ap.Reg
+	reg := arg.Reg
 
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
-	bat := result.Batch
 
-	if bat == nil {
+	if result.Batch == nil {
 		result.Status = vm.ExecStop
 		return result, nil
+	}
+
+	bat, err := result.Batch.Dup(proc.Mp())
+	if err != nil {
+		return result, err
 	}
 	if bat.IsEmpty() {
 		return result, nil
@@ -61,7 +64,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 
 	case reg.Ch <- bat:
-		// result.Batch = nil
 		return result, nil
 	}
 }

@@ -84,6 +84,8 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+
+	resBat *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -127,6 +129,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		arg.ctr.partitionId_blockId_deltaLoc = nil
 		arg.ctr.blockId_type = nil
 		arg.ctr.pool = nil
+	}
+	if arg.resBat != nil {
+		arg.resBat.Clean(proc.Mp())
+		arg.resBat = nil
 	}
 }
 

@@ -36,6 +36,10 @@ func (arg *Argument) Prepare(_ *proc) error {
 }
 
 func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
+	analy := proc.GetAnalyze(arg.info.Idx)
+	analy.Start()
+	defer analy.Stop()
+
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
@@ -45,62 +49,57 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 	}
 	bat := result.Batch
 
-	analy := proc.GetAnalyze(arg.info.Idx)
-	analy.Start()
-	defer analy.Stop()
-	defer proc.PutBatch(bat)
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
 
-	newBat := batch.NewWithSize(len(arg.Attrs))
-	newBat.Attrs = make([]string, 0, len(arg.Attrs))
+	arg.buf = batch.NewWithSize(len(arg.Attrs))
+	arg.buf.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
-		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
+		arg.buf.Attrs = append(arg.buf.Attrs, arg.Attrs[idx])
 		srcVec := bat.Vecs[idx]
 		vec := proc.GetVector(*srcVec.GetType())
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
-			newBat.Clean(proc.Mp())
 			return result, err
 		}
-		newBat.SetVector(int32(idx), vec)
+		arg.buf.SetVector(int32(idx), vec)
 	}
-	newBat.AddRowCount(bat.RowCount())
+	arg.buf.AddRowCount(bat.RowCount())
 
 	if arg.HasAutoCol {
-		err := genAutoIncrCol(newBat, proc, arg)
+		err := genAutoIncrCol(arg.buf, proc, arg)
 		if err != nil {
-			newBat.Clean(proc.GetMPool())
 			return result, err
 		}
 	}
 	// check new rows not null
-	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
+	err = colexec.BatchDataNotNullCheck(arg.buf, arg.TableDef, proc.Ctx)
 	if err != nil {
-		newBat.Clean(proc.GetMPool())
 		return result, err
 	}
 
 	// calculate the composite primary key column and append the result vector to batch
-	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
+	err = genCompositePrimaryKey(arg.buf, proc, arg.TableDef)
 	if err != nil {
-		newBat.Clean(proc.GetMPool())
 		return result, err
 	}
-	err = genClusterBy(newBat, proc, arg.TableDef)
+	err = genClusterBy(arg.buf, proc, arg.TableDef)
 	if err != nil {
-		newBat.Clean(proc.GetMPool())
 		return result, err
 	}
 	if arg.IsUpdate {
 		idx := len(bat.Vecs) - 1
-		newBat.Attrs = append(newBat.Attrs, catalog.Row_ID)
+		arg.buf.Attrs = append(arg.buf.Attrs, catalog.Row_ID)
 		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
 		err := rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
 			return result, err
 		}
-		newBat.Vecs = append(newBat.Vecs, rowIdVec)
+		arg.buf.Vecs = append(arg.buf.Vecs, rowIdVec)
 	}
 
-	result.Batch = newBat
+	result.Batch = arg.buf
 	return result, nil
 }
 

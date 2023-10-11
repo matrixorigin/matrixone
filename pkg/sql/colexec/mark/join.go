@@ -158,31 +158,39 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
+	if ctr.rbat != nil {
+		proc.PutBatch(ctr.rbat)
+		ctr.rbat = nil
+	}
+	ctr.rbat = batch.NewWithSize(len(ap.Result))
 	count := bat.RowCount()
 	for i, rp := range ap.Result {
 		if rp >= 0 {
 			// rbat.Vecs[i] = bat.Vecs[rp]
 			// bat.Vecs[rp] = nil
 			typ := *bat.Vecs[rp].GetType()
-			rbat.Vecs[i] = vector.NewVec(typ)
-			if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[rp]); err != nil {
+			ctr.rbat.Vecs[i] = vector.NewVec(typ)
+			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
 				return err
 			}
 		} else {
-			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
+			ctr.rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
-	rbat.AddRowCount(bat.RowCount())
-	anal.Output(rbat, isLast)
+	ctr.rbat.AddRowCount(bat.RowCount())
+	anal.Output(ctr.rbat, isLast)
 
-	result.Batch = rbat
+	result.Batch = ctr.rbat
 	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
+	if ctr.rbat != nil {
+		proc.PutBatch(ctr.rbat)
+		ctr.rbat = nil
+	}
+	ctr.rbat = batch.NewWithSize(len(ap.Result))
 	markVec, err := proc.AllocVectorOfRows(types.T_bool.ToType(), bat.RowCount(), nil)
 	if err != nil {
 		return err
@@ -191,7 +199,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	ctr.markNulls = nulls.NewWithSize(bat.RowCount())
 
 	if err = ctr.evalJoinProbeCondition(bat, proc); err != nil {
-		rbat.Clean(proc.Mp())
 		return err
 	}
 
@@ -216,14 +223,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if zvals[k] == 0 { // 2.1 : probe tuple has null
 				condState, err = ctr.EvalEntire(bat, ctr.bat, i+k, proc, ctr.rewriteCond)
 				if err != nil {
-					rbat.Clean(proc.Mp())
 					return err
 				}
 				ctr.handleResultType(i+k, condState)
 			} else if vals[k] > 0 { // 2.2.1 : condEq is condTrue in JoinMap
 				condState, err = ctr.nonEqJoinInMap(ap, mSels, vals, k, i, proc, bat)
 				if err != nil {
-					rbat.Clean(proc.Mp())
 					return err
 				}
 				if condState == condTrue { // 2.2.1.1 : condNonEq is condTrue in JoinMap
@@ -237,7 +242,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					condState, err = ctr.EvalEntire(bat, ctr.nullWithBatch, i+k, proc, ctr.rewriteCond)
 					if err != nil {
-						rbat.Clean(proc.Mp())
 						return err
 					}
 					ctr.handleResultType(i+k, condState)
@@ -249,7 +253,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 				condState, err = ctr.EvalEntire(bat, ctr.nullWithBatch, i+k, proc, ctr.rewriteCond)
 				if err != nil {
-					rbat.Clean(proc.Mp())
 					return err
 				}
 				ctr.handleResultType(i+k, condState)
@@ -258,16 +261,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	for i, pos := range ap.Result {
 		if pos >= 0 {
-			rbat.Vecs[i] = bat.Vecs[pos]
+			ctr.rbat.Vecs[i] = bat.Vecs[pos]
 			bat.Vecs[pos] = nil
 		} else {
 			markVec.SetNulls(ctr.markNulls)
-			rbat.Vecs[i] = markVec
+			ctr.rbat.Vecs[i] = markVec
 		}
 	}
-	rbat.AddRowCount(bat.RowCount())
-	anal.Output(rbat, isLast)
-	result.Batch = rbat
+	ctr.rbat.AddRowCount(bat.RowCount())
+	anal.Output(ctr.rbat, isLast)
+	result.Batch = ctr.rbat
 	return nil
 }
 

@@ -77,11 +77,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.insertBat != nil {
 				anal.Output(ctr.insertBat, arg.info.IsLast)
 				result.Batch = ctr.insertBat
-				ctr.insertBat = nil
-				ctr.state = End
-				return result, nil
 			}
 			ctr.state = End
+			return result, nil
 
 		case End:
 			result.Batch = nil

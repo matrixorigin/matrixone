@@ -103,10 +103,8 @@ func TestJoin(t *testing.T) {
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
-				cleanResult(&ok, tc.proc)
 				break
 			}
-			cleanResult(&ok, tc.proc)
 		}
 		tc.arg.Free(tc.proc, false)
 		tc.proc.FreeVectors()
@@ -229,10 +227,8 @@ func BenchmarkJoin(b *testing.B) {
 			for {
 				ok, err := tc.arg.Call(tc.proc)
 				if ok.Status == vm.ExecStop || err != nil {
-					cleanResult(&ok, tc.proc)
 					break
 				}
-				cleanResult(&ok, tc.proc)
 			}
 		}
 	}
@@ -364,9 +360,3 @@ func constructIndex(t *testing.T, v *vector.Vector, m *mpool.MPool) {
 	v.SetIndex(idx)
 }
 */
-
-func cleanResult(result *vm.CallResult, proc *process.Process) {
-	if result.Batch != nil {
-		result.Batch.Clean(proc.Mp())
-	}
-}

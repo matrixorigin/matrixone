@@ -99,27 +99,35 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
+	if ctr.rbat != nil {
+		proc.PutBatch(ctr.rbat)
+		ctr.rbat = nil
+	}
+	ctr.rbat = batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		// rbat.Vecs[i] = bat.Vecs[pos]
 		// bat.Vecs[pos] = nil
 		typ := *bat.Vecs[pos].GetType()
-		rbat.Vecs[i] = vector.NewVec(typ)
-		if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[pos]); err != nil {
+		ctr.rbat.Vecs[i] = vector.NewVec(typ)
+		if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[pos]); err != nil {
 			return err
 		}
 	}
-	rbat.AddRowCount(bat.RowCount())
-	anal.Output(rbat, isLast)
-	result.Batch = rbat
+	ctr.rbat.AddRowCount(bat.RowCount())
+	anal.Output(ctr.rbat, isLast)
+	result.Batch = ctr.rbat
 	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
 	anal.Input(bat, isFirst)
-	rbat := batch.NewWithSize(len(ap.Result))
+	if ctr.rbat != nil {
+		proc.PutBatch(ctr.rbat)
+		ctr.rbat = nil
+	}
+	ctr.rbat = batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
+		ctr.rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
 	count := bat.RowCount()
 	if ctr.joinBat == nil {
@@ -130,13 +138,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i := 0; i < count; i++ {
 		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
 			ctr.bat.RowCount(), ctr.cfs); err != nil {
-			rbat.Clean(proc.Mp())
 			return err
 		}
 		matched := false
 		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
 		if err != nil {
-			rbat.Clean(proc.Mp())
 			return err
 		}
 
@@ -150,8 +156,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		if !matched && !nulls.Any(vec.GetNulls()) {
 			for k, pos := range ap.Result {
-				if err := rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
-					rbat.Clean(proc.Mp())
+				if err := ctr.rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
 					vec.Free(proc.Mp())
 					return err
 				}
@@ -159,9 +164,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rowCountIncrease++
 		}
 	}
-	rbat.SetRowCount(rbat.RowCount() + rowCountIncrease)
-	anal.Output(rbat, isLast)
+	ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
+	anal.Output(ctr.rbat, isLast)
 
-	result.Batch = rbat
+	result.Batch = ctr.rbat
 	return nil
 }

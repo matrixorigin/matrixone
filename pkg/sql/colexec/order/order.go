@@ -159,6 +159,11 @@ func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) 
 			return err
 		}
 	}
+	if ctr.rbat != nil {
+		proc.PutBatch(ctr.rbat)
+		ctr.rbat = nil
+	}
+	ctr.rbat = ctr.batWaitForSort
 	result.Batch = ctr.batWaitForSort
 	ctr.batWaitForSort = nil
 	return nil

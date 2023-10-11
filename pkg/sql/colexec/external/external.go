@@ -121,23 +121,17 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctx, span := trace.Start(proc.Ctx, "ExternalCall")
-	defer span.End()
-	result := vm.NewCallResult()
-	select {
-	case <-proc.Ctx.Done():
-		result.Status = vm.ExecStop
-		return result, nil
-	default:
-	}
-
 	t1 := time.Now()
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer func() {
 		anal.Stop()
 		anal.AddScanTime(t1)
+		span.End()
 	}()
 	anal.Input(nil, arg.info.IsFirst)
+
+	result := vm.NewCallResult()
 	param := arg.Es
 	if param.Fileparam.End {
 		result.Status = vm.ExecStop

@@ -17,7 +17,6 @@ package mergerecursive
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -37,12 +36,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg
-	ctr := ap.ctr
-	var sb *batch.Batch
+
 	result := vm.NewCallResult()
-	for !ctr.last {
-		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+	for !arg.ctr.last {
+		bat, _, err := arg.ctr.ReceiveFromSingleReg(0, anal)
 		if err != nil {
 			result.Status = vm.ExecStop
 			return result, err
@@ -53,26 +50,26 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 		if bat.Last() {
-			ctr.last = true
+			arg.ctr.last = true
 		}
-		ctr.bats = append(ctr.bats, bat)
+		arg.ctr.bats = append(arg.ctr.bats, bat)
 	}
-	sb = ctr.bats[0]
-	ctr.bats = ctr.bats[1:]
+	arg.buf = arg.ctr.bats[0]
+	arg.ctr.bats = arg.ctr.bats[1:]
 
-	if sb.Last() {
-		ctr.last = false
+	if arg.buf.Last() {
+		arg.ctr.last = false
 	}
 
-	if sb.End() {
-		sb.Clean(proc.Mp())
+	if arg.buf.End() {
+		arg.buf.Clean(proc.Mp())
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
-	anal.Input(sb, arg.info.IsFirst)
-	anal.Output(sb, arg.info.IsLast)
-	result.Batch = sb
+	anal.Input(arg.buf, arg.info.IsFirst)
+	anal.Output(arg.buf, arg.info.IsLast)
+	result.Batch = arg.buf
 	return result, nil
 }

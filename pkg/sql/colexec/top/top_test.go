@@ -72,32 +72,16 @@ func TestTop(t *testing.T) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 
-		testBatch := newBatch(t, tc.types, tc.proc, Rows)
-		resetChildren(tc.arg, testBatch)
-		result, _ := tc.arg.Call(tc.proc)
-		cleanResult(&result, tc.proc)
-
-		testBatch = newBatch(t, tc.types, tc.proc, Rows)
-		resetChildren(tc.arg, testBatch)
-		result, _ = tc.arg.Call(tc.proc)
-		cleanResult(&result, tc.proc)
-
-		testBatch = batch.EmptyBatch
-		resetChildren(tc.arg, testBatch)
-		result, _ = tc.arg.Call(tc.proc)
-		cleanResult(&result, tc.proc)
-
-		testBatch = nil
-		resetChildren(tc.arg, testBatch)
-		result, _ = tc.arg.Call(tc.proc)
-		cleanResult(&result, tc.proc)
-
-		testBatch = nil
-		resetChildren(tc.arg, testBatch)
-		result, _ = tc.arg.Call(tc.proc)
-		cleanResult(&result, tc.proc)
-
+		bats := []*batch.Batch{
+			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(t, tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
+		_, _ = tc.arg.Call(tc.proc)
 		tc.proc.FreeVectors()
+		tc.arg.Free(tc.proc, false)
+		tc.arg.children[0].Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -113,25 +97,15 @@ func BenchmarkTop(b *testing.B) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 
-			testBatch := newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			resetChildren(tc.arg, testBatch)
-			result, _ := tc.arg.Call(tc.proc)
-			cleanResult(&result, tc.proc)
-
-			testBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			resetChildren(tc.arg, testBatch)
-			result, _ = tc.arg.Call(tc.proc)
-			cleanResult(&result, tc.proc)
-
-			testBatch = batch.EmptyBatch
-			resetChildren(tc.arg, testBatch)
-			result, _ = tc.arg.Call(tc.proc)
-			cleanResult(&result, tc.proc)
-
-			testBatch = nil
-			resetChildren(tc.arg, testBatch)
-			result, _ = tc.arg.Call(tc.proc)
-			cleanResult(&result, tc.proc)
+			bats := []*batch.Batch{
+				newBatch(t, tc.types, tc.proc, BenchmarkRows),
+				newBatch(t, tc.types, tc.proc, BenchmarkRows),
+				batch.EmptyBatch,
+			}
+			resetChildren(tc.arg, bats)
+			_, _ = tc.arg.Call(tc.proc)
+			tc.arg.Free(tc.proc, false)
+			tc.arg.children[0].Free(tc.proc, false)
 		}
 	}
 }
@@ -168,24 +142,17 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *Argument, bats []*batch.Batch) {
 	if len(arg.children) == 0 {
 		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+			Batchs: bats,
 		})
 
 	} else {
 		arg.children = arg.children[:0]
 		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+			Batchs: bats,
 		})
 	}
 	arg.ctr.state = vm.Build
-}
-
-func cleanResult(result *vm.CallResult, proc *process.Process) {
-	if result.Batch != nil {
-		result.Batch.Clean(proc.Mp())
-		result.Batch = nil
-	}
 }

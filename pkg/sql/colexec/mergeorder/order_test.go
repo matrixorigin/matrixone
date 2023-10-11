@@ -132,7 +132,6 @@ func TestOrder(t *testing.T) {
 					}
 				}
 
-				cleanResult(&ok, tc.proc)
 				break
 			}
 		}
@@ -145,7 +144,8 @@ func TestOrder(t *testing.T) {
 			}
 		}
 		tc.proc.FreeVectors()
-		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
+		tc.arg.Free(tc.proc, false)
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
@@ -170,7 +170,6 @@ func BenchmarkOrder(b *testing.B) {
 				if ok.Status == vm.ExecStop || err != nil {
 					break
 				}
-				cleanResult(&ok, tc.proc)
 			}
 			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
@@ -272,10 +271,4 @@ func newIntBatch(ts []types.Type, proc *process.Process, rows int64, fs []*plan.
 
 func newRandomBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func cleanResult(result *vm.CallResult, proc *process.Process) {
-	if result.Batch != nil {
-		result.Batch.Clean(proc.Mp())
-	}
 }

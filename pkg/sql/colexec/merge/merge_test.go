@@ -77,19 +77,19 @@ func TestMerge(t *testing.T) {
 		for {
 			ok, err := tc.arg.Call(tc.proc)
 			if ok.Status == vm.ExecStop || err != nil {
-				cleanResult(&ok, tc.proc)
 				break
 			}
-			cleanResult(&ok, tc.proc)
 		}
-		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					bat.Clean(tc.proc.Mp())
-				}
-			}
-		}
+		// for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+		// 	for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+		// 		bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+		// 		if bat != nil {
+		// 			bat.Clean(tc.proc.Mp())
+		// 		}
+		// 	}
+		// }
+		tc.arg.Free(tc.proc, false)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -126,10 +126,4 @@ func newTestCase() mergeTestCase {
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
-
-func cleanResult(result *vm.CallResult, proc *process.Process) {
-	if result.Batch != nil {
-		result.Batch.Clean(proc.Mp())
-	}
 }

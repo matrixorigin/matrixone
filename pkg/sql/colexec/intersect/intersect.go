@@ -156,7 +156,10 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		analyze.Input(btc, isFirst)
-
+		if c.btc != nil {
+			proc.PutBatch(c.btc)
+			c.btc = nil
+		}
 		c.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
 			c.btc.Vecs[i] = vector.NewVec(*btc.Vecs[i].GetType())

@@ -67,6 +67,8 @@ type container struct {
 	// expression executors for order columns.
 	executors []colexec.ExpressionExecutor
 	compares  []compare.Compare
+
+	buf *batch.Batch
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -91,6 +93,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			if ctr.executors[i] != nil {
 				ctr.executors[i].Free()
 			}
+		}
+
+		if ctr.buf != nil {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
 		}
 	}
 }

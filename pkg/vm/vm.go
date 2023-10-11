@@ -50,13 +50,9 @@ func Prepare(ins Instructions, proc *process.Process) error {
 }
 
 func Run(ins Instructions, proc *process.Process) (end bool, err error) {
-	var result *CallResult
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(proc.Ctx, e)
-		}
-		if result != nil && result.Batch != nil {
-			result.Batch.Clean(proc.Mp())
 		}
 	}()
 

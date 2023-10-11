@@ -72,6 +72,7 @@ type container struct {
 
 	// store the all batch from the build table
 	bat     *batch.Batch
+	rbat    *batch.Batch
 	joinBat *batch.Batch
 	expr    colexec.ExpressionExecutor
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
@@ -192,6 +193,10 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(mp)
+		ctr.rbat = nil
 	}
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)

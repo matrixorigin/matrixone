@@ -85,11 +85,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				anal.Output(ctr.bat, arg.info.IsLast)
 				result.Batch = ctr.bat
-				ctr.bat = nil
-				ctr.state = End
-				return result, nil
 			}
 			ctr.state = End
+			return result, nil
 
 		case End:
 			result.Batch = nil

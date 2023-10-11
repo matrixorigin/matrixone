@@ -15,6 +15,7 @@
 package projection
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -29,6 +30,7 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+	buf      *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -50,5 +52,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				arg.ctr.projExecutors[i].Free()
 			}
 		}
+	}
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
 	}
 }

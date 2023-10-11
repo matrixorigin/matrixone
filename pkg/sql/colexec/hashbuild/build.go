@@ -122,7 +122,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				result.Batch = ctr.bat
 				ctr.intHashMap = nil
 				ctr.strHashMap = nil
-				ctr.bat = nil
 				ctr.multiSels = nil
 			} else {
 				ctr.cleanHashMap()

@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -147,6 +146,10 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 // send it to the next operator and counter--; else, continue.
 // if batch is the last one, return true, else return false.
 func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
+	if ctr.buf != nil {
+		proc.PutBatch(ctr.buf)
+		ctr.buf = nil
+	}
 	for {
 		bat, _, err := ctr.ReceiveFromSingleReg(0, analyzer)
 		if err != nil {
@@ -155,27 +158,23 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 		if bat == nil {
 			return true, nil
 		}
+		analyzer.Input(bat, isFirst)
 		if bat.Last() {
-			result.Batch = bat
+			ctr.buf = bat
+			result.Batch = ctr.buf
 			return false, nil
 		}
 		if bat.IsEmpty() {
 			proc.PutBatch(bat)
 			continue
 		}
-
-		analyzer.Input(bat, isFirst)
-		//data to send to the next op
-		var outputBat *batch.Batch
 		//counter to record whether a row should add to output batch or not
 		var cnt int
 
 		//init output batch
-		{
-			outputBat = batch.NewWithSize(len(bat.Vecs))
-			for i := range bat.Vecs {
-				outputBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
-			}
+		ctr.buf = batch.NewWithSize(len(bat.Vecs))
+		for i := range bat.Vecs {
+			ctr.buf.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
 		}
 
 		// probe hashTable
@@ -215,11 +214,11 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 					cnt++
 
 				}
-				outputBat.AddRowCount(cnt)
+				ctr.buf.AddRowCount(cnt)
 
 				if cnt > 0 {
 					for colNum := range bat.Vecs {
-						if err := outputBat.Vecs[colNum].UnionBatch(bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
+						if err := ctr.buf.Vecs[colNum].UnionBatch(bat.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
 							bat.Clean(proc.Mp())
 							return false, err
 						}
@@ -228,10 +227,10 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			}
 
 		}
-		analyzer.Alloc(int64(outputBat.Size()))
-		analyzer.Output(outputBat, isLast)
+		analyzer.Alloc(int64(ctr.buf.Size()))
+		analyzer.Output(ctr.buf, isLast)
 
-		result.Batch = outputBat
+		result.Batch = ctr.buf
 		proc.PutBatch(bat)
 		return false, nil
 	}

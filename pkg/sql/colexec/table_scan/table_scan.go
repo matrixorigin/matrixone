@@ -56,6 +56,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Alloc(int64(bat.Size()))
 	}
 
-	result.Batch = bat
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+	}
+	arg.buf = bat
+	bat = nil
+
+	result.Batch = arg.buf
 	return result, nil
 }

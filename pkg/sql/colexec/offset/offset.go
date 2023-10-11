@@ -41,27 +41,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-
-	ap := arg
 	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 	anal.Input(bat, arg.info.IsFirst)
 
-	if ap.Seen > ap.Offset {
+	if arg.Seen > arg.Offset {
 		return result, nil
 	}
 	length := bat.RowCount()
-	if ap.Seen+uint64(length) > ap.Offset {
-		sels := newSels(int64(ap.Offset-ap.Seen), int64(length)-int64(ap.Offset-ap.Seen), proc)
-		ap.Seen += uint64(length)
+	if arg.Seen+uint64(length) > arg.Offset {
+		sels := newSels(int64(arg.Offset-arg.Seen), int64(length)-int64(arg.Offset-arg.Seen), proc)
+		arg.Seen += uint64(length)
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		result.Batch = bat
 		return result, nil
 	}
-	ap.Seen += uint64(length)
-	proc.PutBatch(bat)
+	arg.Seen += uint64(length)
 	result.Batch = batch.EmptyBatch
 	return result, nil
 }

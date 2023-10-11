@@ -148,7 +148,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			return true, nil
 		}
 		if bat.Last() {
-			result.Batch = bat
+			ctr.bat = bat
+			result.Batch = ctr.bat
 			return false, nil
 		}
 		// just an empty batch.

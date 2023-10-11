@@ -17,6 +17,7 @@ package preinsertunique
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,6 +31,7 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+	buf      *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -40,4 +42,8 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
 }
 
-func (arg *Argument) Free(*process.Process, bool) {}
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+	}
+}

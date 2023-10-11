@@ -44,6 +44,10 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
+	anal.Start()
+	defer anal.Stop()
+
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
@@ -52,35 +56,33 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-
-	anal := proc.GetAnalyze(arg.info.Idx)
-	anal.Start()
-	defer anal.Stop()
-
 	anal.Input(bat, arg.info.IsFirst)
-	ap := arg
-	rbat := batch.NewWithSize(len(ap.Es))
+
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+
+	arg.buf = batch.NewWithSize(len(arg.Es))
 
 	// do projection.
-	for i := range ap.ctr.projExecutors {
-		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
+	for i := range arg.ctr.projExecutors {
+		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return result, err
 		}
-		rbat.Vecs[i] = vec
+		arg.buf.Vecs[i] = vec
 	}
 
-	newAlloc, err := colexec.FixProjectionResult(proc, ap.ctr.projExecutors, rbat, bat)
+	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.buf, bat)
 	if err != nil {
 		bat.Clean(proc.Mp())
 		return result, err
 	}
 	anal.Alloc(int64(newAlloc))
+	arg.buf.SetRowCount(bat.RowCount())
 
-	rbat.SetRowCount(bat.RowCount())
-
-	proc.PutBatch(bat)
-	anal.Output(rbat, arg.info.IsLast)
-	result.Batch = rbat
+	anal.Output(arg.buf, arg.info.IsLast)
+	result.Batch = arg.buf
 	return result, nil
 }
