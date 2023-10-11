@@ -38,33 +38,76 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
+func findBatchToSend(ap *Argument, threshHold int) int {
+	for i := range ap.ctr.shuffledBats {
+		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].RowCount() > threshHold {
+			return i
+		}
+	}
+	return -1
+}
+
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
+	var index = -1
 
-	if ap.ctr.state == outPutNotEnding {
-		return sendOneBatch(ap, proc, false), nil
-	} else if ap.ctr.state == outPutEnding {
-		return sendOneBatch(ap, proc, true), nil
-	}
-
-	result, err := arg.children[0].Call(proc)
-	if err != nil {
-		return result, err
-	}
-	bat := result.Batch
-	if bat == nil || result.Batch.Last() {
-		return sendOneBatch(ap, proc, true), nil
-	}
-	if bat.IsEmpty() {
-		return sendOneBatch(ap, proc, false), nil
-	}
-	if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
-		return hashShuffle(bat, ap, proc)
-	} else if ap.ShuffleType == int32(plan.ShuffleType_Range) {
-		return rangeShuffle(bat, ap, proc)
+	//do output
+	if ap.ctr.ending {
+		index = findBatchToSend(ap, 0)
+		if index == -1 {
+			result := vm.NewCallResult()
+			result.Status = vm.ExecStop
+			return result, nil
+		}
 	} else {
-		panic("unsupported shuffle type!")
+		index = findBatchToSend(ap, shuffleBatchSize)
 	}
+
+	for index == -1 {
+		// do input
+		result, err := arg.children[0].Call(proc)
+		if err != nil {
+			return result, err
+		}
+		bat := result.Batch
+
+		if bat == nil {
+			ap.ctr.ending = true
+		} else if !bat.IsEmpty() {
+			if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
+				err = hashShuffle(ap, bat, proc)
+				if err != nil {
+					return result, err
+				}
+			} else if ap.ShuffleType == int32(plan.ShuffleType_Range) {
+				bat, err = rangeShuffle(bat, ap, proc)
+				if err != nil {
+					return result, err
+				}
+				if bat != nil {
+					// can directly send this batch
+					return result, nil
+				}
+			}
+		}
+
+		// do output again
+		if ap.ctr.ending {
+			index = findBatchToSend(ap, 0)
+			if index == -1 {
+				result.Batch = nil
+				result.Status = vm.ExecStop
+				return result, nil
+			}
+		} else {
+			index = findBatchToSend(ap, shuffleBatchSize)
+		}
+	}
+
+	result := vm.NewCallResult()
+	result.Batch = ap.ctr.shuffledBats[index]
+	ap.ctr.shuffledBats[index] = nil
+	return result, nil
 }
 
 func (arg *Argument) initShuffle() {
@@ -156,7 +199,7 @@ func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, reg
 	return nil
 }
 
-func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process) error {
+func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) error {
 	//release old bats
 	defer proc.PutBatch(bat)
 	shuffledBats := ap.ctr.shuffledBats
@@ -186,53 +229,6 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 	}
 
 	return nil
-}
-
-func sendOneBatch(ap *Argument, proc *process.Process, isEnding bool) vm.CallResult {
-	threshHold := shuffleBatchSize * 3 / 4
-	result := vm.NewCallResult()
-	if isEnding {
-		threshHold = 0
-	}
-	var findOneBatch bool
-	for i := range ap.ctr.shuffledBats {
-		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].RowCount() > threshHold {
-			if !findOneBatch {
-				findOneBatch = true
-				result.Batch = ap.ctr.shuffledBats[i]
-				ap.ctr.shuffledBats[i] = nil
-			} else {
-				if isEnding {
-					ap.ctr.state = outPutEnding
-				} else {
-					ap.ctr.state = outPutNotEnding
-				}
-				result.Status = vm.ExecHasMore
-				return result
-			}
-		}
-	}
-
-	// can not return nil, put an empty batch here
-	if result.Batch == nil {
-		result.Batch = batch.EmptyBatch
-	}
-
-	ap.ctr.state = input
-	if isEnding {
-		result.Status = vm.ExecStop
-		return result
-	}
-	return result
-}
-
-func hashShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (vm.CallResult, error) {
-	err := genShuffledBatsByHash(ap, bat, proc)
-	result := vm.NewCallResult()
-	if err != nil {
-		return result, err
-	}
-	return sendOneBatch(ap, proc, false), nil
 }
 
 func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
@@ -386,33 +382,22 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, sels [][]int32, proc
 	return nil
 }
 
-func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (vm.CallResult, error) {
+func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (*batch.Batch, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
-
 	if groupByVec.GetSorted() {
 		ok, regIndex := allBatchInOneRange(ap, bat)
 		if ok {
-			result := vm.NewCallResult()
 			bat.ShuffleIDX = int(regIndex)
-			result.Batch = bat
-			return result, nil
+			return bat, nil
 		}
 	}
-
 	sels := getShuffledSelsByRange(ap, bat)
 	for i := range sels {
 		if len(sels[i]) == bat.RowCount() {
-			result := vm.NewCallResult()
 			bat.ShuffleIDX = i
-			result.Batch = bat
-			return result, nil
+			return bat, nil
 		}
 	}
-
 	err := genShuffledBatsByRange(ap, bat, sels, proc)
-	if err != nil {
-		result := vm.NewCallResult()
-		return result, err
-	}
-	return sendOneBatch(ap, proc, false), nil
+	return nil, err
 }
