@@ -22,13 +22,7 @@ import (
 
 var _ vm.Operator = new(Argument)
 
-const shuffleBatchSize = 8192
-
-const (
-	input = iota
-	outPutNotEnding
-	outPutEnding
-)
+const shuffleBatchSize = 8192 * 3 / 4
 
 type Argument struct {
 	ctr           *container
@@ -51,9 +45,10 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 type container struct {
-	state        int
+	ending       bool
 	sels         [][]int32
 	shuffledBats []*batch.Batch
+	lastSentIdx  int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
