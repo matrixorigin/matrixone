@@ -112,12 +112,15 @@ func (w *waiter) ref() int32 {
 	return w.refCount.Add(1)
 }
 
-func (w *waiter) close() {
+func (w *waiter) close(clear bool) {
 	n := w.refCount.Add(-1)
 	if n < 0 {
 		panic("BUG: invalid ref count, " + w.String())
 	}
 	if n == 0 {
+		if clear {
+			w.disableNotify()
+		}
 		w.reset()
 	}
 }

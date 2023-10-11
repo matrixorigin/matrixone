@@ -26,7 +26,7 @@ import (
 
 func TestAcquireWaiter(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-	defer w.close()
+	defer w.close(false)
 
 	assert.Equal(t, 0, len(w.c))
 	assert.Equal(t, int32(1), w.refCount.Load())
@@ -34,7 +34,7 @@ func TestAcquireWaiter(t *testing.T) {
 
 func TestWait(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
-	defer w.close()
+	defer w.close(false)
 
 	w.setStatus(blocking)
 	go func() {
@@ -57,7 +57,7 @@ func TestWaitWithTimeout(t *testing.T) {
 func TestWaitAndNotifyConcurrent(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
 	w.setStatus(blocking)
-	defer w.close()
+	defer w.close(false)
 
 	w.beforeSwapStatusAdjustFunc = func() {
 		w.setStatus(notified)
@@ -85,7 +85,7 @@ func TestWaitMultiTimes(t *testing.T) {
 func TestNotifyAfterCompleted(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{})
 	require.Equal(t, 0, len(w.c))
-	defer w.close()
+	defer w.close(false)
 	w.setStatus(completed)
 	assert.False(t, w.notify(notifyValue{}))
 }
@@ -93,7 +93,7 @@ func TestNotifyAfterCompleted(t *testing.T) {
 func TestNotifyAfterAlreadyNotified(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{})
 	w.setStatus(blocking)
-	defer w.close()
+	defer w.close(false)
 	assert.True(t, w.notify(notifyValue{}))
 	assert.NoError(t, w.wait(context.Background()).err)
 	assert.False(t, w.notify(notifyValue{}))
@@ -101,7 +101,7 @@ func TestNotifyAfterAlreadyNotified(t *testing.T) {
 
 func TestNotifyWithStatusChanged(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{})
-	defer w.close()
+	defer w.close(false)
 
 	w.beforeSwapStatusAdjustFunc = func() {
 		w.setStatus(completed)
