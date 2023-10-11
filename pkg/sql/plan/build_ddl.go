@@ -1466,18 +1466,11 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 
 			// 1.b.ii add PK column to the "end of indexParts" irrespective of whether it is already present or not.
 			{
-				// add to indexParts
-				//indexParts = append(indexParts, pkeyName)
+				//add to indexParts
+				indexParts = append(indexParts, pkeyName)
 
-				//TODO: need to verify (arjun)
-				// add to KeyParts (modify indexInfo built from tree.stmt)
-				//name, err := tree.NewUnresolvedName(nil, pkeyName)
-				//if err != nil {
-				//	return false, err
-				//}
-				//indexInfo.KeyParts = append(indexInfo.KeyParts, &tree.KeyPart{
-				//	ColName: name,
-				//})
+				//TODO: should we check if PK column is already present in the SecondaryKey list
+				// and avoid adding that to the SecondaryKey list
 			}
 
 			// 1.c build index table column def
@@ -1485,29 +1478,7 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 
 				// 1.c.i) add index columns to index table
 				var keyName string
-				if len(indexInfo.KeyParts) == 1 {
-					keyName = catalog.IndexTableIndexColName
-					colDef := &ColDef{
-						Name: keyName,
-						Alg:  plan.CompressType_Lz4,
-						Typ: &Type{
-							Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
-							Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
-						},
-						//TODO: check if this should be true
-						// If PK, then can, the column be nullable?
-						Default: &plan.Default{
-							NullAbility:  false,
-							Expr:         nil,
-							OriginString: "",
-						},
-					}
-					tableDef.Cols = append(tableDef.Cols, colDef)
-					tableDef.Pkey = &PrimaryKeyDef{
-						Names:       []string{keyName},
-						PkeyColName: keyName,
-					}
-				} else {
+				{
 					keyName = catalog.IndexTableIndexColName
 					colDef := &ColDef{
 						Name: keyName,
@@ -1521,6 +1492,7 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 							Expr:         nil,
 							OriginString: "",
 						},
+						Primary: true,
 					}
 					tableDef.Cols = append(tableDef.Cols, colDef)
 					tableDef.Pkey = &PrimaryKeyDef{
