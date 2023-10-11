@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -51,7 +52,11 @@ func RunLockServicesForTest(
 			ServiceID:          v,
 			LockServiceAddress: address,
 		})
-		configs = append(configs, Config{ServiceID: v, ListenAddress: address})
+		configs = append(configs, Config{
+			ServiceID:                 v,
+			ListenAddress:             address,
+			DeadlockCheckWaitDuration: toml.Duration{Duration: time.Millisecond * 100},
+		})
 	}
 	cluster := clusterservice.NewMOCluster(
 		nil,
