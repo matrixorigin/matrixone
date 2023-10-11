@@ -562,6 +562,7 @@ message OnDuplicateKeyCtx {
 	TableDef table_def					= 1;
 	repeated int32 on_duplicate_idx		= 2;
 	map<string, Expr> on_duplicate_expr	= 3;
+	bool is_ignore 						= 4;
 }
 
 message InsertCtx {

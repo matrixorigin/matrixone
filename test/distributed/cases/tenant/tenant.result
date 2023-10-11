@@ -26,7 +26,9 @@ account_id    relname    relkind
 0    mo_stored_procedure    r
 0    mo_table_partitions    r
 0    mo_tables    r
+0    mo_transactions    v
 0    mo_user    r
 0    mo_user_defined_function    r
 0    mo_user_grant    r
+0    mo_variables    v
 set global enable_privilege_cache = on;

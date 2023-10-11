@@ -84,6 +84,9 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
 	}
+	if v := reqCtx.Value(defines.NodeIDKey{}); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey{}, v)
+	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
 	if th.ses != nil && th.ses.tenant != nil && th.ses.tenant.User == db_holder.MOLoggerUser {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
@@ -268,6 +271,10 @@ func (th *TxnHandler) GetSession() *Session {
 }
 
 func (th *TxnHandler) CommitTxn() error {
+	_, span := trace.Start(th.ses.requestCtx, "TxnHandler.CommitTxn",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
+
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
 	if !th.IsValidTxnOperator() || th.IsShareTxn() {
@@ -334,6 +341,10 @@ func (th *TxnHandler) CommitTxn() error {
 }
 
 func (th *TxnHandler) RollbackTxn() error {
+	_, span := trace.Start(th.ses.requestCtx, "TxnHandler.RollbackTxn",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
+
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
 	if !th.IsValidTxnOperator() || th.IsShareTxn() {

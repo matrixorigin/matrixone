@@ -4018,6 +4018,10 @@ on_duplicate_key_update_opt:
     {
       	$$ = $5
     }
+|   ON DUPLICATE KEY IGNORE
+    {
+      	$$ = []*tree.UpdateExpr{nil}
+    }
 
 set_value_list:
     {

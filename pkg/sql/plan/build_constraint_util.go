@@ -45,9 +45,10 @@ type dmlSelectInfo struct {
 	rootId         int32
 	derivedTableId int32
 
-	onDuplicateIdx     []int32
-	onDuplicateExpr    map[string]*Expr
-	onDuplicateNeedAgg bool //if table have pk & unique key, that will be true.
+	onDuplicateIdx      []int32
+	onDuplicateExpr     map[string]*Expr
+	onDuplicateNeedAgg  bool //if table have pk & unique key, that will be true.
+	onDuplicateIsIgnore bool
 }
 
 type dmlTableInfo struct {
@@ -564,6 +565,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	if len(stmt.OnDuplicateUpdate) > 0 {
+		isIgnore := len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+		if isIgnore {
+			stmt.OnDuplicateUpdate = nil
+		}
+
 		rightTableDef := DeepCopyTableDef(tableDef)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
@@ -707,6 +713,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
 			info.onDuplicateNeedAgg = len(uniqueCols) > 1
+			info.onDuplicateIsIgnore = isIgnore
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{

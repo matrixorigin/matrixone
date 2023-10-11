@@ -596,7 +596,7 @@ system_metrics    7    accountadmin
 information_schema    16    accountadmin
 mysql    5    accountadmin
 mo_mo    0    accountadmin
-mo_catalog    18    -
+mo_catalog    19    -
 SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id ORDER BY reldatabase, relname;
 datname    relname    relkind    owner
 mo_mo    null    null    -
@@ -632,9 +632,11 @@ mo_catalog    mo_stages    r    accountadmin
 mo_catalog    mo_stored_procedure    r    accountadmin
 mo_catalog    mo_table_partitions    r    accountadmin
 mo_catalog    mo_tables    r    -
+mo_catalog    mo_transactions    v    accountadmin
 mo_catalog    mo_user    r    accountadmin
 mo_catalog    mo_user_defined_function    r    accountadmin
 mo_catalog    mo_user_grant    r    accountadmin
+mo_catalog    mo_variables    v    accountadmin
 mysql    columns_priv    r    accountadmin
 mysql    db    r    accountadmin
 mysql    procs_priv    r    accountadmin

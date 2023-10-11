@@ -246,6 +246,32 @@ func TestKeyPartitionError(t *testing.T) {
 		)
 		PARTITION BY KEY()
 		PARTITIONS 4;`,
+
+		`create table pt_table_21(
+			col1 tinyint,
+			col2 smallint,
+			col3 int,
+			col4 bigint,
+			col5 tinyint unsigned,
+			col6 smallint unsigned,
+			col7 int unsigned,
+			col8 bigint unsigned,
+			col9 float,
+			col10 double,
+			col11 varchar(255),
+			col12 Date,
+			col13 DateTime,
+			col14 timestamp,
+			col15 bool,
+			col16 decimal(5,2),
+			col17 text,
+			col18 varchar(255),
+			col19 varchar(255),
+			col20 int,
+			col21 int
+			)
+			partition by key(col1,col2,col3, col4,col5 ,col6 ,col7 ,col8 ,col9 ,col10,col11,col12,col13,col16,col18,col19,col20,col21)
+			partitions 4;`,
 	}
 	mock := NewMockOptimizer(false)
 	for _, sql := range sqls {

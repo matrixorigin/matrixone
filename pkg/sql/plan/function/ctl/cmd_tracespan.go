@@ -44,24 +44,12 @@ import (
 // the cmd format for TN service:
 // 		mo_ctl("dn", "TraceSpan", "enable/disable:kinds of span")
 // (because there only exist one dn service, so we don't need to specify the uuid,
-// 		but, the uuid will be ignored and will not check its validation even through it is specified.)
+// 		but, the uuid will be ignored and will not check its validation even though it is specified.)
 // examples as below:
 // mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3")
 // mo_ctl("dn", "TraceSpan", "[uuid]:disable:local")
 // mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3, local,...")
 // mo_ctl("dn", "TraceSpan", "[uuid]:enable:all")
-
-var supportedSpans = map[string]func(state bool){
-	// enable or disable s3 file service read and write span
-	"s3": func(s bool) { trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(s) },
-	// enable or disable local file service read and write span
-	"local": func(s bool) { trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(s) },
-	// enable or disable all span
-	"all": func(s bool) {
-		trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Store(s)
-		trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Store(s)
-	},
-}
 
 var cmd2State = map[string]bool{
 	"enable":  true,
@@ -150,8 +138,7 @@ func SelfProcess(cmd string, spans string) string {
 	var succeed, failed []string
 	ss := strings.Split(spans, ",")
 	for _, t := range ss {
-		if fn, ok2 := supportedSpans[t]; ok2 {
-			fn(cmd2State[cmd])
+		if trace.SetMoCtledSpanState(t, cmd2State[cmd]) {
 			succeed = append(succeed, t)
 		} else {
 			failed = append(failed, t)

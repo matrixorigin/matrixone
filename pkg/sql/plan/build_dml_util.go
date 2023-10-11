@@ -1025,67 +1025,71 @@ func makeInsertPlan(
 		builder.appendStep(lastNodeId)
 	}
 
+	isUpdate := updateColLength > 0
+
 	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
 	if checkInsertPkDup {
-		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
-			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-			pkColExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(pkPos),
-						Name:   tableDef.Pkey.PkeyColName,
+		// insert stmt or update pk col, we need check insert pk dup
+		if !isUpdate || (isUpdate && updatePkCol) {
+			if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
+				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+				pkColExpr := &plan.Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(pkPos),
+							Name:   tableDef.Pkey.PkeyColName,
+						},
 					},
-				},
-			}
-			lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, pkColExpr)
-			if err != nil {
-				return err
-			}
+				}
+				lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, pkColExpr)
+				if err != nil {
+					return err
+				}
 
-			countType := types.T_int64.ToType()
-			countColExpr := &plan.Expr{
-				Typ: makePlan2Type(&countType),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						Name: tableDef.Pkey.PkeyColName,
+				countType := types.T_int64.ToType()
+				countColExpr := &plan.Expr{
+					Typ: makePlan2Type(&countType),
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name: tableDef.Pkey.PkeyColName,
+						},
 					},
-				},
-			}
+				}
 
-			eqCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(1), countColExpr})
-			if err != nil {
-				return err
+				eqCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(1), countColExpr})
+				if err != nil {
+					return err
+				}
+				varcharType := types.T_varchar.ToType()
+				varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
+					Typ: tableDef.Cols[pkPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
+					},
+				}, makePlan2Type(&varcharType))
+				if err != nil {
+					return err
+				}
+				filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+				if err != nil {
+					return err
+				}
+				filterNode := &Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{lastNodeId},
+					FilterList: []*Expr{filterExpr},
+					IsEnd:      true,
+				}
+				lastNodeId = builder.appendNode(filterNode, bindCtx)
+				builder.appendStep(lastNodeId)
 			}
-			varcharType := types.T_varchar.ToType()
-			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
-				},
-			}, makePlan2Type(&varcharType))
-			if err != nil {
-				return err
-			}
-			filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
-			if err != nil {
-				return err
-			}
-			filterNode := &Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{lastNodeId},
-				FilterList: []*Expr{filterExpr},
-				IsEnd:      true,
-			}
-			lastNodeId = builder.appendNode(filterNode, bindCtx)
-			builder.appendStep(lastNodeId)
 		}
 	}
 
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 	if CNPrimaryCheck {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
-			isUpdate := updateColLength > 0
 			rfTag := builder.genNewTag()
 
 			if isUpdate && updatePkCol { // update stmt && pk included in update cols

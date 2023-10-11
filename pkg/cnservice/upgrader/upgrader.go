@@ -16,6 +16,7 @@ package upgrader
 
 import (
 	"context"
+	liberrors "errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,30 +37,35 @@ type Upgrader struct {
 }
 
 func ParseDataTypeToColType(dataType string) (table.ColType, error) {
+	dataTypeStr := strings.ToLower(dataType)
 	switch {
-	case strings.Contains(strings.ToLower(dataType), "datetime"):
+	case strings.Contains(dataTypeStr, "datetime"):
 		return table.TDatetime, nil
-	case strings.Contains(strings.ToLower(dataType), "bigint"):
-		if strings.Contains(strings.ToLower(dataType), "unsigned") {
+	case strings.Contains(dataTypeStr, "bigint"):
+		if strings.Contains(dataTypeStr, "unsigned") {
 			return table.TUint64, nil
 		}
 		return table.TInt64, nil
-	case strings.Contains(strings.ToLower(dataType), "double"):
+	case strings.Contains(dataTypeStr, "double"):
 		return table.TFloat64, nil
-	case strings.Contains(strings.ToLower(dataType), "json"):
+	case strings.Contains(dataTypeStr, "json"):
 		return table.TJson, nil
-	case strings.Contains(strings.ToLower(dataType), "text"):
+	case strings.Contains(dataTypeStr, "text"):
 		return table.TText, nil
-	case strings.Contains(strings.ToLower(dataType), "varchar"):
+	case strings.Contains(dataTypeStr, "varchar"):
 		return table.TVarchar, nil
-	case strings.Contains(strings.ToLower(dataType), "bytes"):
+	case strings.Contains(dataTypeStr, "bytes"):
 		return table.TBytes, nil
-	case strings.Contains(strings.ToLower(dataType), "uuid"):
+	case strings.Contains(dataTypeStr, "uuid"):
 		return table.TUuid, nil
-	case strings.Contains(strings.ToLower(dataType), "int unsigned"):
+	case strings.Contains(dataTypeStr, "int unsigned"):
 		return table.TUint64, nil
+	case strings.Contains(dataTypeStr, "int"):
+		return table.TInt64, nil
+	case strings.Contains(dataTypeStr, "bool"):
+		return table.TBool, nil
 	default:
-		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type")
+		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type %s", dataTypeStr)
 	}
 }
 
@@ -104,7 +110,8 @@ func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecuto
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
-		return nil, moerr.NewInternalError(ctx, "can not get the schema")
+		errors = append(errors, moerr.NewInternalError(ctx, "can not get the schema"))
+		return nil, liberrors.Join(errors...)
 	}
 
 	// Construct and return the table
@@ -220,6 +227,11 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) error {
 		currentSchema, err := u.GetCurrentSchema(ctx, exec, tbl.Database, tbl.Table)
 		if err != nil {
 			return err
+		}
+
+		//if there is no view, skip
+		if currentSchema == nil {
+			continue
 		}
 
 		diff, err := u.GenerateDiff(currentSchema, tbl)
@@ -430,7 +442,8 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
-		return nil, moerr.NewInternalError(ctx, "can not get the schema")
+		errors = append(errors, moerr.NewInternalError(ctx, "can not get the schema"))
+		return nil, liberrors.Join(errors...)
 	}
 	return tenantInfos, nil
 }

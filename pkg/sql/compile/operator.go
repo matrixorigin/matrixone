@@ -528,6 +528,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
 		TableDef:        oldCtx.TableDef,
+		IsIgnore:        oldCtx.IsIgnore,
 	}
 }
 

@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -498,7 +499,8 @@ type txnTable struct {
 	oldTableId uint64
 
 	// process for statement
-	proc *process.Process
+	//proc *process.Process
+	proc atomic.Pointer[process.Process]
 }
 
 type column struct {
