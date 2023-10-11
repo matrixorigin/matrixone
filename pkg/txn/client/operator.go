@@ -410,6 +410,8 @@ func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*r
 func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	_, task := gotrace.NewTask(context.TODO(), "transaction.WriteAndCommit")
 	defer task.End()
+	util.LogTxnWrite(tc.getTxnMeta(false))
+	util.LogTxnCommit(tc.getTxnMeta(false))
 	return tc.doWrite(ctx, requests, true)
 }
 
