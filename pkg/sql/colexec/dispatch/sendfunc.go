@@ -17,12 +17,10 @@ package dispatch
 import (
 	"context"
 	"hash/crc32"
-	"sync/atomic"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,43 +30,51 @@ import (
 
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	var refCountAdd int64
+	// var refCountAdd int64
 	var err error
-	if !ap.RecSink {
-		refCountAdd = int64(ap.ctr.localRegsCnt - 1)
-		atomic.AddInt64(&bat.Cnt, refCountAdd)
-		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-			jm.IncRef(refCountAdd)
-			jm.SetDupCount(int64(ap.ctr.localRegsCnt))
-		}
-	}
+	// if !ap.RecSink {
+	// 	refCountAdd = int64(ap.ctr.localRegsCnt - 1)
+	// 	atomic.AddInt64(&bat.Cnt, refCountAdd)
+	// 	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+	// 		jm.IncRef(refCountAdd)
+	// 		jm.SetDupCount(int64(ap.ctr.localRegsCnt))
+	// 	}
+	// }
 	var bats []*batch.Batch
-	if ap.RecSink {
-		bats = append(bats, bat)
-		for k := 1; k < len(ap.LocalRegs); k++ {
-			bat, err = bat.Dup(proc.Mp())
-			if err != nil {
-				return false, err
-			}
-			bats = append(bats, bat)
+	// if ap.RecSink {
+	bats = append(bats, bat)
+	for k := 1; k < len(ap.LocalRegs); k++ {
+		bat, err = bat.Dup(proc.Mp())
+		if err != nil {
+			return false, err
 		}
+		bats = append(bats, bat)
 	}
+	defer func() {
+		for _, bat := range bats {
+			if bat != nil {
+				bat.Clean(proc.Mp())
+			}
+		}
+		bats = nil
+	}()
+	// }
 
 	for i, reg := range ap.LocalRegs {
-		if ap.RecSink {
-			bat = bats[i]
-		}
+		// if ap.RecSink {
+		bat = bats[i]
+		// }
 		select {
 		case <-proc.Ctx.Done():
-			handleUnsent(proc, bat, refCountAdd, int64(i))
+			// handleUnsent(proc, bat, refCountAdd, int64(i))
 			return true, nil
 
 		case <-reg.Ctx.Done():
 			if ap.IsSink {
-				atomic.AddInt64(&bat.Cnt, -1)
+				// atomic.AddInt64(&bat.Cnt, -1)
 				continue
 			}
-			handleUnsent(proc, bat, refCountAdd, int64(i))
+			// handleUnsent(proc, bat, refCountAdd, int64(i))
 			return true, nil
 
 		case reg.Ch <- bat:
@@ -109,14 +115,20 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex == batIndex {
 			if bat != nil && bat.RowCount() != 0 {
+				sendBat, err := bat.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
 				select {
 				case <-proc.Ctx.Done():
+					sendBat.Clean(proc.Mp())
 					return nil
 
 				case <-reg.Ctx.Done():
+					sendBat.Clean(proc.Mp())
 					return nil
 
-				case reg.Ch <- bat:
+				case reg.Ch <- sendBat:
 				}
 			}
 		}
@@ -127,7 +139,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 			if bat != nil && bat.RowCount() != 0 {
 				encodeData, errEncode := types.Encode(bat)
 				// in shuffle dispatch, this batch only send to remote CN, we can safely put it back into pool
-				defer proc.PutBatch(bat)
+				// defer proc.PutBatch(bat)
 				if errEncode != nil {
 					return errEncode
 				}
@@ -146,14 +158,20 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && bat.RowCount() != 0 {
+				sendBat, err := bat.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
 				select {
 				case <-proc.Ctx.Done():
+					sendBat.Clean(proc.Mp())
 					return nil
 
 				case <-reg.Ctx.Done():
+					sendBat.Clean(proc.Mp())
 					return nil
 
-				case reg.Ch <- bat:
+				case reg.Ch <- sendBat:
 				}
 			}
 		}
@@ -163,20 +181,26 @@ func sendBatToLocalMatchedReg(ap *Argument, proc *process.Process, bat *batch.Ba
 
 func sendBatToMultiMatchedReg(ap *Argument, proc *process.Process, bat *batch.Batch, regIndex uint32) error {
 	localRegsCnt := uint32(ap.ctr.localRegsCnt)
-	atomic.AddInt64(&bat.Cnt, 1)
-	defer atomic.AddInt64(&bat.Cnt, -1)
+	// atomic.AddInt64(&bat.Cnt, 1)
+	// defer atomic.AddInt64(&bat.Cnt, -1)
 	for i, reg := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && bat.RowCount() != 0 {
+				sendBat, err := bat.Dup(proc.Mp())
+				if err != nil {
+					return err
+				}
 				select {
 				case <-proc.Ctx.Done():
+					sendBat.Clean(proc.Mp())
 					return nil
 
 				case <-reg.Ctx.Done():
+					sendBat.Clean(proc.Mp())
 					return nil
 
-				case reg.Ch <- bat:
+				case reg.Ch <- sendBat:
 				}
 			}
 		}
@@ -232,11 +256,16 @@ func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 // if the reg which you want to send to is closed
 // send it to next one.
 func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	sendBat, err := bat.Dup(proc.Mp())
+	if err != nil {
+		return true, err
+	}
 	for {
 		sendto := ap.ctr.sendCnt % ap.ctr.localRegsCnt
 		reg := ap.LocalRegs[sendto]
 		select {
 		case <-proc.Ctx.Done():
+			sendBat.Clean(proc.Mp())
 			return true, nil
 
 		case <-reg.Ctx.Done():
@@ -245,10 +274,11 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			ap.ctr.aliveRegCnt--
 			close(reg.Ch)
 			if ap.ctr.localRegsCnt == 0 {
+				sendBat.Clean(proc.Mp())
 				return true, nil
 			}
 
-		case reg.Ch <- bat:
+		case reg.Ch <- sendBat:
 			ap.ctr.sendCnt++
 			return false, nil
 		}
@@ -312,7 +342,7 @@ func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 			return false, nil
 		}
 		if allclosed { // all local reg closed, change sendFunc to send remote only
-			proc.PutBatch(bat)
+			// proc.PutBatch(bat)
 			ap.ctr.sendFunc = sendToAnyRemoteFunc
 			return ap.ctr.sendFunc(bat, ap, proc)
 		}
@@ -373,13 +403,13 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *Wr
 }
 
 // success count is always no greater than refcnt
-func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
-	diff := successCnt - refCnt
-	atomic.AddInt64(&bat.Cnt, diff)
-	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
-		jm.IncRef(diff)
-		jm.SetDupCount(diff)
-	}
+// func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
+// 	diff := successCnt - refCnt
+// 	atomic.AddInt64(&bat.Cnt, diff)
+// 	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+// 		jm.IncRef(diff)
+// 		jm.SetDupCount(diff)
+// 	}
 
-	proc.PutBatch(bat)
-}
+// 	proc.PutBatch(bat)
+// }

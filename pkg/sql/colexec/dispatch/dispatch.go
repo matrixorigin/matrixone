@@ -114,11 +114,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ap.ctr.hasData = false
 		}
 	} else if bat.IsEmpty() {
-		proc.PutBatch(bat)
+		// proc.PutBatch(bat)
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	} else {
 		ap.ctr.hasData = true
+	}
+	bat, err = bat.Dup(proc.Mp())
+	if err != nil {
+		return result, err
 	}
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {

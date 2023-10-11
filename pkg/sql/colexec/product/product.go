@@ -69,7 +69,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if err := ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
 				bat.Clean(proc.Mp())
-				ap.Free(proc, true)
 				return result, err
 			}
 			proc.PutBatch(bat)

@@ -114,7 +114,6 @@ func callNonBlocking(
 	}
 
 	if err := performLock(bat, proc, arg); err != nil {
-		bat.Clean(proc.Mp())
 		return result, err
 	}
 
@@ -133,7 +132,6 @@ func callBlocking(
 	defer anal.Stop()
 
 	result := vm.NewCallResult()
-	needRemoveCachedBatches := true
 	if arg.rt.step == stepLock {
 		for {
 			bat, err := arg.getBatch(proc, anal, isFirst)
@@ -144,7 +142,6 @@ func callBlocking(
 			// no input batch any more, means all lock performed.
 			if bat == nil {
 				arg.rt.step = stepDownstream
-				needRemoveCachedBatches = false
 				if len(arg.rt.cachedBatches) == 0 {
 					arg.rt.step = stepEnd
 				}
@@ -157,7 +154,6 @@ func callBlocking(
 			}
 
 			if err := performLock(bat, proc, arg); err != nil {
-				bat.Clean(proc.Mp())
 				return result, err
 			}
 
@@ -176,12 +172,9 @@ func callBlocking(
 		if len(arg.rt.cachedBatches) == 0 {
 			arg.rt.step = stepEnd
 		} else {
-			if needRemoveCachedBatches {
-				bat := arg.rt.cachedBatches[0]
-				arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
-				proc.PutBatch(bat)
-			}
-			result.Batch = arg.rt.cachedBatches[0]
+			bat := arg.rt.cachedBatches[0]
+			arg.rt.cachedBatches = arg.rt.cachedBatches[1:]
+			result.Batch = bat
 			return result, nil
 		}
 	}
@@ -729,9 +722,9 @@ func (arg *Argument) Free(
 }
 
 func (arg *Argument) cleanCachedBatch(proc *process.Process) {
-	for _, bat := range arg.rt.cachedBatches {
-		bat.Clean(proc.Mp())
-	}
+	// for _, bat := range arg.rt.cachedBatches {
+	// 	bat.Clean(proc.Mp())
+	// }
 	arg.rt.cachedBatches = nil
 }
 

@@ -29,7 +29,7 @@ import (
 
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
 	if bat.IsEmpty() {
-		proc.PutBatch(bat)
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 
@@ -83,7 +83,7 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 		return false, err
 	}
 	if ctr.batWaitForSort != bat {
-		proc.PutBatch(bat)
+		bat.Clean(proc.Mp())
 	}
 	return all >= maxBatchSizeToSort, nil
 }
@@ -228,7 +228,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			}
 
-			enoughToSend, err := ctr.appendBatch(proc, result.Batch)
+			bat, err := result.Batch.Dup(proc.Mp())
+			if err != nil {
+				return result, err
+			}
+			enoughToSend, err := ctr.appendBatch(proc, bat)
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err

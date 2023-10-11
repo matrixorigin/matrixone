@@ -87,7 +87,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			}
 			if bat.IsEmpty() {
-				proc.PutBatch(bat)
 				continue
 			}
 			err = ctr.build(ap, bat, proc, anal)
@@ -168,7 +167,6 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		}
 	}
 	err := ctr.processBatch(ap.Limit, bat, proc)
-	proc.PutBatch(bat)
 	return err
 }
 

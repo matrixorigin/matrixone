@@ -99,37 +99,37 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 			proc.PutBatch(arg.resBat)
 			arg.resBat = nil
 		}
-		resBat := batch.NewWithSize(5)
-		resBat.Attrs = []string{
+		arg.resBat = batch.NewWithSize(5)
+		arg.resBat.Attrs = []string{
 			catalog.BlockMeta_Delete_ID,
 			catalog.BlockMeta_DeltaLoc,
 			catalog.BlockMeta_Type,
 			catalog.BlockMeta_Partition,
 			catalog.BlockMeta_Deletes_Length,
 		}
-		resBat.SetVector(0, proc.GetVector(types.T_text.ToType()))
-		resBat.SetVector(1, proc.GetVector(types.T_text.ToType()))
-		resBat.SetVector(2, proc.GetVector(types.T_int8.ToType()))
-		resBat.SetVector(3, proc.GetVector(types.T_int32.ToType()))
+		arg.resBat.SetVector(0, proc.GetVector(types.T_text.ToType()))
+		arg.resBat.SetVector(1, proc.GetVector(types.T_text.ToType()))
+		arg.resBat.SetVector(2, proc.GetVector(types.T_int8.ToType()))
+		arg.resBat.SetVector(3, proc.GetVector(types.T_int32.ToType()))
 
 		for pidx, blockId_rowIdBatch := range arg.ctr.partitionId_blockId_rowIdBatch {
 			for blkid, bat := range blockId_rowIdBatch {
-				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+				vector.AppendBytes(arg.resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
 				bat.SetRowCount(bat.GetVector(0).Length())
 				bytes, err := bat.MarshalBinary()
 				if err != nil {
 					result.Status = vm.ExecStop
 					return result, err
 				}
-				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(2), arg.ctr.blockId_type[blkid], false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
+				vector.AppendBytes(arg.resBat.GetVector(1), bytes, false, proc.GetMPool())
+				vector.AppendFixed(arg.resBat.GetVector(2), arg.ctr.blockId_type[blkid], false, proc.GetMPool())
+				vector.AppendFixed(arg.resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
 			}
 		}
 
 		for pidx, blockId_deltaLoc := range arg.ctr.partitionId_blockId_deltaLoc {
 			for blkid, bat := range blockId_deltaLoc {
-				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+				vector.AppendBytes(arg.resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
 				//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
 				bat.SetRowCount(bat.GetVector(0).Length())
 				bytes, err := bat.MarshalBinary()
@@ -137,17 +137,16 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 					result.Status = vm.ExecStop
 					return result, err
 				}
-				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
+				vector.AppendBytes(arg.resBat.GetVector(1), bytes, false, proc.GetMPool())
+				vector.AppendFixed(arg.resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
+				vector.AppendFixed(arg.resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
 			}
 		}
 
-		resBat.SetRowCount(resBat.Vecs[0].Length())
-		resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, resBat.RowCount(), proc.GetMPool()))
+		arg.resBat.SetRowCount(arg.resBat.Vecs[0].Length())
+		arg.resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, arg.resBat.RowCount(), proc.GetMPool()))
 
-		arg.resBat = resBat
-		result.Batch = resBat
+		result.Batch = arg.resBat
 		arg.ctr.state = vm.End
 		return result, nil
 	}

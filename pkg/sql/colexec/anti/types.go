@@ -43,7 +43,8 @@ type container struct {
 
 	inBuckets []uint8
 
-	bat *batch.Batch
+	bat  *batch.Batch
+	rbat *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -70,7 +71,6 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
-	buf      *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -91,10 +91,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 	}
-	if arg.buf != nil {
-		arg.buf.Clean(proc.Mp())
-		arg.buf = nil
-	}
 }
 
 func (ctr *container) cleanExprExecutor() {
@@ -107,6 +103,10 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(mp)
+		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
 		ctr.joinBat1.Clean(mp)

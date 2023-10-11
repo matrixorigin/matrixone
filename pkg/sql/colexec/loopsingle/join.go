@@ -79,11 +79,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				err = ctr.probe(bat, arg, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
 			}
-			if err != nil {
-				bat.Clean(proc.Mp())
-			} else {
-				proc.PutBatch(bat)
-			}
+			proc.PutBatch(bat)
 
 			return result, err
 
