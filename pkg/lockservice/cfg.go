@@ -22,11 +22,12 @@ import (
 )
 
 var (
-	defaultLockListenAddress      = "127.0.0.1:6003"
-	defaultMaxLockRowCount        = 1024
-	defaultMaxFixedSliceSize      = 1 << 20 // 1mb
-	defaultKeepRemoteLockDuration = time.Second
-	defaultKeepBindTimeout        = time.Second * 10
+	defaultLockListenAddress         = "127.0.0.1:6003"
+	defaultMaxLockRowCount           = 1024
+	defaultMaxFixedSliceSize         = 1 << 20 // 1mb
+	defaultKeepRemoteLockDuration    = time.Second
+	defaultKeepBindTimeout           = time.Second * 10
+	defaultDeadlockCheckWaitDuration = time.Second * 5
 )
 
 // Config lock service config
@@ -62,6 +63,9 @@ type Config struct {
 	// continuously hold the bind, and if no hold request is received after the configured time,
 	// then all bindings for the service will fail.
 	KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
+	// DeadlockCheckWaitDuration when a conflict arises, wait as long as it takes for the lock to
+	// be acquired and initiate deadlock detection.
+	DeadlockCheckWaitDuration toml.Duration `toml:"deadlock-check-wait-duration"`
 }
 
 // Validate validate
@@ -92,6 +96,9 @@ func (c *Config) Validate() {
 	}
 	if c.KeepBindTimeout.Duration == 0 {
 		c.KeepBindTimeout.Duration = defaultKeepBindTimeout
+	}
+	if c.DeadlockCheckWaitDuration.Duration == 0 {
+		c.DeadlockCheckWaitDuration.Duration = defaultDeadlockCheckWaitDuration
 	}
 	c.RPC.Adjust()
 }
