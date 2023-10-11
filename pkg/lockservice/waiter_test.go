@@ -36,6 +36,7 @@ func TestWait(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
 	defer w.close(false)
 
+	w.resetTimer(time.Second)
 	w.setStatus(blocking)
 	go func() {
 		time.Sleep(time.Millisecond * 10)
@@ -47,6 +48,7 @@ func TestWait(t *testing.T) {
 
 func TestWaitWithTimeout(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
+	w.resetTimer(time.Second)
 	w.setStatus(blocking)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -56,6 +58,7 @@ func TestWaitWithTimeout(t *testing.T) {
 
 func TestWaitAndNotifyConcurrent(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{TxnID: []byte("w")})
+	w.resetTimer(time.Second)
 	w.setStatus(blocking)
 	defer w.close(false)
 
@@ -75,6 +78,7 @@ func TestWaitMultiTimes(t *testing.T) {
 	defer cancel()
 
 	for i := 0; i < 100; i++ {
+		w.resetTimer(time.Second)
 		w.setStatus(blocking)
 		w.notify(notifyValue{})
 		assert.NoError(t, w.wait(ctx).err)
@@ -92,6 +96,7 @@ func TestNotifyAfterCompleted(t *testing.T) {
 
 func TestNotifyAfterAlreadyNotified(t *testing.T) {
 	w := acquireWaiter(pb.WaitTxn{})
+	w.resetTimer(time.Second)
 	w.setStatus(blocking)
 	defer w.close(false)
 	assert.True(t, w.notify(notifyValue{}))
