@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -168,6 +169,28 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 		proc: proc,
 		pn:   pn,
 		stmt: stmts[0],
+	}
+}
+
+func TestCompileShouldReturnCtxError(t *testing.T) {
+	{
+		c := Compile{proc: &process.Process{}}
+		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
+		c.proc.Ctx = ctx
+		time.Sleep(time.Second)
+		require.True(t, c.shouldReturnCtxErr())
+		cancel()
+		require.True(t, c.shouldReturnCtxErr())
+	}
+
+	{
+		c := Compile{proc: &process.Process{}}
+		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
+		c.proc.Ctx = ctx
+		cancel()
+		require.False(t, c.shouldReturnCtxErr())
+		time.Sleep(time.Second)
+		require.False(t, c.shouldReturnCtxErr())
 	}
 }
 
