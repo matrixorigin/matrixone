@@ -81,6 +81,7 @@ var (
 
 	DBSpecialDeleteSchema  *catalog.Schema
 	TBLSpecialDeleteSchema *catalog.Schema
+	BlkAccSchema           *catalog.Schema
 )
 
 var (
@@ -282,6 +283,20 @@ var (
 	BaseTypes = []types.Type{
 		types.T_Rowid.ToType(),
 		types.T_TS.ToType(),
+	}
+
+	BlkAccSchemaAttrs = []string{
+		pkgcatalog.SystemColAttr_AccID,
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+		CheckpointMetaAttr_BlockLocation,
+	}
+
+	BlkAccSchemaTypes = []types.Type{
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 )
 
