@@ -205,24 +205,24 @@ func TestCanGetCommitTSInWaitQueue(t *testing.T) {
 	w2 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w2")})
 	w2.resetTimer(time.Second)
 	w2.setStatus(blocking)
-	defer w2.close(false)
+	defer w2.close(true)
 
 	w3 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w3")})
 	w3.resetTimer(time.Second)
 	w3.setStatus(blocking)
-	defer w3.close(false)
+	defer w3.close(true)
 
 	w4 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w4")})
 	w4.resetTimer(time.Second)
 	w4.setStatus(blocking)
 	defer func() {
-		w4.close(false)
+		w4.close(true)
 	}()
 
 	w5 := acquireWaiter(pb.WaitTxn{TxnID: []byte("w5")})
 	w5.resetTimer(time.Second)
 	w5.setStatus(blocking)
-	defer w5.close(false)
+	defer w5.close(true)
 
 	q.put(w2, w3, w4, w5)
 
