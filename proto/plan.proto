@@ -801,7 +801,6 @@ message PreInsertUkCtx {
 	TableDef table_def 		= 5;
 }
 
-
 message PreDeleteCtx {
 	//the indexes of row_id&pk column in the batch
 	repeated int32 idx = 1;

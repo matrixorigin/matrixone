@@ -726,10 +726,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
 		}
-	//case *preinsertsecondaryindex.Argument:
-	//	in.PreInsertSecondaryIndex = &pipeline.PreInsertSecondaryIndex{
-	//		PreInsertSkCtx: t.PreInsertCtx,
-	//	}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
