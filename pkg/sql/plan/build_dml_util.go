@@ -257,7 +257,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// delete unique table
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
-	if hasUniqueKey {
+	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
+
+	if hasUniqueKey || hasSecondaryKey {
 		uniqueDeleteIdx := len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		typMap := make(map[string]*plan.Type)
 		posMap := make(map[string]int)
@@ -266,7 +268,16 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			typMap[col.Name] = col.Typ
 		}
 		for idx, indexdef := range delCtx.tableDef.Indexes {
-			if indexdef.Unique {
+
+			if indexdef.TableExist {
+				var isSK = false
+				var isUk = false
+				if indexdef.Unique {
+					isUk = true
+				} else {
+					isSK = true
+				}
+
 				uniqueObjRef, uniqueTableDef := builder.compCtx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName)
 				if uniqueTableDef == nil {
 					return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexTableName)
@@ -290,7 +301,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						//sink_scan -> lock -> delete
 						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, true, false)
+						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK)
 						putDeleteNodeInfo(delNodeInfo)
 						if err != nil {
 							return err
@@ -320,7 +331,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: projectProjection,
 						}
 						lastNodeId = builder.appendNode(projectNode, bindCtx)
-						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef, true)
+						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef, isUk)
 						if err != nil {
 							return err
 						}
@@ -339,101 +350,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				} else {
 					// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, true, false)
-					putDeleteNodeInfo(delNodeInfo)
-					if err != nil {
-						return err
-					}
-					builder.appendStep(lastNodeId)
-				}
-			}
-		}
-	}
-
-	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	if hasSecondaryKey {
-		secondaryDeleteIdx := len(delCtx.tableDef.Cols) + delCtx.updateColLength
-		typMap := make(map[string]*plan.Type)
-		posMap := make(map[string]int)
-		for idx, col := range delCtx.tableDef.Cols {
-			posMap[col.Name] = idx
-			typMap[col.Name] = col.Typ
-		}
-		for idx, indexdef := range delCtx.tableDef.Indexes {
-			if !indexdef.Unique && indexdef.TableExist {
-				secondaryObjRef, secondaryTableDef := builder.compCtx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName)
-				if secondaryTableDef == nil {
-					return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexTableName)
-				}
-
-				lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-
-				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, secondaryObjRef, secondaryTableDef, indexdef, typMap, posMap, lastNodeId)
-				if err != nil {
-					return err
-				}
-
-				secondaryTblPkPos := secondaryDeleteIdx + 1
-				secondaryTblPkTyp := secondaryTableDef.Cols[0].Typ
-				if isUpdate {
-					// do it like simple update
-					lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-					newSourceStep := builder.appendStep(lastNodeId)
-					// delete sk plan
-					{
-						//sink_scan -> lock -> delete
-						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
-						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, secondaryObjRef, secondaryTableDef, secondaryDeleteIdx, -1, false, secondaryTblPkPos, secondaryTblPkTyp, delCtx.lockTable)
-						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, true)
-						putDeleteNodeInfo(delNodeInfo)
-						if err != nil {
-							return err
-						}
-						builder.appendStep(lastNodeId)
-					}
-					// insert sk plan
-					{
-						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
-						lastProject := builder.qry.Nodes[lastNodeId].ProjectList
-						projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
-						for j, uCols := range delCtx.tableDef.Cols {
-							if nIdx, ok := delCtx.updateColPosMap[uCols.Name]; ok {
-								projectProjection[j] = lastProject[nIdx]
-							} else {
-								if uCols.Name == catalog.Row_ID {
-									// replace the origin table's row_id with unique table's row_id
-									projectProjection[j] = lastProject[len(lastProject)-2]
-								} else {
-									projectProjection[j] = lastProject[j]
-								}
-							}
-						}
-						projectNode := &Node{
-							NodeType:    plan.Node_PROJECT,
-							Children:    []int32{lastNodeId},
-							ProjectList: projectProjection,
-						}
-						lastNodeId = builder.appendNode(projectNode, bindCtx)
-						preSKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, secondaryTableDef, false)
-						if err != nil {
-							return err
-						}
-
-						insertSecondaryTableDef := DeepCopyTableDef(secondaryTableDef)
-						for j, col := range insertSecondaryTableDef.Cols {
-							if col.Name == catalog.Row_ID {
-								insertSecondaryTableDef.Cols = append(insertSecondaryTableDef.Cols[:j], insertSecondaryTableDef.Cols[j+1:]...)
-							}
-						}
-						err = makeInsertPlan(ctx, builder, bindCtx, secondaryObjRef, insertSecondaryTableDef, 1, preSKStep, false, false, true, true, nil, false)
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
-					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, secondaryObjRef, secondaryTableDef, secondaryDeleteIdx, -1, false, secondaryTblPkPos, secondaryTblPkTyp, delCtx.lockTable)
-					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, true)
+					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK)
 					putDeleteNodeInfo(delNodeInfo)
 					if err != nil {
 						return err
