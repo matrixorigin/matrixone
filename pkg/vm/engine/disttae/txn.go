@@ -680,7 +680,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return nil, err
 	}
-	reqs, err := genWriteReqs(ctx, txn.writes)
+	reqs, err := genWriteReqs(ctx, txn.writes, txn.op.Txn().DebugString())
 	if err != nil {
 		return nil, err
 	}
