@@ -347,14 +347,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if indexAlgo == tree.INDEX_TYPE_BTREE.ToString() || indexAlgo == tree.INDEX_TYPE_INVALID.ToString() {
 							def := act.AddIndex.IndexInfo.GetIndexTables()[0]
 							// 2. create index table from unique index object
-							createSQL := genCreateSecondaryIndexTableSqlForBTreeIndex(def, indexDef, qry.Database)
+							createSQL := genCreateSecondaryIndexTableSqlForUniqueIndex(def, indexDef, qry.Database)
 							err = c.runSql(createSQL)
 							if err != nil {
 								return err
 							}
 
 							// 3. insert data into index table for unique index object
-							insertSQL := genInsertIntoSecondaryIndexTableSqlForBTreeIndex(tableDef, indexDef, qry.Database)
+							insertSQL := genInsertIntoSecondaryIndexTableSqlForUniqueIndex(tableDef, indexDef, qry.Database)
 							err = c.runSql(insertSQL)
 							if err != nil {
 								return err
@@ -1020,13 +1020,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 				indexAlgo := strings.ToLower(indexDef.IndexAlgo)
 				if indexAlgo == tree.INDEX_TYPE_BTREE.ToString() || indexAlgo == tree.INDEX_TYPE_INVALID.ToString() {
 					tblDef := indexInfo.GetIndexTables()[0]
-					createSQL := genCreateSecondaryIndexTableSqlForBTreeIndex(tblDef, indexDef, qry.Database)
+					createSQL := genCreateSecondaryIndexTableSqlForUniqueIndex(tblDef, indexDef, qry.Database)
 					err = c.runSql(createSQL)
 					if err != nil {
 						return err
 					}
 
-					insertSQL := genInsertIntoSecondaryIndexTableSqlForBTreeIndex(originalTableDef, indexDef, qry.Database)
+					insertSQL := genInsertIntoSecondaryIndexTableSqlForUniqueIndex(originalTableDef, indexDef, qry.Database)
 					err = c.runSql(insertSQL)
 					if err != nil {
 						return err
