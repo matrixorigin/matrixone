@@ -75,8 +75,8 @@ var (
 	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
 )
 
-// genCreateSecondaryIndexTableSqlForUniqueIndex: Generate ddl statements for creating index table
-func genCreateSecondaryIndexTableSqlForUniqueIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+// genCreateIndexTableSql: Generate ddl statements for creating index table
+func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
@@ -108,8 +108,8 @@ func genCreateSecondaryIndexTableSqlForUniqueIndex(indexTableDef *plan.TableDef,
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
-// genInsertIntoSecondaryIndexTableSqlForUniqueIndex: Generate an insert statement for inserting data into the index table
-func genInsertIntoSecondaryIndexTableSqlForUniqueIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+// genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
+func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)
