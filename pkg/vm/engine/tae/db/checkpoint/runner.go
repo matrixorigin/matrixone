@@ -181,6 +181,7 @@ type runner struct {
 		checkpointQueueSize int
 
 		checkpointBlockRows int
+		checkpointSize      int
 
 		reservedWALEntryCount uint64
 	}
@@ -278,6 +279,7 @@ func (r *runner) String() string {
 	_, _ = fmt.Fprintf(&buf, "waitQueueSize=%v, ", r.options.waitQueueSize)
 	_, _ = fmt.Fprintf(&buf, "checkpointQueueSize=%v, ", r.options.checkpointQueueSize)
 	_, _ = fmt.Fprintf(&buf, "checkpointBlockRows=%v, ", r.options.checkpointBlockRows)
+	_, _ = fmt.Fprintf(&buf, "checkpointSize=%v, ", r.options.checkpointSize)
 	_, _ = fmt.Fprintf(&buf, ">")
 	return buf.String()
 }
@@ -505,7 +507,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 		return
 	}
 	defer data.Close()
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
+	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}
@@ -528,7 +530,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, in
 	}
 	defer data.Close()
 
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
+	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}
@@ -690,6 +692,9 @@ func (r *runner) fillDefaults() {
 	}
 	if r.options.checkpointBlockRows <= 0 {
 		r.options.checkpointBlockRows = logtail.DefaultCheckpointBlockRows
+	}
+	if r.options.checkpointSize <= 0 {
+		r.options.checkpointSize = logtail.DefaultCheckpointSize
 	}
 }
 

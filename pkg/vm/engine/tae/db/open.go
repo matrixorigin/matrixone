@@ -136,6 +136,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		checkpoint.WithCollectInterval(opts.CheckpointCfg.ScanInterval),
 		checkpoint.WithMinCount(int(opts.CheckpointCfg.MinCount)),
 		checkpoint.WithCheckpointBlockRows(opts.CheckpointCfg.BlockRows),
+		checkpoint.WithCheckpointSize(opts.CheckpointCfg.Size),
 		checkpoint.WithMinIncrementalInterval(opts.CheckpointCfg.IncrementalInterval),
 		checkpoint.WithGlobalMinCount(int(opts.CheckpointCfg.GlobalMinCount)),
 		checkpoint.WithGlobalVersionInterval(opts.CheckpointCfg.GlobalVersionInterval),
