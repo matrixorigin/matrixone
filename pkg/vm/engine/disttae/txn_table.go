@@ -167,6 +167,25 @@ func (tbl *txnTable) ForeachBlock(
 	return
 }
 
+func (tbl *txnTable) ForeachDataObject(
+	state *logtailreplay.PartitionState,
+	fn func(obj logtailreplay.ObjectEntry) error,
+) (err error) {
+	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	iter, err := state.NewObjectsIter(ts)
+	if err != nil {
+		return err
+	}
+	for iter.Next() {
+		entry := iter.Entry()
+		if err = fn(entry); err != nil {
+			break
+		}
+	}
+	iter.Close()
+	return
+}
+
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	var (
 		err  error
@@ -190,12 +209,12 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	if err != nil {
 		return nil, nil, err
 	}
-	onBlkFn := func(blk logtailreplay.BlockEntry) error {
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		var err error
-		location := blk.MetaLocation()
-		if objectio.IsSameObjectLocVsMeta(location, meta) {
-			return nil
-		}
+		location := obj.Location()
+		//if objectio.IsSameObjectLocVsMeta(location, meta) {
+		//	return nil
+		//}
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
@@ -220,7 +239,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = tbl.ForeachBlock(part, onBlkFn); err != nil {
+	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
 		return nil, nil, err
 	}
 

@@ -20,6 +20,66 @@ import (
 	"github.com/tidwall/btree"
 )
 
+type ObjectsIter interface {
+	Next() bool
+	Close() error
+	Entry() ObjectEntry
+}
+
+type objectsIter struct {
+	ts          types.TS
+	iter        btree.IterG[ObjectEntry]
+	firstCalled bool
+}
+
+func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
+	if ts.Less(p.minTS) {
+		return nil, moerr.NewTxnStaleNoCtx()
+	}
+	iter := p.dataObjects.Copy().Iter()
+	ret := &objectsIter{
+		ts:   ts,
+		iter: iter,
+	}
+	return ret, nil
+}
+
+var _ ObjectsIter = new(objectsIter)
+
+func (b *objectsIter) Next() bool {
+	for {
+
+		if !b.firstCalled {
+			if !b.iter.First() {
+				return false
+			}
+			b.firstCalled = true
+		} else {
+			if !b.iter.Next() {
+				return false
+			}
+		}
+
+		entry := b.iter.Item()
+
+		if !entry.Visible(b.ts) {
+			// not visible
+			continue
+		}
+
+		return true
+	}
+}
+
+func (b *objectsIter) Entry() ObjectEntry {
+	return b.iter.Item()
+}
+
+func (b *objectsIter) Close() error {
+	b.iter.Release()
+	return nil
+}
+
 type BlocksIter interface {
 	Next() bool
 	Close() error

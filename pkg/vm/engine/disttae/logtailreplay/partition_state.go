@@ -48,8 +48,10 @@ type PartitionState struct {
 	// also modify the Copy method if adding fields
 
 	// data
-	rows        *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
-	blocks      *btree.BTreeG[BlockEntry]
+	rows   *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	blocks *btree.BTreeG[BlockEntry]
+	//table data objects
+	dataObjects *btree.BTreeG[ObjectEntry]
 	checkpoints []string
 
 	// index
@@ -137,6 +139,26 @@ func (b *BlockEntry) Visible(ts types.TS) bool {
 		(b.DeleteTime.IsEmpty() || ts.Less(b.DeleteTime))
 }
 
+type ObjectEntry struct {
+	location objectio.Location
+
+	CreateTime types.TS
+	DeleteTime types.TS
+}
+
+func (o ObjectEntry) Less(than ObjectEntry) bool {
+	return bytes.Compare(o.location.ShortName()[:], than.location.ShortName()[:]) < 0
+}
+
+func (o *ObjectEntry) Visible(ts types.TS) bool {
+	return o.CreateTime.LessEq(ts) &&
+		(o.DeleteTime.IsEmpty() || ts.Less(o.DeleteTime))
+}
+
+func (o ObjectEntry) Location() objectio.Location {
+	return o.location
+}
+
 type PrimaryIndexEntry struct {
 	Bytes      []byte
 	RowEntryID int64
@@ -199,6 +221,7 @@ func NewPartitionState(noData bool) *PartitionState {
 		noData:         noData,
 		rows:           btree.NewBTreeGOptions((RowEntry).Less, opts),
 		blocks:         btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		dataObjects:    btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		primaryIndex:   btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		dirtyBlocks:    btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		blockIndexByTS: btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
@@ -210,6 +233,7 @@ func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
 		rows:           p.rows.Copy(),
 		blocks:         p.blocks.Copy(),
+		dataObjects:    p.dataObjects.Copy(),
 		primaryIndex:   p.primaryIndex.Copy(),
 		noData:         p.noData,
 		dirtyBlocks:    p.dirtyBlocks.Copy(),
@@ -510,6 +534,19 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			p.blocks.Set(blockEntry)
 
+			objPivot := ObjectEntry{
+				location: blockEntry.MetaLocation(),
+			}
+			objEntry, ok := p.dataObjects.Get(objPivot)
+			if !ok {
+				objPivot.CreateTime = blockEntry.CreateTime
+				objEntry = objPivot
+			} else {
+				//FIXME::??
+				objEntry.location = blockEntry.MetaLocation()
+			}
+			p.dataObjects.Set(objEntry)
+
 			{
 				e := BlockIndexByTSEntry{
 					Time:         blockEntry.CreateTime,
@@ -647,6 +684,16 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 					p.blockIndexByTS.Set(new)
 				}
 			}
+
+			objPivot := ObjectEntry{
+				location: entry.MetaLocation(),
+			}
+			objEntry, ok := p.dataObjects.Get(objPivot)
+			if !ok {
+				panic(fmt.Sprintf("object had not been created"))
+			}
+			objEntry.DeleteTime = entry.DeleteTime
+			p.dataObjects.Set(objEntry)
 
 		})
 	}
