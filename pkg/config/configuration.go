@@ -69,7 +69,7 @@ var (
 	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
-	defaultLengthOfQueryPrinted = 200000
+	defaultLengthOfQueryPrinted = 1024
 
 	//the count of rows in vector of batch in load data
 	defaultBatchSizeInLoadData = 40000
