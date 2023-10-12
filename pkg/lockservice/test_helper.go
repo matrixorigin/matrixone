@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -35,6 +34,7 @@ func RunLockServicesForTest(
 	lockTableBindTimeout time.Duration,
 	fn func(LockTableAllocator, []LockService),
 	adjustConfig func(*Config)) {
+	defaultLazyCheckDuration = time.Millisecond * 50
 	testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntimeWithLevel(level))
 	allocator := NewLockTableAllocator(testSockets, lockTableBindTimeout, morpc.Config{})
@@ -52,11 +52,7 @@ func RunLockServicesForTest(
 			ServiceID:          v,
 			LockServiceAddress: address,
 		})
-		configs = append(configs, Config{
-			ServiceID:                 v,
-			ListenAddress:             address,
-			DeadlockCheckWaitDuration: toml.Duration{Duration: time.Millisecond * 100},
-		})
+		configs = append(configs, Config{ServiceID: v, ListenAddress: address})
 	}
 	cluster := clusterservice.NewMOCluster(
 		nil,
