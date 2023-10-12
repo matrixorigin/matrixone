@@ -1345,73 +1345,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
-func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
-	truncateTable := &plan.TruncateTable{}
-
-	truncateTable.Database = string(stmt.Name.SchemaName)
-	if truncateTable.Database == "" {
-		truncateTable.Database = ctx.DefaultDatabase()
-	}
-	truncateTable.Table = string(stmt.Name.ObjectName)
-	obj, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
-	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
-	} else {
-		if len(tableDef.RefChildTbls) > 0 {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' referenced by some foreign key constraint", truncateTable.Table)
-		}
-
-		if tableDef.ViewSql != nil {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
-		}
-
-		truncateTable.TableId = tableDef.TblId
-		if tableDef.Fkeys != nil {
-			for _, fk := range tableDef.Fkeys {
-				truncateTable.ForeignTbl = append(truncateTable.ForeignTbl, fk.ForeignTbl)
-			}
-		}
-
-		truncateTable.ClusterTable = &plan.ClusterTable{
-			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
-		}
-
-		//non-sys account can not truncate the cluster table
-		if truncateTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
-		}
-
-		if obj.PubInfo != nil {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' which is published by other account", truncateTable.Table)
-		}
-
-		truncateTable.IndexTableNames = make([]string, 0)
-		if tableDef.Indexes != nil {
-			for _, indexdef := range tableDef.Indexes {
-				if indexdef.TableExist {
-					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
-				}
-			}
-		}
-
-		if tableDef.Partition != nil {
-			truncateTable.PartitionTableNames = make([]string, len(tableDef.Partition.PartitionTableNames))
-			copy(truncateTable.PartitionTableNames, tableDef.Partition.PartitionTableNames)
-		}
-	}
-
-	return &Plan{
-		Plan: &plan.Plan_Ddl{
-			Ddl: &plan.DataDefinition{
-				DdlType: plan.DataDefinition_TRUNCATE_TABLE,
-				Definition: &plan.DataDefinition_TruncateTable{
-					TruncateTable: truncateTable,
-				},
-			},
-		},
-	}, nil
-}
-
 func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) (tableExists bool, err error) {
 	nameCount := make(map[string]int)
 
@@ -1559,6 +1492,73 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 		}
 	}
 	return tableExists, nil
+}
+
+func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
+	truncateTable := &plan.TruncateTable{}
+
+	truncateTable.Database = string(stmt.Name.SchemaName)
+	if truncateTable.Database == "" {
+		truncateTable.Database = ctx.DefaultDatabase()
+	}
+	truncateTable.Table = string(stmt.Name.ObjectName)
+	obj, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
+	} else {
+		if len(tableDef.RefChildTbls) > 0 {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' referenced by some foreign key constraint", truncateTable.Table)
+		}
+
+		if tableDef.ViewSql != nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
+		}
+
+		truncateTable.TableId = tableDef.TblId
+		if tableDef.Fkeys != nil {
+			for _, fk := range tableDef.Fkeys {
+				truncateTable.ForeignTbl = append(truncateTable.ForeignTbl, fk.ForeignTbl)
+			}
+		}
+
+		truncateTable.ClusterTable = &plan.ClusterTable{
+			IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		}
+
+		//non-sys account can not truncate the cluster table
+		if truncateTable.GetClusterTable().GetIsClusterTable() && ctx.GetAccountId() != catalog.System_Account {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
+		}
+
+		if obj.PubInfo != nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' which is published by other account", truncateTable.Table)
+		}
+
+		truncateTable.IndexTableNames = make([]string, 0)
+		if tableDef.Indexes != nil {
+			for _, indexdef := range tableDef.Indexes {
+				if indexdef.TableExist {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
+				}
+			}
+		}
+
+		if tableDef.Partition != nil {
+			truncateTable.PartitionTableNames = make([]string, len(tableDef.Partition.PartitionTableNames))
+			copy(truncateTable.PartitionTableNames, tableDef.Partition.PartitionTableNames)
+		}
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_TRUNCATE_TABLE,
+				Definition: &plan.DataDefinition_TruncateTable{
+					TruncateTable: truncateTable,
+				},
+			},
+		},
+	}, nil
 }
 
 func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
