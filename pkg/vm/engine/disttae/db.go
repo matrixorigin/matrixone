@@ -282,14 +282,14 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 				tbl.db.databaseName,
 				tbl.db.txn.engine.mp,
 				tbl.db.txn.engine.fs)
+			if err != nil {
+				return err
+			}
 			defer func() {
 				for _, cb := range closeCBs {
 					cb()
 				}
 			}()
-			if err != nil {
-				return err
-			}
 			for _, entry := range entries {
 				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
 					return err

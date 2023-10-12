@@ -1234,13 +1234,14 @@ func genMetaTableName(id uint64) string {
 
 func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 	var attrs []string
-	var vecs []*vector.Vector
+	vecs := make([]*vector.Vector, 0, 2)
 
 	{
 		vec := vector.NewVec(types.T_Rowid.ToType())
 		for i := 0; i < bat.RowCount(); i++ {
 			val := types.RandomRowid()
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
+				vec.Free(m)
 				return nil, err
 			}
 		}
@@ -1253,6 +1254,8 @@ func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
 		vec := vector.NewVec(types.T_TS.ToType())
 		for i := 0; i < bat.RowCount(); i++ {
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
+				vecs[0].Free(m)
+				vec.Free(m)
 				return nil, err
 			}
 		}
