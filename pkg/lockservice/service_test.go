@@ -811,7 +811,6 @@ func TestManyRowLockInManyGoroutines(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
-					lt.deadlockCheckWaitDuration = time.Second * 5
 					option := newTestRowExclusiveOptions()
 					rows := newTestRows(1, 2, 3, 4, 5, 6)
 
@@ -847,8 +846,6 @@ func TestManyRangeLockInManyGoroutines(t *testing.T) {
 					ctx context.Context,
 					s *service,
 					lt *localLockTable) {
-					lt.deadlockCheckWaitDuration = time.Second * 5
-
 					option := newTestRangeExclusiveOptions()
 					rows := newTestRows(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
@@ -1411,7 +1408,16 @@ func checkLock(
 	idx := 0
 	lock.waiters.iter(func(w *waiter) bool {
 		require.Equal(t, expectWaiters[idx], w.txn.TxnID)
-		require.Equal(t, expectWaiterRefs[idx], w.refCount.Load())
+
+		n := expectWaiterRefs[idx]
+		lt.events.mu.Lock()
+		for _, v := range lt.events.mu.blockedWaiters {
+			if v == w {
+				n += 1
+			}
+		}
+		require.Equal(t, n, w.refCount.Load())
+		lt.events.mu.Unlock()
 		idx++
 		return true
 	})
