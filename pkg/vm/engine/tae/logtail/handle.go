@@ -745,15 +745,19 @@ func LoadCheckpointEntries(
 	for i := range objectLocations {
 		data := NewCNCheckpointData()
 		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
-		idxes := make([]uint16, len(meteIdxSchema.attrs))
-		for attr := range meteIdxSchema.attrs {
-			idxes[attr] = uint16(attr)
+		if meteIdxSchema == nil {
+			panic(fmt.Sprintf("LoadCheckpointEntries version %d is invalid, current version %d", versions[i], CheckpointCurrentVersion))
+		} else {
+			idxes := make([]uint16, len(meteIdxSchema.attrs))
+			for attr := range meteIdxSchema.attrs {
+				idxes[attr] = uint16(attr)
+			}
+			err := data.PrefetchMetaIdx(ctx, versions[i], idxes, objectLocations[i], fs)
+			if err != nil {
+				return nil, nil, err
+			}
+			datas[i] = data
 		}
-		err := data.PrefetchMetaIdx(ctx, versions[i], idxes, objectLocations[i], fs)
-		if err != nil {
-			return nil, nil, err
-		}
-		datas[i] = data
 	}
 
 	for i := range datas {
