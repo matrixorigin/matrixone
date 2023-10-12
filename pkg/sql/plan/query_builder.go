@@ -1861,6 +1861,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var resultLen int
 	var havingBinder *HavingBinder
 	var lockNode *plan.Node
+	var notCacheable bool
 
 	if clause == nil {
 		proc := builder.compCtx.GetProcess()
@@ -2204,6 +2205,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if _, ok := ctx.projectByExpr[exprStr]; !ok {
 			ctx.projectByExpr[exprStr] = int32(i)
 		}
+
+		if !notCacheable {
+			if ef, ok := proj.Expr.(*plan.Expr_F); ok {
+				overloadID := ef.F.Func.GetObj()
+				f, exists := function.GetFunctionByIdWithoutError(overloadID)
+				if exists && f.IsRealTimeRelated() {
+					notCacheable = true
+				}
+			}
+		}
 	}
 
 	// bind ORDER BY clause
@@ -2389,10 +2400,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: ctx.projects,
-		Children:    []int32{nodeID},
-		BindingTags: []int32{ctx.projectTag},
+		NodeType:     plan.Node_PROJECT,
+		ProjectList:  ctx.projects,
+		Children:     []int32{nodeID},
+		BindingTags:  []int32{ctx.projectTag},
+		NotCacheable: notCacheable,
 	}, ctx)
 
 	// append DISTINCT node
