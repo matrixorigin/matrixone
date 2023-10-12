@@ -70,11 +70,11 @@ func TestPreInsertSecondary(t *testing.T) {
 	inputBatch.SetRowCount(3)
 
 	argument := Argument{
-		PreInsertCtx: &plan.PreInsertSkCtx{
+		PreInsertCtx: &plan.PreInsertUkCtx{
 			Columns:  []int32{1},
 			PkColumn: 0,
 			PkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
-			SkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
+			UkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
 		},
 	}
 

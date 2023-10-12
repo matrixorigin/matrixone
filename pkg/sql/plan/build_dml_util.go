@@ -2166,11 +2166,11 @@ func appendPreInsertUkPlan(
 			Children:    []int32{lastNodeId},
 			NodeType:    plan.Node_PRE_INSERT_SK,
 			ProjectList: preinsertUkProjection,
-			PreInsertSkCtx: &plan.PreInsertSkCtx{
+			PreInsertSkCtx: &plan.PreInsertUkCtx{
 				Columns:  useColumns,
 				PkColumn: int32(pkColumn),
 				PkType:   originPkType,
-				SkType:   ukType,
+				UkType:   ukType,
 				TableDef: tableDef,
 			},
 		}

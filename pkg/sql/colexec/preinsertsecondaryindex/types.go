@@ -22,7 +22,7 @@ import (
 
 type Argument struct {
 	Ctx          context.Context
-	PreInsertCtx *plan.PreInsertSkCtx
+	PreInsertCtx *plan.PreInsertUkCtx
 }
 
 func (arg *Argument) Free(*process.Process, bool) {}

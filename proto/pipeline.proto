@@ -167,7 +167,7 @@ message PreInsertUnique {
 }
 
 message PreInsertSecondaryIndex{
-  plan.PreInsertSkCtx pre_insert_sk_ctx = 1;
+  plan.PreInsertUkCtx pre_insert_sk_ctx = 1;
 }
 
 message OnDuplicateKey{
