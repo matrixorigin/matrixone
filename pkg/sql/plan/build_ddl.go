@@ -984,6 +984,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.Parts[0]
 				indexs = append(indexs, name)
 			}
+			//TODO fix.
 
 		case *tree.UniqueIndex:
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
@@ -1388,6 +1389,7 @@ func buildSecondaryIndexTable(createTable *plan.CreateTable, indexInfos []*tree.
 					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 				}
 				if colMap[name].Typ.Id == int32(types.T_array_float32) {
+					// Not supported for BTREE or DEFAULT index
 					return false, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECF32 column '%s' cannot be in index", name))
 				}
 				if colMap[name].Typ.Id == int32(types.T_array_float64) {
