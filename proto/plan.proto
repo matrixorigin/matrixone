@@ -672,6 +672,7 @@ message Node {
 		PRE_DELETE = 61;
 		// the node which build insert batch for hidden table(unique key)
 		PRE_INSERT_UK = 62;
+		PRE_INSERT_SK = 63;
 	}
 
 	enum JoinType {
@@ -763,6 +764,8 @@ message Node {
 	bool recursive_sink = 43;
 	ExternScan extern_scan = 44;
 	PartitionPrune partition_prune = 45;
+
+	PreInsertUkCtx pre_insert_sk_ctx = 46;
 }
 
 message ExternScan {

@@ -736,6 +736,9 @@ func (it IndexType) ToString() string {
 		return "bsi"
 	case INDEX_TYPE_ZONEMAP:
 		return "zonemap"
+	case INDEX_TYPE_INVALID:
+		//TODO: verify if this is valid?
+		return ""
 	default:
 		return "Unknown IndexType"
 	}
@@ -782,6 +785,10 @@ type IndexOption struct {
 
 // Must follow the following sequence when test
 func (node *IndexOption) Format(ctx *FmtCtx) {
+	if node.KeyBlockSize != 0 || node.ParserName != "" ||
+		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID {
+		ctx.WriteByte(' ')
+	}
 	if node.KeyBlockSize != 0 {
 		ctx.WriteString("KEY_BLOCK_SIZE ")
 		ctx.WriteString(strconv.FormatUint(node.KeyBlockSize, 10))
@@ -2019,7 +2026,6 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(")")
 	if node.IndexOption != nil {
-		ctx.WriteByte(' ')
 		node.IndexOption.Format(ctx)
 	}
 }

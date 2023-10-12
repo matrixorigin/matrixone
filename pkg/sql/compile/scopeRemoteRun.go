@@ -1110,6 +1110,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		v.Arg = &preinsertunique.Argument{
 			PreInsertCtx: t.GetPreInsertUkCtx(),
 		}
+	case vm.PreInsertSecondaryIndex:
+		t := opr.GetPreInsertSecondaryIndex()
+		v.Arg = &preinsertunique.Argument{
+			PreInsertCtx: t.GetPreInsertSkCtx(),
+		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		v.Arg = &onduplicatekey.Argument{

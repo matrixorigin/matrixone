@@ -571,6 +571,13 @@ func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique
 		PreInsertCtx: preCtx,
 	}, nil
 }
+func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertunique.Argument, error) {
+	preCtx := n.PreInsertSkCtx
+	return &preinsertunique.Argument{
+		Ctx:          proc.Ctx,
+		PreInsertCtx: preCtx,
+	}, nil
+}
 
 func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*lockop.Argument, error) {
 	arg := lockop.NewArgument(eng)
@@ -1733,21 +1740,17 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		uniqueIndexTables = make([]engine.Relation, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
-				if indexdef.Unique {
-					var indexTable engine.Relation
-					if indexdef.TableExist {
-						if isTemp {
-							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName), proc)
-						} else {
-							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName, proc)
-						}
-						if err != nil {
-							return nil, nil, err
-						}
-						uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				var indexTable engine.Relation
+				if indexdef.TableExist {
+					if isTemp {
+						indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName), proc)
+					} else {
+						indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName, proc)
 					}
-				} else {
-					continue
+					if err != nil {
+						return nil, nil, err
+					}
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
 				}
 			}
 		}
