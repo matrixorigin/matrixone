@@ -32,16 +32,10 @@ func checkDropColumnWithPrimaryKey(colName string, pkey *plan.PrimaryKeyDef, ctx
 
 func checkDropColumnWithIndex(colName string, indexes []*plan.IndexDef, ctx CompilerContext) error {
 	for _, indexInfo := range indexes {
-		if indexInfo.Unique {
+		if indexInfo.TableExist {
 			for _, column := range indexInfo.Parts {
 				if column == colName {
-					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with unique index covered now", colName)
-				}
-			}
-		} else if !indexInfo.Unique && indexInfo.TableExist {
-			for _, column := range indexInfo.Parts {
-				if column == colName {
-					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with secondary index covered now", colName)
+					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with index covered now", colName)
 				}
 			}
 		}
