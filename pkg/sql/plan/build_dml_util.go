@@ -847,7 +847,7 @@ func makeInsertPlan(
 	// append plan for the hidden tables of unique keys
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
-			if indexdef.Unique {
+			if indexdef.TableExist {
 				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
 				// remove row_id
 				for i, col := range idxTableDef.Cols {
@@ -858,29 +858,7 @@ func makeInsertPlan(
 				}
 
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef, true)
-				if err != nil {
-					return err
-				}
-
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil, false)
-				if err != nil {
-					return err
-				}
-			}
-
-			if !indexdef.Unique && indexdef.TableExist {
-				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
-				// remove row_id
-				for i, col := range idxTableDef.Cols {
-					if col.Name == catalog.Row_ID {
-						idxTableDef.Cols = append(idxTableDef.Cols[:i], idxTableDef.Cols[i+1:]...)
-						break
-					}
-				}
-
-				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef, false)
+				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef, indexdef.Unique)
 				if err != nil {
 					return err
 				}
