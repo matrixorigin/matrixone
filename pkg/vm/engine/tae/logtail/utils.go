@@ -1447,8 +1447,6 @@ func (data *CheckpointData) prepareTNMetaBatch(
 	schemaTypes [][]uint16,
 ) {
 	for i, blks := range objectBlocks {
-		logutil.Infof("prepareTNMetaBatch %s, i is %d", checkpointNames[i], i)
-		logutil.Infof("shcemaTypes is %v", schemaTypes[i])
 		for y, blk := range blks {
 			location := objectio.BuildLocation(checkpointNames[i], blk.GetExtent(), 0, blk.GetID())
 			data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_BlockLocation).Append([]byte(location), false)
@@ -1608,7 +1606,6 @@ func (data *CheckpointData) WriteTo(
 		blockLoc := BuildBlockLoactionWithLocation(
 			fileName, loc.GetExtent(), 0, loc.GetID(),
 			0, 0)
-		logutil.Infof("blockLoc is %v", blockLoc.GetLocation().String())
 		data.meta[0].tables[0].locations.Append(blockLoc)
 	}
 	data.prepareMeta()
