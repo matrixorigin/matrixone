@@ -255,6 +255,11 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {
+		for _, bat := range batches {
+			if bat != nil {
+				bat.Clean(exec.s.mp)
+			}
+		}
 		return executor.Result{}, err
 	}
 

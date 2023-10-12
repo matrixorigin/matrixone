@@ -44,12 +44,6 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
-	// Should be no fixed or some size?
-	mp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
-	if err != nil {
-		return err
-	}
-
 	// use s3 as main fs
 	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
 	if err != nil {
@@ -61,9 +55,13 @@ func (s *service) initDistributedTAE(
 	blockio.Start()
 
 	// engine
+	distributeTaeMp, err := mpool.NewMPool("distributed_tae", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
 	s.storeEngine = disttae.New(
 		ctx,
-		mp,
+		distributeTaeMp,
 		fs,
 		client,
 		hakeeper,
@@ -77,6 +75,11 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
-	s.initInternalSQlExecutor(mp)
+	// internal sql executor.
+	internalExecutorMp, err := mpool.NewMPool("internal_executor", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+	s.initInternalSQlExecutor(internalExecutorMp)
 	return nil
 }
