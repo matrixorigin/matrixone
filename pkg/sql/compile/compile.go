@@ -3167,7 +3167,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 					continue
 				}
 				args := agg.F.Args[0]
-				col := args.Expr.(*plan.Expr_Col)
+				col, ok := args.Expr.(*plan.Expr_Col)
+				if !ok {
+					agg.F.Func.ObjName = "starcount"
+					continue
+				}
 				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
 				if len(n.TableDef.Cols) > 0 {
 					columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[columnMap[int(col.Col.ColPos)]].Seqnum)
