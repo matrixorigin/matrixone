@@ -67,7 +67,6 @@ func NewLockService(cfg Config) LockService {
 		serviceID: getServiceIdentifier(cfg.ServiceID, time.Now().UnixNano()),
 		cfg:       cfg,
 		fsp:       newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
-		events:    newWaiterEvents(eventsWorkers),
 		stopper: stopper.NewStopper("lock-service",
 			stopper.WithLogger(getLogger().RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
@@ -77,6 +76,7 @@ func NewLockService(cfg Config) LockService {
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
+	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector)
 	s.clock = runtime.ProcessLevelRuntime().Clock()
 	s.initRemote()
 	s.events.start()
@@ -323,7 +323,6 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 		return newLocalLockTable(
 			bind,
 			s.fsp,
-			s.deadlockDetector,
 			s.events,
 			s.clock)
 	} else {
