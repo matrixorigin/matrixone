@@ -745,6 +745,9 @@ func LoadCheckpointEntries(
 	for i := range objectLocations {
 		data := NewCNCheckpointData()
 		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
+		if meteIdxSchema == nil {
+			logutil.Infof("LoadCheckpointEntries version %d is invalid, current version %d", versions[i], CheckpointCurrentVersion)
+		}
 		idxes := make([]uint16, len(meteIdxSchema.attrs))
 		for attr := range meteIdxSchema.attrs {
 			idxes[attr] = uint16(attr)
