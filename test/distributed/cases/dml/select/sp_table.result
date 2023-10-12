@@ -3,11 +3,12 @@ reldatabase    relname    relkind
 mo_catalog    mo_increment_columns    
 select relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and account_id = 0 order by relname;
 relname    relkind
+__mo_index_unique_9b248450-68c7-11ee-a3f2-d235aa0f93a7    r
 mo_account    r
 mo_columns    r
 mo_configurations    v
 mo_database    r
-mo_increment_columns
+mo_increment_columns    
 mo_indexes    r
 mo_locks    v
 mo_mysql_compatibility_mode    r
