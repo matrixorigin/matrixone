@@ -72,10 +72,7 @@ func (s *service) initDistributedTAE(
 
 	// set up log tail client to subscribe table and receive table log.
 	cnEngine := pu.StorageEngine.(*disttae.Engine)
-	err = cnEngine.InitLogTailPushModel(
-		ctx,
-		mp,
-		s.timestampWaiter)
+	err = cnEngine.InitLogTailPushModel(ctx, s.timestampWaiter)
 	if err != nil {
 		return err
 	}

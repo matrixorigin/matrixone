@@ -24,16 +24,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // init is used to insert some data that will not be synchronized by logtail.
-func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
+func (e *Engine) init(ctx context.Context) error {
 	e.Lock()
 	defer e.Unlock()
+	m := e.mp
 
 	e.catalog = cache.NewCatalog()
 	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
