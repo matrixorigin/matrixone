@@ -48,17 +48,15 @@ func TestLockAdded(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	events := newWaiterEvents(1)
+	events := newWaiterEvents(1, nil)
 	defer events.close()
 
 	id := []byte("t1")
 	fsp := newFixedSlicePool(2)
 	txn := newActiveTxn(id, string(id), fsp, "")
 	tables := map[uint64]lockTable{
-		1: newLocalLockTable(pb.LockTable{Table: 1}, nil,
-			nil, events, runtime.DefaultRuntime().Clock()),
-		2: newLocalLockTable(pb.LockTable{Table: 2}, nil,
-			nil, events, runtime.DefaultRuntime().Clock()),
+		1: newLocalLockTable(pb.LockTable{Table: 1}, nil, events, runtime.DefaultRuntime().Clock()),
+		2: newLocalLockTable(pb.LockTable{Table: 2}, nil, events, runtime.DefaultRuntime().Clock()),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
