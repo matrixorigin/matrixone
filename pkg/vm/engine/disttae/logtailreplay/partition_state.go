@@ -690,7 +690,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 			}
 			objEntry, ok := p.dataObjects.Get(objPivot)
 			if !ok {
-				panic(fmt.Sprintf("object had not been created"))
+				panic(fmt.Sprintf("object:%s had not been created", entry.MetaLocation().Name().String()))
 			}
 			objEntry.DeleteTime = entry.DeleteTime
 			p.dataObjects.Set(objEntry)

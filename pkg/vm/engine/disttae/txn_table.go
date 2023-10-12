@@ -212,9 +212,6 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		var err error
 		location := obj.Location()
-		//if objectio.IsSameObjectLocVsMeta(location, meta) {
-		//	return nil
-		//}
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
