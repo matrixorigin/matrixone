@@ -104,22 +104,20 @@ func consumeLogTailOfPull(
 		tbl.db.databaseName,
 		engine.mp,
 		engine.fs); err != nil {
+		return
+	}
+
+	defer func() {
 		for _, cb := range closeCBs {
 			cb()
 		}
-		return
-	}
+	}()
+
 	for _, e := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, e); err != nil {
-			for _, cb := range closeCBs {
-				cb()
-			}
 			return
 		}
-	}
-	for _, cb := range closeCBs {
-		cb()
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {
