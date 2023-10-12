@@ -39,6 +39,8 @@ type ObjectStorageArguments struct {
 	SecurityToken       string `toml:"security-token"`
 	SessionToken        string `toml:"session-token"`
 	SharedConfigProfile string `toml:"shared-config-profile"`
+	OIDCProviderARN     string `toml:"oidc-provider-arn"`
+	OIDCTokenFilePath   string `toml:"oidc-token-file-path"`
 }
 
 func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
@@ -82,6 +84,10 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			o.SharedConfigProfile = value
 		case "token", "session-token":
 			o.SessionToken = value
+		case "oidc-provider-arn":
+			o.OIDCProviderARN = value
+		case "oidc-token-file-path":
+			o.OIDCTokenFilePath = value
 
 		default:
 			return moerr.NewInvalidInputNoCtx("invalid S3 argument: %s", pair)

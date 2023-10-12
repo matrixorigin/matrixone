@@ -295,7 +295,7 @@ func (d *DiskCache) triggerEvict(ctx context.Context, bytesWritten int64) {
 		if newlyWrittenThreshold > 0 && d.evictState.newlyWritten >= newlyWrittenThreshold {
 			if d.evictState.timer.Stop() {
 				// evict immediately
-				logutil.Info("disk cache: newly written bytes may excceeds eviction target, start immediately",
+				logutil.Debug("disk cache: newly written bytes may excceeds eviction target, start immediately",
 					zap.Any("newly-written", d.evictState.newlyWritten),
 					zap.Any("newly-written-threshold", newlyWrittenThreshold),
 				)
@@ -370,7 +370,7 @@ func (d *DiskCache) evict(ctx context.Context) {
 			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 				set.FileService.Cache.Disk.Evict.Add(numDeleted)
 			}, d.perfCounterSets...)
-			logutil.Info("disk cache: eviction finished",
+			logutil.Debug("disk cache: eviction finished",
 				zap.Any("files", numDeleted),
 				zap.Any("bytes", bytesDeleted),
 			)
