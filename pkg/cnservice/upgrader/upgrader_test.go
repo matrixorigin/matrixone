@@ -145,3 +145,8 @@ func TestGenerateUpgradeSQL(t *testing.T) {
 		})
 	}
 }
+
+func TestUpgrateErr(t *testing.T) {
+	upgrateError := moerr.NewUpgrateError(context.TODO(), "information_schema", "columns", "system", 0, "table not exist")
+	assert.Equal(t, "CN upgrade table or view 'information_schema.columns' under tenant 'system:0' reports error: table not exist", upgrateError.Error())
+}
