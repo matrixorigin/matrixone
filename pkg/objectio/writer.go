@@ -179,9 +179,7 @@ func (w *objectWriterV1) prepareDataMeta(objectMeta objectDataMetaV1, blocks []b
 	metaColCnt := uint16(0)
 	maxSeqnum := uint16(0)
 	var seqnums *Seqnums
-	if len(blocks) == 0 {
-		logutil.Warn("object io: no block needs to be written")
-	} else {
+	if len(blocks) != 0 {
 		columnCount = blocks[0].meta.GetColumnCount()
 		metaColCnt = blocks[0].meta.GetMetaColumnCount()
 		maxSeqnum = blocks[0].meta.GetMaxSeqnum()

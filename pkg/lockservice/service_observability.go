@@ -27,11 +27,11 @@ func (s *service) GetWaitingList(
 	if txn == nil {
 		return false, nil, nil
 	}
-	v := txn.toWaitTxn(s.cfg.ServiceID, false)
-	if v.CreatedOn == s.cfg.ServiceID {
+	v := txn.toWaitTxn(s.serviceID, false)
+	if v.CreatedOn == s.serviceID {
 		values := make([]pb.WaitTxn, 0, 1)
 		txn.fetchWhoWaitingMe(
-			s.cfg.ServiceID,
+			s.serviceID,
 			txnID,
 			s.activeTxnHolder,
 			func(w pb.WaitTxn) bool {
