@@ -25,6 +25,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/util/format"
+	"github.com/matrixorigin/matrixone/pkg/common/chaos"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -95,7 +96,13 @@ func startDynamicCNServices(
 			return err
 		}
 	}
-	return nil
+	if !cfg.Chaos.Enable {
+		return nil
+	}
+	cfg.Chaos.Restart.KillFunc = stopDynamicCNByIndex
+	cfg.Chaos.Restart.RestartFunc = startDynamicCNByIndex
+	chaosTester := chaos.NewChaosTester(cfg.Chaos)
+	return chaosTester.Start()
 }
 
 func genDynamicCNConfigs(
@@ -216,6 +223,10 @@ func startDynamicCtlHTTPServer(addr string) error {
 		http.ListenAndServe(*httpListenAddr, nil)
 	}()
 	return nil
+}
+
+func stopDynamicCNByIndex(index int) error {
+	return syscall.Kill(dynamicCNServicePIDs[index], syscall.SIGKILL)
 }
 
 func startDynamicCNByIndex(index int) error {
