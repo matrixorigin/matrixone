@@ -214,6 +214,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.hakeeper,
 		exec.s.aicm,
 	)
+	proc.SetVectorPoolSize(0)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.SessionInfo.Buf = exec.s.buf
 	defer func() {
