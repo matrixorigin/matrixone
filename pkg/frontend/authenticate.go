@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"math"
 	"math/bits"
 	"os"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -1507,6 +1508,8 @@ const (
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
 	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s';`
+
+	createUniqueIndexForMoAccount = `create unique index mo_account_idx on mo_catalog.mo_account(account_name)`
 )
 
 var (
@@ -7473,6 +7476,9 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	for _, sql := range createSqls {
 		addSqlIntoSet(sql)
 	}
+
+	//create uinuqe index for mo_account on account_name
+	addSqlIntoSet(createUniqueIndexForMoAccount)
 
 	//initialize the default data of tables for the tenant
 	//step 1: add new tenant entry to the mo_account
