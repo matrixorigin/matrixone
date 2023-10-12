@@ -1347,7 +1347,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = false
 
-		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true)
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
 
 		if err != nil {
 			return err
@@ -1381,27 +1381,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		indexParts = append(indexParts, pkeyName)
 
 		var keyName string
-		if len(indexInfo.KeyParts) == 1 {
-			keyName = catalog.IndexTableIndexColName
-			colDef := &ColDef{
-				Name: keyName,
-				Alg:  plan.CompressType_Lz4,
-				Typ: &Type{
-					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
-					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
-				},
-				Default: &plan.Default{
-					NullAbility:  false,
-					Expr:         nil,
-					OriginString: "",
-				},
-			}
-			tableDef.Cols = append(tableDef.Cols, colDef)
-			tableDef.Pkey = &PrimaryKeyDef{
-				Names:       []string{keyName},
-				PkeyColName: keyName,
-			}
-		} else {
+		{
 			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
