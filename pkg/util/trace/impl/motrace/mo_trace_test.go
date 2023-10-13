@@ -372,10 +372,17 @@ func TestMOSpan_doProfile(t *testing.T) {
 	tracer := p.Tracer("test").(*MOTracer)
 	ctx := context.TODO()
 
+	prepareCheckCpu := func(t *testing.T) {
+		if runtime.NumCPU() < 4 {
+			t.Skip("machine's performance too low to handle time sensitive case, issue #11864")
+		}
+	}
+
 	tests := []struct {
-		name   string
-		fields fields
-		want   bool
+		name    string
+		fields  fields
+		prepare func(t *testing.T)
+		want    bool
 	}{
 		{
 			name: "normal",
@@ -446,7 +453,8 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
-			want: true,
+			prepare: prepareCheckCpu,
+			want:    true,
 		},
 		{
 			name: "trace",
@@ -455,11 +463,15 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
-			want: true,
+			prepare: prepareCheckCpu,
+			want:    true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.prepare != nil {
+				tt.prepare(t)
+			}
 			_, s := tt.fields.tracer.Start(tt.fields.ctx, "test", tt.fields.opts...)
 			ms, _ := s.(*MOSpan)
 			t.Logf("span.LongTimeThreshold: %v", ms.LongTimeThreshold)
