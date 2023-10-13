@@ -60,8 +60,10 @@ var (
 )
 
 var (
-	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s, serial(%s,%s) from %s.%s where (%s) is not null;"
-	insertIntoIndexTableWithPKeyFormat          = "insert into  %s.`%s` select serial(%s), %s, serial(%s,%s) from %s.%s where serial(%s) is not null;"
+	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s from %s.%s where (%s) is not null;"
+	insertIntoIndexTableWithPKeyFormat          = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
+	insertIntoSingleIndexTableWithPKeyFormatSK  = "insert into  %s.`%s` select (%s), %s, serial(%s,%s) from %s.%s where (%s) is not null;"
+	insertIntoIndexTableWithPKeyFormatSK        = "insert into  %s.`%s` select serial(%s), %s, serial(%s,%s) from %s.%s where serial(%s) is not null;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
 	createIndexTableForamt                      = "create table %s.`%s` (%s);"
@@ -109,7 +111,7 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 }
 
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
-func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUK bool) string {
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)
@@ -135,10 +137,19 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 		} else {
 			pKeyMsg = pkeyName
 		}
-		if len(indexDef.Parts) == 1 {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+
+		if isUK {
+			if len(indexDef.Parts) == 1 {
+				insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			} else {
+				insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			}
 		} else {
-			insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			if len(indexDef.Parts) == 1 {
+				insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormatSK, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			} else {
+				insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormatSK, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			}
 		}
 	}
 	return insertSQL
