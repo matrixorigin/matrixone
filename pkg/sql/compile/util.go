@@ -62,8 +62,8 @@ var (
 var (
 	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithPKeyFormat          = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
-	insertIntoSingleIndexTableWithPKeyFormatSK  = "insert into  %s.`%s` select (%s), %s, serial(%s,%s) from %s.%s where (%s) is not null;"
-	insertIntoIndexTableWithPKeyFormatSK        = "insert into  %s.`%s` select serial(%s), %s, serial(%s,%s) from %s.%s where serial(%s) is not null;"
+	insertIntoSingleIndexTableWithPKeyFormatSK  = "insert into  %s.`%s` select (%s), %s, serial(%s,%s) from %s.%s;"
+	insertIntoIndexTableWithPKeyFormatSK        = "insert into  %s.`%s` select serial(%s), %s, serial(serial(%s),%s) from %s.%s;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
 	createIndexTableForamt                      = "create table %s.`%s` (%s);"
@@ -146,9 +146,9 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			}
 		} else {
 			if len(indexDef.Parts) == 1 {
-				insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormatSK, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+				insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormatSK, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name)
 			} else {
-				insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormatSK, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+				insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormatSK, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name)
 			}
 		}
 	}
