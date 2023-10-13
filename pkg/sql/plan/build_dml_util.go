@@ -2100,6 +2100,23 @@ func appendPreInsertUkPlan(
 			},
 		},
 	})
+	if !isUK {
+		// ie it is Secondary Key
+		skPkType := &Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		}
+		preinsertUkProjection = append(preinsertUkProjection, &plan.Expr{
+			Typ: skPkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: -1,
+					ColPos: 2,
+					Name:   catalog.IndexTableSkPrimaryColName,
+				},
+			},
+		})
+	}
 	if isUpddate {
 		lastProjection := builder.qry.Nodes[lastNodeId].ProjectList
 		originRowIdIdx := len(lastProjection) - 1

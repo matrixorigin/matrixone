@@ -99,7 +99,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 	for vIdx, pIdx := range secondaryColumnPos {
 		vs[vIdx] = inputBat.Vecs[pIdx]
 	}
-	vs[colCount] = inputBat.Vecs[pkPos]
+	vs[colCount] = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
 	vec, bitMap = util.SerialWithCompacted(vs, proc)
 	insertSecondaryBat.SetVector(skPkColPos, vec)
 
