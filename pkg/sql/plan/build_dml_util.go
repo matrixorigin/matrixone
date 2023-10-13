@@ -268,13 +268,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		for idx, indexdef := range delCtx.tableDef.Indexes {
 			if indexdef.TableExist {
-				var isSK = false
-				var isUk = false
-				if indexdef.Unique {
-					isUk = true
-				} else {
-					isSK = true
-				}
+				var isUk = indexdef.Unique
+				var isSK = !isUk
 
 				uniqueObjRef, uniqueTableDef := builder.compCtx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName)
 				if uniqueTableDef == nil {
