@@ -92,6 +92,9 @@ const (
 
 	// MOTaskDB mo task db name
 	MOTaskDB = "mo_task"
+
+	// MOStages if the table name of mo_stages table in mo_cataglog.
+	MO_STAGES = "mo_stages"
 )
 
 const (

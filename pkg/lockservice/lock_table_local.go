@@ -34,12 +34,11 @@ const (
 
 // a localLockTable instance manages the locks on a table
 type localLockTable struct {
-	bind     pb.LockTable
-	fsp      *fixedSlicePool
-	detector *detector
-	clock    clock.Clock
-	events   *waiterEvents
-	mu       struct {
+	bind   pb.LockTable
+	fsp    *fixedSlicePool
+	clock  clock.Clock
+	events *waiterEvents
+	mu     struct {
 		sync.RWMutex
 		closed           bool
 		store            LockStorage
@@ -50,15 +49,13 @@ type localLockTable struct {
 func newLocalLockTable(
 	bind pb.LockTable,
 	fsp *fixedSlicePool,
-	detector *detector,
 	events *waiterEvents,
 	clock clock.Clock) lockTable {
 	l := &localLockTable{
-		bind:     bind,
-		fsp:      fsp,
-		detector: detector,
-		clock:    clock,
-		events:   events,
+		bind:   bind,
+		fsp:    fsp,
+		clock:  clock,
+		events: events,
 	}
 	l.mu.store = newBtreeBasedStorage()
 	l.mu.tableCommittedAt, _ = clock.Now()
@@ -94,7 +91,7 @@ func (l *localLockTable) doLock(
 		c.done(ErrDeadLockDetected)
 		return
 	}
-
+	var old *waiter
 	var err error
 	table := l.bind.Table
 	for {
@@ -113,7 +110,7 @@ func (l *localLockTable) doLock(
 			}
 			// no waiter, all locks are added
 			if c.w == nil {
-				c.txn.clearBlocked(c.txn.txnID)
+				c.txn.clearBlocked(old)
 				logLocalLockAdded(c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
 					c.result.Timestamp = c.lockedTS
@@ -133,6 +130,7 @@ func (l *localLockTable) doLock(
 		// wait result. Because during wait, deadlock detection may be triggered, and need call txn.fetchWhoWaitingMe,
 		// or other concurrent txn method.
 		oldTxnID := c.txn.txnID
+		old = c.w
 		c.txn.Unlock()
 		v := c.w.wait(c.ctx)
 		c.txn.Lock()
@@ -305,7 +303,8 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			}
 
 			c.offset = idx
-			return l.handleLockConflictLocked(c, key, lock)
+			l.handleLockConflictLocked(c, key, lock)
+			return nil
 		}
 		l.addRowLockLocked(c, row)
 		// lock added, need create new waiter next time
@@ -335,7 +334,8 @@ func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 		if len(conflict) > 0 {
 			c.w = acquireWaiter(c.waitTxn)
 			c.offset = i
-			return l.handleLockConflictLocked(c, conflict, conflictWith)
+			l.handleLockConflictLocked(c, conflict, conflictWith)
+			return nil
 		}
 
 		// lock added, need create new waiter next time
@@ -363,33 +363,19 @@ func (l *localLockTable) addRowLockLocked(
 func (l *localLockTable) handleLockConflictLocked(
 	c *lockContext,
 	key []byte,
-	conflictWith Lock) error {
-	var err error
-	conflictWith.waiters.beginChange()
-	defer func() {
-		if err != nil {
-			conflictWith.waiters.rollbackChange()
-			return
-		}
-		conflictWith.waiters.commitChange()
-
-		if c.opts.async {
-			l.events.add(c)
-		}
-		// find conflict, and wait prev txn completed, and a new
-		// waiter added, we need to active deadlock check.
-		c.txn.setBlocked(c.txn.txnID, c.w)
-		logLocalLockWaitOn(c.txn, l.bind.Table, c.w, key, conflictWith)
-	}()
-
-	// added to waiters list, and wait for notify
-	conflictWith.addWaiter(c.w)
+	conflictWith Lock) {
+	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
-		if err = l.detector.check(txn.TxnID, c.waitTxn); err != nil {
-			return err
-		}
+		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
-	return err
+
+	conflictWith.addWaiter(c.w)
+	l.events.add(c)
+
+	// find conflict, and wait prev txn completed, and a new
+	// waiter added, we need to active deadlock check.
+	c.txn.setBlocked(c.w)
+	logLocalLockWaitOn(c.txn, l.bind.Table, c.w, key, conflictWith)
 }
 
 func (l *localLockTable) addRangeLockLocked(

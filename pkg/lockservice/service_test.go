@@ -136,7 +136,7 @@ func TestRowLockWithSharedAndExclusive(t *testing.T) {
 					}()
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 					<-c
@@ -247,8 +247,8 @@ func TestRangeLockWithSharedAndExclusive(t *testing.T) {
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 					require.NoError(t, waitLocalWaiters(lt, rows[1], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
-					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
+					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 					<-c
@@ -332,7 +332,7 @@ func TestRowLockWithConflict(t *testing.T) {
 					}()
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 					<-c
@@ -378,8 +378,8 @@ func TestRangeLockWithConflict(t *testing.T) {
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 					require.NoError(t, waitLocalWaiters(lt, rows[1], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
-					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
+					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 					<-c
@@ -422,7 +422,7 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 						require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 					}()
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
 					// add txn3 into wait queue
 					close3 := make(chan struct{})
@@ -436,12 +436,12 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 					}()
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 2))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn3}, []int32{2, 2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn3}, []int32{3, 3})
 
 					// close txn1, txn2 get lock
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn2}, [][]byte{txn3}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn2}, [][]byte{txn3}, []int32{3})
 
 					// close txn2, txn3 get lock
 					close(close2)
@@ -489,7 +489,7 @@ func TestRangeLockWithWaitQueue(t *testing.T) {
 						require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 					}()
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
 					// add txn3 into wait queue
 					close3 := make(chan struct{})
@@ -504,15 +504,15 @@ func TestRangeLockWithWaitQueue(t *testing.T) {
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 2))
 					require.NoError(t, waitLocalWaiters(lt, rows[1], 2))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn3}, []int32{2, 2})
-					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2, txn3}, []int32{2, 2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn3}, []int32{3, 3})
+					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2, txn3}, []int32{3, 3})
 
 					// close txn1, txn2 get lock
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 					require.NoError(t, waitLocalWaiters(lt, rows[1], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn2}, [][]byte{txn3}, []int32{2})
-					checkLock(t, lt, rows[1], [][]byte{txn2}, [][]byte{txn3}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn2}, [][]byte{txn3}, []int32{3})
+					checkLock(t, lt, rows[1], [][]byte{txn2}, [][]byte{txn3}, []int32{3})
 
 					// close txn2, txn3 get lock
 					close(close2)
@@ -558,7 +558,7 @@ func TestRowLockWithSameTxnWithConflict(t *testing.T) {
 						require.NoError(t, err)
 					}()
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
 					// add txn2 op2 into wait queue
 					go func() {
@@ -568,7 +568,7 @@ func TestRowLockWithSameTxnWithConflict(t *testing.T) {
 					}()
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 2))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn2}, []int32{2, 2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn2}, []int32{3, 3})
 
 					// close txn1, txn2 get lock
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
@@ -613,8 +613,8 @@ func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
 					}()
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 					require.NoError(t, waitLocalWaiters(lt, rows[1], 1))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
-					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
+					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
 					// add txn2 op2 into wait queue
 					go func() {
@@ -625,8 +625,8 @@ func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 2))
 					require.NoError(t, waitLocalWaiters(lt, rows[1], 2))
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn2}, []int32{2, 2})
-					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2, txn2}, []int32{2, 2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn2}, []int32{3, 3})
+					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2, txn2}, []int32{3, 3})
 
 					// close txn1, txn2 get lock
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
@@ -739,7 +739,7 @@ func TestManyRowLockWithConflict(t *testing.T) {
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 					checkLock(t, lt, rows[1], [][]byte{txn1}, nil, nil)
 
 					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
@@ -788,8 +788,8 @@ func TestManyRangeLockWithConflict(t *testing.T) {
 
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
-					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
+					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 					checkLock(t, lt, rows[2], [][]byte{txn1}, nil, nil)
 					checkLock(t, lt, rows[3], [][]byte{txn1}, nil, nil)
 
@@ -915,7 +915,7 @@ func TestCtxCancelWhileWaiting(t *testing.T) {
 						require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
 					}()
 					waitLocalWaiters(lt, rows[0], 2)
-					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn3}, []int32{2, 2})
+					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2, txn3}, []int32{3, 3})
 
 					// cancel txn2
 					cancel()
@@ -1199,6 +1199,44 @@ func TestLockResultWithConflictAndTxnAborted(t *testing.T) {
 	)
 }
 
+func TestRowLockWithConflictAndUnlock(t *testing.T) {
+	table := uint64(0)
+	getRunner(false)(
+		t,
+		table,
+		func(
+			ctx context.Context,
+			s *service,
+			lt *localLockTable) {
+			option := newTestRowExclusiveOptions()
+			rows := newTestRows(1)
+			txn1 := newTestTxnID(1)
+			txn2 := newTestTxnID(2)
+
+			// txn1 hold the lock
+			_, err := s.Lock(ctx, table, rows, txn1, option)
+			require.NoError(t, err)
+
+			// txn2 blocked by txn1
+			c := make(chan struct{})
+			go func() {
+				defer close(c)
+
+				_, err := s.Lock(ctx, table, rows, txn2, option)
+				require.Error(t, err)
+			}()
+
+			require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
+			checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
+
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+
+			<-c
+			checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{1})
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+		})
+}
+
 func BenchmarkWithoutConflict(b *testing.B) {
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)
@@ -1408,7 +1446,16 @@ func checkLock(
 	idx := 0
 	lock.waiters.iter(func(w *waiter) bool {
 		require.Equal(t, expectWaiters[idx], w.txn.TxnID)
-		require.Equal(t, expectWaiterRefs[idx], w.refCount.Load())
+
+		n := expectWaiterRefs[idx]
+		lt.events.mu.Lock()
+		for _, v := range lt.events.mu.blockedWaiters {
+			if v == w {
+				n += 1
+			}
+		}
+		require.Equal(t, n, w.refCount.Load())
+		lt.events.mu.Unlock()
 		idx++
 		return true
 	})
