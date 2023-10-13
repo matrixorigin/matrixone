@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -378,6 +379,9 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
+	start := time.Now()
+	defer v2.SQlRunDurationHistogram.Observe(time.Since(start).Seconds())
+
 	var span trace.Span
 	var cc *Compile // compile structure for rerun.
 	var result = &util2.RunResult{}
@@ -398,12 +402,16 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
+
+	v2.TxnStatementCounter.Inc()
 	if err = c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
 		if !c.ifNeedRerun(err) {
 			return nil, err
 		}
+		v2.TxnStatementRetryCounter.Inc()
+
 		c.proc.TxnOperator.ResetRetry(true)
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
