@@ -904,20 +904,20 @@ type blockData struct {
 	data *batch.Batch
 }
 
-func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32, ts types.TS, files map[string]*fileservice.DirEntry) (*CheckpointData, error) {
+func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileService, location,tnLocation objectio.Location, version uint32, ts types.TS) (objectio.Location,objectio.Location,*CheckpointData, error) {
 	objectsData := make(map[string]*fileData, 0)
 	data := NewCheckpointData()
 	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
-		return nil, err
+		return nil,nil,nil, err
 	}
 	err = data.readMetaBatch(ctx, version, reader, nil)
 	if err != nil {
-		return nil, err
+		return nil,nil,nil, err
 	}
 	err = data.readAll(ctx, version, fs)
 	if err != nil {
-		return nil, err
+		return nil,nil,nil, err
 	}
 	isCkpChange := false
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
@@ -930,14 +930,14 @@ func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileSe
 
 		bat, err := blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
 		if err != nil {
-			return  nil, err
+			return nil,nil,nil, err
 		}
 		isChange := false
 		if v := 0; v < bat.Vecs[0].Length() {
 			commitTs := types.TS{}
 			err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetBytesAt(v))
 			if err != nil {
-				return nil, err
+				return nil,nil,nil, err
 			}
 			if !commitTs.LessEq(ts) {
 				windowCNBatch(bat, 0, uint64(v))
@@ -970,19 +970,19 @@ func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileSe
 						if block.blockType == objectio.SchemaData {
 							_, err = writer.WriteBatch(block.data)
 							if err != nil {
-								return nil, err
+								return nil,nil,nil, err
 							}
 						} else if block.blockType == objectio.SchemaTombstone {
 							_, err = writer.WriteTombstoneBatch(block.data)
 							if err != nil {
-								return nil, err
+								return nil,nil,nil, err
 							}
 						}
 					}
 
 					blocks, extent, err := writer.Sync(ctx)
 					if err != nil {
-						return nil, err
+						return nil,nil,nil, err
 					}
 
 					for row, block := range blocks {
@@ -1000,11 +1000,13 @@ func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileSe
 			}
 			cnLocation, dnLocation, err := data.WriteTo(fs, 10000)
 			if err != nil {
-				return nil, err
+				return nil,nil,nil, err
 			}
+			location = cnLocation
+			tnLocation = dnLocation
 
 		}
 
 	}
-	return  data, nil
+	return  location, tnLocation, data, nil
 }

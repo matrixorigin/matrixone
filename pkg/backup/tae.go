@@ -94,7 +94,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	suffix := names[1]
 	names = names[2:]
 	files := make(map[string]*fileservice.DirEntry, 0)
-	suffixFiles := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	for _, name := range names {
@@ -171,7 +170,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	}
 	taeFileList = append(taeFileList, sizeList...)
 	if suffix != "" {
-		var mergeData *logtail.CheckpointData
 		ckpStr := strings.Split(suffix, ":")
 		if len(ckpStr) != 5 {
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
@@ -184,11 +182,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		key, err := blockio.EncodeLocationFromString(cnLoc)
-		if err != nil {
-			return err
-		}
-		locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
+		/*locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
 		if err != nil {
 			return err
 		}
@@ -208,14 +202,18 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 				}
 				suffixFiles[location.Name().String()] = dentry
 			}
-		}
-		end := types.StringToTS(mergeEnd)
-		start := types.StringToTS(mergeStart)
+		}*/
 		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)
 		if err != nil {
 			return err
 		}
 		tnLocation, err := blockio.EncodeLocationFromString(tnLoc)
+		if err != nil {
+			return err
+		}
+		end := types.StringToTS(mergeEnd)
+		start := types.StringToTS(mergeStart)
+		cnLocation, tnLocation, _, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, cnLocation, tnLocation, uint32(version), start)
 		if err != nil {
 			return err
 		}
