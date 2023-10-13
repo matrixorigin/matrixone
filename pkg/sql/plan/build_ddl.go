@@ -1358,6 +1358,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			Name: indexTableName,
 		}
 		indexParts := make([]string, 0)
+
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -1376,10 +1377,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
 			}
 
-			indexParts = append(indexParts, name)
-		}
 
-		if len(indexInfo.KeyParts) == 1 {
 			colDef := &ColDef{
 				Name: catalog.IndexTableIndexColName,
 				Alg:  plan.CompressType_Lz4,
