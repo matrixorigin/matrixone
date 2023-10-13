@@ -139,12 +139,31 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	}
 	iter.Close()
 
-	if len(tbl.blockInfos) > 0 {
-		for _, blk := range tbl.blockInfos {
-			rows += int64(blk.MetaLocation().Rows())
-		}
+	var meta objectio.ObjectDataMeta
+	var objMeta objectio.ObjectMeta
+	fs, err := fileservice.Get[fileservice.FileService](
+		tbl.db.txn.proc.FileService,
+		defines.SharedFileServiceName)
+	if err != nil {
+		return 0, err
 	}
-
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+		var err error
+		location := obj.Location()
+		if objMeta, err = objectio.FastLoadObjectMeta(
+			ctx,
+			&location,
+			false,
+			fs); err != nil {
+			return err
+		}
+		meta = objMeta.MustDataMeta()
+		rows += int64(meta.BlockHeader().Rows())
+		return nil
+	}
+	if err = tbl.ForeachDataObject(partition, onObjFn); err != nil {
+		return 0, err
+	}
 	return rows, nil
 }
 
@@ -312,8 +331,6 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	// to record the batch which we have already handled to avoid
 	// repetitive computation
 	handled := make(map[*batch.Batch]struct{})
-	var meta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
 	// Calculate the in mem size
 	// TODO: It might includ some deleted row size
 	iter := part.NewRowsIter(ts, nil, false)
@@ -336,24 +353,21 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	}
 	iter.Close()
 
+	var meta objectio.ObjectDataMeta
+	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return -1, err
 	}
-	// Calculate the block size
-	biter, err := part.NewBlocksIter(ts)
-	if err != nil {
-		return 0, err
-	}
-	for biter.Next() {
-		blk := biter.Entry()
-		location := blk.MetaLocation()
-		if objectio.IsSameObjectLocVsMeta(location, meta) {
-			continue
-		}
-		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
-			biter.Close()
-			return 0, err
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+		var err error
+		location := obj.Location()
+		if objMeta, err = objectio.FastLoadObjectMeta(
+			ctx,
+			&location,
+			false,
+			fs); err != nil {
+			return err
 		}
 		meta = objMeta.MustDataMeta()
 		ret += int64(meta.BlockHeader().ZoneMapArea().Length())
@@ -362,9 +376,11 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			colmata := meta.MustGetColumn(uint16(col.Seqnum))
 			ret += int64(colmata.Location().Length())
 		}
+		return nil
 	}
-	biter.Close()
-
+	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+		return 0, err
+	}
 	return ret, nil
 }
 
