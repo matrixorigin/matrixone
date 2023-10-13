@@ -701,6 +701,7 @@ func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.Reader, err
 	var errGroup *errgroup.Group
 
 	// watch and cancel
+	// TODO use context.AfterFunc in go1.21
 	go func() {
 		defer func() {
 			reader.Close()
@@ -711,13 +712,9 @@ func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.Reader, err
 			}
 		}()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				time.Sleep(time.Second)
-			}
+		select {
+		case <-ctx.Done():
+			return
 		}
 	}()
 

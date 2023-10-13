@@ -207,7 +207,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
-		0,
+		0, 0,
 	)
 	require.Nil(t, err)
 
@@ -675,7 +675,7 @@ func Test_decodeBatch(t *testing.T) {
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
-		0,
+		0, 0,
 	)
 	require.Nil(t, err)
 

@@ -1293,16 +1293,11 @@ func (mce *MysqlCmdExecutor) handleDropRole(ctx context.Context, dr *tree.DropRo
 	return doDropRole(ctx, mce.GetSession(), dr)
 }
 
-func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.CreateFunction, proc *process.Process) error {
+func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.CreateFunction) error {
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
 
-	uploader := &MySqlPkgUploader{
-		Mce:  mce,
-		Proc: proc,
-	}
-
-	return InitFunction(ctx, ses, tenant, cf, uploader)
+	return mce.InitFunction(ctx, ses, tenant, cf)
 }
 
 func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction, proc *process.Process) error {
@@ -3139,7 +3134,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = st.Valid(); err != nil {
 			return err
 		}
-		if err = mce.handleCreateFunction(requestCtx, st, proc); err != nil {
+		if err = mce.handleCreateFunction(requestCtx, st); err != nil {
 			return
 		}
 	case *tree.DropFunction:

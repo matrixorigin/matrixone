@@ -60,7 +60,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -8377,24 +8376,16 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-type MySqlPkgUploader struct {
-	Mce  *MysqlCmdExecutor
-	Proc *process.Process
-}
-
-func (m *MySqlPkgUploader) Upload(ctx context.Context, localPath string, storageDir string) (string, error) {
+func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
 	// watch and cancel
+	// TODO use context.AfterFunc in go1.21
 	go func() {
 		defer loadLocalReader.Close()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				time.Sleep(time.Second)
-			}
+		select {
+		case <-ctx.Done():
+			return
 		}
 	}()
 
@@ -8406,7 +8397,7 @@ func (m *MySqlPkgUploader) Upload(ctx context.Context, localPath string, storage
 				Filepath: localPath,
 			},
 		}
-		return m.Mce.processLoadLocal(ctx, param, loadLocalWriter)
+		return mce.processLoadLocal(ctx, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload
@@ -8420,14 +8411,19 @@ func (m *MySqlPkgUploader) Upload(ctx context.Context, localPath string, storage
 		},
 	}
 
-	_ = m.Proc.FileService.Delete(ctx, ioVector.FilePath)
-	err := m.Proc.FileService.Write(ctx, ioVector)
+	fileService := mce.ses.proc.FileService
+	_ = fileService.Delete(ctx, ioVector.FilePath)
+	err := fileService.Write(ctx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
 	if err != nil {
 		return "", err
 	}
 
 	return ioVector.FilePath, nil
+}
+
+func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) error {
+	return InitFunction(ctx, ses, tenant, cf, mce)
 }
 
 func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction, uploader udf.PkgUploader) (err error) {
