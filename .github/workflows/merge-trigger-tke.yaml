@@ -167,10 +167,8 @@ jobs:
         uses: actions/checkout@v3
         with:
           path: ./matrixone
-      - name: Reset Matrixone Repo Head And Set PATH
+      - name: Set JAVA PATH
         run: |
-          cd $GITHUB_WORKSPACE/matrixone
-          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
       - name: Generate MO-Tester Config and Start BVT Test
         if: ${{ always() && !cancelled() }}
@@ -353,7 +351,7 @@ jobs:
 
  
       # start sysbench test
-      - name: Start OLTP Insert Test With 100 Threads
+      - name: Start OLTP Mixed Test With 100 Threads
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 30
         run: |
