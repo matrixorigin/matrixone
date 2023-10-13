@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -204,6 +205,12 @@ func newTxnOperator(
 	}
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
+
+	if tc.option.user {
+		v2.GetUserTxnCounter().Inc()
+	} else {
+		v2.GetInternalTxnCounter().Inc()
+	}
 	return tc
 }
 
@@ -240,6 +247,9 @@ func (tc *txnOperator) setWaitActive(v bool) {
 }
 
 func (tc *txnOperator) waitActive(ctx context.Context) error {
+	start := time.Now()
+	defer v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
+
 	if tc.waiter == nil {
 		return nil
 	}
@@ -420,6 +430,9 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
+	start := time.Now()
+	v2.TxnCommitDurationHistogram.Observe(time.Since(start).Seconds())
+
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
 	defer task.End()
 	tc.enterCommit()
@@ -925,7 +938,9 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 	// rc mode need to see the committed value, so wait logtail applied
 	if tc.mu.txn.IsRCIsolation() &&
 		tc.timestampWaiter != nil {
+		start := time.Now()
 		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+		v2.LogTailWaitDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
 			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
 				util.TxnField(tc.mu.txn),
