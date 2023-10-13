@@ -80,7 +80,7 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
-		if i == 1 {
+		if i >= 1 {
 			sql += ","
 		}
 		sql += planCol.Name + " "
