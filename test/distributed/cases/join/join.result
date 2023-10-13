@@ -251,7 +251,7 @@ a    b    a    b
 0    10000    0    10000
 2    9998    0    9998
 2    9998    1    9998
-4    9996    0    9996 
+4    9996    0    9996
 select * from t1 where t1.b in (select b from t2) order by t1.b desc limit 4;
 a    b
 0    10000
