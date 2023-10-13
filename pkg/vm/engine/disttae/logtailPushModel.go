@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/fagongzi/goetty/v2"
@@ -253,7 +252,7 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 	return err
 }
 
-func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine, mp *mpool.MPool) {
+func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	connectMsg := make(chan error)
 
 	// we should always make sure that we have received connection message from `connectMsg` channel if we want to do reconnect.
@@ -378,7 +377,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				e.abortAllRunningTxn()
 
 				// clean memory table.
-				err := e.init(ctx, mp)
+				err := e.init(ctx)
 				if err != nil {
 					logutil.Errorf("[log-tail-push-client] rebuild memory-table failed, err : '%s'.", err)
 					time.Sleep(retryReconnect)
@@ -731,10 +730,7 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 	return resp
 }
 
-func (e *Engine) InitLogTailPushModel(
-	ctx context.Context, mp *mpool.MPool,
-	timestampWaiter client.TimestampWaiter) error {
-
+func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
 	// try to init log tail client. if failed, retry.
 	for {
 		if err := ctx.Err(); err != nil {
@@ -750,7 +746,7 @@ func (e *Engine) InitLogTailPushModel(
 		break
 	}
 
-	e.pClient.receiveTableLogTailContinuously(ctx, e, mp)
+	e.pClient.receiveTableLogTailContinuously(ctx, e)
 	e.pClient.unusedTableGCTicker(ctx)
 	e.pClient.partitionStateGCTicker(ctx, e)
 	return nil
