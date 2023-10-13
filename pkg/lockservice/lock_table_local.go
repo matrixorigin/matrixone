@@ -91,7 +91,7 @@ func (l *localLockTable) doLock(
 		c.done(ErrDeadLockDetected)
 		return
 	}
-
+	var old *waiter
 	var err error
 	table := l.bind.Table
 	for {
@@ -110,7 +110,7 @@ func (l *localLockTable) doLock(
 			}
 			// no waiter, all locks are added
 			if c.w == nil {
-				c.txn.clearBlocked(c.txn.txnID)
+				c.txn.clearBlocked(old)
 				logLocalLockAdded(c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
 					c.result.Timestamp = c.lockedTS
@@ -130,6 +130,7 @@ func (l *localLockTable) doLock(
 		// wait result. Because during wait, deadlock detection may be triggered, and need call txn.fetchWhoWaitingMe,
 		// or other concurrent txn method.
 		oldTxnID := c.txn.txnID
+		old = c.w
 		c.txn.Unlock()
 		v := c.w.wait(c.ctx)
 		c.txn.Lock()
@@ -373,7 +374,7 @@ func (l *localLockTable) handleLockConflictLocked(
 
 	// find conflict, and wait prev txn completed, and a new
 	// waiter added, we need to active deadlock check.
-	c.txn.setBlocked(c.txn.txnID, c.w)
+	c.txn.setBlocked(c.w)
 	logLocalLockWaitOn(c.txn, l.bind.Table, c.w, key, conflictWith)
 }
 
