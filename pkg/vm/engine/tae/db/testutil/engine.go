@@ -445,6 +445,9 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 			ins = e.Bat
 		}
 	}
+	for _, c := range cb {
+		c()
+	}
 	return
 }
 
