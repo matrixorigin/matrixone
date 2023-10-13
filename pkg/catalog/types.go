@@ -49,14 +49,15 @@ const (
 )
 
 var InternalColumns = map[string]int8{
-	Row_ID:                   0,
-	PrefixPriColName:         0,
-	PrefixCBColName:          0,
-	PrefixIndexTableName:     0,
-	CPrimaryKeyColName:       0,
-	FakePrimaryKeyColName:    0,
-	IndexTableIndexColName:   0,
-	IndexTablePrimaryColName: 0,
+	Row_ID:                     0,
+	PrefixPriColName:           0,
+	PrefixCBColName:            0,
+	PrefixIndexTableName:       0,
+	CPrimaryKeyColName:         0,
+	FakePrimaryKeyColName:      0,
+	IndexTableIndexColName:     0,
+	IndexTablePrimaryColName:   0,
+	IndexTableSkPrimaryColName: 0,
 }
 
 var InternalTableNames = map[string]int8{

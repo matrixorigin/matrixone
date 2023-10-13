@@ -1379,8 +1379,25 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexParts = append(indexParts, name)
 		}
 
-		{
-			keyName := catalog.IndexTableIndexColName
+		var keyName string
+		if len(indexInfo.KeyParts) == 1 {
+			keyName = catalog.IndexTableIndexColName
+			colDef := &ColDef{
+				Name: keyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
+				},
+				Default: &plan.Default{
+					NullAbility:  true,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
+		} else {
+			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
