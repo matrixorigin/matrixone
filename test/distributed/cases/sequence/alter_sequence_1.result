@@ -8,45 +8,78 @@ Names    Data Type
 alter_seq_01    BIGINT
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
-alter sequence alter_seq_01 minvalue 1 maxvalue 2;
-select nextval('alter_seq_01'),currval('alter_seq_01');
-nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
-select nextval('alter_seq_01'),currval('alter_seq_01');
-nextval(alter_seq_01)    currval(alter_seq_01)
 2    2
+alter sequence alter_seq_01 minvalue 1 maxvalue 2;
+invalid input: Start value for sequence must between minvalue and maxvalue
 select nextval('alter_seq_01'),currval('alter_seq_01');
-internal error: Reached maximum value of sequence alter_seq_01
+nextval(alter_seq_01)    currval(alter_seq_01)
+3    3
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+4    4
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+5    5
 alter sequence alter_seq_01 cycle;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
+6    6
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-2    2
+7    7
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
+8    8
 alter sequence alter_seq_01 maxvalue 1000;
 alter sequence alter_seq_01 increment by 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
+19    19
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-11    11
+29    29
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-21    21
+39    39
 alter sequence alter_seq_01 start with 900;
-select nextval('alter_seq_01'),currval('alter_seq_01');
-nextval(alter_seq_01)    currval(alter_seq_01)
-900    900
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 910    910
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 920    920
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+930    930
 drop sequence alter_seq_01;
+create sequence alter_seq_02 increment 3;
+select nextval('alter_seq_02');
+nextval(alter_seq_02)
+1
+select nextval('alter_seq_02'),currval('alter_seq_02');
+nextval(alter_seq_02)    currval(alter_seq_02)
+4    4
+alter sequence alter_seq_02 increment 10;
+select nextval('alter_seq_02'),currval('alter_seq_02');
+nextval(alter_seq_02)    currval(alter_seq_02)
+14    14
+drop sequence alter_seq_02;
+create sequence alter_seq_03 start 1000;
+select nextval('alter_seq_03'),currval('alter_seq_03');
+nextval(alter_seq_03)    currval(alter_seq_03)
+1000    1000
+select nextval('alter_seq_03'),currval('alter_seq_03');
+nextval(alter_seq_03)    currval(alter_seq_03)
+1001    1001
+select nextval('alter_seq_03'),currval('alter_seq_03');
+nextval(alter_seq_03)    currval(alter_seq_03)
+1002    1002
+alter sequence alter_seq_03 start 1001;
+select nextval('alter_seq_03'),currval('alter_seq_03');
+nextval(alter_seq_03)    currval(alter_seq_03)
+1003    1003
+drop sequence alter_seq_03;
+create sequence alter_seq_03 increment by 10;
+alter sequence alter_seq_03;
+SQL syntax error: synatx error, alter_seq_03 has nothing to alter
+drop sequence alter_seq_03;

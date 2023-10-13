@@ -2157,6 +2157,7 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	var minValue, maxValue, startNum T
 	var incrNum int64
 	var cycle bool
+	var err error
 
 	if incr, ok := result[4].(int64); ok {
 		incrNum = incr
@@ -2191,9 +2192,14 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	}
 
 	// if alter startWith value of sequence
-	preStartWith, err := strconv.ParseInt(curval, 10, 64)
-	if err != nil {
-		return 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Alter sequence currval parse err")
+	var preStartWith int64
+	if len(curval) == 0 {
+		preStartWith = getInterfaceValue[int64](result[3])
+	} else {
+		preStartWith, err = strconv.ParseInt(curval, 10, 64)
+		if err != nil {
+			return 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Alter sequence currval parse err")
+		}
 	}
 	if stmt.StartWith != nil {
 		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
