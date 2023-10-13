@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -142,6 +143,10 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 // LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
 func (entry *SegmentEntry) LoadObjectInfo() error {
 	if entry.Stat.Loaded {
+		return nil
+	}
+	// special case for raw log table.
+	if entry.GetTable().GetLastestSchema().Name == motrace.RawLogTbl && len(entry.table.entries) > 4096 {
 		return nil
 	}
 	entry.RLock()

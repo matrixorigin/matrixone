@@ -19,14 +19,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/spf13/cobra"
 )
@@ -124,43 +123,19 @@ func runCatalog(arg *catalogArg, respWriter io.Writer) {
 }
 
 type compactPolicyArg struct {
-	ctx              *inspectContext
-	db, table        string
-	flushGapDuration time.Duration
-	flushCapacity    int
+	ctx          *inspectContext
+	maxMergeObjN int32
 }
 
 func (c *compactPolicyArg) fromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-	address, _ := cmd.Flags().GetString("target")
-	parts := strings.Split(address, ".")
-	if len(parts) != 2 {
-		return moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
-	}
-	c.db, c.table = parts[0], parts[1]
-	c.flushGapDuration, _ = cmd.Flags().GetDuration("flushInterval")
-	c.flushCapacity, _ = cmd.Flags().GetInt("flushCapacity")
+
+	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
 	return nil
 }
 
 func runCompactPolicy(arg *compactPolicyArg) error {
-	txn, _ := arg.ctx.db.StartTxn(nil)
-	dbHdl, err := txn.GetDatabase(arg.db)
-	if err != nil {
-		return err
-	}
-	tblHdl, err := dbHdl.GetRelationByName(arg.table)
-	if err != nil {
-		return err
-	}
-	meta := tblHdl.GetMeta().(*catalog.TableEntry)
-	meta.Stats.Lock()
-	defer meta.Stats.Unlock()
-
-	meta.Stats.Inited = true
-	meta.Stats.FlushTableTailEnabled = true
-	meta.Stats.FlushGapDuration = arg.flushGapDuration
-	meta.Stats.FlushMemCapacity = arg.flushCapacity
+	merge.MaxMergeSegN.Store(arg.maxMergeObjN)
 	return nil
 
 }
@@ -198,9 +173,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 			} else {
 				cmd.OutOrStdout().Write([]byte(
 					fmt.Sprintf(
-						"success. [%s.%s] flush_cap %v, flush_gap %v",
-						arg.db, arg.table,
-						arg.flushCapacity, arg.flushGapDuration,
+						"success. maxMergeObjN %v", arg.maxMergeObjN,
 					)))
 			}
 		},
@@ -218,9 +191,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	catalogCmd.Flags().StringP("table", "t", "", "table name")
 	rootCmd.AddCommand(catalogCmd)
 
-	policyCmd.Flags().StringP("target", "t", "", "target table, input format: database.table")
-	policyCmd.Flags().DurationP("flushInterval", "i", 1*time.Minute, "flush interval duration")
-	policyCmd.Flags().IntP("flushCapacity", "c", 20*(1<<20), "flush table exceeds capacity in bytes")
+	policyCmd.Flags().Int32P("maxMergeObjN", "s", merge.DefaultMaxMergeObjN, "max objects merged for one")
 	rootCmd.AddCommand(policyCmd)
 
 	return rootCmd

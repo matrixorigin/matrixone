@@ -14,7 +14,11 @@
 
 package merge
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+import (
+	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+)
 
 var _ Policy = (*Basic)(nil)
 
@@ -28,8 +32,8 @@ type Basic struct {
 func NewBasicPolicy() *Basic {
 	return &Basic{
 		objHeap: &heapBuilder[*catalog.SegmentEntry]{
-			items: make(itemSet[*catalog.SegmentEntry], 2),
-			cap:   2,
+			items: make(itemSet[*catalog.SegmentEntry], 0, 32),
+			cap:   32,
 		},
 	}
 }
@@ -56,8 +60,23 @@ func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
 	}
 }
 
-func (o *Basic) Revise(cpu, mem float64) []*catalog.SegmentEntry {
-	return o.objHeap.finish()
+func (o *Basic) Revise(cpu, mem int64) []*catalog.SegmentEntry {
+	segs := o.objHeap.finish()
+	needPopout := func(ss []*catalog.SegmentEntry) bool {
+		_, esize := estimateMergeConsume(ss)
+		return esize > int(mem/2)
+	}
+	if !needPopout(segs) {
+		return segs
+	}
+	sort.Slice(segs, func(i, j int) bool {
+		return segs[i].Stat.Rows-segs[i].Stat.Dels < segs[j].Stat.Rows-segs[j].Stat.Dels
+	})
+	segs = segs[:len(segs)-1]
+	for needPopout(segs) {
+		segs = segs[:len(segs)-1]
+	}
+	return segs
 }
 
 func (o *Basic) ResetForTable(id uint64, schema *catalog.Schema) {

@@ -17,6 +17,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 
 	"os"
@@ -846,6 +847,12 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
+func shortSegId(x objectio.Segmentid) string {
+	var shortuuid [8]byte
+	hex.Encode(shortuuid[:], x[:4])
+	return string(shortuuid[:])
+}
+
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
@@ -911,6 +918,9 @@ func (h *Handle) HandleWrite(
 				locations = append(locations, location)
 			}
 			err = tb.AddBlksWithMetaLoc(ctx, locations)
+			if req.TableName == "rawlog" {
+				logutil.Infof("mergeblocks add metaloc %s %d", shortSegId(locations[0].Name().SegmentId()), len(locations))
+			}
 			return
 		}
 		//check the input batch passed by cn is valid.

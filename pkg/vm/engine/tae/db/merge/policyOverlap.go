@@ -55,7 +55,7 @@ func (o *Overlap) OnObject(obj *catalog.SegmentEntry) {
 
 }
 
-func (o *Overlap) Revise(cpu, mem float64) []*catalog.SegmentEntry {
+func (o *Overlap) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 	o.analyzer.analyze(o.schema.GetSingleSortKeyType().Oid, o.schema.Name)
 	return nil
 }

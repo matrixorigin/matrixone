@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -203,6 +204,12 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 	seg.Stat.Rows = s.segmentHelper.segRowCnt
 	seg.Stat.Dels = s.segmentHelper.segRowDel
 	seg.LoadObjectInfo()
+	if s.schema.Name == motrace.RawLogTbl && seg.Stat.OriginSize == 0 {
+		// after loading object info, original size is still 0, we have to estimate it by experience
+		factor := 1 + seg.Stat.Rows/1600
+		seg.Stat.OriginSize = (1 << 20) * factor
+
+	}
 	s.objPolicy.OnObject(seg)
 	return nil
 }

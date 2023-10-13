@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 // min heap item
@@ -73,7 +74,8 @@ func (h *heapBuilder[T]) reset() {
 
 func (h *heapBuilder[T]) push(item *mItem[T]) {
 	heap.Push(&h.items, item)
-	if h.items.Len() > h.cap {
+	cap := int(MaxMergeSegN.Load())
+	if h.items.Len() > cap {
 		heap.Pop(&h.items)
 	}
 }
@@ -85,6 +87,23 @@ func (h *heapBuilder[T]) finish() []T {
 		ret[i] = item.entry
 	}
 	return ret
+}
+
+func estimateMergeConsume(msegs []*catalog.SegmentEntry) (origSize, estSize int) {
+	rows, merged := 0, 0
+	for _, m := range msegs {
+		rows += m.Stat.Rows
+		merged += m.Stat.Rows - m.Stat.Dels
+		origSize += m.Stat.OriginSize
+	}
+	// by test exprience, full 8192 rows batch will expand to (6~8)x memory comsupation.
+	// the ExpansionRate will be moderated by the actual row number after applying deletes
+	rate := float64(constMergeExpansionRate*merged) / float64(rows)
+	if rate < 2 {
+		rate = 2
+	}
+	estSize = int(float64(origSize) * rate)
+	return
 }
 
 func humanReadableBytes(bytes int) string {

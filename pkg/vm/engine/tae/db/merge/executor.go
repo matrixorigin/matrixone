@@ -77,8 +77,8 @@ func (e *MergeExecutor) PrintStats() {
 }
 
 func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn int, msegs []*catalog.SegmentEntry) {
-	size := estimateMergeConsume(msegs)
-	atomic.AddInt64(&e.activeEstimateBytes, int64(size))
+	osize, esize := estimateMergeConsume(msegs)
+	atomic.AddInt64(&e.activeEstimateBytes, int64(esize))
 	atomic.AddInt32(&e.activeMergeBlkCount, int32(blkn))
 	e.taskConsume.Lock()
 	if e.taskConsume.m == nil {
@@ -87,9 +87,11 @@ func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn int, msegs []*catalog.
 	e.taskConsume.m[taskId] = struct {
 		blk      int
 		estBytes int
-	}{blkn, size}
+	}{blkn, esize}
 	e.taskConsume.Unlock()
-	logutil.Infof("Mergeblocks active task %d-%s, blk %d, size %s", taskId, e.tableName, blkn, humanReadableBytes(size))
+	logutil.Infof(
+		"Mergeblocks active task %d-%s, blk %d, osize %s, merge size %s",
+		taskId, e.tableName, blkn, humanReadableBytes(osize), humanReadableBytes(esize))
 }
 
 func (e *MergeExecutor) OnExecDone(v any) {
@@ -110,7 +112,8 @@ func (e *MergeExecutor) ExecuteFor(tid uint64, tblName string, delSegs []*catalo
 
 	hasMergeObjects := false
 
-	mergedBlks, msegs := expandObjectList(policy.Revise(0, 0))
+	objectList := policy.Revise(0, int64(e.memAvailBytes()))
+	mergedBlks, msegs := expandObjectList(objectList)
 	blkCnt := len(mergedBlks)
 	if blkCnt > 0 && e.checkMemAvail(msegs) {
 		delSegs = append(delSegs, msegs...)
@@ -164,14 +167,18 @@ func (e *MergeExecutor) ExecuteFor(tid uint64, tblName string, delSegs []*catalo
 }
 
 func (e *MergeExecutor) checkMemAvail(msegs []*catalog.SegmentEntry) bool {
-	merging := int(atomic.LoadInt64(&e.activeEstimateBytes))
-	consume := estimateMergeConsume(msegs)
-	left := e.memAvail - consume - merging
-	sufficient := left > e.memSpare
+	avail := e.memAvailBytes()
+	_, consume := estimateMergeConsume(msegs)
+	sufficient := avail > consume
 	if !sufficient {
 		logutil.Infof("mergeblocks skip %s, estimate cost %s", e.tableName, humanReadableBytes(consume))
 	}
 	return sufficient
+}
+
+func (e *MergeExecutor) memAvailBytes() int {
+	merging := int(atomic.LoadInt64(&e.activeEstimateBytes))
+	return e.memAvail - e.memSpare - merging
 }
 
 func expandObjectList(segs []*catalog.SegmentEntry) (
@@ -198,22 +205,6 @@ func expandObjectList(segs []*catalog.SegmentEntry) (
 		}
 	}
 	return
-}
-
-func estimateMergeConsume(msegs []*catalog.SegmentEntry) int {
-	size, rows, merged := 0, 0, 0
-	for _, m := range msegs {
-		rows += m.Stat.Rows
-		merged += m.Stat.Rows - m.Stat.Dels
-		size += m.Stat.OriginSize
-	}
-	// by test exprience, full 8192 rows batch will expand to (6~8)x memory comsupation.
-	// the ExpansionRate will be moderated by the actual row number after applying deletes
-	rate := float64(constMergeExpansionRate*merged) / float64(rows)
-	if rate < 2 {
-		rate = 2
-	}
-	return int(float64(size) * rate)
 }
 
 func logMergeTask(name string, dels, merges []*catalog.SegmentEntry) {
