@@ -31,13 +31,13 @@ type leakChecker struct {
 	logger         *log.MOLogger
 	actives        []activeTxn
 	maxActiveAges  time.Duration
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)
+	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, counter string)
 	stopper        *stopper.Stopper
 }
 
 func newLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) *leakChecker {
+	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, counter string)) *leakChecker {
 	logger := runtime.DefaultRuntime().Logger()
 	return &leakChecker{
 		logger:         logger,
@@ -58,7 +58,7 @@ func (lc *leakChecker) close() {
 	lc.stopper.Stop()
 }
 
-func (lc *leakChecker) txnOpened(
+func (lc *leakChecker) txnOpened(txnOp *txnOperator,
 	txnID []byte,
 	createBy string) {
 	if createBy == "" {
@@ -71,6 +71,7 @@ func (lc *leakChecker) txnOpened(
 		createBy: createBy,
 		id:       txnID,
 		createAt: time.Now(),
+		txnOp:    txnOp,
 	})
 }
 
@@ -106,7 +107,7 @@ func (lc *leakChecker) doCheck() {
 	now := time.Now()
 	for _, txn := range lc.actives {
 		if now.Sub(txn.createAt) >= lc.maxActiveAges {
-			lc.leakHandleFunc(txn.id, txn.createAt, txn.createBy)
+			lc.leakHandleFunc(txn.id, txn.createAt, txn.createBy, txn.txnOp.counter())
 		}
 	}
 }
@@ -115,4 +116,5 @@ type activeTxn struct {
 	createBy string
 	id       []byte
 	createAt time.Time
+	txnOp    *txnOperator
 }
