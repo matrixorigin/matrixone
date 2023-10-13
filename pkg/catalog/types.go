@@ -41,7 +41,6 @@ const (
 	IndexTableIndexColName     = "__mo_index_idx_col"
 	IndexTablePrimaryColName   = "__mo_index_pri_col"
 	IndexTableSkPrimaryColName = "__mo_index_sk_pri_col"
-	IndexTablePrimaryColNameSK = "__mo_index_pri_col_sk"
 	ExternalFilePath           = "__mo_filepath"
 	IndexTableNamePrefix       = "__mo_index_"
 	UniqueIndexTableNamePrefix = "__mo_index_unique__"

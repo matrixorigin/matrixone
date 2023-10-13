@@ -363,11 +363,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				break
 			}
 		}
-		if indexInfo.Unique && len(indexInfo.Parts) == 0 {
-			tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
-		}
-		// Handles deleting the index table when there is no more user defined secondary keys.
-		if !indexInfo.Unique && len(indexInfo.Parts) == 1 {
+		if len(indexInfo.Parts) == 0 {
 			tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 		}
 	}
