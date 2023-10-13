@@ -691,9 +691,6 @@ func (task *flushTableTailTask) waitFlushAllDeletesFromDelSrc(ctx context.Contex
 		if emtpyDelBlkIdx != nil && emtpyDelBlkIdx.Contains(uint64(i)) {
 			continue
 		}
-		if hdl.GetMeta().(*catalog.BlockEntry).HasDropCommitted() {
-			panic(fmt.Sprintf("%d flush after deleted", hdl.GetMeta().(*catalog.BlockEntry).ID))
-		}
 		if err = hdl.UpdateDeltaLoc(deltaLoc); err != nil {
 			return err
 		}
