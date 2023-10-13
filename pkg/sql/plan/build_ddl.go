@@ -1379,11 +1379,9 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexParts = append(indexParts, name)
 		}
 
-		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
-			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
-				Name: keyName,
+				Name: catalog.IndexTableIndexColName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
@@ -1397,9 +1395,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		} else {
-			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
-				Name: keyName,
+				Name: catalog.IndexTableIndexColName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    int32(types.T_varchar),
@@ -1427,9 +1424,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
 		{
-			keyName := catalog.IndexTableSkPrimaryColName
 			colDef := &ColDef{
-				Name: keyName,
+				Name: catalog.IndexTableSkPrimaryColName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: &Type{
 					Id:    int32(types.T_varchar),
@@ -1444,8 +1440,9 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			}
 			tableDef.Cols = append(tableDef.Cols, colDef)
 			tableDef.Pkey = &PrimaryKeyDef{
-				Names:       []string{keyName},
-				PkeyColName: keyName,
+				Names:       []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName},
+				PkeyColName: catalog.IndexTableSkPrimaryColName,
+				CompPkeyCol: colDef,
 			}
 		}
 
