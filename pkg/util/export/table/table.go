@@ -17,7 +17,6 @@ package table
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -51,12 +50,16 @@ type ColType int
 const (
 	TSkip ColType = iota
 	TDatetime
+	TUint32
+	TInt32
 	TUint64
 	TInt64
 	TFloat64
 	TJson
 	TText
 	TVarchar
+	TChar
+	TBool
 	TBytes // only used in ColumnField
 	TUuid  // only used in ColumnField
 )
@@ -67,6 +70,10 @@ func (c *ColType) ToType() types.Type {
 		typ := types.T_datetime.ToType()
 		typ.Scale = 6
 		return typ
+	case TUint32:
+		return types.T_uint32.ToType()
+	case TInt32:
+		return types.T_int32.ToType()
 	case TUint64:
 		return types.T_uint64.ToType()
 	case TInt64:
@@ -77,8 +84,14 @@ func (c *ColType) ToType() types.Type {
 		return types.T_json.ToType()
 	case TText:
 		return types.T_text.ToType()
+	case TBool:
+		return types.T_bool.ToType()
 	case TVarchar:
 		return types.T_varchar.ToType()
+		//TODO : Need to see how T_array should be included in this class.
+	case TChar:
+		return types.T_char.ToType()
+		//TODO : Need to see how T_array should be included in this class.
 	case TSkip:
 		fallthrough
 	default:
@@ -90,6 +103,10 @@ func (c *ColType) String(scale int) string {
 	switch *c {
 	case TDatetime:
 		return "Datetime(6)"
+	case TUint32:
+		return "INT UNSIGNED"
+	case TInt32:
+		return "INT"
 	case TUint64:
 		return "BIGINT UNSIGNED"
 	case TInt64:
@@ -100,11 +117,18 @@ func (c *ColType) String(scale int) string {
 		return "JSON"
 	case TText:
 		return "TEXT"
+	case TBool:
+		return "BOOL"
 	case TVarchar:
 		if scale == 0 {
 			scale = 1024
 		}
 		return fmt.Sprintf("VARCHAR(%d)", scale)
+	case TChar:
+		if scale == 0 {
+			scale = 1024
+		}
+		return fmt.Sprintf("CHAR(%d)", scale)
 	case TSkip:
 		panic("not support SkipType")
 	default:
@@ -211,6 +235,33 @@ func UInt64Column(name, comment string) Column {
 		Name:    name,
 		ColType: TUint64,
 		Default: "0",
+		Comment: comment,
+	}
+}
+
+func Int32Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TInt32,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
+func UInt32Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TUint32,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
+func BoolColumn(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TBool,
+		Default: "false",
 		Comment: comment,
 	}
 }
@@ -397,12 +448,19 @@ type WhereCondition interface {
 	String() string
 }
 
+type CreateSql interface {
+	String(ctx context.Context, ifNotExists bool) string
+}
+
 type View struct {
 	Database    string
 	Table       string
 	OriginTable *Table
 	Columns     []Column
-	Condition   WhereCondition
+	// Condition will be used in View.ToCreateSql
+	Condition WhereCondition
+	// CreateSql will be used in View.ToCreateSql
+	CreateSql CreateSql
 	// SupportUserAccess default false. if true, user account can access.
 	SupportUserAccess bool
 }
@@ -419,7 +477,19 @@ func SupportUserAccess(support bool) ViewOption {
 	})
 }
 
+// ToCreateSql return create view sql.
+// If tbl.CreateSql is  not nil, return tbl.CreateSql.String(),
+// Else return
 func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
+	if tbl.CreateSql != nil {
+		return tbl.CreateSql.String(ctx, ifNotExists)
+	} else {
+		return tbl.generateCreateSql(ctx, ifNotExists)
+	}
+}
+
+// generateCreateSql generate create view sql.
+func (tbl *View) generateCreateSql(ctx context.Context, ifNotExists bool) string {
 	sb := strings.Builder{}
 	// create table
 	sb.WriteString("CREATE VIEW ")
@@ -456,6 +526,12 @@ type ViewSingleCondition struct {
 
 func (tbl *ViewSingleCondition) String() string {
 	return fmt.Sprintf("`%s` = %q", tbl.Column.Name, tbl.Table)
+}
+
+type ViewCreateSqlString string
+
+func (s ViewCreateSqlString) String(ctx context.Context, ifNotExists bool) string {
+	return string(s)
 }
 
 type ColumnField struct {
@@ -686,10 +762,7 @@ func (r *Row) ToStrings() []string {
 			}
 		case types.T_json:
 			switch r.Columns[idx].Type {
-			case TJson:
-				buf, _ := json.Marshal(r.Columns[idx].Interface)
-				col[idx] = string(buf)
-			case TVarchar, TText:
+			case TJson, TVarchar, TText:
 				val := r.Columns[idx].String
 				if len(val) == 0 {
 					val = typ.Default
@@ -732,6 +805,8 @@ func (r *Row) ParseRow(cols []string) error {
 	return nil
 }
 
+// CsvPrimaryKey return string = concat($CsvCol[PrimaryKeyColumnIdx], '-')
+// Deprecated
 func (r *Row) CsvPrimaryKey() string {
 	if len(r.Table.PrimaryKeyColumn) == 0 {
 		return ""

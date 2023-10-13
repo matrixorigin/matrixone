@@ -144,8 +144,11 @@ func HandleSyncLogTailReq(
 	if err != nil {
 		return
 	}
-	if start.Less(tableEntry.GetCreatedAt()) {
-		start = tableEntry.GetCreatedAt()
+	tableEntry.RLock()
+	createTS := tableEntry.GetCreatedAtLocked()
+	tableEntry.RUnlock()
+	if start.Less(createTS) {
+		start = createTS
 	}
 
 	ckpLoc, checkpointed, err := ckpClient.CollectCheckpointsInRange(ctx, start, end)
@@ -742,15 +745,19 @@ func LoadCheckpointEntries(
 	for i := range objectLocations {
 		data := NewCNCheckpointData()
 		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
-		idxes := make([]uint16, len(meteIdxSchema.attrs))
-		for attr := range meteIdxSchema.attrs {
-			idxes[attr] = uint16(attr)
+		if meteIdxSchema == nil {
+			panic(fmt.Sprintf("LoadCheckpointEntries version %d is invalid, current version %d", versions[i], CheckpointCurrentVersion))
+		} else {
+			idxes := make([]uint16, len(meteIdxSchema.attrs))
+			for attr := range meteIdxSchema.attrs {
+				idxes[attr] = uint16(attr)
+			}
+			err := data.PrefetchMetaIdx(ctx, versions[i], idxes, objectLocations[i], fs)
+			if err != nil {
+				return nil, nil, err
+			}
+			datas[i] = data
 		}
-		err := data.PrefetchMetaIdx(ctx, versions[i], idxes, objectLocations[i], fs)
-		if err != nil {
-			return nil, nil, err
-		}
-		datas[i] = data
 	}
 
 	for i := range datas {
@@ -782,7 +789,12 @@ func LoadCheckpointEntries(
 		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
-			return nil, closeCBs, err
+			for j := range closeCBs {
+				if closeCBs[j] != nil {
+					closeCBs[j]()
+				}
+			}
+			return nil, nil, err
 		}
 		bats[i] = bat
 	}
@@ -792,7 +804,12 @@ func LoadCheckpointEntries(
 		data := datas[i]
 		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
-			return nil, closeCBs, err
+			for j := range closeCBs {
+				if closeCBs[j] != nil {
+					closeCBs[j]()
+				}
+			}
+			return nil, nil, err
 		}
 		if tableName != pkgcatalog.MO_DATABASE &&
 			tableName != pkgcatalog.MO_COLUMNS &&

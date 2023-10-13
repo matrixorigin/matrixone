@@ -49,6 +49,7 @@ func SetupAutoIncrService() {
 	rt.SetGlobalVariables(
 		runtime.AutoIncrmentService,
 		incrservice.NewIncrService(
+			"",
 			incrservice.NewMemStore(),
 			incrservice.Config{}))
 }

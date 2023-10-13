@@ -50,13 +50,14 @@ func New(
 		TxnClient:    txnClient,
 		TxnOperator:  txnOperator,
 		FileService:  fileService,
-		IncrService:  incrservice.GetAutoIncrementService(),
+		IncrService:  incrservice.GetAutoIncrementService(ctx),
 		UnixTime:     time.Now().UnixNano(),
 		LastInsertID: new(uint64),
 		LockService:  lockService,
 		Aicm:         aicm,
 		vp: &vectorPool{
-			vecs: make(map[uint8][]*vector.Vector),
+			vecs:  make(map[uint8][]*vector.Vector),
+			Limit: VectorLimit,
 		},
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
 		QueryService:   queryService,
@@ -245,6 +246,10 @@ func (proc *Process) CopyValueScanBatch(src *Process) {
 	proc.valueScanBatch = src.valueScanBatch
 }
 
+func (proc *Process) SetVectorPoolSize(limit int) {
+	proc.vp.Limit = limit
+}
+
 func (proc *Process) CopyVectorPool(src *Process) {
 	proc.vp = src.vp
 }
@@ -319,7 +324,7 @@ func (vp *vectorPool) putVector(vec *vector.Vector) bool {
 	vp.Lock()
 	defer vp.Unlock()
 	key := uint8(vec.GetType().Oid)
-	if len(vp.vecs[key]) >= VectorLimit {
+	if len(vp.vecs[key]) >= vp.Limit {
 		return false
 	}
 	vp.vecs[key] = append(vp.vecs[key], vec)
