@@ -1357,7 +1357,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		}
 		indexParts := make([]string, 0)
 
-		isPkAlreadyPresentInIndexParts := false
+		//isPkAlreadyPresentInIndexParts := false
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -1376,15 +1376,16 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
 			}
 
-			if strings.Compare(name, pkeyName) == 0 {
-				isPkAlreadyPresentInIndexParts = true
-			}
+			//if strings.Compare(name, pkeyName) == 0 {
+			//	isPkAlreadyPresentInIndexParts = true
+			//}
 			indexParts = append(indexParts, name)
 		}
 
-		if !isPkAlreadyPresentInIndexParts {
-			indexParts = append(indexParts, pkeyName)
-		}
+		//if !isPkAlreadyPresentInIndexParts {
+		// TODO: see how to do aliasing for the pkeyName @qingx
+		indexParts = append(indexParts, catalog.IndexTablePrimaryColNameSK)
+		//}
 
 		var keyName string
 		{
