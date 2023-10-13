@@ -9,33 +9,40 @@ alter_seq_01    BIGINT
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 2    2
-alter sequence alter_seq_01 minvalue 1 maxvalue 2;
+alter sequence alter_seq_01 minvalue 1 maxvalue 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 3    3
 select nextval('alter_seq_01'),currval('alter_seq_01');
-internal error: Reached maximum value of sequence alter_seq_01
+nextval(alter_seq_01)    currval(alter_seq_01)
+4    4
 select nextval('alter_seq_01'),currval('alter_seq_01');
-internal error: Reached maximum value of sequence alter_seq_01
+nextval(alter_seq_01)    currval(alter_seq_01)
+5    5
 alter sequence alter_seq_01 cycle;
-invalid input: Start value for sequence must between minvalue and maxvalue
+select * from alter_seq_01;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+6    1    10    5    1    true    false
 select nextval('alter_seq_01'),currval('alter_seq_01');
-internal error: Reached maximum value of sequence alter_seq_01
+nextval(alter_seq_01)    currval(alter_seq_01)
+6    6
 select nextval('alter_seq_01'),currval('alter_seq_01');
-internal error: Reached maximum value of sequence alter_seq_01
+nextval(alter_seq_01)    currval(alter_seq_01)
+7    7
 select nextval('alter_seq_01'),currval('alter_seq_01');
-internal error: Reached maximum value of sequence alter_seq_01
+nextval(alter_seq_01)    currval(alter_seq_01)
+8    8
 alter sequence alter_seq_01 maxvalue 1000;
 alter sequence alter_seq_01 increment by 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-13    13
+18    18
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-23    23
+28    28
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-33    33
+38    38
 alter sequence alter_seq_01 start with 900;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
