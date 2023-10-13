@@ -39,3 +39,8 @@ drop sequence alter_seq_03;
 create sequence alter_seq_03 increment by 10;
 alter sequence alter_seq_03;
 drop sequence alter_seq_03;
+create sequence if not exists alter_seq_04 as bigint increment by 100 minvalue 20 start with 50 cycle;
+select nextval('alter_seq_04'),currval('alter_seq_04');
+alter sequence if exists alter_seq_04 as int increment by 200 minvalue 10 no cycle;
+select nextval('alter_seq_04'),currval('alter_seq_04');
+drop sequence alter_seq_04;

@@ -1806,6 +1806,9 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
+		if maxV < 0 {
+			maxV = math.MaxInt16
+		}
 		err = valueCheckOut(maxV, minV, startN, ctx)
 		if err != nil {
 			return nil, err
@@ -1819,6 +1822,9 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
+		if maxV < 0 {
+			maxV = math.MaxInt32
+		}
 		err = valueCheckOut(maxV, minV, startN, ctx)
 		if err != nil {
 			return nil, err
@@ -1831,6 +1837,9 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int64](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
+		}
+		if maxV < 0 {
+			maxV = math.MaxInt64
 		}
 		err = valueCheckOut(maxV, minV, startN, ctx)
 		if err != nil {
