@@ -80,6 +80,7 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 		retByts = append(retByts, executor.GetBytesRows(cols[0]))
 		return true
 	})
+	res.Close()
 
 	fileName, err := getFileNames(ctx, retByts)
 	if err != nil {
