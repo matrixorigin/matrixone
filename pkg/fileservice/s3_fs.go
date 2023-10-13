@@ -17,8 +17,10 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"io"
 	"math"
+	"net/http/httptrace"
 	pathpkg "path"
 	"sort"
 	"strings"
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -242,6 +245,14 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	ctx = addGetConnMetric(ctx)
+
+	v2.GetS3FSWriteCounter().Inc()
+	v2.GetS3FSWriteSizeGauge().Set(float64(vector.EntriesSize()))
+
+	start := time.Now()
+	defer v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -346,6 +357,14 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	ctx = addGetConnMetric(ctx)
+
+	v2.GetS3FSReadCounter().Inc()
+	defer v2.GetS3FSReadSizeGauge().Set(float64(vector.EntriesSize()))
+
+	start := time.Now()
+	defer v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -662,4 +681,44 @@ func (s *S3FS) FlushCache() {
 
 func (s *S3FS) SetAsyncUpdate(b bool) {
 	s.asyncUpdate = b
+}
+
+func addGetConnMetric(ctx context.Context) context.Context {
+	var start time.Time
+	var dnsStart time.Time
+	var connectStart time.Time
+	var tlsHandshakeStart time.Time
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GetConn: func(hostPort string) {
+			start = time.Now()
+		},
+
+		GotConn: func(info httptrace.GotConnInfo) {
+			v2.S3GetConnDurationHistogram.Observe(time.Since(start).Seconds())
+		},
+
+		DNSStart: func(di httptrace.DNSStartInfo) {
+			dnsStart = time.Now()
+		},
+
+		DNSDone: func(di httptrace.DNSDoneInfo) {
+			v2.S3DNSDurationHistogram.Observe(time.Since(dnsStart).Seconds())
+		},
+
+		ConnectStart: func(network, addr string) {
+			connectStart = time.Now()
+		},
+
+		ConnectDone: func(network, addr string, err error) {
+			v2.S3ConnectDurationHistogram.Observe(time.Since(connectStart).Seconds())
+		},
+
+		TLSHandshakeStart: func() {
+			tlsHandshakeStart = time.Now()
+		},
+
+		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
+			v2.S3TLSHandshakeDurationHistogram.Observe(time.Since(tlsHandshakeStart).Seconds())
+		},
+	})
 }

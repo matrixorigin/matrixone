@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/ratelimit"
 	"go.uber.org/zap"
 )
@@ -329,6 +330,9 @@ func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
 func (client *txnClient) determineTxnSnapshot(
 	ctx context.Context,
 	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
+	start := time.Now()
+	defer v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
+
 	// always use the current ts as txn's snapshot ts is enableSacrificingFreshness
 	if !client.enableSacrificingFreshness {
 		// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
