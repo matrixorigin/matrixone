@@ -52,8 +52,6 @@ type SegStat struct {
 	SortKeyZonemap index.ZM
 	Rows           int
 	Dels           int
-	SameDelsStreak int
-	MergeIntent    int
 }
 
 func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
