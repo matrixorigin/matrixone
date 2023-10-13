@@ -60,8 +60,8 @@ var (
 )
 
 var (
-	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s from %s.%s where (%s) is not null;"
-	insertIntoIndexTableWithPKeyFormat          = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
+	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s, serial(%s,%s) from %s.%s where (%s) is not null;"
+	insertIntoIndexTableWithPKeyFormat          = "insert into  %s.`%s` select serial(%s), %s, serial(%s,%s) from %s.%s where serial(%s) is not null;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
 	createIndexTableForamt                      = "create table %s.`%s` (%s);"
@@ -80,7 +80,7 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 	var sql string
 	planCols := indexTableDef.GetCols()
 	for i, planCol := range planCols {
-		if i == 1 {
+		if i >= 1 {
 			sql += ","
 		}
 		sql += planCol.Name + " "
@@ -101,7 +101,7 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 		default:
 			sql += typeId.String()
 		}
-		if i == 0 {
+		if planCol.Primary {
 			sql += " primary key"
 		}
 	}
@@ -136,9 +136,9 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			pKeyMsg = pkeyName
 		}
 		if len(indexDef.Parts) == 1 {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name, temp)
 		} else {
-			insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, temp, pKeyMsg, DBName, originTableDef.Name, temp)
 		}
 	}
 	return insertSQL

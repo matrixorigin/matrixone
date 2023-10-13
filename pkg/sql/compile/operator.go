@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -63,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -564,18 +564,18 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	}, nil
 }
 
-func constructPreInsertUk(n *plan.Node, proc *process.Process, isUk bool) (*preinsertunique.Argument, error) {
-	if isUk {
-		return &preinsertunique.Argument{
-			Ctx:          proc.Ctx,
-			PreInsertCtx: n.PreInsertUkCtx,
-		}, nil
-	} else {
-		return &preinsertunique.Argument{
-			Ctx:          proc.Ctx,
-			PreInsertCtx: n.PreInsertSkCtx,
-		}, nil
-	}
+func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.Argument, error) {
+	return &preinsertunique.Argument{
+		Ctx:          proc.Ctx,
+		PreInsertCtx: n.PreInsertUkCtx,
+	}, nil
+}
+
+func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.Argument, error) {
+	return &preinsertsecondaryindex.Argument{
+		Ctx:          proc.Ctx,
+		PreInsertCtx: n.PreInsertSkCtx,
+	}, nil
 }
 
 func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*lockop.Argument, error) {
