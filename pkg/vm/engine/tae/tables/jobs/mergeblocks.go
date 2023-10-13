@@ -212,10 +212,10 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	var sortColDef *catalog.ColDef
 	if schema.HasSortKey() {
 		sortColDef = schema.GetSingleSortKey()
+		logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
 	} else {
 		sortColDef = schema.PhyAddrKey
 	}
-	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
 	phaseNumber = 1
 	seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
 	Idxs := make([]int, 0, len(schema.ColDefs))
