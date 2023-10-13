@@ -60,7 +60,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 	}
 	defer proc.PutBatch(inputBat)
 
-	var vec *vector.Vector
+	var vecIdxCol *vector.Vector
 	var bitMap *nulls.Nulls
 
 	secondaryColumnPos := argument.PreInsertCtx.Columns
@@ -81,28 +81,26 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 
 	if colCount == 1 {
 		pos := secondaryColumnPos[indexColPos]
-		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		vecIdxCol, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
 	} else {
 		vs := make([]*vector.Vector, colCount)
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap = util.SerialWithCompacted(vs, proc)
+		vecIdxCol, bitMap = util.SerialWithCompacted(vs, proc)
 	}
-	insertSecondaryBat.SetVector(indexColPos, vec)
-	insertSecondaryBat.SetRowCount(vec.Length())
+	insertSecondaryBat.SetVector(indexColPos, vecIdxCol)
+	insertSecondaryBat.SetRowCount(vecIdxCol.Length())
 
-	vecPk := util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
-	insertSecondaryBat.SetVector(pkColPos, vecPk)
+	vecPkCol := util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	insertSecondaryBat.SetVector(pkColPos, vecPkCol)
 
-	{ // 3rd column ie sk's + original_pk
-		vs := make([]*vector.Vector, colCount+1)
-		for vIdx, pIdx := range secondaryColumnPos {
-			vs[vIdx] = inputBat.Vecs[pIdx]
-		}
-		vs[colCount] = vecPk
-		vec, _ = util.SerialWithCompacted(vs, proc)
-		insertSecondaryBat.SetVector(skPkColPos, vec)
+	{ // 3rd column ie index_col + original_pk
+		vs := make([]*vector.Vector, 2)
+		vs[0] = vecIdxCol
+		vs[1] = vecPkCol
+		vecSkPkCol, _ := util.SerialWithCompacted(vs, proc)
+		insertSecondaryBat.SetVector(skPkColPos, vecSkPkCol)
 	}
 
 	if isUpdate {
