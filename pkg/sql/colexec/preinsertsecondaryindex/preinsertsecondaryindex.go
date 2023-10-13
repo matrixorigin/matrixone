@@ -95,13 +95,15 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 	vecPk := util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
 	insertSecondaryBat.SetVector(pkColPos, vecPk)
 
-	vs := make([]*vector.Vector, colCount+1)
-	for vIdx, pIdx := range secondaryColumnPos {
-		vs[vIdx] = inputBat.Vecs[pIdx]
+	{ // 3rd column ie sk's + original_pk
+		vs := make([]*vector.Vector, colCount+1)
+		for vIdx, pIdx := range secondaryColumnPos {
+			vs[vIdx] = inputBat.Vecs[pIdx]
+		}
+		vs[colCount] = vecPk
+		vec, _ = util.SerialWithCompacted(vs, proc)
+		insertSecondaryBat.SetVector(skPkColPos, vec)
 	}
-	vs[colCount] = vecPk
-	vec, _ = util.SerialWithCompacted(vs, proc)
-	insertSecondaryBat.SetVector(skPkColPos, vec)
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
