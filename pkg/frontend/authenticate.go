@@ -30,6 +30,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -906,7 +908,7 @@ var (
     		);`,
 		`create table mo_account(
 				account_id int signed auto_increment primary key,
-				account_name varchar(300),
+				account_name varchar(300) unique key,
 				status varchar(300),
 				created_time timestamp,
 				comments varchar(256),
