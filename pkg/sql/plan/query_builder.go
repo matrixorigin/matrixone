@@ -2123,10 +2123,17 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				newFilterList = append(newFilterList, expr)
 			}
 
+			for _, filter := range newFilterList {
+				if detectedExprWhetherTimeRelated(filter) {
+					notCacheable = true
+				}
+			}
+
 			nodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{nodeID},
-				FilterList: newFilterList,
+				NodeType:     plan.Node_FILTER,
+				Children:     []int32{nodeID},
+				FilterList:   newFilterList,
+				NotCacheable: notCacheable,
 			}, ctx)
 		}
 
@@ -2207,12 +2214,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		if !notCacheable {
-			if ef, ok := proj.Expr.(*plan.Expr_F); ok {
-				overloadID := ef.F.Func.GetObj()
-				f, exists := function.GetFunctionByIdWithoutError(overloadID)
-				if exists && f.IsRealTimeRelated() {
-					notCacheable = true
-				}
+			if detectedExprWhetherTimeRelated(proj) {
+				notCacheable = true
 			}
 		}
 	}
