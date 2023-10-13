@@ -919,8 +919,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		}()
 	}
 
-	skipCols := []string{catalog.IndexTablePrimaryColNameSK}
-	skipColsStr := strings.Join(skipCols, "','")
+	skipCols := strings.Join([]string{catalog.IndexTablePrimaryColNameSK}, "','")
 
 	sql := "select " +
 		"`tcl`.`att_relname` as `Table`, " +
@@ -944,7 +943,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`column_name` NOT IN ('%s') " +
 		";"
 	//TODO: verify if this works for Unique Key
-	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, skipColsStr)
+	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, skipCols)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)
