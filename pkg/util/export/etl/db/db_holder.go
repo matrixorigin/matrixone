@@ -183,6 +183,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 
 	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
 	if err != nil {
+		fmt.Printf("gavinyue bulkInsert failed, err: %v\n", err)
 		DBConnErrCount.Add(1)
 		return 0, err
 	}
@@ -279,6 +280,7 @@ type CSVWriter struct {
 
 func NewCSVWriter(ctx context.Context) *CSVWriter {
 	buf := getBuffer()
+	buf.Reset()
 	writer := csv.NewWriter(buf)
 	writer.UseCRLF = true // Use \r\n as the line terminator
 
@@ -341,6 +343,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	// If there's an error, rollback the transaction
 	if execErr != nil {
+		fmt.Printf("gavinyue bulkInsert failed, err: %v, sql: %v \n", execErr, loadSQL)
 		tx.Rollback()
 		return execErr
 	}
