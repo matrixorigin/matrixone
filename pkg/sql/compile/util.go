@@ -162,6 +162,11 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 				}
 
 				for i, part := range indexdef.Parts {
+					// NO NEED TO CHECK ALIAS
+					//if catalog.IsAlias(part) {
+					//	part = catalog.ResolveAlias(part)
+					//}
+
 					//1. index id
 					if isFirst {
 						fmt.Fprintf(buffer, "(%d, ", index_id)
@@ -384,6 +389,9 @@ func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) e
 func partsToColsStr(parts []string) string {
 	var temp string
 	for i, part := range parts {
+		if catalog.IsAlias(part) {
+			part = catalog.ResolveAlias(part)
+		}
 		if i == 0 {
 			temp += part
 		} else {

@@ -1505,6 +1505,9 @@ func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
 		if index.Unique {
 			pkMap := make(map[string]int)
 			for _, part := range index.Parts {
+				//if catalog2.IsAlias(part) {
+				//	part = catalog2.ResolveAlias(part)
+				//}
 				pkMap[part] = int(tableDef.Name2ColIndex[part])
 			}
 			uniqueCols = append(uniqueCols, pkMap)

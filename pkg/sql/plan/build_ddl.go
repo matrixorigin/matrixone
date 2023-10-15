@@ -1382,10 +1382,9 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexParts = append(indexParts, name)
 		}
 
-		//if !isPkAlreadyPresentInIndexParts {
-		// TODO: see how to do aliasing for the pkeyName @qingx
-		indexParts = append(indexParts, catalog.IndexTablePrimaryColNameSK)
-		//}
+		if !isPkAlreadyPresentInIndexParts {
+			indexParts = append(indexParts, catalog.BuildAlias(pkeyName))
+		}
 
 		var keyName string
 		{
@@ -2496,6 +2495,10 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 		if index.Unique {
 			uniqueMap := make(map[string]uint64)
 			for _, uniqueColName := range index.Parts {
+				//if catalog.IsAlias(uniqueColName) {
+				//	//continue
+				//	uniqueColName = catalog.ResolveAlias(uniqueColName)
+				//}
 				colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
 				uniqueMap[uniqueColName] = colId
 			}

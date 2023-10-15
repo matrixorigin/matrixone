@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,9 @@ func checkDropColumnWithIndex(colName string, indexes []*plan.IndexDef, ctx Comp
 	for _, indexInfo := range indexes {
 		if indexInfo.TableExist {
 			for _, column := range indexInfo.Parts {
+				if catalog.IsAlias(column) {
+					column = catalog.ResolveAlias(column)
+				}
 				if column == colName {
 					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with index covered now", colName)
 				}

@@ -218,6 +218,9 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 	if newColName != originalCol.Name {
 		for _, indexInfo := range alterPlan.CopyTableDef.Indexes {
 			for j, partCol := range indexInfo.Parts {
+				if catalog.IsAlias(partCol) {
+					partCol = catalog.ResolveAlias(partCol)
+				}
 				if partCol == originalCol.Name {
 					indexInfo.Parts[j] = newColName
 				}

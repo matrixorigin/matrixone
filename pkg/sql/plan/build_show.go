@@ -220,11 +220,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			} else {
 				i := 0
 				for _, part := range indexdef.Parts {
-					if part == catalog.IndexTablePrimaryColNameSK {
+					if catalog.IsAlias(part) {
 						continue
 					}
 					if i > 0 {
-						indexStr += ", "
+						indexStr += ","
 					}
 
 					indexStr += fmt.Sprintf("`%s`", formatStr(part))
@@ -919,8 +919,6 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		}()
 	}
 
-	skipCols := strings.Join([]string{catalog.IndexTablePrimaryColNameSK}, "','")
-
 	sql := "select " +
 		"`tcl`.`att_relname` as `Table`, " +
 		"if(`idx`.`type` = 'MULTIPLE', 1, 0) as `Non_unique`, " +
@@ -940,10 +938,9 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`) " +
 		"where `tcl`.`att_database` = '%s' AND " +
 		"`tcl`.`att_relname` = '%s' AND " +
-		"`idx`.`column_name` NOT IN ('%s') " +
+		"`idx`.`column_name` NOT LIKE '%s' " +
 		";"
-	//TODO: verify if this works for Unique Key
-	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, skipCols)
+	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)

@@ -281,12 +281,16 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				indexStr = "KEY "
 			}
 			indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
-			for num, part := range indexdef.Parts {
-				if num == len(indexdef.Parts)-1 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
-				} else {
-					indexStr += fmt.Sprintf("`%s`,", formatStr(part))
+			i := 0
+			for _, part := range indexdef.Parts {
+				if catalog.IsAlias(part) {
+					continue
 				}
+				if i > 0 {
+					indexStr += ","
+				}
+				indexStr += fmt.Sprintf("`%s`", formatStr(part))
+				i++
 			}
 			indexStr += ")"
 			if indexdef.Comment != "" {
