@@ -16,8 +16,8 @@ WORKDIR /home/mo
 
 COPY . .
 
-#RUN pip install -r requirement.txt
-RUN pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirement.txt
+RUN pip install -r requirements/base.txt
+RUN pip install -r requirements/pytorch.txt
 
 USER mo
 
