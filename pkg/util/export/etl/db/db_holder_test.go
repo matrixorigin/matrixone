@@ -77,8 +77,11 @@ func TestBulkInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
+	mock.ExpectBegin()
+	mock.ExpectExec("LOAD DATA INLINE FORMAT='csv', DATA='str1,1,1.1,1,2023-05-16T00:00:00Z,\"{\"\"key1\"\":\"\"value1\"\"}\"\nstr2,2,2.2,2,2023-05-16T00:00:00Z,\"{\"\"key2\"\":\"\"value2\"\"}\"\n' INTO TABLE testDB.testTable").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	mock.ExpectExec("LOAD DATA INLINE FORMAT='csv', DATA='str1,1,1.1,1,2023-05-16T00:00:00Z,\"{\"\"key1\"\":\"\"value1\"\"}\"\nstr2,2,2.2,2,2023-05-16T00:00:00Z,\"{\"\"key2\"\":\"\"value2\"\"}\"\n' INTO TABLE testDB.testTable")
+	mock.ExpectCommit()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

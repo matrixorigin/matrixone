@@ -29,9 +29,9 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer db.Close()
-
+	mock.ExpectBegin()
 	mock.ExpectExec("LOAD DATA INLINE FORMAT='csv', DATA='record1\n' INTO TABLE testDB.testTable").WillReturnResult(sqlmock.NewResult(1, 1))
-
+	mock.ExpectCommit()
 	db_holder.SetDBConn(db)
 
 	// set up your DefaultSqlWriter and records
