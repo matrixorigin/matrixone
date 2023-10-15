@@ -912,12 +912,12 @@ type blockData struct {
 func ReWriteCheckpointAndBlockFromKey(
 	ctx context.Context,
 	fs,dstFs fileservice.FileService,
-	location,tnLocation objectio.Location,
+	loc,tnLocation objectio.Location,
 	version uint32, ts types.TS,
 	) (objectio.Location,objectio.Location,*CheckpointData, error) {
 	objectsData := make(map[string]*fileData, 0)
 	data := NewCheckpointData()
-	reader, err := blockio.NewObjectReader(fs, location)
+	reader, err := blockio.NewObjectReader(fs, loc)
 	if err != nil {
 		return nil,nil,nil, err
 	}
@@ -931,17 +931,29 @@ func ReWriteCheckpointAndBlockFromKey(
 	}
 	isCkpChange := false
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
-		deltaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
-		metaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		var location objectio.Location
+		deltaLoc := objectio.Location(
+			data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(
+			data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		isAblk := data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_EntryState).Get(i).(bool)
 		if !isAblk && deltaLoc.IsEmpty() {
 			continue
 		}
 		var bat *batch.Batch
+		var deltaBat *batch.Batch
 		if !isAblk && !deltaLoc.IsEmpty() {
-			bat, err = blockio.LoadOneBlock(ctx, fs, deltaLoc, objectio.SchemaTombstone)
-		} else if isAblk {
+			deltaBat, err = blockio.LoadOneBlock(ctx, fs, deltaLoc, objectio.SchemaTombstone)
+			location = deltaLoc
+		} else if isAblk{
 			bat, err = blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
+			if err != nil {
+				return nil,nil,nil, err
+			}
+			if !deltaLoc.IsEmpty() {
+				deltaBat, err = blockio.LoadOneBlock(ctx, fs, deltaLoc, objectio.SchemaTombstone)
+			}
+			location = metaLoc
 		} else {
 			continue
 		}
@@ -951,31 +963,61 @@ func ReWriteCheckpointAndBlockFromKey(
 		isChange := false
 		if v := 0; v < bat.Vecs[0].Length() {
 			commitTs := types.TS{}
-			bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v)
-			err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
-			if err != nil {
-				return nil,nil,nil, err
+			deltaCommitTs := types.TS{}
+			if bat != nil {
+				err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
+				if err != nil {
+					return nil,nil,nil, err
+				}
+				if !commitTs.LessEq(ts) {
+					windowCNBatch(bat, 0, uint64(v))
+					isChange = true
+					isCkpChange = true
+				}
 			}
-			if !commitTs.LessEq(ts) {
-				windowCNBatch(bat, 0, uint64(v))
-				isChange = true
-				isCkpChange = true
+			if deltaBat != nil {
+				err = deltaCommitTs.Unmarshal(bat.Vecs[len(deltaBat.Vecs)-2].GetRawBytesAt(v))
+				if err != nil {
+					return nil,nil,nil, err
+				}
+				if !deltaCommitTs.LessEq(ts) {
+					windowCNBatch(deltaBat, 0, uint64(v))
+					isChange = true
+					isCkpChange = true
+				}
 			}
 		}
 
-		if objectsData[metaLoc.Name().String()] == nil {
-			objectsData[metaLoc.Name().String()] = &fileData{
-				name: metaLoc.Name(),
+		name := location.Name().String()
+		if objectsData[name] == nil {
+			objectsData[name] = &fileData{
+				name: location.Name(),
 				data: make([]blockData,0),
 				isChange: isChange,
 			}
 		}
 
-		objectsData[metaLoc.Name().String()].data = append(objectsData[metaLoc.Name().String()].data, blockData{
-			num: metaLoc.ID(),
-			row: uint32(i),
-			data: bat,
-		})
+		if deltaBat != nil {
+			objectsData[name].data = append(
+				objectsData[name].data,
+				blockData{
+					num: deltaLoc.ID(),
+					row: uint32(i),
+					data: deltaBat,
+					blockType: objectio.SchemaTombstone,
+				})
+		}
+		if bat != nil {
+			objectsData[name].data = append(
+				objectsData[name].data,
+				blockData{
+					num: metaLoc.ID(),
+					row: uint32(i),
+					data: bat,
+					blockType: objectio.SchemaData,
+				})
+		}
+
 		if isCkpChange {
 			for fileName, objectData := range objectsData {
 				if objectData.isChange {
@@ -1005,10 +1047,16 @@ func ReWriteCheckpointAndBlockFromKey(
 					for row, block := range blocks {
 						blockLocation := objectio.BuildLocation(objectData.name, extent,0, block.GetID())
 						if objectData.data[row].blockType == objectio.SchemaData {
-							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Update(int(objectData.data[i].row), []byte(blockLocation), false)
+							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Update(
+								int(objectData.data[i].row),
+								[]byte(blockLocation),
+								false)
 						}
 						if objectData.data[row].blockType == objectio.SchemaTombstone {
-							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Update(int(objectData.data[i].row), []byte(blockLocation), false)
+							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Update(
+								int(objectData.data[i].row),
+								[]byte(blockLocation),
+								false)
 						}
 					}
 
@@ -1019,11 +1067,11 @@ func ReWriteCheckpointAndBlockFromKey(
 			if err != nil {
 				return nil,nil,nil, err
 			}
-			location = cnLocation
+			loc = cnLocation
 			tnLocation = dnLocation
 
 		}
 
 	}
-	return  location, tnLocation, data, nil
+	return  loc, tnLocation, data, nil
 }
