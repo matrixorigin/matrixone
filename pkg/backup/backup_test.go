@@ -57,7 +57,7 @@ func TestBackupData(t *testing.T) {
 	db.BindSchema(schema)
 	testutil.CreateRelation(t, db.DB, "db", schema, true)
 
-	totalRows := uint64(schema.BlockMaxRows * 30)testutils.go
+	totalRows := uint64(schema.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
 	bats := bat.Split(100)
