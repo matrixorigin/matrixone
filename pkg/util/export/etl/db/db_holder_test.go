@@ -16,10 +16,6 @@ package db_holder
 
 import (
 	"context"
-	"database/sql/driver"
-	"fmt"
-	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -82,21 +78,7 @@ func TestBulkInsert(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 
-	mock.ExpectBegin()
-
-	stmt := mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO `testDB`.`testTable` (`str`,`int64`,`float64`,`uint64`,`datetime_6`,`json_col`) VALUES (?,?,?,?,?,?)"))
-
-	for _, record := range records {
-		driverValues := make([]driver.Value, len(record))
-		for i, v := range record {
-			driverValues[i] = driver.Value(v)
-		}
-		stmt.ExpectExec().
-			WithArgs(driverValues...).
-			WillReturnResult(sqlmock.NewResult(1, 1))
-	}
-	mock.ExpectCommit()
-
+	mock.ExpectExec("LOAD DATA INLINE FORMAT='csv', DATA='str1,1,1.1,1,2023-05-16T00:00:00Z,\"{\"\"key1\"\":\"\"value1\"\"}\"\nstr2,2,2.2,2,2023-05-16T00:00:00Z,\"{\"\"key2\"\":\"\"value2\"\"}\"\n' INTO TABLE testDB.testTable")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -104,74 +86,6 @@ func TestBulkInsert(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	if err != nil {
-		t.Errorf("there were unfulfilled expectations: %s", err)
-	}
-}
-
-func TestBulkInsertWithBatch(t *testing.T) {
-	tbl := &table.Table{
-		Account:  "test",
-		Database: "testDB",
-		Table:    "testTable",
-		Columns: []table.Column{
-			{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"},
-			{Name: "int64", ColType: table.TInt64, Default: "0", Comment: "int64 column"},
-			{Name: "float64", ColType: table.TFloat64, Default: "0.0", Comment: "float64 column"},
-			{Name: "uint64", ColType: table.TUint64, Default: "0", Comment: "uint64 column"},
-			{Name: "datetime_6", ColType: table.TDatetime, Default: "", Comment: "datetime.6 column"},
-			{Name: "json_col", ColType: table.TJson, Default: "{}", Comment: "json column"},
-		},
-	}
-
-	// Generate 109 records
-	records := make([][]string, 109)
-	for i := 0; i < 109; i++ {
-		records[i] = []string{fmt.Sprintf("str%d", i+1), fmt.Sprintf("%d", i+1), fmt.Sprintf("%.1f", float64(i+1)), fmt.Sprintf("%d", i+1), "2023-05-16T00:00:00Z", fmt.Sprintf(`{"key%d":"value%d"}`, i+1, i+1)}
-	}
-	// Mock db
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
-	}
-
-	mock.ExpectBegin()
-
-	batchSize := 10
-	numBatches := len(records) / batchSize
-
-	// Expect numBatches batches
-	placeholders := strings.TrimSuffix(strings.Repeat("(?,?,?,?,?,?),", batchSize), ",")
-
-	stmt := mock.ExpectPrepare(regexp.QuoteMeta(fmt.Sprintf("INSERT INTO `testDB`.`testTable` (`str`,`int64`,`float64`,`uint64`,`datetime_6`,`json_col`) VALUES %s", placeholders)))
-	batchArgs := make([]driver.Value, batchSize*6) // Assuming 6 fields in a record
-	for i := range batchArgs {
-		batchArgs[i] = sqlmock.AnyArg()
-	}
-
-	for i := 0; i < numBatches; i++ {
-		stmt.ExpectExec().WithArgs(batchArgs...).WillReturnResult(sqlmock.NewResult(1, int64(batchSize)))
-	}
-
-	// Expect last 9
-	stmt = mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO `testDB`.`testTable` (`str`,`int64`,`float64`,`uint64`,`datetime_6`,`json_col`) VALUES (?,?,?,?,?,?)"))
-	recordArgs := make([]driver.Value, 6) // Assuming 6 fields in a record
-	for i := range recordArgs {
-		recordArgs[i] = sqlmock.AnyArg()
-	}
-
-	for i := 0; i < 9; i++ {
-		stmt.ExpectExec().WithArgs(recordArgs...).WillReturnResult(sqlmock.NewResult(1, 1))
-	}
-
-	mock.ExpectCommit()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	bulkInsert(ctx, db, records, tbl, 10, 1)
-
-	// we make sure that all expectations were met
-	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)
 	}
 }

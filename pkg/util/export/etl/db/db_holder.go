@@ -39,15 +39,11 @@ var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
 
-	csvWriterGlobal atomic.Value
-
 	db atomic.Value
 
 	dbMux sync.Mutex
 
 	DBConnErrCount atomic.Uint32
-
-	prepareSQLMap sync.Map
 )
 
 const MOLoggerUser = "mo_logger"
@@ -282,7 +278,7 @@ type CSVWriter struct {
 }
 
 func NewCSVWriter(ctx context.Context) *CSVWriter {
-	buf := bufPool.Get().(*bytes.Buffer)
+	buf := getBuffer()
 	writer := csv.NewWriter(buf)
 	writer.UseCRLF = true // Use \r\n as the line terminator
 
@@ -309,10 +305,10 @@ func (w *CSVWriter) GetContent() string {
 func (w *CSVWriter) Release() {
 	if w.buf != nil {
 		w.buf.Reset()
-		bufPool.Put(w.buf)
 		w.buf = nil
 		w.formatter = nil
 	}
+	putBuffer(w.buf)
 }
 
 func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
@@ -335,7 +331,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
 
 	// Execute the LOAD DATA command directly without a transaction
-	_, err := sqlDb.ExecContext(context.Background(), loadSQL)
+	_, err := sqlDb.Exec(loadSQL)
 	if err != nil {
 		return err
 	}
