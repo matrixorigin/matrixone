@@ -974,13 +974,13 @@ func ReWriteCheckpointAndBlockFromKey(
 			return nil,nil,nil, err
 		}
 		isChange := false
-		if v := 0; v < bat.Vecs[0].Length() {
-			commitTs := types.TS{}
-			deltaCommitTs := types.TS{}
-			if bat != nil && bat.Vecs[0].Length() > 0 {
+		commitTs := types.TS{}
+		deltaCommitTs := types.TS{}
+		if bat != nil && bat.Vecs[0].Length() > 0 {
+			for v := 0; v < bat.Vecs[0].Length(); v++ {
 				err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
 				if err != nil {
-					return nil,nil,nil, err
+					return nil, nil, nil, err
 				}
 				if !commitTs.LessEq(ts) {
 					windowCNBatch(bat, 0, uint64(v))
@@ -988,7 +988,9 @@ func ReWriteCheckpointAndBlockFromKey(
 					isCkpChange = true
 				}
 			}
-			if deltaBat != nil && deltaBat.Vecs[0].Length() > 0 {
+		}
+		if deltaBat != nil && deltaBat.Vecs[0].Length() > 0 {
+			for v := 0; v < deltaBat.Vecs[0].Length(); v++ {
 				err = deltaCommitTs.Unmarshal(deltaBat.Vecs[len(deltaBat.Vecs)-3].GetRawBytesAt(v))
 				if err != nil {
 					return nil,nil,nil, err
@@ -1010,16 +1012,6 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 		}
 
-		if deltaBat != nil {
-			objectsData[name].data = append(
-				objectsData[name].data,
-				blockData{
-					num: deltaLoc.ID(),
-					row: uint32(i),
-					data: deltaBat,
-					blockType: objectio.SchemaTombstone,
-				})
-		}
 		if bat != nil {
 			objectsData[name].data = append(
 				objectsData[name].data,
@@ -1028,6 +1020,16 @@ func ReWriteCheckpointAndBlockFromKey(
 					row: uint32(i),
 					data: bat,
 					blockType: objectio.SchemaData,
+				})
+		}
+		if deltaBat != nil {
+			objectsData[name].data = append(
+				objectsData[name].data,
+				blockData{
+					num: deltaLoc.ID(),
+					row: uint32(i),
+					data: deltaBat,
+					blockType: objectio.SchemaTombstone,
 				})
 		}
 
