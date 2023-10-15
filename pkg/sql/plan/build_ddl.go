@@ -1383,7 +1383,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		}
 
 		if !isPkAlreadyPresentInIndexParts {
-			indexParts = append(indexParts, catalog.BuildAlias(pkeyName))
+			indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
 		}
 
 		var keyName string

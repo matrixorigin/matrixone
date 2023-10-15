@@ -358,7 +358,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 	for i := 0; i < len(tbInfo.Indexes); i++ {
 		indexInfo := tbInfo.Indexes[i]
 		for j := 0; j < len(indexInfo.Parts); j++ {
-			if catalog.TryResolve(indexInfo.Parts[j]) == colName {
+			if catalog.TryResolveAlias(indexInfo.Parts[j]) == colName {
 				indexInfo.Parts = append(indexInfo.Parts[:j], indexInfo.Parts[j+1:]...)
 				break
 			}
