@@ -389,9 +389,7 @@ func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) e
 func partsToColsStr(parts []string) string {
 	var temp string
 	for i, part := range parts {
-		if catalog.IsAlias(part) {
-			part = catalog.ResolveAlias(part)
-		}
+		part = catalog.TryResolve(part)
 		if i == 0 {
 			temp += part
 		} else {
