@@ -313,10 +313,6 @@ func ReadOneBlockAllColumns(
 	}
 	for _, seqnum := range cols {
 		blkmeta := meta.GetBlockMeta(id)
-		if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
-			// prefetch, do not generate
-			panic("ReadAllBlocksWithMeta expect no schema changes")
-		}
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{

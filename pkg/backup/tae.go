@@ -92,16 +92,16 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
 	backupTime := names[0]
 	suffix := names[1]
-	names = names[2:]
+	names = names[1:]
 	files := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
-	for _, name := range names {
+	for i, name := range names {
 		if len(name) == 0 {
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 {
+		if len(ckpStr) != 2 && i > 0 {
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
 		}
 		metaLoc := ckpStr[0]
@@ -182,27 +182,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		/*locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
-		if err != nil {
-			return err
-		}
-		table.UpdateTable(data)
-		gcFiles := table.SoftGC()
-		mergeGCFile(gcFiles, gcFileMap)
-		for _, location := range locations {
-			if files[location.Name().String()] == nil && suffixFiles[location.Name().String()] == nil {
-				dentry, err := srcFs.StatFile(ctx, location.Name().String())
-				if err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
-						isGC(gcFileMap, location.Name().String()) {
-						continue
-					} else {
-						return err
-					}
-				}
-				suffixFiles[location.Name().String()] = dentry
-			}
-		}*/
 		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)
 		if err != nil {
 			return err
@@ -213,7 +192,8 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 		end := types.StringToTS(mergeEnd)
 		start := types.StringToTS(mergeStart)
-		cnLocation, tnLocation, _, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, cnLocation, tnLocation, uint32(version), start)
+		cnLocation, tnLocation, _, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
+			cnLocation, tnLocation, uint32(version), start)
 		if err != nil {
 			return err
 		}

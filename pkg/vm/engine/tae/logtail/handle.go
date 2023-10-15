@@ -847,7 +847,12 @@ func LoadCheckpointEntries(
 	return entries, closeCBs, nil
 }
 
-func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32) ([]objectio.Location, *CheckpointData, error) {
+func LoadCheckpointEntriesFromKey(
+	ctx context.Context,
+	fs fileservice.FileService,
+	location objectio.Location,
+	version uint32,
+	) ([]objectio.Location, *CheckpointData, error) {
 	locations := make([]objectio.Location, 0)
 	locations = append(locations, location)
 	data := NewCheckpointData()
@@ -904,7 +909,12 @@ type blockData struct {
 	data *batch.Batch
 }
 
-func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileService, location,tnLocation objectio.Location, version uint32, ts types.TS) (objectio.Location,objectio.Location,*CheckpointData, error) {
+func ReWriteCheckpointAndBlockFromKey(
+	ctx context.Context,
+	fs,dstFs fileservice.FileService,
+	location,tnLocation objectio.Location,
+	version uint32, ts types.TS,
+	) (objectio.Location,objectio.Location,*CheckpointData, error) {
 	objectsData := make(map[string]*fileData, 0)
 	data := NewCheckpointData()
 	reader, err := blockio.NewObjectReader(fs, location)
@@ -927,15 +937,22 @@ func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileSe
 		if !isAblk && deltaLoc.IsEmpty() {
 			continue
 		}
-
-		bat, err := blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
+		var bat *batch.Batch
+		if !isAblk && !deltaLoc.IsEmpty() {
+			bat, err = blockio.LoadOneBlock(ctx, fs, deltaLoc, objectio.SchemaTombstone)
+		} else if isAblk {
+			bat, err = blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
+		} else {
+			continue
+		}
 		if err != nil {
 			return nil,nil,nil, err
 		}
 		isChange := false
 		if v := 0; v < bat.Vecs[0].Length() {
 			commitTs := types.TS{}
-			err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetBytesAt(v))
+			bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v)
+			err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
 			if err != nil {
 				return nil,nil,nil, err
 			}
@@ -998,7 +1015,7 @@ func ReWriteCheckpointAndBlockFromKey(ctx context.Context, fs fileservice.FileSe
 
 				}
 			}
-			cnLocation, dnLocation, err := data.WriteTo(fs, 10000)
+			cnLocation, dnLocation, err := data.WriteTo(dstFs, 10000)
 			if err != nil {
 				return nil,nil,nil, err
 			}
