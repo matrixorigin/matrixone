@@ -330,9 +330,23 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	escapedCSVData := strings.ReplaceAll(csvData, "'", "''")
 	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
 
-	// Execute the LOAD DATA command directly without a transaction
-	_, err := sqlDb.Exec(loadSQL)
+	// Begin a new transaction
+	tx, err := sqlDb.Begin()
 	if err != nil {
+		return err
+	}
+
+	// Use the transaction to execute the SQL command
+	_, execErr := tx.Exec(loadSQL)
+
+	// If there's an error, rollback the transaction
+	if execErr != nil {
+		tx.Rollback()
+		return execErr
+	}
+
+	// If no errors, commit the transaction
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 
