@@ -29,3 +29,10 @@ func ResolveAlias(alias string) string {
 func IsAlias(column string) bool {
 	return len(column) > len(AliasPrefix) && column[:len(AliasPrefix)] == AliasPrefix
 }
+
+func TryResolve(column string) string {
+	if IsAlias(column) {
+		return ResolveAlias(column)
+	}
+	return column
+}
