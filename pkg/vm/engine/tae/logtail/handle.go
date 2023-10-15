@@ -1066,13 +1066,13 @@ func ReWriteCheckpointAndBlockFromKey(
 						blockLocation := objectio.BuildLocation(objectData.name, extent,0, block.GetID())
 						if objectData.data[row].blockType == objectio.SchemaData {
 							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Update(
-								int(objectData.data[i].row),
+								int(objectData.data[row].row),
 								[]byte(blockLocation),
 								false)
 						}
 						if objectData.data[row].blockType == objectio.SchemaTombstone {
 							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Update(
-								int(objectData.data[i].row),
+								int(objectData.data[row].row),
 								[]byte(blockLocation),
 								false)
 						}
