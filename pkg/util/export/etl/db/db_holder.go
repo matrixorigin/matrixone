@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"fmt"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
@@ -36,6 +38,8 @@ var (
 var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
+
+	csvWriterGlobal atomic.Value
 
 	db atomic.Value
 
@@ -254,162 +258,87 @@ func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen i
 	return prepareSQLS
 }
 
+const initedSize = 4 * mpool.MB
+
+var bufPool = sync.Pool{New: func() any {
+	return bytes.NewBuffer(make([]byte, 0, initedSize))
+}}
+
+func getBuffer() *bytes.Buffer {
+	return bufPool.Get().(*bytes.Buffer)
+}
+
+func putBuffer(buf *bytes.Buffer) {
+	if buf != nil {
+		buf.Reset()
+		bufPool.Put(buf)
+	}
+}
+
+type CSVWriter struct {
+	ctx       context.Context
+	formatter *csv.Writer
+	buf       *bytes.Buffer
+}
+
+func NewCSVWriter(ctx context.Context) *CSVWriter {
+	buf := bufPool.Get().(*bytes.Buffer)
+	writer := csv.NewWriter(buf)
+	writer.UseCRLF = true // Use \r\n as the line terminator
+
+	w := &CSVWriter{
+		ctx:       ctx,
+		buf:       buf,
+		formatter: writer,
+	}
+	return w
+}
+
+func (w *CSVWriter) WriteStrings(record []string) error {
+	if err := w.formatter.Write(record); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *CSVWriter) GetContent() string {
+	w.formatter.Flush() // Ensure all data is written to buffer
+	return w.buf.String()
+}
+
+func (w *CSVWriter) Release() {
+	if w.buf != nil {
+		w.buf.Reset()
+		bufPool.Put(w.buf)
+		w.buf = nil
+		w.formatter = nil
+	}
+}
+
 func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
 	if len(records) == 0 {
 		return nil
 	}
-	var sqls *prepareSQLs
-	key := fmt.Sprintf("%s_%s", tbl.Database, tbl.Table)
-	if val, ok := prepareSQLMap.Load(key); ok {
-		sqls = val.(*prepareSQLs)
-		if sqls.columns != len(records[0]) {
-			sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
-			prepareSQLMap.Store(key, sqls)
+
+	csvWriter := NewCSVWriter(ctx)
+	defer csvWriter.Release() // Ensures that the buffer is returned to the pool
+
+	// Write each record to the CSVWriter
+	for _, record := range records {
+		if err := csvWriter.WriteStrings(record); err != nil {
+			return err
 		}
-	} else {
-		sqls = getPrepareSQL(tbl, len(records[0]), batchLen, middleBatchLen)
-		prepareSQLMap.Store(key, sqls)
 	}
 
-	tx, err := sqlDb.BeginTx(ctx, nil)
+	csvData := csvWriter.GetContent()
+	escapedCSVData := strings.ReplaceAll(csvData, "'", "''")
+	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
+
+	// Execute the LOAD DATA command directly without a transaction
+	_, err := sqlDb.ExecContext(context.Background(), loadSQL)
 	if err != nil {
 		return err
 	}
 
-	var maxStmt *sql.Stmt
-	var middleStmt *sql.Stmt
-	var oneStmt *sql.Stmt
-
-	for {
-		if len(records) == 0 {
-			break
-		} else if len(records) >= batchLen {
-			if maxStmt == nil {
-				maxStmt, err = tx.PrepareContext(ctx, sqls.maxRows)
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-			}
-			vals := make([]any, sqls.columns*batchLen)
-			idx := 0
-			for _, row := range records[:batchLen] {
-				for i, field := range row {
-					escapedStr := field
-					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-						vals[idx] = field[:tbl.Columns[i].Scale-1]
-					} else {
-						vals[idx] = field
-					}
-					idx++
-				}
-			}
-			_, err := maxStmt.ExecContext(ctx, vals...)
-			if err != nil {
-				tx.Rollback()
-				return err
-			}
-			if ctx.Err() != nil {
-				tx.Rollback()
-				return ctx.Err()
-			}
-
-			records = records[batchLen:]
-		} else if len(records) >= middleBatchLen {
-			if maxStmt != nil {
-				err = maxStmt.Close()
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-				maxStmt = nil
-			}
-			if middleStmt == nil {
-				middleStmt, err = tx.PrepareContext(ctx, sqls.middleRows)
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-			}
-			vals := make([]any, sqls.columns*middleBatchLen)
-			idx := 0
-			for _, row := range records[:middleBatchLen] {
-				for i, field := range row {
-					escapedStr := field
-					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-						vals[idx] = field[:tbl.Columns[i].Scale-1]
-					} else {
-						vals[idx] = field
-					}
-					idx++
-				}
-			}
-			_, err := middleStmt.ExecContext(ctx, vals...)
-			if err != nil {
-				tx.Rollback()
-				return err
-			}
-			if ctx.Err() != nil {
-				tx.Rollback()
-				return ctx.Err()
-			}
-
-			records = records[middleBatchLen:]
-		} else {
-			if maxStmt != nil {
-				err = maxStmt.Close()
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-				maxStmt = nil
-			}
-			if middleStmt != nil {
-				err = middleStmt.Close()
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-				middleStmt = nil
-			}
-			if oneStmt == nil {
-				oneStmt, err = tx.PrepareContext(ctx, sqls.oneRow)
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-			}
-			vals := make([]any, sqls.columns)
-			for _, row := range records {
-				if err != nil {
-					return err
-				}
-				for i, field := range row {
-					escapedStr := field
-					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-						vals[i] = field[:tbl.Columns[i].Scale-1]
-					} else {
-						vals[i] = field
-					}
-				}
-				_, err = oneStmt.ExecContext(ctx, vals...)
-				if err != nil {
-					tx.Rollback()
-					return err
-				}
-			}
-			err = oneStmt.Close()
-			if err != nil {
-				tx.Rollback()
-				return err
-			}
-			break
-		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		tx.Rollback()
-		return err
-	}
 	return nil
 }
