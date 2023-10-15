@@ -8383,10 +8383,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 	// TODO use context.AfterFunc in go1.21
 	go func() {
 		defer loadLocalReader.Close()
-		select {
-		case <-ctx.Done():
-			return
-		}
+		<-ctx.Done()
 	}()
 
 	// write to pipe

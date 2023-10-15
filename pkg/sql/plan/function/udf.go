@@ -712,10 +712,7 @@ func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.Reader, err
 			}
 		}()
 
-		select {
-		case <-ctx.Done():
-			return
-		}
+		<-ctx.Done()
 	}()
 
 	ioVector := &fileservice.IOVector{
