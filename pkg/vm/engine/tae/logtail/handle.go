@@ -785,7 +785,12 @@ func LoadCheckpointEntries(
 		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
-			return nil, closeCBs, err
+			for j := range closeCBs {
+				if closeCBs[j] != nil {
+					closeCBs[j]()
+				}
+			}
+			return nil, nil, err
 		}
 		bats[i] = bat
 	}
@@ -795,7 +800,12 @@ func LoadCheckpointEntries(
 		data := datas[i]
 		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
-			return nil, closeCBs, err
+			for j := range closeCBs {
+				if closeCBs[j] != nil {
+					closeCBs[j]()
+				}
+			}
+			return nil, nil, err
 		}
 		if tableName != pkgcatalog.MO_DATABASE &&
 			tableName != pkgcatalog.MO_COLUMNS &&

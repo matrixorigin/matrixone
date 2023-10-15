@@ -677,7 +677,10 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 		}
 	}
 	tableName := obj.GetObjName()
-	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
+	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
+	if err != nil {
+		return false
+	}
 
 	var partitionInfo *plan2.PartitionByDef
 	engineDefs, err := table.TableDefs(ctx)

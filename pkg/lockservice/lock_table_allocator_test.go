@@ -136,6 +136,7 @@ func TestKeepaliveBind(t *testing.T) {
 			m.Store(1,
 				newRemoteLockTable(
 					"s1",
+					time.Second,
 					bind,
 					c,
 					func(lt pb.LockTable) {}))
