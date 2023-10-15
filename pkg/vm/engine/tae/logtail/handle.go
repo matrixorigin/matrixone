@@ -865,7 +865,7 @@ func LoadCheckpointEntriesFromKey(
 	fs fileservice.FileService,
 	location objectio.Location,
 	version uint32,
-	) ([]objectio.Location, *CheckpointData, error) {
+) ([]objectio.Location, *CheckpointData, error) {
 	locations := make([]objectio.Location, 0)
 	locations = append(locations, location)
 	data := NewCheckpointData()
@@ -910,37 +910,37 @@ func LoadCheckpointEntriesFromKey(
 }
 
 type fileData struct {
-	data []blockData
-	name objectio.ObjectName
+	data     []blockData
+	name     objectio.ObjectName
 	isChange bool
 }
 
 type blockData struct {
-	num uint16
-	row uint32
+	num       uint16
+	row       uint32
 	blockType objectio.DataMetaType
-	data *batch.Batch
+	data      *batch.Batch
 }
 
 func ReWriteCheckpointAndBlockFromKey(
 	ctx context.Context,
-	fs,dstFs fileservice.FileService,
-	loc,tnLocation objectio.Location,
+	fs, dstFs fileservice.FileService,
+	loc, tnLocation objectio.Location,
 	version uint32, ts types.TS,
-	) (objectio.Location,objectio.Location,*CheckpointData, error) {
+) (objectio.Location, objectio.Location, *CheckpointData, error) {
 	objectsData := make(map[string]*fileData, 0)
 	data := NewCheckpointData()
 	reader, err := blockio.NewObjectReader(fs, loc)
 	if err != nil {
-		return nil,nil,nil, err
+		return nil, nil, nil, err
 	}
 	err = data.readMetaBatch(ctx, version, reader, nil)
 	if err != nil {
-		return nil,nil,nil, err
+		return nil, nil, nil, err
 	}
 	err = data.readAll(ctx, version, fs)
 	if err != nil {
-		return nil,nil,nil, err
+		return nil, nil, nil, err
 	}
 	isCkpChange := false
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
@@ -958,10 +958,10 @@ func ReWriteCheckpointAndBlockFromKey(
 		if !isAblk && !deltaLoc.IsEmpty() {
 			deltaBat, err = blockio.LoadOneBlock(ctx, fs, deltaLoc, objectio.SchemaTombstone)
 			location = deltaLoc
-		} else if isAblk{
+		} else if isAblk {
 			bat, err = blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
 			if err != nil {
-				return nil,nil,nil, err
+				return nil, nil, nil, err
 			}
 			if !deltaLoc.IsEmpty() {
 				deltaBat, err = blockio.LoadOneBlock(ctx, fs, deltaLoc, objectio.SchemaTombstone)
@@ -971,7 +971,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			continue
 		}
 		if err != nil {
-			return nil,nil,nil, err
+			return nil, nil, nil, err
 		}
 		isChange := false
 		commitTs := types.TS{}
@@ -993,7 +993,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			for v := 0; v < deltaBat.Vecs[0].Length(); v++ {
 				err = deltaCommitTs.Unmarshal(deltaBat.Vecs[len(deltaBat.Vecs)-3].GetRawBytesAt(v))
 				if err != nil {
-					return nil,nil,nil, err
+					return nil, nil, nil, err
 				}
 				if !deltaCommitTs.LessEq(ts) {
 					windowCNBatch(deltaBat, 0, uint64(v))
@@ -1006,8 +1006,8 @@ func ReWriteCheckpointAndBlockFromKey(
 		name := location.Name().String()
 		if objectsData[name] == nil {
 			objectsData[name] = &fileData{
-				name: location.Name(),
-				data: make([]blockData,0),
+				name:     location.Name(),
+				data:     make([]blockData, 0),
 				isChange: isChange,
 			}
 		}
@@ -1016,9 +1016,9 @@ func ReWriteCheckpointAndBlockFromKey(
 			objectsData[name].data = append(
 				objectsData[name].data,
 				blockData{
-					num: metaLoc.ID(),
-					row: uint32(i),
-					data: bat,
+					num:       metaLoc.ID(),
+					row:       uint32(i),
+					data:      bat,
 					blockType: objectio.SchemaData,
 				})
 		}
@@ -1026,70 +1026,68 @@ func ReWriteCheckpointAndBlockFromKey(
 			objectsData[name].data = append(
 				objectsData[name].data,
 				blockData{
-					num: deltaLoc.ID(),
-					row: uint32(i),
-					data: deltaBat,
+					num:       deltaLoc.ID(),
+					row:       uint32(i),
+					data:      deltaBat,
 					blockType: objectio.SchemaTombstone,
 				})
 		}
+	}
 
-		if isCkpChange {
-			for fileName, objectData := range objectsData {
-				if objectData.isChange {
-					writer, err := blockio.NewBlockWriter(fs, fileName)
-					if err != nil {
-						return nil,nil,nil, err
-					}
-					sort.Slice(objectData.data, func(i, j int) bool {
-						return objectData.data[i].num < objectData.data[j].num
-					})
-					for _, block := range objectData.data {
-						if block.blockType == objectio.SchemaData {
-							_, err = writer.WriteBatch(block.data)
-							if err != nil {
-								return nil,nil,nil, err
-							}
-						} else if block.blockType == objectio.SchemaTombstone {
-							_, err = writer.WriteTombstoneBatch(block.data)
-							if err != nil {
-								return nil,nil,nil, err
-							}
-						}
-					}
-
-					blocks, extent, err := writer.Sync(ctx)
-					if err != nil {
-						return nil,nil,nil, err
-					}
-
-					for row, block := range blocks {
-						blockLocation := objectio.BuildLocation(objectData.name, extent,0, block.GetID())
-						if objectData.data[row].blockType == objectio.SchemaData {
-							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Update(
-								int(objectData.data[row].row),
-								[]byte(blockLocation),
-								false)
-						}
-						if objectData.data[row].blockType == objectio.SchemaTombstone {
-							data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Update(
-								int(objectData.data[row].row),
-								[]byte(blockLocation),
-								false)
-						}
-					}
-
-
+	if isCkpChange {
+		for fileName, objectData := range objectsData {
+			if objectData.isChange {
+				writer, err := blockio.NewBlockWriter(fs, fileName)
+				if err != nil {
+					return nil, nil, nil, err
 				}
-			}
-			cnLocation, dnLocation, err := data.WriteTo(dstFs, 10000)
-			if err != nil {
-				return nil,nil,nil, err
-			}
-			loc = cnLocation
-			tnLocation = dnLocation
+				sort.Slice(objectData.data, func(i, j int) bool {
+					return objectData.data[i].num < objectData.data[j].num
+				})
+				for _, block := range objectData.data {
+					if block.blockType == objectio.SchemaData {
+						_, err = writer.WriteBatch(block.data)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+					} else if block.blockType == objectio.SchemaTombstone {
+						_, err = writer.WriteTombstoneBatch(block.data)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+					}
+				}
 
+				blocks, extent, err := writer.Sync(ctx)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+
+				for row, block := range blocks {
+					blockLocation := objectio.BuildLocation(objectData.name, extent, 0, block.GetID())
+					if objectData.data[row].blockType == objectio.SchemaData {
+						data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Update(
+							int(objectData.data[row].row),
+							[]byte(blockLocation),
+							false)
+					}
+					if objectData.data[row].blockType == objectio.SchemaTombstone {
+						data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Update(
+							int(objectData.data[row].row),
+							[]byte(blockLocation),
+							false)
+					}
+				}
+
+			}
 		}
+		cnLocation, dnLocation, err := data.WriteTo(dstFs, 10000)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		loc = cnLocation
+		tnLocation = dnLocation
 
 	}
-	return  loc, tnLocation, data, nil
+	return loc, tnLocation, data, nil
 }
