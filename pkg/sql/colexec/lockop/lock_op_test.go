@@ -260,6 +260,7 @@ func TestCallLockOpWithHasPrevCommitLessMe(t *testing.T) {
 				defer arg2.rt.parker.FreeMem()
 
 				proc.TxnOperator.TxnRef().SnapshotTS = timestamp.Timestamp{PhysicalTime: math.MaxInt64}
+
 				_, err = Call(0, proc, arg2, false, false)
 				assert.NoError(t, err)
 
