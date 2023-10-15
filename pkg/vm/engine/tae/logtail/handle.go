@@ -977,7 +977,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		if v := 0; v < bat.Vecs[0].Length() {
 			commitTs := types.TS{}
 			deltaCommitTs := types.TS{}
-			if bat != nil {
+			if bat != nil && bat.Vecs[0].Length() > 0 {
 				err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
 				if err != nil {
 					return nil,nil,nil, err
@@ -988,8 +988,8 @@ func ReWriteCheckpointAndBlockFromKey(
 					isCkpChange = true
 				}
 			}
-			if deltaBat != nil {
-				err = deltaCommitTs.Unmarshal(bat.Vecs[len(deltaBat.Vecs)-2].GetRawBytesAt(v))
+			if deltaBat != nil && deltaBat.Vecs[0].Length() > 0 {
+				err = deltaCommitTs.Unmarshal(deltaBat.Vecs[len(deltaBat.Vecs)-3].GetRawBytesAt(v))
 				if err != nil {
 					return nil,nil,nil, err
 				}
