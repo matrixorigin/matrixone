@@ -67,6 +67,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	cnt, err = db_holder.WriteRowRecords(sw.buffer, sw.tbl, MAX_INSERT_TIME)
 
 	if err != nil {
+		// todo : write err to rawlog files
 		sw.dumpBufferToCSV()
 	}
 	_, err = sw.csvWriter.FlushAndClose()
