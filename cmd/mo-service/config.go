@@ -17,8 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"hash/fnv"
 	"math"
 	"net"
@@ -27,8 +25,12 @@ import (
 	"strings"
 	"time"
 
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
+
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/chaos"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -84,6 +86,8 @@ type Dynamic struct {
 	ServiceCount int `toml:"service-count"`
 	// CpuCount how many cpu can used pr cn instance
 	CpuCount int `toml:"cpu-count"`
+	// Chaos chaos test config
+	Chaos chaos.Config `toml:"chaos"`
 }
 
 // Config mo-service configuration
@@ -341,13 +345,23 @@ func (c *Config) createFileService(
 		if err != nil {
 			return nil, err
 		}
+		services = append(services, service)
+
+		// perf counter
 		counterSetName := strings.Join([]string{
 			serviceType.String(),
 			nodeUUID,
 			service.Name(),
 		}, " ")
 		perfCounterSet.FileServiceByName[counterSetName] = counterSet
-		services = append(services, service)
+
+		// set shared fs perf counter as node perf counter
+		if service.Name() == defines.SharedFileServiceName {
+			perfcounter.Named.Store(
+				perfcounter.NameForNode(nodeUUID),
+				counterSet,
+			)
+		}
 
 		// Create "Log Exporter" for this PerfCounter
 		counterLogExporter := perfcounter.NewCounterLogExporter(counterSet)

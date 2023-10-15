@@ -329,6 +329,9 @@ type Process struct {
 type vectorPool struct {
 	sync.Mutex
 	vecs map[uint8][]*vector.Vector
+
+	// max vector count limit for each type in pool.
+	Limit int
 }
 
 type sqlHelper interface {

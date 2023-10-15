@@ -92,11 +92,9 @@ func (db *DB) ForceCheckpoint(
 	if err != nil {
 		return err
 	}
-	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts); err != nil {
+	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true); err != nil {
 		return err
 	}
-	lsn := db.BGCheckpointRunner.MaxLSNInRange(ts)
-	_, err = db.Wal.RangeCheckpoint(1, lsn)
 	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
 	return err
 }

@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -553,6 +555,9 @@ func (tbl *txnTable) resetSnapshot() {
 
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
+	start := time.Now()
+	defer v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
 
@@ -588,7 +593,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	for i := range exprs {
 		newExprs[i] = plan2.DeepCopyExpr(exprs[i])
 		// newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
-		foldedExpr, _ := plan2.ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], tbl.proc, true)
+		foldedExpr, _ := plan2.ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], tbl.proc.Load(), true)
 		if foldedExpr != nil {
 			newExprs[i] = foldedExpr
 		}
@@ -601,7 +606,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		newExprs,
 		tbl.blockInfos,
 		&ranges,
-		tbl.proc,
+		tbl.proc.Load(),
 	)
 	return
 }
@@ -635,7 +640,7 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
 	if tbl.db.txn.meta.IsRCIsolation() {
-		state, err := tbl.getPartitionState(tbl.proc.Ctx)
+		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
 		if err != nil {
 			return err
 		}
@@ -830,7 +835,7 @@ func (tbl *txnTable) tryFastRanges(
 		tbl.tableDef,
 		exprs,
 		tbl.primaryIdx,
-		tbl.proc,
+		tbl.proc.Load(),
 		tbl.db.txn.engine.packerPool,
 	)
 	if len(val) == 0 {
@@ -851,7 +856,7 @@ func (tbl *txnTable) tryFastRanges(
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
 			var objMeta objectio.ObjectMeta
 			if objMeta, err = objectio.FastLoadObjectMeta(
-				tbl.proc.Ctx, &location, false, tbl.db.txn.engine.fs,
+				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 			); err != nil {
 				return
 			}
@@ -870,7 +875,7 @@ func (tbl *txnTable) tryFastRanges(
 
 			// check whether the object is skipped by bloom filter
 			if bf, err = objectio.LoadBFWithMeta(
-				tbl.proc.Ctx, meta, location, fs,
+				tbl.proc.Load().Ctx, meta, location, fs,
 			); err != nil {
 				return
 			}
@@ -1323,7 +1328,8 @@ func (tbl *txnTable) NewReader(
 		}
 
 		if len(cleanBlks) > 0 {
-			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc)
+			//FIXME::tbl.proc produce datarace
+			rds0, err = tbl.newBlockReader(ctx, num, expr, cleanBlks, tbl.proc.Load())
 			if err != nil {
 				return nil, err
 			}
@@ -1341,7 +1347,7 @@ func (tbl *txnTable) NewReader(
 	for _, r := range ranges {
 		blkInfos = append(blkInfos, catalog.DecodeBlockInfo(r))
 	}
-	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc)
+	return tbl.newBlockReader(ctx, num, expr, blkInfos, tbl.proc.Load())
 }
 
 func (tbl *txnTable) newMergeReader(
@@ -1358,7 +1364,7 @@ func (tbl *txnTable) newMergeReader(
 		// here we try to serialize the composite primary key
 		if pk.CompPkeyCol != nil {
 			pkVals := make([]*plan.Const, len(pk.Names))
-			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc)
+			_, hasNull := getCompositPKVals(expr, pk.Names, pkVals, tbl.proc.Load())
 
 			// return empty reader if the composite primary key has null value
 			if hasNull {
@@ -1382,7 +1388,7 @@ func (tbl *txnTable) newMergeReader(
 			}
 		} else {
 			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-			ok, hasNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc)
+			ok, hasNull, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id), tbl.proc.Load())
 			if hasNull {
 				return []engine.Reader{
 					new(emptyReader),
@@ -1520,9 +1526,9 @@ func (tbl *txnTable) newReader(
 		typsMap:  mp,
 	}
 
-	tbl.Lock()
-	proc := tbl.proc
-	tbl.Unlock()
+	//tbl.Lock()
+	proc := tbl.proc.Load()
+	//tbl.Unlock()
 
 	readers[0] = partReader
 
@@ -1775,11 +1781,11 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		location := blk.MetaLocation()
 		if hit, ok := objFilterMap[*location.ShortName()]; !ok {
 			if objMeta, err = objectio.FastLoadObjectMeta(
-				tbl.proc.Ctx, &location, false, tbl.db.txn.engine.fs,
+				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 			); err != nil {
 				return rowid, false, err
 			}
-			hit = colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,
+			hit = colexec.EvaluateFilterByZoneMap(tbl.proc.Load().Ctx, tbl.proc.Load(), filter,
 				objMeta.MustDataMeta(), columnMap, zms, vecs)
 			objFilterMap[*location.ShortName()] = hit
 			if !hit {
@@ -1790,15 +1796,15 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		}
 		// eval filter expr on the block
 		blkMeta := objMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
-		if !colexec.EvaluateFilterByZoneMap(tbl.proc.Ctx, tbl.proc, filter,
+		if !colexec.EvaluateFilterByZoneMap(tbl.proc.Load().Ctx, tbl.proc.Load(), filter,
 			blkMeta, columnMap, zms, vecs) {
 			continue
 		}
 		// rowid + pk
 		bat, err := blockio.BlockRead(
-			tbl.proc.Ctx, &blk, nil, columns, colTypes, tbl.db.txn.meta.SnapshotTS,
+			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes, tbl.db.txn.meta.SnapshotTS,
 			nil, nil, nil,
-			tbl.db.txn.engine.fs, tbl.proc.Mp(), tbl.proc,
+			tbl.db.txn.engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(),
 		)
 		if err != nil {
 			return rowid, false, err
@@ -1811,17 +1817,17 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		for i, b := range bs {
 			if b {
 				rowids := vector.MustFixedCol[types.Rowid](bat.Vecs[0])
-				vec.Free(tbl.proc.Mp())
-				bat.Clean(tbl.proc.Mp())
+				vec.Free(tbl.proc.Load().Mp())
+				bat.Clean(tbl.proc.Load().Mp())
 				return rowids[i], true, nil
 			}
 		}
-		vec.Free(tbl.proc.Mp())
-		bat.Clean(tbl.proc.Mp())
+		vec.Free(tbl.proc.Load().Mp())
+		bat.Clean(tbl.proc.Load().Mp())
 	}
 	return rowid, false, nil
 }
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
-	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Ctx, "=", []*plan.Expr{pkExpr, constExpr})
+	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
 }

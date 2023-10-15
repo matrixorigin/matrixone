@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 )
 
@@ -524,6 +525,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
+	getLogger().Info("createTable",
+		zap.String("databaseName", c.db),
+		zap.String("tableName", qry.GetTableDef().GetName()),
+	)
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
@@ -531,6 +536,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
 
@@ -545,6 +555,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if dbName == "" {
 			return moerr.NewNoDB(c.ctx)
 		}
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
 	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
@@ -554,9 +569,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if qry.GetReplace() {
 			err := c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 		} else {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return moerr.NewTableAlreadyExists(c.ctx, tblName)
 		}
 	}
@@ -568,27 +593,57 @@ func (s *Scope) CreateTable(c *Compile) error {
 			if qry.GetIfNotExists() {
 				return nil
 			}
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
 		}
 	}
 
 	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
+	getLogger().Info("createTable ok",
+		zap.String("databaseName", c.db),
+		zap.String("tableName", qry.GetTableDef().GetName()),
+		zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+	)
 
 	partitionTables := qry.GetPartitionTables()
 	for _, table := range partitionTables {
 		storageCols := planColsToExeCols(table.GetCols())
 		storageDefs, err := planDefsToExeDefs(table)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -598,12 +653,22 @@ func (s *Scope) CreateTable(c *Compile) error {
 		fkTables := qry.GetFkTables()
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		tblId := newRelation.GetTableID(c.ctx)
 
 		newTableDef, err := newRelation.TableDefs(c.ctx)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		var colNameToId = make(map[string]uint64)
@@ -637,10 +702,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = newRelation.UpdateConstraint(c.ctx, newCt)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 
@@ -649,14 +724,29 @@ func (s *Scope) CreateTable(c *Compile) error {
 			fkDbName := fkDbs[i]
 			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 			fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName, nil)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 			err = s.addRefChildTbl(c, fkRelation, tblId)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 		}
@@ -668,12 +758,27 @@ func (s *Scope) CreateTable(c *Compile) error {
 		exeCols = planColsToExeCols(planCols)
 		exeDefs, err = planDefsToExeDefs(def)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		if _, err := dbSource.Relation(c.ctx, def.Name, nil); err == nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
 		}
 		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -681,23 +786,48 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if checkIndexInitializable(dbName, tblName) {
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = c.runSql(insertSQL)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 
 		insertSQL2, err := makeInsertTablePartitionsSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = c.runSql(insertSQL2)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -1198,7 +1328,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		oldId = rel.GetTableID(c.ctx)
 	}
-	err = incrservice.GetAutoIncrementService().Reset(
+	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
 		c.ctx,
 		oldId,
 		newId,
@@ -1349,7 +1479,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := incrservice.GetAutoIncrementService().Delete(
+			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
 				c.proc.TxnOperator)
@@ -1377,7 +1507,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := incrservice.GetAutoIncrementService().Delete(
+			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
 				c.proc.TxnOperator)
@@ -2219,7 +2349,7 @@ func maybeCreateAutoIncrement(
 	if len(cols) == 0 {
 		return nil
 	}
-	return incrservice.GetAutoIncrementService().Create(
+	return incrservice.GetAutoIncrementService(ctx).Create(
 		ctx,
 		def.TblId,
 		cols,

@@ -337,13 +337,18 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if maxTs.Less(checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
-		// for force checkpoint, ckpLSN is 0.
-		if checkpointEntry.version >= logtail.CheckpointVersion7 && checkpointEntry.ckpLSN > 0 {
+		if checkpointEntry.version >= logtail.CheckpointVersion7 && checkpointEntry.ckpLSN != 0 {
 			if checkpointEntry.ckpLSN < maxLSN {
 				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, checkpointEntry.ckpLSN))
 			}
 			isLSNValid = true
 			maxLSN = checkpointEntry.ckpLSN
+		}
+		// For version 7, all ckp LSN of force ickp is 0.
+		// In db.ForceIncrementalCheckpoint，it truncates.
+		// If the last ckp is force ickp，LSN check should be disable.
+		if checkpointEntry.version == logtail.CheckpointVersion7 && checkpointEntry.ckpLSN == 0 {
+			isLSNValid = false
 		}
 	}
 	applyDuration = time.Since(t0)
