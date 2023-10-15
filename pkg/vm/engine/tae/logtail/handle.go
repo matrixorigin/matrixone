@@ -1035,6 +1035,9 @@ func ReWriteCheckpointAndBlockFromKey(
 			for fileName, objectData := range objectsData {
 				if objectData.isChange {
 					writer, err := blockio.NewBlockWriter(fs, fileName)
+					if err != nil {
+						return nil,nil,nil, err
+					}
 					sort.Slice(objectData.data, func(i, j int) bool {
 						return objectData.data[i].num < objectData.data[j].num
 					})

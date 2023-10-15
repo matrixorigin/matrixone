@@ -517,7 +517,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	return
 }
 
-func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (err error, location string) {
+func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
 	factory := logtail.BackupCheckpointDataFactory(entry.start, entry.end)
 	data, err := factory(r.catalog)
 	if err != nil {

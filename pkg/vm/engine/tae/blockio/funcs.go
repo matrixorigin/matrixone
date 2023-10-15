@@ -122,5 +122,5 @@ func LoadOneBlock(
 		idxes[i] = uint16(i)
 	}
 	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(), uint32(key.ID()), idxes, fileservice.SkipMemory, fs)
-	return bat, nil
+	return bat, err
 }

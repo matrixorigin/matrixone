@@ -435,7 +435,7 @@ func (h *Handle) HandleBackup(
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	var locations string
 	locations += backupTime.Format(time.DateTime) + ";"
-	err, location := h.db.ForceCheckpointForBackup(ctx, currTs, timeout)
+	location, err := h.db.ForceCheckpointForBackup(ctx, currTs, timeout)
 	if err != nil {
 		return nil, err
 	}
