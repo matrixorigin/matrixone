@@ -30,10 +30,7 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectBegin()
-	// mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectPrepare("INSERT INTO `testDB`.`testTable`").ExpectExec().WithArgs("record1").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	mock.ExpectExec("LOAD DATA INLINE FORMAT='csv', DATA='record1\n' INTO TABLE testDB.testTable").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	db_holder.SetDBConn(db)
 
