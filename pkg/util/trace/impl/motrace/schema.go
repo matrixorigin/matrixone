@@ -182,7 +182,7 @@ var (
 			sessionIDCol,
 		},
 		PrimaryKeyColumn: nil,
-		ClusterBy:        []table.Column{timestampCol, rawItemCol},
+		ClusterBy:        []table.Column{timestampCol},
 		Engine:           table.NormalTableEngine,
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      table.NewAccountDatePathBuilder(),
