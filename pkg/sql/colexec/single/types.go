@@ -68,6 +68,7 @@ type Argument struct {
 	Conditions [][]*plan.Expr
 	Result     []colexec.ResultPos
 
+	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 }
 
