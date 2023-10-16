@@ -87,7 +87,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			}
 			err := ctr.build(ap, bat, proc, anal)
 			if err != nil {
-				ap.Free(proc, true)
+				ap.Free(proc, true, nil)
 			}
 			return process.ExecNext, err
 
@@ -97,7 +97,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				return process.ExecStop, nil
 			}
 			err := ctr.eval(ap.Limit, proc)
-			ap.Free(proc, err != nil)
+			ap.Free(proc, err != nil, nil)
 			if err == nil {
 				return process.ExecStop, nil
 			}

@@ -69,25 +69,25 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	ctr := ap.ctr
 
 	if ap.Limit == 0 {
-		ap.Free(proc, false)
+		ap.Free(proc, false, nil)
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
 
 	if end, err := ctr.build(ap, proc, anal, isFirst); err != nil {
-		ap.Free(proc, true)
+		ap.Free(proc, true, nil)
 		return process.ExecNext, err
 	} else if end {
 		return process.ExecStop, nil
 	}
 
 	if ctr.bat == nil {
-		ap.Free(proc, false)
+		ap.Free(proc, false, nil)
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
 	err := ctr.eval(ap.Limit, proc, anal, isLast)
-	ap.Free(proc, err != nil)
+	ap.Free(proc, err != nil, nil)
 	if err == nil {
 		return process.ExecStop, nil
 	}

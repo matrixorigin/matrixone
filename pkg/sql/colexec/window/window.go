@@ -123,7 +123,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (proces
 			}
 			_, err = ctr.processOrder(i, ap, ctr.bat, proc)
 			if err != nil {
-				ap.Free(proc, true)
+				ap.Free(proc, true, nil)
 				return process.ExecNext, err
 			}
 		}
