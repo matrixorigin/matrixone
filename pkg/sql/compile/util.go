@@ -162,10 +162,10 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 				}
 
 				for i, part := range indexdef.Parts {
-					// NO NEED TO CHECK ALIAS
-					//if catalog.IsAlias(part) {
-					//	part = catalog.ResolveAlias(part)
-					//}
+					// NOTE: Don't resolve the alias here.
+					// If we resolve it here, it will insert "OriginalPKColumnName" into the "mo_catalog.mo_indexes" table instead of
+					// "AliasPKColumnName". This will result is issues filter "Programmatically added PK" from the output of
+					// "show indexes" and "show create table" command.
 
 					//1. index id
 					if isFirst {

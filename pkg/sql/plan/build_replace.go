@@ -116,9 +116,6 @@ func getAllKeys(tableDef *plan.TableDef) []map[string]struct{} {
 		if index.Unique {
 			keys = append(keys, make(map[string]struct{}))
 			for _, key := range index.Parts {
-				//if catalog.IsAlias(key) {
-				//	key = catalog.ResolveAlias(key)
-				//}
 				keys[len(keys)-1][key] = struct{}{}
 			}
 		}

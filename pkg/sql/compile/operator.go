@@ -1772,6 +1772,7 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 					if err != nil {
 						return nil, nil, err
 					}
+					// NOTE: uniqueIndexTables is not yet used by the callee
 					uniqueIndexTables = append(uniqueIndexTables, indexTable)
 				}
 			}

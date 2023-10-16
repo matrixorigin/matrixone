@@ -2499,10 +2499,6 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 		if index.Unique {
 			uniqueMap := make(map[string]uint64)
 			for _, uniqueColName := range index.Parts {
-				//if catalog.IsAlias(uniqueColName) {
-				//	//continue
-				//	uniqueColName = catalog.ResolveAlias(uniqueColName)
-				//}
 				colId := tableRef.Cols[columnNamePos[uniqueColName]].ColId
 				uniqueMap[uniqueColName] = colId
 			}
