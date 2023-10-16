@@ -384,7 +384,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	// If there's an error, rollback the transaction
 	if execErr != nil {
-		//fmt.Printf("gavinyue1 bulkInsert failed, sql: %v \n", loadSQL)
+		fmt.Printf("gavinyue1 bulkInsert failed, sql: %v \n the end \n", loadSQL)
 		tx.Rollback()
 		return execErr
 	}
