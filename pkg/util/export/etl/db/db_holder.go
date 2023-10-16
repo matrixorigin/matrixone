@@ -329,8 +329,8 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	}
 
 	csvData := csvWriter.GetContent()
-	escapedCSVData := strings.ReplaceAll(csvData, "'", "''")
-	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
+	escapedCSVData := strings.ReplaceAll(strings.ReplaceAll(csvData, "\\", "\\\\"), "'", "''")
+	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%q' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
 
 	// Begin a new transaction
 	tx, err := sqlDb.Begin()
