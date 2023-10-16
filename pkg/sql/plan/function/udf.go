@@ -702,8 +702,8 @@ func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.Reader, err
 
 	// watch and cancel
 	// TODO use context.AfterFunc in go1.21
-	funcCtx := context.Background()
-	defer funcCtx.Done()
+	funcCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	go func() {
 		defer func() {
 			reader.Close()
@@ -714,12 +714,7 @@ func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.Reader, err
 			}
 		}()
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-funcCtx.Done():
-			return
-		}
+		<-funcCtx.Done()
 	}()
 
 	ioVector := &fileservice.IOVector{
