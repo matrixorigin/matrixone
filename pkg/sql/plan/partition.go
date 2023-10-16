@@ -638,7 +638,7 @@ func stringSliceToMap(stringSlice []string, stringMap map[string]int) (bool, str
 
 func stringSliceToMapIndexParts(stringSlice []string, stringMap map[string]int) (bool, string) {
 	for _, s := range stringSlice {
-		s = catalog2.TryResolveAlias(s)
+		s = catalog2.ResolveAlias(s)
 		if _, ok := stringMap[s]; ok {
 			return true, s
 		}

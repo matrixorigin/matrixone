@@ -35,7 +35,7 @@ func checkDropColumnWithIndex(colName string, indexes []*plan.IndexDef, ctx Comp
 	for _, indexInfo := range indexes {
 		if indexInfo.TableExist {
 			for _, column := range indexInfo.Parts {
-				column = catalog.TryResolveAlias(column)
+				column = catalog.ResolveAlias(column)
 				if column == colName {
 					return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column %s with index covered now", colName)
 				}

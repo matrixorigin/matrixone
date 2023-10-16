@@ -63,7 +63,7 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		// with the index key. If it is an index key column, column name replacement is required.
 		for _, indexInfo := range alterPlan.CopyTableDef.Indexes {
 			for j, partCol := range indexInfo.Parts {
-				partCol = catalog.TryResolveAlias(partCol)
+				partCol = catalog.ResolveAlias(partCol)
 				if partCol == originalCol.Name {
 					indexInfo.Parts[j] = newColName
 					break

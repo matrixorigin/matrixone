@@ -2064,7 +2064,7 @@ func appendPreInsertUkPlan(
 		colsMap[col.Name] = i
 	}
 	for _, part := range idxDef.Parts {
-		part = catalog.TryResolveAlias(part)
+		part = catalog.ResolveAlias(part)
 		if i, ok := colsMap[part]; ok {
 			useColumns = append(useColumns, int32(i))
 		}
@@ -2258,7 +2258,7 @@ func appendDeleteUniqueTablePlan(
 	} else {
 		args := make([]*Expr, partsLength)
 		for i, column := range indexdef.Parts {
-			column = catalog.TryResolveAlias(column)
+			column = catalog.ResolveAlias(column)
 			typ := typMap[column]
 			args[i] = &plan.Expr{
 				Typ: typ,

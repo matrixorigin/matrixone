@@ -14,25 +14,23 @@
 
 package catalog
 
+import (
+	"fmt"
+	"strings"
+)
+
 const (
 	AliasPrefix = "__mo_alias_"
 )
 
 func CreateAlias(column string) string {
-	return AliasPrefix + column
+	return fmt.Sprintf("%s%s", AliasPrefix, column)
 }
 
 func ResolveAlias(alias string) string {
-	return alias[len(AliasPrefix):]
+	return strings.TrimPrefix(alias, AliasPrefix)
 }
 
 func IsAlias(column string) bool {
-	return len(column) > len(AliasPrefix) && column[:len(AliasPrefix)] == AliasPrefix
-}
-
-func TryResolveAlias(column string) string {
-	if IsAlias(column) {
-		return ResolveAlias(column)
-	}
-	return column
+	return strings.HasPrefix(column, AliasPrefix)
 }
