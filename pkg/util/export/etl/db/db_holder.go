@@ -358,11 +358,30 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 		return nil
 	}
 
+	chunkSize := 100 // number of records per batch
+	for i := 0; i < len(records); i += chunkSize {
+		end := i + chunkSize
+
+		// Ensure not to exceed slice bounds
+		if end > len(records) {
+			end = len(records)
+		}
+
+		// Process current chunk
+		if err := processChunk(ctx, sqlDb, records[i:end], tbl); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func processChunk(ctx context.Context, sqlDb *sql.DB, chunkRecords [][]string, tbl *table.Table) error {
 	csvWriter := NewCSVWriter(ctx)
 	defer csvWriter.Release() // Ensures that the buffer is returned to the pool
 
-	// Write each record to the CSVWriter
-	for _, record := range records {
+	// Write each record of the chunk to the CSVWriter
+	for _, record := range chunkRecords {
 		if err := csvWriter.WriteStrings(record); err != nil {
 			return err
 		}
@@ -373,26 +392,13 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
 
-	// Begin a new transaction
-	tx, err := sqlDb.Begin()
-	if err != nil {
-		return err
-	}
-
 	// Use the transaction to execute the SQL command
-	_, execErr := tx.Exec(loadSQL)
+	_, execErr := sqlDb.Exec(loadSQL)
 
 	// If there's an error, rollback the transaction
 	if execErr != nil {
-		fmt.Printf("gavinyue1 bulkInsert failed, sql: %v \n the end \n", loadSQL)
-		tx.Rollback()
+		fmt.Printf("gavinyue1 processChunk failed, sql: %v \n the end \n", loadSQL)
 		return execErr
 	}
-
-	// If no errors, commit the transaction
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
 	return nil
 }
