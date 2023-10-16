@@ -15,9 +15,8 @@
 package types
 
 import (
-	"fmt"
+	"github.com/stretchr/testify/require"
 	"testing"
-	"time"
 )
 
 func TestParseDateCast(t *testing.T) {
@@ -124,26 +123,11 @@ func TestParseDateCast(t *testing.T) {
 	}
 }
 
-func TestParseDate2(t *testing.T) {
-	t1 := time.Now()
+func BenchmarkParseDate(b *testing.B) {
 	s := "2020-12-21"
-	for i := 0; i < 1000000; i++ {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
 		_, err := ParseDateCast(s)
-		if err != nil {
-			panic(err)
-		}
+		require.NoError(b, err)
 	}
-	fmt.Println("Time Spent is ", time.Since(t1))
 }
-
-// func TestParseDate3(t *testing.T) {
-// 	t1 := time.Now()
-// 	s := "2020-12-21"
-// 	for i := 0; i < 1000000; i++ {
-// 		_, err := ParseDateCast(s)
-// 		if err != nil {
-// 			panic(err)
-// 		}
-// 	}
-// 	fmt.Println("Time Spent is ", time.Since(t1))
-// }
