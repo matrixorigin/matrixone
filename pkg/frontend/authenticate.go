@@ -30,8 +30,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
