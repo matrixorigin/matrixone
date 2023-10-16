@@ -58,6 +58,10 @@ const (
 	AccountIDDbNameTblName = catalog.AccountIDDbNameTblName
 	AccountIDDbName        = catalog.AccountIDDbName
 
+	// supporting `show accounts` in checkpoint
+	CheckpointMetaAttr_BlockRows = "checkpoint_meta_block_rows"
+	CheckpointMetaAttr_BlockSize = "checkpoint_meta_block_size"
+
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
 
@@ -289,14 +293,16 @@ var (
 		pkgcatalog.SystemColAttr_AccID,
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
-		CheckpointMetaAttr_BlockLocation,
+		CheckpointMetaAttr_BlockRows,
+		CheckpointMetaAttr_BlockSize,
 	}
 
 	BlkAccSchemaTypes = []types.Type{
 		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint32, 0, 0),
 	}
 )
 
@@ -544,6 +550,19 @@ func init() {
 			}
 		} else {
 			if err := TNMetaSchema.AppendCol(colname, TNMetaShcemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	BlkAccSchema = catalog.NewEmptySchema("account_info")
+	for i, colname := range BlkAccSchemaAttrs {
+		if i == 0 {
+			if err := BlkAccSchema.AppendPKCol(colname, BlkAccSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := BlkAccSchema.AppendCol(colname, BlkAccSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}
