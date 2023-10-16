@@ -2115,6 +2115,10 @@ func appendPreInsertUkPlan(
 			},
 		})
 	}
+	//TODO: once everything works, rename all the UK to a more generic name that means UK and SK.
+	// ie preInsertUkNode -> preInsertIKNode
+	// NOTE: we have build secondary index by reusing the whole code flow of Unique Index.
+	// This would be done in a separate PR after verifying the correctness of the current code.
 	var preInsertUkNode *Node
 	if isUK {
 		preInsertUkNode = &Node{

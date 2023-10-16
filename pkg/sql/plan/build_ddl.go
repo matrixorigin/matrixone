@@ -1422,7 +1422,6 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
 
-		//indexDef.IndexName = indexInfo.Name
 		if indexInfo.Name == "" {
 			firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
 			nameCount[firstPart]++
@@ -1449,6 +1448,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 	}
 	return nil
 }
+
 func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
 	truncateTable := &plan.TruncateTable{}
 

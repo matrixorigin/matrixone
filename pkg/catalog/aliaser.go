@@ -19,6 +19,9 @@ import (
 	"strings"
 )
 
+// This class is used by "secondary index" to resolve the "programmatically generated PK" appended to the
+// end of the index key "__mo_index_idx_col".
+
 const (
 	AliasPrefix = "__mo_alias_"
 )
