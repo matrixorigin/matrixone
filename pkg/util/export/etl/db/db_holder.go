@@ -282,7 +282,6 @@ func NewCSVWriter(ctx context.Context) *CSVWriter {
 	buf := getBuffer()
 	buf.Reset()
 	writer := csv.NewWriter(buf)
-	writer.UseCRLF = true // Use \r\n as the line terminator
 
 	w := &CSVWriter{
 		ctx:       ctx,
@@ -313,14 +312,45 @@ func (w *CSVWriter) Release() {
 	putBuffer(w.buf)
 }
 
-func escapeString(value string) string {
-	replace := map[string]string{"\\": "\\\\", "'": `\'`, "\\0": "\\\\0", "\n": "\\n", "\r": "\\r", `"`: `\"`, "\x1a": "\\Z"}
+func escapeString(sql string) string {
+	dest := make([]byte, 0, 2*len(sql))
+	var escape byte
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
 
-	for b, a := range replace {
-		value = strings.Replace(value, b, a, -1)
+		escape = 0
+
+		switch c {
+		case 0:
+			escape = '0'
+			break
+		case '\n':
+			escape = 'n'
+			break
+		case '\r':
+			escape = 'r'
+			break
+		case '\\':
+			escape = '\\'
+			break
+		case '\'':
+			escape = '\''
+			break
+		case '"':
+			escape = '"'
+			break
+		case '\032':
+			escape = 'Z'
+		}
+
+		if escape != 0 {
+			dest = append(dest, '\\', escape)
+		} else {
+			dest = append(dest, c)
+		}
 	}
 
-	return value
+	return string(dest)
 }
 
 func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
@@ -339,8 +369,9 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	}
 
 	csvData := csvWriter.GetContent()
-	escapedCSVData := escapeString(csvData)
-	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%q' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
+	escapedCSVData := strings.ReplaceAll(csvData, "'", "''")
+
+	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
 
 	// Begin a new transaction
 	tx, err := sqlDb.Begin()
@@ -353,7 +384,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	// If there's an error, rollback the transaction
 	if execErr != nil {
-		fmt.Printf("gavinyue1 bulkInsert failed, sql: %v \n", loadSQL)
+		//fmt.Printf("gavinyue1 bulkInsert failed, sql: %v \n", loadSQL)
 		tx.Rollback()
 		return execErr
 	}
