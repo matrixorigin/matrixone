@@ -15,8 +15,9 @@
 package types
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseDateCast(t *testing.T) {
