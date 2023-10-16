@@ -302,6 +302,18 @@ func (tc *txnOperator) TxnRef() *txn.TxnMeta {
 	return &tc.mu.txn
 }
 
+func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.txn.SnapshotTS
+}
+
+func (tc *txnOperator) Status() txn.TxnStatus {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.txn.Status
+}
+
 func (tc *txnOperator) Snapshot() ([]byte, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
