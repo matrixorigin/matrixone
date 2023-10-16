@@ -1625,6 +1625,28 @@ func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+func builtInLg(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			lgValue, err := momath.Lg(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(lgValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 type opBuiltInRand struct {
 	seed *rand.Rand
 }
