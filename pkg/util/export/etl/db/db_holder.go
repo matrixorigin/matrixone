@@ -382,6 +382,10 @@ func processChunk(ctx context.Context, sqlDb *sql.DB, chunkRecords [][]string, t
 
 	// Write each record of the chunk to the CSVWriter
 	for _, record := range chunkRecords {
+		for i, col := range record {
+			record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "\\'")
+
+		}
 		if err := csvWriter.WriteStrings(record); err != nil {
 			return err
 		}
