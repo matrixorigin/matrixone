@@ -152,6 +152,8 @@ type Argument struct {
 	Cond *plan.Expr
 
 	OnList []*plan.Expr
+
+	HashOnPK bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
