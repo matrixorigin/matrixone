@@ -54,7 +54,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -8381,9 +8380,17 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 
 	// watch and cancel
 	// TODO use context.AfterFunc in go1.21
+	funcCtx := context.Background()
+	defer funcCtx.Done()
 	go func() {
 		defer loadLocalReader.Close()
-		<-ctx.Done()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-funcCtx.Done():
+			return
+		}
 	}()
 
 	// write to pipe
@@ -8419,11 +8426,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 	return ioVector.FilePath, nil
 }
 
-func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) error {
-	return InitFunction(ctx, ses, tenant, cf, mce)
-}
-
-func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction, uploader udf.PkgUploader) (err error) {
+func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
@@ -8528,7 +8531,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 			}
 			// upload
 			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = uploader.Upload(ctx, cf.Body, storageDir)
+			cf.Body, err = mce.Upload(ctx, cf.Body, storageDir)
 			if err != nil {
 				return err
 			}

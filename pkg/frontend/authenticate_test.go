@@ -387,7 +387,8 @@ func Test_initFunction(t *testing.T) {
 		}
 
 		ses := &Session{tenant: tenant}
-		err := InitFunction(ctx, ses, tenant, cu, nil)
+		mce := &MysqlCmdExecutor{}
+		err := mce.InitFunction(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
