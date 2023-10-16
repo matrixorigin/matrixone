@@ -378,13 +378,14 @@ func writeIncrementalCheckpoint(
 	start, end types.TS,
 	c *catalog.Catalog,
 	checkpointBlockRows int,
+	checkpointSize int,
 	fs fileservice.FileService,
 ) (objectio.Location, objectio.Location) {
 	factory := logtail.IncrementalCheckpointDataFactory(start, end)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
-	cnLocation, tnLocation, err := data.WriteTo(fs, checkpointBlockRows)
+	cnLocation, tnLocation, err := data.WriteTo(fs, checkpointBlockRows, checkpointSize)
 	assert.NoError(t, err)
 	return cnLocation, tnLocation
 }
@@ -613,9 +614,10 @@ func CheckCheckpointReadWrite(
 	start, end types.TS,
 	c *catalog.Catalog,
 	checkpointBlockRows int,
+	checkpointSize int,
 	fs fileservice.FileService,
 ) {
-	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, fs)
+	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, checkpointSize, fs)
 	tnData := tnReadCheckpoint(t, location, fs)
 
 	checkTNCheckpointData(context.Background(), t, tnData, start, end, c)
