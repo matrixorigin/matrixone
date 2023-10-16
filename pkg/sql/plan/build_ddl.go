@@ -1357,7 +1357,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		}
 		indexParts := make([]string, 0)
 
-		//isPkAlreadyPresentInIndexParts := false
+		isPkAlreadyPresentInIndexParts := false
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -1376,16 +1376,15 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
 			}
 
-			//if strings.Compare(name, pkeyName) == 0 {
-			//	isPkAlreadyPresentInIndexParts = true
-			//}
+			if strings.Compare(name, pkeyName) == 0 || catalog.IsAlias(name) {
+				isPkAlreadyPresentInIndexParts = true
+			}
 			indexParts = append(indexParts, name)
 		}
 
-		// Strategy 2:Add the alias primary key column to the index table irrespective of whether user added PK or not.
-		//if !isPkAlreadyPresentInIndexParts {
-		indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
-		//}
+		if !isPkAlreadyPresentInIndexParts {
+			indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
+		}
 
 		var keyName string
 		{

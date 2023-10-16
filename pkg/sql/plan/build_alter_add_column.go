@@ -366,7 +366,10 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 		if indexInfo.Unique && len(indexInfo.Parts) == 0 {
 			tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 		} else if !indexInfo.Unique {
-			if len(indexInfo.Parts) == 1 && catalog.IsAlias(indexInfo.Parts[0]) {
+			if len(indexInfo.Parts) == 1 &&
+				(catalog.IsAlias(indexInfo.Parts[0]) ||
+					indexInfo.Parts[0] == catalog.FakePrimaryKeyColName ||
+					indexInfo.Parts[0] == catalog.CPrimaryKeyColName) {
 				// Handles deleting the index table when there is no more user defined secondary keys.
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 			} else if len(indexInfo.Parts) == 0 {
