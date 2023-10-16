@@ -56,17 +56,17 @@ type Argument struct {
 	ctr *container
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if len(arg.ctr.insertBats) > 0 {
-			for _, bat := range arg.ctr.insertBats {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if ap.ctr != nil {
+		ap.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if len(ap.ctr.insertBats) > 0 {
+			for _, bat := range ap.ctr.insertBats {
 				bat.Clean(proc.Mp())
 			}
-			arg.ctr.insertBats = nil
+			ap.ctr.insertBats = nil
 		}
-		if arg.ctr.checkConflictBat != nil {
-			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
+		if ap.ctr.checkConflictBat != nil {
+			ap.ctr.checkConflictBat.Clean(proc.GetMPool())
 		}
 	}
 }
