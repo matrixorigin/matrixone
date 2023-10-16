@@ -202,7 +202,7 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 	}
 	// for sorted segments, we have to feed it to policy to see if it is qualified to be merged
 	seg.Stat.Rows = s.segmentHelper.segRowCnt
-	seg.Stat.Dels = s.segmentHelper.segRowDel
+	seg.Stat.RemainingRows = s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel
 	seg.LoadObjectInfo()
 	if s.schema.Name == motrace.RawLogTbl && seg.Stat.OriginSize == 0 {
 		// after loading object info, original size is still 0, we have to estimate it by experience

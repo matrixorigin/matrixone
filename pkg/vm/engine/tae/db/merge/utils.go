@@ -93,7 +93,7 @@ func estimateMergeConsume(msegs []*catalog.SegmentEntry) (origSize, estSize int)
 	rows, merged := 0, 0
 	for _, m := range msegs {
 		rows += m.Stat.Rows
-		merged += m.Stat.Rows - m.Stat.Dels
+		merged += m.Stat.RemainingRows
 		origSize += m.Stat.OriginSize
 	}
 	// by test exprience, full 8192 rows batch will expand to (6~8)x memory comsupation.

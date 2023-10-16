@@ -52,7 +52,7 @@ type SegStat struct {
 	OriginSize     int
 	SortKeyZonemap index.ZM
 	Rows           int
-	Dels           int
+	RemainingRows  int
 }
 
 func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {

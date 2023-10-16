@@ -40,7 +40,7 @@ func NewBasicPolicy() *Basic {
 
 // impl Policy for Basic
 func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
-	rowsLeftOnSeg := obj.Stat.Rows - obj.Stat.Dels
+	rowsLeftOnSeg := obj.Stat.RemainingRows
 	// it has too few rows, merge it
 	iscandidate := func() bool {
 		if rowsLeftOnSeg < o.objectMinRows {
@@ -70,7 +70,7 @@ func (o *Basic) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 		return segs
 	}
 	sort.Slice(segs, func(i, j int) bool {
-		return segs[i].Stat.Rows-segs[i].Stat.Dels < segs[j].Stat.Rows-segs[j].Stat.Dels
+		return segs[i].Stat.RemainingRows < segs[j].Stat.RemainingRows
 	})
 	segs = segs[:len(segs)-1]
 	for needPopout(segs) {
