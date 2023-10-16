@@ -68,6 +68,7 @@ type Argument struct {
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 
+	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 }
 

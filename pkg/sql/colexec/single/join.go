@@ -184,16 +184,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 				continue
 			}
-			idx := 0
-			matched := false
-			sels := mSels[vals[k]-1]
-			if ap.Cond != nil {
-				for j, sel := range sels {
+			if ap.HashOnPK {
+				matched := false
+				if ap.Cond != nil {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
 						return err
 					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
 						1, ctr.cfs2); err != nil {
 						return err
 					}
@@ -214,31 +212,85 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 						}
 						matched = true
-						idx = j
 					}
 					vec.Free(proc.Mp())
 				}
-			} else if len(sels) > 1 {
-				rbat.Clean(proc.Mp())
-				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
-			}
-			if ap.Cond != nil && !matched {
+				if ap.Cond != nil && !matched {
+					for j, rp := range ap.Result {
+						if rp.Rel != 0 {
+							if err := rbat.Vecs[j].UnionNull(proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
+						}
+					}
+					continue
+				}
 				for j, rp := range ap.Result {
 					if rp.Rel != 0 {
-						if err := rbat.Vecs[j].UnionNull(proc.Mp()); err != nil {
+						if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(vals[k]-1), proc.Mp()); err != nil {
 							rbat.Clean(proc.Mp())
 							return err
 						}
 					}
 				}
-				continue
-			}
-			sel := sels[idx]
-			for j, rp := range ap.Result {
-				if rp.Rel != 0 {
-					if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
-						rbat.Clean(proc.Mp())
-						return err
+			} else {
+				idx := 0
+				matched := false
+				sels := mSels[vals[k]-1]
+				if ap.Cond != nil {
+					for j, sel := range sels {
+						if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+							1, ctr.cfs1); err != nil {
+							return err
+						}
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+							1, ctr.cfs2); err != nil {
+							return err
+						}
+						vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+						if err != nil {
+							rbat.Clean(proc.Mp())
+							return err
+						}
+						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+							vec.Free(proc.Mp())
+							continue
+						}
+						bs := vector.MustFixedCol[bool](vec)
+						if bs[0] {
+							if matched {
+								vec.Free(proc.Mp())
+								rbat.Clean(proc.Mp())
+								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							}
+							matched = true
+							idx = j
+						}
+						vec.Free(proc.Mp())
+					}
+				} else if len(sels) > 1 {
+					rbat.Clean(proc.Mp())
+					return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+				}
+				if ap.Cond != nil && !matched {
+					for j, rp := range ap.Result {
+						if rp.Rel != 0 {
+							if err := rbat.Vecs[j].UnionNull(proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
+						}
+					}
+					continue
+				}
+				sel := sels[idx]
+				for j, rp := range ap.Result {
+					if rp.Rel != 0 {
+						if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(sel), proc.Mp()); err != nil {
+							rbat.Clean(proc.Mp())
+							return err
+						}
 					}
 				}
 			}
