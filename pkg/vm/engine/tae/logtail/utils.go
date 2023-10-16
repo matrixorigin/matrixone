@@ -51,6 +51,7 @@ const (
 	CheckpointVersion6 uint32 = 6
 	CheckpointVersion7 uint32 = 7
 	CheckpointVersion8 uint32 = 8
+	CheckpointVersion9 uint32 = 8
 
 	CheckpointCurrentVersion = CheckpointVersion8
 )
@@ -87,6 +88,8 @@ const (
 
 	BLKCNMetaInsertIDX
 
+	// supporting `show accounts` by recording extra
+	// account-blk changing info in checkpoint
 	BLKAccInsIDX
 	BLKAccDelIDX
 
@@ -127,6 +130,7 @@ var checkpointDataSchemas_V5 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V6 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V7 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V8 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V9 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
@@ -157,6 +161,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
+		BlkAccSchema,
+		BlkAccSchema, // 25
 		TNMetaSchema,
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
@@ -184,6 +190,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
+		BlkAccSchema,
+		BlkAccSchema, // 25
 		TNMetaSchema,
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
@@ -211,6 +219,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
+		BlkAccSchema,
+		BlkAccSchema, // 25
 		TNMetaSchema,
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
@@ -238,6 +248,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
+		BlkAccSchema,
+		BlkAccSchema, // 25
 		TNMetaSchema,
 	}
 	checkpointDataSchemas_V5 = [MaxIDX]*catalog.Schema{
@@ -265,6 +277,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
+		BlkAccSchema,
+		BlkAccSchema, // 25
 		TNMetaSchema,
 	}
 
@@ -293,11 +307,46 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema, // 23
+		BlkAccSchema,
+		BlkAccSchema, // 25
 		TNMetaSchema,
 	}
 	// Checkpoint V7, V8 update checkpoint metadata
 	checkpointDataSchemas_V7 = checkpointDataSchemas_V6
 	checkpointDataSchemas_V8 = checkpointDataSchemas_V6
+
+	// adding extra batches in V9, recording the blk rows and size
+	// changing and the account, db, table info the blk belongs to.
+	// this enabled the optimization of `show accounts` in CN side.
+	checkpointDataSchemas_V9 = [MaxIDX]*catalog.Schema{
+		MetaSchema,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DBDelSchema, // 3
+		DBTNSchema,
+		catalog.SystemTableSchema,
+		TblTNSchema,
+		TblDelSchema, // 7
+		TblTNSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
+		SegSchema, // 11
+		SegTNSchema,
+		DelSchema,
+		SegTNSchema,
+		BlkMetaSchema, // 15
+		BlkTNSchema,
+		DelSchema,
+		BlkTNSchema,
+		BlkMetaSchema, // 19
+		BlkTNSchema,
+		DelSchema,
+		BlkTNSchema,
+		BlkMetaSchema, // 23
+		BlkAccSchema,
+		BlkAccSchema, // 25
+		TNMetaSchema,
+	}
 
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 
@@ -309,7 +358,8 @@ func init() {
 	registerCheckpointDataReferVersion(CheckpointVersion6, checkpointDataSchemas_V6[:])
 	registerCheckpointDataReferVersion(CheckpointVersion7, checkpointDataSchemas_V7[:])
 	registerCheckpointDataReferVersion(CheckpointVersion8, checkpointDataSchemas_V8[:])
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V8
+	registerCheckpointDataReferVersion(CheckpointVersion9, checkpointDataSchemas_V9[:])
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V9
 }
 
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
@@ -2513,6 +2563,20 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkCNMetaInsBat := collector.data.bats[BLKCNMetaInsertIDX]
 	blkMetaInsBat := collector.data.bats[BLKMetaInsertIDX]
 	blkMetaInsTxnBat := collector.data.bats[BLKMetaInsertTxnIDX]
+	blkAccInsBat := collector.data.bats[BLKAccInsIDX]
+	//blkAccDelBat := collector.data.bats[BLKAccDelIDX]
+
+	blkAccInsAccIDVec := blkAccInsBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
+	blkAccInsDBIDVec := blkAccInsBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
+	blkAccInsTblIDVec := blkAccInsBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	blkAccInsRowsVec := blkAccInsBat.GetVectorByName(CheckpointMetaAttr_BlockRows).GetDownstreamVector()
+	blkAccInsSizeVec := blkAccInsBat.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
+
+	//blkAccDelAccIDVec := blkAccDelBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
+	//blkAccDelDBIDVec := blkAccDelBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
+	//blkAccDelTblIDVec := blkAccDelBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	//blkAccDelRowsVec := blkAccDelBat.GetVectorByName(CheckpointMetaAttr_BlockRows).GetDownstreamVector()
+	//blkAccDelSizeVec := blkAccDelBat.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
 
 	blkTNMetaDelRowIDVec := blkTNMetaDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
 	blkTNMetaDelCommitTsVec := blkTNMetaDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
@@ -2571,6 +2635,24 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkMetaInsTxnTIDVec := blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
 	blkMetaInsTxnMetaLocVec := blkMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
 	blkMetaInsTxnDeltaLocVec := blkMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
+
+	// recording the blk rows and size
+	// changing and the account, db, table info the blk belongs to.
+	var size, rows uint32
+	if entry.GetMetaLoc() != nil { // flushed
+		size = entry.GetMetaLoc().Extent().Length()
+		rows = entry.GetMetaLoc().Rows()
+	} else { // not flush yet
+		size = uint32(entry.GetBlockData().EstimateMemSize())
+		rows = uint32(entry.GetBlockData().Rows())
+	}
+	vector.AppendFixed(blkAccInsAccIDVec, entry.GetSegment().GetTable().GetDB().GetTenantID(),
+		false, common.DefaultAllocator)
+	vector.AppendFixed(blkAccInsDBIDVec, entry.GetSegment().GetTable().GetDB().ID,
+		false, common.DefaultAllocator)
+	vector.AppendFixed(blkAccInsTblIDVec, entry.GetSegment().GetTable().ID, false, common.DefaultAllocator)
+	vector.AppendFixed(blkAccInsRowsVec, rows, false, common.DefaultAllocator)
+	vector.AppendFixed(blkAccInsSizeVec, size, false, common.DefaultAllocator)
 
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
