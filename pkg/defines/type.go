@@ -164,6 +164,7 @@ const (
 type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
+type NodeIDKey struct{}
 
 func GetAccountId(ctx context.Context) uint32 {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
