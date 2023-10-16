@@ -123,19 +123,22 @@ func runCatalog(arg *catalogArg, respWriter io.Writer) {
 }
 
 type compactPolicyArg struct {
-	ctx          *inspectContext
-	maxMergeObjN int32
+	ctx             *inspectContext
+	maxMergeObjN    int32
+	notLoadMoreThan int32
 }
 
 func (c *compactPolicyArg) fromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
+	c.notLoadMoreThan, _ = cmd.Flags().GetInt32("notLoadMoreThan")
 	return nil
 }
 
 func runCompactPolicy(arg *compactPolicyArg) error {
 	merge.MaxMergeSegN.Store(arg.maxMergeObjN)
+	common.NotLoadMoreThan.Store(arg.notLoadMoreThan)
 	return nil
 
 }
@@ -191,7 +194,8 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	catalogCmd.Flags().StringP("table", "t", "", "table name")
 	rootCmd.AddCommand(catalogCmd)
 
-	policyCmd.Flags().Int32P("maxMergeObjN", "s", merge.DefaultMaxMergeObjN, "max objects merged for one")
+	policyCmd.Flags().Int32P("maxMergeObjN", "o", merge.DefaultMaxMergeObjN, "max objects merged for one")
+	policyCmd.Flags().Int32P("notLoadMoreThan", "l", common.DefaultNotLoadMoreThan, "not load if too much objects")
 	rootCmd.AddCommand(policyCmd)
 
 	return rootCmd

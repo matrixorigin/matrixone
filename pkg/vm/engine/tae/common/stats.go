@@ -17,10 +17,21 @@ package common
 import (
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
+
+const DefaultNotLoadMoreThan = 4096
+
+var (
+	NotLoadMoreThan atomic.Int32
+)
+
+func init() {
+	NotLoadMoreThan.Store(DefaultNotLoadMoreThan)
+}
 
 type TableCompactStat struct {
 	sync.RWMutex

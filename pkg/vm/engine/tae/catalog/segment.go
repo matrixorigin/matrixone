@@ -146,7 +146,8 @@ func (entry *SegmentEntry) LoadObjectInfo() error {
 		return nil
 	}
 	// special case for raw log table.
-	if entry.GetTable().GetLastestSchema().Name == motrace.RawLogTbl && len(entry.table.entries) > 4096 {
+	if entry.GetTable().GetLastestSchema().Name == motrace.RawLogTbl &&
+		len(entry.table.entries) > int(common.NotLoadMoreThan.Load()) {
 		return nil
 	}
 	entry.RLock()
