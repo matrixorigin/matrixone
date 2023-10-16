@@ -1382,6 +1382,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexParts = append(indexParts, name)
 		}
 
+		// Strategy 2:Add the alias primary key column to the index table irrespective of whether user added PK or not.
 		//if !isPkAlreadyPresentInIndexParts {
 		indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
 		//}
