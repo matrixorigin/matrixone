@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -72,11 +73,13 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (process.ExecStatus,
 			ctr.state = Eval
 
 		case Eval:
-			if ctr.insertBat != nil {
-				anal.Output(ctr.insertBat, isLast)
-				proc.SetInputBatch(ctr.insertBat)
-				ctr.insertBat = nil
-				ctr.state = End
+			if len(ctr.insertBats) > 0 {
+				anal.Output(ctr.insertBats[0], isLast)
+				proc.SetInputBatch(ctr.insertBats[0])
+				ctr.insertBats = ctr.insertBats[1:]
+				if len(ctr.insertBats) == 0 {
+					ctr.state = End
+				}
 				return process.ExecNext, nil
 			}
 			ctr.state = End
@@ -103,7 +106,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 
 	tableDef := insertArg.TableDef
 	insertColCount := 0 //columns without hidden columns
-	if insertArg.ctr.insertBat == nil {
+	if len(insertArg.ctr.insertBats) == 0 {
 		attrs := make([]string, 0, len(originBatch.Vecs))
 		for _, col := range tableDef.Cols {
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
@@ -116,19 +119,20 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			attrs = append(attrs, col.Name)
 		}
 		attrs = append(attrs, catalog.Row_ID)
-		insertArg.ctr.insertBat = batch.NewWithSize(len(attrs))
-		insertArg.ctr.insertBat.Attrs = attrs
+		bat := batch.NewWithSize(len(attrs))
+		bat.Attrs = attrs
 
 		insertArg.ctr.checkConflictBat = batch.NewWithSize(len(attrs))
 		insertArg.ctr.checkConflictBat.Attrs = append(insertArg.ctr.checkConflictBat.Attrs, attrs...)
 
 		for i, v := range originBatch.Vecs {
 			newVec := vector.NewVec(*v.GetType())
-			insertArg.ctr.insertBat.SetVector(int32(i), newVec)
+			bat.SetVector(int32(i), newVec)
 
 			ckVec := vector.NewVec(*v.GetType())
 			insertArg.ctr.checkConflictBat.SetVector(int32(i), ckVec)
 		}
+		insertArg.ctr.insertBats = append(insertArg.ctr.insertBats, bat)
 	} else {
 		for _, col := range tableDef.Cols {
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
@@ -143,7 +147,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		return err
 	}
 
-	insertBatch := insertArg.ctr.insertBat
+	insertBatch := insertArg.ctr.insertBats[len(insertArg.ctr.insertBats)-1]
 	checkConflictBatch := insertArg.ctr.checkConflictBat
 	attrs := make([]string, len(insertBatch.Attrs))
 	copy(attrs, insertBatch.Attrs)
@@ -261,6 +265,10 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		proc.PutBatch(newBatch)
 	}
 
+	if insertBatch.RowCount() > int(options.DefaultBlockMaxRows) {
+		insertArg.newInsertBatch(insertBatch)
+	}
+
 	return nil
 }
 
@@ -375,4 +383,26 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 	}
 
 	return -1, "", nil
+}
+
+func (ap *Argument) newInsertBatch(bat *batch.Batch) {
+	tableDef := ap.TableDef
+	attrs := make([]string, 0, len(bat.Vecs))
+	for _, col := range tableDef.Cols {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+			continue
+		}
+		attrs = append(attrs, col.Name)
+	}
+	for _, col := range tableDef.Cols {
+		attrs = append(attrs, col.Name)
+	}
+	attrs = append(attrs, catalog.Row_ID)
+	ibat := batch.NewWithSize(len(attrs))
+	ibat.Attrs = attrs
+	for i, v := range bat.Vecs {
+		newVec := vector.NewVec(*v.GetType())
+		ibat.SetVector(int32(i), newVec)
+	}
+	ap.ctr.insertBats = append(ap.ctr.insertBats, bat)
 }
