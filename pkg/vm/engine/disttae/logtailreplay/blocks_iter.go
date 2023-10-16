@@ -32,6 +32,11 @@ type objectsIter struct {
 	firstCalled bool
 }
 
+// not accurate!  only used by stats
+func (p *PartitionState) ApproxObjectsNum() int {
+	return p.dataObjects.Len()
+}
+
 func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 	if ts.Less(p.minTS) {
 		return nil, moerr.NewTxnStaleNoCtx()

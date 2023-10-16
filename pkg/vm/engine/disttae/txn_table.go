@@ -52,46 +52,33 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 	if !ok {
 		return false
 	}
-
+	approxNumObjects := 0
 	if partitionTables != nil {
-		sumBlockInfos := make([]catalog.BlockInfo, 0)
 		for _, partitionTable := range partitionTables {
 			if ptable, ok2 := partitionTable.(*txnTable); ok2 {
-				if len(ptable.blockInfos) == 0 || !ptable.blockInfosUpdated {
-					err := ptable.UpdateBlockInfos(ctx)
-					if err != nil {
-						return false
-					}
-				}
-
-				if len(ptable.blockInfos) > 0 {
-					sumBlockInfos = append(sumBlockInfos, ptable.blockInfos...)
-				}
+				approxNumObjects += ptable.ApproxObjectsNum(ctx)
 			} else {
 				panic("partition Table type is not txnTable")
 			}
 		}
+	} else {
+		approxNumObjects = tbl.ApproxObjectsNum(ctx)
+	}
 
-		if len(sumBlockInfos) > 0 {
-			return CalcStats(ctx, sumBlockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
+	if approxNumObjects == 0 {
+		// no objects flushed yet, very small table, or something error
+		return false
+	}
+	if s.NeedUpdate(approxNumObjects) {
+		if partitionTables != nil {
+			return UpdateStatsForPartitionTable(ctx, tbl, partitionTables, s)
 		} else {
-			// no meta means not flushed yet, very small table
-			return false
+			return UpdateStats(ctx, tbl, s)
 		}
 	} else {
-		if len(tbl.blockInfos) == 0 || !tbl.blockInfosUpdated {
-			err := tbl.UpdateBlockInfos(ctx)
-			if err != nil {
-				return false
-			}
-		}
-		if len(tbl.blockInfos) > 0 {
-			return CalcStats(ctx, tbl.blockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
-		} else {
-			// no meta means not flushed yet, very small table
-			return false
-		}
+		return true
 	}
+
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
@@ -203,6 +190,15 @@ func (tbl *txnTable) ForeachDataObject(
 	}
 	iter.Close()
 	return
+}
+
+// not accurate!  only used by stats
+func (tbl *txnTable) ApproxObjectsNum(ctx context.Context) int {
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0
+	}
+	return part.ApproxObjectsNum()
 }
 
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
