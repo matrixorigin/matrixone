@@ -313,7 +313,7 @@ func (w *CSVWriter) Release() {
 	putBuffer(w.buf)
 }
 
-func escpateString(value string) string {
+func escapeString(value string) string {
 	replace := map[string]string{"\\": "\\\\", "'": `\'`, "\\0": "\\\\0", "\n": "\\n", "\r": "\\r", `"`: `\"`, "\x1a": "\\Z"}
 
 	for b, a := range replace {
@@ -339,7 +339,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	}
 
 	csvData := csvWriter.GetContent()
-	escapedCSVData := escpateString(csvData)
+	escapedCSVData := escapeString(csvData)
 	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%q' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
 
 	// Begin a new transaction
