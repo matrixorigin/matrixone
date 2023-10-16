@@ -498,6 +498,10 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 }
 
 func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, error) {
+	if stmt.Type == nil && stmt.IncrementBy == nil && stmt.MaxValue == nil && stmt.MinValue == nil && stmt.StartWith == nil && stmt.Cycle == nil {
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "synatx error, %s has nothing to alter", string(stmt.Name.ObjectName))
+	}
+
 	alterSequence := &plan.AlterSequence{
 		IfExists: stmt.IfExists,
 		TableDef: &TableDef{

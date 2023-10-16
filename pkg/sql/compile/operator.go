@@ -104,6 +104,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:       t.Typs,
 			Conditions: t.Conditions,
 			Result:     t.Result,
+			HashOnPK:   t.HashOnPK,
 		}
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
@@ -140,6 +141,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:               t.Typs,
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			HashOnPK:           t.HashOnPK,
 		}
 	case vm.Right:
 		t := sourceIns.Arg.(*right.Argument)
@@ -152,6 +154,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			LeftTypes:          t.LeftTypes,
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			HashOnPK:           t.HashOnPK,
 		}
 	case vm.RightSemi:
 		t := sourceIns.Arg.(*rightsemi.Argument)
@@ -163,6 +166,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			RightTypes:         t.RightTypes,
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			HashOnPK:           t.HashOnPK,
 		}
 	case vm.RightAnti:
 		t := sourceIns.Arg.(*rightanti.Argument)
@@ -174,6 +178,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			RightTypes:         t.RightTypes,
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			HashOnPK:           t.HashOnPK,
 		}
 	case vm.Limit:
 		t := sourceIns.Arg.(*limit.Argument)
@@ -258,6 +263,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:               t.Typs,
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			HashOnPK:           t.HashOnPK,
 		}
 	case vm.Single:
 		t := sourceIns.Arg.(*single.Argument)
@@ -269,6 +275,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:               t.Typs,
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+			HashOnPK:           t.HashOnPK,
 		}
 	case vm.Top:
 		t := sourceIns.Arg.(*top.Argument)
@@ -336,6 +343,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Typs:       t.Typs,
 			Cond:       t.Cond,
 			OnList:     t.OnList,
+			HashOnPK:   t.HashOnPK,
 		}
 	case vm.TableFunction:
 		t := sourceIns.Arg.(*table_function.Argument)
@@ -746,6 +754,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 		Cond:               cond,
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -761,6 +770,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 		Cond:               cond,
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -779,6 +789,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 		Cond:               cond,
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -796,6 +807,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 		Cond:               cond,
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -813,6 +825,7 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 		Cond:               cond,
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -828,6 +841,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 		Cond:               cond,
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -854,6 +868,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		Result:     result,
 		Cond:       cond,
 		Conditions: constructJoinConditions(conds, proc),
+		HashOnPK:   n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
 	}
 }
 
@@ -1412,6 +1427,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			Conditions:      arg.Conditions[1],
 			IsDup:           isDup,
 			NeedMergedBatch: true,
+			HashOnPK:        arg.HashOnPK,
 		}
 
 	case vm.Mark:
@@ -1422,6 +1438,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			Conditions:      arg.Conditions[1],
 			IsDup:           isDup,
 			NeedMergedBatch: true,
+			HashOnPK:        arg.HashOnPK,
 		}
 
 	case vm.Join:
@@ -1459,6 +1476,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			Conditions:      arg.Conditions[1],
 			IsDup:           isDup,
 			NeedMergedBatch: true,
+			HashOnPK:        arg.HashOnPK,
 		}
 
 		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
@@ -1475,6 +1493,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			Conditions:      arg.Conditions[1],
 			IsDup:           isDup,
 			NeedMergedBatch: true,
+			HashOnPK:        arg.HashOnPK,
 		}
 
 		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
@@ -1491,6 +1510,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			Conditions:      arg.Conditions[1],
 			IsDup:           isDup,
 			NeedMergedBatch: true,
+			HashOnPK:        arg.HashOnPK,
 		}
 
 		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
@@ -1507,6 +1527,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			Conditions:      arg.Conditions[1],
 			IsDup:           isDup,
 			NeedMergedBatch: true,
+			HashOnPK:        arg.HashOnPK,
 		}
 
 		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
@@ -1521,6 +1542,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			Conditions:      arg.Conditions[1],
 			IsDup:           isDup,
 			NeedMergedBatch: true,
+			HashOnPK:        arg.HashOnPK,
 		}
 
 		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
@@ -1535,6 +1557,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 			Conditions:      arg.Conditions[1],
 			IsDup:           isDup,
 			NeedMergedBatch: true,
+			HashOnPK:        arg.HashOnPK,
 		}
 
 		registerRuntimeFilters(retArg, c, arg.RuntimeFilterSpecs, shuffleCnt)
