@@ -1,0 +1,83 @@
+select log10(log10(10000)),log10(log10(10));
+log10(log10(10000))    log10(log10(10))
+0.6020599913279624    0.0
+SELECT log10(1000);
+log10(1000)
+3.0
+SELECT log10(-10);
+invalid argument log10, bad value -10
+SELECT log10(0);
+invalid argument log10, bad value 0
+select log10(0.00000000000000001);
+log10(0.00000000000000001)
+-17.0
+select log10(2e2);
+log10(2e2)
+2.301029995663981
+select log10(0.141241241241313);
+log10(0.141241241241313)
+-0.8500384744714139
+select log10(-124314124124.12412341);
+invalid argument log10, bad value -1.2431412412412413e+11
+select log10(null);
+log10(null)
+null
+CREATE TABLE t1(a DOUBLE);
+not connect to a database
+INSERT INTO t1 select (log10(56));
+no such table .t1
+INSERT INTO t1 select (log10(100));
+no such table .t1
+SELECT * FROM t1 ORDER BY a;
+SQL parser error: table "t1" does not exist
+drop table t1;
+no such table .t1
+create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19));
+not connect to a database
+insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314);
+no such table .t1
+select log10(a),log10(b),log10(c),log10(d),log10(e),log10(f),log10(g),log10(h) from t1;
+SQL parser error: table "t1" does not exist
+drop table t1;
+no such table .t1
+select log10(123.54-123.03);
+log10(123.54 - 123.03)
+-0.2924298239020636
+select log10(123.54*0.34);
+log10(123.54 * 0.34)
+1.62328651404393
+select log10(134)-log10(194);
+log10(134) - log10(194)
+-0.16069693156541875
+drop table if exists t1;
+create table t1(a int);
+not connect to a database
+insert into t1 values(10), (100);
+no such table .t1
+select distinct * from t1 where log10(a)>0;
+SQL parser error: table "t1" does not exist
+drop table t1;
+no such table .t1
+create table t1(a INT, b int);
+not connect to a database
+create table t2(a INT, b int);
+not connect to a database
+insert into t1 values(2,4), (100,23);
+no such table .t1
+insert into t2 values(10,100), (4,41);
+no such table .t2
+SELECT t1.a, t2.a FROM t1 JOIN t2 ON (log10(t1.a) <> log10(t2.a));
+SQL parser error: table "t1" does not exist
+drop table t1;
+no such table .t1
+drop table t2;
+no such table .t2
+drop table if exists t1;
+create table t1(a float,  b float);
+not connect to a database
+insert into t1 values(14.413, 43.413), (8.123, 0.409);
+no such table .t1
+select b from t1 group by b having log10(b)>0;
+SQL parser error: table "t1" does not exist
+drop table t1;
+no such table .t1

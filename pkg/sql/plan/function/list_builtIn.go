@@ -2432,9 +2432,9 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `lg`
+	// function `log10`
 	{
-		functionId: LG,
+		functionId: LOG10,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -2447,7 +2447,7 @@ var supportedMathBuiltIns = []FuncNew{
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return builtInLg
+					return builtInLog10
 				},
 			},
 		},
