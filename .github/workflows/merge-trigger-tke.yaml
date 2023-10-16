@@ -14,6 +14,7 @@ on:
 jobs:
   docker_image_build:
     runs-on: amd64-tke-dind
+    if: ${{ github.event.pull_request.merged == true }}
     timeout-minutes: 60
     name: BUILD MO DOCKER IMAGE
     outputs:
