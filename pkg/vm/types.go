@@ -107,7 +107,7 @@ type Instruction struct {
 type InstructionArgument interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
-	Free(proc *process.Process, pipelineFailed bool)
+	Free(proc *process.Process, pipelineFailed bool, err error)
 }
 
 type Instructions []Instruction
