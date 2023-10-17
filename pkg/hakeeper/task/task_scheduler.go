@@ -129,7 +129,8 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 		runtime.ProcessLevelRuntime().Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
 			zap.String("task-metadata-id", t.Metadata.ID),
-			zap.String("task-runner", runner))
+			zap.String("task-runner", runner),
+			zap.Error(err))
 		return
 	}
 	orderedCN.inc(t.TaskRunner)
