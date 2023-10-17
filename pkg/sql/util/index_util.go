@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -327,264 +328,28 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 }
 
 // serialWithoutCompacted is similar to serialWithCompacted and builtInSerial
-// serialWithoutCompacted function is used by Secondary Index to support Null entries
+// serialWithoutCompacted function is used by Secondary Index to support rows containing null entries
 // for example:
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, null), serial(1, 2, 3)]
 // result bitmap is [] (empty)
-// Here we are keeping the same function signature of serialWithCompacted so that we can replicate the same code of
+// Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
 // `preinsertunique` in `preinsertsecondaryindex`
 func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
-	/*
-		NOTE 1: I tried re-using function.BuiltInSerialNew(), but not sure how to Free() the FunctionResult.
-		1. If I free it using defer in this function, then I get null ptr exception.
-		2. If I don't free the FunctionResult here, I think, it will result in OOM
-		3. I don't think, `functions` should be used outside of function package.
 
-		<code>
-		result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, types.T_varchar.ToType(), proc.Mp())
-		defer result.Free()
-		if len(vs) == 0 {
-			return result.GetResultVector(), new(nulls.Nulls)
-		}
-		_ = function.BuiltInSerialNew(vs, result, proc, vs[0].Length())
-		return result.GetResultVector(), new(nulls.Nulls)
-		</code>
+	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
 
-		<error>
-		ERROR 20101 (HY000): internal error: panic interface conversion: interface {} is nil, not []types.Varlena:
-		runtime.panicdottypeE
-				/usr/local/go/src/runtime/iface.go:262
-		github.com/matrixorigin/matrixone/pkg/container/vector.GetUnionAllFunction.func22
-				/Users/arjunsunilkumar/GolandProjects/matrixone/pkg/container/vector/vector.go:1454
-		github.com/matrixorigin/matrixone/pkg/container/batch.(*Batch).Dup
-				/Users/arjunsunilkumar/GolandProjects/matrixone/pkg/container/batch/batch.go:273
-		github.com/matrixorigin/matrixone/pkg/sql/cole
-		</error>
-
-		NOTE 2: It should have been better if we could call serialWithoutCompacted inside function.BuiltInSerialNew, but
-		there was a cyclic dependency.
-
-		<code>
-		// code in function.BuiltInSerialNew
-		rs := vector.MustFunctionResult[types.Varlena](result)
-		out, _ := util2.SerialWithoutCompacted(parameters, proc)
-		rs.SetResultVector(out)
-		return nil
-		</code>
-
-		<error>
-		package github.com/matrixorigin/matrixone/cmd/mo-service
-			imports github.com/matrixorigin/matrixone/pkg/cnservice
-			imports github.com/matrixorigin/matrixone/pkg/cnservice/upgrader
-			imports github.com/matrixorigin/matrixone/pkg/frontend
-			imports github.com/matrixorigin/matrixone/pkg/sql/colexec
-			imports github.com/matrixorigin/matrixone/pkg/sql/plan/function
-			imports github.com/matrixorigin/matrixone/pkg/sql/util
-			imports github.com/matrixorigin/matrixone/pkg/sql/plan/function: import cycle not allowed
-		make: *** [build] Error 1
-		</error>
-	*/
-
-	// resolve vs
-	length := vs[0].Length()
-	vct := types.T_varchar.ToType()
-	//nsp := new(nulls.Nulls)
-	val := make([][]byte, 0, length)
-	ps := types.NewPackerArray(length, proc.Mp())
-	bitMap := new(nulls.Nulls)
-
-	for _, v := range vs {
-		switch v.GetType().Oid {
-		case types.T_bool:
-			s := vector.MustFixedCol[bool](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeBool(b)
-				}
-			}
-		case types.T_int8:
-			s := vector.MustFixedCol[int8](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeInt8(b)
-				}
-			}
-		case types.T_int16:
-			s := vector.MustFixedCol[int16](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeInt16(b)
-				}
-			}
-		case types.T_int32:
-			s := vector.MustFixedCol[int32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeInt32(b)
-				}
-			}
-		case types.T_int64:
-			s := vector.MustFixedCol[int64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeInt64(b)
-				}
-			}
-		case types.T_uint8:
-			s := vector.MustFixedCol[uint8](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeUint8(b)
-				}
-			}
-		case types.T_uint16:
-			s := vector.MustFixedCol[uint16](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeUint16(b)
-				}
-			}
-		case types.T_uint32:
-			s := vector.MustFixedCol[uint32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeUint32(b)
-				}
-			}
-		case types.T_uint64:
-			s := vector.MustFixedCol[uint64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeUint64(b)
-				}
-			}
-		case types.T_float32:
-			s := vector.MustFixedCol[float32](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeFloat32(b)
-				}
-			}
-		case types.T_float64:
-			s := vector.MustFixedCol[float64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeFloat64(b)
-				}
-			}
-		case types.T_date:
-			s := vector.MustFixedCol[types.Date](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeDate(b)
-				}
-			}
-		case types.T_time:
-			s := vector.MustFixedCol[types.Time](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeTime(b)
-				}
-			}
-		case types.T_datetime:
-			s := vector.MustFixedCol[types.Datetime](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeDatetime(b)
-				}
-			}
-		case types.T_timestamp:
-			s := vector.MustFixedCol[types.Timestamp](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeTimestamp(b)
-				}
-			}
-		case types.T_enum:
-			s := vector.MustFixedCol[types.Enum](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeEnum(b)
-				}
-			}
-		case types.T_decimal64:
-			s := vector.MustFixedCol[types.Decimal64](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeDecimal64(b)
-				}
-			}
-		case types.T_decimal128:
-			s := vector.MustFixedCol[types.Decimal128](v)
-			for i, b := range s {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-					ps[i].EncodeDecimal128(b)
-				}
-			}
-		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
-			types.T_array_float32, types.T_array_float64:
-			// NOTE 1: We will consider T_array as bytes here just like JSON, VARBINARY and BLOB.
-			// If not, we need to define arrayType in types/tuple.go as arrayF32TypeCode, arrayF64TypeCode etc
-			// NOTE 2: vs is []string and not []byte. vs[i] is not of form "[1,2,3]". It is binary string of []float32{1,2,3}
-			// NOTE 3: This class is mainly used by PreInsertUnique which gets triggered before inserting into column having
-			// Unique Key or Primary Key constraint. Vector cannot be UK or PK.
-			vs := vector.MustStrCol(v)
-			for i := range vs {
-				if nulls.Contains(v.GetNulls(), uint64(i)) {
-					ps[i].EncodeNull()
-				} else {
-
-					ps[i].EncodeStringType([]byte(vs[i]))
-				}
-			}
-		}
+	if len(vs) == 0 {
+		// return empty vector and empty bitmap
+		return vector.NewVec(types.T_varchar.ToType()), new(nulls.Nulls)
 	}
 
-	for i := range ps {
-		val = append(val, ps[i].GetBuf())
-	}
+	_ = function.BuiltInSerialNew(vs, result, proc, vs[0].Length())
+	// here we create a deep copy of result.GetResultVector, so that we can free the FunctionResultWrapper
+	resultVec, _ := result.GetResultVector().Dup(proc.Mp())
+	return resultVec, new(nulls.Nulls)
 
-	vec := vector.NewVec(vct)
-	vector.AppendBytesList(vec, val, nil, proc.Mp())
-
-	return vec, bitMap
 }
 
 func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
