@@ -70,7 +70,7 @@ func TestBulkInsert(t *testing.T) {
 	}
 
 	records := [][]string{
-		{"str1", "1", "1.1", "1", "2023-05-16T00:00:00Z", `{"key1":"value1 \n test \r 'test'"}`},
+		{"str1", "1", "1.1", "1", "2023-05-16T00:00:00Z", `{"key1":"value1 \n test , \r 'test'"}`},
 		{"str2", "2", "2.2", "2", "2023-05-16T00:00:00Z", `{"key2":"value2"}`},
 	}
 
@@ -78,13 +78,11 @@ func TestBulkInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='str1,1,1.1,1,2023-05-16T00:00:00Z,"{""key1"":""value1 \n test \r ''test''""}"
+	mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='str1,1,1.1,1,2023-05-16T00:00:00Z,"{""key1"":""value1 \\n test , \\r ''test''""}"
 str2,2,2.2,2,2023-05-16T00:00:00Z,"{""key2"":""value2""}"
 ' INTO TABLE testDB.testTable`)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	mock.ExpectCommit()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

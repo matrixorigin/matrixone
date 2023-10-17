@@ -383,7 +383,7 @@ func processChunk(ctx context.Context, sqlDb *sql.DB, chunkRecords [][]string, t
 	// Write each record of the chunk to the CSVWriter
 	for _, record := range chunkRecords {
 		for i, col := range record {
-			record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "\\'")
+			record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "''")
 
 		}
 		if err := csvWriter.WriteStrings(record); err != nil {
@@ -392,9 +392,8 @@ func processChunk(ctx context.Context, sqlDb *sql.DB, chunkRecords [][]string, t
 	}
 
 	csvData := csvWriter.GetContent()
-	escapedCSVData := strings.ReplaceAll(csvData, "'", "''")
 
-	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", escapedCSVData, tbl.Database, tbl.Table)
+	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", csvData, tbl.Database, tbl.Table)
 
 	// Use the transaction to execute the SQL command
 	_, execErr := sqlDb.Exec(loadSQL)
