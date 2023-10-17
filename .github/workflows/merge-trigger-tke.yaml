@@ -130,7 +130,7 @@ jobs:
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_0 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
           apt update && apt install git -y
           export https_proxy='http://proxy-service.proxy.svc.cluster.local:8001'
-          git clone -b ${{ inputs.branch }} https://github.com/${{ inputs.repo }}.git -v --progress
+          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git -v --progress
           cd matrixone
           git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
           unset https_proxy
@@ -142,7 +142,7 @@ jobs:
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_1 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
           apt update && apt install git -y
           export https_proxy='http://proxy-service.proxy.svc.cluster.local:8001'
-          git clone -b ${{ inputs.branch }} https://github.com/${{ inputs.repo }}.git -v --progress
+          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git -v --progress
           cd matrixone
           git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
           unset https_proxy
@@ -217,7 +217,7 @@ jobs:
           ref: main
 
       - name: Clone mo-ssb Repo
-        if: ${{ always() && !cancelled() && inputs.ssb-test }}
+        if: ${{ always() && !cancelled() }}
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-ssb
@@ -226,7 +226,7 @@ jobs:
           ref: main
 
       - name: Clone mo-tpch Repo
-        if: ${{ always() && !cancelled() && inputs.tpch-test }}
+        if: ${{ always() && !cancelled() }}
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tpch
@@ -258,7 +258,7 @@ jobs:
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
       - name: Start Load SSB 10G Data And Test
-        if: ${{ always() && !cancelled() && inputs.ssb-test }}
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           set -uo pipefail

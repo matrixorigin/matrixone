@@ -105,7 +105,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		tc.arg.Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		nb1 := tc.proc.Mp().CurrNB()
 		require.Equal(t, nb0, nb1)
@@ -129,7 +129,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		tc.arg.Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		nb1 := tc.proc.Mp().CurrNB()
 		require.Equal(t, nb0, nb1)
