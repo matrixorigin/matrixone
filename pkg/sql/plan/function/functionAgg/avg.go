@@ -115,6 +115,13 @@ type sAggDecimalAvg struct {
 	tmpResult types.Decimal128
 }
 
+func (s *sAggAvg[T]) Dup() agg.AggStruct {
+	val := &sAggAvg[T]{
+		cnts: make([]int64, len(s.cnts)),
+	}
+	copy(val.cnts, s.cnts)
+	return val
+}
 func (s *sAggAvg[T]) Grows(cnt int) {
 	for i := 0; i < cnt; i++ {
 		s.cnts = append(s.cnts, 0)
@@ -158,6 +165,17 @@ func (s *sAggAvg[T]) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+func (s *sAggDecimalAvg) Dup() agg.AggStruct {
+	val := &sAggDecimalAvg{
+		cnts:      make([]int64, len(s.cnts)),
+		typ:       s.typ,
+		x:         s.x,
+		y:         s.y,
+		tmpResult: s.tmpResult,
+	}
+	copy(val.cnts, s.cnts)
+	return val
+}
 func (s *sAggDecimalAvg) Grows(cnt int) {
 	for i := 0; i < cnt; i++ {
 		s.cnts = append(s.cnts, 0)

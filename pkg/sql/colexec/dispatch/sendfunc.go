@@ -31,7 +31,7 @@ import (
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	// var refCountAdd int64
-	var err error
+	// var err error
 	// if !ap.RecSink {
 	// 	refCountAdd = int64(ap.ctr.localRegsCnt - 1)
 	// 	atomic.AddInt64(&bat.Cnt, refCountAdd)
@@ -44,11 +44,11 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 	// if ap.RecSink {
 	bats = append(bats, bat)
 	for k := 1; k < len(ap.LocalRegs); k++ {
-		bat, err = bat.Dup(proc.Mp())
+		newBat, err := bat.Dup(proc.Mp())
 		if err != nil {
 			return false, err
 		}
-		bats = append(bats, bat)
+		bats = append(bats, newBat)
 	}
 	// defer func() {
 	// 	for _, bat := range bats {

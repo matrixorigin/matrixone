@@ -77,6 +77,9 @@ func newGenericBitXor[T numeric](overloadID int64, inputType types.Type, outputT
 type sAggBitXor[T numeric] struct{}
 type sAggBinaryBitXor struct{}
 
+func (s *sAggBitXor[T]) Dup() agg.AggStruct {
+	return &sAggBitXor[T]{}
+}
 func (s *sAggBitXor[T]) Grows(_ int)         {}
 func (s *sAggBitXor[T]) Free(_ *mpool.MPool) {}
 func (s *sAggBitXor[T]) Fill(groupNumber int64, value T, lastResult uint64, count int64, isEmpty bool, isNull bool) (uint64, bool, error) {
@@ -118,6 +121,9 @@ func (s *sAggBitXor[T]) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 
+func (s *sAggBinaryBitXor) Dup() agg.AggStruct {
+	return &sAggBinaryBitXor{}
+}
 func (s *sAggBinaryBitXor) Grows(_ int)         {}
 func (s *sAggBinaryBitXor) Free(_ *mpool.MPool) {}
 func (s *sAggBinaryBitXor) Fill(groupNumber int64, value []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {

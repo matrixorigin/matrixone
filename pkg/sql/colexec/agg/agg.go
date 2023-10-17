@@ -379,6 +379,33 @@ func (a *UnaryAgg[T1, T2]) GetOperatorId() int64 {
 	return a.op
 }
 
+// todo need improve performance
+func (a *UnaryAgg[T1, T2]) Dup() Agg[any] {
+	val := &UnaryAgg[T1, T2]{
+		op:         a.op,
+		isCount:    a.isCount,
+		vs:         make([]T2, len(a.vs)),
+		es:         make([]bool, len(a.es)),
+		da:         make([]byte, len(a.da)),
+		outputType: a.outputType,
+		inputTypes: make([]types.Type, len(a.inputTypes)),
+	}
+	copy(val.vs, a.vs)
+	copy(val.es, a.es)
+	copy(val.da, a.da)
+	copy(val.inputTypes, a.inputTypes)
+
+	if a.priv != nil {
+		// pData, err := a.priv.MarshalBinary()
+		// if err != nil {
+		// 	panic(err)
+		// }
+		// a.priv = new()
+	}
+
+	return val
+}
+
 func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 	pData, err := a.priv.MarshalBinary()
 	if err != nil {

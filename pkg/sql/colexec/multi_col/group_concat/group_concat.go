@@ -17,10 +17,11 @@ package group_concat
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 	"strings"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -71,6 +72,20 @@ func NewGroupConcat(arg *Argument, typs []types.Type) agg.Agg[any] {
 		arg:  arg,
 		ityp: typs,
 	}
+}
+
+// todo need improve performance
+func (gc *GroupConcat) Dup() agg.Agg[any] {
+	bs, e := gc.MarshalBinary()
+	if e != nil {
+		panic(e)
+	}
+	b := &GroupConcat{}
+	e = b.UnmarshalBinary(bs)
+	if e != nil {
+		panic(e)
+	}
+	return b
 }
 
 // We need to implements the interface of Agg

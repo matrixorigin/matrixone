@@ -523,6 +523,20 @@ func (a *UnaryDistAgg[T1, T2]) GetOperatorId() int64 {
 	return a.op
 }
 
+// todo need improve performance
+func (a *UnaryDistAgg[T1, T2]) Dup() Agg[any] {
+	bs, e := a.MarshalBinary()
+	if e != nil {
+		panic(e)
+	}
+	b := &UnaryDistAgg[T1, T2]{}
+	e = b.UnmarshalBinary(bs)
+	if e != nil {
+		panic(e)
+	}
+	return b
+}
+
 func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 	pData, err := a.priv.MarshalBinary()
 	if err != nil {

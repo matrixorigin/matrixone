@@ -113,6 +113,15 @@ type VarianceDecimal struct {
 	x, y types.Decimal128
 }
 
+func (s *sAggVarPop[T]) Dup() agg.AggStruct {
+	val := &sAggVarPop[T]{
+		sum:    make([]float64, len(s.sum)),
+		counts: make([]float64, len(s.counts)),
+	}
+	copy(val.sum, s.sum)
+	copy(val.counts, s.counts)
+	return val
+}
 func (s *sAggVarPop[T]) Grows(cnt int) {
 	s.sum = append(s.sum, make([]float64, cnt)...)
 	s.counts = append(s.counts, make([]float64, cnt)...)
