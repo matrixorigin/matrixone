@@ -461,6 +461,13 @@ func (c *Compile) runOnce() error {
 		wg.Add(1)
 		scope := c.scope[i]
 		ants.Submit(func() {
+			defer func() {
+				if e := recover(); e != nil {
+					err := moerr.ConvertPanicError(c.ctx, e)
+					errC <- err
+					wg.Done()
+				}
+			}()
 			errC <- c.run(scope)
 			wg.Done()
 		})
