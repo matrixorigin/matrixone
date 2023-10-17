@@ -252,6 +252,7 @@ const (
 	Label_Minus_Expressions         = "Minus expressions"
 	Label_Pre_Insert                = "Pre insert"
 	Label_Pre_InsertUk              = "Pre insert uk"
+	Label_Pre_InsertSk              = "Pre insert sk"
 	Label_Pre_Delete                = "Pre delete"
 	Label_Sink                      = "Sink"
 	Label_Sink_Scan                 = "Sink scan"
