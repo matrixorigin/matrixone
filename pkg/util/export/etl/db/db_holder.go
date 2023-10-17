@@ -152,7 +152,6 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 
 	err = bulkInsert(ctx, dbConn, records, tbl)
 	if err != nil {
-		fmt.Printf("gavinyue bulkInsert failed, err: %v\n", err)
 		DBConnErrCount.Add(1)
 		return 0, err
 	}
