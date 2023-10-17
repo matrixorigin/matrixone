@@ -326,3 +326,31 @@ func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, s
 		}
 	}
 }
+
+func (m *StrHashMap) Dup(pool *mpool.MPool) *StrHashMap {
+	val := &StrHashMap{
+		hasNull: m.hasNull,
+		rows:    m.rows,
+
+		keys:          make([][]byte, len(m.keys)),
+		values:        make([]uint64, len(m.values)),
+		zValues:       make([]int64, len(m.zValues)),
+		strHashStates: make([][3]uint64, len(m.strHashStates)),
+
+		ibucket: m.ibucket,
+		nbucket: m.nbucket,
+
+		m: pool,
+	}
+	copy(val.values, m.values)
+	copy(val.zValues, m.zValues)
+	copy(val.strHashStates, m.strHashStates)
+	for i, key := range m.keys {
+		val.keys[i] = make([]byte, len(key))
+		copy(val.keys[i], key)
+	}
+	if m.hashMap != nil {
+		val.hashMap = m.hashMap.Dup()
+	}
+	return val
+}

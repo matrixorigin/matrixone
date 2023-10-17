@@ -101,7 +101,7 @@ type Agg[T any] interface {
 
 	IsDistinct() bool
 
-	Dup() Agg[any]
+	Dup(m *mpool.MPool) Agg[any]
 
 	// WildAggReAlloc reallocate for agg structure from memory pool.
 	// todo: remove this method.

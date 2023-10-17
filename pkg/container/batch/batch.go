@@ -281,9 +281,16 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	if len(bat.Aggs) > 0 {
 		rbat.Aggs = make([]agg.Agg[any], len(bat.Aggs))
 		for i, agg := range bat.Aggs {
-			rbat.Aggs[i] = agg.Dup()
+			rbat.Aggs[i] = agg.Dup(mp)
 		}
 	}
+	// if bat.AuxData != nil {
+	// 	if m, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+	// rbat.AuxData = &hashmap.JoinMap{
+	// 	cnt: m
+	// }
+	// 	}
+	// }
 	return rbat, nil
 }
 
