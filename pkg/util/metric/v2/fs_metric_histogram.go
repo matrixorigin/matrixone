@@ -83,9 +83,9 @@ func GetS3WriteDurationHistogram() prometheus.Observer {
 }
 
 func GetLocalReadDurationHistogram() prometheus.Observer {
-	return S3IODurationHistogram.WithLabelValues("read")
+	return LocalIODurationHistogram.WithLabelValues("read")
 }
 
 func GetLocalWriteDurationHistogram() prometheus.Observer {
-	return S3IODurationHistogram.WithLabelValues("write")
+	return LocalIODurationHistogram.WithLabelValues("write")
 }
