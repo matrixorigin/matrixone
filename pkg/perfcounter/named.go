@@ -83,6 +83,9 @@ func GetCacheStats(callback func(info []*query.CacheInfo)) {
 			}
 
 			nodeType, nodeId := decodeName(name)
+			if len(nodeType) == 0 || len(nodeId) == 0 {
+				return true
+			}
 
 			//memory
 			read1 := ptr.FileService.Cache.Memory.Read.Load()

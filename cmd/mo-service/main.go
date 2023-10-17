@@ -110,6 +110,7 @@ func main() {
 	} else {
 		panic(errors.New("no configuration specified"))
 	}
+
 	waitSignalToStop(stopper, shutdownC)
 	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
@@ -281,6 +282,7 @@ func startTNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
+		//notify the tn service it is in the standalone cluster
 		c.InStandalone = cfg.IsStandalone
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
