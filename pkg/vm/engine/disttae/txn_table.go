@@ -179,7 +179,7 @@ func (tbl *txnTable) ForeachDataObject(
 	state *logtailreplay.PartitionState,
 	fn func(obj logtailreplay.ObjectEntry) error,
 ) (err error) {
-	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	iter, err := state.NewObjectsIter(ts)
 	if err != nil {
 		return err
