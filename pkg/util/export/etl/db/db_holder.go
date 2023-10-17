@@ -324,7 +324,6 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	for _, record := range records {
 		for i, col := range record {
 			record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "''")
-
 		}
 		if err := csvWriter.WriteStrings(record); err != nil {
 			return err
@@ -336,11 +335,35 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", csvData, tbl.Database, tbl.Table)
 
 	// Use the transaction to execute the SQL command
-	_, execErr := sqlDb.Exec(loadSQL)
 
-	if execErr != nil {
-		fmt.Printf("gavinyue1 processChunk failed, sql: %v \n the end \n", loadSQL)
-		return execErr
+	retryCount := 2
+
+	for i := 0; i < retryCount; i++ {
+		txn, err := sqlDb.Begin()
+		if err != nil {
+			return err
+		}
+
+		_, execErr := txn.Exec(loadSQL)
+
+		if execErr != nil {
+			// Rollback the transaction upon failure
+			txn.Rollback()
+
+			// Check if the error is one that suggests retrying
+			if strings.Contains(execErr.Error(), "txn need retry in rc mode") {
+				continue
+			}
+
+			return execErr
+		}
+
+		// Commit the transaction if no errors
+		err = txn.Commit()
+		if err != nil {
+			return err
+		}
+		break
 	}
 	return nil
 
