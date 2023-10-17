@@ -79,7 +79,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 
 	colCount := len(secondaryColumnPos)
 
-	if colCount <= 1 {
+	if colCount < 2 {
 		msg := fmt.Sprintf("invalid secondary index column count in %s", catalog.IndexTableIndexColName)
 		return process.ExecNext, moerr.NewInternalErrorNoCtx(msg)
 	} else {

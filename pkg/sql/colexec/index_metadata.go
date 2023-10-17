@@ -240,7 +240,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 				}
 
 				for i, part := range index.Parts {
-					//NOTE: this function is used in UT only.
+					//NOTE: buildInsertIndexMetaBatch function is used in UT only.
 					part = catalog.ResolveAlias(part)
 					err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
 					if err != nil {
