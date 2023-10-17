@@ -251,14 +251,16 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	ctx = addGetConnMetric(ctx)
 
-	var bytesWritten int
+	bytesCounter := new(atomic.Int64)
 	v2.GetS3FSWriteCounter().Inc()
 	defer func() {
-		v2.GetS3FSWriteSizeGauge().Set(float64(bytesWritten))
+		v2.GetS3FSWriteSizeGauge().Set(float64(bytesCounter.Load()))
 	}()
 
 	start := time.Now()
-	defer v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
+	}()
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -274,17 +276,16 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return moerr.NewFileAlreadyExistsNoCtx(vector.FilePath)
 	}
 
-	bytesWritten, err = s.write(ctx, vector)
-	return err
+	return s.write(ctx, vector, bytesCounter)
 }
 
-func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, err error) {
+func (s *S3FS) write(ctx context.Context, vector IOVector, bytesCounter *atomic.Int64) (err error) {
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
 
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
 	// sort
@@ -305,7 +306,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		// also write to disk cache
 		w, done, closeW, err := s.diskCache.newFileContentWriter(vector.FilePath)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		defer closeW()
 		defer func() {
@@ -320,7 +321,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		)
 		content, err = io.ReadAll(r)
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 	} else if len(vector.Entries) == 1 &&
@@ -333,14 +334,14 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		r := newIOEntriesReader(ctx, vector.Entries)
 		content, err = io.ReadAll(r)
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 
 	if vector.Hash.Sum != nil && vector.Hash.New != nil {
 		h := vector.Hash.New()
 		if _, err := h.Write(content); err != nil {
-			return 0, err
+			return err
 		}
 		*vector.Hash.Sum = h.Sum(nil)
 	}
@@ -352,10 +353,11 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 	key := s.pathToKey(path.File)
 	if err := s.storage.Write(ctx, key, r, size, expire); err != nil {
-		return 0, err
+		return err
 	}
 
-	return len(content), nil
+	bytesCounter.Add(int64(len(content)))
+	return nil
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
@@ -373,7 +375,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}()
 
 	start := time.Now()
-	defer v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
+	}()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()

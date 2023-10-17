@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -108,13 +109,13 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 }
 
 func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
-	v2.GetMemFSWriteCounter().Inc()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+
+	bytesCounter := new(atomic.Int64)
+
+	v2.GetMemFSWriteCounter().Inc()
 
 	m.Lock()
 	defer m.Unlock()
@@ -132,14 +133,12 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 		return moerr.NewFileAlreadyExistsNoCtx(path.File)
 	}
 
-	return m.write(ctx, vector)
+	return m.write(ctx, vector, bytesCounter)
 }
 
-func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+func (m *MemoryFS) write(ctx context.Context, vector IOVector, bytesCounter *atomic.Int64) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	path, err := ParsePathAtService(vector.FilePath, m.name)
@@ -182,17 +181,19 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 	}
 	m.tree.Set(entry)
 
+	bytesCounter.Add(int64(len(data)))
+
 	return nil
 }
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
-	v2.GetMemFSWriteCounter().Inc()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+
+	bytesCounter := new(atomic.Int64)
+
+	v2.GetMemFSWriteCounter().Inc()
 
 	for _, cache := range m.caches {
 		cache := cache
@@ -243,6 +244,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			return moerr.NewUnexpectedEOFNoCtx(path.File)
 		}
 		data := fsEntry.Data[entry.Offset : entry.Offset+entry.Size]
+		bytesCounter.Add(int64(len(data)))
 
 		setData := true
 
@@ -357,7 +359,7 @@ var _ ReplaceableFileService = new(MemoryFS)
 func (m *MemoryFS) Replace(ctx context.Context, vector IOVector) error {
 	m.Lock()
 	defer m.Unlock()
-	return m.write(ctx, vector)
+	return m.write(ctx, vector, new(atomic.Int64))
 }
 
 // mark MemoryFS as ETL-compatible to use it as ETL fs in testing
