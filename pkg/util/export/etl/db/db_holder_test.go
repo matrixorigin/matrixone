@@ -24,35 +24,6 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestGetPrepareSQL(t *testing.T) {
-	tbl := &table.Table{
-		Database: "testDB",
-		Table:    "testTable",
-	}
-	columns := 3
-	maxRowLen := 10
-	middleRowLen := 2
-
-	sqls := getPrepareSQL(tbl, columns, maxRowLen, middleRowLen)
-
-	if sqls.maxRowNum != maxRowLen {
-		t.Errorf("Expected rowNum to be %d, but got %d", maxRowLen, sqls.maxRowNum)
-	}
-
-	if sqls.columns != columns {
-		t.Errorf("Expected columns to be %d, but got %d", columns, sqls.columns)
-	}
-
-	expectedOneRow := "INSERT INTO `testDB`.`testTable` () VALUES  (?,?,?)"
-	if sqls.oneRow != expectedOneRow {
-		t.Errorf("Expected oneRow to be %s, but got %s", expectedOneRow, sqls.oneRow)
-	}
-	expectedMultiRows := "INSERT INTO `testDB`.`testTable` () VALUES (?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?)"
-	if sqls.maxRows != expectedMultiRows {
-		t.Errorf("Expected multiRows to be %s, but got %s", expectedMultiRows, sqls.maxRows)
-	}
-}
-
 func TestBulkInsert(t *testing.T) {
 
 	tbl := &table.Table{
@@ -86,7 +57,7 @@ str2,2,2.2,2,2023-05-16T00:00:00Z,"{""key2"":""value2""}"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	bulkInsert(ctx, db, records, tbl, 10, 1)
+	bulkInsert(ctx, db, records, tbl)
 
 	err = mock.ExpectationsWereMet()
 	if err != nil {

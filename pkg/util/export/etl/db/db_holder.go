@@ -51,37 +51,6 @@ const MaxConnectionNumber = 1
 
 const DBConnRetryThreshold = 8
 
-const MaxInsertLen = 200
-const MiddleInsertLen = 10
-
-var maxRowBufPool sync.Pool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-
-var middleRowBufPool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-var oneRowBufPool = sync.Pool{
-	New: func() any {
-		return &bytes.Buffer{}
-	},
-}
-
-type prepareSQLs struct {
-	maxRowNum int
-	maxRows   string
-
-	middleRowNum int
-	middleRows   string
-
-	oneRow  string
-	columns int
-}
-
 type DBUser struct {
 	UserName string
 	Password string
@@ -181,7 +150,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
+	err = bulkInsert(ctx, dbConn, records, tbl)
 	if err != nil {
 		fmt.Printf("gavinyue bulkInsert failed, err: %v\n", err)
 		DBConnErrCount.Add(1)
@@ -189,70 +158,6 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	}
 
 	return len(records), nil
-}
-
-func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen int) *prepareSQLs {
-	columnNames := make([]string, len(tbl.Columns))
-
-	for i, column := range tbl.Columns {
-		columnNames[i] = fmt.Sprintf("`%s`", column.Name)
-	}
-
-	columnStr := strings.Join(columnNames, ",")
-
-	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) VALUES ", tbl.Database, tbl.Table, columnStr)
-
-	oneRowBuf := oneRowBufPool.Get().(*bytes.Buffer)
-	for i := 0; i < columns; i++ {
-		if i == 0 {
-			oneRowBuf.WriteByte('?')
-		} else {
-			oneRowBuf.WriteString(",?")
-		}
-	}
-	oneRow := fmt.Sprintf("%s (%s)", prefix, oneRowBuf.String())
-
-	maxRowBuf := maxRowBufPool.Get().(*bytes.Buffer)
-	maxRowBuf.WriteString(prefix)
-	for i := 0; i < batchLen; i++ {
-		if i == 0 {
-			maxRowBuf.WriteByte('(')
-		} else {
-			maxRowBuf.WriteString(",(")
-		}
-		maxRowBuf.Write(oneRowBuf.Bytes())
-		maxRowBuf.WriteByte(')')
-	}
-
-	middleRowBuf := middleRowBufPool.Get().(*bytes.Buffer)
-	middleRowBuf.WriteString(prefix)
-	for i := 0; i < middleBatchLen; i++ {
-		if i == 0 {
-			middleRowBuf.WriteByte('(')
-		} else {
-			middleRowBuf.WriteString(",(")
-		}
-		middleRowBuf.Write(oneRowBuf.Bytes())
-		middleRowBuf.WriteByte(')')
-	}
-
-	prepareSQLS := &prepareSQLs{
-		maxRowNum: batchLen,
-		maxRows:   maxRowBuf.String(),
-
-		middleRowNum: middleBatchLen,
-		middleRows:   middleRowBuf.String(),
-
-		oneRow:  oneRow,
-		columns: columns,
-	}
-	oneRowBuf.Reset()
-	maxRowBuf.Reset()
-	middleRowBuf.Reset()
-	oneRowBufPool.Put(oneRowBuf)
-	maxRowBufPool.Put(maxRowBuf)
-	middleRowBufPool.Put(middleRowBuf)
-	return prepareSQLS
 }
 
 const initedSize = 4 * mpool.MB
@@ -312,7 +217,7 @@ func (w *CSVWriter) Release() {
 	putBuffer(w.buf)
 }
 
-func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
+func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -337,6 +242,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	// Use the transaction to execute the SQL command
 
 	retryCount := 2
+	var lastError error
 
 	for i := 0; i < retryCount; i++ {
 		txn, err := sqlDb.Begin()
@@ -352,6 +258,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 			// Check if the error is one that suggests retrying
 			if strings.Contains(execErr.Error(), "txn need retry in rc mode") {
+				lastError = execErr
 				continue
 			}
 
@@ -364,6 +271,9 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 			return err
 		}
 		break
+	}
+	if lastError != nil {
+		return lastError
 	}
 	return nil
 
