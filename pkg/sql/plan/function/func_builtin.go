@@ -1133,8 +1133,6 @@ func BuiltInSerialNew(parameters []*vector.Vector, result vector.FunctionResultW
 		}
 	}()
 
-	bitMap := new(nulls.Nulls)
-
 	for _, v := range parameters {
 		if v.IsConstNull() {
 			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
@@ -1318,14 +1316,8 @@ func BuiltInSerialNew(parameters []*vector.Vector, result vector.FunctionResultW
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if bitMap.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
-				return err
-			}
+		if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+			return err
 		}
 	}
 	return nil

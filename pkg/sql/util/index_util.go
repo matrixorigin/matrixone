@@ -331,7 +331,9 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 // for example:
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, null), serial(1, 2, 3)]
-// result bitmap is []
+// result bitmap is [] (empty)
+// Here we are keeping the same function signature of serialWithCompacted so that we can replicate the same code of
+// `preinsertunique` in `preinsertsecondaryindex`
 func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
 	/*
 		NOTE 1: I tried re-using function.BuiltInSerialNew(), but not sure how to Free() the FunctionResult.
@@ -576,9 +578,7 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector
 	}
 
 	for i := range ps {
-		if !nulls.Contains(bitMap, uint64(i)) {
-			val = append(val, ps[i].GetBuf())
-		}
+		val = append(val, ps[i].GetBuf())
 	}
 
 	vec := vector.NewVec(vct)
