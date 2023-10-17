@@ -14,6 +14,7 @@ on:
 jobs:
   docker_image_build:
     runs-on: amd64-tke-dind
+    if: ${{ github.event.pull_request.merged == true }}
     timeout-minutes: 60
     name: BUILD MO DOCKER IMAGE
     outputs:
@@ -537,7 +538,7 @@ jobs:
           retention-days: 7
 
   clean_up_env:
-    if: ${{ always() }}
+    if: ${{ always() && github.event.pull_request.merged == true }}
     name: CLEAN ENV AND NOTICE
     runs-on: amd64-tke-mo
     needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test]
