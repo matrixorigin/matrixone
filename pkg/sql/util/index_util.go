@@ -28,6 +28,7 @@ import (
 )
 
 var SerialWithCompacted = serialWithCompacted
+var SerialWithoutCompacted = serialWithoutCompacted
 var CompactSingleIndexCol = compactSingleIndexCol
 var CompactPrimaryCol = compactPrimaryCol
 
@@ -305,6 +306,216 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 			for i := range vs {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
+				} else {
+
+					ps[i].EncodeStringType([]byte(vs[i]))
+				}
+			}
+		}
+	}
+
+	for i := range ps {
+		if !nulls.Contains(bitMap, uint64(i)) {
+			val = append(val, ps[i].GetBuf())
+		}
+	}
+
+	vec := vector.NewVec(vct)
+	vector.AppendBytesList(vec, val, nil, proc.Mp())
+
+	return vec, bitMap
+}
+
+// serialWithoutCompacted is similar to serialWithCompacted and builtInSerial
+// serialWithoutCompacted function is used by Secondary Index to support Null entries
+// for example:
+// input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
+// result vec is [serial(1, 2, 3), serial(1, 2, null), serial(1, 2, 3)]
+// result bitmap is []
+func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
+	// resolve vs
+	length := vs[0].Length()
+	vct := types.T_varchar.ToType()
+	//nsp := new(nulls.Nulls)
+	val := make([][]byte, 0, length)
+	ps := types.NewPackerArray(length, proc.Mp())
+	bitMap := new(nulls.Nulls)
+
+	for _, v := range vs {
+		switch v.GetType().Oid {
+		case types.T_bool:
+			s := vector.MustFixedCol[bool](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeBool(b)
+				}
+			}
+		case types.T_int8:
+			s := vector.MustFixedCol[int8](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeInt8(b)
+				}
+			}
+		case types.T_int16:
+			s := vector.MustFixedCol[int16](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeInt16(b)
+				}
+			}
+		case types.T_int32:
+			s := vector.MustFixedCol[int32](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeInt32(b)
+				}
+			}
+		case types.T_int64:
+			s := vector.MustFixedCol[int64](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeInt64(b)
+				}
+			}
+		case types.T_uint8:
+			s := vector.MustFixedCol[uint8](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeUint8(b)
+				}
+			}
+		case types.T_uint16:
+			s := vector.MustFixedCol[uint16](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeUint16(b)
+				}
+			}
+		case types.T_uint32:
+			s := vector.MustFixedCol[uint32](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeUint32(b)
+				}
+			}
+		case types.T_uint64:
+			s := vector.MustFixedCol[uint64](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeUint64(b)
+				}
+			}
+		case types.T_float32:
+			s := vector.MustFixedCol[float32](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeFloat32(b)
+				}
+			}
+		case types.T_float64:
+			s := vector.MustFixedCol[float64](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeFloat64(b)
+				}
+			}
+		case types.T_date:
+			s := vector.MustFixedCol[types.Date](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeDate(b)
+				}
+			}
+		case types.T_time:
+			s := vector.MustFixedCol[types.Time](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeTime(b)
+				}
+			}
+		case types.T_datetime:
+			s := vector.MustFixedCol[types.Datetime](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeDatetime(b)
+				}
+			}
+		case types.T_timestamp:
+			s := vector.MustFixedCol[types.Timestamp](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeTimestamp(b)
+				}
+			}
+		case types.T_enum:
+			s := vector.MustFixedCol[types.Enum](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeEnum(b)
+				}
+			}
+		case types.T_decimal64:
+			s := vector.MustFixedCol[types.Decimal64](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeDecimal64(b)
+				}
+			}
+		case types.T_decimal128:
+			s := vector.MustFixedCol[types.Decimal128](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeDecimal128(b)
+				}
+			}
+		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64:
+			// NOTE 1: We will consider T_array as bytes here just like JSON, VARBINARY and BLOB.
+			// If not, we need to define arrayType in types/tuple.go as arrayF32TypeCode, arrayF64TypeCode etc
+			// NOTE 2: vs is []string and not []byte. vs[i] is not of form "[1,2,3]". It is binary string of []float32{1,2,3}
+			// NOTE 3: This class is mainly used by PreInsertUnique which gets triggered before inserting into column having
+			// Unique Key or Primary Key constraint. Vector cannot be UK or PK.
+			vs := vector.MustStrCol(v)
+			for i := range vs {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
 				} else {
 
 					ps[i].EncodeStringType([]byte(vs[i]))

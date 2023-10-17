@@ -1070,7 +1070,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			if n.NodeType == plan.Node_PRE_INSERT_UK {
-				preInsertUkArg, err := constructPreInsertUk(n, c.proc, true)
+				preInsertUkArg, err := constructPreInsertUk(n, c.proc)
 				if err != nil {
 					return nil, err
 				}
@@ -1081,7 +1081,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Arg:     preInsertUkArg,
 				})
 			} else {
-				preInsertSkArg, err := constructPreInsertUk(n, c.proc, false)
+				preInsertSkArg, err := constructPreInsertSk(n, c.proc)
 				if err != nil {
 					return nil, err
 				}
