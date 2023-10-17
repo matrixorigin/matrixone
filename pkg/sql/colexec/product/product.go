@@ -65,9 +65,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				proc.PutBatch(bat)
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+			if err = ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
 				bat.Clean(proc.Mp())
-				ap.Free(proc, true)
 				return process.ExecNext, err
 			}
 			proc.PutBatch(bat)

@@ -187,7 +187,7 @@ privileges    VARCHAR(31)    NO        null
 column_comment    VARCHAR(2048)    YES        null        
 generation_expression    VARCHAR(500)    NO        null        
 srs_id    BIGINT(0)    YES        null        
-select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
+select table_name, column_name from columns where table_schema = 'mo_catalog' and column_name != '__mo_index_idx_col' and column_name != '__mo_index_pri_col' order by table_name, column_name limit 5;
 table_name    column_name
 mo_account    account_id
 mo_account    account_name

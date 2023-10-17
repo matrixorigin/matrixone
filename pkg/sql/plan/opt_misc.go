@@ -863,37 +863,53 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 			determineHashOnPK(child, builder)
 		}
 	}
-	// for now ,only support inner join
-	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
-		return
-	}
-	if !builder.IsEquiJoin(node) {
-		return
-	}
-	//for now, only support 1 join cond
-	if len(node.OnList) != 1 {
+
+	if node.NodeType != plan.Node_JOIN {
 		return
 	}
 
-	var hashCol *plan.ColRef
-	cond := node.OnList[0]
-	switch condImpl := cond.Expr.(type) {
-	case *plan.Expr_F:
-		expr := condImpl.F.Args[1]
-		switch exprImpl := expr.Expr.(type) {
-		case *plan.Expr_Col:
-			hashCol = exprImpl.Col
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = nil
+	}
+
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = nil
+	}
+
+	exprs := make([]*plan.Expr, 0)
+	for _, expr := range node.OnList {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
+			exprs = append(exprs, expr)
 		}
 	}
-	if hashCol == nil {
+
+	hashCols := make([]*plan.ColRef, 0)
+	for _, cond := range exprs {
+		switch condImpl := cond.Expr.(type) {
+		case *plan.Expr_F:
+			expr := condImpl.F.Args[1]
+			switch exprImpl := expr.Expr.(type) {
+			case *plan.Expr_Col:
+				hashCols = append(hashCols, exprImpl.Col)
+			}
+		}
+	}
+
+	if len(hashCols) == 0 {
 		return
 	}
 
-	tableDef := findHashOnPKTable(node.Children[1], hashCol.RelPos, builder)
+	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
 	if tableDef == nil {
 		return
 	}
-	if containsAllPKs([]int32{hashCol.ColPos}, tableDef) {
+	hashColPos := make([]int32, len(hashCols))
+	for i := range hashCols {
+		hashColPos[i] = hashCols[i].ColPos
+	}
+	if containsAllPKs(hashColPos, tableDef) {
 		node.Stats.HashmapStats.HashOnPK = true
 	}
 

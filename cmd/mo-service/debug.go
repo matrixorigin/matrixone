@@ -44,6 +44,10 @@ var (
 	globalCounterSet = new(perfcounter.CounterSet)
 )
 
+func init() {
+	perfcounter.Named.Store("global", globalCounterSet)
+}
+
 func startCPUProfile() func() {
 	cpuProfilePath := *cpuProfilePathFlag
 	if cpuProfilePath == "" {
