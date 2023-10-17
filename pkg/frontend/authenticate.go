@@ -824,7 +824,7 @@ var (
 		"mo_locks":                    0,
 		"mo_variables":                0,
 		"mo_transactions":             0,
-		"mo_cache": 0,
+		"mo_cache":                    0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -856,7 +856,7 @@ var (
 		"mo_locks":                    0,
 		"mo_variables":                0,
 		"mo_transactions":             0,
-		"mo_cache": 0,
+		"mo_cache":                    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (

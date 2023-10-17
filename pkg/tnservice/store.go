@@ -432,6 +432,7 @@ func (s *store) initClusterService() {
 
 // initQueryService
 // inStandalone:
+//
 //	true: tn is boosted in a standalone cluster. cn has a queryservice already.
 //	false: tn is boosted in an independent process. tn needs a queryservice.
 func (s *store) initQueryService(inStandalone bool) {
