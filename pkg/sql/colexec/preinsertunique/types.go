@@ -25,4 +25,4 @@ type Argument struct {
 	PreInsertCtx *plan.PreInsertUkCtx
 }
 
-func (arg *Argument) Free(*process.Process, bool) {}
+func (arg *Argument) Free(*process.Process, bool, error) {}

@@ -80,10 +80,11 @@ type Argument struct {
 	Channel  chan *bitmap.Bitmap
 	NumCPU   uint64
 
+	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		if !ctr.handledLast {
