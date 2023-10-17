@@ -1123,7 +1123,7 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func BuiltInSerialNew(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := types.NewPackerArray(length, proc.Mp())

@@ -1247,9 +1247,9 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `serial_new`
+	// function `serial_full`
 	{
-		functionId: SERIAL_NEW,
+		functionId: SERIAL_FULL,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
@@ -1266,7 +1266,7 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return BuiltInSerialNew
+					return BuiltInSerialFull
 				},
 			},
 		},

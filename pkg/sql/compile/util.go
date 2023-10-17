@@ -62,7 +62,7 @@ var (
 var (
 	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s from %s.%s where (%s) is not null;"
 	insertIntoUniqueIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
-	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  %s.`%s` select serial_new(%s), %s from %s.%s;"
+	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  %s.`%s` select serial_full(%s), %s from %s.%s;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
 	createIndexTableForamt                      = "create table %s.`%s` (%s);"
