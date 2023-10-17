@@ -32,6 +32,8 @@ func init() {
 	registry.MustRegister(TxnStatementCounter)
 	registry.MustRegister(TxnStatementRetryCounter)
 	registry.MustRegister(TxnHandleCommitCounter)
+	registry.MustRegister(S3ConnectCounter)
+	registry.MustRegister(S3DNSResolveCounter)
 
 	registry.MustRegister(TxnCommitSizeGauge)
 	registry.MustRegister(TxnHandleQueueSizeGauge)

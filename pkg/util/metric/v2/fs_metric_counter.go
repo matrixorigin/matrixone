@@ -13,3 +13,25 @@
 // limitations under the License.
 
 package v2
+
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+var (
+	S3ConnectCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "cn",
+			Subsystem: "fs",
+			Name:      "s3_connect_total",
+			Help:      "Total number of s3 connect count.",
+		})
+
+	S3DNSResolveCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "cn",
+			Subsystem: "fs",
+			Name:      "s3_dns_resolve_total",
+			Help:      "Total number of s3 dns resolve count.",
+		})
+)

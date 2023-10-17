@@ -693,6 +693,7 @@ func addGetConnMetric(ctx context.Context) context.Context {
 		},
 
 		DNSStart: func(di httptrace.DNSStartInfo) {
+			v2.S3DNSResolveCounter.Inc()
 			dnsStart = time.Now()
 		},
 
@@ -701,6 +702,7 @@ func addGetConnMetric(ctx context.Context) context.Context {
 		},
 
 		ConnectStart: func(network, addr string) {
+			v2.S3ConnectCounter.Inc()
 			connectStart = time.Now()
 		},
 

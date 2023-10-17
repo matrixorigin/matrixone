@@ -937,24 +937,24 @@ func (c *DashboardCreator) initWriteLogTailBytesRow() dashboard.Option {
 
 func (c *DashboardCreator) initFSCountRow() dashboard.Option {
 	return dashboard.Row(
-		"FileService qps",
+		"FileService Status",
 		c.withGraph(
-			"Mem Count",
-			4,
-			"sum(rate(cn_fs_mem_io_bytes_count[$interval])) by (type)",
-			"{{ type }}"),
-
-		c.withGraph(
-			"Local Count",
-			4,
-			"sum(rate(cn_fs_local_io_bytes_count[$interval])) by (type)",
-			"{{ type }}"),
-
-		c.withGraph(
-			"S3 Count",
+			"S3 op qps",
 			4,
 			"sum(rate(cn_fs_s3_io_bytes_count[$interval])) by (type)",
 			"{{ type }}"),
+
+		c.withGraph(
+			"S3 Connect qps",
+			4,
+			"sum(rate(cn_fs_s3_connect_total[$interval]))",
+			""),
+
+		c.withGraph(
+			"S3 DNS Resolve qps",
+			4,
+			"sum(rate(cn_fs_s3_dns_resolve_total[$interval]))",
+			""),
 	)
 }
 
