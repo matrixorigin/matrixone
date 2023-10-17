@@ -430,7 +430,6 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		})
 		initWG.Wait()
 	}
-	SV.EnableMetricToProm = true
 	if !SV.DisableMetric || SV.EnableMetricToProm {
 		stopper.RunNamedTask("metric", func(ctx context.Context) {
 			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole, mometric.WithWriterFactory(writerFactory)); !act {
