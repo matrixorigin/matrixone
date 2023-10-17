@@ -240,40 +240,22 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	// Use the transaction to execute the SQL command
 
-	retryCount := 2
-	var lastError error
+	_, execErr := sqlDb.Exec(loadSQL)
 
-	for i := 0; i < retryCount; i++ {
-		txn, err := sqlDb.Begin()
-		if err != nil {
-			return err
-		}
+	if execErr != nil {
 
-		_, execErr := txn.Exec(loadSQL)
-
-		if execErr != nil {
-			// Rollback the transaction upon failure
-			txn.Rollback()
-
-			// Check if the error is one that suggests retrying
-			if strings.Contains(execErr.Error(), "txn need retry in rc mode") {
-				lastError = execErr
-				continue
+		// Check if the error is one that suggests retrying
+		if strings.Contains(execErr.Error(), "txn need retry in rc mode") {
+			// Retry the transaction
+			_, execErr = sqlDb.Exec(loadSQL)
+			if execErr == nil {
+				return nil
 			}
-
-			return execErr
 		}
 
-		// Commit the transaction if no errors
-		err = txn.Commit()
-		if err != nil {
-			return err
-		}
-		break
+		return execErr
 	}
-	if lastError != nil {
-		return lastError
-	}
+
 	return nil
 
 }
