@@ -28,20 +28,20 @@ func MustRegister(cs ...prometheus.Collector) {
 }
 
 func init() {
-	registry.MustRegister(S3FSCounter)
-	registry.MustRegister(LocalFSCounter)
-	registry.MustRegister(MemFSCounter)
 	registry.MustRegister(TxnCounter)
 	registry.MustRegister(TxnStatementCounter)
 	registry.MustRegister(TxnStatementRetryCounter)
 	registry.MustRegister(TxnHandleCommitCounter)
 
-	registry.MustRegister(S3IOSizeGauge)
-	registry.MustRegister(LocalIOSizeGauge)
-	registry.MustRegister(LogTailSizeGauge)
 	registry.MustRegister(TxnCommitSizeGauge)
 	registry.MustRegister(TxnHandleQueueSizeGauge)
 
+	registry.MustRegister(TxnTotalCostDurationHistogram)
+	registry.MustRegister(MemIOBytesHistogram)
+	registry.MustRegister(LogTailSendDurationHistogram)
+	registry.MustRegister(LogTailBytesHistogram)
+	registry.MustRegister(S3IOBytesHistogram)
+	registry.MustRegister(LocalIOBytesHistogram)
 	registry.MustRegister(S3IODurationHistogram)
 	registry.MustRegister(LocalIODurationHistogram)
 	registry.MustRegister(S3GetConnDurationHistogram)

@@ -108,7 +108,7 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 }
 
 func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
-	v2.GetMemFSWriteCounter().Inc()
+	v2.GetMemFSWriteBytesHistogram().Observe(float64(vector.EntriesSize()))
 
 	select {
 	case <-ctx.Done():
@@ -186,7 +186,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
-	v2.GetMemFSWriteCounter().Inc()
+	defer v2.GetMemFSReadBytesHistogram().Observe(float64(vector.EntriesSize()))
 
 	select {
 	case <-ctx.Done():

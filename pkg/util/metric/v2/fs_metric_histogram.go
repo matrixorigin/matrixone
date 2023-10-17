@@ -19,6 +19,15 @@ import (
 )
 
 var (
+	S3IOBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "cn",
+			Subsystem: "fs",
+			Name:      "s3_io_bytes",
+			Help:      "Bucketed histogram of s3 io bytes.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		}, []string{"type"})
+
 	S3IODurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "cn",
@@ -72,6 +81,24 @@ var (
 			Help:      "Bucketed histogram of s3 tls handshake duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
 		})
+
+	LocalIOBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "cn",
+			Subsystem: "fs",
+			Name:      "local_io_bytes",
+			Help:      "Bucketed histogram of local io bytes.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		}, []string{"type"})
+
+	MemIOBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "cn",
+			Subsystem: "fs",
+			Name:      "mem_io_bytes",
+			Help:      "Bucketed histogram of memory io bytes.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		}, []string{"type"})
 )
 
 func GetS3ReadDurationHistogram() prometheus.Observer {
@@ -88,4 +115,28 @@ func GetLocalReadDurationHistogram() prometheus.Observer {
 
 func GetLocalWriteDurationHistogram() prometheus.Observer {
 	return LocalIODurationHistogram.WithLabelValues("write")
+}
+
+func GetS3FSWriteBytesHistogram() prometheus.Observer {
+	return S3IOBytesHistogram.WithLabelValues("write")
+}
+
+func GetS3FSReadBytesHistogram() prometheus.Observer {
+	return S3IOBytesHistogram.WithLabelValues("read")
+}
+
+func GetLocalFSWriteBytesHistogram() prometheus.Observer {
+	return LocalIOBytesHistogram.WithLabelValues("write")
+}
+
+func GetLocalFSReadBytesHistogram() prometheus.Observer {
+	return LocalIOBytesHistogram.WithLabelValues("read")
+}
+
+func GetMemFSWriteBytesHistogram() prometheus.Observer {
+	return MemIOBytesHistogram.WithLabelValues("write")
+}
+
+func GetMemFSReadBytesHistogram() prometheus.Observer {
+	return MemIOBytesHistogram.WithLabelValues("read")
 }

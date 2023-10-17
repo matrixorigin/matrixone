@@ -45,4 +45,34 @@ var (
 			Help:      "Bucketed histogram of append log tail into logservice duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
 		})
+
+	LogTailBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "tn",
+			Subsystem: "logtail",
+			Name:      "log_tail_bytes",
+			Help:      "Bucketed histogram of logtail log bytes.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		}, []string{"type"})
+
+	LogTailSendDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "tn",
+			Subsystem: "logtail",
+			Name:      "send_log_tail_duration_seconds",
+			Help:      "Bucketed histogram of send logtail log duration.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		})
 )
+
+func GetWriteLogTailBytesHistogram() prometheus.Observer {
+	return LogTailBytesHistogram.WithLabelValues("write")
+}
+
+func GetSendLogTailBytesHistogram() prometheus.Observer {
+	return LogTailBytesHistogram.WithLabelValues("send")
+}
+
+func GetReceiveLogTailBytesHistogram() prometheus.Observer {
+	return LogTailBytesHistogram.WithLabelValues("receive")
+}
