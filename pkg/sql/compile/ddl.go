@@ -529,6 +529,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	getLogger().Info("createTable",
 		zap.String("databaseName", c.db),
 		zap.String("tableName", qry.GetTableDef().GetName()),
+		zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
 	)
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -565,6 +566,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
+			getLogger().Info("createTable no exist",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			)
 			return nil
 		}
 		if qry.GetReplace() {
