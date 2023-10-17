@@ -162,7 +162,10 @@ func (s *morpcStream) write(
 
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
-		if err := s.cs.Write(ctx, seg); err != nil {
+		st := time.Now()
+		err := s.cs.Write(ctx, seg)
+		v2.GetSendWithStepNetworkLogTailDurationHistogram().Observe(time.Since(st).Seconds())
+		if err != nil {
 			return err
 		}
 	}
@@ -261,7 +264,7 @@ func NewSession(
 					v2.LogTailSendLatencyDurationHistogram.Observe(float64(now.Sub(msg.createAt).Seconds()))
 
 					v2.GetSendLogTailBytesHistogram().Observe(float64(msg.response.Size()))
-					defer v2.LogTailSendDurationHistogram.Observe(time.Since(now).Seconds())
+					defer v2.GetSendLogTailTotalDurationHistogram().Observe(time.Since(now).Seconds())
 
 					err := ss.stream.write(ctx, msg.response)
 					if sendCost := time.Since(now); sendCost > 10*time.Second {

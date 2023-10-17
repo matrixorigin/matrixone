@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type ClientOption func(*LogtailClient)
@@ -159,6 +160,7 @@ func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 				c.once.Do(func() { close(c.broken) })
 				return nil, moerr.NewStreamClosedNoCtx()
 			}
+			v2.LogTailReceiveQueueSizeGauge.Set(float64(len(c.recvChan)))
 			return message.(*LogtailResponseSegment), nil
 		}
 	}
