@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type TableState int
@@ -256,6 +257,9 @@ func NewSession(
 					defer cancel()
 
 					now := time.Now()
+					v2.GetSendLogTailBytesHistogram().Observe(float64(msg.response.Size()))
+					defer v2.LogTailSendDurationHistogram.Observe(time.Since(now).Seconds())
+
 					err := ss.stream.write(ctx, msg.response)
 					if sendCost := time.Since(now); sendCost > 10*time.Second {
 						ss.logger.Info("send logtail too much", zap.Int64("sendRound", cnt), zap.Duration("duration", sendCost))

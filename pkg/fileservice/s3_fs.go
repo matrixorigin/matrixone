@@ -246,10 +246,7 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	ctx = addGetConnMetric(ctx)
-
-	v2.GetS3FSWriteCounter().Inc()
-	v2.GetS3FSWriteSizeGauge().Set(float64(vector.EntriesSize()))
-
+	v2.GetS3FSWriteBytesHistogram().Observe(float64(vector.EntriesSize()))
 	start := time.Now()
 	defer v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
 
@@ -358,9 +355,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	ctx = addGetConnMetric(ctx)
-
-	v2.GetS3FSReadCounter().Inc()
-	defer v2.GetS3FSReadSizeGauge().Set(float64(vector.EntriesSize()))
+	defer v2.GetS3FSReadBytesHistogram().Observe(float64(vector.EntriesSize()))
 
 	start := time.Now()
 	defer v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())

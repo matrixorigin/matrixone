@@ -66,7 +66,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			"interval",
 			interval.Values([]string{"1s", "3s", "5s", "30s", "1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
 		),
-		c.initTxnTotalHandledRow(),
+		c.initTxnTPSRow(),
 		c.initTxnStatementRow(),
 		c.initTxnCNCommitCostRow(),
 		c.initTxnTNCommitCostRow(),
@@ -76,7 +76,8 @@ func (c *DashboardCreator) initTxnDashboard() error {
 		c.initTxnTNCommitInQueueCostRow(),
 		c.initTxnLockRow(),
 		c.initTxnUnlockRow(),
-		c.initTxnSendCommitCostRow())
+		c.initTxnSendCommitCostRow(),
+		c.initTxnTotalCostRow())
 	if err != nil {
 		return err
 	}
@@ -97,9 +98,12 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 			"interval",
 			interval.Values([]string{"1s", "3s", "5s", "30s", "1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
 		),
+		c.initLogTailTPSRow(),
 		c.initLogTailApplyCostRow(),
 		c.initWaitLogTailCostRow(),
-		c.initWriteLogTailCostRow())
+		c.initWriteLogTailCostRow(),
+		c.initSendLogTailCostRow(),
+		c.initWriteLogTailBytesRow())
 	if err != nil {
 		return err
 	}
@@ -143,6 +147,10 @@ func (c *DashboardCreator) initFSDashboard() error {
 			interval.Values([]string{"1s", "3s", "5s", "30s", "1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
 		),
 		c.initFSCountRow(),
+		c.initS3ReadBytesRow(),
+		c.initS3WriteBytesRow(),
+		c.initLocalReadBytesRow(),
+		c.initLocalWriteBytesRow(),
 		c.initS3ReadIOCostRow(),
 		c.initS3WriteIOCostRow(),
 		c.initLocalReadIOCostRow(),
@@ -177,30 +185,30 @@ func (c *DashboardCreator) initTxnStatementRow() dashboard.Option {
 	return dashboard.Row(
 		"Statement Status",
 		c.withGraph(
-			"Statement",
+			"Statement tps",
 			6,
 			"sum(rate(cn_txn_statement_total[$interval]))",
 			""),
 
 		c.withGraph(
-			"Statement Retry",
+			"Statement Retry tps",
 			6,
 			"sum(rate(cn_txn_statement_retry_total[$interval]))",
 			""),
 	)
 }
 
-func (c *DashboardCreator) initTxnTotalHandledRow() dashboard.Option {
+func (c *DashboardCreator) initTxnTPSRow() dashboard.Option {
 	return dashboard.Row(
-		"Total number of txn handled",
+		"Txn Status",
 		c.withGraph(
-			"Txn Count",
+			"Txn tps",
 			4,
 			"sum(rate(cn_txn_txn_total[$interval])) by (type)",
 			"{{ type }}"),
 
 		c.withGraph(
-			"Commit Count",
+			"Commit tps",
 			4,
 			"sum(rate(tn_txn_handle_commit_total[$interval]))",
 			""),
@@ -365,12 +373,50 @@ func (c *DashboardCreator) initTxnUnlockRow() dashboard.Option {
 	)
 }
 
+func (c *DashboardCreator) initTxnTotalCostRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn Total Cost",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(cn_txn_total_cost_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(cn_txn_total_cost_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(cn_txn_total_cost_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(cn_txn_total_cost_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
 func (c *DashboardCreator) initTxnCNCommitCostRow() dashboard.Option {
 	return dashboard.Row(
 		"Txn CN Commit Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_txn_commit_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -378,7 +424,7 @@ func (c *DashboardCreator) initTxnCNCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_txn_commit_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -386,7 +432,7 @@ func (c *DashboardCreator) initTxnCNCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_txn_commit_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -394,7 +440,7 @@ func (c *DashboardCreator) initTxnCNCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_txn_commit_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -408,7 +454,7 @@ func (c *DashboardCreator) initTxnTNCommitCostRow() dashboard.Option {
 		"Txn TN Commit Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(tn_txn_handle_commit_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -416,7 +462,7 @@ func (c *DashboardCreator) initTxnTNCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(tn_txn_handle_commit_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -424,7 +470,7 @@ func (c *DashboardCreator) initTxnTNCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(tn_txn_handle_commit_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -432,7 +478,7 @@ func (c *DashboardCreator) initTxnTNCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(tn_txn_handle_commit_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -446,7 +492,7 @@ func (c *DashboardCreator) initTxnTNCommitInQueueCostRow() dashboard.Option {
 		"Txn TN Commit In Queue Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(tn_txn_handle_queue_in_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -454,7 +500,7 @@ func (c *DashboardCreator) initTxnTNCommitInQueueCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(tn_txn_handle_queue_in_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -462,7 +508,7 @@ func (c *DashboardCreator) initTxnTNCommitInQueueCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(tn_txn_handle_queue_in_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -470,7 +516,7 @@ func (c *DashboardCreator) initTxnTNCommitInQueueCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(tn_txn_handle_queue_in_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -484,7 +530,7 @@ func (c *DashboardCreator) initTxnSendCommitCostRow() dashboard.Option {
 		"Txn Send Commit Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_txn_send_request_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -492,7 +538,7 @@ func (c *DashboardCreator) initTxnSendCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_txn_send_request_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -500,7 +546,7 @@ func (c *DashboardCreator) initTxnSendCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_txn_send_request_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -508,7 +554,7 @@ func (c *DashboardCreator) initTxnSendCommitCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_txn_send_request_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -522,7 +568,7 @@ func (c *DashboardCreator) initTxnRangesLoadCostRow() dashboard.Option {
 		"Txn Ranges Load Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_txn_ranges_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -530,7 +576,7 @@ func (c *DashboardCreator) initTxnRangesLoadCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_txn_ranges_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -538,7 +584,7 @@ func (c *DashboardCreator) initTxnRangesLoadCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_txn_ranges_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -546,7 +592,7 @@ func (c *DashboardCreator) initTxnRangesLoadCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_txn_ranges_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -560,7 +606,7 @@ func (c *DashboardCreator) initSQLBuildCostRow() dashboard.Option {
 		"SQL Build Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_sql_build_plan_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -568,7 +614,7 @@ func (c *DashboardCreator) initSQLBuildCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_sql_build_plan_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -576,7 +622,7 @@ func (c *DashboardCreator) initSQLBuildCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_sql_build_plan_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -584,7 +630,7 @@ func (c *DashboardCreator) initSQLBuildCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_sql_build_plan_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -598,7 +644,7 @@ func (c *DashboardCreator) initSQLRunCostRow() dashboard.Option {
 		"SQL Run Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_sql_sql_run_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -606,7 +652,7 @@ func (c *DashboardCreator) initSQLRunCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_sql_sql_run_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -614,7 +660,7 @@ func (c *DashboardCreator) initSQLRunCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_sql_sql_run_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -622,7 +668,7 @@ func (c *DashboardCreator) initSQLRunCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_sql_sql_run_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -631,12 +677,35 @@ func (c *DashboardCreator) initSQLRunCostRow() dashboard.Option {
 	)
 }
 
+func (c *DashboardCreator) initLogTailTPSRow() dashboard.Option {
+	return dashboard.Row(
+		"LogTail Status",
+		c.withGraph(
+			"Write tps",
+			4,
+			`sum(rate(tn_logtail_log_tail_bytes_count{type="write"}[$interval])) by (type)`,
+			"{{ type }}"),
+
+		c.withGraph(
+			"Send tps",
+			4,
+			`sum(rate(tn_logtail_log_tail_bytes_count{type="send"}[$interval])) by (type)`,
+			"{{ type }}"),
+
+		c.withGraph(
+			"Receive tps",
+			4,
+			`sum(rate(tn_logtail_log_tail_bytes_count{type="receive"}[$interval])) by (type)`,
+			"{{ type }}"),
+	)
+}
+
 func (c *DashboardCreator) initLogTailApplyCostRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail Apply Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_logtail_apply_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -644,7 +713,7 @@ func (c *DashboardCreator) initLogTailApplyCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_logtail_apply_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -652,7 +721,7 @@ func (c *DashboardCreator) initLogTailApplyCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_logtail_apply_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -660,7 +729,7 @@ func (c *DashboardCreator) initLogTailApplyCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_logtail_apply_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -674,7 +743,7 @@ func (c *DashboardCreator) initWaitLogTailCostRow() dashboard.Option {
 		"Logtail Wait Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_logtail_wait_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -682,7 +751,7 @@ func (c *DashboardCreator) initWaitLogTailCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_logtail_wait_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -690,7 +759,7 @@ func (c *DashboardCreator) initWaitLogTailCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_logtail_wait_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -698,7 +767,7 @@ func (c *DashboardCreator) initWaitLogTailCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_logtail_wait_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -712,7 +781,7 @@ func (c *DashboardCreator) initWriteLogTailCostRow() dashboard.Option {
 		"Logtail Write Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(tn_logtail_append_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -720,7 +789,7 @@ func (c *DashboardCreator) initWriteLogTailCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(tn_logtail_append_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -728,7 +797,7 @@ func (c *DashboardCreator) initWriteLogTailCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(tn_logtail_append_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -736,7 +805,7 @@ func (c *DashboardCreator) initWriteLogTailCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(tn_logtail_append_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -745,26 +814,254 @@ func (c *DashboardCreator) initWriteLogTailCostRow() dashboard.Option {
 	)
 }
 
+func (c *DashboardCreator) initSendLogTailCostRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail Send Cost",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initWriteLogTailBytesRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail Write Bytes",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(tn_logtail_log_tail_bytes_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(tn_logtail_log_tail_bytes_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(tn_logtail_log_tail_bytes_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(tn_logtail_log_tail_bytes_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+	)
+}
+
 func (c *DashboardCreator) initFSCountRow() dashboard.Option {
 	return dashboard.Row(
-		"Total number of fs handled",
+		"FileService qps",
 		c.withGraph(
 			"Mem Count",
 			4,
-			"sum(rate(cn_fs_mem_fs_total[$interval])) by (type)",
+			"sum(rate(cn_fs_mem_io_bytes_count[$interval])) by (type)",
 			"{{ type }}"),
 
 		c.withGraph(
 			"Local Count",
 			4,
-			"sum(rate(cn_fs_local_total[$interval])) by (type)",
+			"sum(rate(cn_fs_local_io_bytes_count[$interval])) by (type)",
 			"{{ type }}"),
 
 		c.withGraph(
 			"S3 Count",
 			4,
-			"sum(rate(cn_fs_s3_total[$interval])) by (type)",
+			"sum(rate(cn_fs_s3_io_bytes_count[$interval])) by (type)",
 			"{{ type }}"),
+	)
+}
+
+func (c *DashboardCreator) initS3ReadBytesRow() dashboard.Option {
+	return dashboard.Row(
+		"S3 Read Bytes",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(cn_fs_s3_io_bytes_bucket{type="read"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(cn_fs_s3_io_bytes_bucket{type="read"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(cn_fs_s3_io_bytes_bucket{type="read"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(cn_fs_s3_io_bytes_bucket{type="read"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initS3WriteBytesRow() dashboard.Option {
+	return dashboard.Row(
+		"S3 Write Bytes",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(cn_fs_s3_io_bytes_bucket{type="write"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(cn_fs_s3_io_bytes_bucket{type="write"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(cn_fs_s3_io_bytes_bucket{type="write"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(cn_fs_s3_io_bytes_bucket{type="write"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initLocalReadBytesRow() dashboard.Option {
+	return dashboard.Row(
+		"Local Read Bytes",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(cn_fs_local_io_bytes_bucket{type="read"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(cn_fs_local_io_bytes_bucket{type="read"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(cn_fs_local_io_bytes_bucket{type="read"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(cn_fs_local_io_bytes_bucket{type="read"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initLocalWriteBytesRow() dashboard.Option {
+	return dashboard.Row(
+		"Local Write Bytes",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(cn_fs_local_io_bytes_bucket{type="write"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(cn_fs_local_io_bytes_bucket{type="write"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(cn_fs_local_io_bytes_bucket{type="write"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(cn_fs_local_io_bytes_bucket{type="write"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("bytes"),
+			axis.Min(0)),
 	)
 }
 
@@ -773,7 +1070,7 @@ func (c *DashboardCreator) initS3ReadIOCostRow() dashboard.Option {
 		"S3 Read Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_fs_s3_io_duration_seconds_bucket{type="read"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -781,7 +1078,7 @@ func (c *DashboardCreator) initS3ReadIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_fs_s3_io_duration_seconds_bucket{type="read"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -789,7 +1086,7 @@ func (c *DashboardCreator) initS3ReadIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_fs_s3_io_duration_seconds_bucket{type="read"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -797,7 +1094,7 @@ func (c *DashboardCreator) initS3ReadIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_fs_s3_io_duration_seconds_bucket{type="read"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -811,7 +1108,7 @@ func (c *DashboardCreator) initS3WriteIOCostRow() dashboard.Option {
 		"S3 Write Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_fs_s3_io_duration_seconds_bucket{type="write"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -819,7 +1116,7 @@ func (c *DashboardCreator) initS3WriteIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_fs_s3_io_duration_seconds_bucket{type="write"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -827,7 +1124,7 @@ func (c *DashboardCreator) initS3WriteIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_fs_s3_io_duration_seconds_bucket{type="write"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -835,7 +1132,7 @@ func (c *DashboardCreator) initS3WriteIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_fs_s3_io_duration_seconds_bucket{type="write"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -849,7 +1146,7 @@ func (c *DashboardCreator) initLocalReadIOCostRow() dashboard.Option {
 		"Local Read Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_fs_local_io_duration_seconds_bucket{type="read"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -857,7 +1154,7 @@ func (c *DashboardCreator) initLocalReadIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_fs_local_io_duration_seconds_bucket{type="read"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -865,7 +1162,7 @@ func (c *DashboardCreator) initLocalReadIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_fs_local_io_duration_seconds_bucket{type="read"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -873,7 +1170,7 @@ func (c *DashboardCreator) initLocalReadIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_fs_local_io_duration_seconds_bucket{type="read"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -887,7 +1184,7 @@ func (c *DashboardCreator) initLocalWriteIOCostRow() dashboard.Option {
 		"Local Write Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_fs_local_io_duration_seconds_bucket{type="write"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -895,7 +1192,7 @@ func (c *DashboardCreator) initLocalWriteIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_fs_local_io_duration_seconds_bucket{type="write"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -903,7 +1200,7 @@ func (c *DashboardCreator) initLocalWriteIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_fs_local_io_duration_seconds_bucket{type="write"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -911,7 +1208,7 @@ func (c *DashboardCreator) initLocalWriteIOCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_fs_local_io_duration_seconds_bucket{type="write"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -925,7 +1222,7 @@ func (c *DashboardCreator) initS3TLSHandleShakeCostRow() dashboard.Option {
 		"S3 TLS HandleShake Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_fs_s3_tls_handshake_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -933,7 +1230,7 @@ func (c *DashboardCreator) initS3TLSHandleShakeCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_fs_s3_tls_handshake_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -941,7 +1238,7 @@ func (c *DashboardCreator) initS3TLSHandleShakeCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_fs_s3_tls_handshake_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -949,7 +1246,7 @@ func (c *DashboardCreator) initS3TLSHandleShakeCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_fs_s3_tls_handshake_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -963,7 +1260,7 @@ func (c *DashboardCreator) initS3GetConnCostRow() dashboard.Option {
 		"S3 Get Conn Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_fs_s3_conn_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -971,7 +1268,7 @@ func (c *DashboardCreator) initS3GetConnCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_fs_s3_conn_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -979,7 +1276,7 @@ func (c *DashboardCreator) initS3GetConnCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_fs_s3_conn_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -987,7 +1284,7 @@ func (c *DashboardCreator) initS3GetConnCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_fs_s3_conn_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -1001,7 +1298,7 @@ func (c *DashboardCreator) initS3ConnectCostRow() dashboard.Option {
 		"S3 Connect Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_fs_s3_connect_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -1009,7 +1306,7 @@ func (c *DashboardCreator) initS3ConnectCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_fs_s3_connect_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -1017,7 +1314,7 @@ func (c *DashboardCreator) initS3ConnectCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_fs_s3_connect_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -1025,7 +1322,7 @@ func (c *DashboardCreator) initS3ConnectCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_fs_s3_connect_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -1039,7 +1336,7 @@ func (c *DashboardCreator) initS3DNSResolveCostRow() dashboard.Option {
 		"S3 DNS Resolve Cost",
 
 		c.withGraph(
-			"80% wait time",
+			"80% time",
 			3,
 			`histogram_quantile(0.80, sum(rate(cn_fs_s3_dns_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -1047,7 +1344,7 @@ func (c *DashboardCreator) initS3DNSResolveCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"90% wait time",
+			"90% time",
 			3,
 			`histogram_quantile(0.90, sum(rate(cn_fs_s3_dns_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -1055,7 +1352,7 @@ func (c *DashboardCreator) initS3DNSResolveCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99% wait time",
+			"99% time",
 			3,
 			`histogram_quantile(0.99, sum(rate(cn_fs_s3_dns_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
@@ -1063,7 +1360,7 @@ func (c *DashboardCreator) initS3DNSResolveCostRow() dashboard.Option {
 			axis.Min(0)),
 
 		c.withGraph(
-			"99.99% wait time",
+			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(cn_fs_s3_dns_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",

@@ -282,6 +282,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					cancel()
 
 					resp := <-ch
+
 					if resp.err != nil {
 						// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
 						logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
@@ -289,6 +290,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					}
 
 					response := resp.response
+					v2.GetReceiveLogTailBytesHistogram().Observe(float64(response.Response.ProtoSize()))
 					// consume subscribe response
 					if sResponse := response.GetSubscribeResponse(); sResponse != nil {
 						if err := distributeSubscribeResponse(

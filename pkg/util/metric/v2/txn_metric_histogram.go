@@ -19,6 +19,15 @@ import (
 )
 
 var (
+	TxnTotalCostDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "cn",
+			Subsystem: "txn",
+			Name:      "total_cost_duration_seconds",
+			Help:      "Bucketed histogram of txn total cost duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+		})
+
 	TxnDetermineSnapshotDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "cn",

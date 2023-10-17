@@ -153,8 +153,7 @@ func (l *LocalFS) Name() string {
 }
 
 func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
-	v2.GetLocalFSWriteCounter().Inc()
-	v2.GetLocalFSWriteSizeGauge().Set(float64(vector.EntriesSize()))
+	v2.GetLocalFSWriteBytesHistogram().Observe(float64(vector.EntriesSize()))
 
 	start := time.Now()
 	defer v2.GetLocalWriteDurationHistogram().Observe(time.Since(start).Seconds())
@@ -287,8 +286,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
-	v2.GetLocalFSReadCounter().Inc()
-	defer v2.GetLocalFSReadSizeGauge().Set(float64(vector.EntriesSize()))
+	defer v2.GetLocalFSReadBytesHistogram().Observe(float64(vector.EntriesSize()))
 
 	start := time.Now()
 	defer v2.GetLocalReadDurationHistogram().Observe(time.Since(start).Seconds())
