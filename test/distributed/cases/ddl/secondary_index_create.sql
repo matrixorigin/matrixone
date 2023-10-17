@@ -8,6 +8,7 @@ select * from t1;
 show index from t1;
 show create table t1;
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx1";
+-- select a,b, a=b, id from (select serial(name,id) as a,id from t1) as v1 inner join (select __mo_index_idx_col as b, __mo_index_pri_col from `__mo_index_secondary_d4ea54e0-6c04-11ee-a57e-723e89f7b972`) as v2 on v1.id = v2.__mo_index_pri_col;
 
 
 -- 1.a Create Secondary Index after table population [Without User defined PK in SK column list]
