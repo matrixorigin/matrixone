@@ -85,11 +85,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				proc.SetInputBatch(nil)
 				return process.ExecStop, nil
 			}
-			err := ctr.build(ap, bat, proc, anal)
-			if err != nil {
-				ap.Free(proc, true, nil)
-			}
-			return process.ExecNext, err
+			return process.ExecNext, ctr.build(ap, bat, proc, anal)
 
 		case Eval:
 			if ctr.bat == nil {
