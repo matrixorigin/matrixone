@@ -102,6 +102,7 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 		c.initLogTailApplyCostRow(),
 		c.initWaitLogTailCostRow(),
 		c.initWriteLogTailCostRow(),
+		c.initSendLogTailLatencyRow(),
 		c.initSendLogTailCostRow(),
 		c.initWriteLogTailBytesRow())
 	if err != nil {
@@ -216,7 +217,7 @@ func (c *DashboardCreator) initTxnTPSRow() dashboard.Option {
 		c.withTable(
 			"Handle Commit Queue",
 			4,
-			"sum(tn_txn_handle_request_queue_size)",
+			"sum(cn_txn_handle_request_queue_size)",
 			""),
 	)
 }
@@ -682,21 +683,27 @@ func (c *DashboardCreator) initLogTailTPSRow() dashboard.Option {
 		"LogTail Status",
 		c.withGraph(
 			"Write tps",
-			4,
+			3,
 			`sum(rate(tn_logtail_log_tail_bytes_count{type="write"}[$interval])) by (type)`,
 			"{{ type }}"),
 
 		c.withGraph(
 			"Send tps",
-			4,
+			3,
 			`sum(rate(tn_logtail_log_tail_bytes_count{type="send"}[$interval])) by (type)`,
 			"{{ type }}"),
 
 		c.withGraph(
 			"Receive tps",
-			4,
+			3,
 			`sum(rate(tn_logtail_log_tail_bytes_count{type="receive"}[$interval])) by (type)`,
 			"{{ type }}"),
+
+		c.withTable(
+			"Sending Queue",
+			3,
+			"sum(tn_txn_sending_queue_size)",
+			""),
 	)
 }
 
@@ -808,6 +815,44 @@ func (c *DashboardCreator) initWriteLogTailCostRow() dashboard.Option {
 			"99.99% time",
 			3,
 			`histogram_quantile(0.9999, sum(rate(tn_logtail_append_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initSendLogTailLatencyRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail Send Latency",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(tn_logtail_send_log_tail_latency_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(tn_logtail_send_log_tail_latency_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(tn_logtail_send_log_tail_latency_duration_seconds_bucket[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(tn_logtail_send_log_tail_latency_duration_seconds_bucket[$interval])) by (le, instance))`,
 			"{{ instance }}",
 			axis.Unit("s"),
 			axis.Min(0)),

@@ -13,3 +13,17 @@
 // limitations under the License.
 
 package v2
+
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+var (
+	LogTailSendQueueSizeGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "tn",
+			Subsystem: "logtail",
+			Name:      "sending_queue_size",
+			Help:      "Size of sending logtail queue size.",
+		})
+)
