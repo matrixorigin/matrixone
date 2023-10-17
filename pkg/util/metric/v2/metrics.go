@@ -52,6 +52,7 @@ func init() {
 	registry.MustRegister(LogTailWaitDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
 	registry.MustRegister(SQLBuildPlanDurationHistogram)
+	registry.MustRegister(SQlRunDurationHistogram)
 	registry.MustRegister(TxnDetermineSnapshotDurationHistogram)
 	registry.MustRegister(TxnWaitActiveDurationHistogram)
 	registry.MustRegister(TxnLockDurationHistogram)
