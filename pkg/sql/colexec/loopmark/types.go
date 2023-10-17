@@ -47,7 +47,7 @@ type Argument struct {
 	Result []int32
 }
 
-func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if ctr := ap.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
