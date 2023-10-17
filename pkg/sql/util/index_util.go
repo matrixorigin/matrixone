@@ -345,8 +345,9 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector
 		return vector.NewVec(types.T_varchar.ToType()), new(nulls.Nulls)
 	}
 
-	_ = function.BuiltInSerialNew(vs, result, proc, vs[0].Length())
-	// here we create a deep copy of result.GetResultVector, so that we can free the FunctionResultWrapper
+	rowCount := vs[0].Length()
+	_ = function.BuiltInSerialNew(vs, result, proc, rowCount)
+	// here we create a deep copy of result.GetResultVector, so that we can free the FunctionResultWrapper upon return
 	resultVec, _ := result.GetResultVector().Dup(proc.Mp())
 	return resultVec, new(nulls.Nulls)
 
