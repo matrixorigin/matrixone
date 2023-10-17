@@ -113,6 +113,7 @@ func (sm *SessionManager) ListSession() []*Session {
 
 // message describes response to be sent.
 type message struct {
+	createAt time.Time
 	timeout  time.Duration
 	response *LogtailResponse
 }
@@ -249,7 +250,7 @@ func NewSession(
 					ss.logger.Info("session sender channel closed")
 					return
 				}
-
+				v2.LogTailSendQueueSizeGauge.Set(float64(len(ss.sendChan)))
 				sendFunc := func() error {
 					defer ss.responses.Release(msg.response)
 
@@ -257,6 +258,8 @@ func NewSession(
 					defer cancel()
 
 					now := time.Now()
+					v2.LogTailSendLatencyDurationHistogram.Observe(float64(now.Sub(msg.createAt).Seconds()))
+
 					v2.GetSendLogTailBytesHistogram().Observe(float64(msg.response.Size()))
 					defer v2.LogTailSendDurationHistogram.Observe(time.Since(now).Seconds())
 
@@ -519,7 +522,7 @@ func (ss *Session) SendResponse(
 			ss.logger.Error("fail to close poision morpc client session", zap.Error(err))
 		}
 		return moerr.NewStreamClosedNoCtx()
-	case ss.sendChan <- message{timeout: ContextTimeout(sendCtx, ss.sendTimeout), response: response}:
+	case ss.sendChan <- message{timeout: ContextTimeout(sendCtx, ss.sendTimeout), response: response, createAt: time.Now()}:
 		return nil
 	}
 }
