@@ -66,7 +66,7 @@ func (s *store) heartbeat(ctx context.Context) {
 	}
 
 	if s.queryService != nil {
-		hb.QueryAddress = s.queryServiceListenAddr()
+		hb.QueryAddress = s.queryServiceServiceAddr()
 	}
 
 	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)

@@ -114,6 +114,13 @@ func (s *store) ctlServiceListenAddr() string {
 	return s.cfg.Ctl.Address.ListenAddress
 }
 
+func (s *store) queryServiceServiceAddr() string {
+	if s.newPortStrategy() {
+		return s.addressMgr.ServiceAddress(int(QueryService))
+	}
+	return ""
+}
+
 func (s *store) queryServiceListenAddr() string {
 	if s.newPortStrategy() {
 		return s.addressMgr.ListenAddress(int(QueryService))
