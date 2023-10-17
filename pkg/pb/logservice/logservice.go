@@ -169,6 +169,7 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
 	}
+	storeInfo.QueryAddress = hb.QueryAddress
 	s.Stores[hb.UUID] = storeInfo
 }
 

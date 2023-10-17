@@ -162,6 +162,9 @@ type Config struct {
 	LockService lockservice.Config `toml:"lockservice"`
 
 	Ctl ctlservice.Config `toml:"ctl"`
+
+	// IsStandalone indicates whether the tn is in standalone cluster not an independent process.
+	InStandalone bool
 }
 
 func (c *Config) Validate() error {

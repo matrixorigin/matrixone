@@ -134,6 +134,9 @@ type Config struct {
 
 	// MetaCache the config for objectio metacache
 	MetaCache objectio.CacheConfig `toml:"metacache"`
+
+	// IsStandalone denotes the matrixone is running in standalone mode
+	IsStandalone bool
 }
 
 // NewConfig return Config with default values.
@@ -263,6 +266,7 @@ func (c *Config) defaultFileServiceDataDir(name string) string {
 
 func (c *Config) createFileService(
 	ctx context.Context,
+	st metadata.ServiceType,
 	defaultName string,
 	perfCounterSet *perfcounter.CounterSet,
 	serviceType metadata.ServiceType,
@@ -358,7 +362,7 @@ func (c *Config) createFileService(
 		// set shared fs perf counter as node perf counter
 		if service.Name() == defines.SharedFileServiceName {
 			perfcounter.Named.Store(
-				perfcounter.NameForNode(nodeUUID),
+				perfcounter.NameForNode(st.String(), nodeUUID),
 				counterSet,
 			)
 		}

@@ -117,6 +117,7 @@ func startTNServiceCluster(
 
 	for _, file := range files {
 		cfg := NewConfig()
+		cfg.IsStandalone = true
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}

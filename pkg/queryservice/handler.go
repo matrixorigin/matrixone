@@ -44,10 +44,12 @@ func (s *queryService) handleShowProcessList(ctx context.Context, req *pb.Reques
 // It is called "processList" is because it is used in "SHOW PROCESSLIST" statement.
 func (s *queryService) processList(tenant string, sysTenant bool) ([]*status.Session, error) {
 	var ss []Session
-	if sysTenant {
-		ss = s.sessionMgr.GetAllSessions()
-	} else {
-		ss = s.sessionMgr.GetSessionsByTenant(tenant)
+	if s.sessionMgr != nil {
+		if sysTenant {
+			ss = s.sessionMgr.GetAllSessions()
+		} else {
+			ss = s.sessionMgr.GetSessionsByTenant(tenant)
+		}
 	}
 	sessions := make([]*status.Session, 0, len(ss))
 	for _, ses := range ss {

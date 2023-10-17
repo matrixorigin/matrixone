@@ -110,7 +110,10 @@ func main() {
 	} else {
 		panic(errors.New("no configuration specified"))
 	}
-
+	perfcounter.Named.Range(func(key, value interface{}) bool {
+		fmt.Fprintf(os.Stderr, "xxx>%v\n", key)
+		return true
+	})
 	waitSignalToStop(stopper, shutdownC)
 	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
@@ -183,7 +186,7 @@ func startService(
 		}
 	}
 
-	fs, err := cfg.createFileService(ctx, defines.LocalFileServiceName, globalCounterSet, st, uuid)
+	fs, err := cfg.createFileService(ctx, st, defines.LocalFileServiceName, globalCounterSet, st, uuid)
 	if err != nil {
 		return err
 	}
@@ -282,6 +285,7 @@ func startTNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
+		c.InStandalone = cfg.IsStandalone
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
 			perfCounterSet,
