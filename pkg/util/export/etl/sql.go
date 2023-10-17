@@ -16,6 +16,7 @@ package etl
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -68,6 +69,33 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 
 	if err != nil {
 		// todo : write err to rawlog files
+		logEntry := []string{
+			"log_error",                              // raw_item
+			"",                                       // node_uuid (this should probably be dynamically generated)
+			"ALL",                                    // node_type
+			"",                                       // span_id (should be dynamically set if needed)
+			"",                                       // trace_id (should be dynamically generated)
+			"mo_logger_sql",                          // logger_name
+			time.Now().Format("2006-01-02 15:04:05"), // timestamp
+			"error",                                  // level
+			"etl/sql.go",                             // caller
+			fmt.Sprintf("error: %s", err.Error()),    // message
+			"{}",                                     // extra
+			"0",                                      // err_code
+			err.Error(),                              // error
+			"",                                       // stack
+			"",                                       // span_name
+			"0",                                      // parent_span_id
+			time.Now().Format("2006-01-02 15:04:05"), // start_time
+			time.Now().Format("2006-01-02 15:04:05"), // end_time
+			"0",                                      // duration
+			"{}",                                     // resource
+			"internal",                               // span_kind
+			"",                                       // statement_id (should be dynamically set if needed)
+			"",                                       // session_id (should be dynamically set if needed)
+		}
+		// Append the new log entry to your records
+		sw.buffer = append(sw.buffer, logEntry)
 		sw.dumpBufferToCSV()
 	}
 	_, err = sw.csvWriter.FlushAndClose()
