@@ -1123,12 +1123,7 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func builtInSerialNew(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	//TODO: see how to re-use the code in index_utils
-	//rs := vector.MustFunctionResult[types.Varlena](result)
-	//out, _ := util2.SerialWithoutCompacted(parameters, proc)
-	//rs.SetResultVector(out)
-	//return nil
+func BuiltInSerialNew(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := types.NewPackerArray(length, proc.Mp())
