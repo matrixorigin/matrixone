@@ -9,7 +9,6 @@ import (
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/graph"
 	"github.com/K-Phoen/grabana/row"
-	"github.com/K-Phoen/grabana/table"
 	"github.com/K-Phoen/grabana/target/prometheus"
 	"github.com/K-Phoen/grabana/variable/interval"
 )
@@ -99,11 +98,13 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 			interval.Values([]string{"1s", "3s", "5s", "30s", "1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
 		),
 		c.initLogTailTPSRow(),
+		c.initLogTailQueueRow(),
 		c.initLogTailApplyCostRow(),
 		c.initWaitLogTailCostRow(),
 		c.initWriteLogTailCostRow(),
 		c.initSendLogTailLatencyRow(),
 		c.initSendLogTailCostRow(),
+		c.initSendLogTailNetworkCostRow(),
 		c.initWriteLogTailBytesRow())
 	if err != nil {
 		return err
@@ -214,11 +215,11 @@ func (c *DashboardCreator) initTxnTPSRow() dashboard.Option {
 			"sum(rate(tn_txn_handle_commit_total[$interval]))",
 			""),
 
-		c.withTable(
+		c.withGraph(
 			"Handle Commit Queue",
 			4,
-			"sum(cn_txn_handle_request_queue_size)",
-			""),
+			"sum(cn_txn_handle_request_queue_size) by (instance)",
+			"{{ instance }}"),
 	)
 }
 
@@ -683,26 +684,37 @@ func (c *DashboardCreator) initLogTailTPSRow() dashboard.Option {
 		"LogTail Status",
 		c.withGraph(
 			"Write tps",
-			3,
+			4,
 			`sum(rate(tn_logtail_log_tail_bytes_count{type="write"}[$interval])) by (type)`,
 			"{{ type }}"),
 
 		c.withGraph(
 			"Send tps",
-			3,
+			4,
 			`sum(rate(tn_logtail_log_tail_bytes_count{type="send"}[$interval])) by (type)`,
 			"{{ type }}"),
 
 		c.withGraph(
 			"Receive tps",
-			3,
+			4,
 			`sum(rate(tn_logtail_log_tail_bytes_count{type="receive"}[$interval])) by (type)`,
 			"{{ type }}"),
+	)
+}
 
-		c.withTable(
+func (c *DashboardCreator) initLogTailQueueRow() dashboard.Option {
+	return dashboard.Row(
+		"LogTail Queue Status",
+		c.withGraph(
 			"Sending Queue",
-			3,
-			"sum(tn_txn_sending_queue_size)",
+			6,
+			"sum(tn_logtail_sending_queue_size)",
+			""),
+
+		c.withGraph(
+			"Receiving Queue",
+			6,
+			"sum(cn_logtail_receive_queue_size)",
 			""),
 	)
 }
@@ -861,12 +873,12 @@ func (c *DashboardCreator) initSendLogTailLatencyRow() dashboard.Option {
 
 func (c *DashboardCreator) initSendLogTailCostRow() dashboard.Option {
 	return dashboard.Row(
-		"Logtail Send Cost",
+		"Logtail Send Total Cost",
 
 		c.withGraph(
 			"80% time",
 			3,
-			`histogram_quantile(0.80, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			`histogram_quantile(0.80, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket{step="total"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
 			axis.Unit("s"),
 			axis.Min(0)),
@@ -874,7 +886,7 @@ func (c *DashboardCreator) initSendLogTailCostRow() dashboard.Option {
 		c.withGraph(
 			"90% time",
 			3,
-			`histogram_quantile(0.90, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			`histogram_quantile(0.90, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket{step="total"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
 			axis.Unit("s"),
 			axis.Min(0)),
@@ -882,7 +894,7 @@ func (c *DashboardCreator) initSendLogTailCostRow() dashboard.Option {
 		c.withGraph(
 			"99% time",
 			3,
-			`histogram_quantile(0.99, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			`histogram_quantile(0.99, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket{step="total"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
 			axis.Unit("s"),
 			axis.Min(0)),
@@ -890,7 +902,45 @@ func (c *DashboardCreator) initSendLogTailCostRow() dashboard.Option {
 		c.withGraph(
 			"99.99% time",
 			3,
-			`histogram_quantile(0.9999, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket[$interval])) by (le, instance))`,
+			`histogram_quantile(0.9999, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket{step="total"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initSendLogTailNetworkCostRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail Send Network Step Cost",
+
+		c.withGraph(
+			"80% time",
+			3,
+			`histogram_quantile(0.80, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket{step="network"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"90% time",
+			3,
+			`histogram_quantile(0.90, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket{step="network"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99% time",
+			3,
+			`histogram_quantile(0.99, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket{step="network"}[$interval])) by (le, instance))`,
+			"{{ instance }}",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.withGraph(
+			"99.99% time",
+			3,
+			`histogram_quantile(0.9999, sum(rate(tn_logtail_send_log_tail_duration_seconds_bucket{step="network"}[$interval])) by (le, instance))`,
 			"{{ instance }}",
 			axis.Unit("s"),
 			axis.Min(0)),
@@ -1430,26 +1480,5 @@ func (c *DashboardCreator) withGraph(
 			prometheus.Legend(legend),
 		),
 		graph.LeftYAxis(opts...),
-	)
-}
-
-func (c *DashboardCreator) withTable(
-	title string,
-	span float32,
-	pql string,
-	legend string) row.Option {
-	return row.WithTable(
-		title,
-		table.Span(span),
-		table.Height("400px"),
-		table.DataSource(c.dataSource),
-		table.WithPrometheusTarget(
-			pql,
-			prometheus.Legend(legend)),
-		table.AsTimeSeriesAggregations([]table.Aggregation{
-			{Label: "Current", Type: table.Current},
-			{Label: "Max", Type: table.Max},
-			{Label: "Min", Type: table.Min},
-		}),
 	)
 }
