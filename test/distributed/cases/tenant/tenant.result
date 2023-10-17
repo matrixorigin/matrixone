@@ -10,6 +10,7 @@ drop account if exists tenant_test;
 select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname not like '__mo_index_unique__%' order by relname;
 account_id    relname    relkind
 0    mo_account    r
+0    mo_cache    v
 0    mo_columns    r
 0    mo_configurations    v
 0    mo_database    r

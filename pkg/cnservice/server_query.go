@@ -16,7 +16,6 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -26,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"os"
 )
 
 func (s *service) initQueryService() {
@@ -209,13 +207,6 @@ func (s *service) handleGetCacheInfo(ctx context.Context, req *query.Request, re
 		for _, info := range infos {
 			if info != nil {
 				resp.GetCacheInfoResponse.CacheInfoList = append(resp.GetCacheInfoResponse.CacheInfoList, info)
-				fmt.Fprintf(os.Stderr, "%v %v %v %v %v %v\n",
-					info.GetNodeType(),
-					info.GetNodeId(),
-					info.GetCacheType(),
-					info.GetUsed(),
-					info.GetFree(),
-					info.GetHitRatio())
 			}
 		}
 	})

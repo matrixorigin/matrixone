@@ -243,9 +243,10 @@ mo_tables
 mo_locks
 mo_variables
 mo_transactions
+mo_cache
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-21
+22
 show column_number from mo_database;
 Number of columns in mo_database
 9

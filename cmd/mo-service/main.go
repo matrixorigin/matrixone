@@ -110,10 +110,6 @@ func main() {
 	} else {
 		panic(errors.New("no configuration specified"))
 	}
-	perfcounter.Named.Range(func(key, value interface{}) bool {
-		fmt.Fprintf(os.Stderr, "xxx>%v\n", key)
-		return true
-	})
 	waitSignalToStop(stopper, shutdownC)
 	logutil.GetGlobalLogger().Info("Shutdown complete")
 }

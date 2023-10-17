@@ -17,11 +17,9 @@ package tnservice
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"os"
 	"sync"
 	"time"
 
@@ -229,12 +227,9 @@ func (s *store) Start() error {
 	}
 	if s.queryService != nil {
 		if err := s.queryService.Start(); err != nil {
-			fmt.Fprintln(os.Stderr, "start tn query service failed.")
 			return err
 		}
 	}
-
-	fmt.Fprintln(os.Stderr, "start tn query service succeeded.")
 	s.rt.SubLogger(runtime.SystemInit).Info("dn heartbeat task started")
 	return s.stopper.RunTask(s.heartbeatTask)
 }
@@ -451,7 +446,6 @@ func (s *store) initQueryService(inStandalone bool) {
 		panic(err)
 	}
 	s.initQueryCommandHandler()
-	fmt.Fprintln(os.Stderr, "tn initQueryService done")
 }
 
 func (s *store) initQueryCommandHandler() {
@@ -462,18 +456,10 @@ func (s *store) initQueryCommandHandler() {
 
 func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
 	resp.GetCacheInfoResponse = new(query.GetCacheInfoResponse)
-	fmt.Fprintln(os.Stderr, "tn accept GetCacheInfo request")
 	perfcounter.GetCacheStats(func(infos []*query.CacheInfo) {
 		for _, info := range infos {
 			if info != nil {
 				resp.GetCacheInfoResponse.CacheInfoList = append(resp.GetCacheInfoResponse.CacheInfoList, info)
-				fmt.Fprintf(os.Stderr, "++++ %v %v %v %v %v %v\n",
-					info.GetNodeType(),
-					info.GetNodeId(),
-					info.GetCacheType(),
-					info.GetUsed(),
-					info.GetFree(),
-					info.GetHitRatio())
 			}
 		}
 	})
