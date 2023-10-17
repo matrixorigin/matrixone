@@ -1123,6 +1123,219 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
+func builtInSerialNew(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	//TODO: see how to re-use the code in index_utils
+	//rs := vector.MustFunctionResult[types.Varlena](result)
+	//out, _ := util2.SerialWithoutCompacted(parameters, proc)
+	//rs.SetResultVector(out)
+	//return nil
+
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	ps := types.NewPackerArray(length, proc.Mp())
+	defer func() {
+		for _, p := range ps {
+			p.FreeMem()
+		}
+	}()
+
+	bitMap := new(nulls.Nulls)
+
+	for _, v := range parameters {
+		if v.IsConstNull() {
+			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
+			return nil
+		}
+
+		switch v.GetType().Oid {
+		case types.T_bool:
+			s := vector.ExpandFixedCol[bool](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeBool(b)
+				}
+			}
+		case types.T_int8:
+			s := vector.ExpandFixedCol[int8](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeInt8(b)
+				}
+			}
+		case types.T_int16:
+			s := vector.ExpandFixedCol[int16](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeInt16(b)
+				}
+			}
+		case types.T_int32:
+			s := vector.ExpandFixedCol[int32](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeInt32(b)
+				}
+			}
+		case types.T_int64:
+			s := vector.ExpandFixedCol[int64](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeInt64(b)
+				}
+			}
+		case types.T_uint8:
+			s := vector.ExpandFixedCol[uint8](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeUint8(b)
+				}
+			}
+		case types.T_uint16:
+			s := vector.ExpandFixedCol[uint16](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeUint16(b)
+				}
+			}
+		case types.T_uint32:
+			s := vector.ExpandFixedCol[uint32](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeUint32(b)
+				}
+			}
+		case types.T_uint64:
+			s := vector.ExpandFixedCol[uint64](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeUint64(b)
+				}
+			}
+		case types.T_float32:
+			s := vector.ExpandFixedCol[float32](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeFloat32(b)
+				}
+			}
+		case types.T_float64:
+			s := vector.ExpandFixedCol[float64](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeFloat64(b)
+				}
+			}
+		case types.T_date:
+			s := vector.ExpandFixedCol[types.Date](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeDate(b)
+				}
+			}
+		case types.T_time:
+			s := vector.ExpandFixedCol[types.Time](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeTime(b)
+				}
+			}
+		case types.T_datetime:
+			s := vector.ExpandFixedCol[types.Datetime](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeDatetime(b)
+				}
+			}
+		case types.T_timestamp:
+			s := vector.ExpandFixedCol[types.Timestamp](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeTimestamp(b)
+				}
+			}
+		case types.T_enum:
+			s := vector.MustFixedCol[types.Enum](v)
+			for i, b := range s {
+				if nulls.Contains(v.GetNulls(), uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeEnum(b)
+				}
+			}
+		case types.T_decimal64:
+			s := vector.ExpandFixedCol[types.Decimal64](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeDecimal64(b)
+				}
+			}
+		case types.T_decimal128:
+			s := vector.ExpandFixedCol[types.Decimal128](v)
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeDecimal128(b)
+				}
+			}
+		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64:
+			vs := vector.ExpandStrCol(v)
+			for i := range vs {
+				if v.IsNull(uint64(i)) {
+					ps[i].EncodeNull()
+				} else {
+					ps[i].EncodeStringType([]byte(vs[i]))
+				}
+			}
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if bitMap.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // 24-hour seconds
 const SecondsIn24Hours = 86400
 
