@@ -155,7 +155,8 @@ type Argument struct {
 	Typs []types.Type
 	Cond *plan.Expr
 
-	OnList []*plan.Expr
+	OnList   []*plan.Expr
+	HashOnPK bool
 
 	info     *vm.OperatorInfo
 	children []vm.Operator

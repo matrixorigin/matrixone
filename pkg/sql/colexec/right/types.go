@@ -83,6 +83,7 @@ type Argument struct {
 	Channel  chan *bitmap.Bitmap
 	NumCPU   uint64
 
+	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	info     *vm.OperatorInfo

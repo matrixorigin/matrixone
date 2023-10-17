@@ -558,4 +558,76 @@ func Test_BuiltIn_Math(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+
+	{
+		tc := tcTemp{
+			info: "test log2",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						8,
+					},
+					nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{3}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog2)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test log2 with err",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						-10,
+					},
+					nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true,
+				nil, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog2)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test lg",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						100,
+					},
+					nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{2}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLg)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test lg with err",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						-10,
+					},
+					nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true,
+				nil, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLg)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
 }
