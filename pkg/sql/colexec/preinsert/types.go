@@ -33,4 +33,4 @@ type Argument struct {
 	IsUpdate   bool
 }
 
-func (arg *Argument) Free(*proc, bool) {}
+func (arg *Argument) Free(*process.Process, bool, error) {}
