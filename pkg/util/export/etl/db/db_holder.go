@@ -312,76 +312,16 @@ func (w *CSVWriter) Release() {
 	putBuffer(w.buf)
 }
 
-func escapeString(sql string) string {
-	dest := make([]byte, 0, 2*len(sql))
-	var escape byte
-	for i := 0; i < len(sql); i++ {
-		c := sql[i]
-
-		escape = 0
-
-		switch c {
-		case 0:
-			escape = '0'
-			break
-		case '\n':
-			escape = 'n'
-			break
-		case '\r':
-			escape = 'r'
-			break
-		case '\\':
-			escape = '\\'
-			break
-		case '\'':
-			escape = '\''
-			break
-		case '"':
-			escape = '"'
-			break
-		case '\032':
-			escape = 'Z'
-		}
-
-		if escape != 0 {
-			dest = append(dest, '\\', escape)
-		} else {
-			dest = append(dest, c)
-		}
-	}
-
-	return string(dest)
-}
-
 func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int, middleBatchLen int) error {
 	if len(records) == 0 {
 		return nil
 	}
 
-	chunkSize := 100 // number of records per batch
-	for i := 0; i < len(records); i += chunkSize {
-		end := i + chunkSize
-
-		// Ensure not to exceed slice bounds
-		if end > len(records) {
-			end = len(records)
-		}
-
-		// Process current chunk
-		if err := processChunk(ctx, sqlDb, records[i:end], tbl); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func processChunk(ctx context.Context, sqlDb *sql.DB, chunkRecords [][]string, tbl *table.Table) error {
 	csvWriter := NewCSVWriter(ctx)
 	defer csvWriter.Release() // Ensures that the buffer is returned to the pool
 
 	// Write each record of the chunk to the CSVWriter
-	for _, record := range chunkRecords {
+	for _, record := range records {
 		for i, col := range record {
 			record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "''")
 
@@ -398,10 +338,10 @@ func processChunk(ctx context.Context, sqlDb *sql.DB, chunkRecords [][]string, t
 	// Use the transaction to execute the SQL command
 	_, execErr := sqlDb.Exec(loadSQL)
 
-	// If there's an error, rollback the transaction
 	if execErr != nil {
 		fmt.Printf("gavinyue1 processChunk failed, sql: %v \n the end \n", loadSQL)
 		return execErr
 	}
 	return nil
+
 }
