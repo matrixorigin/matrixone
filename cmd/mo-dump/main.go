@@ -49,7 +49,7 @@ func main() {
 		createDb                           string
 		createTable                        []string
 		err                                error
-		toCsv, localInfile                 bool
+		toCsv, localInfile, noData         bool
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -80,6 +80,7 @@ func main() {
 	flag.Var(&tables, "tbl", "tableNameList, default all")
 	flag.BoolVar(&toCsv, "csv", defaultCsv, "set export format to csv")
 	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
+	flag.BoolVar(&noData, "no-data", defaultNoData, "dump database and table definitions only without data")
 	flag.Parse()
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
@@ -158,9 +159,11 @@ func main() {
 		case catalog.SystemOrdinaryRel:
 			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
 			showCreateTable(create, false)
-			err = genOutput(database, tbl.Name, bufPool, netBufferLength, toCsv, localInfile)
-			if err != nil {
-				return
+			if !noData {
+				err = genOutput(database, tbl.Name, bufPool, netBufferLength, toCsv, localInfile)
+				if err != nil {
+					return
+				}
 			}
 		case catalog.SystemExternalRel:
 			fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)

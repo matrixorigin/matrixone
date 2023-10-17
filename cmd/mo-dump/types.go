@@ -30,6 +30,7 @@ const (
 	maxNetBufferLength     = mpool.MB * 16
 	defaultCsv             = false
 	defaultLocalInfile     = true
+	defaultNoData          = false
 	timeout                = 10 * time.Second
 )
 
