@@ -37,6 +37,7 @@ type container struct {
 	state            int
 	checkConflictBat *batch.Batch   //batch to check conflict
 	insertBats       []*batch.Batch //the final batch
+	rbat             *batch.Batch
 }
 
 type Argument struct {
@@ -77,6 +78,9 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				bat.Clean(proc.Mp())
 			}
 			ap.ctr.insertBats = nil
+		}
+		if ap.ctr.rbat != nil {
+			ap.ctr.rbat.Clean(proc.GetMPool())
 		}
 		if ap.ctr.checkConflictBat != nil {
 			ap.ctr.checkConflictBat.Clean(proc.GetMPool())

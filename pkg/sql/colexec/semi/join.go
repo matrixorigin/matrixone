@@ -190,7 +190,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						}
 						vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
 						if err != nil {
-							rbat.Clean(proc.Mp())
 							return err
 						}
 						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
