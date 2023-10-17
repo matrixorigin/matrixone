@@ -16,7 +16,9 @@ package preinsertsecondaryindex
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -77,9 +79,9 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 
 	colCount := len(secondaryColumnPos)
 
-	if colCount == 1 {
-		pos := secondaryColumnPos[indexColPos]
-		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+	if colCount <= 1 {
+		msg := fmt.Sprintf("invalid secondary index column count in %s", catalog.IndexTableIndexColName)
+		return process.ExecNext, moerr.NewInternalErrorNoCtx(msg)
 	} else {
 		vs := make([]*vector.Vector, colCount)
 		for vIdx, pIdx := range secondaryColumnPos {

@@ -1347,6 +1347,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
 	nameCount := make(map[string]int)
 
+	if len(pkeyName) == 0 {
+		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
+	}
+
 	for _, indexInfo := range indexInfos {
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = false
