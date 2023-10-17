@@ -55,14 +55,14 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
 		}, []string{"type"})
 
-	LogTailSendDurationHistogram = prometheus.NewHistogram(
+	LogTailSendDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "tn",
 			Subsystem: "logtail",
 			Name:      "send_log_tail_duration_seconds",
 			Help:      "Bucketed histogram of send logtail log duration.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
-		})
+		}, []string{"step"})
 
 	LogTailSendLatencyDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
@@ -84,4 +84,12 @@ func GetSendLogTailBytesHistogram() prometheus.Observer {
 
 func GetReceiveLogTailBytesHistogram() prometheus.Observer {
 	return LogTailBytesHistogram.WithLabelValues("receive")
+}
+
+func GetSendWithStepNetworkLogTailDurationHistogram() prometheus.Observer {
+	return LogTailSendDurationHistogram.WithLabelValues("network")
+}
+
+func GetSendLogTailTotalDurationHistogram() prometheus.Observer {
+	return LogTailSendDurationHistogram.WithLabelValues("total")
 }

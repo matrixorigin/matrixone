@@ -38,6 +38,7 @@ func init() {
 	registry.MustRegister(TxnCommitSizeGauge)
 	registry.MustRegister(TxnHandleQueueSizeGauge)
 	registry.MustRegister(LogTailSendQueueSizeGauge)
+	registry.MustRegister(LogTailReceiveQueueSizeGauge)
 
 	registry.MustRegister(LogTailSendLatencyDurationHistogram)
 	registry.MustRegister(TxnTotalCostDurationHistogram)
