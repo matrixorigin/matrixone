@@ -281,7 +281,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 				lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 
-				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId)
+				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk)
 				if err != nil {
 					return err
 				}
@@ -2183,6 +2183,7 @@ func appendDeleteUniqueTablePlan(
 	typMap map[string]*plan.Type,
 	posMap map[string]int,
 	baseNodeId int32,
+	isUK bool,
 ) (int32, error) {
 	lastNodeId := baseNodeId
 	var err error
@@ -2280,7 +2281,11 @@ func appendDeleteUniqueTablePlan(
 				},
 			}
 		}
-		leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		if isUK {
+			leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		} else {
+			leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+		}
 		if err != nil {
 			return -1, err
 		}
