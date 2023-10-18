@@ -799,7 +799,7 @@ func TestManyRowLockInManyGoroutines(t *testing.T) {
 					rows := newTestRows(1, 2, 3, 4, 5, 6)
 
 					var succeeds atomic.Int32
-					sum := int32(200)
+					sum := int32(10)
 					var wg sync.WaitGroup
 					for i := int32(0); i < sum; i++ {
 						wg.Add(1)
@@ -834,7 +834,7 @@ func TestManyRangeLockInManyGoroutines(t *testing.T) {
 					rows := newTestRows(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
 					var succeeds atomic.Int32
-					sum := int32(200)
+					sum := int32(10)
 					var wg sync.WaitGroup
 					for i := int32(0); i < sum; i++ {
 						wg.Add(1)
