@@ -264,7 +264,9 @@ func NewSession(
 					v2.LogTailSendLatencyDurationHistogram.Observe(float64(now.Sub(msg.createAt).Seconds()))
 
 					v2.GetSendLogTailBytesHistogram().Observe(float64(msg.response.Size()))
-					defer v2.GetSendLogTailTotalDurationHistogram().Observe(time.Since(now).Seconds())
+					defer func() {
+						v2.GetSendLogTailTotalDurationHistogram().Observe(time.Since(now).Seconds())
+					}()
 
 					err := ss.stream.write(ctx, msg.response)
 					if sendCost := time.Since(now); sendCost > 10*time.Second {

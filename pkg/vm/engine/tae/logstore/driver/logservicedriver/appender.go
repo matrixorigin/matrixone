@@ -47,7 +47,9 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 
 func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	start := time.Now()
-	defer v2.LogTailAppendDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.LogTailAppendDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
