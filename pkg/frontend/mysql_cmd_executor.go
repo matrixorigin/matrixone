@@ -1400,7 +1400,7 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
-	err = doShowAccounts(ctx, ses, sa)
+	err = doShowAccountsInProgress(ctx, ses, sa)
 	if err != nil {
 		return err
 	}
