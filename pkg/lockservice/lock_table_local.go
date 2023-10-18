@@ -193,12 +193,15 @@ func (l *localLockTable) unlock(
 			if !lock.holders.contains(txn.txnID) {
 				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn")
 			}
+			if len(startKey) > 0 && !lock.isLockRangeEnd() {
+				panic("BUG: missing range end key")
+			}
 
-			lock.closeTxn(
+			lockCanRemoved := lock.closeTxn(
 				txn,
 				notifyValue{ts: commitTS})
 			logLockUnlocked(txn, key, lock)
-			if lock.isEmpty() {
+			if lockCanRemoved {
 				l.mu.store.Delete(key)
 				if len(startKey) > 0 {
 					l.mu.store.Delete(startKey)
