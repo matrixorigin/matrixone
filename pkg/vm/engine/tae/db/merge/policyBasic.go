@@ -119,6 +119,17 @@ func (o *Basic) Config(id uint64, c any) {
 	o.configProvider.SetConfig(id, cfg)
 }
 
+func (o *Basic) GetConfig(id uint64) any {
+	r := o.configProvider.GetConfig(id)
+	if r == nil {
+		r = &BasicPolicyConfig{
+			ObjectMinRows:  40960,
+			MergeMaxOneRun: int(common.RuntimeMaxMergeObjN.Load()),
+		}
+	}
+	return r
+}
+
 func (o *Basic) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 	segs := o.objHeap.finish()
 	sort.Slice(segs, func(i, j int) bool {

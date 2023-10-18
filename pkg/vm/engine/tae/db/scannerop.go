@@ -161,6 +161,10 @@ func (s *MergeTaskBuilder) ConfigPolicy(id uint64, c any) {
 	s.objPolicy.Config(id, c)
 }
 
+func (s *MergeTaskBuilder) GetPolicy(id uint64) any {
+	return s.objPolicy.GetConfig(id)
+}
+
 func (s *MergeTaskBuilder) trySchedMergeTask() {
 	if s.tid == 0 {
 		return

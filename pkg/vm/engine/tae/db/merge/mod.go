@@ -34,4 +34,5 @@ type Policy interface {
 	Revise(cpu, mem int64) []*catalog.SegmentEntry
 	ResetForTable(id uint64, schema *catalog.TableEntry)
 	Config(uint64, any)
+	GetConfig(uint64) any
 }

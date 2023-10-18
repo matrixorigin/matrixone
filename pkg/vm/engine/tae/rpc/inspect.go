@@ -145,7 +145,12 @@ func (c *objStatArg) String() string {
 
 func (c *objStatArg) Run() error {
 	if c.tbl != nil {
-		c.ctx.resp.Payload = []byte(c.tbl.ObjectStatsString())
+		b := &bytes.Buffer{}
+		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl.ID).(*merge.BasicPolicyConfig)
+		b.WriteString(c.tbl.ObjectStatsString())
+		b.WriteByte('\n')
+		b.WriteString(fmt.Sprintf("\n%s", p.String()))
+		c.ctx.resp.Payload = b.Bytes()
 	}
 	return nil
 }
