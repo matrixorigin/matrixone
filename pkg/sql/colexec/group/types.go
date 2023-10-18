@@ -85,7 +85,7 @@ type Argument struct {
 	PartialResults []any
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

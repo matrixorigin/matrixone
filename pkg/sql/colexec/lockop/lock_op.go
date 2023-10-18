@@ -717,9 +717,7 @@ func (arg *Argument) AddLockTargetWithPartitionAndMode(
 }
 
 // Free free mem
-func (arg *Argument) Free(
-	proc *process.Process,
-	pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.rt == nil {
 		return
 	}

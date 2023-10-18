@@ -56,7 +56,7 @@ type Argument struct {
 	ctr *container
 }
 
-func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if ap.ctr != nil {
 		ap.ctr.FreeMergeTypeOperator(pipelineFailed)
 		if len(ap.ctr.insertBats) > 0 {
