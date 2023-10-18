@@ -383,95 +383,78 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 }
 
 func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
-	var (
-		err  error
-		part *logtailreplay.PartitionState
-	)
-	if part, err = tbl.getPartitionState(ctx); err != nil {
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	var needCols []*plan.ColDef
-	found := false
 	cols := tbl.getTableDef().GetCols()
+	found := false
+	n := 0
 	for _, c := range cols {
 		// TODO: We can keep hidden column but need a better way to know
 		// whether it has the colmeta or not
 		if !c.Hidden && (c.Name == name || name == AllColumns) {
-			needCols = append(needCols, c)
+			n++
 			found = true
 		}
 	}
-
 	if !found {
 		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
 	}
+
+	needCols := make([]*plan.ColDef, 0, n)
+	for _, c := range cols {
+		if !c.Hidden && (c.Name == name || name == AllColumns) {
+			needCols = append(needCols, c)
+		}
+	}
+
 	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	var meta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
 	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
-	eachBlkFn := func(blk logtailreplay.BlockEntry) error {
-		var err error
-		location := blk.MetaLocation()
-		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
-				return err
-			}
+	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+		location := obj.Location()
+		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+		if err != nil {
+			return err
 		}
-		meta = objMeta.MustDataMeta()
-		blkmeta := meta.GetBlockMeta(uint32(location.ID()))
-		maxSeq := uint32(blkmeta.GetMaxSeqnum())
+		meta := objMeta.MustDataMeta()
+		createTs, err := obj.CreateTime.Marshal()
+		if err != nil {
+			return err
+		}
+		deleteTs, err := obj.DeleteTime.Marshal()
+		if err != nil {
+			return err
+		}
 		for _, col := range needCols {
-			// Blocks will have different col info becuase of ddl
-			// So we have to check whether the block includes needed col
-			// or not first.
-			if col.Seqnum > maxSeq {
-				continue
-			}
-
-			newInfo := &plan.MetadataScanInfo{
-				ColName:    col.Name,
-				EntryState: blk.EntryState,
-				Sorted:     blk.Sorted,
-				IsHidden:   col.Hidden,
-			}
-			FillByteFamilyTypeForBlockInfo(newInfo, blk)
-			colmeta := blkmeta.ColumnMeta(uint16(col.Seqnum))
-
-			newInfo.RowCnt = int64(blkmeta.GetRows())
-			newInfo.NullCnt = int64(colmeta.NullCnt())
-			newInfo.CompressSize = int64(colmeta.Location().Length())
-			newInfo.OriginSize = int64(colmeta.Location().OriginSize())
-
-			newInfo.ZoneMap = colmeta.ZoneMap()
-
-			infoList = append(infoList, newInfo)
+			colMeta := meta.MustGetColumn(uint16(col.Seqnum))
+			infoList = append(infoList, &plan.MetadataScanInfo{
+				ColName:      col.Name,
+				IsHidden:     col.Hidden,
+				ObjectName:   obj.Location().Name().String(),
+				MetaLoc:      obj.Location(),
+				DelLoc:       obj.Location(),
+				CreateTs:     createTs,
+				DeleteTs:     deleteTs,
+				RowCnt:       int64(meta.BlockHeader().Rows()),
+				NullCnt:      int64(colMeta.NullCnt()),
+				CompressSize: int64(colMeta.Location().Length()),
+				OriginSize:   int64(colMeta.Location().OriginSize()),
+				ZoneMap:      colMeta.ZoneMap(),
+			})
 		}
-
 		return nil
 	}
 
-	if err = tbl.ForeachBlock(part, eachBlkFn); err != nil {
+	if err = tbl.ForeachDataObject(state, onObjFn); err != nil {
 		return nil, err
 	}
 
 	return infoList, nil
-}
-
-func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailreplay.BlockEntry) error {
-	// It is better to use the Marshal() method
-	info.BlockId = blk.BlockID[:]
-	info.ObjectName = blk.MetaLocation().Name().String()
-	info.MetaLoc = blk.MetaLoc[:]
-	info.DelLoc = blk.DeltaLoc[:]
-	info.SegId = blk.SegmentID[:]
-	info.CommitTs = blk.CommitTs[:]
-	info.CreateTs = blk.CreateTime[:]
-	info.DeleteTs = blk.DeleteTime[:]
-	return nil
 }
 
 func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types.Blockid {
