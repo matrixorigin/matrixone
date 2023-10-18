@@ -43,9 +43,7 @@ func init() {
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_IS_HIDDEN:
 			tp = types.New(types.T_bool, 0, 0)
-		case plan.MetadataScanInfo_META_LOC:
-			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-		case plan.MetadataScanInfo_DELTA_LOC:
+		case plan.MetadataScanInfo_OBJ_LOC:
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_CREATE_TS:
 			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
