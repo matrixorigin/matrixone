@@ -67,3 +67,31 @@ select * from t1;
 id    name    age
 1    Abby    24
 2    null    25
+drop table if exists t1;
+create table t1(id VARCHAR(255) PRIMARY KEY,name VARCHAR(255),age VARCHAR(255));
+create  index idx6 on t1(name);
+insert into t1 values("a","Abby", "twenty four");
+insert into t1 values("b","Debby", "twenty six");
+select * from t1;
+id    name    age
+a    Abby    twenty four
+b    Debby    twenty six
+update t1 set name = null where id = "b";
+select * from t1;
+id    name    age
+a    Abby    twenty four
+b    null    twenty six
+update t1 set name = "Cia" where id = "b";
+select * from t1;
+id    name    age
+a    Abby    twenty four
+b    Cia    twenty six
+update t1 set name = null where id = "b";
+select * from t1;
+id    name    age
+a    Abby    twenty four
+b    null    twenty six
+delete from t1 where id = "b";
+select * from t1;
+id    name    age
+a    Abby    twenty four

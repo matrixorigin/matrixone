@@ -40,10 +40,26 @@ insert into t1 values(2,"Dora", 25);
 update t1 set name = null where id = 2;
 select * from t1;
 
--- 4.c Insert Null
+-- 4.e Insert Null
 drop table if exists t1;
 create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
 create index idx5 on t1(name);
 insert into t1 values(1,"Abby", 24);
 insert into t1 (id, age) values(2, 25);
+select * from t1;
+
+-- 4.f Update to Null and Then Update to Non Null and Then Delete
+drop table if exists t1;
+create table t1(id VARCHAR(255) PRIMARY KEY,name VARCHAR(255),age VARCHAR(255));
+create  index idx6 on t1(name);
+insert into t1 values("a","Abby", "twenty four");
+insert into t1 values("b","Debby", "twenty six");
+select * from t1;
+update t1 set name = null where id = "b";
+select * from t1;
+update t1 set name = "Cia" where id = "b";
+select * from t1;
+update t1 set name = null where id = "b";
+select * from t1;
+delete from t1 where id = "b";
 select * from t1;
