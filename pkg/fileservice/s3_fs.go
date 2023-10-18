@@ -252,13 +252,11 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	ctx = addGetConnMetric(ctx)
 
 	var bytesWritten int
-	v2.GetS3FSWriteCounter().Inc()
-	defer func() {
-		v2.GetS3FSWriteSizeGauge().Set(float64(bytesWritten))
-	}()
-
 	start := time.Now()
-	defer v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
+		v2.GetS3FSWriteBytesHistogram().Observe(float64(bytesWritten))
+	}()
 
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
@@ -366,10 +364,10 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	ctx = addGetConnMetric(ctx)
 
 	bytesCounter := new(atomic.Int64)
-
-	v2.GetS3FSReadCounter().Inc()
+	start := time.Now()
 	defer func() {
-		v2.GetS3FSReadSizeGauge().Set(float64(bytesCounter.Load()))
+		v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
+		v2.GetS3FSReadBytesHistogram().Observe(float64(bytesCounter.Load()))
 	}()
 	start := time.Now()
 	defer v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())

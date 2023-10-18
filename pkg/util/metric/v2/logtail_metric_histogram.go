@@ -25,7 +25,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "apply_log_tail_duration_seconds",
 			Help:      "Bucketed histogram of apply log tail duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	LogTailWaitDurationHistogram = prometheus.NewHistogram(
@@ -34,7 +34,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "wait_log_tail_duration_seconds",
 			Help:      "Bucketed histogram of wait log tail apply duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	LogTailAppendDurationHistogram = prometheus.NewHistogram(
@@ -43,7 +43,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "append_log_tail_duration_seconds",
 			Help:      "Bucketed histogram of append log tail into logservice duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	LogTailBytesHistogram = prometheus.NewHistogramVec(
@@ -61,7 +61,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "send_log_tail_duration_seconds",
 			Help:      "Bucketed histogram of send logtail log duration.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+			Buckets:   prometheus.ExponentialBuckets(0005, 2.0, 10),
 		}, []string{"step"})
 
 	LogTailSendLatencyDurationHistogram = prometheus.NewHistogram(
@@ -70,7 +70,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "send_log_tail_latency_duration_seconds",
 			Help:      "Bucketed histogram of send logtail log latency duration.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+			Buckets:   prometheus.ExponentialBuckets(0005, 2.0, 10),
 		})
 )
 

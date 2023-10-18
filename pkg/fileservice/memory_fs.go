@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/tidwall/btree"
 )
 
@@ -108,8 +107,6 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 }
 
 func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
-	v2.GetMemFSWriteBytesHistogram().Observe(float64(vector.EntriesSize()))
-
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -186,8 +183,6 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
-	defer v2.GetMemFSReadBytesHistogram().Observe(float64(vector.EntriesSize()))
-
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
