@@ -526,13 +526,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
-	getLogger().Info("createTable",
-		zap.String("databaseName", c.db),
-		zap.String("tableName", qry.GetTableDef().GetName()),
-	)
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
+	getLogger().Info("createTable",
+		zap.String("databaseName", c.db),
+		zap.String("tableName", qry.GetTableDef().GetName()),
+		zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+	)
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
@@ -565,6 +566,11 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
+			getLogger().Info("createTable no exist",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			)
 			return nil
 		}
 		if qry.GetReplace() {
