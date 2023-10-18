@@ -130,12 +130,18 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		//rel.Lock()
 		//defer rel.Unlock()
 		//rel.proc = p
+		if proc == nil {
+			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in cache", name, defines.GetAccountId(ctx), db.databaseId)
+		}
 		rel.proc.Store(p)
 		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		//v.(*txnTable).proc = p
+		if proc == nil {
+			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in create map", name, defines.GetAccountId(ctx), db.databaseId)
+		}
 		v.(*txnTable).proc.Store(p)
 		return v.(*txnTable), nil
 	}
@@ -191,6 +197,9 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	}
 	tbl.proc.Store(p)
 
+	if proc == nil {
+		logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in logtail", name, defines.GetAccountId(ctx), db.databaseId)
+	}
 	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
