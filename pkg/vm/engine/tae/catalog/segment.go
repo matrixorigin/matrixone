@@ -55,6 +55,16 @@ type SegStat struct {
 	RemainingRows  int
 }
 
+func (s *SegStat) String() string {
+	zonemapStr := "nil"
+	if s.SortKeyZonemap != nil {
+		zonemapStr = s.SortKeyZonemap.String()
+	}
+	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
+		s.Loaded, common.HumanReadableBytes(s.OriginSize), s.Rows, s.RemainingRows, zonemapStr,
+	)
+}
+
 func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	e := &SegmentEntry{
 		ID: *id,
@@ -147,7 +157,7 @@ func (entry *SegmentEntry) LoadObjectInfo() error {
 	}
 	// special case for raw log table.
 	if entry.GetTable().GetLastestSchema().Name == motrace.RawLogTbl &&
-		len(entry.table.entries) > int(common.NotLoadMoreThan.Load()) {
+		len(entry.table.entries) > int(common.RuntimeNotLoadMoreThan.Load()) {
 		return nil
 	}
 	entry.RLock()

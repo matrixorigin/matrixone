@@ -15,7 +15,7 @@
 package merge
 
 import (
-	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -25,19 +25,13 @@ const (
 	const1GBytes            = 1 << 30
 	const1MBytes            = 1 << 20
 	constMergeExpansionRate = 6
-	DefaultMaxMergeObjN     = 64
-)
-
-var (
-	MaxMergeSegN atomic.Int32 = atomic.Int32{}
+	constMaxMemCap          = 4 * constMergeExpansionRate * const1GBytes // max orginal memory for a object
+	constSmallMergeGap      = 3 * time.Minute
 )
 
 type Policy interface {
 	OnObject(obj *catalog.SegmentEntry)
 	Revise(cpu, mem int64) []*catalog.SegmentEntry
-	ResetForTable(id uint64, schema *catalog.Schema)
-}
-
-func init() {
-	MaxMergeSegN.Store(DefaultMaxMergeObjN)
+	ResetForTable(id uint64, schema *catalog.TableEntry)
+	Config(uint64, any)
 }

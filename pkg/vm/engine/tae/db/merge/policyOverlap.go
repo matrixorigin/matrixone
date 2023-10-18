@@ -52,17 +52,18 @@ func (o *Overlap) OnObject(obj *catalog.SegmentEntry) {
 			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(), maxt.ErrString())
 		}
 	}
-
 }
+
+func (o *Overlap) Config(uint64, any) {}
 
 func (o *Overlap) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 	o.analyzer.analyze(o.schema.GetSingleSortKeyType().Oid, o.schema.Name)
 	return nil
 }
 
-func (o *Overlap) ResetForTable(id uint64, schema *catalog.Schema) {
+func (o *Overlap) ResetForTable(id uint64, entry *catalog.TableEntry) {
 	o.id = id
-	o.schema = schema
+	o.schema = entry.GetLastestSchema()
 	o.analyzer.reset()
 }
 

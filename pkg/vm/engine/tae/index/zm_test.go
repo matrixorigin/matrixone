@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -437,4 +438,9 @@ func BenchmarkUpdateZMVector(b *testing.B) {
 			BatchUpdateZM(zm, vec)
 		}
 	})
+}
+
+func TestXxx(t *testing.T) {
+	a := []byte("fefefef")
+	t.Log(hex.EncodeToString(a))
 }

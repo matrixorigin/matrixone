@@ -16,10 +16,7 @@ package merge
 
 import (
 	"container/heap"
-	"encoding/hex"
-	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -61,21 +58,18 @@ func (is *itemSet[T]) Clear() {
 	*is = old[:0]
 }
 
-// heapBuilder founds out blocks to be merged via maintaining a min heap holding
-// up to default 300 items.
+// heapBuilder founds out blocks to be merged via maintaining a min heap
 type heapBuilder[T any] struct {
 	items itemSet[T]
-	cap   int
 }
 
 func (h *heapBuilder[T]) reset() {
 	h.items.Clear()
 }
 
-func (h *heapBuilder[T]) push(item *mItem[T]) {
+func (h *heapBuilder[T]) pushWithCap(item *mItem[T], cap int) {
 	heap.Push(&h.items, item)
-	cap := int(MaxMergeSegN.Load())
-	if h.items.Len() > cap {
+	for h.items.Len() > cap {
 		heap.Pop(&h.items)
 	}
 }
@@ -104,23 +98,4 @@ func estimateMergeConsume(msegs []*catalog.SegmentEntry) (origSize, estSize int)
 	}
 	estSize = int(float64(origSize) * rate)
 	return
-}
-
-func humanReadableBytes(bytes int) string {
-	if bytes < 1024 {
-		return fmt.Sprintf("%dB", bytes)
-	}
-	if bytes < 1024*1024 {
-		return fmt.Sprintf("%.2fKB", float64(bytes)/1024)
-	}
-	if bytes < 1024*1024*1024 {
-		return fmt.Sprintf("%.2fMB", float64(bytes)/const1MBytes)
-	}
-	return fmt.Sprintf("%.2fGB", float64(bytes)/const1GBytes)
-}
-
-func shortSegId(x objectio.Segmentid) string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], x[:4])
-	return string(shortuuid[:])
 }
