@@ -43,13 +43,13 @@ func (t *Tables) Set(value string) error {
 
 func main() {
 	var (
-		username, password, host, database string
-		tables                             Tables
-		port, netBufferLength              int
-		createDb                           string
-		createTable                        []string
-		err                                error
-		toCsv, localInfile, noData         bool
+		username, password, host, database, tbl string
+		tables                                  Tables
+		port, netBufferLength                   int
+		createDb                                string
+		createTable                             []string
+		err                                     error
+		toCsv, localInfile, noData              bool
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -77,11 +77,20 @@ func main() {
 	flag.IntVar(&port, "P", defaultPort, "portNumber")
 	flag.IntVar(&netBufferLength, "net-buffer-length", defaultNetBufferLength, "net_buffer_length")
 	flag.StringVar(&database, "db", "", "databaseName, must be specified")
-	flag.Var(&tables, "tbl", "tableNameList, default all")
+	flag.StringVar(&tbl, "tbl", "", "tableNameList, default all")
 	flag.BoolVar(&toCsv, "csv", defaultCsv, "set export format to csv")
 	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
 	flag.BoolVar(&noData, "no-data", defaultNoData, "dump database and table definitions only without data")
 	flag.Parse()
+
+	if len(tbl) > 0 {
+		tbls := strings.Split(tbl, ",")
+		for _, t := range tbls {
+			if len(t) != 0 {
+				tables = append(tables, Table{t, ""})
+			}
+		}
+	}
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
 		netBufferLength = minNetBufferLength
