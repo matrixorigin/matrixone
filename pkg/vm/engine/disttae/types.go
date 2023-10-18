@@ -463,7 +463,7 @@ type txnTable struct {
 	// it is only generated when the table is not created by this transaction
 	// it is initialized by updateBlockInfos and once it is initialized, it will not be updated
 	blockInfos []catalog.BlockInfo
-	objInfos   []logtailreplay.ObjectEntry
+	//objInfos   []logtailreplay.ObjectEntry
 
 	// specify whether the blockInfos is updated. once it is updated, it will not be updated again
 	blockInfosUpdated bool
