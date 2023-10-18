@@ -26,18 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	taeCatalog "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 )
@@ -73,7 +68,7 @@ func (h *mockHandle) HandleClose(ctx context.Context) error {
 
 func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta) (timestamp.Timestamp, error) {
 	//2PC
-	if len(meta.DNShards) > 1 && meta.CommitTS.IsEmpty() {
+	if len(meta.TNShards) > 1 && meta.CommitTS.IsEmpty() {
 		meta.CommitTS = meta.PreparedTS.Next()
 	}
 	return h.Handle.HandleCommit(ctx, *meta)
@@ -175,9 +170,9 @@ func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	return txnMeta
 }
 
-func mockDNShard(id uint64) metadata.DNShard {
-	return metadata.DNShard{
-		DNShardRecord: metadata.DNShardRecord{
+func mockTNShard(id uint64) metadata.TNShard {
+	return metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{
 			ShardID:    id,
 			LogShardID: id,
 		},
@@ -190,8 +185,8 @@ func mock2PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta := &txn.TxnMeta{}
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = db.TxnMgr.TsAlloc.Alloc().ToTimestamp()
-	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(1))
-	txnMeta.DNShards = append(txnMeta.DNShards, mockDNShard(2))
+	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(1))
+	txnMeta.TNShards = append(txnMeta.TNShards, mockTNShard(2))
 	return txnMeta
 }
 
@@ -240,6 +235,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	clusterBy       int8
+	enumValues      string
 }
 
 func genColumns(accountId uint32, tableName, databaseName string,
@@ -285,6 +281,7 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			databaseName: databaseName,
 			num:          int32(num),
 			comment:      attrDef.Attr.Comment,
+			enumValues:   attrDef.Attr.EnumVlaues,
 		}
 		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
@@ -542,6 +539,11 @@ func genCreateColumnTuple(
 		if err := vector.AppendFixed(bat.Vecs[idx], uint16(0) /*just create*/, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_COLUMNS_ATT_ENUM_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_enum
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(col.enumValues), false, m); err != nil {
+			return nil, err
+		}
 
 	}
 	return bat, nil
@@ -779,36 +781,4 @@ func toPBBatch(bat *batch.Batch) (*api.Batch, error) {
 		rbat.Vecs = append(rbat.Vecs, pbVector)
 	}
 	return rbat, nil
-}
-
-func mockCNDeleteInS3(fs *objectio.ObjectFS, blk data.Block, schema *taeCatalog.Schema, txn txnif.AsyncTxn, deleteRows []uint32) (location objectio.Location, err error) {
-	pkDef := schema.GetPrimaryKey()
-	view, err := blk.GetColumnDataById(context.Background(), txn, schema, pkDef.Idx)
-	pkVec := containers.MakeVector(pkDef.Type)
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType())
-	blkID := &blk.GetMeta().(*taeCatalog.BlockEntry).ID
-	if err != nil {
-		return
-	}
-	for _, row := range deleteRows {
-		pkVal := view.GetData().Get(int(row))
-		pkVec.Append(pkVal, false)
-		rowID := objectio.NewRowid(blkID, row)
-		rowIDVec.Append(*rowID, false)
-	}
-	bat := containers.NewBatch()
-	bat.AddVector(taeCatalog.AttrRowID, rowIDVec)
-	bat.AddVector("pk", pkVec)
-	name := objectio.MockObjectName()
-	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, nil)
-	if err != nil {
-		return
-	}
-	_, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(bat))
-	if err != nil {
-		return
-	}
-	blks, _, err := writer.Sync(context.Background())
-	location = blockio.EncodeLocation(name, blks[0].GetExtent(), uint32(bat.Length()), blks[0].GetID())
-	return
 }

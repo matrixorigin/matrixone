@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 
@@ -27,12 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
 type SegmentEntry struct {
-	ID objectio.Segmentid
+	ID   objectio.Segmentid
+	Stat SegStat
 	*BaseEntryImpl[*MetadataMVCCNode]
 	table   *TableEntry
 	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
@@ -40,6 +43,15 @@ type SegmentEntry struct {
 	link *common.GenericSortedDList[*BlockEntry]
 	*SegmentNode
 	segData data.Segment
+}
+
+type SegStat struct {
+	// min max etc. later
+	Loaded         bool
+	OriginSize     int
+	SortKeyZonemap index.ZM
+	Rows           int
+	Dels           int
 }
 
 func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
@@ -127,6 +139,41 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 	return 0
 }
 
+// LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
+func (entry *SegmentEntry) LoadObjectInfo() error {
+	if entry.Stat.Loaded {
+		return nil
+	}
+	entry.RLock()
+	blk := entry.link.GetHead().GetPayload()
+	entry.RUnlock()
+	if blk == nil {
+		return nil
+	}
+	schema := blk.GetSchema()
+	loc := blk.GetMetaLoc()
+	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, blk.blkData.GetFs().Service)
+	if err != nil {
+		return err
+	}
+
+	meta := objMeta.MustDataMeta()
+
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		colmata := meta.MustGetColumn(uint16(col.SeqNum))
+		entry.Stat.OriginSize += int(colmata.Location().OriginSize())
+	}
+	if schema.HasSortKey() {
+		col := schema.GetSingleSortKey()
+		entry.Stat.SortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
+	}
+	entry.Stat.Loaded = true
+	return nil
+}
+
 func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -199,7 +246,7 @@ func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
 func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s-%s]SEG[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+			entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
 	}
 	return fmt.Sprintf("[%s-%s]SEG[%s]%s", entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.BaseEntryImpl.StringLocked())
 }
@@ -223,6 +270,10 @@ func (entry *SegmentEntry) SetSorted() {
 func (entry *SegmentEntry) IsSorted() bool {
 	entry.RLock()
 	defer entry.RUnlock()
+	return entry.sorted
+}
+
+func (entry *SegmentEntry) IsSortedLocked() bool {
 	return entry.sorted
 }
 
@@ -398,7 +449,7 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 }
 
 func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
-	logutil.Debug("[Catalog]", common.OperationField("remove"),
+	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(block.String()))
 	entry.Lock()
 	defer entry.Unlock()

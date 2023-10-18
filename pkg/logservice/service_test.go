@@ -119,6 +119,20 @@ func TestNewService(t *testing.T) {
 	assert.NoError(t, service.Close())
 }
 
+func TestNotSupportCmd(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		req := pb.Request{
+			Method: 999,
+		}
+		resp, _ := s.handle(ctx, req, nil)
+		assert.Equal(t, uint32(moerr.ErrNotSupported), resp.ErrorCode)
+	}
+	runServiceTest(t, false, true, fn)
+}
+
 func TestServiceConnect(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -128,7 +142,7 @@ func TestServiceConnect(t *testing.T) {
 			Method: pb.CONNECT,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -146,7 +160,7 @@ func TestServiceConnectTimeout(t *testing.T) {
 			Method: pb.CONNECT,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -164,7 +178,7 @@ func TestServiceConnectRO(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
@@ -242,14 +256,14 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
-func TestServiceHandleDNHeartbeat(t *testing.T) {
+func TestServiceHandleTNHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
 		req := pb.Request{
-			Method: pb.DN_HEARTBEAT,
-			DNHeartbeat: &pb.DNStoreHeartbeat{
+			Method: pb.TN_HEARTBEAT,
+			TNHeartbeat: &pb.TNStoreHeartbeat{
 				UUID: "uuid1",
 			},
 		}
@@ -279,7 +293,7 @@ func TestServiceHandleDNHeartbeat(t *testing.T) {
 		}
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
-		resp := s.handleDNHeartbeat(ctx, req)
+		resp := s.handleTNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)
@@ -294,14 +308,14 @@ func TestServiceHandleAppend(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -324,14 +338,14 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.DNID+1, data)
+		cmd := getTestAppendCmd(req.LogRequest.TNID+1, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -354,14 +368,14 @@ func TestServiceHandleRead(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -402,14 +416,14 @@ func TestServiceTruncate(t *testing.T) {
 			Method: pb.CONNECT_RO,
 			LogRequest: pb.LogRequest{
 				ShardID: 1,
-				DNID:    100,
+				TNID:    100,
 			},
 		}
 		resp := s.handleConnect(ctx, req)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
-		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
+		cmd := getTestAppendCmd(req.LogRequest.TNID, data)
 		req = pb.Request{
 			Method: pb.APPEND,
 			LogRequest: pb.LogRequest{
@@ -1130,6 +1144,23 @@ func TestServiceHandleCNDeleteStore(t *testing.T) {
 		assert.NotEmpty(t, resp.CheckerState)
 		_, ok = resp.CheckerState.CNState.Stores[uuid]
 		assert.False(t, ok)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestServiceHandleProxyHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		req := pb.Request{
+			Method: pb.PROXY_HEARTBEAT,
+			ProxyHeartbeat: &pb.ProxyHeartbeat{
+				UUID: "uuid1",
+			},
+		}
+		resp := s.handleProxyHeartbeat(ctx, req)
+		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
 }

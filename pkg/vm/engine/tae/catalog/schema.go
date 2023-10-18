@@ -61,6 +61,7 @@ type ColDef struct {
 	FakePK        bool // TODO: use column.flag instead of column.fakepk
 	Default       []byte
 	OnUpdate      []byte
+	EnumValues    string
 }
 
 func (def *ColDef) GetName() string     { return def.Name }
@@ -231,6 +232,13 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 	return nil
 }
 
+func (s *Schema) EstimateRowSize() (size int) {
+	for _, col := range s.ColDefs {
+		size += col.Type.TypeSize()
+	}
+	return
+}
+
 func (s *Schema) IsSameColumns(other *Schema) bool {
 	return s.Extra.NextColSeqnum == other.Extra.NextColSeqnum &&
 		len(s.ColDefs) == len(other.ColDefs)
@@ -305,10 +313,10 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 		return
 	}
 	n += int64(sn2)
-	switch ver {
-	case IOET_WALTxnCommand_Table_V1:
+
+	if ver <= IOET_WALTxnCommand_Table_V1 {
 		s.CatalogVersion = pkgcatalog.CatalogVersion_V1
-	case IOET_WALTxnCommand_Table_V2:
+	} else {
 		if sn2, err = r.Read(types.EncodeUint32(&s.CatalogVersion)); err != nil {
 			return
 		}
@@ -424,6 +432,14 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			return
 		}
 		n += sn
+		if ver <= IOET_WALTxnCommand_Table_V2 {
+			def.EnumValues = ""
+		} else {
+			if def.EnumValues, sn, err = objectio.ReadString(r); err != nil {
+				return
+			}
+			n += sn
+		}
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -523,6 +539,10 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if _, err = objectio.WriteBytes(def.OnUpdate, &w); err != nil {
 			return
 		}
+
+		if _, err = objectio.WriteString(def.EnumValues, &w); err != nil {
+			return
+		}
 	}
 	buf = w.Bytes()
 	return
@@ -547,11 +567,14 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		data := bat.GetVectorByName((pkgcatalog.SystemColAttr_Type)).Get(offset).([]byte)
 		types.Decode(data, &def.Type)
 		nullable := bat.GetVectorByName((pkgcatalog.SystemColAttr_NullAbility)).Get(offset).(int8)
-		def.NullAbility = i82bool(nullable)
+		def.NullAbility = !i82bool(nullable)
 		isHidden := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsHidden)).Get(offset).(int8)
 		def.Hidden = i82bool(isHidden)
 		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
 		def.ClusterBy = i82bool(isClusterBy)
+		if def.ClusterBy {
+			def.SortKey = true
+		}
 		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))
@@ -559,6 +582,7 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		def.Default = bat.GetVectorByName((pkgcatalog.SystemColAttr_DefaultExpr)).Get(offset).([]byte)
 		def.Idx = int(bat.GetVectorByName((pkgcatalog.SystemColAttr_Num)).Get(offset).(int32)) - 1
 		def.SeqNum = bat.GetVectorByName(pkgcatalog.SystemColAttr_Seqnum).Get(offset).(uint16)
+		def.EnumValues = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_EnumValues)).Get(offset).([]byte))
 		s.NameMap[def.Name] = def.Idx
 		s.ColDefs = append(s.ColDefs, def)
 		if def.Name == PhyAddrColumnName {
@@ -572,7 +596,6 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		}
 		offset++
 	}
-	s.Finalize(true)
 	return offset
 }
 
@@ -691,6 +714,7 @@ func ColDefFromAttribute(attr engine.Attribute) (*ColDef, error) {
 		ClusterBy:     attr.ClusterBy,
 		Default:       []byte(""),
 		OnUpdate:      []byte(""),
+		EnumValues:    attr.EnumVlaues,
 	}
 	if attr.Default != nil {
 		def.NullAbility = attr.Default.NullAbility
@@ -934,7 +958,7 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 		}
 		name := fmt.Sprintf("%s%d", prefix, i)
 		var typ types.Type
-		switch i % 18 {
+		switch i % 20 {
 		case 0:
 			typ = types.T_int8.ToType()
 			typ.Width = 8
@@ -989,6 +1013,12 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 		case 17:
 			typ = types.T_bool.ToType()
 			typ.Width = 8
+		case 18:
+			typ = types.T_array_float32.ToType()
+			typ.Width = 100
+		case 19:
+			typ = types.T_array_float64.ToType()
+			typ.Width = 100
 		}
 
 		if pkIdx == i {

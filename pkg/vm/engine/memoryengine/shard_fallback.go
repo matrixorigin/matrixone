@@ -32,7 +32,7 @@ func (f FallbackShard) Batch(
 	tableID ID,
 	getDefs func(context.Context) ([]engine.TableDef, error),
 	batch *batch.Batch,
-	nodes []metadata.DNService) (sharded []*ShardedBatch, err error) {
+	nodes []metadata.TNService) (sharded []*ShardedBatch, err error) {
 	for _, policy := range f {
 		sharded, err := policy.Batch(ctx, tableID, getDefs, batch, nodes)
 		if err != nil {
@@ -52,7 +52,7 @@ func (f FallbackShard) Vector(
 	getDefs func(context.Context) ([]engine.TableDef, error),
 	colName string,
 	vec *vector.Vector,
-	nodes []metadata.DNService) (sharded []*ShardedVector, err error) {
+	nodes []metadata.TNService) (sharded []*ShardedVector, err error) {
 	for _, policy := range f {
 		sharded, err := policy.Vector(ctx, tableID, getDefs, colName, vec, nodes)
 		if err != nil {

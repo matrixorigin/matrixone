@@ -21,6 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	dataProducing = iota
+	dataFinished
+)
+
 type Argument struct {
 	ctr *container
 
@@ -33,10 +38,12 @@ type Argument struct {
 }
 
 type container struct {
+	state int
+
 	executorsForArgs []colexec.ExpressionExecutor
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.cleanExecutors()
 	}

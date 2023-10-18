@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -97,7 +98,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-	if len(param.FileList) == 0 {
+	if len(param.FileList) == 0 && param.Extern.ScanType != tree.INLINE {
 		logutil.Warnf("no such file '%s'", param.Extern.Filepath)
 		param.Fileparam.End = true
 	}
@@ -113,6 +114,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.exprMono = plan2.CheckExprIsMonotonic(proc.Ctx, param.Filter.FilterExpr)
+	param.MoCsvLineArray = make([][]string, OneBatchMaxRow)
 	return nil
 }
 
@@ -138,7 +140,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
-	if param.plh == nil {
+	if param.plh == nil && param.Extern.ScanType != tree.INLINE {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			proc.SetInputBatch(nil)
 			return process.ExecStop, nil
@@ -281,6 +283,9 @@ func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process,
 }
 
 func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error) {
+	if param.Extern.ScanType == tree.INLINE {
+		return io.NopCloser(bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))), nil
+	}
 	if param.Extern.Local {
 		return io.NopCloser(proc.LoadLocalReader), nil
 	}
@@ -524,7 +529,7 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	}
 	plh := &ParseLineHandler{
 		csvReader:      newReaderWithOptions(param.reader, rune(cma), '#', true, false),
-		moCsvLineArray: make([][]string, OneBatchMaxRow),
+		moCsvLineArray: param.MoCsvLineArray,
 	}
 	return plh, nil
 }
@@ -1120,7 +1125,8 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 					return err
 				}
 			}
-		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64:
 			// XXX Memory accounting?
 			buf.WriteString(field)
 			bs := buf.Bytes()
@@ -1176,6 +1182,26 @@ func getOneRowData(bat *batch.Batch, line []string, rowIdx int, param *ExternalP
 			}
 			if err := vector.SetFixedAt(vec, rowIdx, d); err != nil {
 				return err
+			}
+		case types.T_enum:
+			d, err := strconv.ParseUint(field, 10, 16)
+			if err == nil {
+				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+					return err
+				}
+			} else {
+				if errors.Is(err, strconv.ErrRange) {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field, colIdx)
+				}
+				f, err := strconv.ParseFloat(field, 64)
+				if err != nil || f < 0 || f > math.MaxUint16 {
+					logutil.Errorf("parse field[%v] err:%v", field, err)
+					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field, colIdx)
+				}
+				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+					return err
+				}
 			}
 		case types.T_decimal64:
 			d, err := types.ParseDecimal64(field, vec.GetType().Width, vec.GetType().Scale)

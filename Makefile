@@ -96,7 +96,7 @@ pb: vendor-build generate-pb fmt
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo" CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm"
+CGO_OPTS=CGO_CFLAGS="-I$(ROOT_DIR)/cgo " CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lmo -lm"
 GOLDFLAGS=-ldflags="-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 
 .PHONY: cgo
@@ -142,7 +142,7 @@ endif
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
 GOPROXY ?= "https://proxy.golang.com.cn,direct"
-LAUNCH ?= "launch-tae-CN-tae-DN"
+LAUNCH ?= "launch"
 
 .PHONY: ci
 ci:
@@ -165,7 +165,7 @@ ci-clean:
 # docker compose bvt test
 ###############################################################################
 
-COMPOSE_LAUNCH := "launch-tae-multi-CN-tae-DN"
+COMPOSE_LAUNCH := "launch-multi-cn"
 
 .PHONY: compose
 compose:
@@ -173,7 +173,7 @@ compose:
 
 .PHONY: compose-clean
 compose-clean:
-	@docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+	@docker compose -f etc/launch-tae-compose/compose.yaml --profile $(COMPOSE_LAUNCH) down --remove-orphans
 	@docker volume rm launch-tae-compose_minio_storage
 	@docker image prune -f
 

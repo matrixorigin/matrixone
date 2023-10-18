@@ -16,8 +16,6 @@ package rpc
 
 import (
 	"context"
-	"os"
-	"path"
 	"strconv"
 	"sync"
 	"testing"
@@ -30,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -40,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -54,23 +51,9 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	ctx := context.Background()
 
-	//create  file service;
-	//dir := testutils.GetDefaultTestPath(ModuleName, t)
-	dir := "/tmp/s3"
-	dir = path.Join(dir, "/local")
-	//if dir exists, remove it.
-	os.RemoveAll(dir)
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	//create dir;
-	fs, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	opts.Fs = fs
 	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
+	fs := handle.db.Opts.Fs
 	IDAlloc := catalog.NewIDAllocator()
 
 	schema := catalog.MockSchema(2, 1)
@@ -228,23 +211,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	ctx := context.Background()
 
-	//create  file service;
-	//dir := testutils.GetDefaultTestPath(ModuleName, t)
-	dir := "/tmp/s3"
-	dir = path.Join(dir, "/local")
-	//if dir exists, remove it.
-	os.RemoveAll(dir)
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	//create dir;
-	fs, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	opts.Fs = fs
 	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
+	fs := handle.db.Opts.Fs
 	IDAlloc := catalog.NewIDAllocator()
 
 	schema := catalog.MockSchema(2, 1)
@@ -260,7 +229,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	taeBats[3] = taeBats[3].CloneWindow(0, 10)
 
 	//sort by primary key
-	_, err = mergesort.SortBlockColumns(taeBats[0].Vecs, 1, mocks.GetTestVectorPool())
+	_, err := mergesort.SortBlockColumns(taeBats[0].Vecs, 1, mocks.GetTestVectorPool())
 	assert.Nil(t, err)
 	_, err = mergesort.SortBlockColumns(taeBats[1].Vecs, 1, mocks.GetTestVectorPool())
 	assert.Nil(t, err)
@@ -470,7 +439,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		bat := batch.New(true, []string{hideDef[0].Name, schema.GetPrimaryKey().GetName()})
 		bat.Vecs[0], _ = view.GetColumnData(2).GetDownstreamVector().Window(0, 5)
 		bat.Vecs[1], _ = view.GetColumnData(1).GetDownstreamVector().Window(0, 5)
-		_, err := writer.WriteBatchWithOutIndex(bat)
+		_, err := writer.WriteTombstoneBatch(bat)
 		assert.Nil(t, err)
 	}
 	blocks, _, err = writer.Sync(context.Background())
@@ -755,9 +724,15 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	cv, err := blk.GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer cv.Close()
+
+	pk, err := blk.GetColumnDataByName(context.Background(), schema.GetPrimaryKey().GetName())
+	assert.NoError(t, err)
+	defer pk.Close()
+
 	assert.NoError(t, txn.Commit(context.Background()))
-	delBat := batch.New(true, []string{hideCol[0].Name})
+	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0], _ = cv.GetData().GetDownstreamVector().Window(0, 20)
+	delBat.Vecs[1], _ = pk.GetData().GetDownstreamVector().Window(0, 20)
 
 	//delete 20 rows
 	deleteTxn := mock1PCTxn(handle.db)
@@ -1015,10 +990,15 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	cv, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer cv.Close()
+	pk, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.GetPrimaryKey().GetName())
+	assert.NoError(t, err)
+	defer pk.Close()
+
 	_ = it.Close()
 
-	delBat := batch.New(true, []string{hideCol[0].Name})
+	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = cv.GetData().GetDownstreamVector()
+	delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
 
 	assert.NoError(t, txn.Commit(ctx))
 
@@ -1327,9 +1307,15 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	v, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer v.Close()
+
+	pk, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.GetPrimaryKey().GetName())
+	assert.NoError(t, err)
+	defer pk.Close()
+
 	_ = it.Close()
-	delBat := batch.New(true, []string{hideCol[0].Name})
+	delBat := batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 	delBat.Vecs[0] = v.GetData().GetDownstreamVector()
+	delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
 
 	assert.NoError(t, txn.Commit(ctx))
 
@@ -1666,10 +1652,17 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		it := tbH.MakeBlockIt()
 		v, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 		assert.NoError(t, err)
+		defer v.Close()
+
+		pk, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.GetPrimaryKey().GetName())
+		assert.NoError(t, err)
+		defer pk.Close()
+
 		_ = it.Close()
 
-		delBat = batch.New(true, []string{hideCol[0].Name})
+		delBat = batch.New(true, []string{hideCol[0].Name, schema.GetPrimaryKey().GetName()})
 		delBat.Vecs[0] = v.GetData().GetDownstreamVector()
+		delBat.Vecs[1] = pk.GetData().GetDownstreamVector()
 
 		assert.NoError(t, txn.Commit(ctx))
 	}
@@ -1741,20 +1734,6 @@ func TestApplyDeltaloc(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	ctx := context.Background()
 
-	//create  file service;
-	dir := "/tmp/s3"
-	dir = path.Join(dir, "/local")
-	//if dir exists, remove it.
-	os.RemoveAll(dir)
-	c := fileservice.Config{
-		Name:    defines.LocalFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-	}
-	//create dir;
-	fs, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
-	opts.Fs = fs
 	h := mockTAEHandle(ctx, t, opts)
 	defer h.HandleClose(context.TODO())
 
@@ -1833,8 +1812,11 @@ func TestApplyDeltaloc(t *testing.T) {
 		assert.NoError(t, err)
 		rowIDVec := containers.MakeVector(types.T_Rowid.ToType())
 		rowIDVec.Append(*objectio.NewRowid(&id.BlockID, offset), false)
+		pkVec := containers.MakeVector(schema.GetPrimaryKey().GetType())
+		pkVec.Append(val, false)
 		bat := containers.NewBatch()
 		bat.AddVector(catalog.AttrRowID, rowIDVec)
+		bat.AddVector(schema.GetPrimaryKey().GetName(), pkVec)
 		insertEntry, err := makePBEntry(DELETE, dbID, tid, "db", schema.Name, "", containers.ToCNBatch(bat))
 		assert.NoError(t, err)
 
@@ -1883,7 +1865,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		assert.NoError(t, err)
 		blk, err := seg.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(t, err)
-		deltaLoc, err := mockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
+		deltaLoc, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, blk.GetBlockData(), schema, txn0, offsets)
 		assert.NoError(t, err)
 		delLocBat.Vecs[0].Append([]byte(deltaLoc.String()), false)
 	}

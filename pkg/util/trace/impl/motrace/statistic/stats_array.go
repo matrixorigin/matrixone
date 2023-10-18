@@ -26,10 +26,12 @@ const (
 )
 
 const (
-	StatsArrayVersion = StatsArrayVersion1
+	StatsArrayVersion = StatsArrayVersion3
 
 	StatsArrayVersion0 = 0 // raw statistics
-	StatsArrayVersion1 = 1 // int64 array
+	StatsArrayVersion1 = 1 // float64 array
+	StatsArrayVersion2 = 2 // float64 array + plus one elem OutTrafficBytes
+	StatsArrayVersion3 = 3 // ... + one elem: ConnType
 )
 
 const (
@@ -38,8 +40,24 @@ const (
 	StatsArrayIndexMemorySize
 	StatsArrayIndexS3IOInputCount
 	StatsArrayIndexS3IOOutputCount // index: 4
+	StatsArrayIndexOutTrafficBytes // index: 5
+	StatsArrayIndexConnType        // index: 6
 
 	StatsArrayLength
+)
+
+const (
+	StatsArrayLengthV1 = 5
+	StatsArrayLengthV2 = 6
+	StatsArrayLengthV3 = 7
+)
+
+type ConnType float64
+
+const (
+	ConnTypeUnknown  ConnType = 0
+	ConnTypeInternal ConnType = 1
+	ConnTypeExternal ConnType = 2
 )
 
 func NewStatsArray() *StatsArray {
@@ -47,12 +65,38 @@ func NewStatsArray() *StatsArray {
 	return s.Init()
 }
 
+func NewStatsArrayV1() *StatsArray {
+	return NewStatsArray().WithVersion(StatsArrayVersion1)
+}
+
+func NewStatsArrayV2() *StatsArray {
+	return NewStatsArray().WithVersion(StatsArrayVersion2)
+}
+
+func NewStatsArrayV3() *StatsArray {
+	return NewStatsArray()
+}
+
 func (s *StatsArray) Init() *StatsArray {
 	return s.WithVersion(StatsArrayVersion)
 }
 
+func (s *StatsArray) InitIfEmpty() *StatsArray {
+	for i := 1; i < StatsArrayLength; i++ {
+		if s[i] != 0 {
+			return s
+		}
+	}
+	return s.WithVersion(StatsArrayVersion)
+}
+
 func (s *StatsArray) Reset() *StatsArray {
-	return s.WithVersion(StatsArrayVersion).WithTimeConsumed(0).WithMemorySize(0).WithS3IOInputCount(0).WithS3IOOutputCount(0)
+	return s.WithVersion(StatsArrayVersion).
+		// StatsArrayVersion1
+		WithTimeConsumed(0).WithMemorySize(0).WithS3IOInputCount(0).WithS3IOOutputCount(0).
+		// StatsArrayVersion2
+		WithOutTrafficBytes(0)
+	// Next Version
 }
 
 func (s *StatsArray) GetVersion() float64         { return (*s)[StatsArrayIndexVersion] }
@@ -60,7 +104,20 @@ func (s *StatsArray) GetTimeConsumed() float64    { return (*s)[StatsArrayIndexT
 func (s *StatsArray) GetMemorySize() float64      { return (*s)[StatsArrayIndexMemorySize] }      // unit: byte
 func (s *StatsArray) GetS3IOInputCount() float64  { return (*s)[StatsArrayIndexS3IOInputCount] }  // unit: count
 func (s *StatsArray) GetS3IOOutputCount() float64 { return (*s)[StatsArrayIndexS3IOOutputCount] } // unit: count
+func (s *StatsArray) GetOutTrafficBytes() float64 { // unit: byte
+	if s.GetVersion() < StatsArrayVersion2 {
+		return 0
+	}
+	return (*s)[StatsArrayIndexOutTrafficBytes]
+}
+func (s *StatsArray) GetConnType() float64 {
+	if s.GetVersion() < StatsArrayVersion3 {
+		return 0
+	}
+	return (*s)[StatsArrayIndexConnType]
+}
 
+// WithVersion set the version array in StatsArray, please carefully to use.
 func (s *StatsArray) WithVersion(v float64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
 func (s *StatsArray) WithTimeConsumed(v float64) *StatsArray {
 	(*s)[StatsArrayIndexTimeConsumed] = v
@@ -78,18 +135,45 @@ func (s *StatsArray) WithS3IOOutputCount(v float64) *StatsArray {
 	(*s)[StatsArrayIndexS3IOOutputCount] = v
 	return s
 }
-
-func (s *StatsArray) ToJsonString() []byte {
-	return StatsArrayToJsonString((*s)[:])
+func (s *StatsArray) WithOutTrafficBytes(v float64) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion2 {
+		(*s)[StatsArrayIndexOutTrafficBytes] = v
+	}
+	return s
 }
 
-func (s *StatsArray) Add(src *StatsArray) *StatsArray {
-	dstLen := len(*src)
-	if len(*s) < len(*src) {
+func (s *StatsArray) WithConnType(v ConnType) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion3 {
+		(*s)[StatsArrayIndexConnType] = float64(v)
+	}
+	return s
+}
+
+func (s *StatsArray) ToJsonString() []byte {
+	switch s.GetVersion() {
+	case StatsArrayVersion1:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV1])
+	case StatsArrayVersion2:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV2])
+	case StatsArrayVersion3:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV3])
+	default:
+		return StatsArrayToJsonString((*s)[:])
+	}
+}
+
+// Add do add two stats array together
+// except for Element ConnType, which idx = StatsArrayIndexConnType, just keep s[StatsArrayIndexConnType] value.
+func (s *StatsArray) Add(delta *StatsArray) *StatsArray {
+	dstLen := len(*delta)
+	if len(*s) < len(*delta) {
 		dstLen = len(*s)
 	}
 	for idx := 1; idx < dstLen; idx++ {
-		(*s)[idx] += (*src)[idx]
+		if idx == StatsArrayIndexConnType {
+			continue
+		}
+		(*s)[idx] += (*delta)[idx]
 	}
 	return s
 }
@@ -98,6 +182,7 @@ func (s *StatsArray) Add(src *StatsArray) *StatsArray {
 // example:
 // [1,0,0,0,0] got `[1,0,0,0,0]`
 // [1,2,3,4,5] got `[1,2,3.000,4,5]`
+// [2,1,2,3,4,5] got `[2,3.000,4,5,6.000,7]`
 func StatsArrayToJsonString(arr []float64) []byte {
 	// len([1,184467440737095516161,18446744073709551616,18446744073709551616,18446744073709551616]") = 88
 	buf := make([]byte, 0, 128)
@@ -118,7 +203,7 @@ func StatsArrayToJsonString(arr []float64) []byte {
 	return buf
 }
 
-var initStatsArray = StatsArray{}
+var initStatsArray = NewStatsArray()
 
 var DefaultStatsArray = *initStatsArray.Init()
 

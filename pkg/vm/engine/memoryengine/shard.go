@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-type Shard = metadata.DNShard
+type Shard = metadata.TNShard
 
 type shardsFunc = func() ([]Shard, error)
 
@@ -46,7 +46,7 @@ type ShardPolicy interface {
 		getDefs getDefsFunc,
 		colName string,
 		vec *vector.Vector,
-		nodes []metadata.DNService,
+		nodes []metadata.TNService,
 	) (
 		sharded []*ShardedVector,
 		err error,
@@ -57,7 +57,7 @@ type ShardPolicy interface {
 		tableID ID,
 		getDefs getDefsFunc,
 		batch *batch.Batch,
-		nodes []metadata.DNService,
+		nodes []metadata.TNService,
 	) (
 		sharded []*ShardedBatch,
 		err error,
@@ -75,10 +75,10 @@ type ShardedBatch struct {
 }
 
 func (e *Engine) allShards() (shards []Shard, err error) {
-	for _, store := range getDNServices(e.cluster) {
+	for _, store := range getTNServices(e.cluster) {
 		for _, shard := range store.Shards {
 			shards = append(shards, Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: shard.ShardID,
 				},
 				ReplicaID: shard.ReplicaID,
@@ -90,10 +90,10 @@ func (e *Engine) allShards() (shards []Shard, err error) {
 }
 
 func (e *Engine) anyShard() (shards []Shard, err error) {
-	for _, store := range getDNServices(e.cluster) {
+	for _, store := range getTNServices(e.cluster) {
 		for _, shard := range store.Shards {
 			shards = append(shards, Shard{
-				DNShardRecord: metadata.DNShardRecord{
+				TNShardRecord: metadata.TNShardRecord{
 					ShardID: shard.ShardID,
 				},
 				ReplicaID: shard.ReplicaID,
@@ -124,11 +124,11 @@ type NoShard struct {
 	shard   Shard
 }
 
-func (s *NoShard) setShard(stores []metadata.DNService) {
+func (s *NoShard) setShard(stores []metadata.TNService) {
 	s.setOnce.Do(func() {
 		type ShardInfo struct {
-			Store metadata.DNService
-			Shard metadata.DNShard
+			Store metadata.TNService
+			Shard metadata.TNShard
 		}
 		infos := make([]ShardInfo, 0, len(stores))
 		for _, store := range stores {
@@ -147,7 +147,7 @@ func (s *NoShard) setShard(stores []metadata.DNService) {
 		})
 		info := infos[0]
 		s.shard = Shard{
-			DNShardRecord: metadata.DNShardRecord{
+			TNShardRecord: metadata.TNShardRecord{
 				ShardID: info.Shard.ShardID,
 			},
 			ReplicaID: info.Shard.ReplicaID,
@@ -164,7 +164,7 @@ func (s *NoShard) Vector(
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
-	nodes []metadata.DNService,
+	nodes []metadata.TNService,
 ) (
 	sharded []*ShardedVector,
 	err error,
@@ -182,7 +182,7 @@ func (s *NoShard) Batch(
 	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
-	nodes []metadata.DNService,
+	nodes []metadata.TNService,
 ) (
 	sharded []*ShardedBatch,
 	err error,

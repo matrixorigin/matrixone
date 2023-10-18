@@ -51,6 +51,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	if ap.Cond != nil {
 		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
 	}
+	ap.ctr.tmpBatches = make([]*batch.Batch, 2)
 	return err
 }
 
@@ -83,7 +84,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				continue
 			}
 			if bat.IsEmpty() {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 
@@ -93,9 +94,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			}
 
 			if err = ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
+				bat.Clean(proc.Mp())
 				return process.ExecNext, err
 			}
-
+			proc.PutBatch(bat)
 			continue
 
 		case SendLast:
@@ -129,7 +131,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(bat.RowCount())
-		analyze.Alloc(ctr.mp.Map().Size())
+		analyze.Alloc(ctr.mp.Size())
 	}
 	return nil
 }
@@ -160,7 +162,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		rbat.Vecs[i] = proc.GetVector(ap.RightTypes[pos])
 	}
 
-	count := ctr.bat.RowCount() - ctr.matched.Count()
+	count := ctr.matched.Count()
 	sels := make([]int32, 0, count)
 	itr := ctr.matched.Iterator()
 	for itr.HasNext() {
@@ -182,7 +184,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) error {
-	defer proc.PutBatch(bat)
 	analyze.Input(bat, isFirst)
 
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
@@ -196,7 +197,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.Map().NewIterator()
+	itr := ctr.mp.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -208,9 +209,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
-			sels := mSels[vals[k]-1]
-			for _, sel := range sels {
-				if ctr.matched.Contains(uint64(sel)) {
+			if ap.HashOnPK {
+				if ctr.matched.Contains(vals[k] - 1) {
 					continue
 				}
 				if ap.Cond != nil {
@@ -218,25 +218,62 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						1, ctr.cfs1); err != nil {
 						return err
 					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
 						1, ctr.cfs2); err != nil {
 						return err
 					}
-					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+					ctr.tmpBatches[0] = ctr.joinBat1
+					ctr.tmpBatches[1] = ctr.joinBat2
+					vec, err := ctr.expr.Eval(proc, ctr.tmpBatches)
 					if err != nil {
 						return err
 					}
-					bs := vector.MustFixedCol[bool](vec)
-					if !bs[0] {
+					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 						continue
+					} else {
+						vcol := vector.MustFixedCol[bool](vec)
+						if !vcol[0] {
+							continue
+						}
 					}
 				}
-				ctr.matched.Add(uint64(sel))
+				ctr.matched.Add(vals[k] - 1)
+			} else {
+				sels := mSels[vals[k]-1]
+				for _, sel := range sels {
+					if ctr.matched.Contains(uint64(sel)) {
+						continue
+					}
+					if ap.Cond != nil {
+						if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+							1, ctr.cfs1); err != nil {
+							return err
+						}
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+							1, ctr.cfs2); err != nil {
+							return err
+						}
+						ctr.tmpBatches[0] = ctr.joinBat1
+						ctr.tmpBatches[1] = ctr.joinBat2
+						vec, err := ctr.expr.Eval(proc, ctr.tmpBatches)
+						if err != nil {
+							return err
+						}
+						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+							continue
+						} else {
+							vcol := vector.MustFixedCol[bool](vec)
+							if !vcol[0] {
+								continue
+							}
+						}
+					}
+					ctr.matched.Add(uint64(sel))
+				}
 			}
+
 		}
 	}
-
-	// proc.SetInputBatch(batch.EmptyBatch)
 	return nil
 }
 

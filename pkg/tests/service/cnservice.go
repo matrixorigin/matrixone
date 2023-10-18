@@ -17,7 +17,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"sync"
 
@@ -29,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests"
 )
 
-// CNService describes expected behavior for dn service.
+// CNService describes expected behavior for tn service.
 type CNService interface {
 	// Start sends heartbeat and start to handle command.
 	Start() error
@@ -139,7 +138,7 @@ func newCNService(
 	fileService fileservice.FileService,
 	options cnOptions,
 ) (CNService, error) {
-	srv, err := cnservice.NewService(cfg, ctx, fileService, options...)
+	srv, err := cnservice.NewService(cfg, ctx, fileService, nil, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +167,6 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 			Port: int64(p),
 		},
 	}
-	cfg.Frontend.StorePath = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.cn
 	cfg.Engine.Type = opt.storage.cnEngine

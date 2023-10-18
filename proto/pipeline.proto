@@ -24,6 +24,7 @@ option (gogoproto.protosizer_all) = true;
 
 import "plan.proto";
 import "timestamp.proto";
+import "lock.proto";
 
 message Message {
   uint64  sid = 1;
@@ -56,9 +57,11 @@ message Dispatch {
   int32 func_id = 1;
   repeated Connector local_connector = 2;
   repeated WrapNode remote_connector = 3;
-  repeated int32 ShuffleRegIdxLocal=4;
-  repeated int32 ShuffleRegIdxRemote=5;
-  bool  is_sink = 6;
+  repeated int32 shuffle_reg_idx_local=4;
+  repeated int32 shuffle_reg_idx_remote=5;
+  int32 shuffle_type=6;
+  bool  is_sink = 7;
+  bool  rec_sink = 8;
 }
 
 message Merge {
@@ -74,9 +77,10 @@ message MultiArguemnt{
 }
 
 message Aggregate {
-  int32 op = 1;
+  int64 op = 1;
   bool dist = 2;
   plan.Expr expr = 3;
+  bytes config =4;
 }
 
 message Group {
@@ -87,6 +91,8 @@ message Group {
   repeated plan.Type  types = 5;
   repeated Aggregate  aggs = 6;
   repeated MultiArguemnt MultiAggs = 7;
+  bool isShuffle = 8;
+  uint64 preAllocSize = 9;
 }
 
 message Insert{
@@ -147,6 +153,8 @@ message LockTarget {
   int32 refresh_ts_idx_in_bat   = 4;
   int32 filter_col_idx_in_bat   = 5;
   bool lock_table               = 6;
+  bool ChangeDef               = 7;
+  lock.LockMode Mode         = 8;
 }
 
 message LockOp {
@@ -162,6 +170,7 @@ message OnDuplicateKey{
   plan.TableDef table_def                   = 1;
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
+  bool is_ignore                            = 4;
 }
 
 message Join {
@@ -174,6 +183,7 @@ message Join {
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
+  bool hash_on_pk = 10;
 }
 
 message AntiJoin{
@@ -184,6 +194,7 @@ message AntiJoin{
   repeated plan.Type  types = 5;
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
+  bool hash_on_pk = 8;
 }
 
 message LeftJoin {
@@ -196,6 +207,7 @@ message LeftJoin {
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
+  bool hash_on_pk = 10;
 }
 
 message RightJoin {
@@ -209,6 +221,7 @@ message RightJoin {
   repeated plan.Expr left_cond = 8;
   repeated plan.Expr right_cond = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 10;
+  bool hash_on_pk = 11;
 }
 
 message RightSemiJoin {
@@ -220,6 +233,7 @@ message RightSemiJoin {
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  bool hash_on_pk = 9;
 }
 
 message RightAntiJoin {
@@ -231,6 +245,7 @@ message RightAntiJoin {
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  bool hash_on_pk = 9;
 }
 
 message SemiJoin {
@@ -242,6 +257,7 @@ message SemiJoin {
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  bool hash_on_pk = 9;
 }
 
 message SingleJoin {
@@ -254,6 +270,7 @@ message SingleJoin {
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
+  bool hash_on_pk = 10;
 }
 
 message MarkJoin {
@@ -265,6 +282,7 @@ message MarkJoin {
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.Expr on_list = 8;
+  bool hash_on_pk = 9;
 }
 
 message Product {
@@ -288,6 +306,8 @@ message HashBuild {
   uint64 nbucket = 4;
   repeated plan.Type types = 5;
   repeated plan.Expr conds = 6;
+  bool hash_on_pk = 7;
+  bool need_merged_batch = 8;
 }
 
 message ExternalName2ColIndex {
@@ -309,6 +329,12 @@ message ExternalScan {
   repeated string file_list = 7;
   repeated plan.ColDef origin_cols = 8;
   plan.Expr    filter = 9;
+}
+
+message StreamScan {
+  plan.TableDef tbl_def = 1;
+  int64 offset = 2;
+  int64 limit = 3;
 }
 
 message Instruction{
@@ -351,6 +377,7 @@ message Instruction{
   LockOp lock_op = 32;
   Shuffle shuffle = 33;
   Merge merge = 34;
+  StreamScan stream_scan = 35;
 }
 
 message AnalysisList {
@@ -430,6 +457,8 @@ message Pipeline {
   int32 children_count = 12;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 13;
+  int32 build_idx = 14;
+  int32 shuffle_cnt = 15;
 }
 
 message WrapNode {
@@ -445,11 +474,13 @@ message UuidToRegIdx {
 
 message RuntimeFilter {
   enum RuntimeFilterType {
-    NO_FILTER = 0;
-    IN = 1;
-    BITMAP = 2;
-    MIN_MAX = 3;
-    BINARY_FUSE = 4;
+    IN = 0;
+    BITMAP = 1;
+    MIN_MAX = 2;
+    BINARY_FUSE = 3;
+
+    PASS = 100;
+    DROP = 101;
   }
 
   RuntimeFilterType typ = 1;

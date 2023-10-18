@@ -17,6 +17,7 @@ package index
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"math"
 	"sort"
 	"strings"
@@ -47,6 +48,7 @@ func init() {
 //	       len(min)    len(max) |   |
 //	                       reserved |
 //	                              type
+
 type ZM []byte
 
 func NewZM(t types.T, scale int32) ZM {
@@ -90,6 +92,9 @@ func (zm ZM) String() string {
 	} else {
 		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
 			zm.GetType().String(), zm.GetScale(), zm.GetMin(), zm.GetMax()))
+		if zm.supportSum() {
+			_, _ = b.WriteString(fmt.Sprintf("SUM:%v", zm.GetSum()))
+		}
 	}
 	if zm.MaxTruncated() {
 		_ = b.WriteByte('+')
@@ -98,6 +103,11 @@ func (zm ZM) String() string {
 		_, _ = b.WriteString("--")
 	}
 	return b.String()
+}
+
+func (zm ZM) supportSum() bool {
+	t := zm.GetType()
+	return t.IsInteger() || t.IsFloat() || t == types.T_decimal64
 }
 
 func (zm ZM) Clone() ZM {
@@ -112,6 +122,10 @@ func (zm ZM) GetType() types.T {
 
 func (zm ZM) IsString() bool {
 	return zm.GetType().FixedLength() < 0
+}
+
+func (zm ZM) IsArray() bool {
+	return zm.GetType().IsArrayRelate()
 }
 
 func (zm ZM) Valid() bool {
@@ -156,12 +170,48 @@ func (zm ZM) GetMax() any {
 	return zm.getValue(buf)
 }
 
+func (zm ZM) SetSum(v []byte) {
+	copy(zm.GetSumBuf(), v)
+}
+
+func (zm ZM) HasSum() bool {
+	return zm.GetSum() != 0
+}
+
+func (zm ZM) GetSum() any {
+	if !zm.IsInited() {
+		return nil
+	}
+	return zm.decodeSum()
+}
+
+func (zm ZM) decodeSum() any {
+	switch types.T(zm[63]) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return types.DecodeInt64(zm.GetSumBuf())
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return types.DecodeUint64(zm.GetSumBuf())
+	case types.T_float32, types.T_float64:
+		return types.DecodeFloat64(zm.GetSumBuf())
+	case types.T_decimal64:
+		return types.DecodeDecimal64(zm.GetSumBuf())
+	}
+	return nil
+}
+
 func (zm ZM) GetMinBuf() []byte {
 	return zm[0 : zm[30]&0x1f]
 }
 
 func (zm ZM) GetMaxBuf() []byte {
 	return zm[31 : 31+zm[61]&0x1f]
+}
+
+func (zm ZM) GetSumBuf() []byte {
+	if zm.supportSum() {
+		return zm[8:16]
+	}
+	return nil
 }
 
 func (zm ZM) GetBuf() []byte {
@@ -307,6 +357,8 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.DecodeFixed[types.Datetime](buf)
 	case types.T_timestamp:
 		return types.DecodeFixed[types.Timestamp](buf)
+	case types.T_enum:
+		return types.DecodeFixed[types.Enum](buf)
 	case types.T_decimal64:
 		return types.DecodeFixed[types.Decimal64](buf)
 	case types.T_decimal128:
@@ -322,6 +374,11 @@ func (zm ZM) getValue(buf []byte) any {
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		return buf
+	case types.T_array_float32:
+		// Used by MO_TABLE_COL_MAX and ZoneMap.String()
+		return types.BytesToArray[float32](buf)
+	case types.T_array_float64:
+		return types.BytesToArray[float64](buf)
 	}
 	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
@@ -608,6 +665,15 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 
 		return lowerBound < len(col) && maxVal >= col[lowerBound]
 
+	case types.T_enum:
+		col := vector.MustFixedCol[types.Enum](vec)
+		minVal, maxVal := types.DecodeEnum(zm.GetMinBuf()), types.DecodeEnum(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+
+		return lowerBound < len(col) && maxVal >= col[lowerBound]
+
 	case types.T_decimal64:
 		col := vector.MustFixedCol[types.Decimal64](vec)
 		minVal, maxVal := types.DecodeDecimal64(zm.GetMinBuf()), types.DecodeDecimal64(zm.GetMaxBuf())
@@ -661,6 +727,24 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		})
 
 		return lowerBound < len(col) && bytes.Compare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0
+
+	case types.T_array_float32:
+		col := vector.MustArrayCol[float32](vec)
+		minVal, maxVal := types.BytesToArray[float32](zm.GetMinBuf()), types.BytesToArray[float32](zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return moarray.Compare[float32](minVal, col[i]) <= 0
+		})
+
+		return lowerBound < len(col) && moarray.Compare[float32](maxVal, col[lowerBound]) >= 0
+
+	case types.T_array_float64:
+		col := vector.MustArrayCol[float64](vec)
+		minVal, maxVal := types.BytesToArray[float64](zm.GetMinBuf()), types.BytesToArray[float64](zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return moarray.Compare[float64](minVal, col[i]) <= 0
+		})
+
+		return lowerBound < len(col) && moarray.Compare[float64](maxVal, col[lowerBound]) >= 0
 
 	default:
 		return true
@@ -1088,6 +1172,11 @@ func adjustBytes(bs []byte) {
 
 func UpdateZM(zm ZM, v []byte) {
 	if !zm.IsInited() {
+		if zm.IsArray() {
+			// If the zm is of type ARRAY, we don't init it.
+			// vector index will be handled separately using HNSW library etc.
+			return
+		}
 		zm.doInit(v)
 		return
 	}
@@ -1120,6 +1209,12 @@ func BatchUpdateZM(zm ZM, vec *vector.Vector) (err error) {
 		UpdateZM(zm, maxv)
 	}
 	return
+}
+
+func SetZMSum(zm ZM, vec *vector.Vector) {
+	if ok, sumv := vec.GetSumValue(); ok {
+		zm.SetSum(sumv)
+	}
 }
 
 func EncodeZM(zm *ZM) []byte {

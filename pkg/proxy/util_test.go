@@ -15,7 +15,7 @@
 package proxy
 
 import (
-	"reflect"
+	"net"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -158,46 +158,16 @@ func TestIsErrPacket(t *testing.T) {
 	require.True(t, ret)
 }
 
-func TestParseLabel(t *testing.T) {
-	cases := []struct {
-		str string
-		ret map[string]string
-	}{
-		{
-			str: "",
-			ret: nil,
-		},
-		{
-			str: "a:1",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a:1,",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a:1,b:2",
-			ret: map[string]string{"b": "2", "a": "1"},
-		},
-		{
-			str: "a:1,b",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a:1,b:",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a:1,:2",
-			ret: map[string]string{"a": "1"},
-		},
-		{
-			str: "a:1,:",
-			ret: map[string]string{"a": "1"},
-		},
+func TestContainIP(t *testing.T) {
+	cidrs := []string{"192.168.20.0/24", "192.168.10.0/24"}
+	ipNetList := make([]*net.IPNet, 0, 2)
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		require.NoError(t, err)
+		ipNetList = append(ipNetList, ipNet)
 	}
-
-	for _, item := range cases {
-		require.True(t, reflect.DeepEqual(item.ret, parseLabel(item.str)))
-	}
+	ip := net.ParseIP("192.168.10.10")
+	require.True(t, containIP(ipNetList, ip))
+	ip = net.ParseIP("192.168.30.10")
+	require.False(t, containIP(ipNetList, ip))
 }

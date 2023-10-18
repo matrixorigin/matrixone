@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -37,17 +38,6 @@ const (
 )
 
 var (
-	//root name
-	defaultRootName = "root"
-
-	//root password
-	defaultRootPassword = ""
-
-	//dump user name
-	defaultDumpUser = "dump"
-
-	//dump user password
-	defaultDumpPassword = "111"
 
 	//port defines which port the mo-server listens on and clients connect to
 	defaultPort = 6001
@@ -76,13 +66,10 @@ var (
 	//process.Limitation.PartitionRows.  10 << 32 = 42949672960
 	defaultProcessLimitationPartitionRows = 42949672960
 
-	//the root directory of the storage
-	defaultStorePath = "./store"
-
 	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
-	defaultLengthOfQueryPrinted = 200000
+	defaultLengthOfQueryPrinted = 1024
 
 	//the count of rows in vector of batch in load data
 	defaultBatchSizeInLoadData = 40000
@@ -114,10 +101,13 @@ var (
 	// defaultLogShardID default: 1
 	defaultLogShardID = 1
 
-	// defaultDNReplicaID default: 1
-	defaultDNReplicaID = 1
+	// defaultTNReplicaID default: 1
+	defaultTNReplicaID = 1
 	// defaultMetricGatherInterval default: 15 sec.
 	defaultMetricGatherInterval = 15
+
+	// defaultMetricInternalGatherInterval default: 1 min.
+	defaultMetricInternalGatherInterval = time.Minute
 
 	// defaultMetricUpdateStorageUsageInterval default: 15 min.
 	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
@@ -143,8 +133,8 @@ var (
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
 
-	// defaultKillRountinesInterval default: 1 minutes
-	defaultKillRountinesInterval = 1
+	// defaultKillRountinesInterval default: 10 seconds
+	defaultKillRountinesInterval = 10
 
 	//defaultCleanKillQueueInterval default: 60 minutes
 	defaultCleanKillQueueInterval = 60
@@ -166,27 +156,14 @@ var (
 type FrontendParameters struct {
 	MoVersion string
 
-	//root name
-	RootName string `toml:"rootname"`
-
-	//root password
-	RootPassword string `toml:"rootpassword"`
-
-	DumpUser string `toml:"dumpuser"`
-
-	DumpPassword string `toml:"dumppassword"`
-
-	//dump database
-	DumpDatabase string `toml:"dumpdatabase"`
-
 	//port defines which port the mo-server listens on and clients connect to
-	Port int64 `toml:"port"`
+	Port int64 `toml:"port" user_setting:"basic"`
 
 	//listening ip
-	Host string `toml:"host"`
+	Host string `toml:"host" user_setting:"basic"`
 
 	// UnixSocketAddress listening unix domain socket
-	UnixSocketAddress string `toml:"unix-socket"`
+	UnixSocketAddress string `toml:"unix-socket" user_setting:"advanced"`
 
 	//guest mmu limitation. default: 1 << 40 = 1099511627776
 	GuestMmuLimitation int64 `toml:"guestMmuLimitation"`
@@ -210,13 +187,10 @@ type FrontendParameters struct {
 	ProcessLimitationPartitionRows int64 `toml:"processLimitationPartitionRows"`
 
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
-	StorePath string `toml:"storePath"`
-
-	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	ServerVersionPrefix string `toml:"serverVersionPrefix"`
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
-	LengthOfQueryPrinted int64 `toml:"lengthOfQueryPrinted"`
+	LengthOfQueryPrinted int64 `toml:"lengthOfQueryPrinted" user_setting:"advanced"`
 
 	//the count of rows in vector of batch in load data
 	BatchSizeInLoadData int64 `toml:"batchSizeInLoadData"`
@@ -239,44 +213,23 @@ type FrontendParameters struct {
 	//port defines which port the rpc server listens on
 	PortOfRpcServerInComputationEngine int64 `toml:"portOfRpcServerInComputationEngine"`
 
-	//default is false. false : one txn for an independent batch true : only one txn during loading data
-	DisableOneTxnPerBatchDuringLoad bool `toml:"DisableOneTxnPerBatchDuringLoad"`
-
-	//default is 'debug'. the level of log.
-	LogLevel string `toml:"logLevel"`
-
-	//default is 'json'. the format of log.
-	LogFormat string `toml:"logFormat"`
-
-	//default is ''. the file
-	LogFilename string `toml:"logFilename"`
-
-	//default is 512MB. the maximum of log file size
-	LogMaxSize int64 `toml:"logMaxSize"`
-
-	//default is 0. the maximum days of log file to be kept
-	LogMaxDays int64 `toml:"logMaxDays"`
-
-	//default is 0. the maximum numbers of log file to be retained
-	LogMaxBackups int64 `toml:"logMaxBackups"`
-
 	//default is false. With true. Server will support tls
-	EnableTls bool `toml:"enableTls"`
+	EnableTls bool `toml:"enableTls" user_setting:"advanced"`
 
 	//default is ''. Path of file that contains list of trusted SSL CAs for client
-	TlsCaFile string `toml:"tlsCaFile"`
+	TlsCaFile string `toml:"tlsCaFile" user_setting:"advanced"`
 
 	//default is ''. Path of file that contains X509 certificate in PEM format for client
-	TlsCertFile string `toml:"tlsCertFile"`
+	TlsCertFile string `toml:"tlsCertFile" user_setting:"advanced"`
 
 	//default is ''. Path of file that contains X509 key in PEM format for client
-	TlsKeyFile string `toml:"tlsKeyFile"`
+	TlsKeyFile string `toml:"tlsKeyFile" user_setting:"advanced"`
 
 	//default is 1
 	LogShardID uint64 `toml:"logshardid"`
 
 	//default is 1
-	DNReplicaID uint64 `toml:"dnreplicalid"`
+	TNReplicaID uint64 `toml:"tnreplicalid"`
 
 	EnableDoComQueryInProgress bool `toml:"comQueryInProgress"`
 
@@ -287,22 +240,23 @@ type FrontendParameters struct {
 	MaxMessageSize uint64 `toml:"max-message-size"`
 
 	// default off
-	SaveQueryResult string `toml:"saveQueryResult"`
+	SaveQueryResult string `toml:"saveQueryResult" user_setting:"advanced"`
 
 	// default 24 (h)
-	QueryResultTimeout uint64 `toml:"queryResultTimeout"`
+	QueryResultTimeout uint64 `toml:"queryResultTimeout" user_setting:"advanced"`
 
 	// default 100 (MB)
-	QueryResultMaxsize uint64 `toml:"queryResultMaxsize"`
+	QueryResultMaxsize uint64 `toml:"queryResultMaxsize" user_setting:"advanced"`
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames int64 `toml:"lowerCaseTableNames"`
+	LowerCaseTableNames int64 `toml:"lowerCaseTableNames" user_setting:"advanced"`
 
 	PrintDebug bool `toml:"printDebug"`
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
 
+	// Interval in seconds
 	KillRountinesInterval int `toml:"killRountinesInterval"`
 
 	CleanKillQueueInterval int `toml:"cleanKillQueueInterval"`
@@ -319,21 +273,6 @@ type FrontendParameters struct {
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
-	if fp.RootName == "" {
-		fp.RootName = defaultRootName
-	}
-
-	if fp.RootPassword == "" {
-		fp.RootPassword = defaultRootPassword
-	}
-
-	if fp.DumpUser == "" {
-		fp.DumpUser = defaultDumpUser
-	}
-
-	if fp.DumpPassword == "" {
-		fp.DumpPassword = defaultDumpPassword
-	}
 
 	if fp.Port == 0 {
 		fp.Port = int64(defaultPort)
@@ -371,10 +310,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.ProcessLimitationPartitionRows = int64(toml.ByteSize(defaultProcessLimitationPartitionRows))
 	}
 
-	if fp.StorePath == "" {
-		fp.StorePath = defaultStorePath
-	}
-
 	if fp.ServerVersionPrefix == "" {
 		fp.ServerVersionPrefix = defaultServerVersionPrefix
 	}
@@ -407,8 +342,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.PortOfRpcServerInComputationEngine = int64(defaultPortOfRpcServerInComputationEngine)
 	}
 
-	if fp.DNReplicaID == 0 {
-		fp.DNReplicaID = uint64(defaultDNReplicaID)
+	if fp.TNReplicaID == 0 {
+		fp.TNReplicaID = uint64(defaultTNReplicaID)
 	}
 
 	if fp.LogShardID == 0 {
@@ -457,12 +392,6 @@ func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
-	fp.LogLevel = log.Level
-	fp.LogFormat = log.Format
-	fp.LogFilename = log.Filename
-	fp.LogMaxSize = int64(log.MaxSize)
-	fp.LogMaxDays = int64(log.MaxDays)
-	fp.LogMaxBackups = int64(log.MaxBackups)
 	fp.MoVersion = version
 }
 
@@ -523,20 +452,20 @@ type ObservabilityParameters struct {
 	MoVersion string
 
 	// Host listening ip. normally same as FrontendParameters.Host
-	Host string `toml:"host"`
+	Host string `toml:"host" user_setting:"advanced"`
 
 	// StatusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
 	// Start listen with EnableMetricToProm is true.
-	StatusPort int `toml:"statusPort"`
+	StatusPort int `toml:"statusPort" user_setting:"advanced"`
 
 	// EnableMetricToProm default is false. if true, metrics can be scraped through host:status/metrics endpoint
-	EnableMetricToProm bool `toml:"enableMetricToProm"`
+	EnableMetricToProm bool `toml:"enableMetricToProm" user_setting:"advanced"`
 
 	// DisableMetric default is false. if false, enable metric at booting
-	DisableMetric bool `toml:"disableMetric"`
+	DisableMetric bool `toml:"disableMetric" user_setting:"advanced"`
 
 	// DisableTrace default is false. if false, enable trace at booting
-	DisableTrace bool `toml:"disableTrace"`
+	DisableTrace bool `toml:"disableTrace" user_setting:"advanced"`
 
 	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
@@ -545,15 +474,18 @@ type ObservabilityParameters struct {
 	TraceExportInterval int `toml:"traceExportInterval"`
 
 	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
-	LongQueryTime float64 `toml:"longQueryTime"`
+	LongQueryTime float64 `toml:"longQueryTime" user_setting:"advanced"`
 
 	// MetricExportInterval default is 15 sec.
-	MetricExportInterval int `toml:"metricExportInterval"`
+	MetricExportInterval int `toml:"metric-export-interval"`
 
 	// MetricGatherInterval default is 15 sec.
-	MetricGatherInterval int `toml:"metricGatherInterval"`
+	MetricGatherInterval int `toml:"metric-gather-interval"`
 
-	// MetricStorageUsageUpdateInterval, default: 30 min
+	// MetricInternalGatherInterval default is 1 min, handle metric.SubSystemMO metric
+	MetricInternalGatherInterval toml.Duration `toml:"metric-internal-gather-interval"`
+
+	// MetricStorageUsageUpdateInterval, default: 15 min
 	MetricStorageUsageUpdateInterval toml.Duration `toml:"metricStorageUsageUpdateInterval"`
 
 	// MetricStorageUsageCheckNewInterval, default: 1 min
@@ -604,6 +536,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		LongQueryTime:                      defaultLongQueryTime,
 		MetricExportInterval:               defaultMetricExportInterval,
 		MetricGatherInterval:               defaultMetricGatherInterval,
+		MetricInternalGatherInterval:       toml.Duration{},
 		MetricStorageUsageUpdateInterval:   toml.Duration{},
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
@@ -617,6 +550,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		EnableStmtMerge:                    false,
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
 	}
+	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval
 	op.MetricStorageUsageUpdateInterval.Duration = defaultMetricUpdateStorageUsageInterval
 	op.MetricStorageUsageCheckNewInterval.Duration = defaultMetricStorageUsageCheckNewInterval
 	op.MergeCycle.Duration = defaultMergeCycle
@@ -737,6 +671,8 @@ type ParameterUnit struct {
 	// HAKeeper client, which is used to get connection ID
 	// from HAKeeper currently.
 	HAKeeperClient logservice.CNHAKeeperClient
+
+	TaskService taskservice.TaskService
 }
 
 func NewParameterUnit(

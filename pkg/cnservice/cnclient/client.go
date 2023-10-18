@@ -27,6 +27,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultRPCTimeout = 10 * time.Second
+)
+
 // client each node will hold only one client.
 // It is responsible for sending messages to other nodes. and messages were received
 // and handled by cn-server.
@@ -140,6 +144,7 @@ func NewCNClient(
 				}
 			}),
 		),
+		morpc.WithBackendReadTimeout(defaultRPCTimeout),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
 		morpc.WithBackendLogger(logger),
 	)

@@ -16,48 +16,67 @@ package lockservice
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
+var (
+	lockContextPool = sync.Pool{New: func() any {
+		return &lockContext{}
+	}}
+
+	defaultLazyCheckDuration = time.Second * 5
+)
+
 type lockContext struct {
-	ctx      context.Context
-	txn      *activeTxn
-	rows     [][]byte
-	opts     LockOptions
-	offset   int
-	w        *waiter
-	idx      int
-	lockedTS timestamp.Timestamp
-	result   pb.Result
-	cb       func(pb.Result, error)
-	lockFunc func(lockContext, bool)
+	ctx       context.Context
+	txn       *activeTxn
+	waitTxn   pb.WaitTxn
+	rows      [][]byte
+	opts      LockOptions
+	offset    int
+	idx       int
+	lockedTS  timestamp.Timestamp
+	result    pb.Result
+	cb        func(pb.Result, error)
+	lockFunc  func(*lockContext, bool)
+	w         *waiter
+	completed bool
 }
 
-func newLockContext(
+func (l *localLockTable) newLockContext(
 	ctx context.Context,
 	txn *activeTxn,
 	rows [][]byte,
 	opts LockOptions,
 	cb func(pb.Result, error),
-	bind pb.LockTable) lockContext {
-	return lockContext{
-		ctx:    ctx,
-		txn:    txn,
-		rows:   rows,
-		opts:   opts,
-		cb:     cb,
-		result: pb.Result{LockedOn: bind},
-	}
+	bind pb.LockTable) *lockContext {
+	c := lockContextPool.Get().(*lockContext)
+	c.ctx = ctx
+	c.txn = txn
+	c.rows = rows
+	c.waitTxn = txn.toWaitTxn(l.bind.ServiceID, true)
+	c.opts = opts
+	c.cb = cb
+	c.result = pb.Result{LockedOn: bind}
+	return c
 }
 
-func (c lockContext) done(err error) {
+func (c *lockContext) done(err error) {
 	c.cb(c.result, err)
+	c.completed = true
 }
 
-func (c lockContext) doLock() {
+func (c *lockContext) release() {
+	*c = lockContext{}
+	lockContextPool.Put(c)
+}
+
+func (c *lockContext) doLock() {
 	if c.lockFunc == nil {
 		panic("missing lock")
 	}
@@ -65,8 +84,8 @@ func (c lockContext) doLock() {
 }
 
 type event struct {
-	c      lockContext
-	eventC chan lockContext
+	c      *lockContext
+	eventC chan *lockContext
 }
 
 func (e event) notified() {
@@ -78,16 +97,25 @@ func (e event) notified() {
 // waiterEvents is used to handle all notified waiters. And use a pool to retry the lock op,
 // to avoid too many goroutine blocked.
 type waiterEvents struct {
-	n       int
-	eventC  chan lockContext
-	stopper *stopper.Stopper
+	n        int
+	detector *detector
+	eventC   chan *lockContext
+	stopper  *stopper.Stopper
+
+	mu struct {
+		sync.RWMutex
+		blockedWaiters []*waiter
+	}
 }
 
-func newWaiterEvents(n int) *waiterEvents {
+func newWaiterEvents(
+	n int,
+	detector *detector) *waiterEvents {
 	return &waiterEvents{
-		n:       n,
-		eventC:  make(chan lockContext, 10000),
-		stopper: stopper.NewStopper("waiter-events", stopper.WithLogger(getLogger().RawLogger())),
+		n:        n,
+		detector: detector,
+		eventC:   make(chan *lockContext, 10000),
+		stopper:  stopper.NewStopper("waiter-events", stopper.WithLogger(getLogger().RawLogger())),
 	}
 }
 
@@ -104,14 +132,28 @@ func (mw *waiterEvents) close() {
 	close(mw.eventC)
 }
 
-func (mw *waiterEvents) add(c lockContext) {
-	c.w.event = event{
-		eventC: mw.eventC,
-		c:      c,
+func (mw *waiterEvents) add(c *lockContext) {
+	if c.opts.async {
+		c.w.event = event{
+			eventC: mw.eventC,
+			c:      c,
+		}
 	}
+	c.w.startWait()
+	mw.addToLazyCheckDeadlockC(c.w)
+}
+
+func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
+	w.ref()
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters, w)
 }
 
 func (mw *waiterEvents) handle(ctx context.Context) {
+	timer := time.NewTimer(defaultLazyCheckDuration)
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -120,6 +162,58 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 			c.txn.Lock()
 			c.doLock()
 			c.txn.Unlock()
+			if c.completed {
+				c.release()
+			}
+		case <-timer.C:
+			mw.check()
+			timer.Reset(defaultLazyCheckDuration)
 		}
 	}
+}
+
+func (mw *waiterEvents) check() {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+	if len(mw.mu.blockedWaiters) == 0 {
+		return
+	}
+
+	stopAt := -1
+	now := time.Now()
+	for i, w := range mw.mu.blockedWaiters {
+		if now.Sub(w.waitAt) < defaultLazyCheckDuration {
+			stopAt = i
+			break
+		}
+
+		// already completed
+		if w.getStatus() != blocking {
+			continue
+		}
+
+		// deadlock check busy, retry later
+		if err := mw.addToDeadlockCheck(w); err != nil {
+			stopAt = i
+			break
+		}
+	}
+	if stopAt == -1 {
+		stopAt = len(mw.mu.blockedWaiters)
+	}
+	for i := 0; i < stopAt; i++ {
+		mw.mu.blockedWaiters[i].close()
+		mw.mu.blockedWaiters[i] = nil
+	}
+
+	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters[:0], mw.mu.blockedWaiters[stopAt:]...)
+}
+
+func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
+	for _, holder := range w.waitFor {
+		if err := mw.detector.check(holder, w.txn); err != nil {
+			return err
+		}
+	}
+	return nil
 }

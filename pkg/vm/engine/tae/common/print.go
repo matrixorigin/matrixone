@@ -124,6 +124,11 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 		} else {
 			return fmt.Sprintf("%x", buf)
 		}
+	case types.T_array_float32:
+		//TODO: Should this behave like Varchar or JSON  type?
+		return types.BytesToArrayToString[float32](v.([]byte))
+	case types.T_array_float64:
+		return types.BytesToArrayToString[float64](v.([]byte))
 	case types.T_date:
 		val := v.(types.Date)
 		return val.String()
@@ -163,6 +168,9 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_Blockid:
 		val := v.(types.Blockid)
 		return val.String()
+	case types.T_enum:
+		val := v.(types.Enum)
+		return fmt.Sprintf("%v", val)
 	default:
 		return fmt.Sprintf("%v", v)
 	}
@@ -218,6 +226,8 @@ func MoVectorToString(v *vector.Vector, printN int) string {
 		return vec2Str(vector.MustFixedCol[types.Time](v)[:printN], v)
 	case types.T_timestamp:
 		return vec2Str(vector.MustFixedCol[types.Timestamp](v)[:printN], v)
+	case types.T_enum:
+		return vec2Str(vector.MustFixedCol[types.Enum](v)[:printN], v)
 	case types.T_decimal64:
 		return vec2Str(vector.MustFixedCol[types.Decimal64](v)[:printN], v)
 	case types.T_decimal128:

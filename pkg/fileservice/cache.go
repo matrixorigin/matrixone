@@ -16,21 +16,41 @@ package fileservice
 
 import (
 	"context"
-	"io"
+	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/cache"
+	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 type CacheConfig struct {
-	MemoryCapacity       *toml.ByteSize `toml:"memory-capacity"`
+	MemoryCapacity       *toml.ByteSize `toml:"memory-capacity" user_setting:"advanced"`
 	DiskPath             *string        `toml:"disk-path"`
 	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
 	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
 	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
+	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
+	RPC                  morpc.Config   `toml:"rpc"`
+
+	CacheClient      client.CacheClient `json:"-"`
+	KeyRouterFactory KeyRouterFactory   `json:"-"`
+	KeyRouter        KeyRouter          `json:"-"`
+	InitKeyRouter    *sync.Once         `json:"-"`
+	CacheCallbacks   `json:"-"`
 
 	enableDiskCacheForLocalFS bool // for testing only
 }
+
+type CacheCallbacks struct {
+	PostGet   []CacheCallbackFunc
+	PostSet   []CacheCallbackFunc
+	PostEvict []CacheCallbackFunc
+}
+
+type CacheCallbackFunc = func(CacheKey, CacheData)
 
 func (c *CacheConfig) setDefaults() {
 	if c.MemoryCapacity == nil {
@@ -50,6 +70,36 @@ func (c *CacheConfig) setDefaults() {
 		target := 0.8
 		c.DiskEvictTarget = &target
 	}
+	c.RPC.Adjust()
+}
+
+func (c *CacheConfig) SetRemoteCacheCallback() {
+	if !c.RemoteCacheEnabled || c.KeyRouterFactory == nil {
+		return
+	}
+	c.InitKeyRouter = &sync.Once{}
+	c.CacheCallbacks.PostSet = append(c.CacheCallbacks.PostSet,
+		func(key CacheKey, data CacheData) {
+			c.InitKeyRouter.Do(func() {
+				c.KeyRouter = c.KeyRouterFactory()
+			})
+			if c.KeyRouter == nil {
+				return
+			}
+			c.KeyRouter.AddItem(key, gossip.Operation_Set)
+		},
+	)
+	c.CacheCallbacks.PostEvict = append(c.CacheCallbacks.PostEvict,
+		func(key CacheKey, data CacheData) {
+			c.InitKeyRouter.Do(func() {
+				c.KeyRouter = c.KeyRouterFactory()
+			})
+			if c.KeyRouter == nil {
+				return
+			}
+			c.KeyRouter.AddItem(key, gossip.Operation_Delete)
+		},
+	)
 }
 
 var DisabledCacheConfig = CacheConfig{
@@ -58,6 +108,9 @@ var DisabledCacheConfig = CacheConfig{
 }
 
 const DisableCacheCapacity = 1
+
+// var DefaultCacheDataAllocator = RCBytesPool
+var DefaultCacheDataAllocator = new(bytesAllocator)
 
 // VectorCache caches IOVector
 type IOVectorCache interface {
@@ -73,38 +126,14 @@ type IOVectorCache interface {
 	Flush()
 }
 
-type IOVectorCacheKey struct {
-	Path   string
-	Offset int64
-	Size   int64
-}
+type CacheKey = pb.CacheKey
 
-// ObjectCache caches IOEntry.ObjectBytes
-type ObjectCache interface {
-	Set(key any, value []byte, size int64, preloading bool)
-	Get(key any, preloading bool) (value []byte, size int64, ok bool)
+// DataCache caches IOEntry.CachedData
+type DataCache interface {
+	Set(ctx context.Context, key CacheKey, value CacheData)
+	Get(ctx context.Context, key CacheKey) (value CacheData, ok bool)
 	Flush()
 	Capacity() int64
 	Used() int64
 	Available() int64
-}
-
-// FileContentCache caches contents of files
-type FileContentCache interface {
-	GetFileContent(
-		ctx context.Context,
-		path string,
-		offset int64,
-	) (
-		r io.ReadCloser,
-		err error,
-	)
-
-	SetFileContent(
-		ctx context.Context,
-		path string,
-		readFunc func(ctx context.Context, vec *IOVector) error,
-	) (
-		err error,
-	)
 }

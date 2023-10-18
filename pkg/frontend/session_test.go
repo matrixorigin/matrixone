@@ -553,6 +553,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		testutil.SetupAutoIncrService()
 		ctx := context.TODO()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
@@ -694,9 +695,9 @@ func TestSetTempTableStorage(t *testing.T) {
 	ck := clock.NewHLCClock(func() int64 {
 		return time.Now().Unix()
 	}, math.MaxInt)
-	dnStore, _ := ses.SetTempTableStorage(ck)
+	tnStore, _ := ses.SetTempTableStorage(ck)
 
-	assert.Equal(t, defines.TEMPORARY_TABLE_DN_ADDR, dnStore.TxnServiceAddress)
+	assert.Equal(t, defines.TEMPORARY_TABLE_TN_ADDR, tnStore.TxnServiceAddress)
 }
 
 func Test_doSelectGlobalSystemVariable(t *testing.T) {

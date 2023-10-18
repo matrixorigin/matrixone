@@ -29,7 +29,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		var affectRows int64
 		delCtx := arg.DeleteCtx
 
-		_, err = delCtx.Source.Ranges(c.ctx, nil)
+		err = delCtx.Source.UpdateBlockInfos(c.ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -54,7 +54,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		}
 
 		// keep old offset.
-		err = incrservice.GetAutoIncrementService().Reset(
+		err = incrservice.GetAutoIncrementService(c.ctx).Reset(
 			c.ctx,
 			oldId,
 			newId,

@@ -16,6 +16,7 @@ package partition
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -127,12 +128,18 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return genericPartition[types.Time](sels, diffs, partitions, vec)
 	case types.T_timestamp:
 		return genericPartition[types.Timestamp](sels, diffs, partitions, vec)
+	case types.T_enum:
+		return genericPartition[types.Enum](sels, diffs, partitions, vec)
 	case types.T_decimal64:
 		return genericPartition[types.Decimal64](sels, diffs, partitions, vec)
 	case types.T_decimal128:
 		return genericPartition[types.Decimal128](sels, diffs, partitions, vec)
-	case types.T_char, types.T_varchar, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_json, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		return bytesPartition(sels, diffs, partitions, vec)
+		//Used by ORDER_BY SQL clause.
+		//Byte partition logic doesn't use byte.Compare or Str.
+		//Hence, we can use bytesPartition here.
 	default:
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}

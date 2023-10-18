@@ -46,26 +46,26 @@ enum TxnStatus {
     // Active is the state of transaction creation, in this state, can execute the 
     // transaction Read/Write/Commit/Rollback.
     Active = 0;
-    // Prepared for distributed transactions across DNs, a 2pc commit is performed, 
-    // and the prepared status means that the transaction on a DN was executed 
+    // Prepared for distributed transactions across TNs, a 2pc commit is performed, 
+    // and the prepared status means that the transaction on a TN was executed 
     // successfully in the first phase. 
     // 
     // Note that this status needs to be saved to the LogService. Once the first 
     // phase of a transaction is successful, data cannot be lost.
     Prepared = 1;
-    // Committing for distributed transactions across DNs, once all DNs have completed
+    // Committing for distributed transactions across TNs, once all TNs have completed
     // the first phase, the transaction enters the Committing state and initiates an 
     // asynchronous process to handle the commit of temporary data.
     //
-    // Note that when all DNs involved are in the prepared state, the distributed 
+    // Note that when all TNs involved are in the prepared state, the distributed 
     // transaction can be considered committed because all data has been written 
     // successfully. The subsequent Committing process just explicitly converts these
     // writes into committed data.
     //
     // Note that the state exists only in memory and is not persisted to the LogService.
-    // It can be restored through the Prepared state, if all(DN).Status == Prepared.
+    // It can be restored through the Prepared state, if all(TN).Status == Prepared.
     Committing = 2;
-    // Committed after the Committing phase has transformed all DN data involved into 
+    // Committed after the Committing phase has transformed all TN data involved into 
     // committed data, the status of the distributed transaction is explicitly recorded 
     // as Committed.
     //
@@ -76,9 +76,9 @@ enum TxnStatus {
     // asynchronous task to clean up the temporary data written by the transaction.
     //
     // Note that the state exists only in memory and is not persisted to the LogService.
-    // It can be restored through the Prepared state, if Any(DN).Status != Prepared.
+    // It can be restored through the Prepared state, if Any(TN).Status != Prepared.
     Aborting  = 4;
-    // Aborted after the Aborting phase, all data involved in the DN is cleaned up and 
+    // Aborted after the Aborting phase, all data involved in the TN is cleaned up and 
     // the transaction status is explicitly recorded as Aborted.
     //
     // Note that this status needs to be saved to the LogService
@@ -100,12 +100,12 @@ message TxnMeta {
     timestamp.Timestamp       PreparedTS  = 4 [(gogoproto.nullable) = false];
     // CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
     timestamp.Timestamp       CommitTS    = 5 [(gogoproto.nullable) = false];
-    // DNShards all DNShards that have written data. The first DN is the coordinator of the 
+    // TNShards all TNShards that have written data. The first TN is the coordinator of the 
     // transaction
-    repeated metadata.DNShard DNShards    = 6 [(gogoproto.nullable) = false];
+    repeated metadata.TNShard TNShards    = 6 [(gogoproto.nullable) = false];
     // LockTables For pessimistic transactions, LockTables record the bind metadata of the 
     // LockTable corresponding to the successful locking of the current transaction. This data 
-    // is committed to the DN at Commit time, and the DN will check once if these bindings have 
+    // is committed to the TN at Commit time, and the TN will check once if these bindings have 
     // changed, and if they have, the transaction will be rolled back.
     repeated lock.LockTable   LockTables  = 7 [(gogoproto.nullable) = false];
     // TxnMode txn mode
@@ -131,7 +131,7 @@ message CNTxnSnapshot {
     repeated lock.LockTable   LockTables       = 5 [(gogoproto.nullable) = false];
 }
 
-// CNOpRequest cn read/write request, CN -> DN. If data is written to more than one DN (>1) in a 
+// CNOpRequest cn read/write request, CN -> TN. If data is written to more than one TN (>1) in a 
 // single transaction, then the transaction becomes a 2pc transaction.
 message CNOpRequest {
     // OpCode request operation type
@@ -140,10 +140,10 @@ message CNOpRequest {
     // format and content
     bytes            Payload = 2;
     // Target target to which the request was sent
-	metadata.DNShard Target  = 3 [(gogoproto.nullable) = false]; 
+	metadata.TNShard Target  = 3 [(gogoproto.nullable) = false]; 
 }
 
-// CNOpResponse cn read/write response, DN -> CN. A request corresponds to a response.
+// CNOpResponse cn read/write response, TN -> CN. A request corresponds to a response.
 message CNOpResponse {
     // Payload response payload
 	bytes Payload = 1;
@@ -159,32 +159,32 @@ enum TxnMethod {
     Commit            = 2;
     // Rollback rollback transaction
     Rollback          = 3;
-    // Prepare when DN(Coordinator) receives a commit request from CN, it sends a prepare to 
-    // each DN(DNShard)
+    // Prepare when TN(Coordinator) receives a commit request from CN, it sends a prepare to 
+    // each TN(TNShard)
     Prepare           = 4;
-    // GetStatus query the status of a transaction on a DN. When a DN encounters a transaction
-    // in the Prepared state, it needs to go to the DN(Coordinator) to query the status of the 
-    // current transaction. When a DN encounters a transaction in the Prepared state during the 
-    // recover, it needs to query the status of the transaction on each DN(DNShard) to determine
+    // GetStatus query the status of a transaction on a TN. When a TN encounters a transaction
+    // in the Prepared state, it needs to go to the TN(Coordinator) to query the status of the 
+    // current transaction. When a TN encounters a transaction in the Prepared state during the 
+    // recover, it needs to query the status of the transaction on each TN(TNShard) to determine
     // if the transaction is committed.
     GetStatus         = 5;
-    // CommitDNShard after the 2pc transaction is committed, the temporary data on each DN needs
+    // CommitTNShard after the 2pc transaction is committed, the temporary data on each TN needs
     // to be explicitly converted to committed data.
-    CommitDNShard     = 6;
-    // RollbackDNShard after the 2pc transaction is aborted, the temporary data on each DN needs
+    CommitTNShard     = 6;
+    // RollbackTNShard after the 2pc transaction is aborted, the temporary data on each TN needs
     // to cleanup.
-    RollbackDNShard   = 7;
-    // RemoveMedata Remove metadata for transactions on DNShard. For a 2pc distributed transaction, 
-    // after all participating DNShards have Prepared successfully, the asynchronous commit process 
-    // starts, sending CommitDNShard requests to all participating DNShards in parallel. After each 
-    // DNShard has processed the CommitDNShard, the metadata of the transaction cannot be deleted 
+    RollbackTNShard   = 7;
+    // RemoveMedata Remove metadata for transactions on TNShard. For a 2pc distributed transaction, 
+    // after all participating TNShards have Prepared successfully, the asynchronous commit process 
+    // starts, sending CommitTNShard requests to all participating TNShards in parallel. After each 
+    // TNShard has processed the CommitTNShard, the metadata of the transaction cannot be deleted 
     // immediately, otherwise when the transaction coordinator node is down and restarted, the commit 
     // status of the transaction cannot be determined in the recovery process, as it is possible that
-    // some participating DNShards cannot find the transaction information.
+    // some participating TNShards cannot find the transaction information.
     //
     // TODO: needs to work with TAE's log compaction, not currently supported.
     RemoveMedata      = 8;
-    // DEBUG used to send debug request from cn to dn, and received response from dn to cn
+    // DEBUG used to send debug request from cn to tn, and received response from tn to cn
     DEBUG             = 9;
 }
 
@@ -193,8 +193,8 @@ enum TxnMethod {
 // to TxnMethod.
 //
 // Request flow of TxnRequest as below:
-// 1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
-// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard,
+// 1. CN -> TN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
+// 2. TN -> TN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitTNShard, TxnMethod.RollbackTNShard,
 //             TxnMethod.RemoveMetadata)
 message TxnRequest {
     // RequestID request id
@@ -215,10 +215,10 @@ message TxnRequest {
     TxnPrepareRequest           PrepareRequest           = 8;
     // TxnGetStatusRequest corresponds to TxnMethod.GetStatus
     TxnGetStatusRequest         GetStatusRequest         = 9;
-    // TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
-    TxnCommitDNShardRequest     CommitDNShardRequest     = 10;
-    // TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
-    TxnRollbackDNShardRequest   RollbackDNShardRequest   = 11;
+    // TxnCommitTNShardRequest corresponds to TxnMethod.CommitTNShard
+    TxnCommitTNShardRequest     CommitTNShardRequest     = 10;
+    // TxnRollbackTNShardRequest corresponds to TxnMethod.RollbackTNShard
+    TxnRollbackTNShardRequest   RollbackTNShardRequest   = 11;
     // TxnRemoveMetadataRequest  corresponds to TxnMethod.RemoveMetadata
     TxnRemoveMetadataRequest    RemoveMetadata           = 12;
     // TxnRequestOptions request options
@@ -227,7 +227,7 @@ message TxnRequest {
 
 // TxnRequestOptions txn options
 message TxnRequestOptions {
-    // RetryCodes when DN processes TxnRequest and encounters the specified error, it needs to retry
+    // RetryCodes when TN processes TxnRequest and encounters the specified error, it needs to retry
     // on the server side. Only read and write can retry.
     repeated int32 RetryCodes    = 1;
     // RetryInterval retry interval, default is 100ms.
@@ -259,16 +259,17 @@ message TxnResponse {
     TxnPrepareResponse           PrepareResponse           = 9;
     // TxnGetStatusResponse corresponds to TxnMethod.GetStatus response
     TxnGetStatusResponse         GetStatusResponse         = 10;
-    // TxnCommitDNShardResponse corresponds to TxnMethod.CommitDNShard response
-    TxnCommitDNShardResponse     CommitDNShardResponse     = 11;
-    // TxnRollbackDNShardResponse corresponds to TxnMethod.RollbackDNShard response
-    TxnRollbackDNShardResponse   RollbackDNShardResponse   = 12;
+    // TxnCommitTNShardResponse corresponds to TxnMethod.CommitTNShard response
+    TxnCommitTNShardResponse     CommitTNShardResponse     = 11;
+    // TxnRollbackTNShardResponse corresponds to TxnMethod.RollbackTNShard response
+    TxnRollbackTNShardResponse   RollbackTNShardResponse   = 12;
      // TxnRemoveMetadataResponse  corresponds to TxnMethod.RemoveMetadata
      TxnRemoveMetadataResponse   RemoveMetadata            = 13;
 }
 
-// TxnCommitRequest CN sent the commit request to coordinator DN.
+// TxnCommitRequest CN sent the commit request to coordinator TN.
 message TxnCommitRequest {
+    repeated TxnRequest       Payload = 1;
     bool                      Disable1PCOpt = 2;
 }
 
@@ -276,7 +277,7 @@ message TxnCommitRequest {
 message TxnCommitResponse {
 }
 
-// TxnCommitRequest CN sent the rollback request to coordinator DN.
+// TxnCommitRequest CN sent the rollback request to coordinator TN.
 message TxnRollbackRequest {
 }
 
@@ -284,12 +285,12 @@ message TxnRollbackRequest {
 message TxnRollbackResponse {
 }
 
-// TxnPrepareRequest when a DN(coordinator) receives a Commit request from a CN, if 
-// more than one DN is involved, the 2PC commit process is enabled and the first phase
-// is to send prepare requests to all DNs.
+// TxnPrepareRequest when a TN(coordinator) receives a Commit request from a CN, if 
+// more than one TN is involved, the 2PC commit process is enabled and the first phase
+// is to send prepare requests to all TNs.
 message TxnPrepareRequest {
-    // DNShard prepare DN
-    metadata.DNShard          DNShard  = 1 [(gogoproto.nullable) = false];
+    // TNShard prepare TN
+    metadata.TNShard          TNShard  = 1 [(gogoproto.nullable) = false];
 }
 
 // TxnPrepareResponse response of TxnPrepareRequest
@@ -297,42 +298,42 @@ message TxnPrepareResponse {
 
 }
 
-// TxnGetStatusRequest query the status of a transaction on DN
+// TxnGetStatusRequest query the status of a transaction on TN
 message TxnGetStatusRequest {
-    // DNShard target DN
-    metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
+    // TNShard target TN
+    metadata.TNShard TNShard = 1 [(gogoproto.nullable) = false];
 }
 
 // TxnGetStatusResponse response of TxnGetStatusRequest
 message TxnGetStatusResponse {
 }
 
-// TxnCommitDNShardRequest commit txn on DNShard. Data needs to be written to the 
+// TxnCommitTNShardRequest commit txn on TNShard. Data needs to be written to the 
 // LogService.
-message TxnCommitDNShardRequest {
-     // DNShard target DN
-     metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
+message TxnCommitTNShardRequest {
+     // TNShard target TN
+     metadata.TNShard TNShard = 1 [(gogoproto.nullable) = false];
 }
 
-// TxnCommitDNShardResponse response of TxnCommitDNShardRequest
-message TxnCommitDNShardResponse {
+// TxnCommitTNShardResponse response of TxnCommitTNShardRequest
+message TxnCommitTNShardResponse {
 }
 
-// TxnRollbackDNShardRequest rollback txn on DNShard
-message TxnRollbackDNShardRequest {
-     // DNShard target DN
-     metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
+// TxnRollbackTNShardRequest rollback txn on TNShard
+message TxnRollbackTNShardRequest {
+     // TNShard target TN
+     metadata.TNShard TNShard = 1 [(gogoproto.nullable) = false];
 }
 
-// TxnRollbackDNShardResponse response of TxnRollbackDNShardRequest
-message TxnRollbackDNShardResponse {
+// TxnRollbackTNShardResponse response of TxnRollbackTNShardRequest
+message TxnRollbackTNShardResponse {
 }
 
 
-// TxnRemoveMetadataRequest remove txn metadata on DNShard
+// TxnRemoveMetadataRequest remove txn metadata on TNShard
 message TxnRemoveMetadataRequest {
-    // DNShard target DN
-    metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
+    // TNShard target TN
+    metadata.TNShard TNShard = 1 [(gogoproto.nullable) = false];
 }
 
 // TxnRemoveMetadataResponse response of TxnRemoveMetadataRequest
@@ -343,7 +344,7 @@ message TxnRemoveMetadataResponse {
 message TxnError {
     // Code moerr code, used to special error handle without unmarshal moerr
     uint32 Code       = 1;
-    // Error we use this field to send moerr from dn to cn. Set with 
+    // Error we use this field to send moerr from tn to cn. Set with 
     // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore 
     // moerr.
     bytes  Error      = 2;

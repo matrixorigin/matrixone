@@ -152,6 +152,9 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan
 		case types.T_date:
 			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_char, types.T_varchar, types.T_text:
+			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
 		}
 	}
 }
@@ -162,15 +165,8 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 		return false
 	}
 	// first to check if it is primary key.
-	if tableDef.Pkey != nil {
-		pkNames := tableDef.Pkey.Names
-		pks := make([]int32, len(pkNames))
-		for i := range pkNames {
-			pks[i] = tableDef.Name2ColIndex[pkNames[i]]
-		}
-		if containsAllPKs(cols, pks) {
-			return true
-		}
+	if containsAllPKs(cols, tableDef) {
+		return true
 	}
 
 	sc := builder.compCtx.GetStatsCache()
@@ -463,8 +459,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		//will fix this in the future
 		//isCrossJoin := (len(node.OnList) == 0)
 		isCrossJoin := false
-		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.5))
-		selectivity_out := math.Min(math.Pow(leftStats.Selectivity, math.Pow(rightStats.Selectivity, 0.5)), selectivity)
+		selectivity := math.Pow(rightStats.Selectivity, math.Pow(leftStats.Selectivity, 0.2))
+		selectivity_out := andSelectivity(leftStats.Selectivity, rightStats.Selectivity)
 
 		for _, pred := range node.OnList {
 			if pred.Ndv <= 0 {
@@ -566,8 +562,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				Selectivity:  1,
 			}
 			if len(node.FilterList) > 0 {
-				node.Stats.Outcnt *= 0.05
-				node.Stats.Selectivity *= 0.05
+				node.Stats.Outcnt *= 0.0001
+				node.Stats.Selectivity *= 0.0001
 			}
 		} else {
 			hashmapStats := &plan.HashMapStats{

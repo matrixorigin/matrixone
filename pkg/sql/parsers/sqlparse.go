@@ -16,15 +16,19 @@ package parsers
 
 import (
 	"context"
+	gotrace "runtime/trace"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/postgresql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) ([]tree.Statement, error) {
+	_, task := gotrace.NewTask(context.TODO(), "parser.Parse")
+	defer task.End()
 	switch dialectType {
 	case dialect.MYSQL:
 		return mysql.Parse(ctx, sql, lower)
@@ -49,6 +53,7 @@ func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, 
 const (
 	stripCloudUser    = "/* cloud_user */"
 	stripCloudNonUser = "/* cloud_nonuser */"
+	stripSaveQuery    = "/* save_result */"
 )
 
 var HandleSqlForRecord = func(sql string) []string {
@@ -66,6 +71,12 @@ var HandleSqlForRecord = func(sql string) []string {
 
 		// remove /* cloud_nonuser */ prefix
 		p0 = strings.Index(split[i], stripCloudNonUser)
+		if p0 >= 0 {
+			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
+		}
+
+		// remove /* save_query */ prefix
+		p0 = strings.Index(split[i], stripSaveQuery)
 		if p0 >= 0 {
 			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
 		}

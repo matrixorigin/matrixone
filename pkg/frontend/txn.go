@@ -84,15 +84,18 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
 	}
+	if v := reqCtx.Value(defines.NodeIDKey{}); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey{}, v)
+	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
 	if th.ses != nil && th.ses.tenant != nil && th.ses.tenant.User == db_holder.MOLoggerUser {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
 	}
 
-	if storage, ok := reqCtx.Value(defines.TemporaryDN{}).(*memorystorage.Storage); ok {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, storage)
+	if storage, ok := reqCtx.Value(defines.TemporaryTN{}).(*memorystorage.Storage); ok {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN{}, storage)
 	} else if th.ses.IfInitedTempEngine() {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, th.ses.GetTempTableStorage())
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN{}, th.ses.GetTempTableStorage())
 	}
 	return retTxnCtx
 }
@@ -100,7 +103,7 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 func (th *TxnHandler) AttachTempStorageToTxnCtx() {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryDN{}, th.ses.GetTempTableStorage())
+	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryTN{}, th.ses.GetTempTableStorage())
 }
 
 // we don't need to lock. TxnHandler is holded by one session.
@@ -144,6 +147,11 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	}
 	opts = append(opts,
 		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
+
+	if th.ses != nil && th.ses.GetFromRealUser() {
+		opts = append(opts,
+			client.WithUserTxn())
+	}
 	th.txnOperator, err = th.txnClient.New(
 		txnCtx,
 		th.ses.getLastCommitTS(),
@@ -221,6 +229,7 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	//	txnOp.GetWorkspace().StartStatement()
 	//	th.enableStartStmt()
 	//}
+	th.ses.SetTxnId(txnOp.Txn().ID)
 	return txnCtx, txnOp, err
 }
 
@@ -262,6 +271,10 @@ func (th *TxnHandler) GetSession() *Session {
 }
 
 func (th *TxnHandler) CommitTxn() error {
+	_, span := trace.Start(th.ses.requestCtx, "TxnHandler.CommitTxn",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
+
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
 	if !th.IsValidTxnOperator() || th.IsShareTxn() {
@@ -278,7 +291,7 @@ func (th *TxnHandler) CommitTxn() error {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TemporaryDN{}, ses.tempTablestorage)
+		txnCtx = context.WithValue(txnCtx, defines.TemporaryTN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(
@@ -291,7 +304,7 @@ func (th *TxnHandler) CommitTxn() error {
 		return e
 	}
 	if val != nil {
-		ctx2 = context.WithValue(ctx2, defines.PkCheckByDN{}, val.(int8))
+		ctx2 = context.WithValue(ctx2, defines.PkCheckByTN{}, val.(int8))
 	}
 	var err error
 	defer func() {
@@ -311,6 +324,7 @@ func (th *TxnHandler) CommitTxn() error {
 		}()
 	}
 	if txnOp != nil {
+		th.ses.SetTxnId(txnOp.Txn().ID)
 		err = txnOp.Commit(ctx2)
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
@@ -327,6 +341,10 @@ func (th *TxnHandler) CommitTxn() error {
 }
 
 func (th *TxnHandler) RollbackTxn() error {
+	_, span := trace.Start(th.ses.requestCtx, "TxnHandler.RollbackTxn",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
+
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
 	if !th.IsValidTxnOperator() || th.IsShareTxn() {
@@ -345,7 +363,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TemporaryDN{}, ses.tempTablestorage)
+		txnCtx = context.WithValue(txnCtx, defines.TemporaryTN{}, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(
@@ -371,6 +389,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		}()
 	}
 	if txnOp != nil {
+		th.ses.SetTxnId(txnOp.Txn().ID)
 		err = txnOp.Rollback(ctx2)
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()

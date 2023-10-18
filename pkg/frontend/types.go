@@ -17,6 +17,9 @@ package frontend
 import (
 	"context"
 
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,6 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
+)
+
+const (
+	DefaultRpcBufferSize = 1 << 10
 )
 
 type (
@@ -35,7 +43,7 @@ type (
 )
 
 type ComputationRunner interface {
-	Run(ts uint64) (err error)
+	Run(ts uint64) (*util.RunResult, error)
 }
 
 // ComputationWrapper is the wrapper of the computation
@@ -49,7 +57,7 @@ type ComputationWrapper interface {
 
 	GetColumns() ([]interface{}, error)
 
-	GetAffectedRows() uint64
+	// GetAffectedRows() uint64
 
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
 
@@ -110,6 +118,7 @@ const (
 	cmdFieldListSqlLen = len(cmdFieldListSql)
 	cloudUserTag       = "cloud_user"
 	cloudNoUserTag     = "cloud_nonuser"
+	saveResultTag      = "save_result"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}
@@ -208,4 +217,31 @@ func (prepareStmt *PrepareStmt) Close() {
 			}
 		}
 	}
+}
+
+var _ buf.Allocator = &SessionAllocator{}
+
+type SessionAllocator struct {
+	mp *mpool.MPool
+}
+
+func NewSessionAllocator(pu *config.ParameterUnit) *SessionAllocator {
+	pool, err := mpool.NewMPool("frontend-goetty-pool-cn-level", pu.SV.GuestMmuLimitation, mpool.NoFixed)
+	if err != nil {
+		panic(err)
+	}
+	ret := &SessionAllocator{mp: pool}
+	return ret
+}
+
+func (s *SessionAllocator) Alloc(capacity int) []byte {
+	alloc, err := s.mp.Alloc(capacity)
+	if err != nil {
+		panic(err)
+	}
+	return alloc
+}
+
+func (s SessionAllocator) Free(bs []byte) {
+	s.mp.Free(bs)
 }

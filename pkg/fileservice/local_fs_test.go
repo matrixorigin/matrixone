@@ -37,6 +37,18 @@ func TestLocalFS(t *testing.T) {
 		})
 	})
 
+	t.Run("with memory cache", func(t *testing.T) {
+		testFileService(t, func(name string) FileService {
+			ctx := context.Background()
+			dir := t.TempDir()
+			fs, err := NewLocalFS(ctx, name, dir, CacheConfig{
+				MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+			}, nil)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
 	t.Run("mutable file service", func(t *testing.T) {
 		testMutableFileService(t, func() MutableFileService {
 			ctx := context.Background()
@@ -72,8 +84,8 @@ func TestLocalFS(t *testing.T) {
 }
 
 func BenchmarkLocalFS(b *testing.B) {
-	benchmarkFileService(b, func() FileService {
-		ctx := context.Background()
+	ctx := context.Background()
+	benchmarkFileService(ctx, b, func() FileService {
 		dir := b.TempDir()
 		fs, err := NewLocalFS(ctx, "local", dir, DisabledCacheConfig, nil)
 		assert.Nil(b, err)

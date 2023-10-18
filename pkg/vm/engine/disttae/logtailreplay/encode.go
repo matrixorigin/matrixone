@@ -150,6 +150,14 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 			packer.Reset()
 		}
 
+	case types.T_enum:
+		s := vector.MustFixedCol[types.Enum](vec)
+		for _, v := range s {
+			packer.EncodeEnum(v)
+			ret = append(ret, packer.Bytes())
+			packer.Reset()
+		}
+
 	case types.T_decimal64:
 		s := vector.MustFixedCol[types.Decimal64](vec)
 		for _, v := range s {
@@ -175,13 +183,13 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		}
 
 	case types.T_json, types.T_char, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_Rowid:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_Rowid,
+		types.T_array_float32, types.T_array_float64:
 		for i := 0; i < vec.Length(); i++ {
 			packer.EncodeStringType(vec.GetBytesAt(i))
 			ret = append(ret, packer.Bytes())
 			packer.Reset()
 		}
-
 	default:
 		panic(fmt.Sprintf("unknown type: %v", vec.GetType().String()))
 
@@ -260,6 +268,9 @@ func EncodePrimaryKey(v any, packer *types.Packer) []byte {
 
 	case types.Uuid:
 		packer.EncodeStringType(v[:])
+
+	case types.Enum:
+		packer.EncodeEnum(v)
 
 	case string:
 		packer.EncodeStringType([]byte(v))

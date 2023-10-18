@@ -101,16 +101,16 @@ func (m *Checkpoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
-type InspectDN struct {
+type InspectTN struct {
 	AccessInfo AccessInfo
 	Operation  string
 }
 
-func (m *InspectDN) MarshalBinary() ([]byte, error) {
+func (m *InspectTN) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
 
-func (m *InspectDN) UnmarshalBinary(data []byte) error {
+func (m *InspectTN) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
@@ -278,4 +278,17 @@ func (m *CatalogResp) MarshalBinary() ([]byte, error) {
 
 func (m *CatalogResp) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
+}
+
+type TraceSpan struct {
+	Cmd   string
+	Spans string
+}
+
+func (t *TraceSpan) MarshalBinary() ([]byte, error) {
+	return t.Marshal()
+}
+
+func (t *TraceSpan) UnmarshalBinary(data []byte) error {
+	return t.Unmarshal(data)
 }

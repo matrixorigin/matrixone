@@ -17,7 +17,7 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 )
 
 var supportedAggregateFunctions = []FuncNew{
@@ -26,15 +26,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.MaxSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggMaxSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.MaxReturnType,
-				specialId:  agg.AggregateMax,
+				retType:    functionAgg.AggMaxReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "max",
+					aggNew: functionAgg.NewAggMax,
+				},
 			},
 		},
 	},
@@ -44,15 +47,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.MinSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggMinSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.MinReturnType,
-				specialId:  agg.AggregateMin,
+				retType:    functionAgg.AggMinxReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "min",
+					aggNew: functionAgg.NewAggMin,
+				},
 			},
 		},
 	},
@@ -62,15 +68,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.SumSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggSumSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.SumReturnType,
-				specialId:  agg.AggregateSum,
+				retType:    functionAgg.AggSumReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "sum",
+					aggNew: functionAgg.NewAggSum,
+				},
 			},
 		},
 	},
@@ -80,15 +89,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.AvgSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggAvgSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.AvgReturnType,
-				specialId:  agg.AggregateAvg,
+				retType:    functionAgg.AggAvgReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "avg",
+					aggNew: functionAgg.NewAggAvg,
+				},
 			},
 		},
 	},
@@ -111,8 +123,11 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.CountReturnType,
-				specialId:  agg.AggregateCount,
+				retType:    functionAgg.AggCountReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "count",
+					aggNew: functionAgg.NewAggCount,
+				},
 			},
 		},
 	},
@@ -135,8 +150,38 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.CountReturnType,
-				specialId:  agg.AggregateStarCount,
+				retType:    functionAgg.AggCountReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "count(*)",
+					aggNew: functionAgg.NewAggStarCount,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: APPROX_COUNT,
+		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				if inputs[0].Oid == types.T_any {
+					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
+				}
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggApproxCountReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "approx_count",
+					aggNew: functionAgg.NewAggApproxCount,
+				},
 			},
 		},
 	},
@@ -146,15 +191,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitAndSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitAndSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitAndReturnType,
-				specialId:  agg.AggregateBitAnd,
+				retType:    functionAgg.AggBitAndReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "bit_and",
+					aggNew: functionAgg.NewAggBitAnd,
+				},
 			},
 		},
 	},
@@ -164,15 +212,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitOrSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitOrSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitOrReturnType,
-				specialId:  agg.AggregateBitOr,
+				retType:    functionAgg.AggBitOrReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "bit_or",
+					aggNew: functionAgg.NewAggBitOr,
+				},
 			},
 		},
 	},
@@ -182,15 +233,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.BitXorSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitXorSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.BitXorReturnType,
-				specialId:  agg.AggregateBitXor,
+				retType:    functionAgg.AggBitXorReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "bit_xor",
+					aggNew: functionAgg.NewAggBitXor,
+				},
 			},
 		},
 	},
@@ -200,15 +254,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.VarianceSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggVarianceSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.VarianceReturnType,
-				specialId:  agg.AggregateVariance,
+				retType:    functionAgg.AggVarianceReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "var_pop",
+					aggNew: functionAgg.NewAggVarPop,
+				},
 			},
 		},
 	},
@@ -218,15 +275,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.StdDevPopSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggStdDevSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.StdDevPopReturnType,
-				specialId:  agg.AggregateStdDevPop,
+				retType:    functionAgg.AggStdDevReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "stddev_pop",
+					aggNew: functionAgg.NewAggStdDevPop,
+				},
 			},
 		},
 	},
@@ -249,8 +309,11 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.ApproxCountReturnType,
-				specialId:  agg.AggregateApproxCountDistinct,
+				retType:    functionAgg.AggApproxCountReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "approx_count_distinct",
+					aggNew: functionAgg.NewAggApproxCount,
+				},
 			},
 		},
 	},
@@ -260,15 +323,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.AnyValueSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggAnyValueSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.AnyValueReturnType,
-				specialId:  agg.AggregateAnyValue,
+				retType:    functionAgg.AggAnyValueReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "any_value",
+					aggNew: functionAgg.NewAggAnyValue,
+				},
 			},
 		},
 	},
@@ -278,15 +344,18 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg.MedianSupported)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggMedianSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg.MedianReturnType,
-				specialId:  agg.AggregateMedian,
+				retType:    functionAgg.AggMedianReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "median",
+					aggNew: functionAgg.NewAggMedian,
+				},
 			},
 		},
 	},
@@ -296,22 +365,21 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return newCheckResultWithSuccess(0)
+			if len(inputs) > 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType: func(parameters []types.Type) types.Type {
-					for _, p := range parameters {
-						if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
-							return types.T_blob.ToType()
-						}
-					}
-					return types.T_text.ToType()
+				retType:    functionAgg.AggGroupConcatReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "group_concat",
+					aggNew: functionAgg.NewAggGroupConcat,
 				},
-				specialId: agg.AggregateGroupConcat,
 			},
 		},
 	},

@@ -221,8 +221,21 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 		for i := int32(1); i <= int32(rows); i++ {
 			vec.Append(types.BuildTestBlockid(int64(i+1), int64(i)), false)
 		}
+	case types.T_enum:
+		for i := int32(1); i <= int32(rows); i++ {
+			vec.Append(types.Enum(i), false)
+		}
+	case types.T_array_float32:
+		// Used for creating MockBatch in DN txn_test.go
+		for i := float32(1); i <= float32(rows); i++ {
+			vec.Append(types.ArrayToBytes([]float32{i + 1, i}), false)
+		}
+	case types.T_array_float64:
+		for i := float64(1); i <= float64(rows); i++ {
+			vec.Append(types.ArrayToBytes([]float64{i + 1, i}), false)
+		}
 	default:
-		panic("not supported")
+		panic(fmt.Sprintf("%v %s", t.Oid, "not supported"))
 	}
 	return
 }
@@ -304,10 +317,24 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 		for i := 0; i < rows; i++ {
 			vec.Append(types.Datetime(i+offset), false)
 		}
+	case types.T_enum:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Enum(i+offset), false)
+		}
 	case types.T_char, types.T_varchar, types.T_binary,
 		types.T_varbinary, types.T_blob, types.T_text:
 		for i := 0; i < rows; i++ {
 			vec.Append([]byte(strconv.Itoa(i+offset)), false)
+		}
+	case types.T_array_float32:
+		for i := 0; i < rows; i++ {
+			arr := types.ArrayToBytes[float32]([]float32{float32(i + offset)}) // 1-D vector
+			vec.Append(arr, false)
+		}
+	case types.T_array_float64:
+		for i := 0; i < rows; i++ {
+			arr := types.ArrayToBytes[float64]([]float64{float64(i + offset)}) // 1-D vector
+			vec.Append(arr, false)
 		}
 	default:
 		panic("not support")

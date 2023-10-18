@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -47,7 +49,7 @@ func main() {
 		createDb                           string
 		createTable                        []string
 		err                                error
-		toCsv, localInfile                 bool
+		toCsv, localInfile, noData         bool
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -78,6 +80,7 @@ func main() {
 	flag.Var(&tables, "tbl", "tableNameList, default all")
 	flag.BoolVar(&toCsv, "csv", defaultCsv, "set export format to csv")
 	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
+	flag.BoolVar(&noData, "no-data", defaultNoData, "dump database and table definitions only without data")
 	flag.Parse()
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
@@ -156,9 +159,11 @@ func main() {
 		case catalog.SystemOrdinaryRel:
 			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
 			showCreateTable(create, false)
-			err = genOutput(database, tbl.Name, bufPool, netBufferLength, toCsv, localInfile)
-			if err != nil {
-				return
+			if !noData {
+				err = genOutput(database, tbl.Name, bufPool, netBufferLength, toCsv, localInfile)
+				if err != nil {
+					return
+				}
 			}
 		case catalog.SystemExternalRel:
 			fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)
@@ -357,7 +362,7 @@ func showInsert(r *sql.Rows, args []any, cols []*Column, tbl string, bufPool *sy
 	return nil
 }
 
-func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string, localInfile bool) error {
+func showLoad(r *sql.Rows, rowResults []any, cols []*Column, db string, tbl string, localInfile bool) error {
 	fname := fmt.Sprintf("%s_%s.%s", db, tbl, "csv")
 	pwd := os.Getenv("PWD")
 	f, err := os.Create(fname)
@@ -366,28 +371,9 @@ func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string, lo
 	}
 	defer f.Close()
 
-	for r.Next() {
-		err = r.Scan(args...)
-		if err != nil {
-			return err
-		}
-		for i, v := range args {
-			dt, format := convertValue2(v, cols[i].Type)
-			str := fmt.Sprintf(format, dt)
-			str = strings.ReplaceAll(str, "\\\"", "\"\"")
-			_, err = fmt.Fprintf(f, "%s", str)
-			if err != nil {
-				return err
-			}
-			ch := '\t'
-			if i == len(args)-1 {
-				ch = '\n'
-			}
-			_, err = fmt.Fprintf(f, "%c", ch)
-			if err != nil {
-				return err
-			}
-		}
+	err = toCsv(r, f, rowResults, cols)
+	if err != nil {
+		return err
 	}
 	if localInfile {
 		fmt.Printf("LOAD DATA LOCAL INFILE '%s' INTO TABLE `%s` FIELDS TERMINATED BY '\\t' ENCLOSED BY '\"' LINES TERMINATED BY '\\n' PARALLEL 'TRUE';\n", fmt.Sprintf("%s/%s", pwd, fname), tbl)
@@ -395,6 +381,47 @@ func showLoad(r *sql.Rows, args []any, cols []*Column, db string, tbl string, lo
 		fmt.Printf("LOAD DATA INFILE '%s' INTO TABLE `%s` FIELDS TERMINATED BY '\\t' ENCLOSED BY '\"' LINES TERMINATED BY '\\n' PARALLEL 'TRUE';\n", fmt.Sprintf("%s/%s", pwd, fname), tbl)
 	}
 	return nil
+}
+
+// toCsv converts the result from mo to csv file
+func toCsv(r *sql.Rows, output io.Writer, rowResults []any, cols []*Column) error {
+	var err error
+	csvWriter := csv.NewWriter(output)
+	csvWriter.Comma = '\t'
+	line := make([]string, len(rowResults))
+
+	for r.Next() {
+		err = r.Scan(rowResults...)
+		if err != nil {
+			return err
+		}
+		err = toCsvLine(csvWriter, rowResults, cols, line)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+// toCsvFields converts the result from mo to string
+func toCsvFields(rowResults []any, cols []*Column, line []string) {
+	for i, v := range rowResults {
+		dt, format := convertValue2(v, cols[i].Type)
+		str := fmt.Sprintf(format, dt)
+		line[i] = str
+	}
+}
+
+// toCsvLine converts the result from mo to csv single line
+func toCsvLine(csvWriter *csv.Writer, rowResults []any, cols []*Column, line []string) error {
+	var err error
+	toCsvFields(rowResults, cols, line)
+	err = csvWriter.Write(line)
+	if err != nil {
+		return err
+	}
+	csvWriter.Flush()
+	return err
 }
 
 func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, toCsv bool, localInfile bool) error {
@@ -413,15 +440,15 @@ func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, t
 		c.Type = col.DatabaseTypeName()
 		cols = append(cols, &c)
 	}
-	args := make([]any, 0, len(cols))
+	rowResults := make([]any, 0, len(cols))
 	for range cols {
 		var v sql.RawBytes
-		args = append(args, &v)
+		rowResults = append(rowResults, &v)
 	}
 	if !toCsv {
-		return showInsert(r, args, cols, tbl, bufPool, netBufferLength)
+		return showInsert(r, rowResults, cols, tbl, bufPool, netBufferLength)
 	}
-	return showLoad(r, args, cols, db, tbl, localInfile)
+	return showLoad(r, rowResults, cols, db, tbl, localInfile)
 }
 
 func convertValue(v any, typ string) string {
@@ -461,6 +488,8 @@ func convertValue2(v any, typ string) (sql.RawBytes, string) {
 	case "json":
 		return ret, jsonFmt
 	default:
-		return ret, quoteFmt
+		//note: do not use the quoteFmt instead of the standard package csv,
+		//it is error-prone.
+		return ret, defaultFmt
 	}
 }

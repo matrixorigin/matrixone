@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"math"
 	"math/rand"
 	"net"
@@ -193,6 +194,8 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
+	CalculateOutTrafficBytes() int64
+
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
@@ -211,6 +214,9 @@ func (ses *Session) GetMysqlProtocol() MysqlProtocol {
 
 type debugStats struct {
 	writeCount uint64
+	// record 2 cases data, all belong to flush op.
+	// 1) MysqlProtocolImpl.flushOutBuffer do flush buffer op
+	// 2) MysqlProtocolImpl.writePackets do write with goetty.WriteOptions{Flush: true}
 	writeBytes uint64
 }
 
@@ -231,6 +237,10 @@ func (ds *debugStats) String() string {
 	)
 }
 
+func (ds *debugStats) AddFlushBytes(b uint64) {
+	ds.writeBytes += b
+}
+
 /*
 rowHandler maintains the states in encoding the result row
 */
@@ -238,7 +248,7 @@ type rowHandler struct {
 	//the begin position of writing.
 	//the range [beginWriteIndex,beginWriteIndex+3]
 	//for the length and sequenceId of the mysql protocol packet
-	beginWriteIndex int
+	beginOffset int
 	//the bytes in the outbuffer
 	bytesInOutBuffer int
 	//when the number of bytes in the outbuffer exceeds the it,
@@ -246,20 +256,22 @@ type rowHandler struct {
 	untilBytesInOutbufToFlush int
 	//the count of the flush
 	flushCount int
+	//the bytes have been response
+	startOffsetInBuffer int
 }
 
 /*
 isInPacket means it is compositing a packet now
 */
 func (rh *rowHandler) isInPacket() bool {
-	return rh.beginWriteIndex >= 0
+	return rh.beginOffset >= 0
 }
 
 /*
 resetPacket reset the beginWriteIndex
 */
 func (rh *rowHandler) resetPacket() {
-	rh.beginWriteIndex = -1
+	rh.beginOffset = -1
 }
 
 /*
@@ -274,6 +286,15 @@ resetFlushCount reset flushCount
 */
 func (rh *rowHandler) resetFlushCount() {
 	rh.flushCount = 0
+}
+
+// resetStartOffset reset the startOffsetInBuffer
+// How rowHandler.resetStartOffset, debugStats.writeBytes and MysqlProtocolImpl.CalculateOutTrafficBytes work together ?
+// 0. init. call rowHandler.resetStartOffset at the beginning of query, record the beginning offset of the current buffer.
+// 1. batch write. inc debugStats.writeBytes and do resetFlushOutBuffer()
+// 2. last data. MysqlProtocolImpl.CalculateOutTrafficBytes() with debugStats.writeBytes, rowHandler.startOffsetInBuffer and rowHandler.bytesInOutBuffer
+func (rh *rowHandler) resetStartOffset() {
+	rh.startOffsetInBuffer = rh.bytesInOutBuffer
 }
 
 type MysqlProtocolImpl struct {
@@ -373,9 +394,18 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
+// CalculateOutTrafficBytes calculate the bytes of the last out traffic
+func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() int64 {
+	// Case 1: send data as ResultSet
+	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
+		// Case 2: send data as CSV
+		mp.GetSession().writeCsvBytes.Load()
+}
+
 func (mp *MysqlProtocolImpl) ResetStatistics() {
 	mp.ResetStats()
 	mp.resetFlushCount()
+	mp.resetStartOffset()
 }
 
 func (mp *MysqlProtocolImpl) GetConnectAttrs() map[string]string {
@@ -1128,7 +1158,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	ses := mp.GetSession()
 	if !mp.SV.SkipCheckUser {
 		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
-		psw, err = ses.AuthenticateUser(mp.GetUserName())
+		psw, err = ses.AuthenticateUser(mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), mp.checkPassword)
 		if err != nil {
 			return err
 		}
@@ -1154,7 +1184,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logInfo(mp.ses, "check password succeeded", "")
+				logInfo(mp.ses, mp.ses.GetDebugString(), "check password succeeded")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
@@ -2215,6 +2245,12 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
+		case defines.MYSQL_TYPE_ENUM:
+			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
 		default:
 			return nil, moerr.NewInternalError(ctx, "unsupported column type %d ", mysqlColumn.ColumnType())
 		}
@@ -2331,12 +2367,24 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 	outbuf := mp.tcpConn.OutBuf()
 	n := 4
 	outbuf.Grow(n)
-	writeIdx := outbuf.GetWriteIndex()
-	mp.beginWriteIndex = writeIdx
+	/*
+		offset = writerIndex - readerIndex
+		writerIndex = GetReaderIndex() + offset
+	*/
+	offset := outbuf.GetWriteIndex() - outbuf.GetReadIndex()
+	writeIdx := beginWriteIndex(outbuf, offset)
+	mp.beginOffset = offset
 	writeIdx += n
 	mp.bytesInOutBuffer += n
 	outbuf.SetWriteIndex(writeIdx)
 	return nil
+}
+
+func beginWriteIndex(outbuf *goetty_buf.ByteBuf, offset int) int {
+	if offset < 0 {
+		panic("invalid offset")
+	}
+	return outbuf.GetReadIndex() + offset
 }
 
 // fill the packet with data
@@ -2357,7 +2405,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 			}
 		}
 		//length of data in the packet
-		hasDataLen = outbuf.GetWriteIndex() - mp.beginWriteIndex - HeaderLengthOfTheProtocol
+		hasDataLen = outbuf.GetWriteIndex() - beginWriteIndex(outbuf, mp.beginOffset) - HeaderLengthOfTheProtocol
 		curLen = int(MaxPayloadSize) - hasDataLen
 		curLen = Min(curLen, n-i)
 		if curLen < 0 {
@@ -2372,7 +2420,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		outbuf.SetWriteIndex(writeIdx)
 
 		//> 16MB, split it
-		curDataLen = outbuf.GetWriteIndex() - mp.beginWriteIndex - HeaderLengthOfTheProtocol
+		curDataLen = outbuf.GetWriteIndex() - beginWriteIndex(outbuf, mp.beginOffset) - HeaderLengthOfTheProtocol
 		if curDataLen == int(MaxPayloadSize) {
 			err = mp.closePacket(i+curLen == n)
 			if err != nil {
@@ -2395,15 +2443,15 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 		return nil
 	}
 	outbuf := mp.tcpConn.OutBuf()
-	payLoadLen := outbuf.GetWriteIndex() - mp.beginWriteIndex - 4
+	payLoadLen := outbuf.GetWriteIndex() - beginWriteIndex(outbuf, mp.beginOffset) - 4
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
 		return moerr.NewInternalError(mp.ses.requestCtx, "invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
-			payLoadLen, outbuf.GetWriteIndex(), mp.beginWriteIndex)
+			payLoadLen, outbuf.GetWriteIndex(), beginWriteIndex(outbuf, mp.beginOffset))
 	}
 
 	buf := outbuf.RawBuf()
-	binary.LittleEndian.PutUint32(buf[mp.beginWriteIndex:], uint32(payLoadLen))
-	buf[mp.beginWriteIndex+3] = mp.GetSequenceId()
+	binary.LittleEndian.PutUint32(buf[beginWriteIndex(outbuf, mp.beginOffset):], uint32(payLoadLen))
+	buf[beginWriteIndex(outbuf, mp.beginOffset)+3] = mp.GetSequenceId()
 
 	mp.AddSequenceId(1)
 
@@ -2414,8 +2462,8 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 			return err
 		}
 		buf = outbuf.RawBuf()
-		binary.LittleEndian.PutUint32(buf[mp.beginWriteIndex:], uint32(0))
-		buf[mp.beginWriteIndex+3] = mp.GetSequenceId()
+		binary.LittleEndian.PutUint32(buf[beginWriteIndex(outbuf, mp.beginOffset):], uint32(0))
+		buf[beginWriteIndex(outbuf, mp.beginOffset)+3] = mp.GetSequenceId()
 		mp.AddSequenceId(1)
 	}
 
@@ -2607,6 +2655,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		if err != nil {
 			return err
 		}
+		mp.AddFlushBytes(uint64(len(packet)))
 		mp.AddSequenceId(1)
 
 		if i+curLen == length && curLen == int(MaxPayloadSize) {
@@ -2618,6 +2667,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 			mp.incDebugCount(6)
 			//send header / zero-sized packet
 			err := mp.tcpConn.Write(header[:], goetty.WriteOptions{Flush: true})
+			mp.AddFlushBytes(uint64(len(header)))
 			mp.incDebugCount(7)
 			if err != nil {
 				return err
@@ -2656,43 +2706,33 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 
 // receiveExtraInfo tries to receive salt and labels read from proxy module.
 func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
-	saltLen := 20
 	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
 	}
-	data := make([]byte, saltLen)
-	n, err := rs.RawConn().Read(data)
-	if err != nil {
-		// Something wrong when try to read the salt value.
-		// If the error is timeout, we treat it as normal case and do not update salt.
-		//
-		// TODO(volgariver6): we should change the port of the internal execution from
-		// 6001 to the proxy listen port.
-		if err, ok := err.(net.Error); !ok || err.Timeout() {
-			logError(mp.ses, mp.GetDebugString(),
-				"Failed to get salt",
-				zap.Error(err))
-		}
-	} else if n != saltLen {
-		logError(mp.ses, mp.GetDebugString(),
-			"Failed to get salt",
-			zap.Error(err))
-	} else {
-		mp.SetSalt(data)
-	}
-
-	// Read requested labels from proxy.
-	label := &proxy.RequestLabel{}
+	extraInfo := &proxy.ExtraInfo{}
 	reader := bufio.NewReader(rs.RawConn())
-	if err = label.Decode(reader); err != nil {
-		logError(mp.ses, mp.GetDebugString(),
-			"Failed to get CN labels",
-			zap.Error(err))
+	if err := extraInfo.Decode(reader); err != nil {
+		if err != nil {
+			// Something wrong when try to read the salt value.
+			// If the error is timeout, we treat it as normal case and do not update salt.
+			if err, ok := err.(net.Error); ok && err.Timeout() {
+				logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
+					zap.Error(err))
+			} else {
+				logError(mp.ses, mp.GetDebugString(), "failed to get extra info",
+					zap.Error(err))
+			}
+		}
 	} else {
-		mp.GetSession().requestLabel = label.Labels
-		logDebugf(mp.GetDebugString(), "got requested CN labels: %v", *label)
+		mp.SetSalt(extraInfo.Salt)
+		mp.GetSession().requestLabel = extraInfo.Label.Labels
+		if extraInfo.InternalConn {
+			mp.GetSession().connType = ConnTypeInternal
+		} else {
+			mp.GetSession().connType = ConnTypeExternal
+		}
 	}
 }
 
@@ -2783,7 +2823,7 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 		lenEncBuffer:     make([]byte, 0, 10),
 		binaryNullBuffer: make([]byte, 0, 512),
 		rowHandler: rowHandler{
-			beginWriteIndex:           0,
+			beginOffset:               -1,
 			bytesInOutBuffer:          0,
 			untilBytesInOutbufToFlush: maxBytesToFlush * 1024,
 		},

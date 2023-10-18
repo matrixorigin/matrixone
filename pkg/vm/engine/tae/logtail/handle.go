@@ -70,6 +70,7 @@ Main workflow:
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sort"
 	"strconv"
 	"strings"
@@ -143,8 +144,11 @@ func HandleSyncLogTailReq(
 	if err != nil {
 		return
 	}
-	if start.Less(tableEntry.GetCreatedAt()) {
-		start = tableEntry.GetCreatedAt()
+	tableEntry.RLock()
+	createTS := tableEntry.GetCreatedAtLocked()
+	tableEntry.RUnlock()
+	if start.Less(createTS) {
+		start = createTS
 	}
 
 	ckpLoc, checkpointed, err := ckpClient.CollectCheckpointsInRange(ctx, start, end)
@@ -541,6 +545,16 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID, false)
+	// for appendable block(deleted, because we skip empty metaloc), non-dropped non-appendabled blocks, those new nodes are
+	// produced by flush table tail, it's safe to truncate mem data in CN
+	memTruncTs := node.Start
+	if !e.IsAppendable() && committs.Equal(deletets) {
+		// for deleted non-appendable block, it must be produced by merging blocks. In this case,
+		// do not truncate any data in CN, because merging blocks didn't flush deletes to disk.
+		memTruncTs = types.TS{}
+	}
+
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).Append(memTruncTs, false)
 	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts, false)
 	insBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(&e.ID), false)
 
@@ -673,7 +687,14 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		Commands:    entries,
 	}, nil
 }
-
+func GetMetaIdxesByVersion(ver uint32) []uint16 {
+	meteIdxSchema := checkpointDataReferVersions[ver][MetaIDX]
+	idxes := make([]uint16, len(meteIdxSchema.attrs))
+	for attr := range meteIdxSchema.attrs {
+		idxes[attr] = uint16(attr)
+	}
+	return idxes
+}
 func LoadCheckpointEntries(
 	ctx context.Context,
 	metLoc string,
@@ -696,6 +717,7 @@ func LoadCheckpointEntries(
 	readers := make([]*blockio.BlockReader, len(locationsAndVersions)/2)
 	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
 	versions := make([]uint32, len(locationsAndVersions)/2)
+	locations := make([]objectio.Location, len(locationsAndVersions)/2)
 	for i := 0; i < len(locationsAndVersions); i += 2 {
 		key := locationsAndVersions[i]
 		version, err := strconv.ParseUint(locationsAndVersions[i+1], 10, 32)
@@ -706,6 +728,7 @@ func LoadCheckpointEntries(
 		if err != nil {
 			return nil, nil, err
 		}
+		locations[i/2] = location
 		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
 			return nil, nil, err
@@ -721,28 +744,68 @@ func LoadCheckpointEntries(
 
 	for i := range objectLocations {
 		data := NewCNCheckpointData()
-		err := data.PrefetchFrom(ctx, versions[i], fs, objectLocations[i])
+		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
+		idxes := make([]uint16, len(meteIdxSchema.attrs))
+		for attr := range meteIdxSchema.attrs {
+			idxes[attr] = uint16(attr)
+		}
+		err := data.PrefetchMetaIdx(ctx, versions[i], idxes, objectLocations[i], fs)
 		if err != nil {
 			return nil, nil, err
 		}
 		datas[i] = data
 	}
 
+	for i := range datas {
+		err := datas[i].InitMetaIdx(ctx, versions[i], readers[i], locations[i], mp)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for i := range datas {
+		err := datas[i].PrefetchMetaFrom(ctx, versions[i], locations[i], fs, tableID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	for i := range datas {
+		err := datas[i].PrefetchFrom(ctx, versions[i], fs, locations[i], tableID)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	closeCBs := make([]func(), 0)
+	bats := make([][]*batch.Batch, len(locationsAndVersions)/2)
+	var err error
 	for i, data := range datas {
-		err := data.ReadFrom(ctx, readers[i], versions[i], mp)
+		var bat []*batch.Batch
+		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
-			return nil, closeCBs, err
+			for j := range closeCBs {
+				if closeCBs[j] != nil {
+					closeCBs[j]()
+				}
+			}
+			return nil, nil, err
 		}
+		bats[i] = bat
 	}
 
 	entries := make([]*api.Entry, 0)
 	for i := range objectLocations {
 		data := datas[i]
-		ins, del, cnIns, segDel, err := data.GetTableData(tableID)
+		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
-			return nil, closeCBs, err
+			for j := range closeCBs {
+				if closeCBs[j] != nil {
+					closeCBs[j]()
+				}
+			}
+			return nil, nil, err
 		}
 		if tableName != pkgcatalog.MO_DATABASE &&
 			tableName != pkgcatalog.MO_COLUMNS &&
@@ -795,4 +858,47 @@ func LoadCheckpointEntries(
 		}
 	}
 	return entries, closeCBs, nil
+}
+
+func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32) ([]objectio.Location, *CheckpointData, error) {
+	locations := make([]objectio.Location, 0)
+	locations = append(locations, location)
+	data := NewCheckpointData()
+	reader, err := blockio.NewObjectReader(fs, location)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = data.readMetaBatch(ctx, version, reader, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = data.readAll(ctx, version, fs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, location = range data.locations {
+		locations = append(locations, location)
+	}
+	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		if !metaLoc.IsEmpty() {
+			locations = append(locations, metaLoc)
+		}
+		if !deltaLoc.IsEmpty() {
+			locations = append(locations, deltaLoc)
+		}
+	}
+	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		if !metaLoc.IsEmpty() {
+			locations = append(locations, metaLoc)
+		}
+		if !deltaLoc.IsEmpty() {
+			locations = append(locations, deltaLoc)
+		}
+	}
+	return locations, data, nil
 }

@@ -15,21 +15,20 @@
 package table
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 const ExternalFilePath = "__mo_filepath"
@@ -51,12 +50,16 @@ type ColType int
 const (
 	TSkip ColType = iota
 	TDatetime
+	TUint32
+	TInt32
 	TUint64
 	TInt64
 	TFloat64
 	TJson
 	TText
 	TVarchar
+	TChar
+	TBool
 	TBytes // only used in ColumnField
 	TUuid  // only used in ColumnField
 )
@@ -67,6 +70,10 @@ func (c *ColType) ToType() types.Type {
 		typ := types.T_datetime.ToType()
 		typ.Scale = 6
 		return typ
+	case TUint32:
+		return types.T_uint32.ToType()
+	case TInt32:
+		return types.T_int32.ToType()
 	case TUint64:
 		return types.T_uint64.ToType()
 	case TInt64:
@@ -77,8 +84,14 @@ func (c *ColType) ToType() types.Type {
 		return types.T_json.ToType()
 	case TText:
 		return types.T_text.ToType()
+	case TBool:
+		return types.T_bool.ToType()
 	case TVarchar:
 		return types.T_varchar.ToType()
+		//TODO : Need to see how T_array should be included in this class.
+	case TChar:
+		return types.T_char.ToType()
+		//TODO : Need to see how T_array should be included in this class.
 	case TSkip:
 		fallthrough
 	default:
@@ -90,6 +103,10 @@ func (c *ColType) String(scale int) string {
 	switch *c {
 	case TDatetime:
 		return "Datetime(6)"
+	case TUint32:
+		return "INT UNSIGNED"
+	case TInt32:
+		return "INT"
 	case TUint64:
 		return "BIGINT UNSIGNED"
 	case TInt64:
@@ -100,11 +117,18 @@ func (c *ColType) String(scale int) string {
 		return "JSON"
 	case TText:
 		return "TEXT"
+	case TBool:
+		return "BOOL"
 	case TVarchar:
 		if scale == 0 {
 			scale = 1024
 		}
 		return fmt.Sprintf("VARCHAR(%d)", scale)
+	case TChar:
+		if scale == 0 {
+			scale = 1024
+		}
+		return fmt.Sprintf("CHAR(%d)", scale)
 	case TSkip:
 		panic("not support SkipType")
 	default:
@@ -215,6 +239,33 @@ func UInt64Column(name, comment string) Column {
 	}
 }
 
+func Int32Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TInt32,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
+func UInt32Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TUint32,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
+func BoolColumn(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TBool,
+		Default: "false",
+		Comment: comment,
+	}
+}
+
 type Column struct {
 	Name    string
 	ColType ColType
@@ -253,6 +304,12 @@ var NormalTableEngine = "TABLE"
 // Deprecated
 var ExternalTableEngine = "EXTERNAL"
 
+type SchemaDiff struct {
+	AddedColumns []Column
+	TableName    string
+	DatabaseName string
+}
+
 type Table struct {
 	Account          string
 	Database         string
@@ -279,6 +336,14 @@ type Table struct {
 	name2ColumnIdx map[string]int
 	// accessIdx used in Row
 	accountIdx int
+
+	// The original create table sql of the system table. If the system table is created by ddl,
+	// If the system table was created by DDL, the original creation sql will be used when upgrading the new table
+	// Note: ToCreateSql() converts a table object as a table creation statement based on its known basic properties
+	CreateTableSql string
+
+	// The original create view sql of the system view
+	CreateViewSql string
 }
 
 func (tbl *Table) Clone() *Table {
@@ -383,12 +448,19 @@ type WhereCondition interface {
 	String() string
 }
 
+type CreateSql interface {
+	String(ctx context.Context, ifNotExists bool) string
+}
+
 type View struct {
 	Database    string
 	Table       string
 	OriginTable *Table
 	Columns     []Column
-	Condition   WhereCondition
+	// Condition will be used in View.ToCreateSql
+	Condition WhereCondition
+	// CreateSql will be used in View.ToCreateSql
+	CreateSql CreateSql
 	// SupportUserAccess default false. if true, user account can access.
 	SupportUserAccess bool
 }
@@ -405,7 +477,19 @@ func SupportUserAccess(support bool) ViewOption {
 	})
 }
 
+// ToCreateSql return create view sql.
+// If tbl.CreateSql is  not nil, return tbl.CreateSql.String(),
+// Else return
 func (tbl *View) ToCreateSql(ctx context.Context, ifNotExists bool) string {
+	if tbl.CreateSql != nil {
+		return tbl.CreateSql.String(ctx, ifNotExists)
+	} else {
+		return tbl.generateCreateSql(ctx, ifNotExists)
+	}
+}
+
+// generateCreateSql generate create view sql.
+func (tbl *View) generateCreateSql(ctx context.Context, ifNotExists bool) string {
 	sb := strings.Builder{}
 	// create table
 	sb.WriteString("CREATE VIEW ")
@@ -444,6 +528,12 @@ func (tbl *ViewSingleCondition) String() string {
 	return fmt.Sprintf("`%s` = %q", tbl.Column.Name, tbl.Table)
 }
 
+type ViewCreateSqlString string
+
+func (s ViewCreateSqlString) String(ctx context.Context, ifNotExists bool) string {
+	return string(s)
+}
+
 type ColumnField struct {
 	Type      ColType
 	Integer   int64
@@ -475,7 +565,7 @@ func (cf *ColumnField) EncodeBytes() string {
 }
 
 func (cf *ColumnField) EncodeUuid() (dst [36]byte) {
-	EncodeUUIDHex(dst[:], cf.Bytes)
+	util.EncodeUUIDHex(dst[:], cf.Bytes)
 	return
 }
 
@@ -520,22 +610,6 @@ func BytesField(val []byte) ColumnField {
 
 func UuidField(val []byte) ColumnField {
 	return ColumnField{Type: TUuid, Bytes: val}
-}
-
-var bufferPool = sync.Pool{
-	New: func() any {
-		return bytes.NewBuffer(make([]byte, 16*mpool.MB))
-	},
-}
-
-func GetBuffer() *bytes.Buffer {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	return buf
-}
-
-func ReleaseBuffer(b *bytes.Buffer) {
-	bufferPool.Put(b)
 }
 
 type Row struct {
@@ -688,10 +762,7 @@ func (r *Row) ToStrings() []string {
 			}
 		case types.T_json:
 			switch r.Columns[idx].Type {
-			case TJson:
-				buf, _ := json.Marshal(r.Columns[idx].Interface)
-				col[idx] = string(buf)
-			case TVarchar, TText:
+			case TJson, TVarchar, TText:
 				val := r.Columns[idx].String
 				if len(val) == 0 {
 					val = typ.Default
@@ -734,6 +805,8 @@ func (r *Row) ParseRow(cols []string) error {
 	return nil
 }
 
+// CsvPrimaryKey return string = concat($CsvCol[PrimaryKeyColumnIdx], '-')
+// Deprecated
 func (r *Row) CsvPrimaryKey() string {
 	if len(r.Table.PrimaryKeyColumn) == 0 {
 		return ""
@@ -855,13 +928,6 @@ func GetAllTables() []*Table {
 		tables = append(tables, tbl)
 	}
 	return tables
-}
-
-func GetTable(b string) (*Table, bool) {
-	mux.Lock()
-	defer mux.Unlock()
-	tbl, exist := gTable[b]
-	return tbl, exist
 }
 
 // SetPathBuilder

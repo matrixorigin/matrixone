@@ -37,6 +37,9 @@ type ItOpT[T any] func(v T, isNull bool, row int) error
 type Vector interface {
 	GetType() *types.Type
 
+	IsConst() bool
+	IsConstNull() bool
+
 	// Deep copy ops
 	Get(i int) any
 	Append(v any, isNull bool)
@@ -69,6 +72,7 @@ type Vector interface {
 	ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) error
 
 	Length() int
+	ApproxSize() int
 	Allocated() int
 	GetAllocator() *mpool.MPool
 

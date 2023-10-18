@@ -498,6 +498,10 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 		return v, nil
 	case []byte:
 		return string(v), nil
+	case []float32:
+		return types.ArrayToString[float32](v), nil
+	case []float64:
+		return types.ArrayToString[float64](v), nil
 	case int:
 		return strconv.FormatInt(int64(v), 10), nil
 	case uint:
@@ -514,6 +518,8 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 		return v.String(), nil
 	case types.TS:
 		return v.ToString(), nil
+	case types.Enum:
+		return strconv.FormatUint(uint64(v), 10), nil
 	default:
 		return "", moerr.NewInternalError(ctx, "unsupported type %d ", v)
 	}

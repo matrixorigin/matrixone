@@ -16,17 +16,26 @@ package onduplicatekey
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	Build = iota
+	Eval
+	End
+)
+
 type proc = process.Process
 
 type container struct {
-	checkConflictBat *batch.Batch //batch to check conflict
-	insertBat        *batch.Batch //the final batch
-	emptyBat         *batch.Batch //use pass this batch before compute finished
+	colexec.ReceiverOperator
+
+	state            int
+	checkConflictBat *batch.Batch   //batch to check conflict
+	insertBats       []*batch.Batch //the final batch
 }
 
 type Argument struct {
@@ -45,15 +54,21 @@ type Argument struct {
 	IdxIdx []int32
 
 	ctr *container
+
+	IsIgnore bool
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		if arg.ctr.insertBat != nil {
-			arg.ctr.insertBat.Clean(proc.GetMPool())
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ap.ctr != nil {
+		ap.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if len(ap.ctr.insertBats) > 0 {
+			for _, bat := range ap.ctr.insertBats {
+				bat.Clean(proc.Mp())
+			}
+			ap.ctr.insertBats = nil
 		}
-		if arg.ctr.checkConflictBat != nil {
-			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
+		if ap.ctr.checkConflictBat != nil {
+			ap.ctr.checkConflictBat.Clean(proc.GetMPool())
 		}
 	}
 }

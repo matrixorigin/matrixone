@@ -75,8 +75,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = Eval
 				continue
 			}
-			if bat.RowCount() == 0 {
-				bat.Clean(proc.Mp())
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
+				proc.SetInputBatch(batch.EmptyBatch)
 				return process.ExecNext, nil
 			}
 			if ap.Limit == 0 {
@@ -84,11 +85,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				proc.SetInputBatch(nil)
 				return process.ExecStop, nil
 			}
-			err := ctr.build(ap, bat, proc, anal)
-			if err != nil {
-				ap.Free(proc, true)
-			}
-			return process.ExecNext, err
+			return process.ExecNext, ctr.build(ap, bat, proc, anal)
 
 		case Eval:
 			if ctr.bat == nil {
@@ -96,7 +93,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				return process.ExecStop, nil
 			}
 			err := ctr.eval(ap.Limit, proc)
-			ap.Free(proc, err != nil)
+			ap.Free(proc, err != nil, nil)
 			if err == nil {
 				return process.ExecStop, nil
 			}
@@ -156,9 +153,10 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 			ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
 		}
 	}
-	defer bat.Clean(proc.Mp())
-	proc.Reg.InputBatch = batch.EmptyBatch
-	return ctr.processBatch(ap.Limit, bat, proc)
+	err := ctr.processBatch(ap.Limit, bat, proc)
+	proc.PutBatch(bat)
+	proc.SetInputBatch(batch.EmptyBatch)
+	return err
 }
 
 func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {

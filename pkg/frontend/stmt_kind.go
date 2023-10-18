@@ -133,7 +133,7 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
 		return true, nil
 	case *tree.CreateDatabase, *tree.CreateSequence: //Case1, Case3 above
-		return !ses.OptionBitsIsSet(OPTION_BEGIN), nil
+		return ses.IsBackgroundSession() || !ses.OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement, *tree.Replace:
 		return true, nil
@@ -168,7 +168,8 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		*tree.ShowPublications,
 		*tree.ShowSubscriptions,
 		*tree.ShowCreatePublications,
-		*tree.ShowBackendServers:
+		*tree.ShowBackendServers,
+		*tree.ShowConnectors:
 		return true, nil
 		//others
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:

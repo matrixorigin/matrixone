@@ -15,6 +15,7 @@
 package momath
 
 import (
+	"golang.org/x/exp/constraints"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -49,11 +50,35 @@ func Exp(v float64) (float64, error) {
 	return math.Exp(v), nil
 }
 
+func Sqrt(v float64) (float64, error) {
+	if v < 0 {
+		return 0, moerr.NewInvalidArgNoCtx("Sqrt", v)
+	} else {
+		return math.Sqrt(v), nil
+	}
+}
+
 func Ln(v float64) (float64, error) {
 	if v <= 0 {
 		return 0, moerr.NewInvalidArgNoCtx("ln", v)
 	} else {
 		return math.Log(v), nil
+	}
+}
+
+func Log2(v float64) (float64, error) {
+	if v <= 0 {
+		return 0, moerr.NewInvalidArgNoCtx("log2", v)
+	} else {
+		return math.Log2(v), nil
+	}
+}
+
+func Lg(v float64) (float64, error) {
+	if v <= 0 {
+		return 0, moerr.NewInvalidArgNoCtx("lg", v)
+	} else {
+		return math.Log10(v), nil
 	}
 }
 
@@ -71,4 +96,18 @@ func Sinh(v float64) (float64, error) {
 
 func Tan(v float64) (float64, error) {
 	return math.Tan(v), nil
+}
+
+func AbsSigned[T constraints.Signed | constraints.Float](v T) (T, error) {
+	//NOTE: AbsSigned specifically deals with int and float and not uint.
+	// If we have uint, we return the value as such.
+	if v < 0 {
+		v = -v
+	}
+	if v < 0 {
+		// This could occur for int8 (-128 to 127)
+		// If the v is -128 and if we multiply by -1 = 128, which is out of range of int8. It could give a -ve value for such case.
+		return 0, moerr.NewOutOfRangeNoCtx("int", "'%v'", v)
+	}
+	return v, nil
 }

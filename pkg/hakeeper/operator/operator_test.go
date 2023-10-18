@@ -55,7 +55,7 @@ func TestCheck(t *testing.T) {
 			Epoch:    0,
 		}},
 	}
-	currentStep := op.Check(logState, pb.DNState{}, pb.CNState{})
+	currentStep := op.Check(logState, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
 
 	assert.Equal(t,
 		AddLogService{"a", Replica{"d", 1, 4, 1}},
@@ -69,7 +69,7 @@ func TestCheck(t *testing.T) {
 			Epoch:    0,
 		}},
 	}
-	currentStep = op.Check(logState, pb.DNState{}, pb.CNState{})
+	currentStep = op.Check(logState, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
 
 	assert.Equal(t,
 		RemoveLogService{"a", Replica{"c", 1, 3, 1}},
@@ -83,10 +83,10 @@ func TestCheck(t *testing.T) {
 			Epoch:    0,
 		}},
 	}
-	currentStep = op.Check(logState, pb.DNState{}, pb.CNState{})
+	currentStep = op.Check(logState, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
 
 	assert.Equal(t, nil, currentStep)
 	assert.Equal(t, SUCCESS, op.Status())
 
-	assert.Equal(t, nil, op.Check(pb.LogState{}, pb.DNState{}, pb.CNState{}))
+	assert.Equal(t, nil, op.Check(pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{}))
 }

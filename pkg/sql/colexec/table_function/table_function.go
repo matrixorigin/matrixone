@@ -17,6 +17,7 @@ package table_function
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,6 +45,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		f, e = metadataScan(idx, proc, tblArg)
 	case "processlist":
 		f, e = processlist(idx, proc, tblArg)
+	case "mo_locks":
+		f, e = moLocksCall(idx, proc, tblArg)
+	case "mo_configurations":
+		f, e = moConfigurationsCall(idx, proc, tblArg)
+	case "mo_transactions":
+		f, e = moTransactionsCall(idx, proc, tblArg)
 	default:
 		return process.ExecStop, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
@@ -59,6 +66,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		return process.ExecStop, e
 	}
 	if bat.IsEmpty() {
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, e
 	}
 
@@ -83,6 +92,7 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) error {
 	tblArg := arg.(*Argument)
+	tblArg.ctr = new(container)
 
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
@@ -103,6 +113,12 @@ func Prepare(proc *process.Process, arg any) error {
 		return metadataScanPrepare(proc, tblArg)
 	case "processlist":
 		return processlistPrepare(proc, tblArg)
+	case "mo_locks":
+		return moLocksPrepare(proc, tblArg)
+	case "mo_configurations":
+		return moConfigurationsPrepare(proc, tblArg)
+	case "mo_transactions":
+		return moTransactionsPrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}

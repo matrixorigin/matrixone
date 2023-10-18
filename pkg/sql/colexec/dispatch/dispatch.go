@@ -17,10 +17,11 @@ package dispatch
 import (
 	"bytes"
 	"context"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -92,7 +93,9 @@ func Prepare(proc *process.Process, arg any) error {
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
 	ap := arg.(*Argument)
 	bat := proc.InputBatch()
-	if bat == nil {
+	if bat == nil && ap.RecSink {
+		bat = makeEndBatch(proc)
+	} else if bat == nil {
 		return process.ExecStop, nil
 	}
 	if bat.Last() {
@@ -101,8 +104,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		} else {
 			ap.ctr.hasData = false
 		}
-	} else if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	} else if bat.IsEmpty() {
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	} else {
 		ap.ctr.hasData = true
@@ -115,20 +119,34 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	}
 }
 
+func makeEndBatch(proc *process.Process) *batch.Batch {
+	b := batch.NewWithSize(1)
+	b.Attrs = []string{
+		"recursive_col",
+	}
+	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
+	batch.SetLength(b, 1)
+	b.SetEnd()
+	return b
+}
+
 func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(arg.RemoteRegs)
 	for cnt > 0 {
 		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), waitNotifyTimeout)
-		defer timeoutCancel()
 		select {
 		case <-timeoutCtx.Done():
-			logutil.Errorf("waiting notify msg timeout")
+			timeoutCancel()
 			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
+
 		case <-proc.Ctx.Done():
+			timeoutCancel()
 			arg.ctr.prepared = true
-			logutil.Warn("conctx done during dispatch")
 			return true, nil
+
 		case csinfo := <-proc.DispatchNotifyCh:
+			timeoutCancel()
 			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
 				msgId:  csinfo.MsgId,
 				cs:     csinfo.Cs,

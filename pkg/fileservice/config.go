@@ -38,7 +38,7 @@ type Config struct {
 	// Backend fileservice backend. [MEM|DISK|DISK-ETL|S3|MINIO]
 	Backend string `toml:"backend"`
 	// S3 used to create fileservice using s3 as the backend
-	S3 S3Config `toml:"s3"`
+	S3 ObjectStorageArguments `toml:"s3"`
 	// Cache specifies configs for cache
 	Cache CacheConfig `toml:"cache"`
 	// DataDir used to create fileservice using DISK as the backend
@@ -49,7 +49,9 @@ type Config struct {
 type NewFileServicesFunc = func(defaultName string) (*FileServices, error)
 
 // NewFileService create file service from config
-func NewFileService(ctx context.Context, cfg Config, perfCounterSets []*perfcounter.CounterSet) (FileService, error) {
+func NewFileService(
+	ctx context.Context, cfg Config, perfCounterSets []*perfcounter.CounterSet,
+) (FileService, error) {
 	if cfg.Name == "" {
 		panic("empty name")
 	}
@@ -109,14 +111,18 @@ func newDiskETLFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService
 	return fs, nil
 }
 
-func newMinioFileService(ctx context.Context, cfg Config, perfCounters []*perfcounter.CounterSet) (FileService, error) {
+func newMinioFileService(
+	ctx context.Context, cfg Config, perfCounters []*perfcounter.CounterSet,
+) (FileService, error) {
 	fs, err := NewS3FSOnMinio(
 		ctx,
-		cfg.S3.SharedConfigProfile,
-		cfg.Name,
-		cfg.S3.Endpoint,
-		cfg.S3.Bucket,
-		cfg.S3.KeyPrefix,
+		ObjectStorageArguments{
+			SharedConfigProfile: cfg.S3.SharedConfigProfile,
+			Name:                cfg.Name,
+			Endpoint:            cfg.S3.Endpoint,
+			Bucket:              cfg.S3.Bucket,
+			KeyPrefix:           cfg.S3.KeyPrefix,
+		},
 		cfg.Cache,
 		perfCounters,
 		false,
@@ -127,14 +133,18 @@ func newMinioFileService(ctx context.Context, cfg Config, perfCounters []*perfco
 	return fs, nil
 }
 
-func newS3FileService(ctx context.Context, cfg Config, perfCounters []*perfcounter.CounterSet) (FileService, error) {
+func newS3FileService(
+	ctx context.Context, cfg Config, perfCounters []*perfcounter.CounterSet,
+) (FileService, error) {
 	fs, err := NewS3FS(
 		ctx,
-		cfg.S3.SharedConfigProfile,
-		cfg.Name,
-		cfg.S3.Endpoint,
-		cfg.S3.Bucket,
-		cfg.S3.KeyPrefix,
+		ObjectStorageArguments{
+			SharedConfigProfile: cfg.S3.SharedConfigProfile,
+			Name:                cfg.Name,
+			Endpoint:            cfg.S3.Endpoint,
+			Bucket:              cfg.S3.Bucket,
+			KeyPrefix:           cfg.S3.KeyPrefix,
+		},
 		cfg.Cache,
 		perfCounters,
 		false,

@@ -20,10 +20,30 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIsEmptyDN(t *testing.T) {
-	v := DNShard{}
+func TestIsEmptyTN(t *testing.T) {
+	v := TNShard{}
 	assert.True(t, v.IsEmpty())
 
 	v.ShardID = 1
 	assert.False(t, v.IsEmpty())
+}
+
+func TestValidStateString(t *testing.T) {
+	cases := []struct {
+		s string
+		r bool
+	}{
+		{s: "", r: false},
+		{s: "n", r: false},
+		{s: "no", r: false},
+		{s: "working", r: true},
+		{s: "woRKing", r: true},
+		{s: "draining", r: true},
+		{s: "drainINg", r: true},
+		{s: "drained", r: true},
+		{s: "DRained", r: true},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.r, ValidStateString(c.s))
+	}
 }

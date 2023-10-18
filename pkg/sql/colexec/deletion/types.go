@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -91,7 +92,7 @@ type DeleteCtx struct {
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.RemoteDelete {
 		for _, blockId_rowIdBatch := range arg.ctr.partitionId_blockId_rowIdBatch {
 			for _, bat := range blockId_rowIdBatch {
@@ -159,7 +160,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			if ctr.blockId_type[blkid] != 0 {
 				continue
 			}
-			err = s3writer.WriteBlock(bat)
+			err = s3writer.WriteBlock(bat, objectio.SchemaTombstone)
 			if err != nil {
 				return 0, err
 			}
@@ -219,16 +220,16 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 
 		arg.ctr.blockId_type[str] = RawRowIdBatch
 		/* XXX why not only send the batch
-		// FIXME: string(segid[:]) means heap allocation, just take the id type itself
-		if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
-			arg.ctr.blockId_type[str] = RawBatchOffset
-			offsetFlag = true
-		} else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
-			arg.ctr.blockId_type[str] = CNBlockOffset
-			offsetFlag = true
-		} else {
-			arg.ctr.blockId_type[str] = RawRowIdBatch
-		}
+		   // FIXME: string(segid[:]) means heap allocation, just take the id type itself
+		   if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
+		   	arg.ctr.blockId_type[str] = RawBatchOffset
+		   	offsetFlag = true
+		   } else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
+		   	arg.ctr.blockId_type[str] = CNBlockOffset
+		   	offsetFlag = true
+		   } else {
+		   	arg.ctr.blockId_type[str] = RawRowIdBatch
+		   }
 		*/
 
 		if _, ok := arg.ctr.partitionId_blockId_rowIdBatch[pIdx]; !ok {
@@ -324,13 +325,16 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		return vector.GetFixedAt[types.Datetime](col, int(row))
 	case types.T_timestamp:
 		return vector.GetFixedAt[types.Timestamp](col, int(row))
+	case types.T_enum:
+		return vector.GetFixedAt[types.Enum](col, int(row))
 	case types.T_TS:
 		return vector.GetFixedAt[types.TS](col, int(row))
 	case types.T_Rowid:
 		return vector.GetFixedAt[types.Rowid](col, int(row))
 	case types.T_Blockid:
 		return vector.GetFixedAt[types.Blockid](col, int(row))
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		return col.GetBytesAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport

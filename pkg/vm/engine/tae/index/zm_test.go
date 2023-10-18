@@ -239,6 +239,25 @@ func TestVectorZM(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func TestZMArray(t *testing.T) {
+	zm := NewZM(types.T_array_float32, 0)
+	zm.Update(types.ArrayToBytes[float32]([]float32{1, 1, 1}))
+	zm.Update(types.ArrayToBytes[float32]([]float32{5, 5, 5}))
+
+	require.True(t, zm.IsArray())
+	require.False(t, zm.IsInited())
+
+	require.Nil(t, zm.GetMin())
+	require.Nil(t, zm.GetMax())
+
+	require.Equal(t, 0, len(zm.GetMinBuf()))
+	require.Equal(t, 0, len(zm.GetMaxBuf()))
+
+	require.False(t, zm.ContainsKey(types.ArrayToBytes[float32]([]float32{1, 1, 1})))
+	require.False(t, zm.ContainsKey(types.ArrayToBytes[float32]([]float32{5, 5, 5})))
+	require.False(t, zm.ContainsKey(types.ArrayToBytes[float32]([]float32{3, 3, 3})))
+}
+
 func TestZMNull(t *testing.T) {
 	zm := NewZM(types.T_int64, 0)
 	x := zm.GetMin()
@@ -311,6 +330,56 @@ func TestZM(t *testing.T) {
 	require.True(t, zm3.MaxTruncated())
 }
 
+func TestZMSum(t *testing.T) {
+	testIntSum(t, types.T_int8)
+	testIntSum(t, types.T_int16)
+	testIntSum(t, types.T_int32)
+	testIntSum(t, types.T_int64)
+	testUIntSum(t, types.T_uint8)
+	testUIntSum(t, types.T_uint16)
+	testUIntSum(t, types.T_uint32)
+	testUIntSum(t, types.T_uint64)
+	testFloatSum(t, types.T_float32)
+	testFloatSum(t, types.T_float64)
+	testDecimal64Sum(t)
+}
+
+func testIntSum(t *testing.T, zmType types.T) {
+	zm := NewZM(zmType, 0)
+	zm.setInited()
+	require.Equal(t, int64(0), zm.GetSum())
+	sum := int64(100)
+	zm.SetSum(types.EncodeFixed(sum))
+	require.Equal(t, sum, zm.GetSum())
+}
+
+func testUIntSum(t *testing.T, zmType types.T) {
+	zm := NewZM(zmType, 0)
+	zm.setInited()
+	require.Equal(t, uint64(0), zm.GetSum())
+	sum := uint64(100)
+	zm.SetSum(types.EncodeFixed(sum))
+	require.Equal(t, sum, zm.GetSum())
+}
+
+func testFloatSum(t *testing.T, zmType types.T) {
+	zm := NewZM(zmType, 0)
+	zm.setInited()
+	require.Equal(t, float64(0), zm.GetSum())
+	sum := float64(100)
+	zm.SetSum(types.EncodeFixed(sum))
+	require.Equal(t, sum, zm.GetSum())
+}
+
+func testDecimal64Sum(t *testing.T) {
+	zm := NewZM(types.T_decimal64, 0)
+	zm.setInited()
+	require.Equal(t, types.Decimal64(0), zm.GetSum())
+	sum := types.Decimal64(100)
+	zm.SetSum(types.EncodeFixed(sum))
+	require.Equal(t, sum, zm.GetSum())
+}
+
 func BenchmarkZM(b *testing.B) {
 	vec := containers.MockVector(types.T_char.ToType(), 10000, true, nil)
 	defer vec.Close()
@@ -358,9 +427,9 @@ func BenchmarkZM(b *testing.B) {
 
 func BenchmarkUpdateZMVector(b *testing.B) {
 	zm := NewZM(types.T_int64, 0)
-	dnVec := containers.MockVector(types.T_int64.ToType(), 10000, false, nil)
-	defer dnVec.Close()
-	vec := dnVec.GetDownstreamVector()
+	tnVec := containers.MockVector(types.T_int64.ToType(), 10000, false, nil)
+	defer tnVec.Close()
+	vec := tnVec.GetDownstreamVector()
 
 	b.Run("update-vector", func(b *testing.B) {
 		b.ResetTimer()

@@ -49,6 +49,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		}
 
 		if bat.Last() && ap.SinkScan {
+			proc.PutBatch(bat)
 			continue
 		}
 		break

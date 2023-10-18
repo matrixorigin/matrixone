@@ -22,26 +22,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 )
 
-// handleRequest handles the requests from client.
-func (s *queryService) handleRequest(ctx context.Context, req *pb.Request, resp *pb.Response) error {
-	switch pb.CmdMethod(req.Method()) {
-	case pb.CmdMethod_ShowProcessList:
-		if req.ShowProcessListRequest == nil {
-			return moerr.NewInternalError(ctx, "bad request")
-		}
-		sessions, err := s.processList(req.ShowProcessListRequest.Tenant,
-			req.ShowProcessListRequest.SysTenant)
-		if err != nil {
-			resp.WrapError(err)
-			return nil
-		}
-		resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
-			Sessions: sessions,
-		}
-		return nil
-	default:
-		return moerr.NewInternalError(ctx, "Unsupported cmd: %s", req.CmdMethod)
+// handleRequest handles the show process list request.
+func (s *queryService) handleShowProcessList(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+	if req.ShowProcessListRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
 	}
+	sessions, err := s.processList(req.ShowProcessListRequest.Tenant,
+		req.ShowProcessListRequest.SysTenant)
+	if err != nil {
+		resp.WrapError(err)
+		return nil
+	}
+	resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
+		Sessions: sessions,
+	}
+	return nil
 }
 
 // processList returns all the sessions. For sys tenant, return all sessions; but for common

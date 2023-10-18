@@ -186,7 +186,7 @@ func TestMergeDelete(t *testing.T) {
 	}
 
 	// free resource
-	argument1.Free(proc, false)
+	argument1.Free(proc, false, nil)
 	metaLocBat0.Clean(proc.GetMPool())
 	metaLocBat1.Clean(proc.GetMPool())
 	metaLocBat2.Clean(proc.GetMPool())
@@ -194,5 +194,6 @@ func TestMergeDelete(t *testing.T) {
 	batch1.Clean(proc.GetMPool())
 	batch2.Clean(proc.GetMPool())
 	// constVector can't free
-	require.Equal(t, int64(16), proc.GetMPool().CurrNB())
+	// 2 * 16 is 2 header of const vector.
+	require.Equal(t, int64(16+2*16), proc.GetMPool().CurrNB())
 }

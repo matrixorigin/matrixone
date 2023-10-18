@@ -1,0 +1,78 @@
+create table typec(a int,b enum('4','3','2','1'));
+insert into typec values(1,1);
+insert into typec values(2,'1');
+select * from typec;
+a    b
+1    4
+2    1
+drop table typec;
+CREATE TABLE orders (
+id INT PRIMARY KEY,
+order_number VARCHAR(20),
+status ENUM('Pending', 'Processing', 'Completed', 'Cancelled')
+);
+insert into orders values(1,'111',1),(2,'222',2),(3,'333',3),(4,'444','Cancelled');
+select * from orders;
+id    order_number    status
+1    111    Pending
+2    222    Processing
+3    333    Completed
+4    444    Cancelled
+update orders set status= 1 where status= 'Processing';
+select * from orders;
+id    order_number    status
+1    111    Pending
+3    333    Completed
+4    444    Cancelled
+2    222    Pending
+delete from orders where status= 'Completed';
+select * from orders;
+id    order_number    status
+1    111    Pending
+4    444    Cancelled
+2    222    Pending
+update orders set status='Pending' where status = 'Processing';
+select * from orders;
+id    order_number    status
+1    111    Pending
+4    444    Cancelled
+2    222    Pending
+select * from orders where status='Cancelled';
+id    order_number    status
+4    444    Cancelled
+select * from orders where status in ('Pending','Cancelled');
+id    order_number    status
+1    111    Pending
+4    444    Cancelled
+2    222    Pending
+insert into orders values(3,'333',null);
+insert into orders(id,order_number) values(5,'555');
+select * from orders;
+id    order_number    status
+1    111    Pending
+4    444    Cancelled
+2    222    Pending
+3    333    null
+5    555    null
+insert into orders values(6,'666','New');
+internal error: convert to MySQL enum failed: item New is not in enum [Pending Processing Completed Cancelled]
+select count(*),status from orders group by status;
+count(*)    status
+2    Pending
+1    Cancelled
+2    null
+select substring(status,2,3) from orders;
+substring(status, 2, 3)
+end
+anc
+end
+null
+null
+select length(status) from orders;
+length(status)
+7
+9
+7
+null
+null
+drop table orders;

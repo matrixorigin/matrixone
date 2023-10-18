@@ -60,12 +60,14 @@ func mustDecimal128(v types.Decimal128, err error) types.Decimal128 {
 
 func StatementInfoNew(i Item, ctx context.Context) Item {
 	windowSize, _ := ctx.Value(DurationKey).(time.Duration)
+	// fixme: if recording status=Running entity, here has data-trace issue.
+	// Should clone the StatementInfo as new one.
 	if s, ok := i.(*StatementInfo); ok {
 		// process the execplan
 		s.ExecPlan2Stats(ctx)
 		// remove the plan
 		s.jsonByte = nil
-		s.ExecPlan = nil
+		s.FreeExecPlan()
 
 		// remove the TransacionID
 		s.TransactionID = NilTxnID
@@ -76,7 +78,6 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.Database = ""
 		s.StmtBuilder.WriteString(s.Statement)
 		duration := s.Duration
-		s.Duration = windowSize
 		s.AggrMemoryTime = mustDecimal128(convertFloat64ToDecimal128(s.statsArray.GetMemorySize() * float64(duration)))
 		s.RequestAt = s.ResponseAt.Truncate(windowSize)
 		s.ResponseAt = s.RequestAt.Add(windowSize)
@@ -91,10 +92,11 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
-		e.StmtBuilder.WriteString("\n")
+		e.StmtBuilder.WriteString(";\n")
 		e.StmtBuilder.WriteString(n.Statement)
 	}
 	e.AggrCount += 1
+	e.Duration += n.Duration
 	e.RowsRead += n.RowsRead
 	e.BytesScan += n.BytesScan
 	e.ResultCount += n.ResultCount
@@ -104,6 +106,11 @@ func StatementInfoUpdate(existing, new Item) {
 		// handle error
 		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
 	}
+	n.FreeExecPlan()
+	// NO need n.mux.Lock()
+	// Because of this op is between EndStatement and FillRow.
+	// This function is called in Aggregator, and StatementInfoFilter must return true.
+	n.exported = true
 }
 
 func StatementInfoFilter(i Item) bool {
@@ -170,6 +177,8 @@ type StatementInfo struct {
 
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
+	ConnType statistic.ConnType `json:"-"` // see frontend.RecordStatement
+
 	// flow ctrl
 	// #		|case 1 |case 2 |case 3 |case 4|
 	// end		| false | false | true  | true |  (set true at EndStatement)
@@ -184,9 +193,11 @@ type StatementInfo struct {
 	// query-quick flow: case 1->3->4
 	end bool // cooperate with mux
 	mux sync.Mutex
-	// mark reported
+	// reported mark reported
+	// set by ReportStatement
 	reported bool
-	// mark exported
+	// exported mark exported
+	// set by FillRow or StatementInfoUpdate
 	exported bool
 
 	// keep []byte as elem
@@ -209,7 +220,9 @@ var stmtPool = sync.Pool{
 }
 
 func NewStatementInfo() *StatementInfo {
-	return stmtPool.Get().(*StatementInfo)
+	s := stmtPool.Get().(*StatementInfo)
+	s.statsArray.Reset()
+	return s
 }
 
 type Statistic struct {
@@ -245,33 +258,51 @@ func (s *StatementInfo) Size() int64 {
 	return num
 }
 
+// FreeExecPlan will free StatementInfo.ExecPlan.
+// Please make sure it called after StatementInfo.ExecPlan2Stats
+func (s *StatementInfo) FreeExecPlan() {
+	if s.ExecPlan != nil {
+		s.ExecPlan.Free()
+		s.ExecPlan = nil
+	}
+}
+
 func (s *StatementInfo) Free() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if s.end && s.exported { // cooperate with s.mux
-		s.RoleId = 0
-		s.Statement = ""
-		s.StatementFingerprint = ""
-		s.StatementTag = ""
-		if s.ExecPlan != nil {
-			s.ExecPlan.Free()
-		}
-		s.RequestAt = time.Time{}
-		s.ResponseAt = time.Time{}
-		s.ExecPlan = nil
-		s.Status = StatementStatusRunning
-		s.Error = nil
-		s.RowsRead = 0
-		s.BytesScan = 0
-		s.ResultCount = 0
-		s.end = false
-		s.reported = false
-		s.exported = false
-		// clean []byte
-		s.jsonByte = nil
-		s.statsArray.Reset()
-		stmtPool.Put(s)
+		s.free()
 	}
+}
+
+// freeNoLocked will free StatementInfo if StatementInfo.end is true.
+// Please make sure it called after EndStatement.
+func (s *StatementInfo) freeNoLocked() {
+	if s.end {
+		s.free()
+	}
+}
+
+func (s *StatementInfo) free() {
+	s.RoleId = 0
+	s.Statement = ""
+	s.StatementFingerprint = ""
+	s.StatementTag = ""
+	s.FreeExecPlan()
+	s.RequestAt = time.Time{}
+	s.ResponseAt = time.Time{}
+	s.Status = StatementStatusRunning
+	s.Error = nil
+	s.RowsRead = 0
+	s.BytesScan = 0
+	s.ResultCount = 0
+	s.end = false
+	s.reported = false
+	s.exported = false
+	// clean []byte
+	s.jsonByte = nil
+	s.statsArray.Reset()
+	stmtPool.Put(s)
 }
 
 func (s *StatementInfo) GetTable() *table.Table { return SingleStatementTable }
@@ -376,6 +407,7 @@ endL:
 // and set RowsRead, BytesScan from ExecPlan
 func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 	var stats Statistic
+	var statsArray statistic.StatsArray
 
 	if s.ExecPlan == nil {
 		if s.statsArray.GetVersion() == 0 {
@@ -383,7 +415,9 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		}
 		return s.statsArray.ToJsonString()
 	} else {
-		s.statsArray, stats = s.ExecPlan.Stats(ctx)
+		statsArray, stats = s.ExecPlan.Stats(ctx)
+		s.statsArray.InitIfEmpty().Add(&statsArray)
+		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
 		return s.statsArray.ToJsonString()
@@ -417,10 +451,6 @@ func (s *StatementInfo) IsZeroTxnID() bool {
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {
-	if s.Status == StatementStatusRunning && GetTracerProvider().skipRunningStmt {
-		return
-	}
-	s.reported = true
 	ReportStatement(ctx, s)
 }
 
@@ -431,7 +461,12 @@ func (s *StatementInfo) MarkResponseAt() {
 	}
 }
 
-var EndStatement = func(ctx context.Context, err error, sentRows int64) {
+// ErrorPkgConst = 56 + 13
+// 56: empty mysql tcp package size
+// 13: avg payload prefix of err msg
+const ErrorPkgConst = 69
+
+var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
@@ -447,6 +482,10 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 		s.ResultCount = sentRows
 		s.AggrCount = 0
 		s.MarkResponseAt()
+		if err != nil {
+			outBytes += ErrorPkgConst + int64(len(err.Error()))
+		}
+		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes))
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
@@ -489,18 +528,25 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
+	// Filter out the Running record.
+	if s.Status == StatementStatusRunning && GetTracerProvider().skipRunningStmt {
+		return nil
+	}
 	// Filter out the MO_LOGGER SQL statements
 	if s.User == db_holder.MOLoggerUser {
-		return nil
+		goto DiscardAndFreeL
 	}
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
-			go s.Free()
-			return nil
+			goto DiscardAndFreeL
 		}
 	}
 
+	s.reported = true
 	return GetGlobalBatchProcessor().Collect(ctx, s)
+DiscardAndFreeL:
+	s.freeNoLocked()
+	return nil
 }

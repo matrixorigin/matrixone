@@ -165,6 +165,18 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		return vector.SetFixedAt(vec, row, v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
+	case types.T_array_float32:
+		v, err := types.StringToArrayToBytes[float32](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
+	case types.T_array_float64:
+		v, err := types.StringToArrayToBytes[float64](val)
+		if err != nil {
+			return err
+		}
+		return vector.SetBytesAt(vec, row, v, proc.Mp())
 	case types.T_json:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_time:
@@ -191,6 +203,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAt(vec, row, v)
+	case types.T_enum:
+		v, err := strconv.ParseUint(val, 0, 16)
+		if err != nil {
+			return moerr.NewOutOfRange(ctx, "enum", "value '%v'", val)
+		}
+		return vector.SetFixedAt(vec, row, types.Enum(v))
 	default:
 		panic(fmt.Sprintf("unsupported type %v", vec.GetType().Oid))
 	}
@@ -224,7 +242,8 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 		return setInsertValueDecimal64(proc, numVal, vec)
 	case types.T_decimal128:
 		return setInsertValueDecimal128(proc, numVal, vec)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		return setInsertValueString(proc, numVal, vec)
 	case types.T_json:
 		return setInsertValueJSON(proc, numVal, vec)
@@ -238,6 +257,8 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 		return setInsertValueDateTime(proc, numVal, vec)
 	case types.T_timestamp:
 		return setInsertValueTimeStamp(proc, numVal, vec)
+	case types.T_enum:
+		return setInsertValueNumber[types.Enum](proc, numVal, vec)
 	}
 
 	return false, nil
@@ -601,12 +622,48 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 	checkStrLen := func(s string) ([]byte, error) {
 		typ := vec.GetType()
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_binary && destLen != 0 {
+		if typ.Oid != types.T_text && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
 			if utf8.RuneCountInString(s) > destLen {
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
-		v := []byte(s)
+		var v []byte
+		if typ.Oid.IsArrayRelate() {
+			// Assuming that input s is of type "[1,2,3]"
+
+			switch typ.Oid {
+			case types.T_array_float32:
+				_v, err := types.StringToArray[float32](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[float32](_v)
+
+			case types.T_array_float64:
+				_v, err := types.StringToArray[float64](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[float64](_v)
+			default:
+				return nil, moerr.NewInternalErrorNoCtx("%s is not supported array type", typ.String())
+
+			}
+
+		} else {
+			v = []byte(s)
+		}
+
 		if typ.Oid == types.T_binary && len(v) < int(typ.Width) {
 			add0 := int(typ.Width) - len(v)
 			for ; add0 != 0; add0-- {

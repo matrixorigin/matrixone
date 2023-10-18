@@ -107,7 +107,7 @@ status    TEXT(0)    YES        null
 quota    TEXT(0)    YES        null        
 network_policy    TEXT(0)    YES        null        
 created_by    TEXT(0)    YES        null        
-created_at    DATETIME(0)    YES        null        
+created_at    DATETIME(3)    YES        null        
 account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 desc mo_catalog.mo_instance;
@@ -124,7 +124,7 @@ status    TEXT(0)    YES        null
 quota    TEXT(0)    YES        null        
 network_policy    TEXT(0)    YES        null        
 created_by    TEXT(0)    YES        null        
-created_at    DATETIME(0)    YES        null        
+created_at    DATETIME(3)    YES        null        
 account_id    INT UNSIGNED(32)    NO    PRI    null        the account_id added by the mo
 drop table mo_instance;
 drop account if exists acc_idx;

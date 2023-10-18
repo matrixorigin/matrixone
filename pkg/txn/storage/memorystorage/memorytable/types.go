@@ -194,6 +194,8 @@ func TypeMatch(v any, typ types.T) bool {
 		_, ok = v.(types.Datetime)
 	case types.T_timestamp:
 		_, ok = v.(types.Timestamp)
+	case types.T_enum:
+		_, ok = v.(types.Enum)
 	case types.T_interval:
 		_, ok = v.(types.IntervalType)
 	case types.T_char:
@@ -201,6 +203,15 @@ func TypeMatch(v any, typ types.T) bool {
 	case types.T_varchar:
 		_, ok = v.([]byte)
 	case types.T_binary:
+		_, ok = v.([]byte)
+	case types.T_array_float32:
+		// NOTE 1: This function is used by TAE catalog to check if the value set for the schema in the code is
+		// matching the Attribute storage format. It is used by verifyAttr() and used to verify
+		// `MoDatabaseTypes = []types.Type` declaration and value set are accordingly.
+		// NOTE 2: If you are ever going to use vector in catalog (which you would not be needing in the most part),
+		// make sure to convert []float32 to []byte. Else this check will fail.
+		_, ok = v.([]byte)
+	case types.T_array_float64:
 		_, ok = v.([]byte)
 	case types.T_varbinary:
 		_, ok = v.([]byte)

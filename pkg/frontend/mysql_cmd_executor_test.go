@@ -111,7 +111,7 @@ func Test_mce(t *testing.T) {
 		use_t.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		runner := mock_frontend.NewMockComputationRunner(ctrl)
-		runner.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+		runner.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 
 		create_1 := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "create table A(a varchar(100),b int,c float)", 1)
@@ -122,9 +122,8 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 		create_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
-		create_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+		create_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		create_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
-		create_1.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
@@ -136,7 +135,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 		select_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
-		select_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+		select_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		select_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
 		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
@@ -214,9 +213,8 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
 			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
-			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+			select_2.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
-			select_2.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 			select_2.EXPECT().GetColumns().Return(self_handle_sql_columns[i], nil).AnyTimes()
 			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 			cws = append(cws, select_2)
@@ -234,6 +232,7 @@ func Test_mce(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := NewSession(proto, nil, pu, &gSys, true, nil, nil)
+		proto.SetSession(ses)
 		ses.txnHandler = &TxnHandler{
 			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
 			txnClient: pu.TxnClient,
@@ -315,6 +314,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
@@ -632,6 +632,8 @@ func Test_typeconvert(t *testing.T) {
 			types.T_time,
 			types.T_datetime,
 			types.T_json,
+			types.T_array_float32,
+			types.T_array_float64,
 		}
 
 		type kase struct {
@@ -655,6 +657,8 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
+			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
+			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 		}
 
 		convey.So(len(input), convey.ShouldEqual, len(output))
@@ -950,6 +954,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
+		proto.SetSession(ses)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}

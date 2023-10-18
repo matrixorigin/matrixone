@@ -1,0 +1,11 @@
+create table if not exists indup_01 (a int primary key, b int);
+
+insert into indup_01 values (1,1);
+insert into indup_01 values (1,2),(2,2) on duplicate key ignore;
+select * from indup_01;
+
+insert into indup_01 values (3,1),(3,2),(3,3) on duplicate key ignore;
+select * from indup_01;
+
+insert into indup_01 values (null,1),(null,2),(null,null) on duplicate key ignore;
+select * from indup_01;

@@ -57,6 +57,8 @@ func SortBlockColumns(
 		Sort(cols[pk], numericLess[types.Datetime], sortedIdx)
 	case types.T_timestamp:
 		Sort(cols[pk], numericLess[types.Timestamp], sortedIdx)
+	case types.T_enum:
+		Sort(cols[pk], numericLess[types.Enum], sortedIdx)
 	case types.T_decimal64:
 		Sort(cols[pk], ltTypeLess[types.Decimal64], sortedIdx)
 	case types.T_decimal128:
@@ -70,8 +72,10 @@ func SortBlockColumns(
 	case types.T_Blockid:
 		Sort(cols[pk], blockidLess, sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		Sort(cols[pk], bytesLess, sortedIdx)
+	//TODO: check if I should add T_array here? Is bytesLess enough?
 	default:
 		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
 	}
@@ -119,6 +123,8 @@ func MergeSortedColumn(
 		ret, mapping = Merge(column, sortedIdx, numericLess[types.Datetime], fromLayout, toLayout, pool)
 	case types.T_timestamp:
 		ret, mapping = Merge(column, sortedIdx, numericLess[types.Timestamp], fromLayout, toLayout, pool)
+	case types.T_enum:
+		ret, mapping = Merge(column, sortedIdx, numericLess[types.Enum], fromLayout, toLayout, pool)
 	case types.T_decimal64:
 		ret, mapping = Merge(column, sortedIdx, ltTypeLess[types.Decimal64], fromLayout, toLayout, pool)
 	case types.T_decimal128:
@@ -132,7 +138,8 @@ func MergeSortedColumn(
 	case types.T_Blockid:
 		ret, mapping = Merge(column, sortedIdx, blockidLess, fromLayout, toLayout, pool)
 	case types.T_char, types.T_json, types.T_varchar,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		ret, mapping = Merge(column, sortedIdx, bytesLess, fromLayout, toLayout, pool)
 	default:
 		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))

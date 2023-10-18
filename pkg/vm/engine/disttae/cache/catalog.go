@@ -16,6 +16,7 @@ package cache
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -301,6 +302,26 @@ func (cc *CatalogCache) DeleteTable(bat *batch.Batch) {
 				Ts:         timestamps[i].ToTimestamp(),
 			}
 			cc.tables.addTableItem(newItem)
+
+			key := TableKey{
+				AccountId:  item.AccountId,
+				DatabaseId: item.DatabaseId,
+				Name:       item.Name,
+			}
+
+			oldVersion := cc.tables.tableGuard.getSchemaVersion(key)
+
+			if oldVersion != nil && oldVersion.TableId != item.Id {
+				// drop old table for alter table stmt
+				oldVersion.Version = math.MaxUint32
+				cc.tables.tableGuard.setSchemaVersion(key, oldVersion)
+			} else {
+				// normal drop table stmt
+				cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+					Version: math.MaxUint32,
+					Ts:      &item.Ts,
+				})
+			}
 		}
 	}
 }
@@ -362,7 +383,8 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.ClusterByIdx = -1
 		copy(item.Rowid[:], rowids[i][:])
 		// invalid old name table
-		if exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]}); ok && exist.Name != item.Name {
+		exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]})
+		if ok && exist.Name != item.Name {
 			logutil.Infof("rename invalidate %d-%s,v%d@%s", exist.Id, exist.Name, exist.Version, item.Ts.String())
 			newItem := &TableItem{
 				deleted:    true,
@@ -375,7 +397,30 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 				Ts:         item.Ts,
 			}
 			cc.tables.addTableItem(newItem)
+
+			key := TableKey{
+				AccountId:  account,
+				DatabaseId: item.DatabaseId,
+				Name:       exist.Name,
+			}
+			cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+				Version: math.MaxUint32,
+				Ts:      &item.Ts,
+				TableId: item.Id,
+			})
 		}
+
+		key := TableKey{
+			AccountId:  account,
+			DatabaseId: item.DatabaseId,
+			Name:       item.Name,
+		}
+
+		cc.tables.tableGuard.setSchemaVersion(key, &TableVersion{
+			Version: item.Version,
+			Ts:      &item.Ts,
+			TableId: item.Id,
+		})
 		cc.tables.addTableItem(item)
 		cc.tables.rowidIndex.Set(item)
 	}
@@ -407,6 +452,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	nums := vector.MustFixedCol[int32](bat.GetVector(catalog.MO_COLUMNS_ATTNUM_IDX + MO_OFF))
 	clusters := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	seqnums := vector.MustFixedCol[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
+	enumValues := bat.GetVector(catalog.MO_COLUMNS_ATT_ENUM_IDX + MO_OFF)
 	for i, account := range accounts {
 		key.AccountId = account
 		key.Name = tableNames.GetStringAt(i)
@@ -432,6 +478,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				constraintType:  constraintTypes.GetStringAt(i),
 				isClusterBy:     clusters[i],
 				seqnum:          seqnums[i],
+				enumValues:      enumValues.GetStringAt(i),
 			}
 			copy(col.rowid[:], rowids[i][:])
 			col.typ = append(col.typ, typs.GetBytesAt(i)...)
@@ -525,6 +572,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	attr.ClusterBy = col.isClusterBy == 1
 	attr.AutoIncrement = col.isAutoIncrement == 1
 	attr.Seqnum = col.seqnum
+	attr.EnumVlaues = col.enumValues
 	if err := types.Decode(col.typ, &attr.Type); err != nil {
 		panic(err)
 	}
@@ -559,10 +607,11 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
 				Typ: &plan.Type{
-					Id:       int32(attr.Attr.Type.Oid),
-					Width:    attr.Attr.Type.Width,
-					Scale:    attr.Attr.Type.Scale,
-					AutoIncr: attr.Attr.AutoIncrement,
+					Id:         int32(attr.Attr.Type.Oid),
+					Width:      attr.Attr.Type.Width,
+					Scale:      attr.Attr.Type.Scale,
+					AutoIncr:   attr.Attr.AutoIncrement,
+					Enumvalues: attr.Attr.EnumVlaues,
 				},
 				Primary:  attr.Attr.Primary,
 				Default:  attr.Attr.Default,
@@ -581,21 +630,12 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 	}
 }
 
-// GetDeletedTableIndex returns the max index of deleted tables slice.
-func (cc *CatalogCache) GetDeletedTableIndex() int {
-	return cc.tables.tableGuard.getDeletedTableIndex()
+// GetSchemaVersion returns the version of table
+func (cc *CatalogCache) GetSchemaVersion(name TableKey) *TableVersion {
+	return cc.tables.tableGuard.getSchemaVersion(name)
 }
 
-// GetDeletedTables returns the deleted tables in [cachedIndex+1:] whose timestamp is less than ts.
-func (cc *CatalogCache) GetDeletedTables(cachedIndex int, ts timestamp.Timestamp) []*TableItem {
-	return cc.tables.tableGuard.getDeletedTables(cachedIndex, ts)
-}
-
-// addTableItem inserts a new table item. If it is a deleted one, also push the
-// item into tableCache.tableGuard.mu.deletedTables.
+// addTableItem inserts a new table item.
 func (c *tableCache) addTableItem(item *TableItem) {
 	c.data.Set(item)
-	if item != nil && item.deleted {
-		c.tableGuard.pushDeletedTable(item)
-	}
 }

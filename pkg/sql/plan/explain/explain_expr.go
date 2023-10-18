@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -77,6 +78,8 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString("'" + val.Sval + "'")
 		case *plan.Const_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
+		case *plan.Const_EnumVal:
+			fmt.Fprintf(buf, "%v", types.Date(val.EnumVal))
 		case *plan.Const_Decimal64Val:
 			fmt.Fprintf(buf, "%s", types.Decimal64(val.Decimal64Val.A).Format(expr.Typ.GetScale()))
 		case *plan.Const_Decimal128Val:
@@ -155,8 +158,12 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 				return err
 			}
 		}
+	case *plan.Expr_Bin:
+		vec := vector.NewVec(types.T_any.ToType())
+		vec.UnmarshalBinary(exprImpl.Bin.Data)
+		buf.WriteString(vec.String())
 	default:
-		panic("error Expr")
+		panic("unsupported expr")
 	}
 	return nil
 }
@@ -227,7 +234,8 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		}
 		buf.WriteString(")")
 	case function.CAST_EXPRESSION:
-		buf.WriteString("CAST(")
+		buf.WriteString(funcName)
+		buf.WriteString("(")
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
 			return err
@@ -277,7 +285,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		if err != nil {
 			return err
 		}
-		buf.WriteString(" " + funcExpr.F.Func.GetObjName() + "(")
+		buf.WriteString(" " + funcExpr.F.Func.GetObjName() + " (")
 		err = describeExpr(ctx, funcExpr.F.Args[1], options, buf)
 		if err != nil {
 			return err

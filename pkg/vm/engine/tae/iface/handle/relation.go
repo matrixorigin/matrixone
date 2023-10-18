@@ -29,7 +29,6 @@ import (
 type Relation interface {
 	io.Closer
 	ID() uint64
-	Rows() int64
 	String() string
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
@@ -41,8 +40,7 @@ type Relation interface {
 
 	DeleteByPhyAddrKey(key any) error
 	GetValueByPhyAddrKey(key any, col int) (any, bool, error)
-	DeleteByPhyAddrKeys(keys containers.Vector) error
-
+	DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector) error
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
 	TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
 	Update(id *common.ID, row uint32, col uint16, v any, isNull bool) error

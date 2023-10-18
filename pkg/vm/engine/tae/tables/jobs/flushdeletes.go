@@ -16,11 +16,11 @@ package jobs
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -29,7 +29,6 @@ import (
 type flushDeletesTask struct {
 	*tasks.BaseTask
 	delta  *containers.Batch
-	meta   *catalog.BlockEntry
 	fs     *objectio.ObjectFS
 	name   objectio.ObjectName
 	blocks []objectio.BlockObject
@@ -38,11 +37,9 @@ type flushDeletesTask struct {
 func NewFlushDeletesTask(
 	ctx *tasks.Context,
 	fs *objectio.ObjectFS,
-	meta *catalog.BlockEntry,
 	delta *containers.Batch,
 ) *flushDeletesTask {
 	task := &flushDeletesTask{
-		meta:  meta,
 		fs:    fs,
 		delta: delta,
 	}
@@ -50,16 +47,16 @@ func NewFlushDeletesTask(
 	return task
 }
 
-func (task *flushDeletesTask) Scope() *common.ID { return task.meta.AsCommonID() }
+func (task *flushDeletesTask) Scope() *common.ID { return nil }
 
 func (task *flushDeletesTask) Execute(ctx context.Context) error {
-	name := task.meta.BuildDeleteObjectName()
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	task.name = name
 	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, 0, nil)
 	if err != nil {
 		return err
 	}
-	_, err = writer.WriteBatchWithOutIndex(containers.ToCNBatch(task.delta))
+	_, err = writer.WriteTombstoneBatch(containers.ToCNBatch(task.delta))
 	if err != nil {
 		return err
 	}

@@ -171,7 +171,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg1.DisableWorkers = true
 	cfg1.HAKeeperConfig.TickPerSecond = 10
 	cfg1.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg1.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
+	cfg1.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
 	cfg1.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	cfg2 := DefaultConfig()
 	cfg2.UUID = uuid.New().String()
@@ -186,7 +186,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg2.DisableWorkers = true
 	cfg2.HAKeeperConfig.TickPerSecond = 10
 	cfg2.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg2.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
+	cfg2.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
 	cfg2.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	cfg3 := DefaultConfig()
 	cfg3.UUID = uuid.New().String()
@@ -201,7 +201,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg3.DisableWorkers = true
 	cfg3.HAKeeperConfig.TickPerSecond = 10
 	cfg3.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg3.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
+	cfg3.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
 	cfg3.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	cfg4 := DefaultConfig()
 	cfg4.UUID = uuid.New().String()
@@ -216,7 +216,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg4.DisableWorkers = true
 	cfg4.HAKeeperConfig.TickPerSecond = 10
 	cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
-	cfg4.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
+	cfg4.HAKeeperConfig.TNStoreTimeout.Duration = 10 * time.Second
 	cfg4.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	service1, err := NewService(cfg1,
 		newFS(),
@@ -275,16 +275,19 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 
 func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 	fn := func(t *testing.T, services []*Service) {
-		// bootstrap the cluster, 1 DN 1 Log shard, Log and HAKeeper have
+		// bootstrap the cluster, 1 TN 1 Log shard, Log and HAKeeper have
 		// 3 replicas
 		store1 := services[0].store
 		state, err := store1.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store1.setInitialClusterInfo(1, 1, 3))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store1.setInitialClusterInfo(1, 1, 3, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store1.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 
 		sendHeartbeat := func(ss []*Service) {
 			for _, s := range ss {
@@ -312,14 +315,14 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		}
 		sendHeartbeat(services[:3])
 
-		// fake a DN store
-		dnMsg := pb.DNStoreHeartbeat{
+		// fake a TN store
+		tnMsg := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
-			Shards: make([]pb.DNShardInfo, 0),
+			Shards: make([]pb.TNShardInfo, 0),
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		_, err = services[0].store.addDNStoreHeartbeat(ctx, dnMsg)
+		_, err = services[0].store.addTNStoreHeartbeat(ctx, tnMsg)
 		require.NoError(t, err)
 
 		// find out the leader HAKeeper store as we need the term value
@@ -378,27 +381,27 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 			}
 		}
 
-		// get the DN bootstrap command, it contains DN shard and replica ID
-		cb, err := leaderStore.getCommandBatch(ctx, dnMsg.UUID)
+		// get the TN bootstrap command, it contains TN shard and replica ID
+		cb, err := leaderStore.getCommandBatch(ctx, tnMsg.UUID)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(cb.Commands))
 		cmd := cb.Commands[0]
 		assert.True(t, cmd.Bootstrapping)
-		assert.Equal(t, pb.DNService, cmd.ServiceType)
-		dnShardInfo := pb.DNShardInfo{
+		assert.Equal(t, pb.TNService, cmd.ServiceType)
+		tnShardInfo := pb.TNShardInfo{
 			ShardID:   cmd.ConfigChange.Replica.ShardID,
 			ReplicaID: cmd.ConfigChange.Replica.ReplicaID,
 		}
-		dnMsg.Shards = append(dnMsg.Shards, dnShardInfo)
-		// as if DN is running
-		_, err = services[0].store.addDNStoreHeartbeat(ctx, dnMsg)
+		tnMsg.Shards = append(tnMsg.Shards, tnShardInfo)
+		// as if TN is running
+		_, err = services[0].store.addTNStoreHeartbeat(ctx, tnMsg)
 		require.NoError(t, err)
-		// fake a free DN store
-		dnMsg2 := pb.DNStoreHeartbeat{
+		// fake a free TN store
+		tnMsg2 := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
-			Shards: make([]pb.DNShardInfo, 0),
+			Shards: make([]pb.TNShardInfo, 0),
 		}
-		_, err = services[0].store.addDNStoreHeartbeat(ctx, dnMsg2)
+		_, err = services[0].store.addTNStoreHeartbeat(ctx, tnMsg2)
 		require.NoError(t, err)
 
 		// stop store 1
@@ -408,7 +411,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		services = services[1:]
 
 		// wait for HAKeeper to repair the Log & HAKeeper shards
-		dnRepaired := false
+		tnRepaired := false
 		for i := 0; i < 5000; i++ {
 			testLogger.Debug(fmt.Sprintf("iteration %d", i))
 			tn := func() (bool, error) {
@@ -432,7 +435,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 				} else {
 					services[2].handleCommands(cb.Commands)
 				}
-				if _, err := services[0].store.addDNStoreHeartbeat(ctx, dnMsg2); err != nil {
+				if _, err := services[0].store.addTNStoreHeartbeat(ctx, tnMsg2); err != nil {
 					return false, err
 				}
 
@@ -442,16 +445,16 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 						s.store.hakeeperCheck()
 					}
 
-					cb, err = services[0].store.getCommandBatch(ctx, dnMsg2.UUID)
+					cb, err = services[0].store.getCommandBatch(ctx, tnMsg2.UUID)
 					if err != nil {
 						return false, err
 					}
 					if len(cb.Commands) > 0 {
 						cmd := cb.Commands[0]
-						if cmd.ServiceType == pb.DNService {
-							if cmd.ConfigChange != nil && cmd.ConfigChange.Replica.ShardID == dnShardInfo.ShardID &&
-								cmd.ConfigChange.Replica.ReplicaID > dnShardInfo.ReplicaID {
-								dnRepaired = true
+						if cmd.ServiceType == pb.TNService {
+							if cmd.ConfigChange != nil && cmd.ConfigChange.Replica.ShardID == tnShardInfo.ShardID &&
+								cmd.ConfigChange.Replica.ReplicaID > tnShardInfo.ReplicaID {
+								tnRepaired = true
 							}
 						}
 					}
@@ -464,8 +467,8 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 						break
 					}
 				}
-				testLogger.Debug(fmt.Sprintf("dnRepaired %t, logRepaired %t", dnRepaired, logRepaired))
-				if !logRepaired || !dnRepaired {
+				testLogger.Debug(fmt.Sprintf("dnRepaired %t, logRepaired %t", tnRepaired, logRepaired))
+				if !logRepaired || !tnRepaired {
 					return false, nil
 				} else {
 					testLogger.Debug(fmt.Sprintf("repair completed, i: %d", i))
@@ -535,10 +538,13 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 	}
 	runHAKeeperStoreTest(t, false, fn)
 }
@@ -556,21 +562,24 @@ func testBootstrap(t *testing.T, fail bool) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err = store.addLogStoreHeartbeat(ctx, m)
 		assert.NoError(t, err)
 
-		dnMsg := pb.DNStoreHeartbeat{
+		tnMsg := pb.TNStoreHeartbeat{
 			UUID:   uuid.New().String(),
-			Shards: make([]pb.DNShardInfo, 0),
+			Shards: make([]pb.TNShardInfo, 0),
 		}
-		_, err = store.addDNStoreHeartbeat(ctx, dnMsg)
+		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
 		assert.NoError(t, err)
 
 		_, term, err := store.isLeaderHAKeeper()
@@ -597,11 +606,11 @@ func testBootstrap(t *testing.T, fail bool) {
 			require.NoError(t, err)
 			assert.Equal(t, pb.HAKeeperBootstrapFailed, state.State)
 		} else {
-			cb, err := store.getCommandBatch(ctx, dnMsg.UUID)
+			cb, err := store.getCommandBatch(ctx, tnMsg.UUID)
 			require.NoError(t, err)
 			require.Equal(t, 1, len(cb.Commands))
 			assert.True(t, cb.Commands[0].Bootstrapping)
-			assert.Equal(t, pb.DNService, cb.Commands[0].ServiceType)
+			assert.Equal(t, pb.TNService, cb.Commands[0].ServiceType)
 			assert.True(t, cb.Commands[0].ConfigChange.Replica.ReplicaID > 0)
 
 			cb, err = store.getCommandBatch(ctx, store.id())
@@ -643,10 +652,13 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -701,11 +713,11 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
 		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
 		assert.NoError(t, err)
-		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
+		err = taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "a"})
 		assert.NoError(t, err)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
-		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
 		store.taskSchedule(state)
@@ -713,7 +725,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		store.taskSchedule(state)
-		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 
@@ -721,15 +733,15 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
 		_, err = store.addCNStoreHeartbeat(ctx, cnMsg2)
 		assert.NoError(t, err)
-		err = taskService.Create(ctx, task.TaskMetadata{ID: "b"})
+		err = taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "b"})
 		assert.NoError(t, err)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
-		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
 		store.taskSchedule(state)
-		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}
@@ -741,10 +753,13 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey))
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+		assert.Equal(t, nextIDByKey, state.NextIDByKey)
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -799,11 +814,11 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
 		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
 		assert.NoError(t, err)
-		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
+		err = taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "a"})
 		assert.NoError(t, err)
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
-		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 0, len(tasks))
 		store.taskSchedule(state)
@@ -811,7 +826,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		state, err = store.getCheckerState()
 		require.NoError(t, err)
 		store.taskSchedule(state)
-		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 
@@ -827,13 +842,13 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				state, err = store.getCheckerState()
 				require.NoError(t, err)
 				store.taskSchedule(state)
-				tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+				tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
 				assert.NoError(t, err)
 				if len(tasks) == 0 {
 					testLogger.Info("no task found")
 					time.Sleep(50 * time.Millisecond)
 				} else {
-					tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+					tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
 					assert.Equal(t, 0, len(tasks))
 					return true
 				}

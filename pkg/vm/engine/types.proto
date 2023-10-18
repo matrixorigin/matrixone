@@ -75,6 +75,11 @@ message ForeignKeyDef {
     repeated plan.ForeignKeyDef Fkeys = 1;
 }
 
+message StreamConfigsDef {
+    option (gogoproto.typedecl)       = false;
+    repeated plan.Property Configs = 1;
+}
+
 message PrimaryKeyDef {
     option (gogoproto.typedecl) = false;
     plan.PrimaryKeyDef Pkey     = 1;
@@ -104,6 +109,7 @@ message ConstraintPB {
         PrimaryKeyDef PrimaryKeyDef       = 2;
         RefChildTableDef RefChildTableDef = 3;
         IndexDef IndexDef                 = 4;
+        StreamConfigsDef StreamConfigsDef   = 5;
     }
 }
 

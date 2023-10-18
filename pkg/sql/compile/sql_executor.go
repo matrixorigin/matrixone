@@ -17,7 +17,9 @@ package compile
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -43,7 +46,9 @@ type sqlExecutor struct {
 	fs        fileservice.FileService
 	ls        lockservice.LockService
 	qs        queryservice.QueryService
+	hakeeper  logservice.CNHAKeeperClient
 	aicm      *defines.AutoIncrCacheManager
+	buf       *buffer.Buffer
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -54,6 +59,7 @@ func NewSQLExecutor(
 	txnClient client.TxnClient,
 	fs fileservice.FileService,
 	qs queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	aicm *defines.AutoIncrCacheManager) executor.SQLExecutor {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService)
 	if !ok {
@@ -66,8 +72,10 @@ func NewSQLExecutor(
 		fs:        fs,
 		ls:        v.(lockservice.LockService),
 		qs:        qs,
+		hakeeper:  hakeeper,
 		aicm:      aicm,
 		mp:        mp,
+		buf:       buffer.New(),
 	}
 }
 
@@ -116,7 +124,7 @@ func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
 	}
 	ts := opts.Txn().Txn().CommitTS
 	if !ts.IsEmpty() {
-		s.txnClient.(client.TxnClientWithCtl).SetLatestCommitTS(ts)
+		s.txnClient.SyncLatestCommitTS(ts)
 	}
 }
 
@@ -203,9 +211,16 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.fs,
 		exec.s.ls,
 		exec.s.qs,
+		exec.s.hakeeper,
 		exec.s.aicm,
 	)
+	proc.SetVectorPoolSize(0)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	proc.SessionInfo.Buf = exec.s.buf
+	defer func() {
+		proc.CleanValueScanBatchs()
+		proc.FreeVectors()
+	}()
 
 	pn, err := plan.BuildPlan(
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
@@ -214,18 +229,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
-	c := New(
-		exec.s.addr,
-		exec.opts.Database(),
-		sql,
-		"",
-		"",
-		exec.ctx,
-		exec.s.eng,
-		proc,
-		stmts[0],
-		false,
-		nil)
+	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil)
 
 	result := executor.NewResult(exec.s.mp)
 	var batches []*batch.Batch
@@ -249,12 +253,19 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	if err != nil {
 		return executor.Result{}, err
 	}
-	if err := c.Run(0); err != nil {
+	var runResult *util.RunResult
+	runResult, err = c.Run(0)
+	if err != nil {
+		for _, bat := range batches {
+			if bat != nil {
+				bat.Clean(exec.s.mp)
+			}
+		}
 		return executor.Result{}, err
 	}
 
 	result.Batches = batches
-	result.AffectedRows = c.GetAffectedRows()
+	result.AffectedRows = runResult.AffectRows
 	return result, nil
 }
 

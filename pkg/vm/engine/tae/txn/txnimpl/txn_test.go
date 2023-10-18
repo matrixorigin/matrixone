@@ -286,6 +286,21 @@ func TestIndex(t *testing.T) {
 	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(bat.Attrs[12], window)
 	assert.Error(t, err)
+
+	// T_array
+	schema = catalog.MockSchemaAll(20, 12)
+	bat = catalog.MockBatch(schema, 500)
+	defer bat.Close()
+	idx = NewSimpleTableIndex()
+	err = idx.BatchDedup(bat.Attrs[19], bat.Vecs[19])
+	assert.Nil(t, err)
+	err = idx.BatchInsert(bat.Attrs[19], bat.Vecs[19], 0, bat.Vecs[19].Length(), 0, false)
+	assert.Nil(t, err)
+
+	window = bat.Vecs[19].Window(20, 2)
+	assert.Equal(t, 2, window.Length())
+	err = idx.BatchDedup(bat.Attrs[19], window)
+	assert.Error(t, err)
 }
 
 func TestLoad(t *testing.T) {
@@ -434,6 +449,7 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 	factory := tables.NewDataFactory(rt, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, factory, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
+	rt.Now = mgr.Now
 	mgr.Start(context.Background())
 	return c, mgr, driver
 }
@@ -513,9 +529,9 @@ func TestTransaction2(t *testing.T) {
 	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
 	t.Log(db.String())
-	assert.Equal(t, txn1.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
+	assert.Equal(t, txn1.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAtLocked())
 	assert.True(t, db.GetMeta().(*catalog.DBEntry).IsCommitted())
-	assert.Equal(t, txn1.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
+	assert.Equal(t, txn1.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAtLocked())
 	assert.True(t, rel.GetMeta().(*catalog.TableEntry).IsCommitted())
 
 	txn2, _ := mgr.StartTxn(nil)

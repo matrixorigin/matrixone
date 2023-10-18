@@ -841,3 +841,76 @@ func increaseTagCnt(expr *plan.Expr, inc int, tagCnt map[int32]int) {
 		}
 	}
 }
+
+func findHashOnPKTable(nodeID, tag int32, builder *QueryBuilder) *plan.TableDef {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		if node.BindingTags[0] == tag {
+			return node.TableDef
+		}
+	} else if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER {
+		if node.Stats.HashmapStats.HashOnPK {
+			return findHashOnPKTable(node.Children[0], tag, builder)
+		}
+	}
+	return nil
+}
+
+func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			determineHashOnPK(child, builder)
+		}
+	}
+
+	if node.NodeType != plan.Node_JOIN {
+		return
+	}
+
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = nil
+	}
+
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = nil
+	}
+
+	exprs := make([]*plan.Expr, 0)
+	for _, expr := range node.OnList {
+		if equi := isEquiCond(expr, leftTags, rightTags); equi {
+			exprs = append(exprs, expr)
+		}
+	}
+
+	hashCols := make([]*plan.ColRef, 0)
+	for _, cond := range exprs {
+		switch condImpl := cond.Expr.(type) {
+		case *plan.Expr_F:
+			expr := condImpl.F.Args[1]
+			switch exprImpl := expr.Expr.(type) {
+			case *plan.Expr_Col:
+				hashCols = append(hashCols, exprImpl.Col)
+			}
+		}
+	}
+
+	if len(hashCols) == 0 {
+		return
+	}
+
+	tableDef := findHashOnPKTable(node.Children[1], hashCols[0].RelPos, builder)
+	if tableDef == nil {
+		return
+	}
+	hashColPos := make([]int32, len(hashCols))
+	for i := range hashCols {
+		hashColPos[i] = hashCols[i].ColPos
+	}
+	if containsAllPKs(hashColPos, tableDef) {
+		node.Stats.HashmapStats.HashOnPK = true
+	}
+
+}

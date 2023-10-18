@@ -65,6 +65,10 @@ func (m *IntHashMap) Free() {
 	m.hashMap.Free(m.m)
 }
 
+func (m *IntHashMap) PreAlloc(n uint64, mp *mpool.MPool) error {
+	return m.hashMap.ResizeOnDemand(int(n), mp)
+}
+
 func (m *IntHashMap) GroupCount() uint64 {
 	return m.rows
 }
@@ -101,7 +105,11 @@ func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 		case 8:
 			fillKeys[uint64](m, vec, 8, start, count)
 		default:
-			fillStrKey(m, vec, start, count)
+			if !vec.IsConst() && vec.GetArea() == nil {
+				fillVarlenaKey(m, vec, start, count)
+			} else {
+				fillStrKey(m, vec, start, count)
+			}
 		}
 	}
 }
@@ -173,6 +181,53 @@ func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32
 				ptr := vector.GetPtrAt[T](vec, int64(i+start))
 				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
 				keyOffs[i] += size
+			}
+		}
+	}
+}
+
+func fillVarlenaKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
+	keys := m.keys
+	keyOffs := m.keyOffs
+	vcol, _ := vector.MustVarlenaRawData(vec)
+	if !vec.GetNulls().Any() {
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				v := vcol[i+start].ByteSlice()
+				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], v)
+				m.keyOffs[i] += uint32(len(v) + 1)
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				v := vcol[i+start].ByteSlice()
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], v)
+				m.keyOffs[i] += uint32(len(v))
+			}
+		}
+	} else {
+		nsp := vec.GetNulls()
+		if m.hasNull {
+			for i := 0; i < n; i++ {
+				if nsp.Contains(uint64(i + start)) {
+					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
+					keyOffs[i]++
+				} else {
+					v := vcol[i+start].ByteSlice()
+					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
+					copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], v)
+					m.keyOffs[i] += uint32(len(v) + 1)
+				}
+			}
+		} else {
+			for i := 0; i < n; i++ {
+				if nsp.Contains(uint64(i + start)) {
+					m.zValues[i] = 0
+					continue
+				}
+				v := vcol[i+start].ByteSlice()
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], v)
+				m.keyOffs[i] += uint32(len(v))
 			}
 		}
 	}

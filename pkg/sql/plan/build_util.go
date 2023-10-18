@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -107,6 +106,8 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if fstr == "char" || fstr == "binary" {
 					width = 1
+				} else if fstr == "vecf32" || fstr == "vecf64" {
+					width = types.MaxArrayDimension
 				} else {
 					width = types.MaxVarcharLen
 				}
@@ -120,6 +121,13 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
+			} else if fstr == "vecf32" || fstr == "vecf64" {
+				if width > types.MaxArrayDimension {
+					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
+				}
+				if width < 1 {
+					return nil, moerr.NewOutOfRange(ctx, fstr, " typeLen cannot be less than 1")
+				}
 			}
 			switch fstr {
 			case "char":
@@ -128,18 +136,22 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 				return &plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
 				return &plan.Type{Id: int32(types.T_varchar), Width: width}, nil
+			case "vecf32":
+				return &plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
+			case "vecf64":
+				return &plan.Type{Id: int32(types.T_array_float64), Width: width}, nil
 			}
 			// varbinary
 			return &plan.Type{Id: int32(types.T_varbinary), Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: int32(types.T_date)}, nil
 		case defines.MYSQL_TYPE_TIME:
-			return &plan.Type{Id: int32(types.T_time), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_time), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DATETIME:
 			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
-			return &plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_datetime), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			return &plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.Width, Scale: n.InternalType.Scale}, nil
+			return &plan.Type{Id: int32(types.T_timestamp), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
 			if n.InternalType.DisplayWith > 16 {
 				return &plan.Type{Id: int32(types.T_decimal128), Width: n.InternalType.DisplayWith, Scale: n.InternalType.Scale}, nil
@@ -161,6 +173,15 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*pla
 			return &plan.Type{Id: int32(types.T_blob)}, nil
 		case defines.MYSQL_TYPE_LONG_BLOB:
 			return &plan.Type{Id: int32(types.T_blob)}, nil
+		case defines.MYSQL_TYPE_ENUM:
+			if len(n.InternalType.EnumValues) > types.MaxEnumLen {
+				return nil, moerr.NewNYI(ctx, "enum type out of max length")
+			}
+			if len(n.InternalType.EnumValues) == 0 {
+				return nil, moerr.NewNYI(ctx, "enum type length err")
+			}
+
+			return &plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
 		default:
 			return nil, moerr.NewNYI(ctx, "data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
@@ -330,62 +351,62 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 
 // getAccountIds transforms the account names into account ids.
 // if accounts is nil, return the id of the sys account.
-func getAccountIds(ctx CompilerContext, accounts tree.IdentifierList) ([]uint32, error) {
-	var accountIds []uint32
-	var err error
-	if len(accounts) != 0 {
-		accountNames := make([]string, len(accounts))
-		for i, account := range accounts {
-			accountNames[i] = string(account)
-		}
-		accountIds, err = ctx.ResolveAccountIds(accountNames)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		accountIds = []uint32{catalog.System_Account}
-	}
-	if len(accountIds) == 0 {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
-	}
-	return accountIds, err
-}
+// func getAccountIds(ctx CompilerContext, accounts tree.IdentifierList) ([]uint32, error) {
+// 	var accountIds []uint32
+// 	var err error
+// 	if len(accounts) != 0 {
+// 		accountNames := make([]string, len(accounts))
+// 		for i, account := range accounts {
+// 			accountNames[i] = string(account)
+// 		}
+// 		accountIds, err = ctx.ResolveAccountIds(accountNames)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 	} else {
+// 		accountIds = []uint32{catalog.System_Account}
+// 	}
+// 	if len(accountIds) == 0 {
+// 		return nil, moerr.NewInternalError(ctx.GetContext(), "need specify account for the cluster tables")
+// 	}
+// 	return accountIds, err
+// }
 
-func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierList, tableDef *TableDef, isClusterTable bool) (*plan.ClusterTable, error) {
-	var accountIds []uint32
-	var columnIndexOfAccountId int32 = -1
-	var err error
-	if isClusterTable {
-		accountIds, err = getAccountIds(ctx, accounts)
-		if err != nil {
-			return nil, err
-		}
-		for i, col := range tableDef.GetCols() {
-			if util.IsClusterTableAttribute(col.Name) {
-				if columnIndexOfAccountId >= 0 {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
-				} else {
-					columnIndexOfAccountId = int32(i)
-				}
-			}
-		}
+// func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierList, tableDef *TableDef, isClusterTable bool) (*plan.ClusterTable, error) {
+// 	var accountIds []uint32
+// 	var columnIndexOfAccountId int32 = -1
+// 	var err error
+// 	if isClusterTable {
+// 		accountIds, err = getAccountIds(ctx, accounts)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		for i, col := range tableDef.GetCols() {
+// 			if util.IsClusterTableAttribute(col.Name) {
+// 				if columnIndexOfAccountId >= 0 {
+// 					return nil, moerr.NewInternalError(ctx.GetContext(), "there are two account_ids in the cluster table")
+// 				} else {
+// 					columnIndexOfAccountId = int32(i)
+// 				}
+// 			}
+// 		}
 
-		if columnIndexOfAccountId == -1 {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
-		} else if columnIndexOfAccountId >= int32(len(tableDef.GetCols())) {
-			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
-		}
-	} else {
-		if len(accounts) != 0 {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "can not specify the accounts for the non cluster table")
-		}
-	}
-	return &plan.ClusterTable{
-		IsClusterTable:         isClusterTable,
-		AccountIDs:             accountIds,
-		ColumnIndexOfAccountId: columnIndexOfAccountId,
-	}, nil
-}
+// 		if columnIndexOfAccountId == -1 {
+// 			return nil, moerr.NewInternalError(ctx.GetContext(), "there is no account_id in the cluster table")
+// 		} else if columnIndexOfAccountId >= int32(len(tableDef.GetCols())) {
+// 			return nil, moerr.NewInternalError(ctx.GetContext(), "the index of the account_id in the cluster table is invalid")
+// 		}
+// 	} else {
+// 		if len(accounts) != 0 {
+// 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "can not specify the accounts for the non cluster table")
+// 		}
+// 	}
+// 	return &plan.ClusterTable{
+// 		IsClusterTable:         isClusterTable,
+// 		AccountIDs:             accountIds,
+// 		ColumnIndexOfAccountId: columnIndexOfAccountId,
+// 	}, nil
+// }
 
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {

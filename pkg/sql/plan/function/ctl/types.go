@@ -27,11 +27,11 @@ import (
 type serviceType string
 
 var (
-	dn serviceType = "DN"
+	tn serviceType = "DN"
 	cn serviceType = "CN"
 
 	supportedServiceTypes = map[serviceType]struct{}{
-		dn: {},
+		tn: {},
 		cn: {},
 	}
 )
@@ -46,10 +46,12 @@ var (
 		strings.ToUpper(pb.CmdMethod_GetSnapshot.String()):   handleGetSnapshotTS,
 		strings.ToUpper(pb.CmdMethod_Checkpoint.String()):    handleCheckpoint(),
 		strings.ToUpper(pb.CmdMethod_ForceGC.String()):       handleCNGC,
-		strings.ToUpper(pb.CmdMethod_Inspect.String()):       handleInspectDN(),
+		strings.ToUpper(pb.CmdMethod_Inspect.String()):       handleInspectTN(),
 		strings.ToUpper(pb.CmdMethod_Label.String()):         handleSetLabel,
 		strings.ToUpper(pb.CmdMethod_SyncCommit.String()):    handleSyncCommit,
 		strings.ToUpper(pb.CmdMethod_AddFaultPoint.String()): handleAddFaultPoint(),
+		strings.ToUpper(pb.CmdMethod_Backup.String()):        handleBackup(),
+		strings.ToUpper(pb.CmdMethod_TraceSpan.String()):     handleTraceSpan,
 	}
 )
 

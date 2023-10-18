@@ -17,15 +17,15 @@ package function
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/assert"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,6 +76,190 @@ func BenchmarkAbsInt64(b *testing.B) {
 		_ = fcTC.BenchMarkRun()
 	}
 	b.StopTimer()
+}
+
+func initAbsArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test abs float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{-4, 9999999, -99999}, {0, -25, 49}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{{4, 9999999, 99999}, {0, 25, 49}},
+				[]bool{false, false}),
+		},
+		{
+			info: "test abs float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{-4, 9999999, -99999}, {0, -25, 49}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				[][]float64{{4, 9999999, 99999}, {0, 25, 49}},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestAbsArray(t *testing.T) {
+	testCases := initAbsArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initSummationArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test summation float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{1, 2, 3}, {4, 5, 6}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{6, 15},
+				[]bool{false, false}),
+		},
+		{
+			info: "test summation float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{1, 2, 3}, {4, 5, 6}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{6, 15},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestSummationArray(t *testing.T) {
+	testCases := initSummationArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initL1NormArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test L1Norm float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{1, 2, 3}, {4, 5, 6}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{6, 15},
+				[]bool{false, false}),
+		},
+		{
+			info: "test L1Norm float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{1, 2, 3}, {4, 5, 6}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{6, 15},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestL1NormArray(t *testing.T) {
+	testCases := initL1NormArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initL2NormArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test L2Norm float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{{1, 2, 3}, {4, 5, 6}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{3.7416573867739413, 8.774964387392123},
+				[]bool{false, false}),
+		},
+		{
+			info: "test L2Norm float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{{1, 2, 3}, {4, 5, 6}},
+					[]bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{3.7416573867739413, 8.774964387392123},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestL2NormArray(t *testing.T) {
+	testCases := initL2NormArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
 }
 
 func initAsciiStringTestCase() []tcTemp {
@@ -601,7 +785,7 @@ func TestLoadFile(t *testing.T) {
 	proc := testutil.NewProc()
 	ctx := context.Background()
 	filepath := dir + "test"
-	fs, readPath, err := fileservice.GetForETL(proc.FileService, filepath)
+	fs, readPath, err := fileservice.GetForETL(ctx, proc.FileService, filepath)
 	assert.Nil(t, err)
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: readPath,
@@ -2613,6 +2797,80 @@ func TestSleep(t *testing.T) {
 	for _, tc := range testCases2 {
 		fcTC := testutil.NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Sleep[float64])
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initBitCastTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test Decode Int8",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"a", "s", ""},
+					[]bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{97, 115, 0},
+				[]bool{false, false, true}),
+		},
+		{
+			info: "test Decode Int16",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"as", "df", ""},
+					[]bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int16.ToType(),
+					[]int16{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int16.ToType(), false,
+				[]int16{29537, 26212, 0},
+				[]bool{false, false, true}),
+		},
+		{
+			info: "test Decode Int32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"asdf", "jkl;", ""},
+					[]bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int32.ToType(),
+					[]int32{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{1717859169, 996961130, 0},
+				[]bool{false, false, true}),
+		},
+		{
+			info: "test Decode Int64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.New(types.T_varbinary, 10, 0),
+					[]string{"asdfjkl;", ""},
+					[]bool{false, true}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{4281915450451063649, 0},
+				[]bool{false, true}),
+		},
+	}
+}
+
+func TestBitCast(t *testing.T) {
+	testCases := initBitCastTestCase()
+
+	// do the test work.
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc,
+			tc.inputs, tc.expect, BitCast)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

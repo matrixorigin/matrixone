@@ -51,9 +51,6 @@ type Router interface {
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
 
-	// SelectByTenant selects the CN servers belongs to the tenant.
-	SelectByTenant(tenant Tenant) ([]*CNServer, error)
-
 	// Connect connects to the CN server and returns the connection.
 	// It should take a handshakeResp as a parameter, which is the auth
 	// request from client including tenant, username, database and others.
@@ -81,6 +78,8 @@ type CNServer struct {
 	uuid string
 	// addr is the net address of CN server.
 	addr string
+	// internalConn indicates the connection is from internal network. Default is false,
+	internalConn bool
 }
 
 // Connect connects to backend server and returns IOSession.
@@ -90,20 +89,22 @@ func (s *CNServer) Connect() (goetty.IOSession, error) {
 	if err != nil {
 		return nil, newConnectErr(err)
 	}
-	// When build connection with backend server, proxy send its salt
-	// to make sure the backend server uses the same salt to do authentication.
-	if err := c.Write(s.salt, goetty.WriteOptions{Flush: true}); err != nil {
-		return nil, err
+	if len(s.salt) != 20 {
+		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
 	}
-
-	// Send labels information.
-	reqLabel := &pb.RequestLabel{
-		Labels: s.reqLabel.allLabels(),
+	info := &pb.ExtraInfo{
+		Salt: s.salt,
+		Label: pb.RequestLabel{
+			Labels: s.reqLabel.allLabels(),
+		},
+		InternalConn: s.internalConn,
 	}
-	data, err := reqLabel.Encode()
+	data, err := info.Encode()
 	if err != nil {
 		return nil, err
 	}
+	// When build connection with backend server, proxy send its salt, request
+	// labels and other information to the backend server.
 	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
 		return nil, err
 	}
@@ -116,7 +117,6 @@ func (s *CNServer) Connect() (goetty.IOSession, error) {
 type router struct {
 	rebalancer *rebalancer
 	moCluster  clusterservice.MOCluster
-	sqlRouter  SQLRouter
 	test       bool
 }
 
@@ -126,13 +126,11 @@ var _ Router = (*router)(nil)
 func newRouter(
 	mc clusterservice.MOCluster,
 	r *rebalancer,
-	sqlRouter SQLRouter,
 	test bool,
 ) Router {
 	return &router{
 		rebalancer: r,
 		moCluster:  mc,
-		sqlRouter:  sqlRouter,
 		test:       test,
 	}
 }
@@ -150,15 +148,6 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 		uuid:          cn.uuid,
 		addr:          cn.addr,
 	}, nil
-}
-
-// SelectByTenant implements the Router interface.
-func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
-	cns, err := r.sqlRouter.GetCNServersByTenant(string(tenant))
-	if err != nil {
-		return nil, err
-	}
-	return cns, nil
 }
 
 // selectForSuperTenant is used to select CN servers for sys tenant.

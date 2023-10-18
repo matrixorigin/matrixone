@@ -73,12 +73,20 @@ func (s *service) heartbeat(ctx context.Context) {
 		Role:               s.metadata.Role,
 		TaskServiceCreated: s.GetTaskRunner() != nil,
 		QueryAddress:       s.queryServiceServiceAddr(),
+		InitWorkState:      s.cfg.InitWorkState,
+		GossipAddress:      s.gossipServiceAddr(),
+		GossipJoined:       s.gossipNode.Joined(),
+		ConfigData:         s.config.GetData(),
 	}
+
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return
 	}
+
+	s.config.DecrCount()
+
 	s.handleCommands(cb.Commands)
 }
 
@@ -91,7 +99,22 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 		if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
-			s.createProxyUser(cmd.CreateTaskService)
+			s.upgrade()
+		} else if s.gossipNode.Created() && cmd.JoinGossipCluster != nil {
+			s.gossipNode.SetJoined()
+
+			// Start an async task to join the gossip cluster to avoid the long time joining, and if
+			// it fails to join cluster, unset the joined state to give it another try.
+			if err := s.stopper.RunNamedTask("join gossip cluster", func(ctx context.Context) {
+				// The local state may be large, so do not set a timeout context.
+				if err := s.gossipNode.Join(cmd.JoinGossipCluster.Existing); err != nil {
+					s.logger.Error("failed to join gossip cluster", zap.Error(err))
+					s.gossipNode.UnsetJoined()
+				}
+			}); err != nil {
+				s.logger.Error("failed to start task to join gossip cluster", zap.Error(err))
+				s.gossipNode.UnsetJoined()
+			}
 		}
 	}
 }

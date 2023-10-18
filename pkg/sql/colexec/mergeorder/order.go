@@ -59,7 +59,7 @@ type container struct {
 	compares  []compare.Compare
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		mp := proc.Mp()
 		ctr := arg.ctr

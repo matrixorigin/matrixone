@@ -17,6 +17,8 @@ package mergecte
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -28,8 +30,9 @@ func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
-	ap.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers))
+	ap.ctr.nodeCnt = int32(len(proc.Reg.MergeReceivers)) - 1
 	ap.ctr.curNodeCnt = ap.ctr.nodeCnt
+	ap.ctr.status = sendInitial
 	return nil
 }
 
@@ -41,25 +44,43 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	ctr := ap.ctr
 	var sb *batch.Batch
 	var end bool
+	var err error
 
-	for {
-		sb, end, _ = ctr.ReceiveFromAllRegs(anal)
-		if end {
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+	switch ctr.status {
+	case sendInitial:
+		sb, _, err = ctr.ReceiveFromSingleReg(0, anal)
+		if err != nil {
+			return process.ExecStop, err
 		}
+		if sb == nil {
+			ctr.status = sendLastTag
+		}
+		fallthrough
+	case sendLastTag:
+		if ctr.status == sendLastTag {
+			ctr.status = sendRecursive
+			sb = makeRecursiveBatch(proc)
+			ctr.RemoveChosen(1)
+		}
+	case sendRecursive:
+		for {
+			sb, end, _ = ctr.ReceiveFromAllRegs(anal)
+			if sb == nil || end {
+				proc.SetInputBatch(nil)
+				return process.ExecStop, nil
+			}
+			if !sb.Last() {
+				break
+			}
 
-		if sb.Last() {
 			sb.SetLast()
 			ap.ctr.curNodeCnt--
 			if ap.ctr.curNodeCnt == 0 {
 				ap.ctr.curNodeCnt = ap.ctr.nodeCnt
 				break
 			} else {
-				sb.Clean(proc.Mp())
+				proc.PutBatch(sb)
 			}
-		} else {
-			break
 		}
 	}
 
@@ -67,4 +88,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	anal.Output(sb, isLast)
 	proc.SetInputBatch(sb)
 	return process.ExecNext, nil
+}
+
+func makeRecursiveBatch(proc *process.Process) *batch.Batch {
+	b := batch.NewWithSize(1)
+	b.Attrs = []string{
+		"recursive_col",
+	}
+	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
+	batch.SetLength(b, 1)
+	b.SetLast()
+	return b
 }

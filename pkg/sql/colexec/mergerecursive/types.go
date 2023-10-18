@@ -21,24 +21,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	SendA         = 0
-	SendLastBatch = 1
-	SendB         = 2
-)
-
 type container struct {
 	colexec.ReceiverOperator
-	bats   []*batch.Batch
-	status int32
-	last   bool
+	bats []*batch.Batch
+	last bool
 }
 
 type Argument struct {
 	ctr *container
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	for _, b := range arg.ctr.bats {
 		b.Clean(proc.Mp())
 		arg.ctr.bats = nil

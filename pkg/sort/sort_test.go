@@ -88,6 +88,12 @@ func init() {
 
 		newTestCase(true, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
 		newTestCase(false, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
+
+		newTestCase(true, mp, types.New(types.T_array_float32, types.MaxArrayDimension, 0)),
+		newTestCase(false, mp, types.New(types.T_array_float32, types.MaxArrayDimension, 0)),
+
+		newTestCase(true, mp, types.New(types.T_array_float64, types.MaxArrayDimension, 0)),
+		newTestCase(false, mp, types.New(types.T_array_float64, types.MaxArrayDimension, 0)),
 	}
 }
 

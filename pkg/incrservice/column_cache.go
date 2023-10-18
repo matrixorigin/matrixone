@@ -16,7 +16,6 @@ package incrservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
@@ -104,6 +104,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt8,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt8 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"tinyint",
@@ -120,6 +123,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt16,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt16 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"smallint",
@@ -135,6 +141,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt32,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt32 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"int",
@@ -151,6 +160,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxInt64,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxInt64 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"bigint",
@@ -167,6 +179,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint8,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint8 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"tinyint unsigned",
@@ -183,6 +198,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint16,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint16 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"smallint unsigned",
@@ -199,6 +217,9 @@ func (col *columnCache) insertAutoValues(
 			math.MaxUint32,
 			col,
 			func(v uint64) error {
+				if v == 0 {
+					v = math.MaxUint32 + 1
+				}
 				return moerr.NewOutOfRange(
 					ctx,
 					"int unsigned",
@@ -266,7 +287,8 @@ func (col *columnCache) applyAutoValues(
 	rows int,
 	skipped *ranges,
 	filter func(i int) bool,
-	apply func(int, uint64) error) error {
+	apply func(int, uint64) error,
+	txnOp client.TxnOperator) error {
 	cul := col.concurrencyApply.Load()
 	col.concurrencyApply.Add(1)
 	col.Lock()
@@ -282,7 +304,7 @@ func (col *columnCache) applyAutoValues(
 		}
 
 		if col.ranges.empty() {
-			if err := col.allocateLocked(ctx, tableID, rows, cul); err != nil {
+			if err := col.allocateLocked(ctx, tableID, rows, cul, txnOp); err != nil {
 				return false, err
 			}
 		}
@@ -353,7 +375,8 @@ func (col *columnCache) allocateLocked(
 	ctx context.Context,
 	tableID uint64,
 	count int,
-	beforeApplyCount uint64) error {
+	beforeApplyCount uint64,
+	txnOp client.TxnOperator) error {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}
@@ -373,7 +396,7 @@ func (col *columnCache) allocateLocked(
 			tableID,
 			col.col.ColName,
 			count*n,
-			nil)
+			txnOp)
 		if err == nil {
 			col.allocateCount.Add(1)
 			col.applyAllocateLocked(from, to)
@@ -382,7 +405,7 @@ func (col *columnCache) allocateLocked(
 	}
 }
 
-func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64) {
+func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) {
 	col.Lock()
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
@@ -390,7 +413,7 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64) {
 		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
 			tableID,
 			col.cfg.CountPerAllocate,
-			nil)
+			txnOp)
 	}
 }
 
@@ -425,7 +448,7 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 			return nil
 		}
 		c := col.allocatingC
-		// we must unlock here, becase we may wait for a long time. And Lock will added
+		// we must unlock here, because we may wait for a long time. And Lock will added
 		// before return, because the caller holds the lock and call this method and use
 		// defer to unlock.
 		col.Unlock()
@@ -457,7 +480,7 @@ func insertAutoValues[T constraints.Integer](
 	// all values are filled after insert
 	defer func() {
 		vec.SetNulls(nil)
-		col.maybeAllocate(ctx, tableID)
+		col.maybeAllocate(ctx, tableID, txnOp)
 	}()
 
 	vs := vector.MustFixedCol[T](vec)
@@ -501,7 +524,7 @@ func insertAutoValues[T constraints.Integer](
 			}
 		}
 	}
-	col.preAllocate(ctx, tableID, rows, nil)
+	col.preAllocate(ctx, tableID, rows, txnOp)
 	err := col.applyAutoValues(
 		ctx,
 		tableID,
@@ -523,7 +546,8 @@ func insertAutoValues[T constraints.Integer](
 			vs[i] = T(v)
 			lastInsertValue = v
 			return nil
-		})
+		},
+		txnOp)
 	if err != nil {
 		return 0, err
 	}

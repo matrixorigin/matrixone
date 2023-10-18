@@ -17,33 +17,34 @@ package objectio
 import (
 	"bytes"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
-type selectivityStats struct {
+type hitStats struct {
 	hit   stats.Counter
 	total stats.Counter
 }
 
-func (s *selectivityStats) Record(hit, total int) {
+func (s *hitStats) Record(hit, total int) {
 	s.total.Add(int64(total))
 	s.hit.Add(int64(hit))
 }
 
-func (s *selectivityStats) Export() (hit, total int64) {
+func (s *hitStats) Export() (hit, total int64) {
 	hit = s.hit.Load()
 	total = s.total.Load()
 	return
 }
 
-func (s *selectivityStats) ExportW() (hit, total int64) {
+func (s *hitStats) ExportW() (hit, total int64) {
 	hit = s.hit.SwapW(0)
 	total = s.total.SwapW(0)
 	return
 }
 
-func (s *selectivityStats) ExportAll() (whit, wtotal int64, hit, total int64) {
+func (s *hitStats) ExportAll() (whit, wtotal int64, hit, total int64) {
 	whit = s.hit.SwapW(0)
 	wtotal = s.total.SwapW(0)
 	hit = s.hit.Swap(0)
@@ -52,9 +53,13 @@ func (s *selectivityStats) ExportAll() (whit, wtotal int64, hit, total int64) {
 }
 
 type Stats struct {
-	blockSelectivity      selectivityStats
-	columnSelectivity     selectivityStats
-	readFilterSelectivity selectivityStats
+	blockSelectivity      hitStats
+	columnSelectivity     hitStats
+	readFilterSelectivity hitStats
+	readDelCnt            stats.Counter
+	readDelOpTotal        stats.Counter
+	readDelRead           stats.Counter
+	readDelBisect         stats.Counter
 }
 
 func NewStats() *Stats {
@@ -104,6 +109,21 @@ func (s *Stats) ExportColumnSelctivity() (
 	return
 }
 
+func (s *Stats) RecordReadDel(total, read, bisect time.Duration) {
+	s.readDelOpTotal.Add(int64(total))
+	s.readDelRead.Add(int64(read))
+	s.readDelBisect.Add(int64(bisect))
+	s.readDelCnt.Add(1)
+}
+
+func (s *Stats) ExportReadDel() (total, read, bisect time.Duration, cnt int64) {
+	total = time.Duration(s.readDelOpTotal.SwapW(0))
+	read = time.Duration(s.readDelRead.SwapW(0))
+	bisect = time.Duration(s.readDelBisect.SwapW(0))
+	cnt = s.readDelCnt.SwapW(0)
+	return
+}
+
 func (s *Stats) ExportString() string {
 	var w bytes.Buffer
 	whit, wtotal := s.ExportBlockSelectivity()
@@ -111,13 +131,13 @@ func (s *Stats) ExportString() string {
 	if wtotal != 0 {
 		wrate = float64(whit) / float64(wtotal)
 	}
-	fmt.Fprintf(&w, "SelectivityStats: BLK[%d/%d=%0.2f] ", whit, wtotal, wrate)
+	fmt.Fprintf(&w, "SelectivityStats: BLK[%d/%d=%0.4f] ", whit, wtotal, wrate)
 	whit, wtotal = s.ExportColumnSelctivity()
 	wrate = 0.0
 	if wtotal != 0 {
 		wrate = float64(whit) / float64(wtotal)
 	}
-	fmt.Fprintf(&w, "COL[%d/%d=%0.2f] ", whit, wtotal, wrate)
+	fmt.Fprintf(&w, "COL[%d/%d=%0.4f] ", whit, wtotal, wrate)
 	whit, wtotal, hit, total := s.ExportReadFilterSelectivity()
 	wrate = 0.0
 	if wtotal != 0 {
@@ -126,6 +146,8 @@ func (s *Stats) ExportString() string {
 	if total != 0 {
 		rate = float64(hit) / float64(total)
 	}
-	fmt.Fprintf(&w, "RDF[%d/%d=%0.2f,%d/%d=%0.2f]", whit, wtotal, wrate, hit, total, rate)
+	fmt.Fprintf(&w, "RDF[%d/%d=%0.4f,%d/%d=%0.4f]", whit, wtotal, wrate, hit, total, rate)
+	rtotal, rread, rbisect, rcnt := s.ExportReadDel()
+	fmt.Fprintf(&w, "RDD[%v/%v/%v/%v]", rtotal, rread, rbisect, rcnt)
 	return w.String()
 }

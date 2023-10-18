@@ -150,7 +150,7 @@ func newLogStore(cfg Config,
 	hakeeperConfig := cfg.GetHAKeeperConfig()
 	rt.SubLogger(runtime.SystemInit).Info("HAKeeper Timeout Configs",
 		zap.Int64("LogStoreTimeout", int64(hakeeperConfig.LogStoreTimeout)),
-		zap.Int64("DNStoreTimeout", int64(hakeeperConfig.DNStoreTimeout)),
+		zap.Int64("DNStoreTimeout", int64(hakeeperConfig.TNStoreTimeout)),
 		zap.Int64("CNStoreTimeout", int64(hakeeperConfig.CNStoreTimeout)),
 	)
 	ls := &store{
@@ -352,10 +352,10 @@ func (l *store) read(ctx context.Context,
 	}
 }
 
-func (l *store) getOrExtendDNLease(ctx context.Context,
-	shardID uint64, dnID uint64) error {
+func (l *store) getOrExtendTNLease(ctx context.Context,
+	shardID uint64, tnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
-	cmd := getSetLeaseHolderCmd(dnID)
+	cmd := getSetLeaseHolderCmd(tnID)
 	_, err := l.propose(ctx, session, cmd)
 	return err
 }
@@ -466,10 +466,10 @@ func (l *store) cnAllocateID(ctx context.Context,
 	return result.Value, nil
 }
 
-func (l *store) addDNStoreHeartbeat(ctx context.Context,
-	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
+func (l *store) addTNStoreHeartbeat(ctx context.Context,
+	hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
-	cmd := hakeeper.GetDNStoreHeartbeatCmd(data)
+	cmd := hakeeper.GetTNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	if result, err := l.propose(ctx, session, cmd); err != nil {
 		l.runtime.Logger().Error("propose failed", zap.Error(err))
@@ -613,6 +613,20 @@ func (l *store) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) err
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
 		return nil
+	}
+}
+
+func (l *store) addProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+	data := MustMarshal(&hb)
+	cmd := hakeeper.GetProxyHeartbeatCmd(data)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("propose failed", zap.Error(err))
+		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return cb, nil
 	}
 }
 

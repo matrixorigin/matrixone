@@ -35,12 +35,12 @@ type outputQueue struct {
 	mrs          *MysqlResultSet
 	rowIdx       uint64
 	length       uint64
-	ep           *ExportParam
+	ep           *ExportConfig
 	lineStr      []byte
 	showStmtType ShowStatementType
 }
 
-func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportParam) *outputQueue {
+func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *MysqlResultSet, ep *ExportConfig) *outputQueue {
 	const countOfResultSet = 1
 	if ctx == nil {
 		ctx = ses.GetRequestContext()
@@ -62,7 +62,7 @@ func NewOutputQueue(ctx context.Context, ses *Session, columnCount int, mrs *Mys
 	}
 
 	if ep == nil {
-		ep = ses.GetExportParam()
+		ep = ses.GetExportConfig()
 	}
 
 	return &outputQueue{
@@ -107,7 +107,7 @@ func (oq *outputQueue) flush() error {
 	if oq.rowIdx <= 0 {
 		return nil
 	}
-	if oq.ep.Outfile {
+	if oq.ep.needExportToFile() {
 		if err := exportDataToCSVFile(oq); err != nil {
 			logError(oq.ses, oq.ses.GetDebugString(),
 				"Error occurred while exporting to CSV file",
@@ -210,6 +210,16 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
+	case types.T_array_float32:
+		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
+		//+------------------------------+
+		//| abs(cast([1,2,3] as vecf32)) |
+		//+------------------------------+
+		//|   �?   @  @@                  |
+		//+------------------------------+
+		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
+	case types.T_array_float64:
+		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
 		row[i] = vector.GetFixedAt[types.Date](vec, rowIndex)
 	case types.T_datetime:
@@ -236,6 +246,8 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = vector.GetFixedAt[types.Blockid](vec, rowIndex)
 	case types.T_TS:
 		row[i] = vector.GetFixedAt[types.TS](vec, rowIndex)
+	case types.T_enum:
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
 	default:
 		logError(ses, ses.GetDebugString(),
 			"Failed to extract row from vector, unsupported type",

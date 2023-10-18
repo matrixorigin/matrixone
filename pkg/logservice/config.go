@@ -16,6 +16,8 @@ package logservice
 
 import (
 	"fmt"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"strconv"
 	"strings"
 	"time"
@@ -67,13 +69,13 @@ type Config struct {
 	// will not be able to communicate via raft.
 	DeploymentID uint64 `toml:"deployment-id"`
 	// UUID is the UUID of the log service node. UUID value must be set.
-	UUID string `toml:"uuid"`
+	UUID string `toml:"uuid" user_setting:"basic"`
 	// RTTMillisecond is the average round trip time between log service nodes in
 	// milliseconds.
 	RTTMillisecond uint64 `toml:"rttmillisecond"`
 	// DataDir is the name of the directory for storing all log service data. It
 	// should a locally mounted partition with good write and fsync performance.
-	DataDir string `toml:"data-dir"`
+	DataDir string `toml:"data-dir" user_setting:"basic"`
 	// SnapshotExportDir is the directory where the dragonboat snapshots are
 	// exported.
 	SnapshotExportDir string `toml:"snapshot-export-dir"`
@@ -85,17 +87,17 @@ type Config struct {
 	// no port value in it.
 	ServiceHost string `toml:"service-host"`
 	// ServiceAddress is log service's service address that can be reached by
-	// other nodes such as DN nodes. It is deprecated and will be removed.
-	ServiceAddress string `toml:"logservice-address"`
+	// other nodes such as TN nodes. It is deprecated and will be removed.
+	ServiceAddress string `toml:"logservice-address" user_setting:"advanced"`
 	// ServiceListenAddress is the local listen address of the ServiceAddress.
 	// It is deprecated and will be removed.
 	ServiceListenAddress string `toml:"logservice-listen-address"`
 	// ServicePort is log service's service address port that can be reached by
-	// other nodes such as DN nodes.
+	// other nodes such as TN nodes.
 	LogServicePort int `toml:"logservice-port"`
 	// RaftAddress is the address that can be reached by other log service nodes
 	// via their raft layer. It is deprecated and will be removed.
-	RaftAddress string `toml:"raft-address"`
+	RaftAddress string `toml:"raft-address" user_setting:"advanced"`
 	// RaftListenAddress is the local listen address of the RaftAddress.
 	// It is deprecated and will be removed.
 	RaftListenAddress string `toml:"raft-listen-address"`
@@ -110,7 +112,7 @@ type Config struct {
 	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
 	// It is deprecated and will be removed.
-	GossipAddress string `toml:"gossip-address"`
+	GossipAddress string `toml:"gossip-address" user_setting:"advanced"`
 	// GossipAddressV2 is the address used for accepting gossip communication.
 	// This is for domain name support. It is deprecated and will be removed.
 	GossipAddressV2 string `toml:"gossip-address-v2"`
@@ -121,7 +123,7 @@ type Config struct {
 	GossipPort int `toml:"gossip-port"`
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
-	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
+	GossipSeedAddresses []string `toml:"gossip-seed-addresses" user_setting:"advanced"`
 	// GossipProbeInterval how often gossip nodes probe each other.
 	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
 	// GossipAllowSelfAsSeed allow use self as gossip seed
@@ -159,9 +161,9 @@ type Config struct {
 		BootstrapCluster bool `toml:"bootstrap-cluster"`
 		// NumOfLogShards defines the number of Log shards in the initial deployment.
 		NumOfLogShards uint64 `toml:"num-of-log-shards"`
-		// NumOfDNShards defines the number of DN shards in the initial deployment.
+		// NumOfTNShards defines the number of TN shards in the initial deployment.
 		// The count must be the same as NumOfLogShards in the current implementation.
-		NumOfDNShards uint64 `toml:"num-of-dn-shards"`
+		NumOfTNShards uint64 `toml:"num-of-tn-shards"`
 		// NumOfLogShardReplicas is the number of replicas for each shard managed by
 		// Log Stores, including Log Service shards and the HAKeeper.
 		NumOfLogShardReplicas uint64 `toml:"num-of-log-shard-replicas"`
@@ -182,7 +184,13 @@ type Config struct {
 		// is when Config.UUID is found in InitHAKeeperMembers, then the corresponding
 		// replica ID value will be used to launch a HAKeeper replica on the Log
 		// Service instance.
-		InitHAKeeperMembers []string `toml:"init-hakeeper-members"`
+		InitHAKeeperMembers []string `toml:"init-hakeeper-members" user_setting:"advanced"`
+		// Restore structure is used when the cluster needs to restore data.
+		Restore struct {
+			// FilePath is the path of the file, which contains the backup data.
+			// If is not set, nothing will be done for restore.
+			FilePath string `toml:"file-path"`
+		} `toml:"restore"`
 	}
 
 	HAKeeperConfig struct {
@@ -194,13 +202,13 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
 		// it regards the log store as down.
 		LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-		// DNStoreTimeout is the actual time limit between a dn store's heartbeat.
-		// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
-		// it regards the dn store as down.
-		DNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		// TNStoreTimeout is the actual time limit between a tn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within TNStoreTimeout,
+		// it regards the tn store as down.
+		TNStoreTimeout toml.Duration `toml:"tn-store-timeout"`
 		// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
 		// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
-		// it regards the dn store as down.
+		// it regards the tn store as down.
 		CNStoreTimeout toml.Duration `toml:"cn-store-timeout"`
 	}
 
@@ -224,7 +232,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 	return hakeeper.Config{
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
 		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
-		DNStoreTimeout:  c.HAKeeperConfig.DNStoreTimeout.Duration,
+		TNStoreTimeout:  c.HAKeeperConfig.TNStoreTimeout.Duration,
 		CNStoreTimeout:  c.HAKeeperConfig.CNStoreTimeout.Duration,
 	}
 }
@@ -313,7 +321,7 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("LogStoreTimeout not set")
 	}
-	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+	if c.HAKeeperConfig.TNStoreTimeout.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("DNStoreTimeout not set")
 	}
 	if c.GossipProbeInterval.Duration == 0 {
@@ -333,13 +341,13 @@ func (c *Config) Validate() error {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfLogShards not set")
 		}
-		if c.BootstrapConfig.NumOfDNShards == 0 {
+		if c.BootstrapConfig.NumOfTNShards == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfDNShards not set")
 		}
 		if c.BootstrapConfig.NumOfLogShardReplicas == 0 {
 			return moerr.NewBadConfigNoCtx("NumOfLogShardReplica not set")
 		}
-		if c.BootstrapConfig.NumOfDNShards != c.BootstrapConfig.NumOfLogShards {
+		if c.BootstrapConfig.NumOfTNShards != c.BootstrapConfig.NumOfLogShards {
 			return moerr.NewBadConfigNoCtx("NumOfDNShards does not match NumOfLogShards")
 		}
 		members, err := c.GetInitHAKeeperMembers()
@@ -394,35 +402,43 @@ func DefaultConfig() Config {
 		BootstrapConfig: struct {
 			BootstrapCluster      bool     `toml:"bootstrap-cluster"`
 			NumOfLogShards        uint64   `toml:"num-of-log-shards"`
-			NumOfDNShards         uint64   `toml:"num-of-dn-shards"`
+			NumOfTNShards         uint64   `toml:"num-of-tn-shards"`
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
-			InitHAKeeperMembers   []string `toml:"init-hakeeper-members"`
+			InitHAKeeperMembers   []string `toml:"init-hakeeper-members" user_setting:"advanced"`
+			Restore               struct {
+				FilePath string `toml:"file-path"`
+			} `toml:"restore"`
 		}(struct {
 			BootstrapCluster      bool
 			NumOfLogShards        uint64
-			NumOfDNShards         uint64
+			NumOfTNShards         uint64
 			NumOfLogShardReplicas uint64
 			InitHAKeeperMembers   []string
+			Restore               struct {
+				FilePath string
+			}
 		}{
 			BootstrapCluster:      true,
 			NumOfLogShards:        1,
-			NumOfDNShards:         1,
+			NumOfTNShards:         1,
 			NumOfLogShardReplicas: 1,
-			InitHAKeeperMembers:   []string{"131072:" + uid}}),
+			InitHAKeeperMembers:   []string{"131072:" + uid},
+			Restore:               struct{ FilePath string }{FilePath: ""},
+		}),
 		HAKeeperConfig: struct {
 			TickPerSecond   int           `toml:"tick-per-second"`
 			LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-			DNStoreTimeout  toml.Duration `toml:"dn-store-timeout"`
+			TNStoreTimeout  toml.Duration `toml:"tn-store-timeout"`
 			CNStoreTimeout  toml.Duration `toml:"cn-store-timeout"`
 		}(struct {
 			TickPerSecond   int
 			LogStoreTimeout toml.Duration
-			DNStoreTimeout  toml.Duration
+			TNStoreTimeout  toml.Duration
 			CNStoreTimeout  toml.Duration
 		}{
 			TickPerSecond:   hakeeper.DefaultTickPerSecond,
 			LogStoreTimeout: toml.Duration{Duration: hakeeper.DefaultLogStoreTimeout},
-			DNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultDNStoreTimeout},
+			TNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultTNStoreTimeout},
 			CNStoreTimeout:  toml.Duration{Duration: hakeeper.DefaultCNStoreTimeout},
 		}),
 		HAKeeperClientConfig: HAKeeperClientConfig{
@@ -506,8 +522,8 @@ type ClientConfig struct {
 	ReadOnly bool
 	// LogShardID is the shard ID of the log service shard to be used.
 	LogShardID uint64
-	// DNReplicaID is the replica ID of the DN that owns the created client.
-	DNReplicaID uint64
+	// TNReplicaID is the replica ID of the TN that owns the created client.
+	TNReplicaID uint64
 	// DiscoveryAddress is the Log Service discovery address provided by k8s.
 	DiscoveryAddress string
 	// LogService nodes service addresses. This field is provided for testing
@@ -524,7 +540,7 @@ func (c *ClientConfig) Validate() error {
 	if c.LogShardID == 0 {
 		return moerr.NewBadConfigNoCtx("LogShardID value cannot be 0")
 	}
-	if c.DNReplicaID == 0 {
+	if c.TNReplicaID == 0 {
 		return moerr.NewBadConfigNoCtx("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
@@ -585,4 +601,9 @@ func (c *Config) GossipServiceAddr() string {
 		return fmt.Sprintf("%s:%d", c.ServiceHost, c.GossipPort)
 	}
 	return c.GossipAddress
+}
+
+func dumpLogConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	return util.DumpConfig(cfg, defCfg)
 }

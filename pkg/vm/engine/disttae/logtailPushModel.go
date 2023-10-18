@@ -17,10 +17,12 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -39,7 +41,7 @@ import (
 const (
 	// reconnection related constants.
 	// maxTimeToWaitServerResponse : max time to wait for server response. if time exceed, do reconnection.
-	// retryReconnect : if reconnect dn failed. push client will retry after time retryReconnect.
+	// retryReconnect : if reconnect tn failed. push client will retry after time retryReconnect.
 	maxTimeToWaitServerResponse = 60 * time.Second
 	retryReconnect              = 20 * time.Millisecond
 
@@ -60,6 +62,10 @@ const (
 	// unsubscribe process scan the table every 20 minutes, and unsubscribe table which was unused for 1 hour.
 	unsubscribeProcessTicker = 20 * time.Minute
 	unsubscribeTimer         = 1 * time.Hour
+
+	// gc blocks and BlockIndexByTSEntry in partition state
+	gcPartitionStateTicker = 20 * time.Minute
+	gcPartitionStateTimer  = 1 * time.Hour
 
 	// log tail consumer related constants.
 	// if buffer is almost full (percent > consumerWarningPercent, we will send a message to log.
@@ -242,12 +248,12 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 	close(ch)
 
 	if err != nil {
-		logutil.Errorf("[log-tail-push-client] connect to dn log tail server failed")
+		logutil.Errorf("[log-tail-push-client] connect to tn log tail server failed")
 	}
 	return err
 }
 
-func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine, mp *mpool.MPool) {
+func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	connectMsg := make(chan error)
 
 	// we should always make sure that we have received connection message from `connectMsg` channel if we want to do reconnect.
@@ -323,7 +329,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					cancel()
 					hasReceivedConnectionMsg = true
 					if err != nil {
-						logutil.Errorf("[log-tail-push-client] connect to dn log tail service failed, reason: %s", err)
+						logutil.Errorf("[log-tail-push-client] connect to tn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
 					}
 
@@ -333,7 +339,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					}
 
 					e.setPushClientStatus(true)
-					logutil.Infof("[log-tail-push-client] connect to dn log tail service succeed.")
+					logutil.Infof("[log-tail-push-client] connect to tn log tail service succeed.")
 					continue
 
 				case <-ctx.Done():
@@ -354,15 +360,15 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 			e.setPushClientStatus(false)
 
-			if ctx.Err() != nil {
-				logutil.Infof("[log-tail-push-client] context has done, exit log tail receive routine.")
-				return
-			}
-
-			logutil.Infof("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
+			logutil.Infof("[log-tail-push-client] clean finished, start to reconnect to tn log tail service")
 			for {
-				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-				if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
+				if ctx.Err() != nil {
+					logutil.Infof("[log-tail-push-client] mo context has done, exit log tail receive routine.")
+					return
+				}
+
+				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+				if err := client.init(tnLogTailServerBackend, client.timestampWaiter); err != nil {
 					logutil.Errorf("[log-tail-push-client] rebuild the cn log tail client failed, reason: %s", err)
 					time.Sleep(retryReconnect)
 					continue
@@ -372,7 +378,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				e.abortAllRunningTxn()
 
 				// clean memory table.
-				err := e.init(ctx, mp)
+				err := e.init(ctx)
 				if err != nil {
 					logutil.Errorf("[log-tail-push-client] rebuild memory-table failed, err : '%s'.", err)
 					time.Sleep(retryReconnect)
@@ -447,6 +453,39 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 			}()
 
 			logutil.Infof("[log-tail-push-client] unsubscribe unused table finished.")
+		}
+	}()
+}
+
+func (client *pushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
+	go func() {
+		ticker := time.NewTicker(gcPartitionStateTicker)
+		for {
+			select {
+			case <-ctx.Done():
+				logutil.Infof("GC partition_state process exit.")
+				ticker.Stop()
+				return
+
+			case <-ticker.C:
+				if !client.receivedLogTailTime.ready.Load() {
+					continue
+				}
+				if client.subscriber == nil {
+					continue
+				}
+			}
+			parts := make(map[[2]uint64]*logtailreplay.Partition)
+			e.Lock()
+			for ids, part := range e.partitions {
+				parts[ids] = part
+			}
+			e.Unlock()
+			ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*5, 0)
+			logutil.Infof("GC partition_state %v", ts.ToString())
+			for ids, part := range parts {
+				part.Truncate(ctx, ids, ts)
+			}
 		}
 	}()
 }
@@ -560,7 +599,7 @@ func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
 }
 
 type logTailSubscriber struct {
-	dnNodeID      int
+	tnNodeID      int
 	logTailClient *service.LogtailClient
 
 	ready        bool
@@ -582,7 +621,7 @@ type logTailSubscriberResponse struct {
 
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
-func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
+func newRpcStreamToTnLogTailService(serviceAddr string) (morpc.Stream, error) {
 	logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
 	codec := morpc.NewMessageCodec(func() morpc.Message {
 		return &service.LogtailResponseSegment{}
@@ -608,8 +647,8 @@ func newRpcStreamToDnLogTailService(serviceAddr string) (morpc.Stream, error) {
 }
 
 func (s *logTailSubscriber) init(serviceAddr string) (err error) {
-	// XXX we assume that we have only 1 dn now.
-	s.dnNodeID = 0
+	// XXX we assume that we have only 1 tn now.
+	s.tnNodeID = 0
 
 	// clear the old status.
 	s.receivedResp = nil
@@ -620,7 +659,7 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 		s.logTailClient = nil
 	}
 
-	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
+	stream, err := newRpcStreamToTnLogTailService(serviceAddr)
 	if err != nil {
 		return err
 	}
@@ -692,22 +731,25 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 	return resp
 }
 
-func (e *Engine) InitLogTailPushModel(
-	ctx context.Context, mp *mpool.MPool,
-	timestampWaiter client.TimestampWaiter) error {
-
+func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
 	// try to init log tail client. if failed, retry.
 	for {
+		if err := ctx.Err(); err != nil {
+			logutil.Infof("[log-tail-push-client] mo context has done, init log tail client failed.")
+			return err
+		}
+
 		// get log tail service address.
-		dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-		if err := e.pClient.init(dnLogTailServerBackend, timestampWaiter); err != nil {
+		tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+		if err := e.pClient.init(tnLogTailServerBackend, timestampWaiter); err != nil {
 			continue
 		}
 		break
 	}
 
-	e.pClient.receiveTableLogTailContinuously(ctx, e, mp)
+	e.pClient.receiveTableLogTailContinuously(ctx, e)
 	e.pClient.unusedTableGCTicker(ctx)
+	e.pClient.partitionStateGCTicker(ctx, e)
 	return nil
 }
 
@@ -951,30 +993,32 @@ func (cmd cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineCo
 func (e *Engine) consumeSubscribeResponse(ctx context.Context, rp *logtail.SubscribeResponse,
 	lazyLoad bool) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.dnNodeID, e, &lt, lazyLoad)
+	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &lt, lazyLoad)
 }
 
 func (e *Engine) consumeUpdateLogTail(ctx context.Context, rp logtail.TableLogtail,
 	lazyLoad bool) error {
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.dnNodeID, e, &rp, lazyLoad)
+	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &rp, lazyLoad)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
-	dnId int,
+	tnId int,
 	e *Engine, tl *logtail.TableLogtail, lazyLoad bool) (err error) {
+	start := time.Now()
+	defer v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
+
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
 	partition := e.getPartition(dbId, tblId)
 
-	select {
-	case <-partition.Lock():
-		defer partition.Unlock()
-	case <-ctx.Done():
-		return ctx.Err()
+	lockErr := partition.Lock(ctx)
+	if lockErr != nil {
+		return lockErr
 	}
+	defer partition.Unlock()
 
 	state, doneMutate := partition.MutateState()
 
@@ -982,7 +1026,7 @@ func updatePartitionOfPush(
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
-			state.AppendCheckpoint(tl.CkpLocation)
+			state.AppendCheckpoint(tl.CkpLocation, partition)
 		}
 
 		err = consumeLogTailOfPushWithLazyLoad(

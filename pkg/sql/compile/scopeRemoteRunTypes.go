@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -44,7 +45,8 @@ import (
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
-	HandleNotifyTimeout = 120 * time.Second
+	// need to fix this in the future. for now, increase it to make tpch1T can run on 3 CN
+	HandleNotifyTimeout = 300 * time.Second
 )
 
 // cnInformation records service information to help handle messages.
@@ -54,6 +56,7 @@ type cnInformation struct {
 	fileService  fileservice.FileService
 	lockService  lockservice.LockService
 	queryService queryservice.QueryService
+	hakeeper     logservice.CNHAKeeperClient
 	aicm         *defines.AutoIncrCacheManager
 }
 
@@ -143,8 +146,8 @@ func (sender *messageSenderOnClient) send(
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 	select {
 	case <-sender.ctx.Done():
-		logutil.Errorf("sender ctx done during receive")
 		return nil, nil
+
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
@@ -196,6 +199,7 @@ func newMessageReceiverOnServer(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
+	hakeeper logservice.CNHAKeeperClient,
 	txnClient client.TxnClient,
 	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
@@ -214,6 +218,7 @@ func newMessageReceiverOnServer(
 		fileService:  fileService,
 		lockService:  lockService,
 		queryService: queryService,
+		hakeeper:     hakeeper,
 		aicm:         aicm,
 	}
 
@@ -268,6 +273,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		cnInfo.fileService,
 		cnInfo.lockService,
 		cnInfo.queryService,
+		cnInfo.hakeeper,
 		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
@@ -288,14 +294,14 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		anal: &anaylze{analInfos: proc.AnalInfos},
 		addr: receiver.cnInformation.cnAddr,
 	}
-	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
+	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.counterSet)
 	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)
 
 	c.fill = func(_ any, b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
 
-	c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
 
 	return c
 }
@@ -320,6 +326,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	if b == nil {
 		return nil
 	}
+
+	// There is still a memory problem here. If row count is very small, but the cap of batch's vectors is very large,
+	// to encode will allocate a large memory.
+	// but I'm not sure how string type store data in vector, so I can't do a simple optimization like vec.col = vec.col[:len].
 	data, err := types.Encode(b)
 	if err != nil {
 		return err

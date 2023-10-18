@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"go.uber.org/zap"
@@ -68,9 +67,6 @@ type Catalog struct {
 	link      *common.GenericSortedDList[*DBEntry]
 
 	nodesMu sync.RWMutex
-
-	tableCnt  atomic.Int32
-	columnCnt atomic.Int32
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -266,7 +262,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	catalog.OnReplayDBID(dbid)
 	db, _ := catalog.GetDatabaseByID(dbid)
 	if db != nil {
-		dbCreatedAt := db.GetCreatedAt()
+		dbCreatedAt := db.GetCreatedAtLocked()
 		if !dbCreatedAt.Equal(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s",
 				txnNode.End.ToString(), dbCreatedAt.ToString()))
@@ -313,7 +309,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	prev := db.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*EmptyMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: db.GetCreatedAt(),
+			CreatedAt: db.GetCreatedAtLocked(),
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
@@ -404,6 +400,7 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema.SegmentMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Get(i).(uint16)
 		extra := insTxn.GetVectorByName(SnapshotAttr_SchemaExtra).Get(i).([]byte)
 		schema.MustRestoreExtra(extra)
+		schema.Finalize(true)
 		txnNode := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataFactory)
 	}
@@ -424,7 +421,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	}
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
-		tblCreatedAt := tbl.GetCreatedAt()
+		tblCreatedAt := tbl.GetCreatedAtLocked()
 		if tblCreatedAt.Greater(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
@@ -588,7 +585,7 @@ func (catalog *Catalog) onReplayCreateSegment(
 	}
 	seg, _ := rel.GetSegmentByID(segid)
 	if seg != nil {
-		segCreatedAt := seg.GetCreatedAt()
+		segCreatedAt := seg.GetCreatedAtLocked()
 		if !segCreatedAt.Equal(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), segCreatedAt.ToString()))
 		}
@@ -837,13 +834,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	blkDeleteAt := blk.GetDeleteAt()
-	if !blkDeleteAt.IsEmpty() {
-		if !blkDeleteAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), blkDeleteAt.ToString()))
-		}
-		return
-	}
+
 	prevUn := blk.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*MetadataMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
@@ -896,26 +887,6 @@ func (catalog *Catalog) CoarseDBCnt() int {
 	catalog.RLock()
 	defer catalog.RUnlock()
 	return len(catalog.entries)
-}
-
-func (catalog *Catalog) CoarseTableCnt() int {
-	return int(catalog.tableCnt.Load())
-}
-
-func (catalog *Catalog) CoarseColumnCnt() int {
-	return int(catalog.columnCnt.Load())
-}
-
-func (catalog *Catalog) AddTableCnt(cnt int) {
-	if catalog.tableCnt.Add(int32(cnt)) < 0 {
-		panic("logic error")
-	}
-}
-
-func (catalog *Catalog) AddColumnCnt(cnt int) {
-	if catalog.columnCnt.Add(int32(cnt)) < 0 {
-		panic("logic error")
-	}
 }
 
 func (catalog *Catalog) GetItemNodeByIDLocked(id uint64) *common.GenericDLNode[*DBEntry] {
@@ -1067,11 +1038,11 @@ func (catalog *Catalog) DropDBEntry(
 		err = moerr.NewTAEErrorNoCtx("not permitted")
 		return
 	}
-	dn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
+	tn, err := catalog.txnGetNodeByName(txn.GetTenantID(), name, txn)
 	if err != nil {
 		return
 	}
-	entry := dn.GetPayload()
+	entry := tn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
 	if newEntry, err = entry.DropEntryLocked(txn); err == nil {
@@ -1142,6 +1113,9 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 		}
 		if err = dbEntry.RecurLoop(processor); err != nil {
 			return
+		}
+		if err = processor.OnPostDatabase(dbEntry); err != nil {
+			break
 		}
 		dbIt.Next()
 	}

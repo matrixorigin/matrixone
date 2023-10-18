@@ -25,12 +25,12 @@ import (
 )
 
 func handleCheckpoint() handleFunc {
-	return getDNHandlerFunc(
+	return getTNHandlerFunc(
 		pb.CmdMethod_Checkpoint,
 		func(_ string) ([]uint64, error) {
 			return nil, nil
 		},
-		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			flushDuration := time.Duration(0)
 			var err error
 			if parameter != "" {
@@ -45,7 +45,7 @@ func handleCheckpoint() handleFunc {
 			return payload, err
 		},
 		func(data []byte) (interface{}, error) {
-			resp := pb.DNStringResponse{}
+			resp := pb.TNStringResponse{}
 			protoc.MustUnmarshal(&resp, data)
 			return resp, nil
 		})

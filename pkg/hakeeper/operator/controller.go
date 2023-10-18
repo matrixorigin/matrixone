@@ -93,10 +93,12 @@ func (c *Controller) GetExecutingReplicas() ExecutingReplicas {
 	return executing
 }
 
-func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNState, cnState pb.CNState) {
+func (c *Controller) RemoveFinishedOperator(
+	logState pb.LogState, tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState,
+) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
-			op.Check(logState, dnState, cnState)
+			op.Check(logState, tnState, cnState, proxyState)
 			switch op.Status() {
 			case SUCCESS, EXPIRED:
 				c.RemoveOperator(op)
@@ -106,10 +108,10 @@ func (c *Controller) RemoveFinishedOperator(logState pb.LogState, dnState pb.DNS
 }
 
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
-	dnState pb.DNState, cnState pb.CNState) (commands []pb.ScheduleCommand) {
+	tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
-		if step := op.Check(logState, dnState, cnState); step != nil {
+		if step := op.Check(logState, tnState, cnState, proxyState); step != nil {
 			commands = append(commands, generateScheduleCommand(step))
 		}
 	}
@@ -128,18 +130,22 @@ func generateScheduleCommand(step OpStep) pb.ScheduleCommand {
 		return stopLogService(st)
 	case KillLogZombie:
 		return killLogZombie(st)
-	case AddDnReplica:
-		return addDnReplica(st)
-	case RemoveDnReplica:
-		return removeDnReplica(st)
-	case StopDnStore:
-		return stopDnStore(st)
+	case AddTnReplica:
+		return addTnReplica(st)
+	case RemoveTnReplica:
+		return removeTnReplica(st)
+	case StopTnStore:
+		return stopTnStore(st)
 	case StopLogStore:
 		return stopLogStore(st)
 	case CreateTaskService:
 		return createTaskService(st)
 	case DeleteCNStore:
 		return deleteCNStore(st)
+	case JoinGossipCluster:
+		return joinGossipCluster(st)
+	case DeleteProxyStore:
+		return deleteProxyStore(st)
 	}
 	panic("invalid schedule command")
 }
@@ -222,7 +228,7 @@ func killLogZombie(st KillLogZombie) pb.ScheduleCommand {
 	}
 }
 
-func addDnReplica(st AddDnReplica) pb.ScheduleCommand {
+func addTnReplica(st AddTnReplica) pb.ScheduleCommand {
 	return pb.ScheduleCommand{
 		UUID: st.StoreID,
 		ConfigChange: &pb.ConfigChange{
@@ -234,11 +240,11 @@ func addDnReplica(st AddDnReplica) pb.ScheduleCommand {
 			},
 			ChangeType: pb.StartReplica,
 		},
-		ServiceType: pb.DNService,
+		ServiceType: pb.TNService,
 	}
 }
 
-func removeDnReplica(st RemoveDnReplica) pb.ScheduleCommand {
+func removeTnReplica(st RemoveTnReplica) pb.ScheduleCommand {
 	return pb.ScheduleCommand{
 		UUID: st.StoreID,
 		ConfigChange: &pb.ConfigChange{
@@ -250,17 +256,17 @@ func removeDnReplica(st RemoveDnReplica) pb.ScheduleCommand {
 			},
 			ChangeType: pb.StopReplica,
 		},
-		ServiceType: pb.DNService,
+		ServiceType: pb.TNService,
 	}
 }
 
-func stopDnStore(st StopDnStore) pb.ScheduleCommand {
+func stopTnStore(st StopTnStore) pb.ScheduleCommand {
 	return pb.ScheduleCommand{
 		UUID: st.StoreID,
 		ShutdownStore: &pb.ShutdownStore{
 			StoreID: st.StoreID,
 		},
-		ServiceType: pb.DNService,
+		ServiceType: pb.TNService,
 	}
 }
 
@@ -290,6 +296,26 @@ func deleteCNStore(st DeleteCNStore) pb.ScheduleCommand {
 		UUID:        st.StoreID,
 		ServiceType: pb.CNService,
 		DeleteCNStore: &pb.DeleteCNStore{
+			StoreID: st.StoreID,
+		},
+	}
+}
+
+func joinGossipCluster(st JoinGossipCluster) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.StoreID,
+		ServiceType: pb.CNService,
+		JoinGossipCluster: &pb.JoinGossipCluster{
+			Existing: st.Existing,
+		},
+	}
+}
+
+func deleteProxyStore(st DeleteProxyStore) pb.ScheduleCommand {
+	return pb.ScheduleCommand{
+		UUID:        st.StoreID,
+		ServiceType: pb.ProxyService,
+		DeleteProxyStore: &pb.DeleteProxyStore{
 			StoreID: st.StoreID,
 		},
 	}

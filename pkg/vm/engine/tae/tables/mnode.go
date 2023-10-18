@@ -19,7 +19,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -133,16 +132,32 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	return vec.Get(row), vec.IsNull(row)
 }
 
-func (node *memoryNode) Foreach(readSchema *catalog.Schema, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (node *memoryNode) Foreach(readSchema *catalog.Schema, colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error {
 	if node.data == nil {
 		return nil
 	}
 	idx, ok := node.writeSchema.SeqnumMap[readSchema.ColDefs[colIdx].SeqNum]
 	if !ok {
 		v := containers.FillConstVector(int(node.data.Length()), readSchema.ColDefs[colIdx].Type, nil)
-		return v.Foreach(op, sels)
+		for _, row := range sels {
+			val := v.Get(int(row))
+			isNull := v.IsNull(int(row))
+			err := op(val, isNull, int(row))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return node.data.Vecs[idx].Foreach(op, sels)
+	for _, row := range sels {
+		val := node.data.Vecs[idx].Get(int(row))
+		isNull := node.data.Vecs[idx].IsNull(int(row))
+		err := op(val, isNull, int(row))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {
@@ -154,6 +169,13 @@ func (node *memoryNode) Rows() uint32 {
 		return 0
 	}
 	return uint32(node.data.Length())
+}
+
+func (node *memoryNode) EstimateMemSize() int {
+	if node.data == nil {
+		return 0
+	}
+	return node.data.ApproxSize()
 }
 
 func (node *memoryNode) GetColumnDataWindow(

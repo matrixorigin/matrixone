@@ -190,6 +190,7 @@ type BindContext struct {
 
 	cteByName              map[string]*CTERef
 	maskedCTEs             map[string]any
+	normalCTE              bool
 	initSelect             bool
 	recSelect              bool
 	finalSelect            bool
@@ -237,6 +238,8 @@ type BindContext struct {
 	rightChild *BindContext
 
 	defaultDatabase string
+
+	forceWindows bool
 }
 
 type NameTuple struct {

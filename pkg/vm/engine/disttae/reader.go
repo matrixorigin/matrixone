@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -120,7 +121,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 }
 
-func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (
+func (mixin *withFilterMixin) getReadFilter(proc *process.Process, blkCnt int) (
 	filter blockio.ReadFilter,
 ) {
 	if mixin.filterState.evaluated {
@@ -134,12 +135,12 @@ func (mixin *withFilterMixin) getReadFilter(proc *process.Process) (
 		return
 	}
 	if pk.CompPkeyCol == nil {
-		return mixin.getNonCompositPKFilter(proc)
+		return mixin.getNonCompositPKFilter(proc, blkCnt)
 	}
-	return mixin.getCompositPKFilter(proc)
+	return mixin.getCompositPKFilter(proc, blkCnt)
 }
 
-func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
+func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process, blkCnt int) (
 	filter blockio.ReadFilter,
 ) {
 	// if no primary key is included in the columns or no filter expr is given,
@@ -195,18 +196,18 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process) (
 		mixin.filterState.seqnums = append(mixin.filterState.seqnums, mixin.columns.seqnums[pos])
 		mixin.filterState.colTypes = append(mixin.filterState.colTypes, mixin.columns.colTypes[pos])
 	}
+	// records how many blks one reader needs to read when having filter
+	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
 	return
 }
 
-func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
-	filter blockio.ReadFilter,
-) {
+func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkCnt int) blockio.ReadFilter {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
-		return
+		return nil
 	}
 
 	// evaluate the search function for the filter
@@ -227,26 +228,21 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process) (
 		mixin.filterState.evaluated = true
 		mixin.filterState.filter = nil
 		mixin.filterState.hasNull = hasNull
-		return
+		return nil
 	}
 
 	// here we will select the primary key column from the vectors, and
 	// use the search function to find the offset of the primary key.
 	// it returns the offset of the primary key in the pk vector.
 	// if the primary key is not found, it returns empty slice
-	filter = func(vecs []*vector.Vector) []int32 {
-		vec := vecs[0]
-		row := searchFunc(vec)
-		if row < 0 {
-			return nil
-		}
-		return []int32{int32(row)}
-	}
 	mixin.filterState.evaluated = true
-	mixin.filterState.filter = filter
+	mixin.filterState.filter = searchFunc
 	mixin.filterState.seqnums = []uint16{uint16(mixin.columns.seqnums[mixin.columns.pkPos])}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
-	return
+
+	// records how many blks one reader needs to read when having filter
+	objectio.BlkReadStats.BlksByReaderStats.Record(1, blkCnt)
+	return searchFunc
 }
 
 // -----------------------------------------------------------------
@@ -323,7 +319,7 @@ func (r *blockReader) Read(
 	r.tryUpdateColumns(cols)
 
 	// get the block read filter
-	filter := r.getReadFilter(r.proc)
+	filter := r.getReadFilter(r.proc, len(r.blks))
 
 	// if any null expr is found in the primary key (composite primary keys), quick return
 	if r.filterState.hasNull {
@@ -341,9 +337,16 @@ func (r *blockReader) Read(
 		r.steps = r.steps[1:]
 	}
 
+	statsCtx, numRead, numHit := r.ctx, int64(0), int64(0)
+	if filter != nil {
+		// try to store the blkReadStats CounterSet into ctx, so that
+		// it can record the mem cache hit stats when call MemCache.Read() later soon.
+		statsCtx, numRead, numHit = r.prepareGatherStats()
+	}
+
 	// read the block
 	bat, err := blockio.BlockRead(
-		r.ctx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
+		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
 		filter,
@@ -352,6 +355,12 @@ func (r *blockReader) Read(
 	if err != nil {
 		return nil, err
 	}
+
+	if filter != nil {
+		// we collect mem cache hit related statistics info for blk read here
+		r.gatherStats(numRead, numHit)
+	}
+
 	bat.SetAttributes(cols)
 
 	if blockInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
@@ -362,6 +371,28 @@ func (r *blockReader) Read(
 		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
 	}
 	return bat, nil
+}
+
+func (r *blockReader) prepareGatherStats() (context.Context, int64, int64) {
+	ctx := perfcounter.WithCounterSet(r.ctx, objectio.BlkReadStats.CounterSet)
+	return ctx, objectio.BlkReadStats.CounterSet.FileService.Cache.Read.Load(),
+		objectio.BlkReadStats.CounterSet.FileService.Cache.Hit.Load()
+}
+
+func (r *blockReader) gatherStats(lastNumRead, lastNumHit int64) {
+	numRead := objectio.BlkReadStats.CounterSet.FileService.Cache.Read.Load()
+	numHit := objectio.BlkReadStats.CounterSet.FileService.Cache.Hit.Load()
+
+	curNumRead := numRead - lastNumRead
+	curNumHit := numHit - lastNumHit
+
+	if curNumRead > curNumHit {
+		objectio.BlkReadStats.BlkCacheHitStats.Record(0, 1)
+	} else {
+		objectio.BlkReadStats.BlkCacheHitStats.Record(1, 1)
+	}
+
+	objectio.BlkReadStats.EntryCacheHitStats.Record(int(curNumHit), int(curNumRead))
 }
 
 // -----------------------------------------------------------------
@@ -402,7 +433,7 @@ func (r *blockMergeReader) prefetchDeletes() error {
 	//load delta locations for r.blocks.
 	if !r.loaded {
 		for _, info := range r.blks {
-			bats, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[info.BlockID]
+			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch[info.BlockID]
 			if !ok {
 				return nil
 			}
@@ -437,7 +468,7 @@ func (r *blockMergeReader) prefetchDeletes() error {
 		}
 		for _, loc := range locs {
 			//rowid + pk
-			pref.AddBlock([]uint16{0, uint16(r.pkidx)}, []uint16{loc.ID()})
+			pref.AddBlockWithType([]uint16{0, uint16(r.pkidx)}, []uint16{loc.ID()}, uint16(objectio.SchemaTombstone))
 
 		}
 		delete(r.deletaLocs, name)

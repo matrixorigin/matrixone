@@ -939,6 +939,8 @@ type FuncExpr struct {
 	AggType AggType
 
 	WindowSpec *WindowSpec
+
+	OrderBy OrderBy
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
@@ -954,6 +956,11 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	} else {
 		node.Exprs.Format(ctx)
 	}
+
+	if node.OrderBy != nil {
+		node.OrderBy.Format(ctx)
+	}
+
 	ctx.WriteByte(')')
 
 	if node.WindowSpec != nil {
@@ -1143,6 +1150,42 @@ func (node *CastExpr) Accept(v Visitor) (Expr, bool) {
 
 func NewCastExpr(e Expr, t ResolvableTypeReference) *CastExpr {
 	return &CastExpr{
+		Expr: e,
+		Type: t,
+	}
+}
+
+type BitCastExpr struct {
+	exprImpl
+	Expr Expr
+	Type ResolvableTypeReference
+}
+
+func (node *BitCastExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("bit_cast(")
+	node.Expr.Format(ctx)
+	ctx.WriteString(" as ")
+	node.Type.(*T).InternalType.Format(ctx)
+	ctx.WriteByte(')')
+}
+
+// Accept implements NodeChecker interface
+func (node *BitCastExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*BitCastExpr)
+	tmpNode, ok := node.Expr.Accept(v)
+	if !ok {
+		return node, false
+	}
+	node.Expr = tmpNode
+	return v.Exit(node)
+}
+
+func NewBitCastExpr(e Expr, t ResolvableTypeReference) *BitCastExpr {
+	return &BitCastExpr{
 		Expr: e,
 		Type: t,
 	}

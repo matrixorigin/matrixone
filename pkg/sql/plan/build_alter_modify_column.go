@@ -36,7 +36,7 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	colName := specNewColumn.Name.Parts[0]
 	col := FindColumn(tableDef.Cols, originalColName)
 	if col == nil || col.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), tableDef.Name, colName)
+		return moerr.NewBadFieldError(ctx.GetContext(), colName, alterPlan.TableDef.Name)
 	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
@@ -69,15 +69,17 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	alterCtx.alterColMap[newCol.Name] = col.Name
+	alterCtx.alterColMap[newCol.Name] = selectExpr{
+		sexprType: columnName,
+		sexprStr:  col.Name,
+	}
+
 	return nil
 }
 
 // checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
 func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCol *ColDef, pos *tree.ColumnPosition) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
-		newCol.ColId = oldCol.ColId
-		newCol.Primary = oldCol.Primary
 		// detete old column
 		originIndex := -1
 		for i, col := range tableDef.Cols {
@@ -94,8 +96,6 @@ func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCo
 		}
 		tableDef.Cols = append(tableDef.Cols[:targetPos], append([]*ColDef{newCol}, tableDef.Cols[targetPos:]...)...)
 	} else {
-		newCol.ColId = oldCol.ColId
-		newCol.Primary = oldCol.Primary
 		for i, col := range tableDef.Cols {
 			if strings.EqualFold(col.Name, oldCol.Name) {
 				tableDef.Cols[i] = newCol
@@ -146,7 +146,9 @@ func checkChangeTypeCompatible(ctx context.Context, origin *plan.Type, to *plan.
 // CheckModifyColumnForeignkeyConstraint check for table column foreign key dependencies, including
 // the foreign keys of the table itself and being dependent on foreign keys of other tables
 func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, originalCol, newCol *ColDef) error {
-	if newCol.Typ.GetId() == originalCol.Typ.GetId() && newCol.Typ.Width == originalCol.Typ.Width {
+	if newCol.Typ.GetId() == originalCol.Typ.GetId() &&
+		newCol.Typ.GetWidth() == originalCol.Typ.GetWidth() &&
+		newCol.Typ.GetAutoIncr() == originalCol.Typ.GetAutoIncr() {
 		return nil
 	}
 
@@ -188,27 +190,66 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 			}
 		}
 
-		for i, colId := range referredFK.Cols {
+		for i := range referredFK.Cols {
 			if referredFK.ForeignCols[i] == originalCol.ColId {
-				childCol := FindColumnByColId(refTableDef.Cols, colId)
-				if childCol == nil {
-					continue
-				}
-
-				if newCol.Typ.GetId() != childCol.Typ.GetId() {
-					return moerr.NewErrFKIncompatibleColumns(ctx.GetContext(), childCol.Name, originalCol.Name, referredFK.Name)
-				}
-
-				if newCol.Typ.GetWidth() < childCol.Typ.GetWidth() ||
-					newCol.Typ.GetWidth() < originalCol.Typ.GetWidth() {
+				if originalCol.Name != newCol.Name {
+					return moerr.NewErrAlterOperationNotSupportedReasonFkRename(ctx.GetContext())
+				} else {
 					return moerr.NewErrForeignKeyColumnCannotChangeChild(ctx.GetContext(), originalCol.Name, referredFK.Name, refObjRef.SchemaName+"."+refTableDef.Name)
 				}
+
+				//childCol := FindColumnByColId(refTableDef.Cols, colId)
+				//if childCol == nil {
+				//	continue
+				//}
+				//
+				//if newCol.Typ.GetId() != childCol.Typ.GetId() {
+				//	return moerr.NewErrFKIncompatibleColumns(ctx.GetContext(), childCol.Name, originalCol.Name, referredFK.Name)
+				//}
+				//
+				//if newCol.Typ.GetWidth() < childCol.Typ.GetWidth() ||
+				//	newCol.Typ.GetWidth() < originalCol.Typ.GetWidth() {
+				//	return moerr.NewErrForeignKeyColumnCannotChangeChild(ctx.GetContext(), originalCol.Name, referredFK.Name, refObjRef.SchemaName+"."+refTableDef.Name)
+				//}
 			}
 		}
 	}
-	// Note: If a column in a table is dependent on a foreign key in another table, modifying it is currently not supported
-	if len(tbInfo.RefChildTbls) > 0 {
-		return moerr.NewNotSupported(ctx.GetContext(), "Currently, modifying tables that are dependent on foreign keys is not supported")
+	return nil
+}
+
+// checkPriKeyConstraint check all parts of a PRIMARY KEY must be NOT NULL
+func checkPriKeyConstraint(ctx context.Context, col *ColDef, hasDefaultValue, hasNullFlag bool, priKeyDef *plan.PrimaryKeyDef) error {
+	if hasDefaultValue {
+		hasNullFlag = DefaultValueIsNull(col.Default) || hasNullFlag
+	}
+	// Primary key should not be null.
+	if col.Primary && hasDefaultValue && DefaultValueIsNull(col.Default) {
+		return moerr.NewErrInvalidDefault(ctx, col.Name)
+	}
+	// Set primary key flag for outer primary key constraint.
+	// Such as: create table t1 (id int ,name varchar(20), age int, primary key(id, name))
+	if !col.Primary && priKeyDef != nil {
+		for _, key := range priKeyDef.Names {
+			if key == col.Name {
+				// Primary key should not be null.
+				if hasNullFlag {
+					return moerr.NewErrPrimaryCantHaveNull(ctx)
+				}
+				break
+			} else {
+				continue
+			}
+		}
 	}
 	return nil
+}
+
+func DefaultValueIsNull(Default *plan.Default) bool {
+	if Default != nil {
+		if constExpr, ok := Default.GetExpr().Expr.(*plan.Expr_C); ok {
+			return constExpr.C.Isnull
+		}
+		return false
+	}
+	return false
 }

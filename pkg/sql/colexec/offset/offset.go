@@ -40,8 +40,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		proc.SetInputBatch(bat)
 		return process.ExecNext, nil
 	}
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}

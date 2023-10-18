@@ -15,12 +15,10 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // isMergeType means the receiver operator receive batch from all regs or single by some order
@@ -30,9 +28,11 @@ func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool)
 	r.proc = proc
 	if isMergeType {
 		r.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+		r.chs = make([]chan *batch.Batch, r.aliveMergeReceiver)
 		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver+1)
 		r.receiverListener[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.proc.Ctx.Done())}
 		for i, mr := range proc.Reg.MergeReceivers {
+			r.chs[i] = mr.Ch
 			r.receiverListener[i+1] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(mr.Ch),
@@ -77,21 +77,9 @@ func (r *ReceiverOperator) FreeAllReg() {
 	}
 }
 
-// clean up the batch left in channel
 func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
-	for {
-		bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch
-		if !ok || bat == nil {
-			break
-		}
-		bat.Clean(r.proc.GetMPool())
-	}
-}
-
-func (r *ReceiverOperator) CloseAllReg() {
-	for _, c := range r.proc.Reg.MergeReceivers {
-		close(c.Ch)
-	}
+	w := r.proc.Reg.MergeReceivers[regIdx]
+	w.CleanChannel(r.proc.GetMPool())
 }
 
 // You MUST Init ReceiverOperator with Merge-Type
@@ -103,29 +91,24 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		}
 
 		start := time.Now()
-		chosen, value, ok := reflect.Select(r.receiverListener)
+		chosen, bat, ok := r.selectFromAllReg()
 		analyze.WaitStop(start)
 
 		// chosen == 0 means the info comes from proc context.Done
 		if chosen == 0 {
-			logutil.Debugf("process context done during merge receive")
 			return nil, true, nil
 		}
 
 		if !ok {
-			logutil.Errorf("children pipeline closed unexpectedly")
-			r.removeChosen(chosen)
 			return nil, true, nil
 		}
 
-		bat := (*batch.Batch)(value.UnsafePointer())
 		if bat == nil {
-			r.removeChosen(chosen)
 			continue
 		}
 
 		if bat.IsEmpty() {
-			bat.Clean(r.proc.Mp())
+			r.proc.PutBatch(bat)
 			continue
 		}
 
@@ -140,23 +123,96 @@ func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 		r.receiverListener = r.receiverListener[1:]
 	}
 
-	for r.aliveMergeReceiver > 0 {
-		chosen, value, ok := reflect.Select(r.receiverListener)
-		if !ok {
-			r.removeChosen(chosen)
-			continue
+	mp := r.proc.Mp()
+	// Senders will never send more because the context is done.
+	for _, ch := range r.chs {
+		for len(ch) > 0 {
+			bat := <-ch
+			if bat != nil {
+				bat.Clean(mp)
+			}
 		}
-
-		bat := (*batch.Batch)(value.UnsafePointer())
-		if bat == nil {
-			r.removeChosen(chosen)
-			continue
-		}
-		bat.Clean(r.proc.Mp())
 	}
 }
 
-func (r *ReceiverOperator) removeChosen(idx int) {
+func (r *ReceiverOperator) RemoveChosen(idx int) {
+	if idx == 0 {
+		return
+	}
 	r.receiverListener = append(r.receiverListener[:idx], r.receiverListener[idx+1:]...)
+	//remove idx-1 from chs
+	r.chs = append(r.chs[:idx-1], r.chs[idx:]...)
 	r.aliveMergeReceiver--
+}
+
+func (r *ReceiverOperator) DisableChosen(idx int) {
+	if idx == 0 {
+		return
+	}
+	//disable idx-1 from chs
+	r.chs[idx-1] = nil
+	r.aliveMergeReceiver--
+}
+
+func (r *ReceiverOperator) selectFromAllReg() (int, *batch.Batch, bool) {
+	var bat *batch.Batch
+	chosen := 0
+	var ok bool
+	switch len(r.chs) {
+	case 1:
+		chosen, bat, ok = r.selectFrom1Reg()
+	case 2:
+		chosen, bat, ok = r.selectFrom2Reg()
+	case 3:
+		chosen, bat, ok = r.selectFrom3Reg()
+	case 4:
+		chosen, bat, ok = r.selectFrom4Reg()
+	case 5:
+		chosen, bat, ok = r.selectFrom5Reg()
+	case 6:
+		chosen, bat, ok = r.selectFrom6Reg()
+	case 7:
+		chosen, bat, ok = r.selectFrom7Reg()
+	case 8:
+		chosen, bat, ok = r.selectFrom8Reg()
+	case 9:
+		chosen, bat, ok = r.selectFrom9Reg()
+	case 10:
+		chosen, bat, ok = r.selectFrom10Reg()
+	case 11:
+		chosen, bat, ok = r.selectFrom11Reg()
+	case 12:
+		chosen, bat, ok = r.selectFrom12Reg()
+	case 13:
+		chosen, bat, ok = r.selectFrom13Reg()
+	case 14:
+		chosen, bat, ok = r.selectFrom14Reg()
+	case 15:
+		chosen, bat, ok = r.selectFrom15Reg()
+	case 16:
+		chosen, bat, ok = r.selectFrom16Reg()
+	case 32:
+		chosen, bat, ok = r.selectFrom32Reg()
+	case 48:
+		chosen, bat, ok = r.selectFrom48Reg()
+	case 64:
+		chosen, bat, ok = r.selectFrom64Reg()
+	case 80:
+		chosen, bat, ok = r.selectFrom80Reg()
+	default:
+		var value reflect.Value
+		chosen, value, ok = reflect.Select(r.receiverListener)
+		if chosen != 0 && ok {
+			bat = (*batch.Batch)(value.UnsafePointer())
+		}
+		if !ok || bat == nil {
+			r.RemoveChosen(chosen)
+		}
+		return chosen, bat, ok
+	}
+
+	if !ok || bat == nil {
+		r.DisableChosen(chosen)
+	}
+	return chosen, bat, ok
 }

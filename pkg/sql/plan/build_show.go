@@ -161,7 +161,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid.IsArrayRelate() {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
@@ -255,6 +255,32 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += ")"
 
+	var comment string
+	var partition string
+	for _, def := range tableDef.Defs {
+		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+			for _, kv := range proDef.Properties.Properties {
+				if kv.Key == catalog.SystemRelAttr_Comment {
+					comment = " COMMENT='" + kv.Value + "'"
+				}
+			}
+		}
+	}
+
+	if tableDef.Partition != nil {
+		partition = ` ` + tableDef.Partition.PartitionMsg
+	}
+
+	createStr += comment
+	createStr += partition
+
+	/**
+	Fix issue: https://github.com/matrixorigin/MO-Cloud/issues/1028#issuecomment-1667642384
+	Based on the grammar of the 'create table' in the file pkg/sql/parsers/dialect/mysql/mysql_sql.y
+		https://github.com/matrixorigin/matrixone/blob/68db7260e411e5a4541eaccf78ca9bb57e810f24/pkg/sql/parsers/dialect/mysql/mysql_sql.y#L6076C7-L6076C7
+		https://github.com/matrixorigin/matrixone/blob/68db7260e411e5a4541eaccf78ca9bb57e810f24/pkg/sql/parsers/dialect/mysql/mysql_sql.y#L6097
+	The 'cluster by' is after the 'partition by' and the 'table options', so we need to add the 'cluster by' string after the 'partition by' and the 'table options'.
+	*/
 	if tableDef.ClusterBy != nil {
 		clusterby := " CLUSTER BY ("
 		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
@@ -274,25 +300,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		clusterby += ")"
 		createStr += clusterby
 	}
-
-	var comment string
-	var partition string
-	for _, def := range tableDef.Defs {
-		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
-			for _, kv := range proDef.Properties.Properties {
-				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
-				}
-			}
-		}
-	}
-
-	if tableDef.Partition != nil {
-		partition = ` ` + tableDef.Partition.PartitionMsg
-	}
-
-	createStr += comment
-	createStr += partition
 
 	if tableDef.TableType == catalog.SystemExternalRel {
 		param := tree.ExternParam{}
@@ -408,16 +415,9 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 }
 
 func buildShowSequences(stmt *tree.ShowSequences, ctx CompilerContext) (*Plan, error) {
-	dbName := stmt.DBName
-
-	if stmt.DBName == "" {
-		dbName = ctx.DefaultDatabase()
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
-	}
-
-	if dbName == "" {
-		return nil, moerr.NewNoDB(ctx.GetContext())
+	dbName, err := databaseIsValid(stmt.DBName, ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	ddlType := plan.DataDefinition_SHOW_SEQUENCES
@@ -442,16 +442,11 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 
 	accountId := ctx.GetAccountId()
-	dbName := stmt.DBName
-	if stmt.DBName == "" {
-		dbName = ctx.DefaultDatabase()
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	dbName, err := databaseIsValid(stmt.DBName, ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	if dbName == "" {
-		return nil, moerr.NewNoDB(ctx.GetContext())
-	}
 	ddlType := plan.DataDefinition_SHOW_TABLES
 	var tableType string
 	if stmt.Full {
@@ -513,15 +508,9 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Plan, error) {
 	accountId := ctx.GetAccountId()
-	dbName := stmt.DbName
-	if stmt.DbName == "" {
-		dbName = ctx.DefaultDatabase()
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
-	}
-
-	if dbName == "" {
-		return nil, moerr.NewNoDB(ctx.GetContext())
+	dbName, err := databaseIsValid(stmt.DbName, ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	sub, err := ctx.GetSubscriptionMeta(dbName)
@@ -569,11 +558,9 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 
 func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*Plan, error) {
 	accountId := ctx.GetAccountId()
-	dbName := stmt.Table.GetDBName()
-	if dbName == "" {
-		dbName = ctx.DefaultDatabase()
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	dbName, err := databaseIsValid(stmt.Table.GetDBName(), ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
@@ -605,10 +592,10 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 			clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
 		}
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT count(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s)"
+		sql = "SELECT count(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0"
 		sql = fmt.Sprintf(sql, tblName, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT count(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+		sql = "SELECT count(attname) `Number of columns in %s` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'AND att_is_hidden = 0"
 		sql = fmt.Sprintf(sql, tblName, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
@@ -616,11 +603,9 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 }
 
 func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Plan, error) {
-	dbName := stmt.Table.GetDBName()
-	if dbName == "" {
-		dbName = ctx.DefaultDatabase()
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	dbName, err := databaseIsValid(stmt.Table.GetDBName(), ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
@@ -674,11 +659,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	accountId := ctx.GetAccountId()
-	dbName := stmt.Table.GetDBName()
-	if dbName == "" {
-		dbName = ctx.DefaultDatabase()
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	dbName, err := databaseIsValid(stmt.Table.GetDBName(), ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
@@ -770,16 +753,12 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	dbName := stmt.DbName
-	if stmt.DbName == "" {
-		dbName = ctx.DefaultDatabase()
-		stmt.DbName = dbName
-		if dbName == "" {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	dbName, err := databaseIsValid(stmt.DbName, ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	stmt.DbName = dbName
 
 	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
 	accountId := ctx.GetAccountId()
@@ -877,16 +856,11 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	dbName := stmt.DbName
-	if stmt.DbName == "" {
-		dbName = ctx.DefaultDatabase()
-		stmt.DbName = dbName
-		if dbName == "" {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	dbName, err := databaseIsValid(stmt.DbName, ctx)
+	if err != nil {
+		return nil, err
 	}
+	stmt.DbName = dbName
 
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := fmt.Sprintf("SELECT trigger_name as `Trigger`, event_manipulation as `Event`, event_object_table as `Table`, action_statement as `Statement`, action_timing as `Timing`, created as `Created`, sql_mode, definer as `Definer`, character_set_client, collation_connection, database_collation as `Database Collation` FROM %s.TRIGGERS ", INFORMATION_SCHEMA)
@@ -906,14 +880,9 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 }
 
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
-	dbName := string(stmt.TableName.Schema())
-	if dbName == "" {
-		dbName = ctx.DefaultDatabase()
-		if dbName == "" {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
-	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), dbName)
+	dbName, err := databaseIsValid(string(stmt.TableName.Schema()), ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	tblName := string(stmt.TableName.Name())

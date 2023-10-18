@@ -8,11 +8,11 @@ set tx_isolation = default;
 set tx_isolation = default;
 show variables like 'auto%';
 Variable_name    Value
-auto_generate_certs    off
+auto_generate_certs    on
 auto_increment_increment    1
 auto_increment_offset    1
 autocommit    on
-automatic_sp_privileges    off
+automatic_sp_privileges    on
 show variables like 'auto_increment_increment';
 Variable_name    Value
 auto_increment_increment    1
@@ -30,8 +30,8 @@ Variable_name    Value
 auto_increment_increment    6
 show variables like 'init%';
 Variable_name    Value
-init_connect
-init_file
+init_connect    
+init_file    
 show variables like 'init_connect';
 Variable_name    Value
 init_connect    
@@ -140,7 +140,9 @@ schemata
 character_sets
 triggers
 tables
+partitions
 views
+statistics
 engines
 routines
 parameters
@@ -185,7 +187,7 @@ privileges    VARCHAR(31)    NO        null
 column_comment    VARCHAR(2048)    YES        null        
 generation_expression    VARCHAR(500)    NO        null        
 srs_id    BIGINT(0)    YES        null        
-select table_name, column_name from columns where table_schema = 'mo_catalog' order by table_name, column_name limit 5;
+select table_name, column_name from columns where table_schema = 'mo_catalog' and column_name != '__mo_index_idx_col' and column_name != '__mo_index_pri_col' order by table_name, column_name limit 5;
 table_name    column_name
 mo_account    account_id
 mo_account    account_name
@@ -209,6 +211,7 @@ table_schema    table_name    definer
 system    error_info    root@localhost
 system    log_info    root@localhost
 system    span_info    root@localhost
+system    sql_statement_hotspot    root@localhost
 desc profiling;
 Field    Type    Null    Key    Default    Extra    Comment
 query_id    INT(32)    NO        '0'        
@@ -242,7 +245,7 @@ grantee    table_catalog
 desc schemata;
 Field    Type    Null    Key    Default    Extra    Comment
 catalog_name    VARCHAR(5000)    YES        null        
-schema_name    VARCHAR(5000)    YES        null        
+schema_name    VARCHAR(5000)    NO        null        
 default_character_set_name    VARCHAR(7)    NO        null        
 default_collation_name    VARCHAR(18)    NO        null        
 sql_path    VARCHAR(0)    YES        null        
@@ -277,7 +280,7 @@ action_reference_old_table    BINARY(0)    YES        null
 action_reference_new_table    BINARY(0)    YES        null        
 action_reference_old_row    VARCHAR(3)    YES        null        
 action_reference_new_row    VARCHAR(3)    YES        null        
-created    TIMESTAMP(0)    YES        null        
+created    TIMESTAMP(2)    YES        null        
 sql_mode    VARCHAR(10)    YES        null        
 definer    VARCHAR(288)    YES        null        
 character_set_client    VARCHAR(64)    YES        null        

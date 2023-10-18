@@ -192,8 +192,13 @@ func (rt *Routine) handleRequest(req *Request) error {
 	var err error
 	var resp *Response
 	var quit bool
+
 	reqBegin := time.Now()
-	routineCtx = rt.getCancelRoutineCtx()
+	var span trace.Span
+	routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End()
+
 	parameters := rt.getParameters()
 	mpi := rt.getProtocol()
 	mpi.SetSequenceID(req.seq)
@@ -204,10 +209,13 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses = rt.getSession()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
-	tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
+	nodeCtx := cancelRequestCtx
+	if ses.getRoutineManager().baseService != nil {
+		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
+	}
+	tenantCtx := context.WithValue(nodeCtx, defines.TenantIDKey{}, tenant.GetTenantID())
 	tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
 	tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
-	tenantCtx = trace.ContextWithSpanContext(tenantCtx, trace.SpanContextWithID(trace.TraceID(ses.uuid), trace.SpanKindSession))
 	ses.SetRequestContext(tenantCtx)
 	executor.SetSession(ses)
 

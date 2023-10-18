@@ -29,10 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+)
+
+var (
+	retryError               = moerr.NewTxnNeedRetryNoCtx()
+	retryWithDefChangedError = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 )
 
 func String(v any, buf *bytes.Buffer) {
@@ -115,8 +119,8 @@ func callNonBlocking(
 	if bat == nil {
 		return true, arg.rt.retryError
 	}
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
@@ -158,8 +162,8 @@ func callBlocking(
 		}
 
 		// skip empty batch
-		if bat.RowCount() == 0 {
-			bat.Clean(proc.Mp())
+		if bat.IsEmpty() {
+			proc.PutBatch(bat)
 			return false, nil
 		}
 
@@ -198,7 +202,6 @@ func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
 	arg *Argument) error {
-	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
 	needRetry := false
 	for idx, target := range arg.targets {
 		getLogger().Debug("lock",
@@ -211,7 +214,7 @@ func performLock(
 		if target.filter != nil {
 			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
 		}
-		locked, refreshTS, err := doLock(
+		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			arg.block,
 			arg.engine,
@@ -224,7 +227,7 @@ func performLock(
 				WithFetchLockRowsFunc(arg.rt.fetchers[idx]).
 				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
-				WithLockTable(target.lockTable).
+				WithLockTable(target.lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(arg.rt.hasNewVersionInRange),
 		)
 		if getLogger().Enabled(zap.DebugLevel) {
@@ -243,7 +246,7 @@ func performLock(
 		}
 
 		// refreshTS is last commit ts + 1, because we need see the committed data.
-		if txnFeature.RefreshExpressionEnabled() &&
+		if proc.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
 			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
@@ -259,13 +262,19 @@ func performLock(
 		if !needRetry && !refreshTS.IsEmpty() {
 			needRetry = true
 		}
+		if !arg.rt.defChanged {
+			arg.rt.defChanged = defChanged
+		}
 	}
 	// when a transaction needs to operate on many data, there may be multiple conflicts on the
 	// data, and if you go to retry every time a conflict occurs, you will also encounter conflicts
 	// when you retry. We need to return the conflict after all the locks have been added successfully,
 	// so that the retry will definitely succeed because all the locks have been put.
 	if needRetry && arg.rt.retryError == nil {
-		arg.rt.retryError = moerr.NewTxnNeedRetry(proc.Ctx)
+		arg.rt.retryError = retryError
+	}
+	if arg.rt.defChanged {
+		arg.rt.retryError = retryWithDefChangedError
 	}
 	return nil
 }
@@ -276,7 +285,8 @@ func LockTable(
 	eng engine.Engine,
 	proc *process.Process,
 	tableID uint64,
-	pkType types.Type) error {
+	pkType types.Type,
+	changeDef bool) error {
 	if !proc.TxnOperator.Txn().IsPessimistic() {
 		return nil
 	}
@@ -284,9 +294,9 @@ func LockTable(
 	defer parker.FreeMem()
 
 	opts := DefaultLockOptions(parker).
-		WithLockTable(true).
+		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
-	_, refreshTS, err := doLock(
+	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		false,
 		eng,
@@ -300,7 +310,10 @@ func LockTable(
 	}
 	// If the returned timestamp is not empty, we should return a retry error,
 	if !refreshTS.IsEmpty() {
-		return moerr.NewTxnNeedRetry(proc.Ctx)
+		if !defChanged {
+			return retryError
+		}
+		return retryWithDefChangedError
 	}
 	return nil
 }
@@ -312,6 +325,7 @@ func LockRows(
 	tableID uint64,
 	vec *vector.Vector,
 	pkType types.Type,
+	lockMode lock.LockMode,
 ) error {
 	if !proc.TxnOperator.Txn().IsPessimistic() {
 		return nil
@@ -321,9 +335,10 @@ func LockRows(
 	defer parker.FreeMem()
 
 	opts := DefaultLockOptions(parker).
-		WithLockTable(false).
+		WithLockTable(false, false).
+		WithLockMode(lockMode).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
-	_, refreshTS, err := doLock(
+	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
 		false,
 		eng,
@@ -337,7 +352,10 @@ func LockRows(
 	}
 	// If the returned timestamp is not empty, we should return a retry error,
 	if !refreshTS.IsEmpty() {
-		return moerr.NewTxnNeedRetry(proc.Ctx)
+		if !defChanged {
+			return retryError
+		}
+		return retryWithDefChangedError
 	}
 	return nil
 }
@@ -354,13 +372,13 @@ func doLock(
 	proc *process.Process,
 	vec *vector.Vector,
 	pkType types.Type,
-	opts LockOptions) (bool, timestamp.Timestamp, error) {
+	opts LockOptions) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.TxnOperator
 	txnClient := proc.TxnClient
 	lockService := proc.LockService
 
 	if !txnOp.Txn().IsPessimistic() {
-		return false, timestamp.Timestamp{}, nil
+		return false, false, timestamp.Timestamp{}, nil
 	}
 
 	if opts.maxCountPerLock == 0 {
@@ -380,14 +398,15 @@ func doLock(
 		opts.filter,
 		opts.filterCols)
 	if !has {
-		return false, timestamp.Timestamp{}, nil
+		return false, false, timestamp.Timestamp{}, nil
 	}
 
 	txn := txnOp.Txn()
 	options := lock.LockOptions{
-		Granularity: g,
-		Policy:      lock.WaitPolicy_Wait,
-		Mode:        opts.mode,
+		Granularity:     g,
+		Policy:          lock.WaitPolicy_Wait,
+		Mode:            opts.mode,
+		TableDefChanged: opts.changeDef,
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -396,10 +415,13 @@ func doLock(
 		}
 	} else {
 		// FIXME: in launch model, multi-cn will use same process level runtime. So lockservice will be wrong.
-		if txn.LockService != lockService.GetConfig().ServiceID {
+		if txn.LockService != lockService.GetServiceID() {
 			lockService = lockservice.GetLockServiceByServiceID(txn.LockService)
 		}
 	}
+
+	key := txnOp.AddWaitLock(tableID, rows, options)
+	defer txnOp.RemoveWaitLock(key)
 
 	result, err := lockService.Lock(
 		ctx,
@@ -408,12 +430,12 @@ func doLock(
 		txn.ID,
 		options)
 	if err != nil {
-		return false, timestamp.Timestamp{}, err
+		return false, false, timestamp.Timestamp{}, err
 	}
 
 	// add bind locks
 	if err := txnOp.AddLockTable(result.LockedOn); err != nil {
-		return false, timestamp.Timestamp{}, err
+		return false, false, timestamp.Timestamp{}, err
 	}
 
 	snapshotTS := txnOp.Txn().SnapshotTS
@@ -429,7 +451,7 @@ func doLock(
 		// wait last committed logtail applied
 		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
 		if err != nil {
-			return false, timestamp.Timestamp{}, err
+			return false, false, timestamp.Timestamp{}, err
 		}
 
 		fn := opts.hasNewVersionInRangeFunc
@@ -440,13 +462,13 @@ func doLock(
 		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
 		changed, err := fn(proc, tableID, eng, vec, snapshotTS, newSnapshotTS)
 		if err != nil {
-			return false, timestamp.Timestamp{}, err
+			return false, false, timestamp.Timestamp{}, err
 		}
 		if changed {
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
-				return false, timestamp.Timestamp{}, err
+				return false, false, timestamp.Timestamp{}, err
 			}
-			return true, newSnapshotTS, nil
+			return true, false, newSnapshotTS, nil
 		}
 	}
 
@@ -454,7 +476,9 @@ func doLock(
 	// current txn can read and write normally
 	if !result.HasConflict ||
 		!result.HasPrevCommit {
-		return true, timestamp.Timestamp{}, nil
+		return true, false, timestamp.Timestamp{}, nil
+	} else if lockedTS.Less(snapshotTS) {
+		return true, false, timestamp.Timestamp{}, nil
 	}
 
 	// Arriving here means that at least one of the conflicting
@@ -469,15 +493,15 @@ func doLock(
 	// is modified between [snapshotTS,prev.commits] and raise the SnapshotTS of
 	// the SI transaction to eliminate conflicts)
 	if !txnOp.Txn().IsRCIsolation() {
-		return false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx)
+		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx)
 	}
 
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
-		return false, timestamp.Timestamp{}, err
+		return false, false, timestamp.Timestamp{}, err
 	}
-	return true, snapshotTS, nil
+	return true, result.TableDefChanged, snapshotTS, nil
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
@@ -498,8 +522,9 @@ func (opts LockOptions) WithLockMode(mode lock.LockMode) LockOptions {
 }
 
 // WithLockTable set lock all table
-func (opts LockOptions) WithLockTable(lockTable bool) LockOptions {
+func (opts LockOptions) WithLockTable(lockTable, changeDef bool) LockOptions {
 	opts.lockTable = lockTable
+	opts.changeDef = changeDef
 	return opts
 }
 
@@ -566,14 +591,31 @@ func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
 			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
 			FilterColIdxInBat:  target.filterColIndexInBatch,
 			LockTable:          target.lockTable,
+			ChangeDef:          target.changeDef,
+			Mode:               target.mode,
 		}
 	}
 	return targets
 }
 
-// AddLockTarget add lock targets
+// AddLockTarget add lock target, LockMode_Exclusive will used
 func (arg *Argument) AddLockTarget(
 	tableID uint64,
+	primaryColumnIndexInBatch int32,
+	primaryColumnType types.Type,
+	refreshTimestampIndexInBatch int32) *Argument {
+	return arg.AddLockTargetWithMode(
+		tableID,
+		lock.LockMode_Exclusive,
+		primaryColumnIndexInBatch,
+		primaryColumnType,
+		refreshTimestampIndexInBatch)
+}
+
+// AddLockTargetWithMode add lock target with lock mode
+func (arg *Argument) AddLockTargetWithMode(
+	tableID uint64,
+	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32) *Argument {
@@ -582,15 +624,32 @@ func (arg *Argument) AddLockTarget(
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
+		mode:                         mode,
 	})
 	return arg
 }
 
 // LockTable lock all table, used for delete, truncate and drop table
-func (arg *Argument) LockTable(tableID uint64) *Argument {
+func (arg *Argument) LockTable(
+	tableID uint64,
+	changeDef bool) *Argument {
+	return arg.LockTableWithMode(
+		tableID,
+		lock.LockMode_Exclusive,
+		changeDef)
+}
+
+// LockTableWithMode is similar to LockTable, but with specify
+// lock mode
+func (arg *Argument) LockTableWithMode(
+	tableID uint64,
+	mode lock.LockMode,
+	changeDef bool) *Argument {
 	for idx := range arg.targets {
 		if arg.targets[idx].tableID == tableID {
 			arg.targets[idx].lockTable = true
+			arg.targets[idx].changeDef = changeDef
+			arg.targets[idx].mode = mode
 			break
 		}
 	}
@@ -608,6 +667,24 @@ func (arg *Argument) LockTable(tableID uint64) *Argument {
 // partitionTableIDMappingInBatch: the ID index of the sub-table corresponding to the data. Index of tableIDs
 func (arg *Argument) AddLockTargetWithPartition(
 	tableIDs []uint64,
+	primaryColumnIndexInBatch int32,
+	primaryColumnType types.Type,
+	refreshTimestampIndexInBatch int32,
+	partitionTableIDMappingInBatch int32) *Argument {
+	return arg.AddLockTargetWithPartitionAndMode(
+		tableIDs,
+		lock.LockMode_Exclusive,
+		primaryColumnIndexInBatch,
+		primaryColumnType,
+		refreshTimestampIndexInBatch,
+		partitionTableIDMappingInBatch)
+}
+
+// AddLockTargetWithPartitionAndMode is similar to AddLockTargetWithPartition, but you can specify
+// the lock mode
+func (arg *Argument) AddLockTargetWithPartitionAndMode(
+	tableIDs []uint64,
+	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
@@ -633,15 +710,14 @@ func (arg *Argument) AddLockTargetWithPartition(
 			refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 			filter:                       getRowsFilter(tableID, tableIDs),
 			filterColIndexInBatch:        partitionTableIDMappingInBatch,
+			mode:                         mode,
 		})
 	}
 	return arg
 }
 
 // Free free mem
-func (arg *Argument) Free(
-	proc *process.Process,
-	pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.rt == nil {
 		return
 	}

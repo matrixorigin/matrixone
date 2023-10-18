@@ -22,6 +22,7 @@ use mo_catalog;
 show tables;
 tables_in_mo_catalog
 mo_indexes
+mo_table_partitions
 mo_user
 mo_account
 mo_role
@@ -36,6 +37,11 @@ mo_stages
 mo_tables
 mo_columns
 mo_database
+mo_sessions
+mo_configurations
+mo_locks
+mo_variables
+mo_transactions
 create database t;
 internal error: do not have privilege to execute the statement
 grant create database on account * to r1;

@@ -71,3 +71,21 @@ func WithGlobalVersionInterval(interval time.Duration) Option {
 		r.options.globalVersionInterval = interval
 	}
 }
+
+func WithCheckpointBlockRows(rows int) Option {
+	return func(r *runner) {
+		r.options.checkpointBlockRows = rows
+	}
+}
+
+func WithCheckpointSize(size int) Option {
+	return func(r *runner) {
+		r.options.checkpointSize = size
+	}
+}
+
+func WithReserveWALEntryCount(count uint64) Option {
+	return func(r *runner) {
+		r.options.reservedWALEntryCount = count
+	}
+}

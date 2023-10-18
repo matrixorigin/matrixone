@@ -190,7 +190,17 @@ func (blk *txnBlock) getDBID() uint64 {
 }
 
 func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, dt)
+	schema := blk.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	for row := start; row <= end; row++ {
+		pkVal, _, err := blk.entry.GetBlockData().GetValue(blk.table.store.GetContext(), blk.Txn, schema, int(row), pkDef.Idx)
+		if err != nil {
+			return err
+		}
+		pkVec.Append(pkVal, false)
+	}
+	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, pkVec, dt)
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaLoc objectio.Location) {
@@ -241,7 +251,7 @@ func (blk *txnBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (
 }
 
 func (blk *txnBlock) GetDeltaPersistedTS() types.TS {
-	return blk.entry.GetDeltaPersistedTSByTxn(blk.Txn)
+	return blk.entry.GetDeltaPersistedTS()
 }
 
 func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*containers.ColumnView, error) {
@@ -258,7 +268,7 @@ func (blk *txnBlock) GetColumnDataByIds(ctx context.Context, colIdxes []int) (*c
 	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdxes)
 }
 
-func (blk *txnBlock) Prefetch(idxes []uint16) error {
+func (blk *txnBlock) Prefetch(idxes []int) error {
 	schema := blk.table.GetLocalSchema()
 	seqnums := make([]uint16, 0, len(idxes))
 	for _, idx := range idxes {

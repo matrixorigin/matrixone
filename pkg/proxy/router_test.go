@@ -29,16 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type mockSQLWorker struct{}
-
-func newMockSQLWorker() *mockSQLWorker {
-	return &mockSQLWorker{}
-}
-
-func (w *mockSQLWorker) GetCNServersByTenant(tenant string) ([]*CNServer, error) {
-	return nil, nil
-}
-
 func TestCNServer(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	temp := os.TempDir()
@@ -82,11 +72,10 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, newMockSQLWorker(), true)
+	ru := newRouter(mc, re, true)
 
 	li1 := labelInfo{
 		Tenant: "t1",
@@ -118,11 +107,10 @@ func TestRouter_RouteForCommon(t *testing.T) {
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, newMockSQLWorker(), true)
+	ru := newRouter(mc, re, true)
 	ctx := context.TODO()
 
 	li1 := labelInfo{
@@ -198,7 +186,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	re := testRebalancer(t, st, logger, mc)
-	ru := newRouter(mc, re, newMockSQLWorker(), true)
+	ru := newRouter(mc, re, true)
 	li1 := labelInfo{
 		Tenant: "sys",
 	}
@@ -206,8 +194,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 	hc.updateCN("cn1", "", map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 	})
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	ctx := context.TODO()
 	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1, username: "dump"}, nil)
 	require.NoError(t, err)
@@ -219,8 +206,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 	require.Nil(t, cn)
 
 	hc.updateCN("cn2", "", map[string]metadata.LabelList{})
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -229,8 +215,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 	hc.updateCN("cn3", "", map[string]metadata.LabelList{
 		"k1": {Labels: []string{"v1"}},
 	})
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -239,8 +224,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 	hc.updateCN("cn4", "", map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"sys"}},
 	})
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
@@ -266,7 +250,7 @@ func TestRouter_SelectByConnID(t *testing.T) {
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
-	ru := newRouter(nil, re, newMockSQLWorker(), true)
+	ru := newRouter(nil, re, true)
 
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
 	_, _, err := ru.Connect(cn1, testPacket, nil)
@@ -335,11 +319,10 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, newMockSQLWorker(), true)
+	ru := newRouter(mc, re, true)
 
 	connResult := make(map[string]struct{})
 	li1 := labelInfo{
@@ -352,6 +335,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
 	tu1 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
@@ -367,6 +351,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
 	tu2 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
@@ -382,6 +367,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
 	tu3 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
@@ -440,11 +426,10 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, newMockSQLWorker(), true)
+	ru := newRouter(mc, re, true)
 
 	connResult := make(map[string]struct{})
 	li1 := labelInfo{
@@ -457,6 +442,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
 	tu1 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
@@ -472,6 +458,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
 	tu2 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
@@ -487,6 +474,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
 	tu3 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
@@ -534,11 +522,10 @@ func TestRouter_Filter(t *testing.T) {
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, newMockSQLWorker(), true)
+	ru := newRouter(mc, re, true)
 
 	cn, err := ru.Route(ctx, clientInfo{username: "dump"}, func(s string) bool {
 		return s == "cn1"
@@ -578,35 +565,63 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	})
 	// We do NOT start cn2 here, to return a retryable error.
 
+	addr3 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr3))
+	hc.updateCN("cn3", addr3, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	stopFn3 := startTestCNServer(t, ctx, addr3, nil, withBeforeHandle(func() {
+		time.Sleep(time.Second * 3)
+	}))
+	defer func() {
+		require.NoError(t, stopFn3())
+	}()
+
 	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
-	mc.ForceRefresh()
-	time.Sleep(time.Millisecond * 200)
+	mc.ForceRefresh(true)
 	re := testRebalancer(t, st, logger, mc)
 
-	ru := newRouter(mc, re, newMockSQLWorker(), true)
+	ru := newRouter(mc, re, false)
 
 	li1 := labelInfo{
 		Tenant: "t1",
 	}
 	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
-		return s == "cn1"
+		// choose cn2
+		return s == "cn1" || s == "cn3"
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
 	tu1 := newTunnel(context.TODO(), nil, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.True(t, isRetryableErr(err))
 
 	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
-		return s == "cn2"
+		// choose cn1
+		return s == "cn2" || s == "cn3"
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
 	require.Equal(t, "cn1", cn.uuid)
+
+	// could not connect to cn3, because of timeout.
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
+		// choose cn3
+		return s == "cn1" || s == "cn2"
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	cn.addr = "unix://" + cn.addr
+	cn.salt = testSlat
+	tu3 := newTunnel(context.TODO(), nil, nil)
+	_, _, err = ru.Connect(cn, testPacket, tu3)
+	require.True(t, isRetryableErr(err))
 }

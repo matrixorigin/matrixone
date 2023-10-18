@@ -43,10 +43,8 @@ alter table add01 add column col9 int not null first;
 show create table add01;
 insert into add01 values(1,3,'nihao','hei','hu','jj',2,'varchar',1);
 
--- @bvt:issue#8740
 insert into add01 values(2,3,'nihao',null,'hu','jj',2,'varchar',1);
 insert into add01 values(3,4,'nihao','hi','hu','jj',2,'varchar',null);
--- @bvt:issue
 
 show create table add01;
 select * from add01;
@@ -341,7 +339,6 @@ alter table update01 add column col1_2 binary after col1;
 alter table update01 add column col5 blob after col3;
 select * from update01;
 show create table update01;
--- @bvt:issue#10093
 insert into update01 values(1,'1',3,'ew83u829d3qcefq','q3829ff2e3qe');
 insert into update01 values(2,'3',6,'3214()_)_)','00');
 select * from update01;
@@ -350,7 +347,6 @@ update update01 set col1 = 100 where col1 = 1;
 update update01 set col5 = '2798u3d3frew' where col2 = 6;
 delete from update01 where col1_2 is null;
 drop table update01;
--- @bvt:issue
 
 -- alter table rename
 drop table if exists rename01;

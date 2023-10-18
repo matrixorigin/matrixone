@@ -98,7 +98,7 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 	}
 }
 
-func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
+func (ar *AccountRoutineManager) EnKillQueue(tenantID int64, version uint64) {
 	if tenantID == sysAccountID {
 		return
 	}
@@ -108,6 +108,24 @@ func (ar *AccountRoutineManager) enKillQueue(tenantID int64, version uint64) {
 	defer ar.killQueueMu.Unlock()
 	ar.killIdQueue[tenantID] = KillRecord
 
+}
+
+func (ar *AccountRoutineManager) AlterRoutineStatue(tenantID int64, status string) {
+	if tenantID == sysAccountID {
+		return
+	}
+
+	ar.accountRoutineMu.Lock()
+	defer ar.accountRoutineMu.Unlock()
+	if rts, ok := ar.accountId2Routine[tenantID]; ok {
+		for rt := range rts {
+			if status == "restricted" {
+				rt.setResricted(true)
+			} else {
+				rt.setResricted(false)
+			}
+		}
+	}
 }
 
 func (ar *AccountRoutineManager) deepCopyKillQueue() map[int64]KillRecord {
@@ -127,7 +145,11 @@ func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uin
 
 	tempRoutineMap := make(map[int64]map[*Routine]uint64, len(ar.accountId2Routine))
 	for account, rountine := range ar.accountId2Routine {
-		tempRoutineMap[account] = rountine
+		tempRountines := make(map[*Routine]uint64, len(rountine))
+		for rt, version := range rountine {
+			tempRountines[rt] = version
+		}
+		tempRoutineMap[account] = tempRountines
 	}
 	return tempRoutineMap
 }
@@ -199,6 +221,10 @@ func (rm *RoutineManager) setSessionMgr(sessionMgr *queryservice.SessionManager)
 	rm.sessionManager = sessionMgr
 }
 
+func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
+	return rm.accountRoutine
+}
+
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	pu := rm.getParameterUnit()
@@ -218,8 +244,12 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
 	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm, nil)
-	ses.SetRequestContext(routine.getCancelRoutineCtx())
-	ses.SetConnectContext(routine.getCancelRoutineCtx())
+	cancelCtx := routine.getCancelRoutineCtx()
+	if rm.baseService != nil {
+		cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, rm.baseService.ID())
+	}
+	ses.SetRequestContext(cancelCtx)
+	ses.SetConnectContext(cancelCtx)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
@@ -329,7 +359,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}()
 	var err error
 	var isTlsHeader bool
-	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler")
+	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
+		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
@@ -595,7 +626,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 			default:
 			}
 			rm.KillRoutineConnections()
-			time.Sleep(time.Duration(time.Duration(pu.SV.KillRountinesInterval) * time.Minute))
+			time.Sleep(time.Duration(time.Duration(pu.SV.KillRountinesInterval) * time.Second))
 		}
 	}()
 

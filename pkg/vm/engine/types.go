@@ -68,6 +68,8 @@ type Attribute struct {
 	AutoIncrement bool
 	// Seqnum, do not change during the whole lifetime of the table
 	Seqnum uint16
+	// EnumValues is for enum type
+	EnumVlaues string
 }
 
 type PropertiesDef struct {
@@ -149,6 +151,10 @@ type PrimaryKeyDef struct {
 
 type RefChildTableDef struct {
 	Tables []uint64
+}
+
+type StreamConfigsDef struct {
+	Configs []*plan.Property
 }
 
 type TableDef interface {
@@ -286,6 +292,7 @@ const (
 	RefChildTable
 	ForeignKey
 	PrimaryKey
+	StreamConfig
 )
 
 type EngineType int8
@@ -361,6 +368,23 @@ func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
 				return nil, err
 			}
 			buf.Write(bytes)
+		case *StreamConfigsDef:
+			if err := binary.Write(buf, binary.BigEndian, StreamConfig); err != nil {
+				return nil, err
+			}
+			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Configs))); err != nil {
+				return nil, err
+			}
+			for _, c := range def.Configs {
+				bytes, err := c.Marshal()
+				if err != nil {
+					return nil, err
+				}
+				if err := binary.Write(buf, binary.BigEndian, uint64(len(bytes))); err != nil {
+					return nil, err
+				}
+				buf.Write(bytes)
+			}
 		}
 	}
 	return buf.Bytes(), nil
@@ -429,6 +453,23 @@ func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
 			}
 			l += int(length)
 			def.Cts = append(def.Cts, &PrimaryKeyDef{pkey})
+		case StreamConfig:
+			length = binary.BigEndian.Uint64(data[l : l+8])
+			l += 8
+			configs := make([]*plan.Property, length)
+
+			for i := 0; i < int(length); i++ {
+				dataLength := binary.BigEndian.Uint64(data[l : l+8])
+				l += 8
+				config := &plan.Property{}
+				err := config.Unmarshal(data[l : l+int(dataLength)])
+				if err != nil {
+					return err
+				}
+				l += int(dataLength)
+				configs[i] = config
+			}
+			def.Cts = append(def.Cts, &StreamConfigsDef{configs})
 		}
 	}
 	return nil
@@ -457,6 +498,9 @@ func (def *ConstraintPB) FromPBVersion() Constraint {
 	if r := def.GetIndexDef(); r != nil {
 		return r
 	}
+	if r := def.GetStreamConfigsDef(); r != nil {
+		return r
+	}
 	panic("no corresponding type")
 }
 
@@ -482,6 +526,7 @@ func (*ForeignKeyDef) constraint()    {}
 func (*PrimaryKeyDef) constraint()    {}
 func (*RefChildTableDef) constraint() {}
 func (*IndexDef) constraint()         {}
+func (*StreamConfigsDef) constraint() {}
 
 func (def *ForeignKeyDef) ToPBVersion() ConstraintPB {
 	return ConstraintPB{
@@ -512,8 +557,18 @@ func (def *IndexDef) ToPBVersion() ConstraintPB {
 	}
 }
 
+func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
+	return ConstraintPB{
+		Ct: &ConstraintPB_StreamConfigsDef{
+			StreamConfigsDef: def,
+		},
+	}
+}
+
 type Relation interface {
 	Statistics
+
+	UpdateBlockInfos(context.Context) error
 
 	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
 

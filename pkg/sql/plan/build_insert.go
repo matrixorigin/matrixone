@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -28,6 +30,20 @@ import (
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
+	}
+
+	tbl := stmt.Table.(*tree.TableName)
+	dbName := string(tbl.SchemaName)
+	tblName := string(tbl.ObjectName)
+	if len(dbName) == 0 {
+		dbName = ctx.DefaultDatabase()
+	}
+	_, t := ctx.Resolve(dbName, tblName)
+	if t == nil {
+		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if t.TableType == catalog.SystemStreamRel {
+		return nil, moerr.NewNYI(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
 	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
@@ -40,20 +56,19 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
-	clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
-	if err != nil {
-		return nil, err
-	}
-
-	if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
-		return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
-	}
+	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
+	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
+	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
-	checkInsertPkDup, pkPosInValues, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -74,14 +89,75 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		// append on duplicate key node
 		tableDef = DeepCopyTableDef(tableDef)
 		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 		}
 		if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			//tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
 			tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
 		}
+
 		dupProjection := getProjectionByLastNode(builder, lastNodeId)
+		// if table have pk & unique key. we need append an agg node before on_duplicate_key
+		if rewriteInfo.onDuplicateNeedAgg {
+			colLen := len(tableDef.Cols)
+			aggGroupBy := make([]*Expr, 0, colLen)
+			aggList := make([]*Expr, 0, len(dupProjection)-colLen)
+			aggProject := make([]*Expr, 0, len(dupProjection))
+			for i := 0; i < len(dupProjection); i++ {
+				if i < colLen {
+					aggGroupBy = append(aggGroupBy, &Expr{
+						Typ: dupProjection[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								ColPos: int32(i),
+							},
+						},
+					})
+					aggProject = append(aggProject, &Expr{
+						Typ: dupProjection[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								RelPos: -1,
+								ColPos: int32(i),
+							},
+						},
+					})
+				} else {
+					aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{
+						{
+							Typ: dupProjection[i].Typ,
+							Expr: &plan.Expr_Col{
+								Col: &ColRef{
+									ColPos: int32(i),
+								},
+							},
+						},
+					})
+					if err != nil {
+						return nil, err
+					}
+					aggList = append(aggList, aggExpr)
+					aggProject = append(aggProject, &Expr{
+						Typ: dupProjection[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								RelPos: -2,
+								ColPos: int32(i),
+							},
+						},
+					})
+				}
+			}
+
+			aggNode := &Node{
+				NodeType:    plan.Node_AGG,
+				Children:    []int32{lastNodeId},
+				GroupBy:     aggGroupBy,
+				AggList:     aggList,
+				ProjectList: aggProject,
+			}
+			lastNodeId = builder.appendNode(aggNode, bindCtx)
+		}
+
 		onDuplicateKeyNode := &Node{
 			NodeType:    plan.Node_ON_DUPLICATE_KEY,
 			Children:    []int32{lastNodeId},
@@ -90,6 +166,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 				TableDef:        tableDef,
 				OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
 				OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
+				IsIgnore:        rewriteInfo.onDuplicateIsIgnore,
 			},
 		}
 		lastNodeId = builder.appendNode(onDuplicateKeyNode, bindCtx)
@@ -167,7 +244,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs)
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, isInsertWithoutAutoPkCol)
 		if err != nil {
 			return nil, err
 		}
@@ -215,7 +292,14 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 	for insertRowIdx, pkColIdx = range pkPosInValues {
 		valExprs := make([]*Expr, rowsCount)
-		colTyp = makePlan2Type(bat.Vecs[insertRowIdx].GetType())
+		rowTyp := bat.Vecs[insertRowIdx].GetType()
+		colTyp = makePlan2Type(rowTyp)
+
+		var varcharTyp *Type
+		if rowTyp.Oid == types.T_uuid {
+			typ := types.T_varchar.ToType()
+			varcharTyp = MakePlan2Type(&typ)
+		}
 
 		for _, data := range node.RowsetData.Cols[insertRowIdx].Data {
 			rowExpr := DeepCopyExpr(data.Expr)
@@ -228,15 +312,34 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 		for i := 0; i < rowsCount; i++ {
 			if valExprs[i] == nil {
-				constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, uint64(i))
-				if constExpr == nil {
-					return nil
-				}
-				valExprs[i] = &plan.Expr{
-					Typ: colTyp,
-					Expr: &plan.Expr_C{
-						C: constExpr,
-					},
+				if bat.Vecs[insertRowIdx].GetType().Oid == types.T_uuid {
+					// we have not uuid type in plan.Const. so use string & cast string to uuid
+					val := vector.MustFixedCol[types.Uuid](bat.Vecs[insertRowIdx])[i]
+					constExpr := &plan.Expr{
+						Typ: varcharTyp,
+						Expr: &plan.Expr_C{
+							C: &plan.Const{
+								Value: &plan.Const_Sval{
+									Sval: val.ToString(),
+								},
+							},
+						},
+					}
+					valExprs[i], err = appendCastBeforeExpr(proc.Ctx, constExpr, colTyp, false)
+					if err != nil {
+						return nil
+					}
+				} else {
+					constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, uint64(i))
+					if constExpr == nil {
+						return nil
+					}
+					valExprs[i] = &plan.Expr{
+						Typ: colTyp,
+						Expr: &plan.Expr_C{
+							C: constExpr,
+						},
+					}
 				}
 			}
 		}

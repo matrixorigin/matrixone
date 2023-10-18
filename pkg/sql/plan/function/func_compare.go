@@ -17,6 +17,8 @@ package function
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,6 +43,7 @@ func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_binary, types.T_varbinary:
 	case types.T_uuid:
 	case types.T_Rowid:
+	case types.T_array_float32, types.T_array_float64:
 	default:
 		return false
 	}
@@ -65,6 +68,8 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_json:
 	case types.T_uuid:
 	case types.T_Rowid:
+	case types.T_array_float32, types.T_array_float64:
+	case types.T_enum:
 	default:
 		return false
 	}
@@ -131,6 +136,26 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
 			return v1 == v2
 		})
+	case types.T_array_float32:
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+			return compareVarlenaEqual(parameters, rs, proc, length)
+		}
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float32](v1)
+			_v2 := types.BytesToArray[float32](v2)
+
+			return moarray.Compare[float32](_v1, _v2) == 0
+		})
+	case types.T_array_float64:
+		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil {
+			return compareVarlenaEqual(parameters, rs, proc, length)
+		}
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float64](v1)
+			_v2 := types.BytesToArray[float64](v2)
+
+			return moarray.Compare[float64](_v1, _v2) == 0
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a == b
@@ -158,6 +183,10 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_Rowid:
 		return opBinaryFixedFixedToFixed[types.Rowid, types.Rowid, bool](parameters, rs, proc, length, func(a, b types.Rowid) bool {
 			return a.Equal(b)
+		})
+	case types.T_enum:
+		return opBinaryFixedFixedToFixed[types.Enum, types.Enum, bool](parameters, rs, proc, length, func(a, b types.Enum) bool {
+			return a == b
 		})
 	}
 	panic("unreached code")
@@ -571,6 +600,20 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) > 0
 		})
+	case types.T_array_float32:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float32](v1)
+			_v2 := types.BytesToArray[float32](v2)
+
+			return moarray.Compare[float32](_v1, _v2) > 0
+		})
+	case types.T_array_float64:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float64](v1)
+			_v2 := types.BytesToArray[float64](v2)
+
+			return moarray.Compare[float64](_v1, _v2) > 0
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a > b
@@ -662,6 +705,20 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) >= 0
+		})
+	case types.T_array_float32:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float32](v1)
+			_v2 := types.BytesToArray[float32](v2)
+
+			return moarray.Compare[float32](_v1, _v2) >= 0
+		})
+	case types.T_array_float64:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float64](v1)
+			_v2 := types.BytesToArray[float64](v2)
+
+			return moarray.Compare[float64](_v1, _v2) >= 0
 		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
@@ -755,6 +812,20 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
 			return a != b
 		})
+	case types.T_array_float32:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float32](v1)
+			_v2 := types.BytesToArray[float32](v2)
+
+			return moarray.Compare[float32](_v1, _v2) != 0
+		})
+	case types.T_array_float64:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float64](v1)
+			_v2 := types.BytesToArray[float64](v2)
+
+			return moarray.Compare[float64](_v1, _v2) != 0
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a != b
@@ -847,6 +918,20 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) < 0
 		})
+	case types.T_array_float32:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float32](v1)
+			_v2 := types.BytesToArray[float32](v2)
+
+			return moarray.Compare[float32](_v1, _v2) < 0
+		})
+	case types.T_array_float64:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float64](v1)
+			_v2 := types.BytesToArray[float64](v2)
+
+			return moarray.Compare[float64](_v1, _v2) < 0
+		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a < b
@@ -938,6 +1023,20 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	case types.T_binary, types.T_varbinary:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) <= 0
+		})
+	case types.T_array_float32:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float32](v1)
+			_v2 := types.BytesToArray[float32](v2)
+
+			return moarray.Compare[float32](_v1, _v2) <= 0
+		})
+	case types.T_array_float64:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {
+			_v1 := types.BytesToArray[float64](v1)
+			_v2 := types.BytesToArray[float64](v2)
+
+			return moarray.Compare[float64](_v1, _v2) <= 0
 		})
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {

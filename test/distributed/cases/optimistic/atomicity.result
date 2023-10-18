@@ -238,3 +238,22 @@ num_col1    num_col2
 -128    -32768
 127    32767
 null    null
+drop table if exists s3t;
+create table s3t (a int, b int, c int, primary key(a, b));
+insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
+select count(*) from s3t;
+count(*)
+30000
+begin;
+CREATE TABLE `s3t_copy` (
+`a` INT NOT NULL,
+`b` INT NOT NULL,
+`d` INT DEFAULT null,
+`c` INT DEFAULT null,
+PRIMARY KEY (`a`,`b`)
+);
+insert into s3t_copy(a, b, c) select a, b, c from s3t;
+select count(*) from s3t_copy;
+count(*)
+30000
+commit;

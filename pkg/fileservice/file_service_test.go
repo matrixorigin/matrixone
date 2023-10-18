@@ -36,6 +36,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -241,6 +242,7 @@ func testFileService(
 		assert.Nil(t, err)
 
 		var r io.ReadCloser
+
 		vec := &IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -256,6 +258,24 @@ func testFileService(
 		data, err := io.ReadAll(r)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("1234"), data)
+		err = r.Close()
+		assert.Nil(t, err)
+
+		vec = &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Offset:            0,
+					Size:              3,
+					ReadCloserForRead: &r,
+				},
+			},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		data, err = io.ReadAll(r)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("123"), data)
 		err = r.Close()
 		assert.Nil(t, err)
 
@@ -619,9 +639,11 @@ func testFileService(
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 	})
 
-	t.Run("object", func(t *testing.T) {
+	t.Run("cache data", func(t *testing.T) {
 		fs := newFS(fsName)
 		ctx := context.Background()
+		var counterSet perfcounter.CounterSet
+		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 		m := api.Int64Map{
 			M: map[int64]int64{
@@ -641,18 +663,21 @@ func testFileService(
 		})
 		assert.Nil(t, err)
 
+		// read with ToCacheData
 		vec := &IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObjectBytes: func(r io.Reader, data []byte) ([]byte, int64, error) {
+					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						return bs, 1, nil
+						cacheData := allocator.Alloc(len(bs))
+						copy(cacheData.Bytes(), bs)
+						return cacheData, nil
 					},
 				},
 			},
@@ -660,11 +685,29 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 
-		err = m.Unmarshal(vec.Entries[0].ObjectBytes)
+		cachedData := vec.Entries[0].CachedData
+		assert.NotNil(t, cachedData)
+		assert.Equal(t, data, cachedData.Bytes())
+
+		err = m.Unmarshal(vec.Entries[0].CachedData.Bytes())
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])
-		assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+
+		// ReadCache
+		vec = &IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: int64(len(data)),
+				},
+			},
+		}
+		err = fs.ReadCache(ctx, vec)
+		assert.Nil(t, err)
+		if vec.Entries[0].CachedData != nil {
+			assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
+		}
 
 	})
 

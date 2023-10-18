@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"reflect"
 	"sync"
 
@@ -60,9 +61,17 @@ type Server struct {
 	cnSegmentMap CnSegmentMap
 }
 
+type uuidProcMapItem struct {
+	proc *process.Process
+
+	// if referenceCount is 0, it means all process dependent on this uuidProcMapItem is over.
+	// and we can delete this item from uuidCsChanMap.
+	referenceCount int
+}
+
 type UuidProcMap struct {
 	sync.Mutex
-	mp map[uuid.UUID]*process.Process
+	mp map[uuid.UUID]uuidProcMapItem
 }
 
 type CnSegmentMap struct {
@@ -85,6 +94,7 @@ type ReceiverOperator struct {
 	// Merge/MergeGroup/MergeLimit ... are Merge-Type
 	// while Join/Intersect/Minus ... are not
 	aliveMergeReceiver int
+	chs                []chan *batch.Batch
 	receiverListener   []reflect.SelectCase
 }
 

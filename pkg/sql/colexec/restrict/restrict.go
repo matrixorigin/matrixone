@@ -41,7 +41,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (status process.ExecStatus, err error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return process.ExecStop, nil
@@ -51,10 +51,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		return process.ExecNext, nil
 	}
 	if bat.IsEmpty() {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
+
 	ap := arg.(*Argument)
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
@@ -86,6 +87,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
+				bat, err = tryDupBatch(proc, bat)
+				if err != nil {
+					return process.ExecNext, err
+				}
 				bat.Shrink(nil)
 			}
 		} else {
@@ -110,6 +115,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 					}
 				}
 			}
+			bat, err = tryDupBatch(proc, bat)
+			if err != nil {
+				return process.ExecNext, err
+			}
 			bat.Shrink(sels)
 		}
 	}
@@ -117,6 +126,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	if sels != nil {
 		proc.Mp().PutSels(sels)
 	}
+
+	// bad design here. should compile a pipeline like `-> restrict -> output (just do clean work or memory reuse) -> `
+	// but not use the IsEnd flag to do the clean work.
 	if ap.IsEnd {
 		bat.Clean(proc.Mp())
 		proc.SetInputBatch(nil)
@@ -125,4 +137,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		proc.SetInputBatch(bat)
 	}
 	return process.ExecNext, nil
+}
+
+func tryDupBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
+	cnt := bat.GetCnt()
+	if cnt == 1 {
+		return bat, nil
+	}
+	newBat, err := bat.Dup(proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	proc.PutBatch(bat)
+	return newBat, nil
 }

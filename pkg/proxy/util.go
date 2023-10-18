@@ -18,8 +18,8 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"sort"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
@@ -195,21 +195,12 @@ func rawHash(t any) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// parseLabel parses the label string. The labels are seperated by
-// ",", key and value are seperated by ":".
-func parseLabel(labelStr string) map[string]string {
-	if len(labelStr) == 0 {
-		return nil
-	}
-	labelMap := make(map[string]string)
-	const delimiter1 = ","
-	const delimiter2 = ':'
-	kvs := strings.Split(labelStr, delimiter1)
-	for _, label := range kvs {
-		pos := strings.IndexByte(label, delimiter2)
-		if pos > 0 && len(label) > pos+1 { // key and value are both not empty.
-			labelMap[label[:pos]] = label[pos+1:]
+// containIP returns if the list of net.IPNet contains the IP address.
+func containIP(ipNetList []*net.IPNet, ip net.IP) bool {
+	for _, ipNet := range ipNetList {
+		if ipNet.Contains(ip) {
+			return true
 		}
 	}
-	return labelMap
+	return false
 }

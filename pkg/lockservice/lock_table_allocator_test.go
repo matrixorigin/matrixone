@@ -46,7 +46,7 @@ func TestGetWithNoBind(t *testing.T) {
 		})
 }
 
-func TestGetWithBinded(t *testing.T) {
+func TestGetWithAlreadyBind(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
 		time.Hour,
@@ -131,8 +131,16 @@ func TestKeepaliveBind(t *testing.T) {
 				assert.NoError(t, c.Close())
 			}()
 
-			a.Get("s1", 1)
-			k := NewLockTableKeeper("s1", c, interval/5, interval/5, &sync.Map{})
+			bind := a.Get("s1", 1)
+			m := &sync.Map{}
+			m.Store(1,
+				newRemoteLockTable(
+					"s1",
+					time.Second,
+					bind,
+					c,
+					func(lt pb.LockTable) {}))
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m)
 
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
@@ -250,7 +258,7 @@ func runLockTableAllocatorTest(
 					LockServiceAddress: testSockets,
 				},
 			},
-			[]metadata.DNService{
+			[]metadata.TNService{
 				{
 					LockServiceAddress: testSockets,
 				},

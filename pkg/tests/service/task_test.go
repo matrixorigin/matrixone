@@ -35,7 +35,7 @@ func waitTaskScheduled(t *testing.T, ctx context.Context, taskService taskservic
 			assert.FailNow(t, "task not allocated")
 		default:
 			t.Logf("iteration: %d", i)
-			tasks, err := taskService.QueryTask(context.TODO(),
+			tasks, err := taskService.QueryAsyncTask(context.TODO(),
 				taskservice.WithTaskIDDesc())
 			require.NoError(t, err)
 
@@ -58,9 +58,9 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 			assert.FailNow(t, "task not reallocated")
 		default:
 			t.Logf("iteration: %d", i)
-			tasks, err := taskService.QueryTask(context.TODO(),
+			tasks, err := taskService.QueryAsyncTask(context.TODO(),
 				taskservice.WithTaskIDDesc(),
-				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+				taskservice.WithTaskStatusCond(task.TaskStatus_Running))
 			require.NoError(t, err)
 			if tasks[0].TaskRunner == uuid {
 				t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
@@ -87,8 +87,8 @@ func TestTaskServiceCanCreate(t *testing.T) {
 	c, err := NewCluster(ctx, t, DefaultOptions().
 		WithCNServiceNum(1).
 		WithCNShardNum(1).
-		WithDNServiceNum(1).
-		WithDNShardNum(1).
+		WithTNServiceNum(1).
+		WithTNShartnum(1).
 		WithLogServiceNum(3).
 		WithLogShardNum(1))
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestTaskServiceCanCreate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitTNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 1)
 	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 2)
@@ -148,7 +148,7 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 		default:
 		}
 		t.Logf("iter %d", i)
-		tasks, err := taskService.QueryTask(ctx)
+		tasks, err := taskService.QueryAsyncTask(ctx)
 		require.NoError(t, err)
 		if len(tasks) == 0 {
 			time.Sleep(time.Second)
@@ -181,7 +181,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	halt := make(chan bool)
 	taskExecutor := func(ctx context.Context, task task.Task) error {
-		t.Logf("task %d is running", task.ID)
+		t.Logf("task %d is running", task.GetID())
 		select {
 		case <-ctx.Done():
 		case <-halt:
@@ -212,10 +212,10 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 
 	taskService, ok := cn1.GetTaskService()
 	require.True(t, ok)
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: task.TaskCode_TestOnly})
+	err = taskService.CreateAsyncTask(context.TODO(), task.TaskMetadata{ID: "a", Executor: task.TaskCode_TestOnly})
 	require.NoError(t, err)
 
-	tasks, err := taskService.QueryTask(ctx,
+	tasks, err := taskService.QueryAsyncTask(ctx,
 		taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_TestOnly))
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
@@ -242,8 +242,8 @@ func TestTaskRunner(t *testing.T) {
 
 	ch := make(chan int)
 	taskExecutor := func(_ context.Context, task task.Task) error {
-		t.Logf("task %d is running", task.ID)
-		ch <- int(task.ID)
+		t.Logf("task %d is running", task.GetID())
+		ch <- int(task.GetID())
 		return nil
 	}
 
@@ -274,7 +274,7 @@ func TestTaskRunner(t *testing.T) {
 	taskService, ok := indexed.GetTaskService()
 	require.True(t, ok)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: task.TaskCode_TestOnly})
+	err = taskService.CreateAsyncTask(context.TODO(), task.TaskMetadata{ID: "a", Executor: task.TaskCode_TestOnly})
 	require.NoError(t, err)
 
 	waitTaskScheduled(t, ctx, taskService)
@@ -302,9 +302,9 @@ func TestCronTask(t *testing.T) {
 
 	ch := make(chan int)
 	taskExecutor := func(ctx context.Context, task task.Task) error {
-		t.Logf("task %d is running", task.ID)
+		t.Logf("task %d is running", task.GetID())
 		select {
-		case ch <- int(task.ID):
+		case ch <- int(task.GetID()):
 		case <-ctx.Done():
 			return nil
 		}

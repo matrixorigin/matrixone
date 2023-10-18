@@ -96,6 +96,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.OrderBy {
+		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.BlockFilterList {
 		node.BlockFilterList[i], err = rule.ApplyExpr(node.BlockFilterList[i])
 		if err != nil {

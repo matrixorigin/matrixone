@@ -21,22 +21,22 @@ import (
 )
 
 // IsEmpty return true if is a empty DNShard
-func (m DNShard) IsEmpty() bool {
+func (m TNShard) IsEmpty() bool {
 	return m.ShardID == 0
 }
 
 // Equal returns true if DNShard is same
-func (m DNShard) Equal(dn DNShard) bool {
-	return m.ShardID == dn.ShardID && m.ReplicaID == dn.ReplicaID
+func (m TNShard) Equal(tn TNShard) bool {
+	return m.ShardID == tn.ShardID && m.ReplicaID == tn.ReplicaID
 }
 
 // DebugString returns debug string
-func (m DNShard) DebugString() string {
+func (m TNShard) DebugString() string {
 	return fmt.Sprintf("%d-%d-%d-%s", m.ShardID, m.ReplicaID, m.LogShardID, m.Address)
 }
 
 // DebugString returns debug string
-func (m DNStore) DebugString() string {
+func (m TNStore) DebugString() string {
 	n := len(m.Shards)
 	var buf bytes.Buffer
 	buf.WriteString(m.UUID)
@@ -88,7 +88,7 @@ func (m CNService) DebugString() string {
 	return buf.String()
 }
 
-func (m DNService) DebugString() string {
+func (m TNService) DebugString() string {
 	var buf bytes.Buffer
 	buf.WriteString(m.ServiceID)
 	buf.WriteString("/txn(")
@@ -110,4 +110,23 @@ func (m DNService) DebugString() string {
 	}
 	buf.WriteString("]")
 	return buf.String()
+}
+
+// ToTitle converts the state string to title-like string.
+func ToTitle(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+}
+
+// ValidStateString returns true if the state string is valid.
+func ValidStateString(s string) bool {
+	title := ToTitle(s)
+	for v := range WorkState_value {
+		if title == v {
+			return true
+		}
+	}
+	return false
 }

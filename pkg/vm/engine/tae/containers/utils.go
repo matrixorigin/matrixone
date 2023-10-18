@@ -16,7 +16,6 @@ package containers
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +28,7 @@ import (
 func FillConstVector(length int, typ types.Type, defautV any) Vector {
 	// TODO(aptend): use default value
 	vec := movec.NewConstNull(typ, length, common.DefaultAllocator)
-	return ToDNVector(vec)
+	return ToTNVector(vec)
 }
 
 func FillCNConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) *movec.Vector {
@@ -39,24 +38,24 @@ func FillCNConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) 
 
 // ### Shallow copy Functions
 
-func ToCNBatch(dnBat *Batch) *batch.Batch {
-	cnBat := batch.New(true, dnBat.Attrs)
-	for i, vec := range dnBat.Vecs {
+func ToCNBatch(tnBat *Batch) *batch.Batch {
+	cnBat := batch.New(true, tnBat.Attrs)
+	for i, vec := range tnBat.Vecs {
 		cnBat.Vecs[i] = vec.GetDownstreamVector()
 	}
 	return cnBat
 }
 
-func ToDNBatch(cnBat *batch.Batch) *Batch {
-	dnBat := NewEmptyBatch()
+func ToTNBatch(cnBat *batch.Batch) *Batch {
+	tnBat := NewEmptyBatch()
 	for i, vec := range cnBat.Vecs {
-		v := ToDNVector(vec)
-		dnBat.AddVector(cnBat.Attrs[i], v)
+		v := ToTNVector(vec)
+		tnBat.AddVector(cnBat.Attrs[i], v)
 	}
-	return dnBat
+	return tnBat
 }
 
-func ToDNVector(v *movec.Vector) Vector {
+func ToTNVector(v *movec.Vector) Vector {
 	vec := MakeVector(*v.GetType())
 	vec.setDownstreamVector(v)
 	return vec
@@ -104,13 +103,16 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 		return movec.GetFixedAt[types.Datetime](col, int(row))
 	case types.T_timestamp:
 		return movec.GetFixedAt[types.Timestamp](col, int(row))
+	case types.T_enum:
+		return movec.GetFixedAt[types.Enum](col, int(row))
 	case types.T_TS:
 		return movec.GetFixedAt[types.TS](col, int(row))
 	case types.T_Rowid:
 		return movec.GetFixedAt[types.Rowid](col, int(row))
 	case types.T_Blockid:
 		return movec.GetFixedAt[types.Blockid](col, int(row))
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		return col.GetBytesAt(int(row))
 	default:
 		//return vector.ErrVecTypeNotSupport
@@ -186,6 +188,8 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool) {
 		GenericUpdateFixedValue[types.Datetime](col, row, val, isNull)
 	case types.T_timestamp:
 		GenericUpdateFixedValue[types.Timestamp](col, row, val, isNull)
+	case types.T_enum:
+		GenericUpdateFixedValue[types.Enum](col, row, val, isNull)
 	case types.T_uuid:
 		GenericUpdateFixedValue[types.Uuid](col, row, val, isNull)
 	case types.T_TS:
@@ -195,7 +199,8 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool) {
 	case types.T_Blockid:
 		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull)
 	case types.T_varchar, types.T_char, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		GenericUpdateBytes(col, row, val, isNull)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))
@@ -255,7 +260,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	bat := NewBatch()
 	for i, attr := range b.Attrs {
-		v := ToDNVector(b.Vecs[i])
+		v := ToTNVector(b.Vecs[i])
 		bat.AddVector(attr, v)
 	}
 	return bat
@@ -496,6 +501,18 @@ func ForeachVectorWindow(
 		var op func(types.Datetime, bool, int) error
 		if op1 != nil {
 			op = op1.(func(types.Datetime, bool, int) error)
+		}
+		return ForeachWindowFixed(
+			col,
+			start,
+			length,
+			op,
+			op2,
+			sel)
+	case types.T_enum:
+		var op func(types.Enum, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Enum, bool, int) error)
 		}
 		return ForeachWindowFixed(
 			col,
@@ -817,6 +834,9 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 		return overload(args...)
 	case types.T_datetime:
 		overload := overloads[t].(func(...any) func(types.Datetime, bool, int) error)
+		return overload(args...)
+	case types.T_enum:
+		overload := overloads[t].(func(...any) func(types.Enum, bool, int) error)
 		return overload(args...)
 	case types.T_TS:
 		overload := overloads[t].(func(...any) func(types.TS, bool, int) error)

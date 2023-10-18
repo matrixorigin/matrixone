@@ -37,6 +37,7 @@ type FunctionParameterWrapper[T types.FixedSizeT] interface {
 	GetValue(idx uint64) (T, bool)
 
 	// GetStrValue return the Idx th string value and if it's null or not.
+	//TODO: Later rename it to GetBytes as it makes more sense.
 	GetStrValue(idx uint64) ([]byte, bool)
 
 	// UnSafeGetAllValue return all the values.
@@ -510,7 +511,8 @@ func NewFunctionResultWrapper(
 	v := getVectorMethod(typ)
 
 	switch typ.Oid {
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary,
+		types.T_array_float32, types.T_array_float64:
 		// IF STRING type.
 		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_json:
@@ -560,6 +562,8 @@ func NewFunctionResultWrapper(
 		return newResultFunc[types.Blockid](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_uuid:
 		return newResultFunc[types.Uuid](v, getVectorMethod, putVectorMethod, mp)
+	case types.T_enum:
+		return newResultFunc[types.Enum](v, getVectorMethod, putVectorMethod, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }

@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -54,7 +55,7 @@ func OrderedFindFirstIndexInSortedSlice[T types.OrderedT](v T, s []T) int {
 // If v is not found, return -1
 // compare is a function to compare two elements in s
 func FixedSizeFindFirstIndexInSortedSliceWithCompare[T types.FixedSizeTExceptStrType](
-	v T, s []T, compare func(T, T) int64,
+	v T, s []T, compare func(T, T) int,
 ) int {
 	if len(s) == 0 {
 		return -1
@@ -108,6 +109,81 @@ func FindFirstIndexInSortedVarlenVector(vec *Vector, v []byte) int {
 		return l
 	}
 	return -1
+}
+
+// IntegerGetSum get the sum the vector if the vector type is integer.
+func IntegerGetSum[T types.Ints | types.UInts, U int64 | uint64](vec *Vector) (sum U) {
+	var ok bool
+	col := MustFixedCol[T](vec)
+	if vec.HasNull() {
+		for i, v := range col {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			sum, ok = addInt(sum, U(v))
+			if !ok {
+				return 0
+			}
+		}
+	} else {
+		for _, v := range col {
+			sum, ok = addInt(sum, U(v))
+			if !ok {
+				return 0
+			}
+		}
+	}
+	return
+}
+
+func addInt[T int64 | uint64](a, b T) (T, bool) {
+	c := a + b
+	if (c > a) == (b > 0) {
+		return c, true
+	}
+	return 0, false
+}
+
+// FloatGetSum get the sum the vector if the vector type is float.
+func FloatGetSum[T types.Floats](vec *Vector) (sum float64) {
+	col := MustFixedCol[T](vec)
+	if vec.HasNull() {
+		for i, v := range col {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			sum += float64(v)
+		}
+	} else {
+		for _, v := range col {
+			sum += float64(v)
+		}
+	}
+	return
+}
+
+func Decimal64GetSum(vec *Vector) (sum types.Decimal64) {
+	var err error
+	col := MustFixedCol[types.Decimal64](vec)
+	if vec.HasNull() {
+		for i, v := range col {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			sum, err = sum.Add64(v)
+			if err != nil {
+				return 0
+			}
+		}
+	} else {
+		for _, dec := range col {
+			sum, err = sum.Add64(dec)
+			if err != nil {
+				return 0
+			}
+		}
+	}
+	return
 }
 
 // OrderedGetMinAndMax returns the min and max value of a vector of ordered type
@@ -212,6 +288,43 @@ func VarlenGetMinMax(vec *Vector) (minv, maxv []byte) {
 				minv = val
 			}
 			if bytes.Compare(maxv, val) < 0 {
+				maxv = val
+			}
+		}
+	}
+	return
+}
+
+func ArrayGetMinMax[T types.RealNumbers](vec *Vector) (minv, maxv []T) {
+	col, area := MustVarlenaRawData(vec)
+	if vec.HasNull() {
+		first := true
+		for i, j := 0, vec.Length(); i < j; i++ {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			val := types.GetArray[T](&col[i], area)
+			if first {
+				minv, maxv = val, val
+				first = false
+			} else {
+				if moarray.Compare[T](minv, val) > 0 {
+					minv = val
+				}
+				if moarray.Compare[T](maxv, val) < 0 {
+					maxv = val
+				}
+			}
+		}
+	} else {
+		val := types.GetArray[T](&col[0], area)
+		minv, maxv = val, val
+		for i, j := 1, vec.Length(); i < j; i++ {
+			val := types.GetArray[T](&col[i], area)
+			if moarray.Compare[T](minv, val) > 0 {
+				minv = val
+			}
+			if moarray.Compare[T](maxv, val) < 0 {
 				maxv = val
 			}
 		}

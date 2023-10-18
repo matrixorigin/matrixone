@@ -16,7 +16,10 @@ package motrace
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
@@ -38,6 +41,8 @@ const (
 	spanInfoTbl  = "span_info"
 	logInfoTbl   = "log_info"
 	errorInfoTbl = "error_info"
+
+	SqlStatementHotspotTbl = "sql_statement_hotspot"
 )
 
 var (
@@ -129,12 +134,23 @@ var (
 	stackCol        = table.StringWithScale("stack", 2048, "stack info")
 	traceIDCol      = table.UuidStringColumn("trace_id", "trace uniq id")
 	spanIDCol       = table.SpanIDStringColumn("span_id", "span uniq id")
+	sessionIDCol    = table.UuidStringColumn("session_id", "session id")
+	statementIDCol  = table.UuidStringColumn("statement_id", "statement id")
 	spanKindCol     = table.StringColumn("span_kind", "span kind, enum: internal, statement, remote")
 	parentSpanIDCol = table.SpanIDStringColumn("parent_span_id", "parent span uniq id")
 	spanNameCol     = table.StringColumn("span_name", "span name, for example: step name of execution plan, function name in code, ...")
 	startTimeCol    = table.DatetimeColumn("start_time", "start time")
 	endTimeCol      = table.DatetimeColumn("end_time", "end time")
 	resourceCol     = table.TextDefaultColumn("resource", `{}`, "static resource information")
+
+	UpgradeColumns = map[string]map[string][]table.Column{
+		"1.0": {
+			"ADD": {
+				statementIDCol,
+				sessionIDCol,
+			},
+		},
+	}
 
 	SingleRowLogTable = &table.Table{
 		Account:  table.AccountSys,
@@ -162,9 +178,11 @@ var (
 			durationCol,
 			resourceCol,
 			spanKindCol,
+			statementIDCol,
+			sessionIDCol,
 		},
 		PrimaryKeyColumn: nil,
-		ClusterBy:        []table.Column{timestampCol, rawItemCol},
+		ClusterBy:        []table.Column{timestampCol},
 		Engine:           table.NormalTableEngine,
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      table.NewAccountDatePathBuilder(),
@@ -236,6 +254,35 @@ var (
 		},
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: spanInfoTbl},
 	}
+
+	SqlStatementHotspotView = &table.View{
+		Database:    StatsDatabase,
+		Table:       SqlStatementHotspotTbl,
+		OriginTable: SingleStatementTable,
+		Columns: []table.Column{
+			table.StringColumn("statement_id", "the statement's uuid"),
+			table.StringColumn("statement", "query's statement"),
+			table.ValueColumn("timeconsumed", "query's exec time (unit: ms)"),
+			table.ValueColumn("memorysize", "query's consume mem size (unit: MiB)"),
+			table.DatetimeColumn("collecttime", "collected time, same as query's response time"),
+			table.StringColumn("node", "cn node uuid"),
+			table.StringColumn("account", "account id "),
+			table.StringColumn("user", "user name"),
+			table.StringColumn("type", "statement type, like: [Insert, Delete, Update, Select, ...]"),
+		},
+		CreateSql: table.ViewCreateSqlString(fmt.Sprintf(`CREATE VIEW IF NOT EXISTS system.sql_statement_hotspot AS
+select statement_id, statement, duration / 1e6 as timeconsumed,
+cast(json_unquote(json_extract(stats, '$[%d]')) / 1048576.00 as decimal(38,3)) as memorysize,
+response_at as collecttime,
+node_uuid as node,
+account,
+user,
+statement_type as type
+ from system.statement_info
+ where response_at > date_sub(now(), interval 10 minute) and response_at < now()
+and aggr_count = 0 order by duration desc limit 10;`, statistic.StatsArrayIndexMemorySize)),
+		SupportUserAccess: false,
+	}
 )
 
 const (
@@ -243,7 +290,7 @@ const (
 )
 
 var tables = []*table.Table{SingleStatementTable, SingleRowLogTable}
-var views = []*table.View{logView, errorView, spanView}
+var views = []*table.View{logView, errorView, spanView, SqlStatementHotspotView}
 
 // InitSchemaByInnerExecutor init schema, which can access db by io.InternalExecutor on any Node.
 func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
@@ -302,7 +349,7 @@ func GetSchemaForAccount(ctx context.Context, account string) []string {
 		}
 	}
 	for _, v := range views {
-		if v.OriginTable.SupportUserAccess {
+		if v.SupportUserAccess && v.OriginTable.SupportUserAccess {
 			sqls = append(sqls, v.ToCreateSql(ctx, true))
 		}
 

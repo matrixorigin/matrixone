@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -218,18 +219,19 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
 
-			if entry.ToObjectBytes != nil {
+			if entry.ToCacheData != nil {
 				r = io.TeeReader(r, entry.WriterForRead)
+				counter := new(atomic.Int64)
 				cr := &countingReader{
 					R: r,
+					C: counter,
 				}
-				bs, size, err := entry.ToObjectBytes(cr, nil)
+				cacheData, err := entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].ObjectBytes = bs
-				vector.Entries[i].ObjectSize = size
-				if entry.Size > 0 && cr.N != entry.Size {
+				vector.Entries[i].CachedData = cacheData
+				if entry.Size > 0 && counter.Load() != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 
@@ -263,7 +265,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			if entry.Size > 0 {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
-			if entry.ToObjectBytes == nil {
+			if entry.ToCacheData == nil {
 				*entry.ReadCloserForRead = &readCloser{
 					r:         r,
 					closeFunc: f.Close,
@@ -274,12 +276,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer f.Close()
-						bs, size, err := entry.ToObjectBytes(buf, buf.Bytes())
+						cacheData, err := entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
 						if err != nil {
 							return err
 						}
-						vector.Entries[i].ObjectBytes = bs
-						vector.Entries[i].ObjectSize = size
+						vector.Entries[i].CachedData = cacheData
 						return nil
 					},
 				}
@@ -327,7 +328,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setObjectBytesFromData(); err != nil {
+			if err := entry.setCachedData(); err != nil {
 				return err
 			}
 
@@ -340,7 +341,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 }
 
-func (l *LocalETLFS) Preload(ctx context.Context, filePath string) error {
+func (l *LocalETLFS) ReadCache(ctx context.Context, vector *IOVector) error {
 	return nil
 }
 

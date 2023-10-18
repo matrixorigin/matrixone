@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,7 +38,7 @@ func TestRunTask(t *testing.T) {
 			defer close(c)
 			return nil
 		})
-		mustAddTestTask(t, store, 1, newTestTask("t1"))
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 		<-c
 	}, WithRunnerParallelism(1),
@@ -53,8 +54,8 @@ func TestRunTasksInParallel(t *testing.T) {
 			time.Sleep(time.Millisecond * 200)
 			return nil
 		})
-		mustAddTestTask(t, store, 1, newTestTask("t1"))
-		mustAddTestTask(t, store, 1, newTestTask("t2"))
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
 		wg.Wait()
 	}, WithRunnerParallelism(2),
@@ -79,8 +80,8 @@ func TestTooMuchTasksWillBlockAndEventuallyCanBeExecuted(t *testing.T) {
 
 			return nil
 		})
-		mustAddTestTask(t, store, 1, newTestTask("t1"))
-		mustAddTestTask(t, store, 1, newTestTask("t2"))
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
 		select {
 		case <-c:
@@ -107,8 +108,8 @@ func TestHeartbeatWithRunningTask(t *testing.T) {
 			<-completeC
 			return nil
 		})
-		mustAddTestTask(t, store, 1, newTestTask("t1"))
-		mustAddTestTask(t, store, 1, newTestTask("t2"))
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
 		<-c
 		mustWaitTestTaskHasHeartbeat(t, store, 2)
@@ -129,9 +130,9 @@ func TestRunTaskWithRetry(t *testing.T) {
 			close(c)
 			return nil
 		})
-		v := newTestTask("t1")
+		v := newTestAsyncTask("t1")
 		v.Metadata.Options.MaxRetryTimes = 1
-		mustAddTestTask(t, store, 1, v)
+		mustAddTestAsyncTask(t, store, 1, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 		<-c
 		assert.Equal(t, uint32(2), n.Load())
@@ -151,13 +152,13 @@ func TestRunTaskWithDisableRetry(t *testing.T) {
 			}
 			return nil
 		})
-		v := newTestTask("t1")
+		v := newTestAsyncTask("t1")
 		v.Metadata.Options.MaxRetryTimes = 0
-		mustAddTestTask(t, store, 1, v)
+		mustAddTestAsyncTask(t, store, 1, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
 		<-c
 		mustWaitTestTaskHasExecuteResult(t, store, 1)
-		v = mustGetTestTask(t, store, 1)[0]
+		v = mustGetTestAsyncTask(t, store, 1)[0]
 		assert.Equal(t, task.ResultCode_Failed, v.ExecuteResult.Code)
 	}, WithRunnerParallelism(2),
 		WithRunnerHeartbeatInterval(time.Millisecond),
@@ -166,26 +167,28 @@ func TestRunTaskWithDisableRetry(t *testing.T) {
 
 func TestCancelRunningTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
-		c := make(chan struct{})
 		cancelC := make(chan struct{})
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-			close(c)
-			<-ctx.Done()
-			close(cancelC)
+			select {
+			case <-ctx.Done():
+			case cancelC <- struct{}{}:
+			}
 			return nil
 		})
-		v := newTestTask("t1")
+		v := newTestAsyncTask("t1")
 		v.Metadata.Options.MaxRetryTimes = 0
-		mustAddTestTask(t, store, 1, v)
+		mustAddTestAsyncTask(t, store, 1, v)
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID})
-		<-c
-		v = mustGetTestTask(t, store, 1)[0]
+		v = mustGetTestAsyncTask(t, store, 1)[0]
 		v.Epoch++
-		mustUpdateTestTask(t, store, 1, []task.Task{v})
+		mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
 		<-cancelC
-		r.mu.RLock()
-		defer r.mu.RUnlock()
-		assert.Equal(t, 0, len(r.mu.runningTasks))
+		for v := mustGetTestAsyncTask(t, store, 1)[0]; v.Status != task.TaskStatus_Completed; v = mustGetTestAsyncTask(t, store, 1)[0] {
+			time.Sleep(10 * time.Millisecond)
+		}
+		r.runningTasks.RLock()
+		defer r.runningTasks.RUnlock()
+		assert.Equal(t, 0, len(r.runningTasks.m))
 	}, WithRunnerParallelism(2),
 		WithRunnerHeartbeatInterval(time.Millisecond),
 		WithRunnerFetchInterval(time.Millisecond))
@@ -194,6 +197,7 @@ func TestCancelRunningTask(t *testing.T) {
 func runTaskRunnerTest(t *testing.T,
 	testFunc func(r *taskRunner, s TaskService, store TaskStorage),
 	opts ...RunnerOption) {
+	defer leaktest.AfterTest(t)()
 	store := NewMemTaskStorage()
 	s := NewTaskService(runtime.DefaultRuntime(), store)
 	defer func() {
@@ -201,7 +205,9 @@ func runTaskRunnerTest(t *testing.T,
 	}()
 
 	opts = append(opts, WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)))
-	r := NewTaskRunner("r1", s, opts...)
+	r := NewTaskRunner("r1", s, func(string) bool {
+		return true
+	}, opts...)
 
 	require.NoError(t, r.Start())
 	defer func() {
@@ -214,7 +220,7 @@ func mustAllocTestTask(t *testing.T, s TaskService, store TaskStorage, alloc map
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	tasks := mustGetTestTask(t, store, len(alloc), WithTaskStatusCond(EQ, task.TaskStatus_Created))
+	tasks := mustGetTestAsyncTask(t, store, len(alloc), WithTaskStatusCond(task.TaskStatus_Created))
 	n := 0
 	for _, v := range tasks {
 		if runner, ok := alloc[v.Metadata.ID]; ok {
@@ -236,8 +242,8 @@ func mustWaitTestTaskHasHeartbeat(t *testing.T, store TaskStorage, expectHasHear
 		case <-ctx.Done():
 			require.Fail(t, "wait heatbeat timeout")
 		default:
-			tasks := mustGetTestTask(t, store, expectHasHeartbeatCount,
-				WithTaskStatusCond(EQ, task.TaskStatus_Running))
+			tasks := mustGetTestAsyncTask(t, store, expectHasHeartbeatCount,
+				WithTaskStatusCond(task.TaskStatus_Running))
 			n := 0
 			for _, v := range tasks {
 				if v.LastHeartbeat > 0 {
@@ -260,7 +266,7 @@ func mustWaitTestTaskHasExecuteResult(t *testing.T, store TaskStorage, expectCou
 		case <-ctx.Done():
 			require.Fail(t, "wait execute result timeout")
 		default:
-			tasks, err := store.Query(ctx, WithTaskStatusCond(EQ, task.TaskStatus_Completed))
+			tasks, err := store.QueryAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Completed))
 			require.NoError(t, err)
 			if len(tasks) != expectCount {
 				break

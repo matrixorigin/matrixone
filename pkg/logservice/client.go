@@ -55,7 +55,7 @@ type Client interface {
 	Config() ClientConfig
 	// GetLogRecord returns a new LogRecord instance with its Data field enough
 	// to hold payloadLength bytes of payload. The layout of the Data field is
-	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes DN replica ID +
+	// 4 bytes of record type (pb.UserEntryUpdate) + 8 bytes TN replica ID +
 	// payloadLength bytes of actual payload.
 	GetLogRecord(payloadLength int) pb.LogRecord
 	// Append appends the specified LogRecord into the Log Service. On success, the
@@ -122,7 +122,7 @@ func (c *managedClient) Config() ClientConfig {
 func (c *managedClient) GetLogRecord(payloadLength int) pb.LogRecord {
 	data := make([]byte, headerSize+8+payloadLength)
 	binaryEnc.PutUint32(data, uint32(pb.UserEntryUpdate))
-	binaryEnc.PutUint64(data[headerSize:], c.cfg.DNReplicaID)
+	binaryEnc.PutUint64(data[headerSize:], c.cfg.TNReplicaID)
 	return pb.LogRecord{Data: data}
 }
 
@@ -314,7 +314,15 @@ func connectToLogService(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, c.cfg.MaxMessageSize, cfg.EnableCompress, cfg.Tag)
+		cc, err := getRPCClient(
+			ctx,
+			addr,
+			c.respPool,
+			c.cfg.MaxMessageSize,
+			cfg.EnableCompress,
+			0,
+			cfg.Tag,
+		)
 		if err != nil {
 			e = err
 			continue
@@ -402,7 +410,7 @@ func (c *client) request(ctx context.Context,
 		Method: mt,
 		LogRequest: pb.LogRequest{
 			ShardID: c.cfg.LogShardID,
-			DNID:    c.cfg.DNReplicaID,
+			TNID:    c.cfg.TNReplicaID,
 			Lsn:     lsn,
 			MaxSize: maxSize,
 		},
@@ -511,6 +519,7 @@ func getRPCClient(
 	pool *sync.Pool,
 	maxMessageSize int,
 	enableCompress bool,
+	readTimeout time.Duration,
 	tag ...string) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
@@ -521,6 +530,7 @@ func getRPCClient(
 		morpc.WithBackendConnectTimeout(time.Second),
 		morpc.WithBackendHasPayloadResponse(),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("hakeeper-client-backend")),
+		morpc.WithBackendReadTimeout(readTimeout),
 	}
 	backendOpts = append(backendOpts, GetBackendOptions(ctx)...)
 

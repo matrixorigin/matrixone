@@ -100,20 +100,23 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.state = End
 				continue
 			}
-			if bat.RowCount() == 0 {
-				bat.Clean(proc.Mp())
+			if bat.IsEmpty() {
+				proc.PutBatch(bat)
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				if err := ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+				if err = ctr.emptyProbe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+					bat.Clean(proc.Mp())
 					return process.ExecStop, err
 				}
 			} else {
-				if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+				if err = ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+					bat.Clean(proc.Mp())
 					return process.ExecStop, err
 				}
 			}
-			return process.ExecNext, err
+			proc.PutBatch(bat)
+			return process.ExecNext, nil
 
 		default:
 			proc.SetInputBatch(nil)
@@ -149,7 +152,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	count := bat.RowCount()
@@ -174,7 +176,6 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	markVec, err := proc.AllocVectorOfRows(types.T_bool.ToType(), bat.RowCount(), nil)
@@ -191,7 +192,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.Map().NewIterator()
+	itr := ctr.mp.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -297,19 +298,18 @@ func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, proc *process.Pro
 func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint64, k int, i int, proc *process.Process, bat *batch.Batch) (otyp, error) {
 	if ap.Cond != nil {
 		condState := condFalse
-		sels := mSels[vals[k]-1]
-		if ctr.joinBat1 == nil {
-			ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
-		}
-		if ctr.joinBat2 == nil {
-			ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
-		}
-		for _, sel := range sels {
+		if ap.HashOnPK {
+			if ctr.joinBat1 == nil {
+				ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+			}
+			if ctr.joinBat2 == nil {
+				ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+			}
 			if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 				1, ctr.cfs1); err != nil {
 				return condUnkown, err
 			}
-			if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+			if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
 				1, ctr.cfs2); err != nil {
 				return condUnkown, err
 			}
@@ -323,7 +323,36 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 			bs := vector.MustFixedCol[bool](vec)
 			if bs[0] {
 				condState = condTrue
-				break
+			}
+		} else {
+			sels := mSels[vals[k]-1]
+			if ctr.joinBat1 == nil {
+				ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+			}
+			if ctr.joinBat2 == nil {
+				ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+			}
+			for _, sel := range sels {
+				if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+					1, ctr.cfs1); err != nil {
+					return condUnkown, err
+				}
+				if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+					1, ctr.cfs2); err != nil {
+					return condUnkown, err
+				}
+				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+				if err != nil {
+					return condUnkown, err
+				}
+				if vec.GetNulls().Contains(0) {
+					condState = condUnkown
+				}
+				bs := vector.MustFixedCol[bool](vec)
+				if bs[0] {
+					condState = condTrue
+					break
+				}
 			}
 		}
 		return condState, nil

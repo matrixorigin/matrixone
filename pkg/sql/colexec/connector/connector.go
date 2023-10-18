@@ -16,7 +16,7 @@ package connector
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,19 +35,23 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (process.ExecSt
 	if bat == nil {
 		return process.ExecStop, nil
 	}
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return process.ExecNext, nil
 	}
+
+	// there is no need to log anything here.
+	// because the context is already canceled means the pipeline closed normally.
 	select {
 	case <-proc.Ctx.Done():
 		proc.PutBatch(bat)
-		logutil.Warn("proc context done during connector send")
 		return process.ExecStop, nil
+
 	case <-reg.Ctx.Done():
 		proc.PutBatch(bat)
-		logutil.Warn("reg.Ctx done during connector send")
 		return process.ExecStop, nil
+
 	case reg.Ch <- bat:
 		proc.SetInputBatch(nil)
 		return process.ExecNext, nil

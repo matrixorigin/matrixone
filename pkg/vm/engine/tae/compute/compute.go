@@ -102,7 +102,7 @@ func GetOffsetOfBytes(
 func GetOffsetWithFunc[T any](
 	vals []T,
 	val T,
-	compare func(a, b T) int64,
+	compare func(a, b T) int,
 	skipmask *nulls.Bitmap,
 ) (offset int, exist bool) {
 	start, end := 0, len(vals)-1
@@ -195,6 +195,9 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 	case types.T_timestamp:
 		vs := vector.MustFixedCol[types.Timestamp](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Timestamp), skipmask)
+	case types.T_enum:
+		vs := vector.MustFixedCol[types.Enum](vec)
+		return GetOffsetOfOrdered(vs, v.(types.Enum), skipmask)
 	case types.T_decimal64:
 		vs := vector.MustFixedCol[types.Decimal64](vec)
 		return GetOffsetWithFunc(
@@ -234,7 +237,9 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 			types.CompareUuid,
 			skipmask)
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text:
+		types.T_binary, types.T_varbinary, types.T_json, types.T_text,
+		types.T_array_float32, types.T_array_float64:
+		// data is retrieved from DN vector, hence T_array can be handled here.
 		val := v.([]byte)
 		start, end := 0, data.Length()-1
 		var mid int

@@ -34,6 +34,18 @@ const (
 	MO_TIMESTAMP_IDX = 1
 )
 
+type TableKey struct {
+	AccountId  uint32
+	DatabaseId uint64
+	Name       string
+}
+
+type TableVersion struct {
+	Version uint32
+	Ts      *timestamp.Timestamp
+	TableId uint64
+}
+
 // catalog cache
 type CatalogCache struct {
 	tables    *tableCache
@@ -146,6 +158,7 @@ type column struct {
 	isClusterBy     int8
 	seqnum          uint16
 	rowid           types.Rowid //rowid for a column in mo_columns
+	enumValues      string
 }
 
 type columns []column
@@ -191,7 +204,7 @@ func tableItemLess(a, b *TableItem) bool {
 	}
 	if a.Ts.Equal(b.Ts) {
 		/*
-			The DN use the table id to distinguish different tables.
+			The TN use the table id to distinguish different tables.
 			For operation on mo_tables, the rowid is the serialized bytes of the table id.
 			So, the rowid is unique for each table in mo_tables. We can use it to sort the items.
 			To be clear, the comparation a.Id < b.Id does not means the table a.Id is created before the table b.Id.
@@ -206,10 +219,10 @@ func tableItemLess(a, b *TableItem) bool {
 			truncate t1;//table id x2 changed to x3
 			commit;//catalog.insertTable(table id x1,x2,x3). catalog.deleteTable(table id x,x1,x2)
 
-			In above case, the DN does not keep the order of multiple insertTable (or deleteTable).
+			In above case, the TN does not keep the order of multiple insertTable (or deleteTable).
 			That is ,it may generate the insertTable order like: x3,x2,x1.
 			In previous design without sort on the table id, the item x3,x2 will be overwritten by the x1.
-			Then the item x3 will be lost. The DN will not know the table x3. It is wrong!
+			Then the item x3 will be lost. The TN will not know the table x3. It is wrong!
 			With sort on the table id, the item x3,x2,x1 will be reserved.
 		*/
 		if a.deleted && !b.deleted { //deleted item head first

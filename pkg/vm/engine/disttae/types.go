@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -79,7 +80,7 @@ var (
 
 var GcCycle = 10 * time.Second
 
-type DNStore = metadata.DNService
+type DNStore = metadata.TNService
 
 type IDGenerator interface {
 	AllocateID(ctx context.Context) (uint64, error)
@@ -93,10 +94,11 @@ type Engine struct {
 	fs         fileservice.FileService
 	ls         lockservice.LockService
 	qs         queryservice.QueryService
+	hakeeper   logservice.CNHAKeeperClient
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
-	dnID       string
+	tnID       string
 	partitions map[[2]uint64]*logtailreplay.Partition
 	packerPool *fileservice.Pool[*types.Packer]
 
@@ -117,7 +119,7 @@ type Transaction struct {
 	// blockId uint64
 
 	// local timestamp for workspace operations
-	meta     *txn.TxnMeta
+	//meta     *txn.TxnMeta
 	op       client.TxnOperator
 	sqlCount atomic.Uint64
 
@@ -126,7 +128,7 @@ type Transaction struct {
 	// txn workspace size
 	workspaceSize uint64
 
-	dnStores []DNStore
+	tnStores []DNStore
 	proc     *process.Process
 
 	idGen IDGenerator
@@ -169,9 +171,10 @@ type Transaction struct {
 	//TODO::remove it
 	blockId_raw_batch map[types.Blockid]*batch.Batch
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_dn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
+	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
+	toFreeBatches   map[[2]string][]*batch.Batch
 
 	rollbackCount int
 	statementID   int
@@ -181,6 +184,7 @@ type Transaction struct {
 	removed              bool
 	startStatementCalled bool
 	incrStatementCalled  bool
+	syncCommittedTSCount uint64
 }
 
 type Pos struct {
@@ -265,6 +269,13 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 
 	txn.Lock()
 	defer txn.Unlock()
+	//free batches
+	for key := range txn.toFreeBatches {
+		for _, bat := range txn.toFreeBatches[key] {
+			txn.proc.PutBatch(bat)
+		}
+		delete(txn.toFreeBatches, key)
+	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
@@ -274,21 +285,10 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
 
-	// For RC isolation, update the snapshot TS of transaction for each statement including
-	// the first one. Means that, the timestamp of the first statement is not the transaction's
-	// begin timestamp, but its own timestamp.
-	if !commit && txn.meta.IsRCIsolation() && txn.GetSQLCount() > 0 {
-		if err := txn.op.UpdateSnapshot(
-			ctx,
-			timestamp.Timestamp{}); err != nil {
-			return err
-		}
-		txn.resetSnapshot()
-	}
-	return nil
+	return txn.handleRCSnapshot(ctx, commit)
 }
 
-// Adjust
+// Adjust adjust writes order
 func (txn *Transaction) Adjust() error {
 	txn.Lock()
 	defer txn.Unlock()
@@ -327,7 +327,7 @@ func (txn *Transaction) adjustUpdateOrderLocked() error {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	// If has s3 operation, can not rollback.
 	if txn.hasS3Op.Load() {
-		return moerr.NewTxnWWConflict(ctx)
+		return moerr.NewTxnCannotRetry(ctx)
 	}
 
 	txn.Lock()
@@ -370,6 +370,29 @@ func (txn *Transaction) GetSQLCount() uint64 {
 	return txn.sqlCount.Load()
 }
 
+// For RC isolation, update the snapshot TS of transaction for each statement.
+// only 2 cases need to reset snapshot
+// 1. cn sync latest commit ts from mo_ctl
+// 2. not first sql
+func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error {
+	needResetSnapshot := false
+	newTimes := txn.proc.TxnClient.GetSyncLatestCommitTSTimes()
+	if newTimes > txn.syncCommittedTSCount {
+		txn.syncCommittedTSCount = newTimes
+		needResetSnapshot = true
+	}
+	if !commit && txn.op.Txn().IsRCIsolation() &&
+		(txn.GetSQLCount() > 1 || needResetSnapshot) {
+		if err := txn.op.UpdateSnapshot(
+			ctx,
+			timestamp.Timestamp{}); err != nil {
+			return err
+		}
+		txn.resetSnapshot()
+	}
+	return nil
+}
+
 // Entry represents a delete/insert
 type Entry struct {
 	typ          int
@@ -381,8 +404,8 @@ type Entry struct {
 	fileName string
 	// update or delete tuples
 	bat       *batch.Batch
-	dnStore   DNStore
-	pkChkByDN int8
+	tnStore   DNStore
+	pkChkByTN int8
 	/*
 		if truncate is true,it denotes the Entry with typ DELETE
 		on mo_tables is generated by the Truncate operation.
@@ -427,7 +450,7 @@ type txnTable struct {
 	tableId   uint64
 	version   uint32
 	tableName string
-	dnList    []int
+	tnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
 	defs       []engine.TableDef
@@ -475,7 +498,8 @@ type txnTable struct {
 	oldTableId uint64
 
 	// process for statement
-	proc *process.Process
+	//proc *process.Process
+	proc atomic.Pointer[process.Process]
 }
 
 type column struct {
@@ -500,6 +524,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	seqnum          uint16
+	enumValues      string
 }
 
 type withFilterMixin struct {

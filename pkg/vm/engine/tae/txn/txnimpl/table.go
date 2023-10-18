@@ -130,8 +130,7 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) 
 	return tbl, nil
 }
 
-func (tbl *txnTable) PrePreareTransfer(phase string) (err error) {
-	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+func (tbl *txnTable) PrePreareTransfer(phase string, ts types.TS) (err error) {
 	return tbl.TransferDeletes(ts, phase)
 }
 
@@ -211,6 +210,7 @@ func (tbl *txnTable) recurTransferDelete(
 	page *model.TransferHashPage,
 	id *common.ID,
 	row uint32,
+	pk containers.Vector,
 	depth int) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
@@ -247,15 +247,16 @@ func (tbl *txnTable) recurTransferDelete(
 			page2.Item(),
 			newID,
 			offset,
+			pk,
 			depth+1)
 	}
-
-	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
+	if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
 		return err
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d",
 			depth,
+			tbl.schema.Name,
 			id.BlockID.String(),
 			row,
 			blockID.String(),
@@ -268,7 +269,8 @@ func (tbl *txnTable) TransferDeleteNode(
 	id *common.ID, node *deleteNode, phase string,
 ) (transferred bool, err error) {
 	rows := node.DeletedRows()
-	if transferred, err = tbl.TransferDeleteRows(id, rows, phase); err != nil {
+	pk := node.DeletedPK()
+	if transferred, err = tbl.TransferDeleteRows(id, rows, pk, phase); err != nil {
 		return
 	}
 
@@ -284,7 +286,11 @@ func (tbl *txnTable) TransferDeleteNode(
 	return
 }
 
-func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32, phase string) (transferred bool, err error) {
+func (tbl *txnTable) TransferDeleteRows(
+	id *common.ID,
+	rows []uint32,
+	pk map[uint32]containers.Vector,
+	phase string) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
@@ -320,7 +326,7 @@ func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32, phase stri
 	page := pinned.Item()
 	depth := 0
 	for _, row := range rows {
-		if err = tbl.recurTransferDelete(memo, page, id, row, depth); err != nil {
+		if err = tbl.recurTransferDelete(memo, page, id, row, pk[row], depth); err != nil {
 			return
 		}
 	}
@@ -646,7 +652,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 				if err != nil {
 					return err
 				}
-				vec := containers.ToDNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0])
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -699,7 +705,13 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 	return tbl.localSegment.IsDeleted(row)
 }
 
-func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+// RangeDelete delete block rows in range [start, end]
+func (tbl *txnTable) RangeDelete(
+	id *common.ID,
+	start,
+	end uint32,
+	pk containers.Vector,
+	dt handle.DeleteType) (err error) {
 	defer func() {
 		if err == nil {
 			return
@@ -733,7 +745,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		mvcc := chain.GetController()
 		mvcc.Lock()
 		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
-			node.RangeDeleteLocked(start, end)
+			node.RangeDeleteLocked(start, end, pk)
 		}
 		mvcc.Unlock()
 		if err != nil {
@@ -750,7 +762,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		return
 	}
 	blkData := blk.GetBlockData()
-	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, dt)
+	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, pk, dt)
 	if err == nil {
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return
@@ -854,6 +866,7 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (er
 	if err != nil {
 		return
 	}
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
@@ -873,6 +886,7 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	if err != nil {
 		return
 	}
+	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
@@ -1156,7 +1170,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				if err != nil {
 					return err
 				}
-				vec := containers.ToDNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0])
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(
@@ -1276,6 +1290,9 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 	//loaded := false
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
+		if seg.SortHint < tbl.dedupedSegmentHint {
+			break
+		}
 		{
 			seg.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
@@ -1317,6 +1334,11 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload()
+			if seg.SortHint == tbl.dedupedSegmentHint {
+				if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
+					break
+				}
+			}
 			{
 				blk.RLock()
 				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()

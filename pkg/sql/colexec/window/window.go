@@ -102,7 +102,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (proces
 
 	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 	for i, ag := range ap.Aggs {
-		if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, ap.Types[i]); err != nil {
+		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
 			return process.ExecNext, err
 		}
 		if err = ctr.bat.Aggs[i].Grows(n, proc.Mp()); err != nil {
@@ -123,7 +123,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst, isLast bool) (proces
 			}
 			_, err = ctr.processOrder(i, ap, ctr.bat, proc)
 			if err != nil {
-				ap.Free(proc, true)
 				return process.ExecNext, err
 			}
 		}
@@ -189,7 +188,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 		// plan.Function_AGG, plan.Function_WIN_VALUE
 		for j := 0; j < n; j++ {
 
-			start, end := 0, ctr.bat.Vecs[0].Length()
+			start, end := 0, n
 
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
@@ -374,7 +373,7 @@ func makeArgFs(ap *Argument) {
 
 func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	w := expr.Expr.(*plan.Expr_W).W
-	if w.PartitionBy == nil && w.OrderBy == nil {
+	if len(w.PartitionBy) == 0 && len(w.OrderBy) == 0 {
 		return nil
 	}
 	orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
@@ -491,6 +490,13 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 			if err := ctr.aggVecs[k].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
 				panic(err)
 			}
+		}
+	}
+
+	t := len(ctr.orderVecs) - 1
+	if ctr.orderVecs[t].vec != nil && !ctr.orderVecs[t].executor.IsColumnExpr() {
+		if err := ctr.orderVecs[t].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
+			panic(err)
 		}
 	}
 

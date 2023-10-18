@@ -207,6 +207,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
+		ExternScan:      node.ExternScan,
+		PartitionPrune:  DeepCopyPartitionPrune(node.PartitionPrune),
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
@@ -305,6 +307,7 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 		Width:       typ.Width,
 		Scale:       typ.Scale,
 		AutoIncr:    typ.AutoIncr,
+		Enumvalues:  typ.Enumvalues,
 	}
 }
 
@@ -382,6 +385,28 @@ func DeepCopyTableDefList(src []*plan.TableDef) []*plan.TableDef {
 		ret[i] = DeepCopyTableDef(def)
 	}
 	return ret
+}
+
+func DeepCopyPartitionPrune(partitionPrune *plan.PartitionPrune) *plan.PartitionPrune {
+	if partitionPrune == nil {
+		return nil
+	}
+	newPartitionPrune := &plan.PartitionPrune{
+		IsPruned:           partitionPrune.IsPruned,
+		SelectedPartitions: make([]*plan.PartitionItem, len(partitionPrune.SelectedPartitions)),
+	}
+	for i, e := range partitionPrune.SelectedPartitions {
+		newPartitionPrune.SelectedPartitions[i] = &plan.PartitionItem{
+			PartitionName:      e.PartitionName,
+			OrdinalPosition:    e.OrdinalPosition,
+			Description:        e.Description,
+			Comment:            e.Comment,
+			LessThan:           DeepCopyExprList(e.LessThan),
+			InValues:           DeepCopyExprList(e.InValues),
+			PartitionTableName: e.PartitionTableName,
+		}
+	}
+	return newPartitionPrune
 }
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
@@ -621,6 +646,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 
 	case *plan.DataDefinition_CreateTable:
 		CreateTable := &plan.CreateTable{
+			Replace:         df.CreateTable.Replace,
 			IfNotExists:     df.CreateTable.IfNotExists,
 			Temporary:       df.CreateTable.Temporary,
 			Database:        df.CreateTable.Database,
@@ -769,6 +795,15 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			UnlockTables: &plan.UnLockTables{},
 		}
 
+	case *plan.DataDefinition_AlterSequence:
+		newDf.Definition = &plan.DataDefinition_AlterSequence{
+			AlterSequence: &plan.AlterSequence{
+				IfExists: df.AlterSequence.IfExists,
+				Database: df.AlterSequence.Database,
+				TableDef: df.AlterSequence.TableDef,
+			},
+		}
+
 	}
 
 	return newDf
@@ -848,6 +883,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			pc.Value = &plan.Const_Defaultval{Defaultval: c.Defaultval}
 		case *plan.Const_UpdateVal:
 			pc.Value = &plan.Const_UpdateVal{UpdateVal: c.UpdateVal}
+		case *plan.Const_EnumVal:
+			pc.Value = &plan.Const_EnumVal{EnumVal: c.EnumVal}
 		}
 
 		newExpr.Expr = &plan.Expr_C{
@@ -966,6 +1003,13 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 		newExpr.Expr = &plan.Expr_List{
 			List: e,
+		}
+
+	case *plan.Expr_Bin:
+		newExpr.Expr = &plan.Expr_Bin{
+			Bin: &plan.BinaryData{
+				Data: item.Bin.Data,
+			},
 		}
 	}
 

@@ -20,16 +20,16 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParseDNConfig(t *testing.T) {
+func TestParseTNConfig(t *testing.T) {
 	data := `
-	# service node type, [DN|CN|LOG]
-	service-type = "DN"
+	# service node type, [TN|CN|LOG]
+	service-type = "TN"
 	
 	[log]
 	level = "debug"
@@ -43,7 +43,7 @@ func TestParseDNConfig(t *testing.T) {
 	]
 	
 	[[fileservice]]
-	# local fileservice instance, used to store TAE Data and DNStore metadata.
+	# local fileservice instance, used to store TAE Data and TNStore metadata.
 	name = "local"
 	# use disk as fileservice backend
 	backend = "DISK"
@@ -60,18 +60,18 @@ func TestParseDNConfig(t *testing.T) {
 	# in the data dir
 	data-dir = "data dir"
 	
-	[dn.Txn.Storage]
+	[tn.Txn.Storage]
 	# txn storage backend implementation. [TAE|MEM]
 	backend = "MEM"
 	`
 	cfg := &Config{}
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
-	assert.Equal(t, dnservice.StorageMEM, cfg.DN.Txn.Storage.Backend)
+	assert.Equal(t, tnservice.StorageMEM, cfg.getTNServiceConfig().Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
-	assert.Equal(t, 2, len(cfg.getDNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
+	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
 }
 
 func TestFileServiceFactory(t *testing.T) {
@@ -163,7 +163,7 @@ gossip-seed-addresses = [
 [logservice.BootstrapConfig]
 bootstrap-cluster = true
 num-of-log-shards = 1
-num-of-dn-shards = 1
+num-of-tn-shards = 1
 num-of-log-shard-replicas = 1
 init-hakeeper-members = [
   "131072:9c4dccb4-4d3c-41f8-b482-5251dc7a41bf",
@@ -181,4 +181,10 @@ service-addresses = [
 	assert.NoError(t, cfg.resolveGossipSeedAddresses())
 	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
 	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
+}
+
+func TestDumpCommonConfig(t *testing.T) {
+	cfg1 := *NewConfig()
+	_, err := dumpCommonConfig(cfg1)
+	assert.NoError(t, err)
 }

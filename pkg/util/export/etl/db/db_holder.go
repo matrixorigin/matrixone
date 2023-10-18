@@ -19,17 +19,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"go.uber.org/zap"
 )
 
 var (
@@ -48,9 +44,6 @@ var (
 	DBConnErrCount atomic.Uint32
 
 	prepareSQLMap sync.Map
-
-	moLogger   *log.MOLogger
-	loggerInit sync.Once
 )
 
 const MOLoggerUser = "mo_logger"
@@ -123,7 +116,6 @@ func SetDBConn(conn *sql.DB) {
 }
 
 func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
-	logger := getLogger()
 	initFunc := func() error {
 		dbMux.Lock()
 		defer dbMux.Unlock()
@@ -158,10 +150,8 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	if forceNewConn || db.Load() == nil {
 		err := initFunc()
 		if err != nil {
-			logger.Error("sqlWriter db init failed", zap.Error(err))
 			return nil, err
 		}
-		logger.Debug("sqlWriter db init", zap.Bool("force", forceNewConn), zap.Bool("randomCN", randomCN), zap.String("db", fmt.Sprintf("%v", db.Load())))
 	}
 	dbConn := db.Load().(*sql.DB)
 	return dbConn, nil
@@ -175,10 +165,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 
 	var dbConn *sql.DB
 
-	var logger = getLogger()
-
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
-		logger.Error("sqlWriter WriteRowRecords failed above threshold")
 		if dbConn != nil {
 			dbConn.Close()
 		}
@@ -188,7 +175,6 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 		dbConn, err = InitOrRefreshDBConn(false, false)
 	}
 	if err != nil {
-		logger.Debug("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
 
@@ -198,15 +184,23 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	err = bulkInsert(ctx, dbConn, records, tbl, MaxInsertLen, MiddleInsertLen)
 	if err != nil {
 		DBConnErrCount.Add(1)
-		return 0, moerr.NewInternalError(ctx, err.Error())
+		return 0, err
 	}
 
-	logger.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
 	return len(records), nil
 }
 
 func getPrepareSQL(tbl *table.Table, columns int, batchLen int, middleBatchLen int) *prepareSQLs {
-	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
+	columnNames := make([]string, len(tbl.Columns))
+
+	for i, column := range tbl.Columns {
+		columnNames[i] = fmt.Sprintf("`%s`", column.Name)
+	}
+
+	columnStr := strings.Join(columnNames, ",")
+
+	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) VALUES ", tbl.Database, tbl.Table, columnStr)
+
 	oneRowBuf := oneRowBufPool.Get().(*bytes.Buffer)
 	for i := 0; i < columns; i++ {
 		if i == 0 {
@@ -264,7 +258,6 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	if len(records) == 0 {
 		return nil
 	}
-	var logger = getLogger()
 	var sqls *prepareSQLs
 	key := fmt.Sprintf("%s_%s", tbl.Database, tbl.Table)
 	if val, ok := prepareSQLMap.Load(key); ok {
@@ -280,7 +273,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	tx, err := sqlDb.BeginTx(ctx, nil)
 	if err != nil {
-		return moerr.ConvertGoError(ctx, err)
+		return err
 	}
 
 	var maxStmt *sql.Stmt
@@ -313,7 +306,6 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 			}
 			_, err := maxStmt.ExecContext(ctx, vals...)
 			if err != nil {
-				logger.Error("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
 				return err
 			}
@@ -354,7 +346,6 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 			}
 			_, err := middleStmt.ExecContext(ctx, vals...)
 			if err != nil {
-				logger.Error("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
 				return err
 			}
@@ -391,7 +382,7 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 			vals := make([]any, sqls.columns)
 			for _, row := range records {
 				if err != nil {
-					return moerr.ConvertGoError(ctx, err)
+					return err
 				}
 				for i, field := range row {
 					escapedStr := field
@@ -404,35 +395,21 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 				_, err = oneStmt.ExecContext(ctx, vals...)
 				if err != nil {
 					tx.Rollback()
-					return moerr.ConvertGoError(ctx, err)
+					return err
 				}
 			}
 			err = oneStmt.Close()
 			if err != nil {
 				tx.Rollback()
-				return moerr.ConvertGoError(ctx, err)
+				return err
 			}
 			break
 		}
 	}
 
 	if err = tx.Commit(); err != nil {
-		logger.Error("sqlWriter commit failed", zap.Error(err))
 		tx.Rollback()
-		return moerr.ConvertGoError(ctx, err)
+		return err
 	}
 	return nil
-}
-
-func getLogger() *log.MOLogger {
-	loggerInit.Do(func() {
-		rt := runtime.ProcessLevelRuntime()
-		if rt == nil {
-			moLogger = log.GetServiceLogger(logutil.Adjust(logutil.GetGlobalLogger()), metadata.ServiceType_CN, "uuid")
-		} else {
-			moLogger = rt.Logger()
-		}
-		moLogger = moLogger.Named("etl/db_holder").With(logutil.Discardable())
-	})
-	return moLogger
 }

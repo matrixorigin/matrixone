@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,7 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -426,6 +430,10 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 		return vector.MustFixedCol[float64](vec)[0], nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
 		return vec.GetStringAt(0), nil
+	case types.T_array_float32:
+		return vector.GetArrayAt[float32](vec, 0), nil
+	case types.T_array_float64:
+		return vector.GetArrayAt[float64](vec, 0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAt[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
@@ -451,6 +459,8 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 	case types.T_timestamp:
 		val := vector.MustFixedCol[types.Timestamp](vec)[0]
 		return val.String2(ses.GetTimeZone(), vec.GetType().Scale), nil
+	case types.T_enum:
+		return vector.MustFixedCol[types.Enum](vec)[0], nil
 	default:
 		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
 	}
@@ -461,6 +471,9 @@ type statementStatus int
 const (
 	success statementStatus = iota
 	fail
+	sessionId = "session_id"
+
+	statementId = "statement_id"
 )
 
 func (s statementStatus) String() string {
@@ -489,13 +502,45 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	outBytes := ses.GetMysqlProtocol().CalculateOutTrafficBytes()
 	if status == success {
-		motrace.EndStatement(ctx, nil, ses.sentRows.Load())
 		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		err = nil // make sure: it is nil for EndStatement
 	} else {
-		motrace.EndStatement(ctx, err, ses.sentRows.Load())
 		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
+	// pls make sure: NO ONE use the ses.tStmt after EndStatement
+	motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes)
+	// need just below EndStatement
+	ses.SetTStmt(nil)
+}
+
+var logger *log.MOLogger
+var loggerOnce sync.Once
+
+func getLogger() *log.MOLogger {
+	loggerOnce.Do(initLogger)
+	return logger
+}
+
+func initLogger() {
+	rt := moruntime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = moruntime.DefaultRuntime()
+	}
+	logger = rt.Logger().Named("frontend")
+}
+
+func appendSessionField(fields []zap.Field, ses *Session) []zap.Field {
+	if ses != nil {
+		if ses.tStmt != nil {
+			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.tStmt.SessionID).String()))
+			fields = append(fields, zap.String(statementId, uuid.UUID(ses.tStmt.StatementID).String()))
+		} else {
+			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
+		}
+	}
+	return fields
 }
 
 func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
@@ -503,17 +548,8 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
-	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
-		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
-		}
-	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
-	logutil.Info(msg, fields...)
+	fields = appendSessionField(fields, ses)
+	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
 }
 
 func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
@@ -521,17 +557,8 @@ func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
-	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
-		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
-		}
-	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
-	logutil.Debug(msg, fields...)
+	fields = appendSessionField(fields, ses)
+	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 }
 
 func logError(ses *Session, info string, msg string, fields ...zap.Field) {
@@ -539,17 +566,8 @@ func logError(ses *Session, info string, msg string, fields ...zap.Field) {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
-	sessionId := ""
-	statementId := ""
-	if ses != nil {
-		sessionId = strconv.Itoa(int(ses.GetConnectionID()))
-		if ses.tStmt != nil {
-			statementId = string(ses.tStmt.StatementID[:])
-		}
-	}
-	fields = append(fields, zap.String("session_id", sessionId))
-	fields = append(fields, zap.String("statement_id", statementId))
-	logutil.Error(msg, fields...)
+	fields = appendSessionField(fields, ses)
+	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
 }
 
 // todo: remove this function after all the logDebugf are replaced by logDebug
@@ -623,4 +641,24 @@ func copyBytes(src []byte, needCopy bool) []byte {
 		}
 	}
 	return src
+}
+
+// getUserProfile returns the account, user, role of the account
+func getUserProfile(account *TenantInfo) (string, string, string) {
+	var (
+		accountName string
+		userName    string
+		roleName    string
+	)
+
+	if account != nil {
+		accountName = account.GetTenant()
+		userName = account.GetUser()
+		roleName = account.GetDefaultRole()
+	} else {
+		accountName = sysAccountName
+		userName = rootName
+		roleName = moAdminRoleName
+	}
+	return accountName, userName, roleName
 }

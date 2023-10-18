@@ -78,7 +78,7 @@ type S3Writer struct {
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
-	WriteS3Threshold uint64 = 64 * mpool.MB
+	WriteS3Threshold uint64 = 128 * mpool.MB
 
 	TagS3Size            uint64 = 10 * mpool.MB
 	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
@@ -465,6 +465,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Time](), getFixedCols[types.Time](w.Bats, pos), nulls)
 		case types.T_timestamp:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Timestamp](), getFixedCols[types.Timestamp](w.Bats, pos), nulls)
+		case types.T_enum:
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Enum](), getFixedCols[types.Enum](w.Bats, pos), nulls)
 		case types.T_decimal64:
 			merge = NewMerge(len(w.Bats), sort.NewDecimal64Less(), getFixedCols[types.Decimal64](w.Bats, pos), nulls)
 		case types.T_decimal128:
@@ -473,6 +475,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 			merge = NewMerge(len(w.Bats), sort.NewUuidCompLess(), getFixedCols[types.Uuid](w.Bats, pos), nulls)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[string](), getStrCols(w.Bats, pos), nulls)
+			//TODO: check if we need T_array here? T_json is missing here.
 		}
 		if _, err := w.generateWriter(proc); err != nil {
 			return err
@@ -602,7 +605,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 	return bat.Shuffle(sels, m)
 }
 
-func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
+func (w *S3Writer) WriteBlock(bat *batch.Batch, dataType ...objectio.DataMetaType) error {
 	if w.pk > -1 {
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
@@ -617,9 +620,16 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
 			w.tablename, w.seqnums, bat.Attrs)
 	}
 	// logutil.Infof("write s3 batch(%d) %q: %v, %v", bat.vecs[0].Length(), w.tablename, w.seqnums, w.attrs)
-	_, err := w.writer.WriteBatch(bat)
-	if err != nil {
-		return err
+	if len(dataType) > 0 && dataType[0] == objectio.SchemaTombstone {
+		_, err := w.writer.WriteTombstoneBatch(bat)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err := w.writer.WriteBatch(bat)
+		if err != nil {
+			return err
+		}
 	}
 	w.lengths = append(w.lengths, uint64(bat.Vecs[0].Length()))
 	return nil

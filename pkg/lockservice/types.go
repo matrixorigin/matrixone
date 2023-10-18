@@ -29,8 +29,12 @@ var (
 	ErrDeadlockDetectorClosed = moerr.NewInvalidStateNoCtx("deadlock detector is closed")
 	// ErrTxnClosed txn not found
 	ErrTxnNotFound = moerr.NewInvalidStateNoCtx("txn not found")
+	// ErrMergeRangeLockNotSupport merge range lock not support with shared lock
+	ErrMergeRangeLockNotSupport = moerr.NewNotSupportedNoCtx("merge range lock not support with shared lock")
 	// ErrDeadLockDetected dead lock detected
 	ErrDeadLockDetected = moerr.NewDeadLockDetectedNoCtx()
+	// ErrDeadlockCheckBusy dead lock check is busy
+	ErrDeadlockCheckBusy = moerr.NewDeadlockCheckBusyNoCtx()
 	// ErrLockTableBindChanged lock table and lock service bind changed
 	ErrLockTableBindChanged = moerr.NewLockTableBindChangedNoCtx()
 	// ErrLockTableNotFound lock table not found on remote lock service
@@ -79,6 +83,8 @@ type LockStorage interface {
 // Lock, a set of background goroutines are notified to start a deadlock detection for all
 // transactions in the Lock's wait queue.
 type LockService interface {
+	// GetServiceID return service id
+	GetServiceID() string
 	// GetConfig returns the lockservice config
 	GetConfig() Config
 	// Lock locks rows(row or row range determined by the Granularity in options) a table. Lockservice
@@ -106,6 +112,9 @@ type LockService interface {
 	ForceRefreshLockTableBinds()
 	// GetLockTableBind returns lock table bind
 	GetLockTableBind(tableID uint64) (pb.LockTable, error)
+	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
+	// len(keys) == 1 if is row lock. And keys only valid in current iter func call.
+	IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool)
 }
 
 // lockTable is used to manage all locks of a Table. LockTable can be local or remote, as determined
@@ -129,7 +138,7 @@ type lockTable interface {
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
 	// getLock get a lock
-	getLock(txnID, key []byte, fn func(Lock))
+	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
 	// getBind returns lock table binding
 	getBind() pb.LockTable
 	// close close the locktable
@@ -208,10 +217,21 @@ type LockOptions struct {
 // in the LockStorage at runtime, this object has been specially designed to save memory
 // usage.
 type Lock struct {
-	txnID []byte
 	// all lock info will encode into this field to save memory overhead
-	value  byte
-	waiter *waiter
+	value byte
+	// all active transactions which hold this lock. Every waiter has a reference to the lock
+	// waiters.
+	holders *holders
+	// all active transactions which wait this lock. Waiters shared by holders. Only holders
+	// and waiters are both empty, the txn can get the lock otherwise the txn need to added
+	// to waiters.
+	waiters waiterQueue
+}
+
+type holders struct {
+	// all active transactions which hold this lock. Every waiter has a reference to the lock
+	// waiters.
+	txns []pb.WaitTxn
 }
 
 // SetLockServiceByServiceID set lockservice instance into process level runtime.

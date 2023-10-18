@@ -24,18 +24,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // init is used to insert some data that will not be synchronized by logtail.
-func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
+func (e *Engine) init(ctx context.Context) error {
 	e.Lock()
 	defer e.Unlock()
+	m := e.mp
 
 	e.catalog = cache.NewCatalog()
+	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 
 	var packer *types.Packer
 	put := e.packerPool.Get(&packer)
@@ -269,44 +270,36 @@ func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partiti
 func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
 	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
 
-	select {
-	case <-part.Lock():
-		defer part.Unlock()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	state, doneMutate := part.MutateState()
-
-	if err := state.ConsumeCheckpoints(func(checkpoint string) error {
-		entries, closeCBs, err := logtail.LoadCheckpointEntries(
-			ctx,
-			checkpoint,
-			tbl.tableId,
-			tbl.tableName,
-			tbl.db.databaseId,
-			tbl.db.databaseName,
-			tbl.db.txn.engine.mp,
-			tbl.db.txn.engine.fs)
-		defer func() {
-			for _, cb := range closeCBs {
-				cb()
-			}
-		}()
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
+	if err := part.ConsumeCheckpoints(
+		ctx,
+		func(checkpoint string, state *logtailreplay.PartitionState) error {
+			entries, closeCBs, err := logtail.LoadCheckpointEntries(
+				ctx,
+				checkpoint,
+				tbl.tableId,
+				tbl.tableName,
+				tbl.db.databaseId,
+				tbl.db.databaseName,
+				tbl.db.txn.engine.mp,
+				tbl.db.txn.engine.fs)
+			if err != nil {
 				return err
 			}
-		}
-		return nil
-	}); err != nil {
+			defer func() {
+				for _, cb := range closeCBs {
+					cb()
+				}
+			}()
+			for _, entry := range entries {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	); err != nil {
 		return nil, err
 	}
-
-	doneMutate()
 
 	return part, nil
 }
@@ -318,25 +311,25 @@ func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, t
 // skip SCA check for unused function.
 var _ = (&Engine{}).UpdateOfPull
 
-func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
+func (e *Engine) UpdateOfPull(ctx context.Context, tnList []DNStore, tbl *txnTable, op client.TxnOperator,
 	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	logDebugf(op.Txn(), "UpdateOfPull")
 
 	part := e.ensureTablePart(databaseId, tableId)
 
 	if err := func() error {
-		select {
-		case <-part.Lock():
-			defer part.Unlock()
-			if part.TS.Greater(ts) || part.TS.Equal(ts) {
-				return nil
-			}
-		case <-ctx.Done():
-			return ctx.Err()
+		lockErr := part.Lock(ctx)
+		if lockErr != nil {
+			return lockErr
+		}
+		defer part.Unlock()
+
+		if part.TS.Greater(ts) || part.TS.Equal(ts) {
+			return nil
 		}
 
 		if err := updatePartitionOfPull(
-			primarySeqnum, tbl, ctx, op, e, part, dnList[0],
+			primarySeqnum, tbl, ctx, op, e, part, tnList[0],
 			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
 		); err != nil {
 			return err

@@ -19,12 +19,27 @@ package query;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/query";
 
 import "status.proto";
+import "lock.proto";
+import "txn.proto";
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
 
 enum CmdMethod {
   // Query is the common query command.
   Query = 0;
   // ShowProcessList represents the show process list query.
   ShowProcessList = 1;
+  // AlterAccount represent set account status as restricted 
+  AlterAccount = 2;
+  // KillConn represents the kill connection request.
+  KillConn = 3;
+  // ProcessTraceSpan process the trace span cmd transferred from
+  // other cn
+  TraceSpan = 4;
+  // GetLockInfo gets the lock info from the cn
+  GetLockInfo = 5;
+  // GetTxnInfo gets the txn info from the cn
+  GetTxnInfo = 6;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -52,6 +67,16 @@ message Request {
   QueryRequest QueryRequest = 3;
   // ShowProcessListRequest is the request for show process list.
   ShowProcessListRequest ShowProcessListRequest = 4;
+  // AlterAccountRequest is the request for alter account restricted
+  AlterAccountRequest AlterAccountRequest = 5;
+  // KillConnRequest is the request which kills the connections.
+  KillConnRequest KillConnRequest = 6;
+  // TraceSpanRequest is the request for transferred span cmd
+  TraceSpanRequest TraceSpanRequest = 7;
+  // GetLockInfoRequest is the request for getting the lock from the cn
+  GetLockInfoRequest GetLockInfoRequest = 8;
+  // GetTxnInfoRequest is the request for getting the txn info from the cn
+  GetTxnInfoRequest GetTxnInfoRequest = 9;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -69,5 +94,96 @@ message Response {
   bytes Error = 3;
   // ShowProcessListResponse is the response of ShowProcessListRequest.
   ShowProcessListResponse ShowProcessListResponse = 4;
+  // AlterAccountResponse is the response of AlterAccount.
+  AlterAccountResponse AlterAccountResponse = 5;
+  // KillConnResponse is the response of KillConnRequest.
+  KillConnResponse KillConnResponse = 6;
+  // TraceSpanResponse is the response of TraceSpanRequest
+  TraceSpanResponse TraceSpanResponse = 7;
+  // GetLockInfoResponse is the response of GetLockInfo
+  GetLockInfoResponse GetLockInfoResponse = 8;
+  // GetTxnInfoResponse is the response to GetTxnInfo
+  GetTxnInfoResponse GetTxnInfoResponse = 9;
 }
 
+// AlterAccountRequest is the "alter account restricted" query request.
+message AlterAccountRequest {
+  // Tenant is the tenant which to alter.
+  int64 TenantId = 1;
+  // Status is the tenant which will be alter to.
+  string Status = 3;
+}
+
+// AlterAccountResponse is the response of command AlterAccount.
+message AlterAccountResponse {
+  bool alterSuccess = 1;
+}
+
+// KillConnRequest is the request that kill the connections belongs
+// to the account.
+message KillConnRequest {
+  int64 AccountID = 1;
+  uint64 Version = 2;
+}
+
+// KillConnResponse is the response to the kill connection request.
+message KillConnResponse {
+  bool Success = 1;
+}
+
+message TraceSpanRequest {
+  string Cmd = 1;
+  string Spans = 2;
+}
+
+message TraceSpanResponse {
+  string Resp = 1;
+}
+
+message GetLockInfoRequest{
+}
+
+message LockInfo{
+  uint64 TableId = 1;
+  repeated bytes Keys = 2;
+  lock.LockMode LockMode  = 3;
+  bool isRangeLock = 4;
+  repeated lock.WaitTxn Holders = 5;
+  repeated lock.WaitTxn Waiters = 6;
+}
+
+message GetLockInfoResponse{
+  string CnId = 1;
+  repeated LockInfo LockInfoList = 2;
+}
+
+message GetTxnInfoRequest{}
+
+message TxnLockInfo{
+  // TableId is the id of the table
+  uint64 TableId = 1;
+  // Rows
+  // - point/row lock : all point lock keys
+  // - rang lock : start,end,start,end
+  repeated bytes Rows = 2;
+  // Options
+  // - type : point or range
+  // - mode : shared or exclusive
+  lock.LockOptions Options = 3;
+}
+
+message TxnInfo{
+  // CreateAt is the create time of the txn
+  google.protobuf.Timestamp CreateAt = 1
+  [ (gogoproto.nullable) = false, (gogoproto.stdtime) = true ];
+  txn.TxnMeta Meta= 2;
+  // UserTxn denotes it is the user txn or not
+  bool UserTxn = 3;
+  // WaitLocks denotes the locks that the txn is waiting on
+  repeated TxnLockInfo WaitLocks = 4;
+}
+
+message GetTxnInfoResponse{
+  string CnId = 1;
+  repeated TxnInfo TxnInfoList = 2;
+}

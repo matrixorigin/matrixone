@@ -209,6 +209,8 @@ func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Ta
 			colData.Append(colDef.OnUpdate, false)
 		case pkgcatalog.SystemColAttr_Seqnum:
 			colData.Append(colDef.SeqNum, false)
+		case pkgcatalog.SystemColAttr_EnumValues:
+			colData.Append([]byte(colDef.EnumValues), false)
 		default:
 			panic("unexpected colname. if add new catalog def, fill it in this switch")
 		}
@@ -375,7 +377,7 @@ func (blk *txnSysBlock) GetColumnDataById(ctx context.Context, colIdx int) (view
 	}
 }
 
-func (blk *txnSysBlock) Prefetch(idxes []uint16) error {
+func (blk *txnSysBlock) Prefetch(idxes []int) error {
 	return nil
 }
 

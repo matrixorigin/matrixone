@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -533,6 +534,27 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, want, get)
 			}
 		}
+	case types.T_enum:
+		r := vector.GenerateFunctionFixedTypeParameter[types.Enum](v)
+		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetValue(i)
+			get, null2 := r.GetValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if want != get {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, want, get)
+			}
+		}
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		r := vector.GenerateFunctionStrParameter(v)
@@ -553,6 +575,49 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if string(want) != string(get) {
 				return false, fmt.Sprintf("the %dth row expected %s, but get %s",
 					i+1, string(want), string(get))
+			}
+		}
+
+	case types.T_array_float32:
+		r := vector.GenerateFunctionStrParameter(v)
+		s := vector.GenerateFunctionStrParameter(vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetStrValue(i)
+			get, null2 := r.GetStrValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
+			}
+			if moarray.Compare[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, types.BytesToArray[float32](want), types.BytesToArray[float32](get))
+			}
+		}
+	case types.T_array_float64:
+		r := vector.GenerateFunctionStrParameter(v)
+		s := vector.GenerateFunctionStrParameter(vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetStrValue(i)
+			get, null2 := r.GetStrValue(i)
+			if null1 {
+				if null2 {
+					continue
+				} else {
+					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
+			}
+			if moarray.Compare[float64](types.BytesToArray[float64](want), types.BytesToArray[float64](get)) != 0 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
+					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
 			}
 		}
 	case types.T_uuid:
@@ -745,6 +810,12 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		values := val.([]string)
 		vector.AppendStringList(vec, values, nil, mp)
+	case types.T_array_float32:
+		values := val.([][]float32)
+		vector.AppendArrayList[float32](vec, values, nil, mp)
+	case types.T_array_float64:
+		values := val.([][]float64)
+		vector.AppendArrayList[float64](vec, values, nil, mp)
 	case types.T_uuid:
 		values := val.([]types.Uuid)
 		vector.AppendFixedList(vec, values, nil, mp)
@@ -760,6 +831,9 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_json:
 		values := val.([]string)
 		vector.AppendStringList(vec, values, nil, mp)
+	case types.T_enum:
+		values := val.([]types.Enum)
+		vector.AppendFixedList(vec, values, nil, mp)
 	default:
 		panic(fmt.Sprintf("function test framework do not support typ %s", typ))
 	}

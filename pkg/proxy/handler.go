@@ -16,8 +16,6 @@ package proxy
 
 import (
 	"context"
-	"time"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -26,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"go.uber.org/zap"
+	"net"
 )
 
 // handler is the proxy service handler.
@@ -42,10 +41,9 @@ type handler struct {
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
 	// haKeeperClient is the client to communicate with HAKeeper.
-	haKeeperClient logservice.ClusterHAKeeperClient
-	// SQLWorker works for the SQL selection. It connects to some
-	// CN server and query for some information.
-	sqlWorker SQLWorker
+	haKeeperClient logservice.ProxyHAKeeperClient
+	// ipNetList is the list of ip net, which is parsed from CIDRs.
+	ipNetList []*net.IPNet
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -57,23 +55,10 @@ func newProxyHandler(
 	cfg Config,
 	st *stopper.Stopper,
 	cs *counterSet,
-	testHAKeeperClient logservice.ClusterHAKeeperClient,
-	test bool,
+	haKeeperClient logservice.ProxyHAKeeperClient,
 ) (*handler, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	var err error
-	c := testHAKeeperClient
-	if c == nil {
-		c, err = logservice.NewProxyHAKeeperClient(ctx, cfg.HAKeeper.ClientConfig)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	// Create the MO cluster.
-	mc := clusterservice.NewMOCluster(c, cfg.Cluster.RefreshInterval.Duration)
+	mc := clusterservice.NewMOCluster(haKeeperClient, cfg.Cluster.RefreshInterval.Duration)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.
@@ -91,15 +76,7 @@ func newProxyHandler(
 		return nil, err
 	}
 
-	// The SQL worker is mainly used in router currently.
-	sw := newSQLWorker()
-
-	var ru Router
-	if test {
-		ru = newRouter(mc, re, re.connManager, false)
-	} else {
-		ru = newRouter(mc, re, sw, false)
-	}
+	ru := newRouter(mc, re, false)
 	// Decorate the router if plugin is enabled
 	if cfg.Plugin != nil {
 		p, err := newRPCPlugin(cfg.Plugin.Backend, cfg.Plugin.Timeout)
@@ -108,16 +85,28 @@ func newProxyHandler(
 		}
 		ru = newPluginRouter(ru, p)
 	}
+
+	var ipNetList []*net.IPNet
+	for _, cidr := range cfg.InternalCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			rt.Logger().Error("failed to parse CIDR",
+				zap.String("CIDR", cidr),
+				zap.Error(err))
+		} else {
+			ipNetList = append(ipNetList, ipNet)
+		}
+	}
 	return &handler{
-		ctx:            context.Background(),
+		ctx:            ctx,
 		logger:         rt.Logger(),
 		config:         cfg,
 		stopper:        st,
 		moCluster:      mc,
 		counterSet:     cs,
 		router:         ru,
-		haKeeperClient: c,
-		sqlWorker:      sw,
+		haKeeperClient: haKeeperClient,
+		ipNetList:      ipNetList,
 	}, nil
 }
 
@@ -136,7 +125,16 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}()
 
 	cc, err := newClientConn(
-		h.ctx, &h.config, h.logger, h.counterSet, c, h.haKeeperClient, h.moCluster, h.router, t,
+		h.ctx,
+		&h.config,
+		h.logger,
+		h.counterSet,
+		c,
+		h.haKeeperClient,
+		h.moCluster,
+		h.router,
+		t,
+		h.ipNetList,
 	)
 	if err != nil {
 		h.logger.Error("failed to create client conn", zap.Error(err))

@@ -29,4 +29,5 @@ func TestAdjustConfig(t *testing.T) {
 	assert.Equal(t, defaultMaxIdleDuration, c.MaxIdleDuration.Duration)
 	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.WriteBufferSize)
 	assert.Equal(t, toml.ByteSize(defaultBufferSize), c.ReadBufferSize)
+	assert.Equal(t, toml.ByteSize(defaultMaxMessageSize), c.MaxMessageSize)
 }

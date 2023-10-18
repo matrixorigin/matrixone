@@ -56,6 +56,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = TableScan
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
+	case plan.Node_STREAM_SCAN:
+		pname = "Stream Scan"
 	case plan.Node_MATERIAL_SCAN:
 		pname = "Material Scan"
 	case plan.Node_PROJECT:
@@ -134,7 +136,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_STREAM_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
@@ -228,6 +230,16 @@ func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *Explain
 
 func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
+
+	// Get partition prune information
+	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN && ndesc.Node.TableDef.Partition != nil {
+		partPruneInfo, err := ndesc.GetPartitionPruneInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, partPruneInfo)
+	}
+
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
 		orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
@@ -360,6 +372,14 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: " + ndesc.Node.JoinType.String()
+	if ndesc.Node.BuildOnLeft {
+		if ndesc.Node.JoinType == plan.Node_SEMI || ndesc.Node.JoinType == plan.Node_ANTI {
+			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
+		}
+	}
+	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.HashOnPK {
+		result += "   hashOnPK"
+	}
 	return result, nil
 }
 
@@ -396,8 +416,36 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 			}
 			buf.WriteString(")")
 		}
+
+		if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+			buf.WriteString(" HYBRID ")
+		}
 	}
 
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Hit Partition: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		if ndesc.Node.PartitionPrune != nil {
+			first := true
+			for _, v := range ndesc.Node.PartitionPrune.SelectedPartitions {
+				if !first {
+					buf.WriteString(", ")
+				}
+				first = false
+				buf.WriteString(v.PartitionName)
+			}
+		} else {
+			buf.WriteString("all partitions")
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
 	return buf.String(), nil
 }
 
@@ -517,20 +565,28 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 	if ndesc.Node.Stats.HashmapStats != nil && ndesc.Node.Stats.HashmapStats.Shuffle {
 		idx := ndesc.Node.Stats.HashmapStats.ShuffleColIdx
 		shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
-		if shuffleType == plan.ShuffleType_Hash {
-			buf.WriteString(" shuffle: hash(")
-			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
-			if err != nil {
-				return "", err
+		if ndesc.Node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
+			if shuffleType == plan.ShuffleType_Hash {
+				buf.WriteString(" shuffle: hash(")
+				err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
+			} else {
+				buf.WriteString(" shuffle: range(")
+				err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+				if err != nil {
+					return "", err
+				}
+				buf.WriteString(")")
 			}
-			buf.WriteString(")")
-		} else {
-			buf.WriteString(" shuffle: range(")
-			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
-			if err != nil {
-				return "", err
-			}
-			buf.WriteString(")")
+		}
+
+		if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+			buf.WriteString(" shuffle: REUSE ")
+		} else if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reshuffle {
+			buf.WriteString(" RESHUFFLE ")
 		}
 	}
 	return buf.String(), nil

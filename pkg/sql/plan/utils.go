@@ -1096,28 +1096,35 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
-		exprList := exprImpl.List
-		for i, exprElem := range exprList.List {
-			_, ok2 := exprElem.Expr.(*plan.Expr_F)
-			if ok2 {
-				foldExpr, err := ConstantFold(bat, exprElem, proc, varAndParamIsConst)
-				if err != nil {
-					return e, nil
-				}
-				exprImpl.List.List[i] = foldExpr
+		exprList := exprImpl.List.List
+		for i := range exprList {
+			foldExpr, err := ConstantFold(bat, exprList[i], proc, varAndParamIsConst)
+			if err != nil {
+				return e, nil
 			}
+			exprList[i] = foldExpr
 		}
-		return e, nil
-	}
 
-	var err error
-	if elist, ok := e.Expr.(*plan.Expr_List); ok {
-		for i, expr := range elist.List.List {
-			if elist.List.List[i], err = ConstantFold(bat, expr, proc, varAndParamIsConst); err != nil {
-				return nil, err
-			}
+		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
+		if err != nil {
+			return nil, err
 		}
-		return e, nil
+		defer vec.Free(proc.Mp())
+
+		colexec.SortInFilter(vec)
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+
+		return &plan.Expr{
+			Typ: e.Typ,
+			Expr: &plan.Expr_Bin{
+				Bin: &plan.BinaryData{
+					Data: data,
+				},
+			},
+		}, nil
 	}
 
 	ef, ok := e.Expr.(*plan.Expr_F)
@@ -1199,6 +1206,7 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // if constant's type higher than column's type
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
+	//TODO: Check if T_array is required here?
 	switch constT.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {
@@ -1412,9 +1420,9 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 			return nil, "", err
 		}
 		w.Flush()
-		return fileservice.GetForETL(nil, fileservice.JoinPath(buf.String(), prefix))
+		return fileservice.GetForETL(context.TODO(), nil, fileservice.JoinPath(buf.String(), prefix))
 	}
-	return fileservice.GetForETL(param.FileService, prefix)
+	return fileservice.GetForETL(context.TODO(), param.FileService, prefix)
 }
 
 // ReadDir support "etl:" and "/..." absolute path, NOT support relative path.
@@ -1708,4 +1716,20 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
+}
+
+// databaseIsValid checks whether the database exists or not.
+func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+
+	if dbName == "" {
+		return "", moerr.NewNoDB(ctx.GetContext())
+	}
+
+	if !ctx.DatabaseExists(dbName) {
+		return "", moerr.NewBadDB(ctx.GetContext(), dbName)
+	}
+	return dbName, nil
 }

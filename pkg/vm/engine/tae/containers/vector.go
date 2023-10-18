@@ -42,6 +42,61 @@ type vectorWrapper struct {
 	element *vectorPoolElement
 }
 
+func NewConstFixed[T any](typ types.Type, val T, length int, opts ...Options) *vectorWrapper {
+	var (
+		alloc *mpool.MPool
+	)
+	if len(opts) > 0 {
+		alloc = opts[0].Allocator
+	}
+	if alloc == nil {
+		alloc = common.DefaultAllocator
+	}
+	vec := &vectorWrapper{
+		wrapped: vector.NewConstFixed[T](typ, val, length, alloc),
+	}
+	vec.mpool = alloc
+	return vec
+}
+
+func NewConstBytes(typ types.Type, val []byte, length int, opts ...Options) *vectorWrapper {
+	var (
+		alloc *mpool.MPool
+	)
+	if len(opts) > 0 {
+		alloc = opts[0].Allocator
+	}
+	if alloc == nil {
+		alloc = common.DefaultAllocator
+	}
+	vec := &vectorWrapper{
+		wrapped: vector.NewConstBytes(typ, val, length, alloc),
+	}
+	vec.mpool = alloc
+	return vec
+}
+
+func NewConstNullVector(
+	typ types.Type,
+	length int,
+	opts ...Options,
+) *vectorWrapper {
+	vec := &vectorWrapper{
+		wrapped: vector.NewConstNull(typ, length, nil),
+	}
+	var (
+		alloc *mpool.MPool
+	)
+	if len(opts) > 0 {
+		alloc = opts[0].Allocator
+	}
+	if alloc == nil {
+		alloc = common.DefaultAllocator
+	}
+	vec.mpool = alloc
+	return vec
+}
+
 func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 	vec := &vectorWrapper{
 		wrapped: vector.NewVec(typ),
@@ -66,6 +121,14 @@ func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 		}
 	}
 	return vec
+}
+
+func (vec *vectorWrapper) ApproxSize() int {
+	if vec.wrapped.NeedDup() {
+		return 0
+	} else {
+		return vec.wrapped.Size()
+	}
 }
 
 func (vec *vectorWrapper) PreExtend(length int) (err error) {
@@ -176,7 +239,7 @@ func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 
 	n += 8
 
-	// 1. Whole DN Vector
+	// 1. Whole TN Vector
 	buf = make([]byte, types.DecodeInt64(buf[:]))
 	if _, err = r.Read(buf); err != nil {
 		return
@@ -215,6 +278,14 @@ func (vec *vectorWrapper) NullCount() int {
 		return vec.NullMask().GetCardinality()
 	}
 	return 0
+}
+
+func (vec *vectorWrapper) IsConst() bool {
+	return vec.wrapped.IsConst()
+}
+
+func (vec *vectorWrapper) IsConstNull() bool {
+	return vec.wrapped.IsConstNull()
 }
 
 // conver a const vectorWrapper to a normal one, getting ready to edit
@@ -294,9 +365,6 @@ func (vec *vectorWrapper) tryCOW() {
 }
 
 func (vec *vectorWrapper) Window(offset, length int) Vector {
-	if vec.wrapped.IsConst() {
-		panic(moerr.NewInternalErrorNoCtx("foreach to const vectorWrapper"))
-	}
 	var err error
 	win := new(vectorWrapper)
 	win.mpool = vec.mpool
@@ -437,33 +505,15 @@ func (vec *vectorWrapper) String() string {
 // Deprecated: Only use for test functions
 func (vec *vectorWrapper) PPString(num int) string {
 	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
 	limit := vec.Length()
 	if num > 0 && num < limit {
 		limit = num
 	}
-	size := vec.Length()
-	long := false
-	if size > limit {
-		long = true
-		size = limit
-	}
-	for i := 0; i < size; i++ {
-		if vec.IsNull(i) {
-			_, _ = w.WriteString("null")
-			continue
-		}
-		if vec.GetType().IsVarlen() {
-			_, _ = w.WriteString(fmt.Sprintf("%s, ", vec.Get(i).([]byte)))
-		} else {
-			_, _ = w.WriteString(fmt.Sprintf("%v, ", vec.Get(i)))
-		}
-	}
-	if long {
+	_, _ = w.WriteString(fmt.Sprintf("[T=%s]%s", vec.GetType().String(), common.MoVectorToString(vec.GetDownstreamVector(), limit)))
+	if vec.Length() > num {
 		_, _ = w.WriteString("...")
 	}
-	_, _ = w.WriteString(")]")
-	_, _ = w.WriteString(fmt.Sprintf(")][%v]", vec.element != nil))
+	_, _ = w.WriteString(fmt.Sprintf("[%v]", vec.element != nil))
 	return w.String()
 }
 

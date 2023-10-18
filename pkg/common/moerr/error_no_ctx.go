@@ -74,6 +74,16 @@ func NewInvalidInputNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrInvalidInput, xmsg)
 }
 
+func NewArrayInvalidOpNoCtx(expected, actual int) *Error {
+	xmsg := fmt.Sprintf("vector ops between different dimensions (%v, %v) is not permitted.", expected, actual)
+	return newError(Context(), ErrInvalidInput, xmsg)
+}
+
+func NewArrayDefMismatchNoCtx(expected, actual int) *Error {
+	xmsg := fmt.Sprintf("expected vector dimension %v != actual dimension %v.", expected, actual)
+	return newError(Context(), ErrInvalidInput, xmsg)
+}
+
 func NewSyntaxErrorNoCtx(msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
 	return newError(Context(), ErrSyntaxError, xmsg)
@@ -204,8 +214,8 @@ func NewTAEErrorNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrTAEError, xmsg)
 }
 
-func NewDNShardNotFoundNoCtx(uuid string, id uint64) *Error {
-	return newError(Context(), ErrDNShardNotFound, uuid, id)
+func NewTNShardNotFoundNoCtx(uuid string, id uint64) *Error {
+	return newError(Context(), ErrTNShardNotFound, uuid, id)
 }
 
 func NewShardNotReportedNoCtx(uuid string, id uint64) *Error {
@@ -251,6 +261,10 @@ func NewTAENeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTAENeedRetry)
 }
 
+func NewTxnStaleNoCtx() *Error {
+	return newError(Context(), ErrTxnStale)
+}
+
 func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }
@@ -284,6 +298,10 @@ func NewDeadLockDetectedNoCtx() *Error {
 	return newError(Context(), ErrDeadLockDetected)
 }
 
+func NewDeadlockCheckBusyNoCtx() *Error {
+	return newError(Context(), ErrDeadlockCheckBusy)
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
@@ -306,4 +324,12 @@ func NewProcedureAlreadyExistsNoCtx(f string) *Error {
 
 func NewTxnNeedRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnNeedRetry)
+}
+
+func NewTxnNeedRetryWithDefChangedNoCtx() *Error {
+	return newError(Context(), ErrTxnNeedRetryWithDefChanged)
+}
+
+func NewTxnCannotRetryNoCtx() *Error {
+	return newError(Context(), ErrTxnCannotRetry)
 }

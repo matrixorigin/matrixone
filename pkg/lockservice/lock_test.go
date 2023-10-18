@@ -23,16 +23,20 @@ import (
 
 func TestNewRowLock(t *testing.T) {
 	txnID := []byte("1")
-	l := newRowLock(txnID, pb.LockMode_Exclusive)
+	opts := LockOptions{}
+	opts.Mode = pb.LockMode_Exclusive
+	l := newRowLock(&lockContext{txn: &activeTxn{txnID: txnID}, opts: opts})
 	assert.True(t, l.isLockRow())
-	assert.Equal(t, pb.LockMode_Exclusive, l.getLockMode())
+	assert.Equal(t, pb.LockMode_Exclusive, l.GetLockMode())
 }
 
 func TestNewRangeLock(t *testing.T) {
 	txnID := []byte("1")
-	sl, el := newRangeLock(txnID, pb.LockMode_Shared)
+	opts := LockOptions{}
+	opts.Mode = pb.LockMode_Shared
+	sl, el := newRangeLock(&lockContext{txn: &activeTxn{txnID: txnID}, opts: opts})
 
-	assert.Equal(t, pb.LockMode_Shared, sl.getLockMode())
+	assert.Equal(t, pb.LockMode_Shared, sl.GetLockMode())
 	assert.True(t, el.isLockRangeEnd())
-	assert.Equal(t, pb.LockMode_Shared, el.getLockMode())
+	assert.Equal(t, pb.LockMode_Shared, el.GetLockMode())
 }

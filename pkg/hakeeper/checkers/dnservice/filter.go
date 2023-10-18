@@ -16,7 +16,7 @@ package dnservice
 
 import "github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 
-// filterOutFull filter out full DN store
+// filterOutFull filter out full TN store
 type filterOutFull struct {
 }
 
@@ -24,7 +24,7 @@ func (f *filterOutFull) Filter(store *util.Store) bool {
 	return store.Length >= store.Capacity
 }
 
-// availableStores selects available dn stores.
+// availableStores selects available tn stores.
 func spareStores(working []*util.Store) []*util.Store {
 	return util.FilterStore(working, []util.IFilter{
 		&filterOutFull{},

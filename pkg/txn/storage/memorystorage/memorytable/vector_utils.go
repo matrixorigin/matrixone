@@ -74,6 +74,9 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 	case types.T_datetime:
 		return vectorAtFixed[types.Datetime](vec, i)
 
+	case types.T_enum:
+		return vectorAtFixed[types.Enum](vec, i)
+
 	case types.T_timestamp:
 		return vectorAtFixed[types.Timestamp](vec, i)
 
@@ -93,7 +96,8 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 	case types.T_uuid:
 		return vectorAtFixed[types.Uuid](vec, i)
 
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64:
 		if vec.IsConstNull() {
 			value = Nullable{
 				IsNull: true,

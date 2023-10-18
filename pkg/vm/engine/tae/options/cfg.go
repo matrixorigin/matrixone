@@ -46,6 +46,12 @@ type CheckpointCfg struct {
 	GlobalVersionInterval     time.Duration
 	GCCheckpointInterval      time.Duration
 	DisableGCCheckpoint       bool
+	ReservedWALEntryCount     uint64
+
+	// only for test
+	// it is used to control the block rows of the checkpoint
+	BlockRows int
+	Size      int
 }
 
 type GCCfg struct {

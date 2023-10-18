@@ -80,11 +80,33 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok {
 		if el, ok := e.Expr.(*plan.Expr_List); ok {
-			lenList := len(el.List.List)
-			for i := 0; i < lenList; i++ {
-				el.List.List[i] = r.constantFold(el.List.List[i], proc)
+			exprList := el.List.List
+			for i := range exprList {
+				exprList[i] = r.constantFold(exprList[i], proc)
+			}
+
+			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
+			if err != nil {
+				return e
+			}
+			defer vec.Free(proc.Mp())
+
+			colexec.SortInFilter(vec)
+			data, err := vec.MarshalBinary()
+			if err != nil {
+				return e
+			}
+
+			return &plan.Expr{
+				Typ: e.Typ,
+				Expr: &plan.Expr_Bin{
+					Bin: &plan.BinaryData{
+						Data: data,
+					},
+				},
 			}
 		}
+
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
@@ -290,6 +312,15 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Const
 		return &plan.Const{
 			Value: &plan.Const_Datetimeval{
 				Datetimeval: int64(vector.MustFixedCol[types.Datetime](vec)[row]),
+			},
+		}
+	case types.T_enum:
+		if !transAll {
+			return nil
+		}
+		return &plan.Const{
+			Value: &plan.Const_EnumVal{
+				EnumVal: uint32(vector.MustFixedCol[types.Enum](vec)[row]),
 			},
 		}
 	case types.T_decimal64:

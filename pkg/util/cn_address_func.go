@@ -26,7 +26,7 @@ import (
 
 // HAKeeperClient is an interface which is mainly used to avoid cycle import.
 type HAKeeperClient interface {
-	// GetClusterDetails queries the HAKeeper and return CN and DN nodes that are
+	// GetClusterDetails queries the HAKeeper and return CN and TN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 }

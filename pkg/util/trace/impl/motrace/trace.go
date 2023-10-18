@@ -106,6 +106,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 		return err, true
 	}
 
+	// init all mo_ctl controlled spans
+	trace.InitMOCtledSpan()
+
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: trace.ContextField})
 	logutil.SpanFieldKey.Store(trace.SpanFieldKey)
@@ -147,8 +150,8 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 // InitSchema
 // PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
-	config := &GetTracerProvider().tracerProviderConfig
-	WithSQLExecutor(sqlExecutor).apply(config)
+	c := &GetTracerProvider().tracerProviderConfig
+	WithSQLExecutor(sqlExecutor).apply(c)
 	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
 		return err
 	}

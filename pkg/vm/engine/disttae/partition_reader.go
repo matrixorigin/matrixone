@@ -94,7 +94,7 @@ func (p *PartitionReader) prepare() error {
 		}
 		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
-		p.table.LoadDeletesForVolatileBlocksIn(p.table._partState, deletes)
+		p.table.LoadDeletesForMemBlocksIn(p.table._partState, deletes)
 		p.inserts = inserts
 		p.deletes = deletes
 		p.prepared = true
@@ -218,6 +218,11 @@ func (p *PartitionReader) Read(
 			}
 		}
 		if rows == 0 {
+			if vp == nil {
+				b.Clean(mp)
+			} else {
+				vp.PutBatch(b)
+			}
 			return nil, nil
 		}
 		b.SetRowCount(rows)

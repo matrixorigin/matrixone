@@ -16,10 +16,12 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
@@ -88,9 +90,6 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 	}
 	tenant := ses.GetTenantInfo()
 	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
-		if tenant != nil {
-			tenant.SetUser("")
-		}
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
@@ -111,6 +110,8 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
 		} else if source == cloudNoUserTag {
 			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudNoUserSql)
+		} else if source == saveResultTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
 		} else {
 			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
 		}
@@ -208,7 +209,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of compile is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfo(ses, "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
 	}
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
@@ -225,7 +226,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 
 	// only log if time of run is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		logInfo(ses, "time of Exec.Run : %s", time.Since(runBegin).String())
+		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 	}
 
 	_ = stmtExec.RecordExecPlan(ctx)
@@ -254,7 +255,12 @@ type baseStmtExecutor struct {
 	ComputationWrapper
 	tenantName string
 	status     stmtExecStatus
+	runResult  *util.RunResult
 	err        error
+}
+
+func (bse *baseStmtExecutor) GetAffectedRows() uint64 {
+	return bse.runResult.AffectRows
 }
 
 func (bse *baseStmtExecutor) GetStatus() stmtExecStatus {
@@ -311,7 +317,9 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 }
 
 func (bse *baseStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return bse.Run(0)
+	runResult, err := bse.Run(0)
+	bse.runResult = runResult
+	return err
 }
 
 func (bse *baseStmtExecutor) Setup(ctx context.Context, ses *Session) error {

@@ -40,6 +40,10 @@ type FileService interface {
 	// returns ErrEmptyVector if no IOEntry is passed
 	Read(ctx context.Context, vector *IOVector) error
 
+	// ReadCache reads cached data if any
+	// if cache hit, IOEntry.CachedData will be set
+	ReadCache(ctx context.Context, vector *IOVector) error
+
 	// List lists sub-entries in a dir
 	List(ctx context.Context, dirPath string) ([]DirEntry, error)
 
@@ -50,9 +54,6 @@ type FileService interface {
 	// Stat returns infomations about a file
 	// returns ErrFileNotFound if requested file not found
 	StatFile(ctx context.Context, filePath string) (*DirEntry, error)
-
-	// Preload indicates the service to preload a file
-	Preload(ctx context.Context, filePath string) error
 }
 
 type IOVector struct {
@@ -73,10 +74,8 @@ type IOVector struct {
 	// implementations may or may not delete the file after this time
 	// zero value means no expire
 	ExpireAt time.Time
-	// NoCache true, means the data NOT read/update FileService cache.
-	NoCache bool
-	// Preloading indicates whether the I/O is for preloading
-	Preloading bool
+	// CachePolicy controls cache policy for the vector
+	CachePolicy CachePolicy
 
 	// Hash stores hash sum of written file if both Sum and New is not null
 	// Hash.Sum may be incorrect if Write fails
@@ -113,22 +112,17 @@ type IOEntry struct {
 	// if number of bytes is unknown, set Size field to -1
 	ReaderForWrite io.Reader
 
-	// When reading, if the ToObjectBytes field is not nil, the returning object's byte slice will be set to this field
-	// Data, WriterForRead, ReadCloserForRead may be empty if ObjectBytes is not null
-	// if ToObjectBytes is provided, caller should always read ObjectBytes instead of Data, WriterForRead or ReadCloserForRead
-	ObjectBytes []byte
+	// When reading, if the ToCacheData field is not nil, the returning object's byte slice will be set to this field
+	// Data, WriterForRead, ReadCloserForRead may be empty if CachedData is not null
+	// if ToCacheData is provided, caller should always read CachedData instead of Data, WriterForRead or ReadCloserForRead
+	CachedData CacheData
 
-	// ToObjectBytes constructs an object byte slice from entry contents
+	// ToCacheData constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns
 	// reader always contains entry contents
 	// data may contains entry contents if available
 	// if data is empty, the io.Reader must be fully read before returning nil error
-	ToObjectBytes func(reader io.Reader, data []byte) (object []byte, objectSize int64, err error)
-
-	// ObjectSize indicates the memory bytes to hold the object
-	// set from ToObjectBytes returning value
-	// used in capacity limited caches
-	ObjectSize int64
+	ToCacheData func(reader io.Reader, data []byte, allocator CacheDataAllocator) (cacheData CacheData, err error)
 
 	// done indicates whether the entry is filled with data
 	// for implementing cascade cache
@@ -136,6 +130,17 @@ type IOEntry struct {
 
 	// fromCache indicates which cache filled the entry
 	fromCache IOVectorCache
+}
+
+type CacheData interface {
+	Bytes() []byte
+	Slice(length int) CacheData
+	Release()
+	Retain()
+}
+
+type CacheDataAllocator interface {
+	Alloc(size int) CacheData
 }
 
 // DirEntry is a file or dir

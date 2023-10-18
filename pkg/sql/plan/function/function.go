@@ -17,6 +17,9 @@ package function
 import (
 	"context"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -40,6 +43,9 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedMathBuiltIns {
 		allSupportedFunctions[fn.functionId] = fn
 	}
+	for _, fn := range supportedArrayOperations {
+		allSupportedFunctions[fn.functionId] = fn
+	}
 	for _, fn := range supportedControlBuiltIns {
 		allSupportedFunctions[fn.functionId] = fn
 	}
@@ -52,6 +58,8 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedWindowFunctions {
 		allSupportedFunctions[fn.functionId] = fn
 	}
+
+	agg.InitAggFramework(generateAggExecutorWithoutConfig, generateAggExecutor, GetFunctionIsWinOrderFunById)
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
@@ -79,6 +87,11 @@ func GetFunctionIsWinOrderFunByName(name string) bool {
 	}
 	f := allSupportedFunctions[fid]
 	return f.isWindowOrder()
+}
+
+func GetFunctionIsWinOrderFunById(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return allSupportedFunctions[fid].isWindowOrder()
 }
 
 func GetFunctionIsMonotonicById(ctx context.Context, overloadID int64) (bool, error) {
@@ -211,6 +224,30 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	return vec, nil
 }
 
+func generateAggExecutor(
+	overloadID int64, isDistinct bool, inputTypes []types.Type, config any, partialresult any) (agg.Agg[any], error) {
+	f, exist := GetFunctionByIdWithoutError(overloadID)
+	if !exist {
+		return nil, moerr.NewInvalidInputNoCtx("function id '%d' not found", overloadID)
+	}
+
+	outputTyp := f.retType(inputTypes)
+	return f.aggFramework.aggNew(overloadID, isDistinct, inputTypes, outputTyp, config, partialresult)
+}
+
+func generateAggExecutorWithoutConfig(
+	overloadID int64, isDistinct bool, inputTypes []types.Type) (agg.Agg[any], error) {
+	return generateAggExecutor(overloadID, isDistinct, inputTypes, nil, nil)
+}
+
+func GetAggFunctionNameByID(overloadID int64) string {
+	f, exist := GetFunctionByIdWithoutError(overloadID)
+	if !exist {
+		return "unknown function"
+	}
+	return f.aggFramework.str
+}
+
 // DeduceNotNullable helps optimization sometimes.
 // deduce notNullable for function
 // for example, create table t1(c1 int not null, c2 int, c3 int not null ,c4 int);
@@ -309,6 +346,14 @@ type executeLogicOfOverload func(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process, length int) error
 
+type aggregationLogicOfOverload struct {
+	// agg related string for error message.
+	str string
+
+	// newAgg is used to create a new aggregation structure for agg framework.
+	aggNew func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any, partialresult any) (agg.Agg[any], error)
+}
+
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
@@ -331,13 +376,10 @@ type overload struct {
 	newOp func() executeLogicOfOverload
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
-	// we use two flags to mark whether function is one of them, and if so, we will record the special id of it.
-	// This id will be passed to the real execution framework of Agg function and window function.
-	//
-	// XXX define a special structure to records this information may suitable ?
-	isAgg     bool
-	isWin     bool
-	specialId int
+	// we use two flags to mark whether function is one of them.
+	isAgg        bool
+	isWin        bool
+	aggFramework aggregationLogicOfOverload
 
 	// if true, overload was unable to run in parallel.
 	// For example,
@@ -368,13 +410,13 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetSpecialId() int {
-	return ov.specialId
-}
-
 func (ov *overload) GetExecuteMethod() executeLogicOfOverload {
 	f := ov.newOp
 	return f()
+}
+
+func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
+	return ov.retType
 }
 
 func (ov *overload) IsWin() bool {

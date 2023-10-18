@@ -57,6 +57,8 @@ import (
     attributeReference *tree.AttributeReference
     loadParam *tree.ExternParam
     tailParam *tree.TailParameter
+    connectorOption *tree.ConnectorOption
+    connectorOptions []*tree.ConnectorOption
 
     functionName *tree.FunctionName
     funcArg tree.FunctionArg
@@ -166,6 +168,8 @@ import (
     zeroFillOpt bool
     ifNotExists bool
     defaultOptional bool
+    streamOptional bool
+    connectorOptional bool
     fullOpt bool
     boolVal bool
     int64Val int64
@@ -225,6 +229,8 @@ import (
     minValueOption  *tree.MinValueOption
     maxValueOption  *tree.MaxValueOption
     startWithOption *tree.StartWithOption
+    cycleOption     *tree.CycleOption
+    alterTypeOption *tree.TypeOption
 
     whenClause2 *tree.WhenStmt
     whenClauseList2 []*tree.WhenStmt
@@ -245,7 +251,7 @@ import (
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
-%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
@@ -298,9 +304,9 @@ import (
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
-%token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION
+%token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
@@ -360,7 +366,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
 
 // MODump
 %token <str> MODUMP
@@ -393,16 +399,19 @@ import (
 // With
 %token <str> RECURSIVE CONFIG DRAINER
 
+// Stream
+%token <str> SOURCE STREAM HEADERS CONNECTOR CONNECTORS DAEMON PAUSE CANCEL TASK RESUME
+
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
 // Built-in function
-%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
+%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK
+%token <str> DENSE_RANK BIT_CAST
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -434,18 +443,19 @@ import (
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt
+%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
+%type <statement> create_stream_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
-%type <statement> show_servers_stmt
+%type <statement> show_servers_stmt show_connectors_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
 %type <statement> explain_stmt explainable_stmt
@@ -463,6 +473,7 @@ import (
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
+%type <statement> backup_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -529,7 +540,7 @@ import (
 %type <str> integer_opt
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
-%type <tableOptions> table_option_list_opt table_option_list
+%type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
@@ -544,7 +555,9 @@ import (
 %type <alterColumnOrderBy> alter_column_order_list
 %type <indexVisibility> visibility
 
-%type <tableOption> table_option
+%type <tableOption> table_option stream_option
+%type <connectorOption> connector_option
+%type <connectorOptions> connector_option_list
 %type <from> from_clause from_opt
 %type <where> where_expression_opt having_opt
 %type <groupBy> group_by_opt
@@ -590,6 +603,7 @@ import (
 %type <createOptions> create_option_list_opt create_option_list
 %type <ifNotExists> not_exists_opt
 %type <defaultOptional> default_opt
+%type <streamOptional> replace_opt
 %type <str> database_or_schema
 %type <indexType> using_opt
 %type <indexCategory> index_prefix
@@ -646,6 +660,8 @@ import (
 %type <minValueOption> min_value_opt
 %type <maxValueOption> max_value_opt
 %type <startWithOption> start_with_opt
+%type <cycleOption> alter_cycle_opt
+%type <alterTypeOption> alter_as_datatype_opt
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
@@ -719,6 +735,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
+%token <str> BACKUP FILESYSTEM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %start start_command
@@ -840,6 +857,25 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
+|   backup_stmt
+
+backup_stmt:
+    BACKUP STRING FILESYSTEM STRING
+	{
+		$$ = &tree.BackupStart{
+		    Timestamp: $2,
+		    IsS3 : false,
+		    Dir: $4,
+		}
+	}
+    | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
+    {
+    	$$ = &tree.BackupStart{
+        	    Timestamp: $2,
+        	    IsS3 : true,
+        	    Option : $5,
+        	}
+    }
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -2585,7 +2621,24 @@ alter_stmt:
 |   alter_table_stmt
 |   alter_publication_stmt
 |   alter_stage_stmt
+|   alter_sequence_stmt
 // |    alter_ddl_stmt
+
+alter_sequence_stmt:
+    ALTER SEQUENCE exists_opt table_name alter_as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt alter_cycle_opt
+    {
+        $$ = &tree.AlterSequence{
+            IfExists: $3,
+            Name: $4,
+            Type: $5,
+            IncrementBy: $6,
+            MinValue: $7,
+            MaxValue: $8,
+            StartWith: $9,
+            Cycle: $10,
+        }
+    }
+
 
 alter_view_stmt:
     ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
@@ -3133,6 +3186,7 @@ show_stmt:
 |   show_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
+|   show_connectors_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -3588,6 +3642,7 @@ drop_ddl_stmt:
 |   drop_publication_stmt
 |   drop_procedure_stmt
 |   drop_stage_stmt
+|   drop_connector_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -3658,6 +3713,16 @@ drop_table_stmt:
     DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
     {
         $$ = &tree.DropTable{IfExists: $4, Names: $5}
+    }
+|   DROP STREAM exists_opt table_name_list
+    {
+        $$ = &tree.DropTable{IfExists: $3, Names: $4}
+    }
+
+drop_connector_stmt:
+    DROP CONNECTOR exists_opt table_name_list
+    {
+	$$ = &tree.DropConnector{IfExists: $3, Names: $4}
     }
 
 drop_view_stmt:
@@ -3952,6 +4017,10 @@ on_duplicate_key_update_opt:
 |   ON DUPLICATE KEY UPDATE update_list
     {
       	$$ = $5
+    }
+|   ON DUPLICATE KEY IGNORE
+    {
+      	$$ = []*tree.UpdateExpr{nil}
     }
 
 set_value_list:
@@ -5059,6 +5128,11 @@ create_ddl_stmt:
 |   create_extension_stmt
 |   create_sequence_stmt
 |   create_procedure_stmt
+|   create_stream_stmt
+|   create_connector_stmt
+|   pause_daemon_task_stmt
+|   cancel_daemon_task_stmt
+|   resume_daemon_task_stmt
 
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
@@ -5232,13 +5306,14 @@ create_view_stmt:
             IfNotExists: $4,
         }
     }
-|   CREATE VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+|   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
         $$ = &tree.CreateView{
-            Name: $4,
-            ColNames: $5,
-            AsSource: $7,
-            IfNotExists: $3,
+            Replace: $2,
+            Name: $5,
+            ColNames: $6,
+            AsSource: $8,
+            IfNotExists: $4,
         }
     }
 
@@ -5265,11 +5340,7 @@ view_list_opt:
     }
 
 view_opt:
-    OR REPLACE
-    {
-        $$ = "OR REPLACE"
-    }
-|   ALGORITHM '=' algorithm_type_2
+    ALGORITHM '=' algorithm_type_2
     {
         $$ = "ALGORITHM = " + $3
     }
@@ -6072,6 +6143,118 @@ default_opt:
         $$ = true
     }
 
+create_connector_stmt:
+    CREATE CONNECTOR FOR table_name WITH '(' connector_option_list ')'
+    {
+        $$ = &tree.CreateConnector{
+            TableName: $4,
+            Options: $7,
+        }
+    }
+
+show_connectors_stmt:
+    SHOW CONNECTORS
+    {
+	$$ = &tree.ShowConnectors{}
+    }
+
+pause_daemon_task_stmt:
+    PAUSE DAEMON TASK INTEGRAL
+    {
+        var taskID uint64
+        switch v := $4.(type) {
+        case uint64:
+    	    taskID = v
+        case int64:
+    	    taskID = uint64(v)
+        default:
+    	    yylex.Error("parse integral fail")
+    	    return 1
+        }
+        $$ = &tree.PauseDaemonTask{
+            TaskID: taskID,
+        }
+    }
+
+cancel_daemon_task_stmt:
+    CANCEL DAEMON TASK INTEGRAL
+    {
+        var taskID uint64
+        switch v := $4.(type) {
+        case uint64:
+    	    taskID = v
+        case int64:
+    	    taskID = uint64(v)
+        default:
+    	    yylex.Error("parse integral fail")
+    	    return 1
+        }
+        $$ = &tree.CancelDaemonTask{
+            TaskID: taskID,
+        }
+    }
+
+resume_daemon_task_stmt:
+    RESUME DAEMON TASK INTEGRAL
+    {
+        var taskID uint64
+        switch v := $4.(type) {
+        case uint64:
+    	    taskID = v
+        case int64:
+    	    taskID = uint64(v)
+        default:
+    	    yylex.Error("parse integral fail")
+    	    return 1
+        }
+        $$ = &tree.ResumeDaemonTask{
+            TaskID: taskID,
+        }
+    }
+
+create_stream_stmt:
+    CREATE replace_opt STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            Source: false,
+            IfNotExists: $4,
+            StreamName: $5,
+            Defs: $7,
+            Options: $9,
+        }
+    }
+|   CREATE replace_opt SOURCE STREAM not_exists_opt table_name '(' table_elem_list_opt ')' stream_option_list_opt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            Source: true,
+            IfNotExists: $5,
+            StreamName: $6,
+            Defs: $8,
+            Options: $10,
+        }
+    }
+|	CREATE replace_opt STREAM not_exists_opt table_name stream_option_list_opt AS select_stmt
+    {
+        $$ = &tree.CreateStream {
+            Replace: $2,
+            IfNotExists: $4,
+            StreamName: $5,
+            AsSource: $8,
+            Options: $6,
+        }
+    }
+
+replace_opt:
+    {
+        $$ = false
+    }
+|   OR REPLACE
+    {
+        $$ = true
+    }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -6124,6 +6307,16 @@ load_param_opt:
             },
         }
     }
+|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING
+    {
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                ScanType: tree.INLINE,
+                Format: $4,
+                Data: $8,
+            },
+        }
+    }
 |   INFILE '{' infile_or_s3_params '}'
     {
         $$ = &tree.ExternParam{
@@ -6138,6 +6331,14 @@ load_param_opt:
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.S3,
                 Option: $4,
+            },
+        }
+    }
+|   URL STAGEOPTION ident
+    {
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                StageName: tree.Identifier($3.Compare()),
             },
         }
     }
@@ -6204,6 +6405,16 @@ as_datatype_opt:
 |   AS column_type
     {
         $$ = $2
+    }
+alter_as_datatype_opt:
+    {
+        $$ = nil
+    }
+|   AS column_type
+    {
+        $$ = &tree.TypeOption{
+            Type: $2,
+        }
     }
 increment_by_opt:
     {
@@ -6283,6 +6494,22 @@ max_value_opt:
         $$ = &tree.MaxValueOption{
             Minus: true,
             Num: $3,
+        }
+    }
+alter_cycle_opt:
+    {
+        $$ = nil
+    }
+|   NO CYCLE
+    {
+        $$ = &tree.CycleOption{
+            Cycle: false,
+        }
+    }
+|   CYCLE
+    {
+        $$ = &tree.CycleOption{
+            Cycle: true,
         }
     }
 start_with_opt:
@@ -6595,6 +6822,55 @@ linear_opt:
 |   LINEAR
     {
         $$ = true
+    }
+
+connector_option_list:
+	connector_option
+	{
+		$$ = []*tree.ConnectorOption{$1}
+	}
+|	connector_option_list ',' connector_option
+	{
+		$$ = append($1, $3)
+	}
+
+connector_option:
+	ident equal_opt literal
+    {
+        $$ = &tree.ConnectorOption{Key: tree.Identifier($1.Compare()), Val: $3}
+    }
+    |   STRING equal_opt literal
+        {
+             $$ = &tree.ConnectorOption{Key: tree.Identifier($1), Val: $3}
+        }
+
+stream_option_list_opt:
+    {
+        $$ = nil
+    }
+|	WITH '(' stream_option_list ')'
+	{
+		$$ = $3
+	}
+
+stream_option_list:
+	stream_option
+	{
+		$$ = []tree.TableOption{$1}
+	}
+|	stream_option_list ',' stream_option
+	{
+		$$ = append($1, $3)
+	}
+
+stream_option:
+	ident equal_opt literal
+    {
+        $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
+    }
+|   STRING equal_opt literal
+    {
+         $$ = &tree.CreateStreamWithOption{Key: tree.Identifier($1), Val: $3}
     }
 
 table_option_list_opt:
@@ -7251,6 +7527,14 @@ column_attribute_elem:
     {
         $$ = nil
     }
+|	HEADER '(' STRING ')'
+	{
+		$$ = tree.NewAttributeHeader($3)
+	}
+|	HEADERS
+	{
+		$$ = tree.NewAttributeHeaders()
+	}
 
 enforce:
     ENFORCED
@@ -7534,7 +7818,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-
+|   BIT_CAST '(' expression AS mo_cast_type ')'
+    {
+        $$ = tree.NewBitCastExpr($3, $5)
+    }
 |   CONVERT '(' expression ',' mysql_cast_type ')'
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -7934,14 +8221,14 @@ window_spec:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
     {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
-            Type: $3,
-            WindowSpec: $8,
-            AggType: 2,
-        }
+	    name := tree.SetUnresolvedName(strings.ToLower($1))
+	        $$ = &tree.FuncExpr{
+	        Func: tree.FuncName2ResolvableFunctionReference(name),
+	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
+	        Type: $3,
+	        WindowSpec: $8,
+            OrderBy:$5,
+	    }
     }
 |   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
@@ -7951,6 +8238,26 @@ function_call_aggregate:
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
+        }
+    }
+|   APPROX_COUNT '(' func_type_opt expression_list ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $4,
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
+|   APPROX_COUNT '(' '*' ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{es},
+            WindowSpec: $5,
         }
     }
 |   APPROX_COUNT_DISTINCT '(' expression_list ')' window_spec_opt
@@ -8099,8 +8406,10 @@ function_call_aggregate:
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
-	}
+	    }
     }
+
+
 
 std_dev_pop:
     STD
@@ -9276,60 +9585,60 @@ time_type:
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Time(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimeFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Time(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimeFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_TIME),
-            },
-        }
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TIME),
+                },
+            }
         }
     }
 |   TIMESTAMP timestamp_option_opt
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimestampFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimestampFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
-            },
-        }
+                Locale:  &locale,
+                Oid: uint32(defines.MYSQL_TYPE_TIMESTAMP),
+                },
+            }
         }
     }
 |   DATETIME timestamp_option_opt
     {
         locale := ""
         if $2 < 0 || $2 > 6 {
-                yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
-                return 1
-                } else {
-                $$ = &tree.T{
-                    InternalType: tree.InternalType{
-                Family:             tree.TimestampFamily,
-                Scale:          $2,
-                    FamilyString: $1,
-                    DisplayWith: 26,
+            yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
+            return 1
+        } else {
+            $$ = &tree.T{
+                InternalType: tree.InternalType{
+                Family: tree.TimestampFamily,
+                Scale: $2,
+                FamilyString: $1,
+                DisplayWith: $2,
                 TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
-            },
-        }
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                },
+            }
         }
     }
 |   YEAR length_opt
@@ -9505,6 +9814,32 @@ char_type:
                 FamilyString: $1,
                 Locale: &locale,
                 Oid:uint32(defines.MYSQL_TYPE_JSON),
+            },
+        }
+    }
+|   VECF32 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECF64 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
             },
         }
     }
@@ -9928,6 +10263,7 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
+|   CANCEL
 |   CHAIN
 |   CHECKSUM
 |   CLUSTER
@@ -9942,10 +10278,13 @@ non_reserved_keyword:
 |   COMPRESSED
 |   COMPACT
 |   COLUMN_FORMAT
+|   CONNECTOR
+|   CONNECTORS
 |   SECONDARY_ENGINE_ATTRIBUTE
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
 |   CASCADE
+|   DAEMON
 |   DATA
 |	DAY
 |   DATETIME
@@ -9980,6 +10319,8 @@ non_reserved_keyword:
 |   INDEXES
 |   ISOLATION
 |   JSON
+|   VECF32
+|   VECF64
 |   KEY_BLOCK_SIZE
 |   KEYS
 |   LANGUAGE
@@ -10024,6 +10365,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |   QUERY
+|   PAUSE
 |   PROFILES
 |   ROLE
 |   RANGE
@@ -10034,6 +10376,7 @@ non_reserved_keyword:
 |   REPAIR
 |   REPEATABLE
 |   RELEASE
+|   RESUME
 |   REVOKE
 |   REPLICATION
 |   ROW_FORMAT
@@ -10049,13 +10392,14 @@ non_reserved_keyword:
 |   START
 |   STATUS
 |   STORAGE
-|	STREAM
 |   STATS_AUTO_RECALC
 |   STATS_PERSISTENT
 |   STATS_SAMPLE_PAGES
+|	SOURCE
 |   SUBPARTITIONS
 |   SUBPARTITION
 |   SIMPLE
+|   TASK
 |   TEXT
 |   THAN
 |   TINYBLOB
@@ -10091,7 +10435,6 @@ non_reserved_keyword:
 |   DATE %prec LOWER_THAN_STRING
 |   TABLES
 |   SEQUENCES
-|   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
 |   HASH
@@ -10100,6 +10443,7 @@ non_reserved_keyword:
 |   HISTORY
 |   LOW_CARDINALITY
 |   S3OPTION
+|   STAGEOPTION
 |   EXTENSION
 |   NODE
 |   ROLES
@@ -10118,6 +10462,8 @@ non_reserved_keyword:
 |   SQL
 |   STAGE
 |   STAGES
+|   BACKUP
+| FILESYSTEM
 
 func_not_keyword:
     DATE_ADD
@@ -10138,6 +10484,7 @@ not_keyword:
 |   BIT_XOR
 |   CAST
 |   COUNT
+|   APPROX_COUNT
 |   APPROX_COUNT_DISTINCT
 |   APPROX_PERCENTILE
 |   CURDATE
@@ -10173,6 +10520,8 @@ not_keyword:
 |   SETVAL
 |   CURRVAL
 |   LASTVAL
+|   HEADERS
+|   BIT_CAST
 
 //mo_keywords:
 //    PROPERTIES

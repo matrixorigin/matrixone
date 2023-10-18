@@ -17,7 +17,14 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,12 +34,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"math"
-	"strconv"
-	"strings"
-	"time"
+
+	"crypto/sha256"
+	"crypto/sha512"
 )
 
 func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -1788,6 +1795,104 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return opBinaryBytesBytesToFixed[uint8](ivecs, result, proc, length, isEqualSuffix)
 }
 
+// https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+	res := vector.MustFunctionResult[types.Varlena](result)
+	strs := vector.GenerateFunctionStrParameter(args[0])
+	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		str, isnull1 := strs.GetStrValue(i)
+		shaType, isnull2 := shaTypes.GetValue(i)
+
+		if isnull1 || isnull2 || !isSha2Family(shaType) {
+			if err = res.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			var checksum []byte
+
+			switch shaType {
+			case 0, 256:
+				sum256 := sha256.Sum256(str)
+				checksum = sum256[:]
+			case 224:
+				sum224 := sha256.Sum224(str)
+				checksum = sum224[:]
+			case 384:
+				sum384 := sha512.Sum384(str)
+				checksum = sum384[:]
+			case 512:
+				sum512 := sha512.Sum512(str)
+				checksum = sum512[:]
+			default:
+				panic("unexpected err happened in sha2 function")
+			}
+			checksum = []byte(hex.EncodeToString(checksum))
+			if err = res.AppendBytes(checksum, false); err != nil {
+				return err
+			}
+		}
+
+	}
+
+	return nil
+}
+
+// any one of 224 256 384 512 0 is valid
+func isSha2Family(len int64) bool {
+	return len == 0 || len == 224 || len == 256 || len == 384 || len == 512
+}
+
+// Encode convert binary data into a textual representation. Supported formats are: base64 and hex. return type types.T_text
+// eg:- encode("abc", "hex") -> 616263
+// https://www.postgresql.org/docs/9.0/functions-binarystring.html#FUNCTIONS-BINARYSTRING-OTHER
+func Encode(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data, format []byte) ([]byte, error) {
+		switch strings.ToUpper(functionUtil.QuickBytesToStr(format)) {
+		case "HEX":
+			buf := make([]byte, hex.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
+			hex.Encode(buf, data)
+			return buf, nil
+		case "BASE64":
+			buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
+			base64.StdEncoding.Encode(buf, data)
+			return buf, nil
+			//TODO: Implement ESCAPE later.
+		default:
+			return nil, moerr.NewInternalErrorNoCtx("unhandled format: %s", format)
+		}
+	})
+}
+
+// Decode convert binary data from textual representation in string. Options for format are same as in encode. return type types.T_blob.
+// eg:- decode("616263", "hex") -> abc
+// https://www.postgresql.org/docs/9.0/functions-binarystring.html#FUNCTIONS-BINARYSTRING-OTHER
+// NOTE: bytea in postgres is BLOB in mysql.https://stackoverflow.com/q/1942586/1609570
+func Decode(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data, format []byte) ([]byte, error) {
+		switch strings.ToUpper(functionUtil.QuickBytesToStr(format)) {
+		case "HEX":
+			buf := make([]byte, hex.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
+			_, err = hex.Decode(buf, data)
+			if err != nil {
+				return nil, err
+			}
+			return buf, nil
+		case "BASE64":
+			buf := make([]byte, base64.StdEncoding.DecodedLen(len(functionUtil.QuickBytesToStr(data))))
+			_, err = base64.StdEncoding.Decode(buf, data)
+			if err != nil {
+				return nil, err
+			}
+			return buf, nil
+			//TODO: Implement ESCAPE later.
+		default:
+			return nil, moerr.NewInternalErrorNoCtx("unhandled format: %s", format)
+		}
+	})
+}
+
 func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	extractFromDate := func(unit string, d types.Date) (uint32, error) {
 		var r uint32
@@ -2445,4 +2550,21 @@ func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 		return "", true
 	}
 	return strSlice[cnt-1], false
+}
+
+func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+
+		return moarray.InnerProduct[T](_v1, _v2)
+	})
+}
+
+func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float32](ivecs, result, proc, length, func(v1, v2 []byte) (out float32, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.CosineSimilarity[T](_v1, _v2)
+	})
 }

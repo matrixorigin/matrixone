@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cacheservice"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -31,9 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -41,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -53,7 +57,7 @@ var (
 	defaultCtlListenAddress          = "127.0.0.1:19958"
 	defaultQueryServiceListenAddress = "0.0.0.0:19998"
 	// defaultTxnIsolation     = txn.TxnIsolation_SI
-	defaultTxnMode             = txn.TxnMode_Optimistic
+	defaultTxnMode             = txn.TxnMode_Pessimistic
 	maxForMaxPreparedStmtCount = 1000000
 
 	// Service ports related.
@@ -103,21 +107,16 @@ type Config struct {
 	// TODO(volgariver6): The value of this field is also used to determine the version
 	// of MO. If it is not set, we use the old listen-address/service-address fields, and
 	// if it is set, we use the new policy to distribute the ports to all services.
-	PortBase int `toml:"port-base"`
+	PortBase int `toml:"port-base" user_setting:"basic"`
 	// ServiceHost is the host name/IP for the service address of RPC request. There is
 	// no port value in it.
-	ServiceHost string `toml:"service-host"`
+	ServiceHost string `toml:"service-host" user_setting:"basic"`
 
 	// FileService file service configuration
 
 	Engine struct {
-		Type                EngineType           `toml:"type"`
-		Logstore            options.LogstoreType `toml:"logstore"`
-		FlushInterval       toml.Duration        `toml:"flush-interval"`
-		MinCount            int64                `toml:"min-count"`
-		ScanInterval        toml.Duration        `toml:"scan-interval"`
-		IncrementalInterval toml.Duration        `toml:"incremental-interval"`
-		GlobalMinCount      int64                `toml:"global-min-count"`
+		Type     EngineType           `toml:"type"`
+		Logstore options.LogstoreType `toml:"logstore"`
 	}
 
 	// parameters for cn-server related buffer.
@@ -130,8 +129,6 @@ type Config struct {
 		HostSize int64 `toml:"host-size"`
 		// GuestSize is the memory limit for one query
 		GuestSize int64 `toml:"guest-size"`
-		// OperatorSize is the memory limit for one operator
-		OperatorSize int64 `toml:"operator-size"`
 		// BatchRows is the batch rows limit for one batch
 		BatchRows int64 `toml:"batch-rows"`
 		// BatchSize is the memory limit for one batch
@@ -162,6 +159,7 @@ type Config struct {
 		FetchTimeout      toml.Duration `toml:"task-fetch-timeout"`
 		RetryInterval     toml.Duration `toml:"task-retry-interval"`
 		HeartbeatInterval toml.Duration `toml:"task-heartbeat-interval"`
+		HeartbeatTimeout  toml.Duration `toml:"task-heartbeat-timeout"`
 	}
 
 	// RPC rpc config used to build txn sender
@@ -180,9 +178,9 @@ type Config struct {
 	Txn struct {
 		// Isolation txn isolation. SI or RC
 		// when Isolation is not set. we will set SI when Mode is optimistic, RC when Mode is pessimistic
-		Isolation string `toml:"isolation"`
-		// Mode txn mode. optimistic or pessimistic, default is optimistic
-		Mode string `toml:"mode"`
+		Isolation string `toml:"isolation" user_setting:"advanced"`
+		// Mode txn mode. optimistic or pessimistic, default is pessimistic
+		Mode string `toml:"mode" user_setting:"advanced"`
 		// EnableSacrificingFreshness In Push Mode, the transaction is not guaranteed
 		// to see the latest commit data, and the latest Logtail commit timestamp received
 		// by the current CN + 1 is used as the start time of the transaction. But it will
@@ -217,6 +215,12 @@ type Config struct {
 		// EnableCheckRCInvalidError this config is used to check and find RC bugs in pessimistic mode.
 		// Will remove it later version.
 		EnableCheckRCInvalidError bool `toml:"enable-check-rc-invalid-error"`
+		// Limit flow control of transaction creation, maximum number of transactions per second. Default
+		// is unlimited.
+		Limit int `toml:"limit-per-second"`
+		// MaxActive is the count of max active txn in current cn.  If reached max value, the txn
+		// is added to a FIFO queue. Default is unlimited.
+		MaxActive int `toml:"max-active"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
@@ -233,6 +237,10 @@ type Config struct {
 
 	// MaxPreparedStmtCount
 	MaxPreparedStmtCount int `toml:"max_prepared_stmt_count"`
+
+	// InitWorkState is the initial work state for CN. Valid values are:
+	// "working", "draining" and "drained".
+	InitWorkState string `toml:"init-work-state"`
 }
 
 func (c *Config) Validate() error {
@@ -327,10 +335,10 @@ func (c *Config) Validate() error {
 		}
 	} else {
 		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = -1
+			c.Txn.EnableSacrificingFreshness = 1
 		}
 		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
+			c.Txn.EnableCNBasedConsistency = 1
 		}
 		// We don't support the following now, so always disable
 		c.Txn.EnableRefreshExpression = -1
@@ -341,6 +349,9 @@ func (c *Config) Validate() error {
 
 	if c.Txn.MaxActiveAges.Duration == 0 {
 		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
+	if c.Txn.MaxActive == 0 {
+		c.Txn.MaxActive = runtime.NumCPU() * 4
 	}
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
@@ -370,10 +381,136 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if !metadata.ValidStateString(c.InitWorkState) {
+		c.InitWorkState = metadata.WorkState_Working.String()
+	}
+
 	// TODO: remove this if rc is stable
 	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.EnableCheckInvalidRCErrors,
 		c.Txn.EnableCheckRCInvalidError)
 	return nil
+}
+
+// SetDefaultValue setups the default of the config.
+// most of the code are copied from the Validate.
+// But, the Validate may change some global variables that the SetDefaultValue does not need.
+// So, need a different function.
+func (c *Config) SetDefaultValue() {
+	foundMachineHost := ""
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultListenAddress
+	}
+	if c.ServiceAddress == "" {
+		c.ServiceAddress = c.ListenAddress
+	} else {
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
+	}
+	if c.Role == "" {
+		c.Role = metadata.CNRole_TP.String()
+	}
+	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
+		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = time.Second
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
+	}
+	if c.TaskRunner.Parallelism == 0 {
+		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
+		if c.TaskRunner.Parallelism <= ReservedTasks {
+			c.TaskRunner.Parallelism = 1 + ReservedTasks
+		}
+	}
+	if c.TaskRunner.FetchInterval.Duration == 0 {
+		c.TaskRunner.FetchInterval.Duration = time.Second * 10
+	}
+	if c.TaskRunner.FetchTimeout.Duration == 0 {
+		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
+	}
+	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
+		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
+	}
+	if c.TaskRunner.MaxWaitTasks == 0 {
+		c.TaskRunner.MaxWaitTasks = 256
+	}
+	if c.TaskRunner.QueryLimit == 0 {
+		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
+	}
+	if c.TaskRunner.RetryInterval.Duration == 0 {
+		c.TaskRunner.RetryInterval.Duration = time.Second
+	}
+	if c.Engine.Type == "" {
+		c.Engine.Type = EngineDistributedTAE
+	}
+	if c.Engine.Logstore == "" {
+		c.Engine.Logstore = options.LogstoreLogservice
+	}
+	if c.Cluster.RefreshInterval.Duration == 0 {
+		c.Cluster.RefreshInterval.Duration = time.Second * 10
+	}
+
+	if c.Txn.Mode == "" {
+		c.Txn.Mode = defaultTxnMode.String()
+	}
+
+	if c.Txn.Isolation == "" {
+		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+			c.Txn.Isolation = txn.TxnIsolation_RC.String()
+		} else {
+			c.Txn.Isolation = txn.TxnIsolation_SI.String()
+		}
+	}
+	// Fix txn mode various config, simply override
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = 1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = -1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	} else {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = 1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = 1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	}
+
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
+	if c.Txn.MaxActive == 0 {
+		c.Txn.MaxActive = runtime.NumCPU() * 4
+	}
+	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
+	c.LockService.ServiceID = "temp"
+	c.LockService.Validate()
+	c.LockService.ServiceID = c.UUID
+
+	c.QueryServiceConfig.Adjust(foundMachineHost, defaultQueryServiceListenAddress)
+
+	if c.PortBase != 0 {
+		if c.ServiceHost == "" {
+			c.ServiceHost = defaultServiceHost
+		}
+	}
+
+	if !metadata.ValidStateString(c.InitWorkState) {
+		c.InitWorkState = metadata.WorkState_Working.String()
+	}
 }
 
 func (s *service) getLockServiceConfig() lockservice.Config {
@@ -397,6 +534,7 @@ type service struct {
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
 		queryService queryservice.QueryService,
+		hakeeper logservice.CNHAKeeperClient,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
@@ -431,5 +569,14 @@ type service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	addressMgr address.AddressManager
+	addressMgr  address.AddressManager
+	gossipNode  *gossip.Node
+	cacheServer cacheservice.CacheService
+	config      *util.ConfigData
+}
+
+func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	defCfg.SetDefaultValue()
+	return util.DumpConfig(cfg, defCfg)
 }

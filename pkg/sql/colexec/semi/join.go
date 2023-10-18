@@ -79,7 +79,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				continue
 			}
 			if bat.IsEmpty() {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.IsEmpty() {
@@ -87,8 +87,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc, anal, isFirst, isLast); err != nil {
+				bat.Clean(proc.Mp())
 				return process.ExecNext, err
 			}
+			proc.PutBatch(bat)
 			return process.ExecNext, nil
 
 		default:
@@ -107,17 +109,18 @@ func (ctr *container) build(anal process.Analyze) error {
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Map().Size())
+		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
+		// for semi join, if left batch is sorted , then output batch is sorted
+		rbat.Vecs[i].SetSorted(bat.Vecs[pos].GetSorted())
 	}
 	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		rbat.Clean(proc.Mp())
@@ -131,7 +134,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
-	itr := ctr.mp.Map().NewIterator()
+	itr := ctr.mp.NewIterator()
 
 	rowCountIncrease := 0
 	eligible := make([]int32, 0, hashmap.UnitLimit)
@@ -148,13 +151,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			if ap.Cond != nil {
 				matched := false // mark if any tuple satisfies the condition
-				sels := mSels[vals[k]-1]
-				for _, sel := range sels {
+				if ap.HashOnPK {
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
 						return err
 					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
 						1, ctr.cfs2); err != nil {
 						return err
 					}
@@ -169,8 +171,33 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					bs := vector.MustFixedCol[bool](vec)
 					if bs[0] {
 						matched = true
-						break
 					}
+				} else {
+					sels := mSels[vals[k]-1]
+					for _, sel := range sels {
+						if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+							1, ctr.cfs1); err != nil {
+							return err
+						}
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+							1, ctr.cfs2); err != nil {
+							return err
+						}
+						vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
+						if err != nil {
+							rbat.Clean(proc.Mp())
+							return err
+						}
+						if vec.IsConstNull() || vec.GetNulls().Contains(0) {
+							continue
+						}
+						bs := vector.MustFixedCol[bool](vec)
+						if bs[0] {
+							matched = true
+							break
+						}
+					}
+
 				}
 				if !matched {
 					continue

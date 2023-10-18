@@ -79,6 +79,22 @@ func (blk *baseBlock) Close() {
 	// TODO
 }
 
+func (blk *baseBlock) GetRuntime() *dbutils.Runtime {
+	return blk.rt
+}
+
+func (blk *baseBlock) EstimateMemSize() int {
+	node := blk.PinNode()
+	defer node.Unref()
+	blk.RLock()
+	defer blk.RUnlock()
+	size := blk.mvcc.EstimateMemSizeLocked()
+	if !node.IsPersisted() {
+		size += node.MustMNode().EstimateMemSize()
+	}
+	return size
+}
+
 func (blk *baseBlock) PinNode() *Node {
 	n := blk.node.Load()
 	// if ref fails, reload.
@@ -103,7 +119,7 @@ func (blk *baseBlock) Rows() int {
 		return int(node.Rows())
 	}
 }
-func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
@@ -176,7 +192,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if bat.Vecs[0].GetType().Oid != types.T_TS {
 		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
 	}
-	vec = containers.ToDNVector(bat.Vecs[0])
+	vec = containers.ToTNVector(bat.Vecs[0])
 	return
 }
 
@@ -280,6 +296,7 @@ func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 	return
 }
 
+// for each deletes in [start,end]
 func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	ctx context.Context,
 	start, end types.TS,
@@ -303,11 +320,17 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 		for i := 0; i < deletes.Length(); i++ {
 			loopOp(i, rowIdVec)
 		}
+		commitTSVec := containers.NewConstFixed[types.TS](types.T_TS.ToType(), deltalocCommitTS, deletes.Length())
+		abortVec := containers.NewConstFixed[bool](types.T_bool.ToType(), false, deletes.Length())
+		deletes.AddVector(catalog.AttrCommitTs, commitTSVec)
+		deletes.AddVector(catalog.AttrAborted, abortVec)
 	} else {
 		abortVec := deletes.Vecs[3].GetDownstreamVector()
 		commitTsVec := deletes.Vecs[1].GetDownstreamVector()
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
-		for i := 0; i < deletes.Length(); i++ {
+
+		rstart, rend := blockio.FindIntervalForBlock(vector.MustFixedCol[types.Rowid](rowIdVec), &blk.meta.ID)
+		for i := rstart; i < rend; i++ {
 			if skipAbort {
 				abort := vector.GetFixedAt[bool](abortVec, i)
 				if abort {
@@ -518,6 +541,7 @@ func (blk *baseBlock) DeletesInfo() string {
 func (blk *baseBlock) RangeDelete(
 	txn txnif.AsyncTxn,
 	start, end uint32,
+	pk containers.Vector,
 	dt handle.DeleteType) (node txnif.DeleteNode, err error) {
 	blk.Lock()
 	defer blk.Unlock()
@@ -525,7 +549,7 @@ func (blk *baseBlock) RangeDelete(
 		return
 	}
 	node = blk.mvcc.CreateDeleteNode(txn, dt)
-	node.RangeDeleteLocked(start, end)
+	node.RangeDeleteLocked(start, end, pk)
 	return
 }
 
@@ -562,11 +586,10 @@ func (blk *baseBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool) {
+func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isPersist bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
-	return
+	return blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 }
 
 func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *containers.BlockView, err error) {
@@ -589,7 +612,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	bat, persistedTS, err := blk.inMemoryCollectDeleteInRange(
+	bat, minTS, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		start,
 		end,
@@ -597,8 +620,8 @@ func (blk *baseBlock) CollectDeleteInRange(
 	if err != nil {
 		return
 	}
-	if end.Greater(persistedTS) {
-		end = persistedTS
+	if !minTS.IsEmpty() && end.Greater(minTS) {
+		end = minTS.Prev()
 	}
 	bat, err = blk.persistedCollectDeleteInRange(
 		ctx,
@@ -612,31 +635,29 @@ func (blk *baseBlock) CollectDeleteInRange(
 func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
-	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
+	withAborted bool) (bat *containers.Batch, minTS types.TS, err error) {
 	blk.RLock()
-	persistedTS = blk.mvcc.GetDeletesPersistedTS()
-	if persistedTS.GreaterEq(end) {
-		blk.RUnlock()
-		return
-	}
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start, end)
+	schema := blk.meta.GetSchema()
+	pkDef := schema.GetPrimaryKey()
+	rowID, ts, pk, abort, abortedMap, deletes, minTS := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type)
 	blk.RUnlock()
 	if rowID == nil {
 		return
 	}
-	schema := blk.meta.GetSchema()
-	pkDef := schema.GetPrimaryKey()
-	pkVec := containers.MakeVector(pkDef.Type)
-	pkIdx := pkDef.Idx
-	blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
-		pkVec.Append(v, false)
-		return nil
-	}, deletes)
+	// for deleteNode version less than 2, pk doesn't exist in memory
+	// collect pk by block.Foreach
+	if len(deletes) != 0 {
+		pkIdx := pkDef.Idx
+		blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
+			pk.Append(v, false)
+			return nil
+		}, deletes)
+	}
 	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
-	bat.AddVector(pkDef.Name, pkVec)
+	bat.AddVector(pkDef.Name, pk)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {
@@ -675,13 +696,16 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 			if bat == nil {
 				bat = containers.NewBatchWithCapacity(len(delBat.Attrs))
 				for i, name := range delBat.Attrs {
+					if !withAborted && name == catalog.AttrAborted {
+						continue
+					}
 					bat.AddVector(
 						name,
 						blk.rt.VectorPool.Transient.GetVector(delBat.Vecs[i].GetType()),
 					)
 				}
 			}
-			for _, name := range delBat.Attrs {
+			for _, name := range bat.Attrs {
 				retVec := bat.GetVectorByName(name)
 				srcVec := delBat.GetVectorByName(name)
 				retVec.PreExtend(sels.Length())

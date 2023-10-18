@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -38,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 )
 
@@ -115,7 +118,7 @@ func (s *Scope) AlterView(c *Compile) error {
 		return err
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -177,7 +180,11 @@ func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int
 
 func (s *Scope) AlterTableInplace(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
-	dbName := c.db
+	dbName := qry.Database
+	if dbName == "" {
+		dbName = c.db
+	}
+
 	tblName := qry.GetTableDef().GetName()
 
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -197,12 +204,32 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		return err
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
-		return err
-	}
+	if c.proc.TxnOperator.Txn().IsPessimistic() {
+		var retryErr error
+		// 1. lock origin table metadata in catalog
+		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = err
+		}
 
-	if err := lockTable(c.e, c.proc, rel); err != nil {
-		return err
+		// 2. lock origin table
+		var partitionTableNames []string
+		if tableDef.Partition != nil {
+			partitionTableNames = tableDef.Partition.PartitionTableNames
+		}
+		if err = lockTable(c.ctx, c.e, c.proc, rel, dbName, partitionTableNames, true); err != nil {
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return err
+			}
+			retryErr = err
+		}
+		if retryErr != nil {
+			return retryErr
+		}
 	}
 
 	tblId := rel.GetTableID(c.ctx)
@@ -502,10 +529,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
+	getLogger().Info("createTable",
+		zap.String("databaseName", c.db),
+		zap.String("tableName", qry.GetTableDef().GetName()),
+		zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+	)
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
 
@@ -520,13 +557,40 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if dbName == "" {
 			return moerr.NewNoDB(c.ctx)
 		}
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
 	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
+			getLogger().Info("createTable no exist",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			)
 			return nil
 		}
-		return moerr.NewTableAlreadyExists(c.ctx, tblName)
+		if qry.GetReplace() {
+			err := c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
+			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+		} else {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return moerr.NewTableAlreadyExists(c.ctx, tblName)
+		}
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
@@ -536,27 +600,57 @@ func (s *Scope) CreateTable(c *Compile) error {
 			if qry.GetIfNotExists() {
 				return nil
 			}
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
 		}
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
 
 	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
+	getLogger().Info("createTable ok",
+		zap.String("databaseName", c.db),
+		zap.String("tableName", qry.GetTableDef().GetName()),
+		zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+	)
 
 	partitionTables := qry.GetPartitionTables()
 	for _, table := range partitionTables {
 		storageCols := planColsToExeCols(table.GetCols())
 		storageDefs, err := planDefsToExeDefs(table)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = dbSource.Create(c.ctx, table.GetName(), append(storageCols, storageDefs...))
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -566,12 +660,22 @@ func (s *Scope) CreateTable(c *Compile) error {
 		fkTables := qry.GetFkTables()
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		tblId := newRelation.GetTableID(c.ctx)
 
 		newTableDef, err := newRelation.TableDefs(c.ctx)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		var colNameToId = make(map[string]uint64)
@@ -605,10 +709,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 			Fkeys: newFkeys,
 		})
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = newRelation.UpdateConstraint(c.ctx, newCt)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 
@@ -617,14 +731,29 @@ func (s *Scope) CreateTable(c *Compile) error {
 			fkDbName := fkDbs[i]
 			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 			fkRelation, err := fkDbSource.Relation(c.ctx, fkTableName, nil)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 			err = s.addRefChildTbl(c, fkRelation, tblId)
 			if err != nil {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
 				return err
 			}
 		}
@@ -636,12 +765,27 @@ func (s *Scope) CreateTable(c *Compile) error {
 		exeCols = planColsToExeCols(planCols)
 		exeDefs, err = planDefsToExeDefs(def)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		if _, err := dbSource.Relation(c.ctx, def.Name, nil); err == nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
 		}
 		if err := dbSource.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
@@ -649,17 +793,52 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if checkIndexInitializable(dbName, tblName) {
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 		err = c.runSql(insertSQL)
 		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+
+		insertSQL2, err := makeInsertTablePartitionsSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+		err = c.runSql(insertSQL2)
+		if err != nil {
+			getLogger().Info("createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
 			return err
 		}
 	}
+
 	return maybeCreateAutoIncrement(
 		c.ctx,
 		dbSource,
@@ -1057,15 +1236,17 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
 			}
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.e, c.proc, rel); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
 			}
 			err = e
@@ -1154,7 +1335,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		oldId = rel.GetTableID(c.ctx)
 	}
-	err = incrservice.GetAutoIncrementService().Reset(
+	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
 		c.ctx,
 		oldId,
 		newId,
@@ -1196,7 +1377,7 @@ func (s *Scope) DropSequence(c *Compile) error {
 		return err
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -1248,15 +1429,17 @@ func (s *Scope) DropTable(c *Compile) error {
 
 	if !isTemp && !isView && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
 			}
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.e, c.proc, rel); e != nil {
-			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) {
+		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, qry.PartitionTableNames, false); e != nil {
+			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
+				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
 			}
 			err = e
@@ -1303,7 +1486,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := incrservice.GetAutoIncrementService().Delete(
+			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
 				c.proc.TxnOperator)
@@ -1331,7 +1514,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := incrservice.GetAutoIncrementService().Delete(
+			err := incrservice.GetAutoIncrementService(c.ctx).Delete(
 				c.ctx,
 				rel.GetTableID(c.ctx),
 				c.proc.TxnOperator)
@@ -1359,6 +1542,9 @@ func planDefsToExeDefs(tableDef *plan.TableDef) ([]engine.TableDef, error) {
 			}
 			exeDefs = append(exeDefs, &engine.PropertiesDef{
 				Properties: properties,
+			})
+			c.Cts = append(c.Cts, &engine.StreamConfigsDef{
+				Configs: defVal.Properties.GetProperties(),
 			})
 		}
 	}
@@ -1440,6 +1626,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				AutoIncrement: col.Typ.GetAutoIncr(),
 				IsHidden:      col.Hidden,
 				Seqnum:        uint16(col.Seqnum),
+				EnumVlaues:    colTyp.GetEnumvalues(),
 			},
 		}
 	}
@@ -1480,7 +1667,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	}
 
-	if err := lockMoTable(c, dbName, tblName); err != nil {
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 
@@ -1510,6 +1697,91 @@ func (s *Scope) CreateSequence(c *Compile) error {
 	return nil
 }
 
+func (s *Scope) AlterSequence(c *Compile) error {
+	var values []interface{}
+	var curval string
+	qry := s.Plan.GetDdl().GetAlterSequence()
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		return err
+	}
+
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	tblName := qry.GetTableDef().GetName()
+
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if dbName == "" {
+			return moerr.NewNoDB(c.ctx)
+		}
+		return err
+	}
+
+	if rel, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+		// sequence table exists
+		// get pre sequence table row values
+		values, err = c.proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		if err != nil {
+			return err
+		}
+		if values == nil {
+			return moerr.NewInternalError(c.ctx, "Failed to get sequence meta data.")
+		}
+
+		// get pre curval
+
+		curval = c.proc.SessionInfo.SeqCurValues[rel.GetTableID(c.ctx)]
+		// dorp the pre sequence
+		err = c.runSql(fmt.Sprintf("drop sequence %s", tblName))
+		if err != nil {
+			return err
+		}
+	} else {
+		// sequence table not exists
+		if qry.GetIfExists() {
+			return nil
+		}
+		return moerr.NewInternalError(c.ctx, "sequence %s not exists", tblName)
+	}
+
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		return err
+	}
+
+	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+
+	//Init the only row of sequence.
+	if rel, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+		if rel == nil {
+			return moerr.NewLockTableNotFound(c.ctx)
+		}
+		bat, err := makeSequenceAlterBatch(c.ctx, c.stmt.(*tree.AlterSequence), qry.GetTableDef(), c.proc, values, curval)
+		defer func() {
+			if bat != nil {
+				bat.Clean(c.proc.Mp())
+			}
+		}()
+		if err != nil {
+			return err
+		}
+		err = rel.Write(c.proc.Ctx, bat)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 /*
 Sequence table got 1 row and 7 columns(besides row_id).
 -----------------------------------------------------------------------------------
@@ -1518,6 +1790,117 @@ last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_cal
 
 ------------------------------------------------------------------------------------
 */
+
+func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, error) {
+	var bat batch.Batch
+	bat.Ro = true
+	bat.Cnt = 0
+	bat.SetRowCount(1)
+	attrs := make([]string, len(plan2.Sequence_cols_name))
+	for i := range attrs {
+		attrs[i] = plan2.Sequence_cols_name[i]
+	}
+	bat.Attrs = attrs
+
+	// typ is sequenece's type now
+	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
+	vecs := make([]*vector.Vector, len(plan2.Sequence_cols_name))
+
+	switch typ.Oid {
+	case types.T_int16:
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int16](ctx, stmt, result, curval)
+		if err != nil {
+			return nil, err
+		}
+		if maxV < 0 {
+			maxV = math.MaxInt16
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_int32:
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int32](ctx, stmt, result, curval)
+		if err != nil {
+			return nil, err
+		}
+		if maxV < 0 {
+			maxV = math.MaxInt32
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_int64:
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int64](ctx, stmt, result, curval)
+		if err != nil {
+			return nil, err
+		}
+		if maxV < 0 {
+			maxV = math.MaxInt64
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_uint16:
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint16](ctx, stmt, result, curval)
+		if err != nil {
+			return nil, err
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_uint32:
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint32](ctx, stmt, result, curval)
+		if err != nil {
+			return nil, err
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		if err != nil {
+			return nil, err
+		}
+	case types.T_uint64:
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint64](ctx, stmt, result, curval)
+		if err != nil {
+			return nil, err
+		}
+		err = valueCheckOut(maxV, minV, startN, ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, moerr.NewNotSupported(ctx, "Unsupported type for sequence")
+	}
+	bat.Vecs = vecs
+	return &bat, nil
+}
+
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.Ro = true
@@ -1726,6 +2109,17 @@ func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.C
 	return nil
 }
 
+func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) error {
+	vecs[0] = vector.NewConstFixed(typ, lastV, 1, proc.Mp())
+	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
+	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
+	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
+	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
+	vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp())
+	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	return nil
+}
+
 func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.CreateSequence) (int64, T, T, T, error) {
 	var minValue, maxValue, startNum T
 	incrNum := int64(1)
@@ -1774,6 +2168,77 @@ func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.Cr
 	return incrNum, minValue, maxValue, startNum, nil
 }
 
+func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}, curval string) (T, int64, T, T, T, bool, error) {
+	var minValue, maxValue, startNum, lastNum T
+	var incrNum int64
+	var cycle bool
+	var err error
+
+	if incr, ok := result[4].(int64); ok {
+		incrNum = incr
+	}
+
+	// if alter increment value
+	if stmt.IncrementBy != nil {
+		switch stmt.IncrementBy.Num.(type) {
+		case uint64:
+			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
+		}
+		incrNum = getValue[int64](stmt.IncrementBy.Minus, stmt.IncrementBy.Num)
+	}
+	if incrNum == 0 {
+		return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
+	}
+
+	// if alter minValue of sequence
+	preMinValue := result[1]
+	if stmt.MinValue != nil {
+		minValue = getValue[T](stmt.MinValue.Minus, stmt.MinValue.Num)
+	} else {
+		minValue = getInterfaceValue[T](preMinValue)
+	}
+
+	// if alter maxValue of sequence
+	preMaxValue := result[2]
+	if stmt.MaxValue != nil {
+		maxValue = getValue[T](stmt.MaxValue.Minus, stmt.MaxValue.Num)
+	} else {
+		maxValue = getInterfaceValue[T](preMaxValue)
+	}
+
+	// if alter startWith value of sequence
+	var preStartWith int64
+	if len(curval) == 0 {
+		preStartWith = getInterfaceValue[int64](result[3])
+	} else {
+		preStartWith, err = strconv.ParseInt(curval, 10, 64)
+		if err != nil {
+			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Alter sequence currval parse err")
+		}
+	}
+	if stmt.StartWith != nil {
+		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
+		if startNum < T(preStartWith) {
+			startNum = T(preStartWith)
+		}
+	} else {
+		startNum = getInterfaceValue[T](preStartWith)
+	}
+	lastNum = startNum + T(incrNum)
+
+	// if alter cycle state of sequence
+	preCycle := result[5]
+	if preCycleVal, ok := preCycle.(bool); ok {
+		if stmt.Cycle != nil {
+			cycle = stmt.Cycle.Cycle
+		} else {
+			cycle = preCycleVal
+		}
+	}
+
+	return lastNum, incrNum, minValue, maxValue, startNum, cycle, nil
+}
+
 // Checkout values.
 func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx context.Context) error {
 	if maxValue < minValue {
@@ -1800,15 +2265,35 @@ func getValue[T constraints.Integer](minus bool, num any) T {
 	return v
 }
 
-func lockTable(
+func getInterfaceValue[T constraints.Integer](val interface{}) T {
+	switch val := val.(type) {
+	case int16:
+		return T(val)
+	case int32:
+		return T(val)
+	case int64:
+		return T(val)
+	case uint16:
+		return T(val)
+	case uint32:
+		return T(val)
+	case uint64:
+		return T(val)
+	}
+	return 0
+}
+
+func doLockTable(
 	eng engine.Engine,
 	proc *process.Process,
-	rel engine.Relation) error {
+	rel engine.Relation,
+	defChanged bool) error {
 	id := rel.GetTableID(proc.Ctx)
 	defs, err := rel.GetPrimaryKeys(proc.Ctx)
 	if err != nil {
 		return err
 	}
+
 	if len(defs) != 1 {
 		panic("invalid primary keys")
 	}
@@ -1817,15 +2302,49 @@ func lockTable(
 		eng,
 		proc,
 		id,
-		defs[0].Type)
+		defs[0].Type,
+		defChanged)
+
 	return err
+}
+
+func lockTable(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	dbName string,
+	partitionTableNames []string,
+	defChanged bool) error {
+
+	if len(partitionTableNames) == 0 {
+		return doLockTable(eng, proc, rel, defChanged)
+	}
+
+	dbSource, err := eng.Database(ctx, dbName, proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+
+	for _, tableName := range partitionTableNames {
+		pRel, pErr := dbSource.Relation(ctx, tableName, nil)
+		if pErr != nil {
+			return pErr
+		}
+		err = doLockTable(eng, proc, pRel, defChanged)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func lockRows(
 	eng engine.Engine,
 	proc *process.Process,
 	rel engine.Relation,
-	vec *vector.Vector) error {
+	vec *vector.Vector,
+	lockMode lock.LockMode) error {
 
 	if vec == nil || vec.Length() == 0 {
 		panic("lock rows is empty")
@@ -1838,7 +2357,8 @@ func lockRows(
 		proc,
 		id,
 		vec,
-		*vec.GetType())
+		*vec.GetType(),
+		lockMode)
 	return err
 }
 
@@ -1863,7 +2383,7 @@ func maybeCreateAutoIncrement(
 	if len(cols) == 0 {
 		return nil
 	}
-	return incrservice.GetAutoIncrementService().Create(
+	return incrservice.GetAutoIncrementService(ctx).Create(
 		ctx,
 		def.TblId,
 		cols,
@@ -1927,13 +2447,13 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec); err != nil {
+	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
 		return err
 	}
 	return nil
 }
 
-func lockMoTable(c *Compile, dbName string, tblName string) error {
+func lockMoTable(c *Compile, dbName string, tblName string, lockMode lock.LockMode) error {
 	dbRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
 		return err
@@ -1942,7 +2462,8 @@ func lockMoTable(c *Compile, dbName string, tblName string) error {
 	if err != nil {
 		return err
 	}
-	if err := lockRows(c.e, c.proc, dbRel, vec); err != nil {
+	defer vec.Free(c.proc.Mp())
+	if err := lockRows(c.e, c.proc, dbRel, vec, lockMode); err != nil {
 		return err
 	}
 	return nil

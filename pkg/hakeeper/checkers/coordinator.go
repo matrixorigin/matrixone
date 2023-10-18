@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/logservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/proxy"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
@@ -49,15 +50,16 @@ func NewCoordinator(cfg hakeeper.Config) *Coordinator {
 
 func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.ScheduleCommand {
 	logState := state.LogState
-	dnState := state.DNState
+	tnState := state.TNState
 	cnState := state.CNState
+	proxyState := state.ProxyState
 	cluster := state.ClusterInfo
 	currentTick := state.Tick
 	user := state.TaskTableUser
 	runtime.ProcessLevelRuntime().Logger().Debug("hakeeper checker state",
 		zap.Any("cluster information", cluster),
 		zap.Any("log state", logState),
-		zap.Any("dn state", dnState),
+		zap.Any("dn state", tnState),
 		zap.Any("cn state", cnState),
 		zap.Uint64("current tick", currentTick),
 	)
@@ -68,18 +70,18 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 		}
 	}()
 
-	c.OperatorController.RemoveFinishedOperator(logState, dnState, cnState)
+	c.OperatorController.RemoveFinishedOperator(logState, tnState, cnState, proxyState)
 
 	// if we've discovered unhealthy already, no need to keep alive anymore.
 	if c.teardown {
-		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState, cnState)
+		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
 	}
 
 	// check whether system health or not.
-	if operators, health := syshealth.Check(c.cfg, cluster, dnState, logState, currentTick); !health {
+	if operators, health := syshealth.Check(c.cfg, cluster, tnState, logState, currentTick); !health {
 		c.teardown = true
 		c.teardownOps = operators
-		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState, cnState)
+		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
 	}
 
 	// system health, try to keep alive.
@@ -87,8 +89,9 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState) []pb.
 
 	operators := make([]*operator.Operator, 0)
 	operators = append(operators, logservice.Check(alloc, c.cfg, cluster, logState, executing, user, currentTick)...)
-	operators = append(operators, dnservice.Check(alloc, c.cfg, cluster, dnState, user, currentTick)...)
+	operators = append(operators, dnservice.Check(alloc, c.cfg, cluster, tnState, user, currentTick)...)
 	operators = append(operators, cnservice.Check(c.cfg, cnState, user, currentTick)...)
+	operators = append(operators, proxy.Check(c.cfg, proxyState, currentTick)...)
 
-	return c.OperatorController.Dispatch(operators, logState, dnState, cnState)
+	return c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)
 }

@@ -124,6 +124,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
 
+	case *tree.BitCastExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
+
 	case *tree.IsNullExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("isnull", []tree.Expr{exprImpl.Expr}, depth)
 
@@ -307,6 +310,41 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		} else {
 			err = moerr.NewInvalidInput(localErrCtx, "missing FROM-clause entry for table '%v'", table)
 		}
+	}
+
+	if typ != nil && typ.Id == int32(types.T_enum) && len(typ.GetEnumvalues()) != 0 {
+		if err != nil {
+			errutil.ReportError(b.GetContext(), err)
+			return
+		}
+		astArgs := []tree.Expr{
+			tree.NewNumValWithType(constant.MakeString(typ.Enumvalues), typ.Enumvalues, false, tree.P_char),
+		}
+
+		// bind ast function's args
+		args := make([]*Expr, len(astArgs)+1)
+		for idx, arg := range astArgs {
+			if idx == len(args)-1 {
+				continue
+			}
+			expr, err := b.impl.BindExpr(arg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			args[idx] = expr
+		}
+		args[len(args)-1] = &Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: relPos,
+					ColPos: colPos,
+					Name:   col,
+				},
+			},
+		}
+
+		return bindFuncExprImplByPlanExpr(b.GetContext(), moEnumCastIndexToValueFun, args)
 	}
 
 	if colPos != NotFound {
@@ -901,6 +939,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		whenExpr := tree.NewComparisonExpr(tree.EQUAL, astArgs[0], astArgs[1])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
+
 	case "ifnull":
 		// rewrite 'ifnull(expr1, expr2)' to 'case when isnull(expr1) then expr2 else null'
 		if len(astArgs) != 2 {
@@ -911,11 +950,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		whenExpr := tree.NewIsNullExpr(astArgs[0])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
-	//case "extract":
-	//	// "extract(year from col_name)"  parser return year as UnresolvedName.
-	//	// we must rewrite it to string。 because binder bind UnresolvedName as column name
-	//	unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
-	//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
+
+		//case "extract":
+		//	// "extract(year from col_name)"  parser return year as UnresolvedName.
+		//	// we must rewrite it to string。 because binder bind UnresolvedName as column name
+		//	unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
+		//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
+
 	case "count":
 		if b.ctx == nil {
 			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid field reference to COUNT")
@@ -937,17 +978,63 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 		}
+
+	case "approx_count":
+		if b.ctx == nil {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "invalid field reference to COUNT")
+		}
+		switch nval := astArgs[0].(type) {
+		case *tree.NumVal:
+			if nval.String() == "*" {
+				if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
+					name = "count"
+				} else {
+					astArgs = []tree.Expr{tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)}
+				}
+			} else {
+				name = "count"
+			}
+		default:
+			name = "count"
+		}
+
 	case "trim":
 		astArgs = astArgs[1:]
 	}
+
 	// bind ast function's args
-	args := make([]*Expr, len(astArgs))
-	for idx, arg := range astArgs {
-		expr, err := b.impl.BindExpr(arg, depth, false)
+	var args []*Expr
+	if name == "bit_cast" {
+		bitCastExpr := astArgs[0].(*tree.BitCastExpr)
+		binExpr, err := b.impl.BindExpr(bitCastExpr.Expr, depth, false)
 		if err != nil {
 			return nil, err
 		}
-		args[idx] = expr
+
+		typ, err := getTypeFromAst(b.GetContext(), bitCastExpr.Type)
+		if err != nil {
+			return nil, err
+		}
+		typeExpr := &Expr{
+			Typ: typ,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: DeepCopyType(typ),
+				},
+			},
+		}
+
+		args = []*Expr{binExpr, typeExpr}
+	} else {
+		args = make([]*Expr, len(astArgs))
+		for idx, arg := range astArgs {
+			expr, err := b.impl.BindExpr(arg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+
+			args[idx] = expr
+		}
 	}
 
 	if b.builder != nil {
@@ -1435,6 +1522,16 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		}
+	}
+
+	if name == NameGroupConcat {
+		expressionList := args[:len(args)-1]
+		separator := args[len(args)-1]
+		compactCol, e := bindFuncExprImplByPlanExpr(ctx, "serial", expressionList)
+		if e != nil {
+			return nil, e
+		}
+		args = []*plan.Expr{compactCol, separator}
 	}
 
 	// return new expr

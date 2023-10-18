@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 )
 
@@ -40,7 +41,7 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	// Check whether original column has existed.
 	col := FindColumn(tableDef.Cols, originalColName)
 	if col == nil || col.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), tableDef.Name, originalColName)
+		return moerr.NewBadFieldError(ctx.GetContext(), originalColName, alterPlan.TableDef.Name)
 	}
 
 	if isColumnWithPartition(col.Name, tableDef.Partition) {
@@ -83,8 +84,17 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
+	handleClusterByKey(ctx.GetContext(), alterPlan, newColName, originalColName)
+
 	delete(alterCtx.alterColMap, col.Name)
-	alterCtx.alterColMap[newCol.Name] = col.Name
+	alterCtx.alterColMap[newCol.Name] = selectExpr{
+		sexprType: columnName,
+		sexprStr:  col.Name,
+	}
+
+	if tmpCol, ok := alterCtx.changColDefMap[col.ColId]; ok {
+		tmpCol.Name = newCol.Name
+	}
 	return nil
 }
 
@@ -99,14 +109,16 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 	}
 
 	newCol := &ColDef{
-		ColId:   originalCol.ColId,
-		Primary: originalCol.Primary,
-		Name:    newColName,
-		Typ:     colType,
-		Alg:     plan.CompressType_Lz4,
+		ColId:     originalCol.ColId,
+		Primary:   originalCol.Primary,
+		ClusterBy: originalCol.ClusterBy,
+		Name:      newColName,
+		Typ:       colType,
+		Alg:       plan.CompressType_Lz4,
 	}
 
 	hasDefaultValue := false
+	hasNullFlag := false
 	auto_incr := false
 	for _, attr := range specNewColumn.Attributes {
 		switch attribute := attr.(type) {
@@ -118,6 +130,8 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 			// If the table already contains a primary key, an `ErrMultiplePriKey` error is reported
 			if alterPlan.CopyTableDef.Pkey != nil && alterPlan.CopyTableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 				return nil, moerr.NewErrMultiplePriKey(ctx.GetContext())
+			} else if alterPlan.CopyTableDef.ClusterBy != nil && alterPlan.CopyTableDef.ClusterBy.Name != "" {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 			} else {
 				alterPlan.CopyTableDef.Pkey = &PrimaryKeyDef{
 					Names:       []string{newColName},
@@ -164,13 +178,20 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 				return nil, err
 			}
 			alterPlan.CopyTableDef.Indexes = append(alterPlan.CopyTableDef.Indexes, indexDef)
-		case *tree.AttributeDefault, *tree.AttributeNull:
+		case *tree.AttributeDefault:
 			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
+		case *tree.AttributeNull:
+			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			newCol.Default = defaultValue
+			hasNullFlag = true
 		case *tree.AttributeOnUpdate:
 			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
@@ -211,6 +232,21 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 			}
 		}
 	}
+
+	if alterPlan.CopyTableDef.Pkey != nil {
+		for _, partCol := range alterPlan.CopyTableDef.Pkey.Names {
+			if partCol == newCol.Name {
+				newCol.Default.NullAbility = false
+				newCol.NotNull = true
+				break
+			}
+		}
+	}
+
+	if err = checkPriKeyConstraint(ctx.GetContext(), newCol, hasDefaultValue, hasNullFlag, alterPlan.CopyTableDef.Pkey); err != nil {
+		return nil, err
+	}
+
 	return newCol, nil
 }
 
@@ -218,6 +254,37 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 func CheckColumnNameValid(ctx context.Context, colName string) error {
 	if _, ok := catalog.InternalColumns[colName]; ok {
 		return moerr.NewErrWrongColumnName(ctx, colName)
+	}
+	return nil
+}
+
+// handleClusterByKey Process the cluster by table. If the cluster by key name is modified, proceed with the process
+func handleClusterByKey(ctx context.Context, alterPlan *plan.AlterTable, newColName string, originalColName string) error {
+	if alterPlan.CopyTableDef.ClusterBy != nil && alterPlan.CopyTableDef.ClusterBy.Name != "" {
+		clusterBy := alterPlan.CopyTableDef.ClusterBy
+		var clNames []string
+		if util.JudgeIsCompositeClusterByColumn(clusterBy.Name) {
+			clNames = util.SplitCompositeClusterByColumnName(clusterBy.Name)
+		} else {
+			clNames = []string{clusterBy.Name}
+		}
+		for j, part := range clNames {
+			if part == originalColName {
+				clNames[j] = newColName
+				break
+			}
+		}
+
+		if len(clNames) == 1 {
+			alterPlan.CopyTableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clNames[0],
+			}
+		} else {
+			clusterByColName := util.BuildCompositeClusterByColumnName(clNames)
+			alterPlan.CopyTableDef.ClusterBy = &plan.ClusterByDef{
+				Name: clusterByColName,
+			}
+		}
 	}
 	return nil
 }

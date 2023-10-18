@@ -61,12 +61,13 @@ type ExParamConst struct {
 }
 
 type ExParam struct {
-	prevStr   string
-	reader    io.ReadCloser
-	plh       *ParseLineHandler
-	Fileparam *ExFileparam
-	Zoneparam *ZonemapFileparam
-	Filter    *FilterParam
+	prevStr        string
+	reader         io.ReadCloser
+	plh            *ParseLineHandler
+	Fileparam      *ExFileparam
+	Zoneparam      *ZonemapFileparam
+	Filter         *FilterParam
+	MoCsvLineArray [][]string
 }
 
 type ExFileparam struct {
@@ -93,7 +94,7 @@ type Argument struct {
 	Es *ExternalParam
 }
 
-func (arg *Argument) Free(*process.Process, bool) {}
+func (arg *Argument) Free(*process.Process, bool, error) {}
 
 type ParseLineHandler struct {
 	csvReader *csv.Reader

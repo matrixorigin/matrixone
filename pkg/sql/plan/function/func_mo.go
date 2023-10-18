@@ -111,7 +111,9 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					prel.Ranges(ctx, nil)
+					if err = prel.UpdateBlockInfos(ctx); err != nil {
+						return err
+					}
 					prows, err = prel.Rows(ctx)
 					if err != nil {
 						return err
@@ -119,7 +121,9 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					rows += prows
 				}
 			} else {
-				rel.Ranges(ctx, nil)
+				if err = rel.UpdateBlockInfos(ctx); err != nil {
+					return err
+				}
 				rows, err = rel.Rows(ctx)
 				if err != nil {
 					return err
@@ -142,7 +146,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if proc.TxnOperator == nil {
-		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
+		return moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 
@@ -204,7 +208,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					prel.Ranges(ctx, nil)
+					if prel.UpdateBlockInfos(ctx); err != nil {
+						return err
+					}
 					psize, err = prel.Size(ctx, AllColumns)
 					if err != nil {
 						return err
@@ -212,7 +218,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					size += psize
 				}
 			} else {
-				rel.Ranges(ctx, nil)
+				if err = rel.UpdateBlockInfos(ctx); err != nil {
+					return err
+				}
 				size, err = rel.Size(ctx, AllColumns)
 				if err != nil {
 					return err
@@ -239,7 +247,7 @@ func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if !ok || proc.TxnOperator == nil {
-		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
+		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 
@@ -354,6 +362,12 @@ func getValueInStr(value any) string {
 		return v
 	case []byte:
 		return string(v)
+	case []float32:
+		// Used by zonemap Min,Max
+		// Used by MO_TABLE_COL_MAX
+		return types.ArrayToString[float32](v)
+	case []float64:
+		return types.ArrayToString[float64](v)
 	case int:
 		return strconv.FormatInt(int64(v), 10)
 	case uint:
@@ -419,3 +433,94 @@ var (
 		"mo_stages":                   0,
 	}
 )
+
+// CastIndexToValue returns enum type index according to the value
+func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
+	indexs := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
+		indexVal, indexnull := indexs.GetValue(i)
+		if typeEnumNull || indexnull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
+			var enumVlaue string
+
+			enumVlaue, err := types.ParseEnumIndex(typeEnumVal, indexVal)
+			if err != nil {
+				return err
+			}
+
+			if err = rs.AppendBytes([]byte(enumVlaue), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CastValueToIndex returns enum type index according to the value
+func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint16](result)
+	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
+	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
+		enumValue, enumValNull := enumValues.GetStrValue(i)
+		if typeEnumNull || enumValNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
+			enumStr := functionUtil.QuickBytesToStr(enumValue)
+
+			var index uint16
+			index, err := types.ParseEnum(typeEnumVal, enumStr)
+			if err != nil {
+				return err
+			}
+
+			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CastIndexValueToIndex returns enum type index according to the index value
+func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[uint16](result)
+	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
+	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
+		enumValueIndex, enumValNull := enumIndexValues.GetValue(i)
+		if typeEnumNull || enumValNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
+			var index uint16
+
+			index, err := types.ParseEnumValue(typeEnumVal, enumValueIndex)
+			if err != nil {
+				return err
+			}
+
+			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

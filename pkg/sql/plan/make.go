@@ -16,8 +16,11 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"go/constant"
 	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -253,15 +256,24 @@ func MakePlan2NullTextConstExprWithType(v string) *plan.Expr {
 }
 
 func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+	var err error
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
 	targetType.NotNullable = expr.Typ.NotNullable
-	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if types.T(expr.Typ.Id) == types.T_any {
 		expr.Typ = targetType
 		return expr, nil
 	}
+
+	if targetType != nil && targetType.Id == int32(types.T_enum) {
+		expr, err = funcCastForEnumType(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -283,6 +295,44 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 		},
 		Typ: targetType,
 	}, nil
+}
+
+func funcCastForEnumType(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
+	var err error
+	if targetType != nil && targetType.Id != int32(types.T_enum) {
+		return expr, nil
+	}
+
+	astArgs := []tree.Expr{
+		tree.NewNumValWithType(constant.MakeString(targetType.Enumvalues), targetType.Enumvalues, false, tree.P_char),
+	}
+
+	// bind ast function's args
+	args := make([]*Expr, len(astArgs)+1)
+	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+	for idx, arg := range astArgs {
+		if idx == len(args)-1 {
+			continue
+		}
+		expr, err := binder.BindExpr(arg, 0, false)
+		if err != nil {
+			return nil, err
+		}
+		args[idx] = expr
+	}
+	args[len(args)-1] = expr
+	if 20 <= expr.Typ.Id && expr.Typ.Id <= 29 {
+		expr, err = bindFuncExprImplByPlanExpr(ctx, moEnumCastIndexValueToIndexFun, args)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		expr, err = bindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return expr, nil
 }
 
 // if typ is decimal128 and decimal64 without scalar and width

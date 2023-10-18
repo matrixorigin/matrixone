@@ -17,10 +17,13 @@ package logtailreplay
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/stretchr/testify/assert"
 )
 
-func BenchmarkPartitionState(b *testing.B) {
+func BenchmarkPartitionStateConcurrentWriteAndIter(b *testing.B) {
 	partition := NewPartition()
 	end := make(chan struct{})
 	defer func() {
@@ -49,5 +52,55 @@ func BenchmarkPartitionState(b *testing.B) {
 			iter.Close()
 		}
 	})
+
+}
+
+func TestTruncate(t *testing.T) {
+	partition := NewPartitionState(true)
+	addBlock(partition, types.BuildTS(1, 0), types.BuildTS(2, 0))
+	addBlock(partition, types.BuildTS(1, 0), types.BuildTS(3, 0))
+	addBlock(partition, types.BuildTS(1, 0), types.TS{})
+
+	partition.truncate([2]uint64{0, 0}, types.BuildTS(1, 0))
+	assert.Equal(t, 3, partition.blocks.Len())
+	assert.Equal(t, 5, partition.blockIndexByTS.Len())
+
+	partition.truncate([2]uint64{0, 0}, types.BuildTS(2, 0))
+	assert.Equal(t, 2, partition.blocks.Len())
+	assert.Equal(t, 3, partition.blockIndexByTS.Len())
+
+	partition.truncate([2]uint64{0, 0}, types.BuildTS(3, 0))
+	assert.Equal(t, 1, partition.blocks.Len())
+	assert.Equal(t, 1, partition.blockIndexByTS.Len())
+
+	partition.truncate([2]uint64{0, 0}, types.BuildTS(4, 0))
+	assert.Equal(t, 1, partition.blocks.Len())
+	assert.Equal(t, 1, partition.blockIndexByTS.Len())
+}
+
+func addBlock(p *PartitionState, create, delete types.TS) {
+	blkID := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
+	blk1 := BlockEntry{
+		BlockInfo: catalog.BlockInfo{
+			BlockID: *blkID,
+		},
+		CreateTime: create,
+		DeleteTime: delete,
+	}
+	p.blocks.Set(blk1)
+	blkIndex1 := BlockIndexByTSEntry{
+		Time:     create,
+		BlockID:  *blkID,
+		IsDelete: false,
+	}
+	p.blockIndexByTS.Set(blkIndex1)
+	if !delete.IsEmpty() {
+		blkIndex2 := BlockIndexByTSEntry{
+			Time:     delete,
+			BlockID:  *blkID,
+			IsDelete: true,
+		}
+		p.blockIndexByTS.Set(blkIndex2)
+	}
 
 }

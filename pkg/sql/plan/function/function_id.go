@@ -43,18 +43,19 @@ const (
 	XOR                       // XOR
 	NOT                       // NOT
 	CAST                      // CAST
-	IS                        //IS
-	ISNOT                     //ISNOT
-	ISNULL                    //ISNULL
-	ISNOTNULL                 //ISNOTNULL
-	ISUNKNOWN                 //ISUNKNOWN
-	ISNOTUNKNOWN              //ISNOTUNKNOWN
-	ISTRUE                    //ISTRUE
-	ISNOTTRUE                 //ISNOTTRUE
-	ISFALSE                   //ISFALSE
-	ISNOTFALSE                //ISNOTTRUE
-	ISEMPTY                   //ISEMPTY
-	NOT_IN_ROWS               //NOT_IN_ROWS
+	BIT_CAST                  // BIT_CAST
+	IS                        // IS
+	ISNOT                     // ISNOT
+	ISNULL                    // ISNULL
+	ISNOTNULL                 // ISNOTNULL
+	ISUNKNOWN                 // ISUNKNOWN
+	ISNOTUNKNOWN              // ISNOTUNKNOWN
+	ISTRUE                    // ISTRUE
+	ISNOTTRUE                 // ISNOTTRUE
+	ISFALSE                   // ISFALSE
+	ISNOTFALSE                // ISNOTTRUE
+	ISEMPTY                   // ISEMPTY
+	NOT_IN_ROWS               // NOT_IN_ROWS
 	OP_BIT_AND                // &
 	OP_BIT_OR                 // |
 	OP_BIT_XOR                // ^
@@ -68,6 +69,7 @@ const (
 	AES_DECRYPT    // AES_DECRYPT
 	AES_ENCRYPT    // AES_ENCRYPT
 	ANY_VALUE      // ANY_VALUE
+	APPROX_COUNT   // APPROX_COUNT
 	ARRAY_AGG      // ARRAY_AGG
 	ARRAY_APPEND   // ARRAY_APPEND
 	ARRAY_CAT      // ARRAY_CAT
@@ -147,6 +149,8 @@ const (
 	LN       // LN
 	NOT_IN   // NOT_IN
 	LOG      // LOG
+	LOG2     // LOG2
+	LG       // LG
 	LOWER    // LOWER
 	LPAD     // LPAD
 	LTRIM    // LTRIM
@@ -187,6 +191,7 @@ const (
 	SPACE
 	SPLIT         // SPLIT
 	SPLIT_PART    // SPLIT_PART
+	SQRT          // SQRT
 	STARCOUNT     // STARTCOUNT
 	STARTSWITH    // STARTSWITH
 	STDDEV_POP    // STDDEV_POP
@@ -201,6 +206,7 @@ const (
 	TRANSLATE   // TRANSLATE
 	TRIM        // TRIM
 	UNIFORM     // UNIFORM
+	SHA2        //SHA2
 	UTC_TIMESTAMP
 	UNIX_TIMESTAMP
 	FROM_UNIXTIME
@@ -220,6 +226,8 @@ const (
 	EXTRACT   // EXTRACT
 	OCT
 	SUBSTRING       // SUBSTRING
+	ENCODE          // ENCODE
+	DECODE          // DECODE
 	SUBSTRING_INDEX //SUBSTRING_INDEX
 	WEEK            //WEEK
 	WEEKDAY
@@ -312,11 +320,24 @@ const (
 	INTERNAL_COLUMN_CHARACTER_SET
 	INTERNAL_AUTO_INCREMENT
 
+	// be uesed: enum
+	CAST_INDEX_TO_VALUE
+	CAST_VALUE_TO_INDEX
+	CAST_INDEX_VALUE_TO_INDEX
+
 	//Sequence function
 	NEXTVAL
 	SETVAL
 	CURRVAL
 	LASTVAL
+
+	// Array Function
+	SUMMATION
+	L1_NORM // L1_NORMALIZATION
+	L2_NORM // L2 NORMALIZATION
+	INNER_PRODUCT
+	COSINE_SIMILARITY
+	VECTOR_DIMS //VECTOR DIMENSIONS
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -355,6 +376,7 @@ var functionIdRegister = map[string]int32{
 	"case":        CASE,
 	"coalesce":    COALESCE,
 	"cast":        CAST,
+	"bit_cast":    BIT_CAST,
 	"is":          IS,
 	"is_not":      ISNOT,
 	"isnot":       ISNOT,
@@ -375,6 +397,7 @@ var functionIdRegister = map[string]int32{
 	"^":          OP_BIT_XOR,
 	"<<":         OP_BIT_SHIFT_LEFT,
 	">>":         OP_BIT_SHIFT_RIGHT,
+	"decode":     DECODE,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
@@ -389,6 +412,7 @@ var functionIdRegister = map[string]int32{
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
+	"approx_count":          APPROX_COUNT,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
@@ -421,6 +445,7 @@ var functionIdRegister = map[string]int32{
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
 	"mid":               SUBSTRING,
+	"encode":            ENCODE,
 	"utc_timestamp":     UTC_TIMESTAMP,
 	"unix_timestamp":    UNIX_TIMESTAMP,
 	"from_unixtime":     FROM_UNIXTIME,
@@ -436,6 +461,7 @@ var functionIdRegister = map[string]int32{
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
+	"sqrt":                           SQRT,
 	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
 	"to_days":                        TO_DAYS,
@@ -447,6 +473,8 @@ var functionIdRegister = map[string]int32{
 	"char_length":                    LENGTH_UTF8,
 	"ln":                             LN,
 	"log":                            LOG,
+	"log2":                           LOG2,
+	"lg":                             LG,
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
 	"not_in_rows":                    NOT_IN_ROWS,
@@ -542,6 +570,7 @@ var functionIdRegister = map[string]int32{
 	"mo_table_col_max":               MO_TABLE_COL_MAX,
 	"mo_table_col_min":               MO_TABLE_COL_MIN,
 	"trim":                           TRIM,
+	"sha2":                           SHA2,
 	"mo_log_date":                    MO_LOG_DATE,
 	"mo_check_level":                 MO_CHECH_LEVEL,
 	"purge_log":                      PURGE_LOG,
@@ -560,4 +589,14 @@ var functionIdRegister = map[string]int32{
 	"setval":                         SETVAL,
 	"currval":                        CURRVAL,
 	"lastval":                        LASTVAL,
+	"cast_index_to_value":            CAST_INDEX_TO_VALUE,
+	"cast_value_to_index":            CAST_VALUE_TO_INDEX,
+	"cast_index_value_to_index":      CAST_INDEX_VALUE_TO_INDEX,
+
+	"summation":         SUMMATION,
+	"l1_norm":           L1_NORM,
+	"l2_norm":           L2_NORM,
+	"inner_product":     INNER_PRODUCT,
+	"cosine_similarity": COSINE_SIMILARITY,
+	"vector_dims":       VECTOR_DIMS,
 }

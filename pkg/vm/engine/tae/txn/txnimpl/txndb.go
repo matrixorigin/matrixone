@@ -139,7 +139,8 @@ func (db *txnDB) AddBlksWithMetaLoc(
 // }
 
 func (db *txnDB) RangeDelete(
-	id *common.ID, start, end uint32, dt handle.DeleteType,
+	id *common.ID, start, end uint32,
+	pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
@@ -148,7 +149,7 @@ func (db *txnDB) RangeDelete(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.RangeDelete(id, start, end, dt)
+	return table.RangeDelete(id, start, end, pkVec, dt)
 }
 
 func (db *txnDB) TryDeleteByDeltaloc(
@@ -481,7 +482,7 @@ func (db *txnDB) Freeze() (err error) {
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(txnif.FreezePhase); err != nil {
+		if err = table.PrePreareTransfer(txnif.FreezePhase, table.store.rt.Now()); err != nil {
 			return
 		}
 	}
@@ -490,7 +491,7 @@ func (db *txnDB) Freeze() (err error) {
 
 func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(txnif.PrePreparePhase); err != nil {
+		if err = table.PrePreareTransfer(txnif.PrePreparePhase, table.store.rt.Now()); err != nil {
 			return
 		}
 	}

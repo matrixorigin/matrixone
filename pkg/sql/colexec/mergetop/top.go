@@ -69,25 +69,22 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 	ctr := ap.ctr
 
 	if ap.Limit == 0 {
-		ap.Free(proc, false)
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
 
 	if end, err := ctr.build(ap, proc, anal, isFirst); err != nil {
-		ap.Free(proc, true)
 		return process.ExecNext, err
 	} else if end {
 		return process.ExecStop, nil
 	}
 
 	if ctr.bat == nil {
-		ap.Free(proc, false)
 		proc.SetInputBatch(nil)
 		return process.ExecStop, nil
 	}
 	err := ctr.eval(ap.Limit, proc, anal, isLast)
-	ap.Free(proc, err != nil)
+	ap.Free(proc, err != nil, nil)
 	if err == nil {
 		return process.ExecStop, nil
 	}
@@ -109,30 +106,22 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		ctr.n = len(bat.Vecs)
 		ctr.poses = ctr.poses[:0]
 		for i := range ctr.executorsForOrderList {
-			vec, err := ctr.executorsForOrderList[i].Eval(proc, []*batch.Batch{bat})
-			if err != nil {
-				return false, err
-			}
-			flg := true
-			for j := range bat.Vecs {
-				if bat.Vecs[j] == vec {
-					flg = false
-					ctr.poses = append(ctr.poses, int32(j))
-					break
-				}
-			}
-			if flg {
-				nv, err := colexec.SafeGetResult(proc, vec, ctr.executorsForOrderList[i])
+			if ctr.executorsForOrderList[i].IsColumnExpr() {
+				colIndex := ctr.executorsForOrderList[i].(*colexec.ColumnExpressionExecutor).GetColIndex()
+				ctr.poses = append(ctr.poses, int32(colIndex))
+			} else {
+				vec, err := ctr.executorsForOrderList[i].EvalWithoutResultReusing(proc, []*batch.Batch{bat})
 				if err != nil {
 					return false, err
 				}
 				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
-				bat.Vecs = append(bat.Vecs, nv)
-				anal.Alloc(int64(nv.Size()))
+				bat.Vecs = append(bat.Vecs, vec)
+				anal.Alloc(int64(vec.Size()))
 			}
 		}
+
 		if ctr.bat == nil {
-			mp := make(map[int]int)
+			mp := make(map[int]int, len(ctr.poses))
 			for i, pos := range ctr.poses {
 				mp[int(pos)] = i
 			}
@@ -156,6 +145,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
 			}
 		}
+
 		if err := ctr.processBatch(ap.Limit, bat, proc); err != nil {
 			bat.Clean(proc.Mp())
 			return false, err
@@ -182,7 +172,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 			ctr.sels = append(ctr.sels, n)
 			n++
 		}
-		ctr.bat.SetRowCount(ctr.bat.RowCount() + bat.RowCount())
+		ctr.bat.AddRowCount(bat.RowCount())
 		if n == limit {
 			ctr.sort()
 		}

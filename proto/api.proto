@@ -28,8 +28,7 @@ option (gogoproto.protosizer_all) = true;
 enum OpCode {
     Nop          = 0;
     OpGetLogTail = 1000;
-    OpWrite      = 1001;
-    OpPreCommit  = 1002;
+    OpPreCommit  = 1001;
 }
 
 message Vector {
@@ -53,7 +52,7 @@ message TableID {
     uint64 partition_id = 3;
 }
 
-// CN pull the log tail of table from DN.
+// CN pull the log tail of table from TN.
 message SyncLogTailReq {
     timestamp.Timestamp cn_have = 1;
     timestamp.Timestamp cn_want = 2;
@@ -76,7 +75,7 @@ message PrecommitWriteCmd {
     repeated Entry entry_list = 1;
 };
 
-// CN--->DN, DDL
+// CN--->TN, DDL
 // create database test:
 //      Entry {
 //          entry_type = Insert
@@ -190,8 +189,8 @@ message Entry {
     string database_name = 5;
     string file_name     = 6;
     Batch bat            = 7;
-    // whether DN do the PK uniqueness check against txn's workspace or not.
-    int32 pk_check_by_dn = 8;
+    // whether TN do the PK uniqueness check against txn's workspace or not.
+    int32 pk_check_by_tn = 8;
 };
 
 // There are two kinds of checkpoint: delta checkpoint and base checkpoint,
@@ -201,7 +200,7 @@ message Entry {
 // CatalogCkp contains information about database and tables in the system,and
 // MetadataCkp contains information about blocks.
 message Checkpoint {
-    // min_ts DN is the lower bounds of the checkpoint
+    // min_ts TN is the lower bounds of the checkpoint
     //  CN maybe don't care about it.
     timestamp.Timestamp min_ts = 1;
     // max_ts is the upper bounds of the checkpoint.

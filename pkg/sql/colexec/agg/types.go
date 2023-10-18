@@ -21,108 +21,71 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"golang.org/x/exp/constraints"
 )
 
 const (
-	AggregateSum = iota
-	AggregateAvg
-	AggregateMax
-	AggregateMin
-	AggregateCount
-	AggregateStarCount
-	AggregateApproxCountDistinct
-	AggregateVariance
-	AggregateBitAnd
-	AggregateBitXor
-	AggregateBitOr
-	AggregateStdDevPop
-	AggregateAnyValue
-	AggregateMedian
-	AggregateGroupConcat
-
-	WinRank
-	WinRowNumber
-	WinDenseRank
+	GroupNotMatch = 0
 )
 
-var Names = [...]string{
-	AggregateSum:                 "sum",
-	AggregateAvg:                 "avg",
-	AggregateMax:                 "max",
-	AggregateMin:                 "min",
-	AggregateCount:               "count",
-	AggregateStarCount:           "starcount",
-	AggregateApproxCountDistinct: "approx_count_distinct",
-	AggregateVariance:            "var",
-	AggregateBitAnd:              "bit_and",
-	AggregateBitXor:              "bit_xor",
-	AggregateBitOr:               "bit_or",
-	AggregateStdDevPop:           "stddev_pop",
-	AggregateAnyValue:            "any",
-	AggregateMedian:              "median",
-	AggregateGroupConcat:         "group_concat",
+// NewAgg generate the aggregation related struct from the function overload id.
+var NewAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error)
 
-	WinRank:      "rank",
-	WinRowNumber: "row_number",
-	WinDenseRank: "dense_rank",
+// NewAggWithConfig generate the aggregation related struct from the function overload id and deliver a config information.
+var NewAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any, partialresult any) (Agg[any], error)
+
+// IsWinOrderFun check if the function is a window function.
+var IsWinOrderFun func(overloadID int64) bool
+
+func InitAggFramework(
+	newAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error),
+	newAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any, partialresult any) (Agg[any], error),
+	isWinOrderFun func(overloadID int64) bool) {
+
+	NewAgg = newAgg
+	NewAggWithConfig = newAggWithConfig
+	IsWinOrderFun = isWinOrderFun
 }
 
 type Aggregate struct {
-	Op   int
-	Dist bool
-	E    *plan.Expr
+	Op     int64
+	Dist   bool
+	E      *plan.Expr
+	Config []byte
 }
 
-// Agg agg interface
+// Agg interface which return type is T.
 type Agg[T any] interface {
 	encoding.BinaryMarshaler
 	encoding.BinaryUnmarshaler
-	//UnmarshalBinary(data []byte, m *mpool.MPool) error
 
-	// Dup will duplicate a new agg with the same type.
-	Dup() Agg[any]
-
-	// Type return the type of the agg's result.
+	// OutputType return the result type of the agg.
 	OutputType() types.Type
 
-	// InputType return the type of the agg's input.
+	// InputTypes return the input types of the agg.
 	InputTypes() []types.Type
 
-	// String return related information of the agg.
-	// used to show query plans.
-	String() string
-
 	// Free the agg.
-	Free(*mpool.MPool)
+	Free(pool *mpool.MPool)
 
 	// Grows allocates n groups for the agg.
-	Grows(n int, m *mpool.MPool) error
+	Grows(n int, pool *mpool.MPool) error
 
 	// Eval method calculates and returns the final result of the aggregate function.
-	Eval(_ *mpool.MPool) (*vector.Vector, error)
+	Eval(pool *mpool.MPool) (*vector.Vector, error)
 
-	// Fill use the one row of vector to update the data of groupIndex-group's agg.
-	Fill(groupIndex int64, rowIndex int64, vecs []*vector.Vector) error
+	// Fill use the one row of vector to fill agg.
+	Fill(groupIndex int64, rowIndex int64, vectors []*vector.Vector) error
 
-	// BulkFill use whole vector to update the data of groupIndex-group's agg.
-	BulkFill(groupIndex int64, rowCount int, vecs []*vector.Vector) error
+	// BulkFill use whole vector to fill agg.
+	BulkFill(groupIndex int64, vectors []*vector.Vector) error
 
-	// BatchFill use part of the vector to update the data of agg's group
-	//      os(origin-s) records information about which groups need to be updated
-	//      if length of os is N, we use first N of vps to do update work.
-	//      And if os[i] > 0, it means the agg's (vps[i]-1)th group is a new one (never been assigned a value),
-	//      Maybe this feature can help us to do some optimization work.
-	//      So we use the os as a parameter but not len(os).
-	//
-	//      agg's (vps[i]-1)th group is related to vector's (offset+i)th row.
-	//      rowCounts[i] is count number of the row[i]
-	// For a more detailed introduction of rowCounts, please refer to comments of Function Fill.
-	BatchFill(offset int64, os []uint8, vps []uint64, vecs []*vector.Vector) error
+	// BatchFill use part rows of the vector to fill agg.
+	// the rows are start from offset and end at offset+len(groupStatus)
+	// groupOfRows[i] is 1 means that the (i+offset)th row matched the first group and 0 means not matched.
+	BatchFill(offset int64, groupStatus []uint8, groupOfRows []uint64, vectors []*vector.Vector) error
 
 	// Merge will merge a couple of group between 2 aggregate function structures.
 	// It merges the groupIndex1-group of agg1 and
@@ -130,19 +93,16 @@ type Agg[T any] interface {
 	Merge(agg2 Agg[any], groupIndex1 int64, groupIndex2 int64) error
 
 	// BatchMerge merges multi groups of agg1 and agg2
-	//  agg1's (vps[i]-1)th group is related to agg2's (start+i)th group
-	// For more introduction of os, please refer to comments of Function BatchFill.
-	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64) error
-
-	// GetInputTypes get types of aggregate's input arguments.
-	GetInputTypes() []types.Type
+	// groupIdxes[i] is 1 means that the (offset + i)th group of agg2 matched the first group and 0 means not matched.
+	BatchMerge(agg2 Agg[any], offset int64, groupStatus []uint8, groupIdxes []uint64) error
 
 	// GetOperatorId get types of aggregate's aggregate id.
-	GetOperatorId() int
+	GetOperatorId() int64
 
 	IsDistinct() bool
 
 	// WildAggReAlloc reallocate for agg structure from memory pool.
+	// todo: remove this method.
 	WildAggReAlloc(m *mpool.MPool) error
 }
 
@@ -154,7 +114,7 @@ type AggStruct interface {
 // UnaryAgg generic aggregation function with one input vector and without distinct
 type UnaryAgg[T1, T2 any] struct {
 	// operation type of aggregate
-	op int
+	op int64
 
 	// aggregate struct
 	priv AggStruct
@@ -166,45 +126,36 @@ type UnaryAgg[T1, T2 any] struct {
 	// memory of vs
 	da []byte
 
-	// iscount is true,  it means that the aggregation function is count
+	// isCount indicate if it is count() agg.
 	isCount bool
-	// otyp is output vecotr's type
-	otyp types.Type
-	// ityps is type list of input vectors
-	ityps []types.Type
+	// outputType is return type of agg.
+	outputType types.Type
+	// inputTypes is input type of agg.
+	inputTypes []types.Type
 
-	// grows used for add groups
+	partialresult any
+
+	// grows add more n groups into agg.
 	grows func(int)
-	// eval used to get final aggregated value
-	eval func([]T2, error) ([]T2, error)
-	// merge
-	// 	first argument is the group number to be merged
-	//  second argument is the group number used to merge
-	// 	third argument is the value of the group corresponding to the first aggregate function,
-	//	fourth argument is the value of the group corresponding to the second aggregate function,
-	//  fifth argument is whether the value corresponding to the first aggregate function is empty,
-	//  sixth argument is whether the value corresponding to the second aggregate function is empty
-	//  seventh value is the private data
+
+	// eval get final result of agg.
+	eval func([]T2) ([]T2, error)
+
+	// merge used to merge 2 groups of agg.
+	// the arguments are
+	// [index of group1, index of group2, result of group1, result of group2, is group1 empty, is group2 empty, private structure of group2's owner]
 	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error)
-	// fill
-	//  first argument is the group number to be filled
-	// 	second parameter is the value to be fed
-	//	third is the value of the group to be filled
-	// 	fourth is the number of times the first parameter needs to be fed
-	//  fifth represents whether it is a new group
-	//  sixth represents whether the value to be fed is null
+
+	// fill add a value into one group of agg.
+	// the arguments are
+	// [group index, value to add, result of group, number of times to add, is group new, is value null]
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)
-
-	// Optional optimisation function for functions where cgo is used in a single pass.
-	batchFill func(any, any, int64, int64, []uint64, *nulls.Nulls) error
-
-	err error
 }
 
 // UnaryDistAgg generic aggregation function with one input vector and with distinct
 type UnaryDistAgg[T1, T2 any] struct {
 	// operation type of aggregate
-	op int
+	op int64
 
 	// aggregate struct
 	priv AggStruct
@@ -215,47 +166,40 @@ type UnaryDistAgg[T1, T2 any] struct {
 	es []bool
 	// memory of vs
 	da []byte
-
-	// iscount is true,  it means that the aggregation function is count
-	isCount bool
 
 	maps []*hashmap.StrHashMap
 
 	// raw values of input vectors
 	srcs [][]T1
 
-	// output vecotr's type
-	otyp types.Type
-	// type list of input vectors
-	ityps []types.Type
+	// isCount indicate if it is count() agg.
+	isCount bool
+	// outputType is return type of agg.
+	outputType types.Type
+	// inputTypes is input type of agg.
+	inputTypes []types.Type
 
-	// grows used for add groups
+	partialresult any
+
+	// grows add more n groups into agg.
 	grows func(int)
-	// eval used to get final aggregated value
-	eval func([]T2, error) ([]T2, error)
-	// merge
-	// 	first argument is the group number to be merged
-	//  second argument is the group number used to merge
-	// 	third argument is the value of the group corresponding to the first aggregate function,
-	//	fourth argument is the value of the group corresponding to the second aggregate function,
-	//  fifth argument is whether the value corresponding to the first aggregate function is empty,
-	//  sixth argument is whether the value corresponding to the second aggregate function is empty
-	//  seventh value is the private data
-	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error)
-	// fill
-	//  first argument is the group number to be filled
-	// 	second parameter is the value to be fed
-	//	third is the value of the group to be filled
-	// 	fourth is the number of times the first parameter needs to be fed
-	//  fifth represents whether it is a new group
-	//  sixth represents whether the value to be fed is null
-	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)
 
-	err error
+	// eval get final result of agg.
+	eval func([]T2) ([]T2, error)
+
+	// merge used to merge 2 groups of agg.
+	// the arguments are
+	// [index of group1, index of group2, result of group1, result of group2, is group1 empty, is group2 empty, private structure of group2's owner]
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error)
+
+	// fill add a value into one group of agg.
+	// the arguments are
+	// [group index, value to add, result of group, number of times to add, is group new, is value null]
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)
 }
 
 type EncodeAgg struct {
-	Op      int
+	Op      int64
 	Private []byte
 	Es      []bool
 	Da      []byte
@@ -266,7 +210,7 @@ type EncodeAgg struct {
 }
 
 type EncodeAggDistinct[T any] struct {
-	Op      int
+	Op      int64
 	Private []byte
 	Es      []bool
 	Da      []byte
@@ -359,9 +303,4 @@ func (m *EncodeAggDistinct[T]) UnmarshalBinary(data []byte) error {
 	m.IsCount = aggPB.IsCount
 
 	return nil
-}
-
-type Compare interface {
-	constraints.Integer | constraints.Float | types.Date |
-		types.Datetime | types.Timestamp
 }

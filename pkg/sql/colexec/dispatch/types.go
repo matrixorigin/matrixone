@@ -20,7 +20,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -81,6 +80,8 @@ type Argument struct {
 
 	// IsSink means this is a Sink Node
 	IsSink bool
+	// RecSink means this is a Recursive Sink Node
+	RecSink bool
 	// FuncId means the sendFunc you want to call
 	FuncId int
 	// LocalRegs means the local register you need to send to.
@@ -88,12 +89,12 @@ type Argument struct {
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
 	// for shuffle dispatch
-
+	ShuffleType         int32
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		if arg.ctr.isRemote {
 			if !arg.ctr.prepared {
@@ -110,7 +111,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 					message.Uuid = r.uuid[:]
 				}
 				if pipelineFailed {
-					err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
 					message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
 				}
 				r.cs.Write(timeoutCtx, message)
@@ -131,6 +131,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			case <-arg.LocalRegs[i].Ctx.Done():
 			case arg.LocalRegs[i].Ch <- nil:
 			}
+		} else {
+			arg.LocalRegs[i].CleanChannel(proc.Mp())
 		}
 		close(arg.LocalRegs[i].Ch)
 	}

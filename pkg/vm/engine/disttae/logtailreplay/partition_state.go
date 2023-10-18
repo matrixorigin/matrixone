@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -68,6 +69,10 @@ type PartitionState struct {
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
 	shared *sharedStates
+
+	// blocks deleted before minTS is hard deleted.
+	// partition state can't serve txn with snapshotTS less than minTS
+	minTS types.TS
 }
 
 // sharedStates is shared among all PartitionStates
@@ -381,6 +386,7 @@ func (p *PartitionState) HandleRowsDelete(
 		)
 	}
 
+	numDeletes := int64(0)
 	for i, rowID := range rowIDVector {
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleDel, func() {
 
@@ -394,6 +400,7 @@ func (p *PartitionState) HandleRowsDelete(
 			if !ok {
 				entry = pivot
 				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
+				numDeletes++
 			}
 
 			entry.Deleted = true
@@ -412,10 +419,7 @@ func (p *PartitionState) HandleRowsDelete(
 					BlockID: blockID,
 				},
 			}
-			be, ok := p.blocks.Get(bPivot)
-			if ok && !be.EntryState {
-				p.dirtyBlocks.Set(be)
-			}
+			p.dirtyBlocks.Set(bPivot)
 
 			// primary key
 			if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
@@ -435,6 +439,7 @@ func (p *PartitionState) HandleRowsDelete(
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.DeleteEntries.Add(1)
+		c.DistTAE.Logtail.DeleteRows.Add(numDeletes)
 	})
 }
 
@@ -455,6 +460,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	deltaLocationVector := mustVectorFromProto(input.Vecs[6])
 	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
 	segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
+	memTruncTSVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
 
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
@@ -475,8 +481,12 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			if !ok {
 				blockEntry = pivot
 				numInserted++
+			} else if blockEntry.CommitTs.GreaterEq(commitTimeVector[i]) {
+				// it possible to get an older version blk from lazy loaded checkpoint
+				return
 			}
 
+			// the following codes handle created block or newer version of block
 			if location := objectio.Location(metaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 				blockEntry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
@@ -493,7 +503,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			if t := commitTimeVector[i]; !t.IsEmpty() {
 				blockEntry.CommitTs = t
 			}
-			blockEntry.EntryState = entryStateVector[i]
+
+			isAppendable := entryStateVector[i]
+			isEmptyDelta := blockEntry.DeltaLocation().IsEmpty()
+			blockEntry.EntryState = isAppendable
 
 			p.blocks.Set(blockEntry)
 
@@ -508,6 +521,8 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			}
 
 			{
+				scanCnt := int64(0)
+				trunctPoint := memTruncTSVector[i]
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
 					BlockID: blockID,
@@ -517,6 +532,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					if entry.BlockID != blockID {
 						break
 					}
+					scanCnt++
 					//it's tricky here.
 					//Due to consuming lazily the checkpoint,
 					//we have to take the following scenario into account:
@@ -526,36 +542,34 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					//   from the checkpoint, then apply the block meta into PartitionState.blocks.
 					// So , if the above scenario happens, we need to set the non-appendable block into
 					// PartitionState.dirtyBlocks.
-					if !entryStateVector[i] && blockEntry.DeltaLocation().IsEmpty() {
-						//if entry.Deleted {
+					if !isAppendable && isEmptyDelta {
 						p.dirtyBlocks.Set(blockEntry)
-						//}
-						//for better performance, we can break here.
 						break
 					}
 
 					// if the inserting block is appendable, need to delete the rows for it;
 					// if the inserting block is non-appendable and has delta location, need to delete
 					// the deletes for it.
-					if entryStateVector[i] ||
-						(!entryStateVector[i] && !blockEntry.DeltaLocation().IsEmpty()) {
-						p.rows.Delete(entry)
-						numDeleted++
+					if isAppendable || (!isAppendable && !isEmptyDelta) {
+						if entry.Time.LessEq(trunctPoint) {
+							// delete the row
+							p.rows.Delete(entry)
 
-					}
-					if entryStateVector[i] {
-						if len(entry.PrimaryIndexBytes) > 0 {
-							p.primaryIndex.Delete(&PrimaryIndexEntry{
-								Bytes:      entry.PrimaryIndexBytes,
-								RowEntryID: entry.ID,
-							})
+							// delete the row's primary index
+							if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
+								p.primaryIndex.Delete(&PrimaryIndexEntry{
+									Bytes:      entry.PrimaryIndexBytes,
+									RowEntryID: entry.ID,
+								})
+							}
+							numDeleted++
 						}
 					}
 				}
 				iter.Release()
-				//if the inserting block is non-appendable and has delta location,
-				//then delete it from the dirtyBlocks.
-				if !entryStateVector[i] && !blockEntry.DeltaLocation().IsEmpty() {
+
+				// if there are no rows for the block, delete the block from the dirty
+				if scanCnt == numDeleted && p.dirtyBlocks.Len() > 0 {
 					p.dirtyBlocks.Delete(blockEntry)
 				}
 			}
@@ -597,18 +611,41 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 				panic(fmt.Sprintf("invalid block id. %x", rowID))
 			}
 
-			entry.DeleteTime = deleteTimeVector[i]
+			if entry.DeleteTime.IsEmpty() {
+				// apply first delete
+				entry.DeleteTime = deleteTimeVector[i]
 
-			p.blocks.Set(entry)
+				p.blocks.Set(entry)
 
-			{
-				e := BlockIndexByTSEntry{
-					Time:         entry.DeleteTime,
-					BlockID:      blockID,
-					IsDelete:     true,
-					IsAppendable: entry.EntryState,
+				{
+					e := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Set(e)
 				}
-				p.blockIndexByTS.Set(e)
+			} else {
+				// update deletetime, if incoming delete ts is less
+				if entry.DeleteTime.Greater(deleteTimeVector[i]) {
+					old := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Delete(old)
+					entry.DeleteTime = deleteTimeVector[i]
+					p.blocks.Set(entry)
+					new := BlockIndexByTSEntry{
+						Time:         entry.DeleteTime,
+						BlockID:      blockID,
+						IsDelete:     true,
+						IsAppendable: entry.EntryState,
+					}
+					p.blockIndexByTS.Set(new)
+				}
 			}
 
 		})
@@ -633,18 +670,77 @@ func (p *PartitionState) BlockVisible(blockID types.Blockid, ts types.TS) bool {
 	return entry.Visible(ts)
 }
 
-func (p *PartitionState) AppendCheckpoint(checkpoint string) {
+func (p *PartitionState) AppendCheckpoint(checkpoint string, partiton *Partition) {
+	if partiton.checkpointConsumed.Load() {
+		panic("checkpoints already consumed")
+	}
 	p.checkpoints = append(p.checkpoints, checkpoint)
 }
 
-func (p *PartitionState) ConsumeCheckpoints(
-	fn func(checkpoint string) error,
+func (p *PartitionState) consumeCheckpoints(
+	fn func(checkpoint string, state *PartitionState) error,
 ) error {
 	for _, checkpoint := range p.checkpoints {
-		if err := fn(checkpoint); err != nil {
+		if err := fn(checkpoint, p); err != nil {
 			return err
 		}
 	}
 	p.checkpoints = p.checkpoints[:0]
 	return nil
+}
+
+func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
+	if p.minTS.Greater(ts) {
+		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
+		return
+	}
+	p.minTS = ts
+	gced := false
+	pivot := BlockIndexByTSEntry{
+		Time:     ts.Next(),
+		BlockID:  types.Blockid{},
+		IsDelete: true,
+	}
+	iter := p.blockIndexByTS.Copy().Iter()
+	ok := iter.Seek(pivot)
+	if !ok {
+		ok = iter.Last()
+	}
+	blksToDelete := ""
+	for ; ok; ok = iter.Prev() {
+		entry := iter.Item()
+		if entry.Time.Greater(ts) {
+			continue
+		}
+		if entry.IsDelete {
+			p.blockIndexByTS.Delete(entry)
+			blockPivot := BlockEntry{
+				BlockInfo: catalog.BlockInfo{
+					BlockID: entry.BlockID,
+				},
+			}
+			blkEntry, ok := p.blocks.Get(blockPivot)
+			if !ok {
+				panic("blk entry not existed")
+			}
+			createEntry := BlockIndexByTSEntry{
+				Time:         blkEntry.CreateTime,
+				BlockID:      blkEntry.BlockID,
+				IsDelete:     false,
+				IsAppendable: blkEntry.EntryState,
+			}
+			p.blockIndexByTS.Delete(createEntry)
+			p.blockIndexByTS.Delete(entry)
+			p.blocks.Delete(blkEntry)
+			if gced {
+				blksToDelete = fmt.Sprintf("%s, %v", blksToDelete, entry.BlockID.ShortStringEx())
+			} else {
+				blksToDelete = fmt.Sprintf("%s%v", blksToDelete, entry.BlockID.ShortStringEx())
+			}
+			gced = true
+		}
+	}
+	if gced {
+		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], blksToDelete)
+	}
 }

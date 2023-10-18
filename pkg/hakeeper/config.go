@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	DefaultTickPerSecond   = 10
-	DefaultLogStoreTimeout = 5 * time.Minute
-	DefaultDNStoreTimeout  = 10 * time.Second
-	DefaultCNStoreTimeout  = 30 * time.Second
+	DefaultTickPerSecond     = 10
+	DefaultLogStoreTimeout   = 5 * time.Minute
+	DefaultTNStoreTimeout    = 10 * time.Second
+	DefaultCNStoreTimeout    = 30 * time.Second
+	DefaultProxyStoreTimeout = 30 * time.Second
 )
 
 type Config struct {
@@ -36,15 +37,20 @@ type Config struct {
 	// it regards the log store as down.
 	LogStoreTimeout time.Duration
 
-	// DNStoreTimeout is the actual time limit between a dn store's heartbeat.
-	// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
-	// it regards the dn store as down.
-	DNStoreTimeout time.Duration
+	// TNStoreTimeout is the actual time limit between a tn store's heartbeat.
+	// If HAKeeper does not receive two heartbeat within TNStoreTimeout,
+	// it regards the tn store as down.
+	TNStoreTimeout time.Duration
 
 	// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
 	// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
-	// it regards the dn store as down.
+	// it regards the tn store as down.
 	CNStoreTimeout time.Duration
+
+	// ProxyStoreTimeout is the actual time limit between a proxy store's heartbeat.
+	// If HAKeeper does not receive two heartbeat within ProxyStoreTimeout,
+	// it regards the proxy store as down.
+	ProxyStoreTimeout time.Duration
 }
 
 func (cfg Config) Validate() error {
@@ -58,11 +64,14 @@ func (cfg *Config) Fill() {
 	if cfg.LogStoreTimeout == 0 {
 		cfg.LogStoreTimeout = DefaultLogStoreTimeout
 	}
-	if cfg.DNStoreTimeout == 0 {
-		cfg.DNStoreTimeout = DefaultDNStoreTimeout
+	if cfg.TNStoreTimeout == 0 {
+		cfg.TNStoreTimeout = DefaultTNStoreTimeout
 	}
 	if cfg.CNStoreTimeout == 0 {
 		cfg.CNStoreTimeout = DefaultCNStoreTimeout
+	}
+	if cfg.ProxyStoreTimeout == 0 {
+		cfg.ProxyStoreTimeout = DefaultProxyStoreTimeout
 	}
 }
 
@@ -70,12 +79,16 @@ func (cfg Config) LogStoreExpired(start, current uint64) bool {
 	return uint64(int(cfg.LogStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
-func (cfg Config) DNStoreExpired(start, current uint64) bool {
-	return uint64(int(cfg.DNStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
+func (cfg Config) TNStoreExpired(start, current uint64) bool {
+	return uint64(int(cfg.TNStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
 func (cfg Config) CNStoreExpired(start, current uint64) bool {
 	return uint64(int(cfg.CNStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
+}
+
+func (cfg Config) ProxyStoreExpired(start, current uint64) bool {
+	return uint64(int(cfg.ProxyStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
 func (cfg Config) ExpiredTick(start uint64, timeout time.Duration) uint64 {

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -56,8 +57,7 @@ func SetLength(bat *Batch, n int) {
 
 func (info *aggInfo) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
-	i32 := int32(info.Op)
-	buf.Write(types.EncodeInt32(&i32))
+	buf.Write(types.EncodeInt64(&info.Op))
 	buf.Write(types.EncodeBool(&info.Dist))
 	buf.Write(types.EncodeType(&info.inputTypes))
 	data, err := types.Encode(info.Agg)
@@ -69,13 +69,13 @@ func (info *aggInfo) MarshalBinary() ([]byte, error) {
 }
 
 func (info *aggInfo) UnmarshalBinary(data []byte) error {
-	info.Op = int(types.DecodeInt32(data[:4]))
-	data = data[4:]
+	info.Op = types.DecodeInt64(data[:8])
+	data = data[8:]
 	info.Dist = types.DecodeBool(data[:1])
 	data = data[1:]
 	info.inputTypes = types.DecodeType(data[:types.TSize])
 	data = data[types.TSize:]
-	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes)
+	aggregate, err := agg.NewAgg(info.Op, info.Dist, []types.Type{info.inputTypes})
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	aggInfos := make([]aggInfo, len(bat.Aggs))
 	for i := range aggInfos {
 		aggInfos[i].Op = bat.Aggs[i].GetOperatorId()
-		aggInfos[i].inputTypes = bat.Aggs[i].GetInputTypes()[0]
+		aggInfos[i].inputTypes = bat.Aggs[i].InputTypes()[0]
 		aggInfos[i].Dist = bat.Aggs[i].IsDistinct()
 		aggInfos[i].Agg = bat.Aggs[i]
 	}
@@ -122,6 +122,9 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 }
 
 func (bat *Batch) Shrink(sels []int64) {
+	if len(sels) == bat.rowCount {
+		return
+	}
 	for _, vec := range bat.Vecs {
 		vec.Shrink(sels, false)
 	}
@@ -194,7 +197,6 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {
-	// xxx todo maybe some bug here
 	if bat == EmptyBatch {
 		return
 	}
@@ -245,19 +247,26 @@ func (bat *Batch) CleanOnlyData() {
 	bat.rowCount = 0
 }
 
-// XXX Useless function, cannot provide any information.
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
 	for i, vec := range bat.Vecs {
-		buf.WriteString(fmt.Sprintf("%d : %s\n", i, vec.GetType()))
+		buf.WriteString(fmt.Sprintf("%d : %s\n", i, vec.String()))
 	}
 	return buf.String()
+}
+
+func (bat *Batch) Log(tag string) {
+	if bat == nil || bat.rowCount < 1 {
+		return
+	}
+	logutil.Infof("\n" + tag + "\n" + bat.String())
 }
 
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	rbat := NewWithSize(len(bat.Vecs))
 	rbat.SetAttributes(bat.Attrs)
+	rbat.Recursive = bat.Recursive
 	for j, vec := range bat.Vecs {
 		typ := *bat.GetVector(int32(j)).GetType()
 		rvec := vector.NewVec(typ)
@@ -269,6 +278,15 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	}
 	rbat.rowCount = bat.rowCount
 	return rbat, nil
+}
+
+func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
+	for i := range bat.Vecs {
+		if err := bat.Vecs[i].PreExtend(rows, m); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
@@ -331,7 +349,7 @@ func (bat *Batch) AntiShrink(sels []int64) {
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0
+	return bat.rowCount == 0 && bat.AuxData == nil
 }
 
 func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {

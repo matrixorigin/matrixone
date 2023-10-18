@@ -92,11 +92,9 @@ func (db *DB) ForceCheckpoint(
 	if err != nil {
 		return err
 	}
-	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts); err != nil {
+	if err = db.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, true); err != nil {
 		return err
 	}
-	lsn := db.BGCheckpointRunner.MaxLSNInRange(ts)
-	_, err = db.Wal.RangeCheckpoint(1, lsn)
 	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
 	return err
 }
@@ -138,8 +136,11 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback(context.Background())
 }
 
-func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
-	replayer := newReplayer(dataFactory, db, maxTs)
+func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS, lsn uint64, valid bool) {
+	if !valid {
+		logutil.Infof("checkpoint version is too small, LSN check is disable")
+	}
+	replayer := newReplayer(dataFactory, db, maxTs, lsn, valid)
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
 

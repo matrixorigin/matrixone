@@ -48,7 +48,7 @@ type container struct {
 	flatFn           []func(v, w *vector.Vector) error // method to flat const vector
 }
 
-func (arg *Argument) Free(proc *process.Process, _ bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		for i := range ctr.sortExprExecutor {
@@ -65,8 +65,8 @@ func (arg *Argument) Free(proc *process.Process, _ bool) {
 }
 
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
-	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+	if bat.IsEmpty() {
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}

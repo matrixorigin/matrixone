@@ -71,13 +71,13 @@ func TestCNStateUpdate(t *testing.T) {
 	})
 }
 
-func TestDNStateUpdate(t *testing.T) {
-	state := DNState{Stores: map[string]DNStoreInfo{}}
+func TestTNStateUpdate(t *testing.T) {
+	state := TNState{Stores: map[string]TNStoreInfo{}}
 
-	hb1 := DNStoreHeartbeat{
+	hb1 := TNStoreHeartbeat{
 		UUID:           "dn-a",
 		ServiceAddress: "addr-a",
-		Shards: []DNShardInfo{{
+		Shards: []TNShardInfo{{
 			ShardID:   1,
 			ReplicaID: 1,
 		}},
@@ -86,17 +86,17 @@ func TestDNStateUpdate(t *testing.T) {
 	tick1 := uint64(100)
 
 	state.Update(hb1, tick1)
-	assert.Equal(t, state.Stores["dn-a"], DNStoreInfo{
+	assert.Equal(t, state.Stores["dn-a"], TNStoreInfo{
 		Tick:                 tick1,
 		ServiceAddress:       hb1.ServiceAddress,
 		Shards:               hb1.Shards,
 		LogtailServerAddress: hb1.LogtailServerAddress,
 	})
 
-	hb2 := DNStoreHeartbeat{
+	hb2 := TNStoreHeartbeat{
 		UUID:           "dn-a",
 		ServiceAddress: "addr-a",
-		Shards: []DNShardInfo{
+		Shards: []TNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1}},
 		LogtailServerAddress: "addr-0",
@@ -104,7 +104,7 @@ func TestDNStateUpdate(t *testing.T) {
 	tick2 := uint64(200)
 
 	state.Update(hb2, tick2)
-	assert.Equal(t, state.Stores[hb2.UUID], DNStoreInfo{
+	assert.Equal(t, state.Stores[hb2.UUID], TNStoreInfo{
 		Tick:                 tick2,
 		ServiceAddress:       hb2.ServiceAddress,
 		Shards:               hb2.Shards,
@@ -284,7 +284,7 @@ func TestLogString(t *testing.T) {
 					ChangeType:     StartReplica,
 					InitialMembers: nil,
 				},
-				ServiceType:   DNService,
+				ServiceType:   TNService,
 				ShutdownStore: nil,
 			},
 			expected: "D/Start storeA storeA:1:4:1",
@@ -474,7 +474,7 @@ func TestCNWorkStateUpdate(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
-		WorkState:      metadata.WorkState_Draining,
+		WorkState:      metadata.WorkState_Working,
 		Labels:         map[string]metadata.LabelList{},
 	})
 }
@@ -572,11 +572,41 @@ func TestCNStateLabelPatch(t *testing.T) {
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
 		Role:           metadata.CNRole_AP,
-		WorkState:      metadata.WorkState_Drained,
+		WorkState:      metadata.WorkState_Working,
 		Labels: map[string]metadata.LabelList{
 			"role": {
 				Labels: []string{"r1"},
 			},
 		},
+	})
+}
+
+func TestProxyStateUpdate(t *testing.T) {
+	state := ProxyState{Stores: map[string]ProxyStore{}}
+
+	hb1 := ProxyHeartbeat{
+		UUID:          "proxy-1",
+		ListenAddress: "addr-a",
+	}
+	tick1 := uint64(100)
+
+	state.Update(hb1, tick1)
+	assert.Equal(t, state.Stores[hb1.UUID], ProxyStore{
+		UUID:          hb1.UUID,
+		Tick:          tick1,
+		ListenAddress: hb1.ListenAddress,
+	})
+
+	hb2 := ProxyHeartbeat{
+		UUID:          "proxy-1",
+		ListenAddress: "addr-a",
+	}
+	tick2 := uint64(200)
+
+	state.Update(hb2, tick2)
+	assert.Equal(t, state.Stores[hb2.UUID], ProxyStore{
+		UUID:          hb1.UUID,
+		Tick:          tick2,
+		ListenAddress: hb1.ListenAddress,
 	})
 }
