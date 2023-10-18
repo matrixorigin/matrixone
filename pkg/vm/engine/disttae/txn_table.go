@@ -417,11 +417,13 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
+		objName := location.Name().String()
 		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 		if err != nil {
 			return err
 		}
 		meta := objMeta.MustDataMeta()
+		rowCnt := int64(meta.BlockHeader().Rows())
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
 			return err
@@ -435,12 +437,11 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 			infoList = append(infoList, &plan.MetadataScanInfo{
 				ColName:      col.Name,
 				IsHidden:     col.Hidden,
-				ObjectName:   obj.Location().Name().String(),
-				MetaLoc:      obj.Location(),
-				DelLoc:       obj.Location(),
+				ObjectName:   objName,
+				ObjLoc:       location,
 				CreateTs:     createTs,
 				DeleteTs:     deleteTs,
-				RowCnt:       int64(meta.BlockHeader().Rows()),
+				RowCnt:       rowCnt,
 				NullCnt:      int64(colMeta.NullCnt()),
 				CompressSize: int64(colMeta.Location().Length()),
 				OriginSize:   int64(colMeta.Location().OriginSize()),

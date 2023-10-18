@@ -169,11 +169,9 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 		case plan.MetadataScanInfo_IS_HIDDEN:
 			vector.AppendFixed(opBat.Vecs[i], info.IsHidden, false, mp)
 
-		case plan.MetadataScanInfo_META_LOC:
-			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.MetaLoc).String()), false, mp)
+		case plan.MetadataScanInfo_OBJ_LOC:
+			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.ObjLoc).String()), false, mp)
 
-		case plan.MetadataScanInfo_DELTA_LOC:
-			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.DelLoc).String()), false, mp)
 		case plan.MetadataScanInfo_CREATE_TS:
 			var ts types.TS
 			if err := ts.Unmarshal(info.CreateTs); err != nil {
