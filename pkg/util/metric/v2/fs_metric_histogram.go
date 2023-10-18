@@ -34,7 +34,7 @@ var (
 			Subsystem: "fs",
 			Name:      "s3_io_duration_seconds",
 			Help:      "Bucketed histogram of s3 io duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
 
 	LocalIODurationHistogram = prometheus.NewHistogramVec(
@@ -43,7 +43,7 @@ var (
 			Subsystem: "fs",
 			Name:      "local_io_duration_seconds",
 			Help:      "Bucketed histogram of local io duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
 
 	S3GetConnDurationHistogram = prometheus.NewHistogram(
@@ -52,7 +52,7 @@ var (
 			Subsystem: "fs",
 			Name:      "s3_conn_duration_seconds",
 			Help:      "Bucketed histogram of s3 get conn duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	S3DNSDurationHistogram = prometheus.NewHistogram(
@@ -61,7 +61,7 @@ var (
 			Subsystem: "fs",
 			Name:      "s3_dns_duration_seconds",
 			Help:      "Bucketed histogram of s3 resolve dns duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	S3ConnectDurationHistogram = prometheus.NewHistogram(
@@ -70,7 +70,7 @@ var (
 			Subsystem: "fs",
 			Name:      "s3_connect_duration_seconds",
 			Help:      "Bucketed histogram of s3 connect duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	S3TLSHandshakeDurationHistogram = prometheus.NewHistogram(
@@ -79,7 +79,7 @@ var (
 			Subsystem: "fs",
 			Name:      "s3_tls_handshake_duration_seconds",
 			Help:      "Bucketed histogram of s3 tls handshake duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	LocalIOBytesHistogram = prometheus.NewHistogramVec(
