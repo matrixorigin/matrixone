@@ -234,18 +234,6 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 		}
 	}
 
-	// append the stats to the CSV
-	csvDataSize := len(csvWriter.GetContent())
-
-	additionalLineSlice := make([]string, len(records[0]))
-	copy(additionalLineSlice, records[0])
-	additionalLine := fmt.Sprintf("s: %d r %d b", len(records), csvDataSize)
-	additionalLineSlice[0] = additionalLine
-
-	if err := csvWriter.WriteStrings(additionalLineSlice); err != nil {
-		return err
-	}
-
 	csvData := csvWriter.GetContent()
 
 	loadSQL := fmt.Sprintf("LOAD DATA INLINE FORMAT='csv', DATA='%s' INTO TABLE %s.%s", csvData, tbl.Database, tbl.Table)
