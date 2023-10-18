@@ -18,14 +18,19 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"math"
 	"strings"
 )
 
@@ -79,7 +84,8 @@ const (
 		"mo_catalog.mo_tables as mt " +
 		"where mt.relkind != '%s' and mt.account_id = %d;"
 
-	// have excluded the mo_table_rows and mo_table_size, compared to `getTableStatsFormat`
+	// have excluded the `mo_table_rows` and `mo_table_size`, compared to getTableStatsFormat
+	// and left the `size_in_mb` as a placeholder
 	getTableStatsFormatV2 = "select " +
 		"( select " +
 		"        mu2.user_name as `admin_name` " +
@@ -90,7 +96,8 @@ const (
 		"      ) as mu1 on mu2.user_id = mu1.min_user_id " +
 		") as `admin_name`, " +
 		"count(distinct mt.reldatabase) as `db_count`, " +
-		"count(distinct mt.relname) as `table_count` " +
+		"count(distinct mt.relname) as `table_count`, " +
+		"cast(0 as double) as `size_in_mb` " +
 		"from " +
 		"mo_catalog.mo_tables as mt " +
 		"where mt.relkind != '%s' and mt.account_id = %d;"
@@ -100,8 +107,7 @@ const (
 	idxOfAdminName  = 0
 	idxOfDBCount    = 1
 	idxOfTableCount = 2
-	//idxOfRowCount   = 3
-	idxOfSize = 3
+	idxOfSize       = 3
 
 	// column index in the result set of the statement show accounts
 	finalIdxOfAccountName   = 0
@@ -111,10 +117,9 @@ const (
 	finalIdxOfSuspendedTime = 4
 	finalIdxOfDBCount       = 5
 	finalIdxOfTableCount    = 6
-	//finalIdxOfRowCount      = 7
-	finalIdxOfSize    = 7
-	finalIdxOfComment = 8
-	finalColumnCount  = 9
+	finalIdxOfSize          = 7
+	finalIdxOfComment       = 8
+	finalColumnCount        = 9
 )
 
 func getSqlForAllAccountInfo(like *tree.ComparisonExpr) string {
@@ -137,16 +142,44 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
+func makeStorageUsageRequest() []txn.CNOpRequest {
+	cluster := clusterservice.GetMOCluster()
+	var requests []txn.CNOpRequest
+	cluster.GetTNService(clusterservice.NewSelector(),
+		func(store metadata.TNService) bool {
+			for _, shard := range store.Shards {
+				requests = append(requests, txn.CNOpRequest{
+					OpCode: uint32(ctl.CmdMethod_StorageUsage),
+					Target: metadata.TNShard{
+						TNShardRecord: metadata.TNShardRecord{
+							ShardID: shard.ShardID,
+						},
+						ReplicaID: shard.ReplicaID,
+						Address:   store.TxnServiceAddress,
+					},
+					Payload: nil,
+				})
+			}
+			return true
+		})
+	return requests
+}
+
+// getAccountStorageUsage calculates the storage usage of all accounts
+// by handling checkpoint
 func getAccountStorageUsage() map[int32]uint64 {
-	return map[int32]uint64{
-		0: 99,
-	}
+	// step 1: pulling the newest ckp locations and block entries from tn
+	requests := makeStorageUsageRequest()
+
+	// step 2: handling these pulled data
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
-	newVec := vector.NewVec(types.T_uint64.ToType())
-	vector.AppendFixed(newVec, size, false, mp)
-	ori.Vecs = append(ori.Vecs, newVec)
+	newVec := vector.NewVec(types.T_float64.ToType())
+	// round to six decimal places
+	vector.AppendFixed(newVec, math.Round(float64(size)/(1048576.0)*1e6)/1e6, false, mp)
+	ori.Vecs[idxOfSize].Free(mp)
+	ori.Vecs[idxOfSize] = newVec
 }
 
 // doShowAccountsInProgress is going to replace `doShowAccounts`.
@@ -234,7 +267,7 @@ func doShowAccountsInProgress(ctx context.Context, ses *Session, sa *tree.ShowAc
 	// step 2
 	// calculating the storage usage size of accounts
 	// the returned value is a map: account_id -> size (in bytes)
-	usages := getAccountStorageUsage()
+	size := getAccountStorageUsage()
 
 	// step 3
 	outputBatches = make([]*batch.Batch, len(allAccountInfo))
@@ -246,8 +279,8 @@ func doShowAccountsInProgress(ctx context.Context, ses *Session, sa *tree.ShowAc
 				return err
 			}
 
-			// step 3.2: put size info into batch
-			embeddingSizeToBatch(tempBatch, usages[id], mp)
+			// step 3.2: put size value into batch
+			embeddingSizeToBatch(tempBatch, size[id], mp)
 
 			eachAccountInfo = append(eachAccountInfo, tempBatch)
 		}
@@ -469,7 +502,6 @@ func mergeRsColumns(rsOfMoAccountColumns *plan.ResultColDef, rsOfEachAccountColu
 	def.ResultCols[finalIdxOfSuspendedTime] = rsOfMoAccountColumns.ResultCols[idxOfSuspendedTime]
 	def.ResultCols[finalIdxOfDBCount] = rsOfEachAccountColumns.ResultCols[idxOfDBCount]
 	def.ResultCols[finalIdxOfTableCount] = rsOfEachAccountColumns.ResultCols[idxOfTableCount]
-	//def.ResultCols[finalIdxOfRowCount] = rsOfEachAccountColumns.ResultCols[idxOfRowCount]
 	def.ResultCols[finalIdxOfSize] = rsOfEachAccountColumns.ResultCols[idxOfSize]
 	def.ResultCols[finalIdxOfComment] = rsOfMoAccountColumns.ResultCols[idxOfComment]
 	return def
@@ -515,10 +547,6 @@ func initOutputRs(rs *MysqlResultSet, rsOfMoAccount *MysqlResultSet, rsOfEachAcc
 		return err
 	}
 	outputColumns[finalIdxOfTableCount], err = rsOfEachAccount.GetColumn(ctx, idxOfTableCount)
-	if err != nil {
-		return err
-	}
-	//outputColumns[finalIdxOfRowCount], err = rsOfEachAccount.GetColumn(ctx, idxOfRowCount)
 	if err != nil {
 		return err
 	}
@@ -596,7 +624,6 @@ func mergeOutputResult(ses *Session, outputBatch *batch.Batch, rsOfMoAccount *ba
 	outputBatch.Vecs[finalIdxOfSuspendedTime] = rsOfMoAccount.Vecs[idxOfSuspendedTime]
 	outputBatch.Vecs[finalIdxOfDBCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfDBCount].GetType())
 	outputBatch.Vecs[finalIdxOfTableCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfTableCount].GetType())
-	//outputBatch.Vecs[finalIdxOfRowCount] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfRowCount].GetType())
 	outputBatch.Vecs[finalIdxOfSize] = vector.NewVec(*rsOfEachAccount[0].Vecs[idxOfSize].GetType())
 	outputBatch.Vecs[finalIdxOfComment] = rsOfMoAccount.Vecs[idxOfComment]
 

@@ -80,7 +80,7 @@ const (
 	ShowAllAccountSQL = "SHOW ACCOUNTS;"
 	ShowAccountSQL    = "SHOW ACCOUNTS like %q;"
 	ColumnAccountName = "account_name" // result column in `show accounts`, or column in table mo_catalog.mo_account
-	ColumnSize        = "size"         // result column in `show accounts`, or column in table mo_catalog.mo_account
+	ColumnSize        = "size_in_mb"   // result column in `show accounts`, or column in table mo_catalog.mo_account
 	ColumnCreatedTime = "created_time" // column in table mo_catalog.mo_account
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
 )
