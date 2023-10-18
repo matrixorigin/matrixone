@@ -286,6 +286,10 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
 				i := 0
 				for _, part := range indexdef.Parts {
+					// NOTE: we skip the alias PK column from the secondary keys list here.
+					// The final SQL string will be similar to the output of "show create table"
+					// (ie buildShowCreateTable) and we should avoid
+					// showing the alias column in the secondary keys list.
 					if catalog.IsAlias(part) {
 						continue
 					}
