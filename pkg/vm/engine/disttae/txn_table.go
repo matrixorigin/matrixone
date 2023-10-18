@@ -156,24 +156,24 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	return rows, nil
 }
 
-func (tbl *txnTable) ForeachBlock(
-	state *logtailreplay.PartitionState,
-	fn func(block logtailreplay.BlockEntry) error,
-) (err error) {
-	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
-	iter, err := state.NewBlocksIter(ts)
-	if err != nil {
-		return err
-	}
-	for iter.Next() {
-		entry := iter.Entry()
-		if err = fn(entry); err != nil {
-			break
-		}
-	}
-	iter.Close()
-	return
-}
+//func (tbl *txnTable) ForeachBlock(
+//	state *logtailreplay.PartitionState,
+//	fn func(block logtailreplay.BlockEntry) error,
+//) (err error) {
+//	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+//	iter, err := state.NewBlocksIter(ts)
+//	if err != nil {
+//		return err
+//	}
+//	for iter.Next() {
+//		entry := iter.Entry()
+//		if err = fn(entry); err != nil {
+//			break
+//		}
+//	}
+//	iter.Close()
+//	return
+//}
 
 func (tbl *txnTable) ForeachDataObject(
 	state *logtailreplay.PartitionState,
@@ -650,7 +650,7 @@ func (tbl *txnTable) rangesOnePart(
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	dirtyBlks := make(map[types.Blockid]struct{})
+
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
 		if err != nil {
@@ -666,6 +666,7 @@ func (tbl *txnTable) rangesOnePart(
 		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
 	}
 
+	dirtyBlks := make(map[types.Blockid]struct{})
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
 		iter := state.NewDirtyBlocksIter()

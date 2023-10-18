@@ -48,10 +48,13 @@ type PartitionState struct {
 	// also modify the Copy method if adding fields
 
 	// data
-	rows   *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	//TODO:: It will be removed.
 	blocks *btree.BTreeG[BlockEntry]
 	//table data objects
 	dataObjects *btree.BTreeG[ObjectEntry]
+	//TODO:: It's transient, should be removed in future PR.
+	blockDeltas *btree.BTreeG[BlockDeltaEntry]
 	checkpoints []string
 
 	// index
@@ -139,15 +142,29 @@ func (b *BlockEntry) Visible(ts types.TS) bool {
 		(b.DeleteTime.IsEmpty() || ts.Less(b.DeleteTime))
 }
 
-type ObjectEntry struct {
-	location objectio.Location
+type BlockDeltaEntry struct {
+	BlockID types.Blockid
 
-	CreateTime types.TS
-	DeleteTime types.TS
+	DeltaLoc catalog.ObjectLocation
+}
+
+func (b BlockDeltaEntry) Less(than BlockDeltaEntry) bool {
+	return b.BlockID.Compare(than.BlockID) < 0
+}
+
+type ObjectEntry struct {
+	Loc objectio.Location
+
+	EntryState  bool
+	Sorted      bool
+	HasDeltaLoc bool
+	SegmentID   types.Uuid
+	CreateTime  types.TS
+	DeleteTime  types.TS
 }
 
 func (o ObjectEntry) Less(than ObjectEntry) bool {
-	return bytes.Compare(o.location.ShortName()[:], than.location.ShortName()[:]) < 0
+	return bytes.Compare(o.Loc.ShortName()[:], than.Loc.ShortName()[:]) < 0
 }
 
 func (o *ObjectEntry) Visible(ts types.TS) bool {
@@ -156,7 +173,7 @@ func (o *ObjectEntry) Visible(ts types.TS) bool {
 }
 
 func (o ObjectEntry) Location() objectio.Location {
-	return o.location
+	return o.Loc
 }
 
 type PrimaryIndexEntry struct {
@@ -222,6 +239,7 @@ func NewPartitionState(noData bool) *PartitionState {
 		rows:           btree.NewBTreeGOptions((RowEntry).Less, opts),
 		blocks:         btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		dataObjects:    btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		blockDeltas:    btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		primaryIndex:   btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		dirtyBlocks:    btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		blockIndexByTS: btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
@@ -234,6 +252,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		rows:           p.rows.Copy(),
 		blocks:         p.blocks.Copy(),
 		dataObjects:    p.dataObjects.Copy(),
+		blockDeltas:    p.blockDeltas.Copy(),
 		primaryIndex:   p.primaryIndex.Copy(),
 		noData:         p.noData,
 		dirtyBlocks:    p.dirtyBlocks.Copy(),
@@ -517,7 +536,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 				blockEntry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
-			if id := segmentIDVector[i]; objectio.IsEmptySegid(&id) {
+			if id := segmentIDVector[i]; !objectio.IsEmptySegid(&id) {
 				blockEntry.SegmentID = id
 			}
 			blockEntry.Sorted = sortedStateVector[i]
@@ -534,8 +553,16 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			p.blocks.Set(blockEntry)
 
+			if !isEmptyDelta {
+				blockDeltaEntry := BlockDeltaEntry{
+					BlockID:  blockID,
+					DeltaLoc: blockEntry.DeltaLoc,
+				}
+				p.blockDeltas.Set(blockDeltaEntry)
+			}
+
 			objPivot := ObjectEntry{
-				location: blockEntry.MetaLocation(),
+				Loc: blockEntry.MetaLocation(),
 			}
 			objEntry, ok := p.dataObjects.Get(objPivot)
 			if !ok {
@@ -543,8 +570,15 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				objEntry = objPivot
 			} else {
 				//FIXME::??
-				objEntry.location = blockEntry.MetaLocation()
+				objEntry.Loc = blockEntry.MetaLocation()
 			}
+			objEntry.EntryState = isAppendable
+			objEntry.Sorted = sortedStateVector[i]
+			if !objEntry.HasDeltaLoc {
+				objEntry.HasDeltaLoc = !isEmptyDelta
+			}
+			objEntry.SegmentID = blockEntry.SegmentID
+
 			p.dataObjects.Set(objEntry)
 
 			{
@@ -686,7 +720,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 			}
 
 			objPivot := ObjectEntry{
-				location: entry.MetaLocation(),
+				Loc: entry.MetaLocation(),
 			}
 			objEntry, ok := p.dataObjects.Get(objPivot)
 			if !ok {
@@ -779,6 +813,9 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 			p.blockIndexByTS.Delete(createEntry)
 			p.blockIndexByTS.Delete(entry)
 			p.blocks.Delete(blkEntry)
+			p.blockDeltas.Delete(BlockDeltaEntry{
+				BlockID: blkEntry.BlockID,
+			})
 			if gced {
 				blksToDelete = fmt.Sprintf("%s, %v", blksToDelete, entry.BlockID.ShortStringEx())
 			} else {
