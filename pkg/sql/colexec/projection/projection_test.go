@@ -96,8 +96,8 @@ func TestProjection(t *testing.T) {
 		_, _ = tc.arg.Call(tc.proc)
 
 		tc.proc.FreeVectors()
-		tc.arg.Free(tc.proc, false)
-		tc.arg.children[0].Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.children[0].Free(tc.proc, false, nil)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

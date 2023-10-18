@@ -71,7 +71,7 @@ type container struct {
 	buf *batch.Batch
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		mp := proc.Mp()
 		ctr := arg.ctr

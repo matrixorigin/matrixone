@@ -153,7 +153,7 @@ func BenchmarkLimit(b *testing.B) {
 			}
 			resetChildren(tc.arg, bats)
 			_, _ = tc.arg.Call(tc.proc)
-			tc.arg.Free(tc.proc, false)
+			tc.arg.Free(tc.proc, false, nil)
 		}
 	}
 }

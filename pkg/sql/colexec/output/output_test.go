@@ -94,8 +94,8 @@ func TestOutput(t *testing.T) {
 		resetChildren(tc.arg, bats)
 		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.arg.Free(tc.proc, false)
-		tc.arg.children[0].Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.children[0].Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}

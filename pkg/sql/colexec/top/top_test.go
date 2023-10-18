@@ -80,8 +80,8 @@ func TestTop(t *testing.T) {
 		resetChildren(tc.arg, bats)
 		_, _ = tc.arg.Call(tc.proc)
 		tc.proc.FreeVectors()
-		tc.arg.Free(tc.proc, false)
-		tc.arg.children[0].Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.children[0].Free(tc.proc, false, nil)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -104,8 +104,8 @@ func BenchmarkTop(b *testing.B) {
 			}
 			resetChildren(tc.arg, bats)
 			_, _ = tc.arg.Call(tc.proc)
-			tc.arg.Free(tc.proc, false)
-			tc.arg.children[0].Free(tc.proc, false)
+			tc.arg.Free(tc.proc, false, nil)
+			tc.arg.children[0].Free(tc.proc, false, nil)
 		}
 	}
 }
