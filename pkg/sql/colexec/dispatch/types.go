@@ -76,6 +76,8 @@ type container struct {
 
 	remoteToIdx map[uuid.UUID]int
 	hasData     bool
+
+	buf *batch.Batch
 }
 
 type Argument struct {
@@ -136,6 +138,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 				uuids = append(uuids, arg.RemoteRegs[i].Uuid)
 			}
 			colexec.Srv.DeleteUuids(uuids)
+		}
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
 		}
 	}
 

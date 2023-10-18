@@ -227,6 +227,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = vm.Eval
 				break
 			}
+			if result.Batch.IsEmpty() {
+				continue
+			}
 
 			bat, err := result.Batch.Dup(proc.Mp())
 			if err != nil {
