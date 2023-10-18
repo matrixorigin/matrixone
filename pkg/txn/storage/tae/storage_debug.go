@@ -110,6 +110,8 @@ func (s *taeStorage) Debug(ctx context.Context,
 		ret := moctl.SelfProcess(req.Cmd, req.Spans, req.Threshold)
 		return []byte(ret), nil
 
+	case uint32(ctl.CmdMethod_StorageUsage):
+		//TODO
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
 	}

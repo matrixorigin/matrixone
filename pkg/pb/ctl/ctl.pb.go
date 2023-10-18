@@ -60,6 +60,9 @@ const (
 	CmdMethod_Backup CmdMethod = 12
 	// Enable or disable specified span
 	CmdMethod_TraceSpan CmdMethod = 13
+	// for CN launchs storage usage query to TN,
+	// not used in mo_ctl for now
+	CmdMethod_StorageUsage CmdMethod = 14
 )
 
 var CmdMethod_name = map[int32]string{
