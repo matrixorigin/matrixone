@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -227,7 +228,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 	var err error
 	var nodes []string
 
-	disttae.SelectForSuperTenant(clusterservice.NewSelector(), "root", nil,
+	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
 		func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
 		})
@@ -246,7 +247,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 		}
 	}
 
-	err = queryservice.RequestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 
@@ -578,7 +579,7 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 	var err error
 	var nodes []string
 
-	disttae.SelectForSuperTenant(clusterservice.NewSelector(), "root", nil,
+	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
 		func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
 		})
@@ -597,7 +598,7 @@ func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
 		}
 	}
 
-	err = queryservice.RequestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 
@@ -702,12 +703,12 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 	var err error
 	var nodes []string
 
-	disttae.SelectForSuperTenant(clusterservice.NewSelector(), "root", nil,
+	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
 		func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
 		})
 
-	disttae.ListTnService(func(s *metadata.TNService) {
+	listTnService(func(s *metadata.TNService) {
 		nodes = append(nodes, s.QueryAddress)
 	})
 
@@ -725,6 +726,21 @@ func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error)
 		}
 	}
 
-	err = queryservice.RequestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
 	return rsps, err
+}
+
+var selectSuperTenant = func(selector clusterservice.Selector,
+	username string,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService)) {
+	disttae.SelectForSuperTenant(selector, username, filter, appendFn)
+}
+
+var listTnService = func(appendFn func(service *metadata.TNService)) {
+	disttae.ListTnService(appendFn)
+}
+
+var requestMultipleCn = func(ctx context.Context, nodes []string, qs queryservice.QueryService, genRequest func() *query.Request, handleValidResponse func(string, *query.Response), handleInvalidResponse func(string)) error {
+	return queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
 }
