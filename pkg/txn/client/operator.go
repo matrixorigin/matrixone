@@ -248,7 +248,9 @@ func (tc *txnOperator) setWaitActive(v bool) {
 
 func (tc *txnOperator) waitActive(ctx context.Context) error {
 	start := time.Now()
-	defer v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	if tc.waiter == nil {
 		return nil
@@ -443,7 +445,9 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
 	start := time.Now()
-	v2.TxnCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
 	defer task.End()
