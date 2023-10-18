@@ -91,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			err = ctr.build(ap, bat, proc, anal)
 			if err != nil {
-				ap.Free(proc, true)
+				ap.Free(proc, true, err)
 			}
 		}
 	}

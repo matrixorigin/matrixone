@@ -51,7 +51,7 @@ type container struct {
 	lastSentIdx  int
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	for i := range arg.ctr.shuffledBats {
 		if arg.ctr.shuffledBats[i] != nil {
 			arg.ctr.shuffledBats[i].Clean(proc.Mp())

@@ -56,7 +56,7 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

@@ -462,7 +462,7 @@ func runLockNonBlockingOpTest(
 			resetChildren(arg, bat)
 
 			fn(proc, arg)
-			arg.Free(proc, false)
+			arg.Free(proc, false, nil)
 		},
 		opts...)
 }
@@ -519,7 +519,7 @@ func runLockBlockingOpTest(
 				}
 			}
 			checkFunc(arg)
-			arg.Free(proc, false)
+			arg.Free(proc, false, nil)
 		},
 		opts...)
 }

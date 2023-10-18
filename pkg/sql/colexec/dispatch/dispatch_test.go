@@ -86,7 +86,7 @@ func TestDispatch(t *testing.T) {
 
 		resetChildren(tc.arg, nil)
 		_, _ = tc.arg.Call(tc.proc)
-		tc.arg.Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
 		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
 				bat = <-re.Ch

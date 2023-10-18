@@ -125,7 +125,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			_, err = ctr.processOrder(i, ap, ctr.bat, proc)
 			if err != nil {
-				ap.Free(proc, true)
+				ap.Free(proc, true, err)
 				return result, err
 			}
 		}

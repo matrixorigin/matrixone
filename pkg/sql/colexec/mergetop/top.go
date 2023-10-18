@@ -70,14 +70,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := ap.ctr
 	result := vm.NewCallResult()
 	if ap.Limit == 0 {
-		ap.Free(proc, false)
 		result.Batch = nil
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 
 	if end, err := ctr.build(ap, proc, anal, arg.info.IsFirst); err != nil {
-		ap.Free(proc, true)
 		return result, err
 	} else if end {
 		result.Status = vm.ExecStop

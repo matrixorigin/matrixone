@@ -109,7 +109,7 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
 }
 
-func (arg *Argument) Free(*process.Process, bool) {}
+func (arg *Argument) Free(*process.Process, bool, error) {}
 
 type ParseLineHandler struct {
 	csvReader *csv.Reader

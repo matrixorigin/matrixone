@@ -85,7 +85,7 @@ func TestJoin(t *testing.T) {
 				break
 			}
 		}
-		tc.arg.Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -107,7 +107,7 @@ func TestJoin(t *testing.T) {
 				break
 			}
 		}
-		tc.arg.Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
