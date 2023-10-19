@@ -324,4 +324,3 @@ select id, py_detect(features, amount) as is_fraud from credit_card_transaction 
 至此，我们已经在 MO 中完成了信用卡欺诈检测任务的推理。
 
 通过该案例可以看出，有了 python udf，我们可以方便地通过自定义 udf 来处理 sql 解决不了的任务。Python udf 既扩展了 sql 的语义，又避免了我们手动编写数据移动和转换的程序，极大地提高了开发效率。
-
