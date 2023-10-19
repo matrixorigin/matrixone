@@ -329,7 +329,9 @@ func TestLockWithBlocking(t *testing.T) {
 			}
 			return end.Status == vm.ExecStop, nil
 		},
-		func(a *Argument) {
+		func(arg *Argument, proc *process.Process) {
+			arg.Free(proc, false, nil)
+			proc.FreeVectors()
 		},
 	)
 }
@@ -378,9 +380,11 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 			ok, err := arg.Call(proc)
 			return ok.Status == vm.ExecStop, err
 		},
-		func(arg *Argument) {
+		func(arg *Argument, proc *process.Process) {
 			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
 			require.Empty(t, arg.rt.cachedBatches)
+			arg.Free(proc, false, nil)
+			proc.FreeVectors()
 		},
 	)
 }
@@ -473,7 +477,7 @@ func runLockBlockingOpTest(
 	values [][]int32,
 	beforeFunc func(proc *process.Process),
 	fn func(proc *process.Process, arg *Argument, idx int, isFirst, isLast bool) (bool, error),
-	checkFunc func(*Argument),
+	checkFunc func(*Argument, *process.Process),
 	opts ...client.TxnClientCreateOption) {
 	runLockOpTest(
 		t,
@@ -487,6 +491,7 @@ func runLockBlockingOpTest(
 			arg := NewArgument(nil).SetBlock(true).AddLockTarget(table, 0, pkType, 1)
 
 			var batches []*batch.Batch
+			var batches2 []*batch.Batch
 			for _, vs := range values {
 				bat := batch.NewWithSize(2)
 				bat.SetRowCount(2)
@@ -499,6 +504,7 @@ func runLockBlockingOpTest(
 				bat.Vecs[1] = vec
 
 				batches = append(batches, bat)
+				batches2 = append(batches2, bat)
 			}
 			require.NoError(t, arg.Prepare(proc))
 			arg.rt.batchFetchFunc = func(process.Analyze) (*batch.Batch, bool, error) {
@@ -518,8 +524,10 @@ func runLockBlockingOpTest(
 					break
 				}
 			}
-			checkFunc(arg)
-			arg.Free(proc, false, nil)
+			for _, bat := range batches2 {
+				bat.Clean(proc.Mp())
+			}
+			checkFunc(arg, proc)
 		},
 		opts...)
 }

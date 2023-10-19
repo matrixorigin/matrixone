@@ -150,7 +150,8 @@ func TestMergeBlock(t *testing.T) {
 	//	}
 	//}
 	argument1.Free(proc, false, nil)
-	//require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+	proc.FreeVectors()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {

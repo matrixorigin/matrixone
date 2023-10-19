@@ -103,7 +103,12 @@ func TestPreInsertNormal(t *testing.T) {
 		for i, vec := range result.Vecs {
 			require.Equal(t, checkResultBat.RowCount(), vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
+		checkResultBat.Clean(proc.Mp())
 	}
+
+	argument1.Free(proc, false, nil)
+	proc.FreeVectors()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func TestPreInsertNullCheck(t *testing.T) {

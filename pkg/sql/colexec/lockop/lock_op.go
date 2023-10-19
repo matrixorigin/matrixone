@@ -720,6 +720,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (arg *Argument) cleanCachedBatch(proc *process.Process) {
+	// do not need clean,  only set nil
 	// for _, bat := range arg.rt.cachedBatches {
 	// 	bat.Clean(proc.Mp())
 	// }

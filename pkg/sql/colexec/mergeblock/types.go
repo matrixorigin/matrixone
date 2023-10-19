@@ -57,10 +57,10 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	// for k := range arg.container.mp {
-	// 	arg.container.mp[k].Clean(proc.GetMPool())
-	// 	arg.container.mp[k] = nil
-	// }
+	for k := range arg.container.mp {
+		arg.container.mp[k].Clean(proc.GetMPool())
+		arg.container.mp[k] = nil
+	}
 }
 
 func (arg *Argument) GetMetaLocBat(name string) {

@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,11 +98,15 @@ func TestInsertOperator(t *testing.T) {
 	resetChildren(&argument1, batch1)
 	err := argument1.Prepare(proc)
 	require.NoError(t, err)
-	result, err := argument1.Call(proc)
+	_, err = argument1.Call(proc)
 	require.NoError(t, err)
 	// result := argument1.InsertCtx.Rel.(*mockRelation).result
 	// require.Equal(t, result.Batch, batch.EmptyBatch)
-	cleanResult(&result, proc)
+
+	argument1.Free(proc, false, nil)
+	argument1.children[0].Free(proc, false, nil)
+	proc.FreeVectors()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
@@ -119,11 +122,4 @@ func resetChildren(arg *Argument, bat *batch.Batch) {
 		})
 	}
 	arg.ctr.state = vm.Build
-}
-
-func cleanResult(result *vm.CallResult, proc *process.Process) {
-	if result.Batch != nil {
-		result.Batch.Clean(proc.Mp())
-		result.Batch = nil
-	}
 }
