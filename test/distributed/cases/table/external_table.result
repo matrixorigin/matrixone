@@ -393,4 +393,3 @@ drop table if exists t1;
 drop table if exists ex_table_null;
 drop table if exists ex_empty_table;
 drop table if exists join_table;
-
