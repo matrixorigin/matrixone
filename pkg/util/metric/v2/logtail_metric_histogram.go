@@ -25,7 +25,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "apply_log_tail_duration_seconds",
 			Help:      "Bucketed histogram of apply log tail duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	LogTailWaitDurationHistogram = prometheus.NewHistogram(
@@ -34,7 +34,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "wait_log_tail_duration_seconds",
 			Help:      "Bucketed histogram of wait log tail apply duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	LogTailAppendDurationHistogram = prometheus.NewHistogram(
@@ -43,6 +43,53 @@ var (
 			Subsystem: "logtail",
 			Name:      "append_log_tail_duration_seconds",
 			Help:      "Bucketed histogram of append log tail into logservice duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
+
+	LogTailBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "tn",
+			Subsystem: "logtail",
+			Name:      "log_tail_bytes",
+			Help:      "Bucketed histogram of logtail log bytes.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		}, []string{"type"})
+
+	LogTailSendDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "tn",
+			Subsystem: "logtail",
+			Name:      "send_log_tail_duration_seconds",
+			Help:      "Bucketed histogram of send logtail log duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 10),
+		}, []string{"step"})
+
+	LogTailSendLatencyDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "tn",
+			Subsystem: "logtail",
+			Name:      "send_log_tail_latency_duration_seconds",
+			Help:      "Bucketed histogram of send logtail log latency duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 10),
 		})
 )
+
+func GetWriteLogTailBytesHistogram() prometheus.Observer {
+	return LogTailBytesHistogram.WithLabelValues("write")
+}
+
+func GetSendLogTailBytesHistogram() prometheus.Observer {
+	return LogTailBytesHistogram.WithLabelValues("send")
+}
+
+func GetReceiveLogTailBytesHistogram() prometheus.Observer {
+	return LogTailBytesHistogram.WithLabelValues("receive")
+}
+
+func GetSendWithStepNetworkLogTailDurationHistogram() prometheus.Observer {
+	return LogTailSendDurationHistogram.WithLabelValues("network")
+}
+
+func GetSendLogTailTotalDurationHistogram() prometheus.Observer {
+	return LogTailSendDurationHistogram.WithLabelValues("total")
+}
