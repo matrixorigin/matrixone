@@ -90,6 +90,8 @@ func (s *scheduler) StopScheduleCronTask() {
 func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 	ts := s.taskServiceGetter()
 	if ts == nil {
+		runtime.ProcessLevelRuntime().Logger().Error("task service is nil",
+			zap.String("status", status.String()))
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
