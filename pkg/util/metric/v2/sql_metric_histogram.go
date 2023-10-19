@@ -25,7 +25,7 @@ var (
 			Subsystem: "sql",
 			Name:      "build_plan_duration_seconds",
 			Help:      "Bucketed histogram of build plan duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	SQlRunDurationHistogram = prometheus.NewHistogram(
@@ -34,6 +34,6 @@ var (
 			Subsystem: "sql",
 			Name:      "sql_run_duration_seconds",
 			Help:      "Bucketed histogram of sql run duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 )
