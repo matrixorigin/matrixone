@@ -1166,6 +1166,43 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
+var visitBlkEntryForStorageUsage = func(h *Handle, resp *db.StorageUsageResp, lastCkpEndTS types.TS) {
+	processor := new(catalog2.LoopProcessor)
+	processor.BlockFn = func(blkEntry *catalog2.BlockEntry) error {
+		// only collecting the blk it's last update happened behind the last checkpoint
+		if blkEntry.GetLatestCommittedNode().End.Greater(lastCkpEndTS) {
+			resp.BlockEntries = append(resp.BlockEntries, &db.BlockMetaInfo{
+				Info: blkEntry.ExtractStorageUsageInfo(),
+			})
+		}
+		return nil
+	}
+
+	h.db.Catalog.RecurLoop(processor)
+}
+
+func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
+	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
+
+	end := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	// get the newest global checkpoint and all increment checkpoints after it.
+	ckpLoc, checkpointed, err := h.db.BGCheckpointRunner.CollectCheckpointsInRange(ctx, types.TS{}, end)
+	if err != nil {
+		resp.Succeed = false
+		return nil, nil
+	}
+
+	resp.CkpLocations = ckpLoc
+
+	// exist a gap!
+	// collecting block entries that have been not checkpoint yet
+	if checkpointed.Less(end) {
+		visitBlkEntryForStorageUsage(h, resp, checkpointed)
+	}
+
+	return nil, nil
+}
+
 func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	if targetDir != "" {

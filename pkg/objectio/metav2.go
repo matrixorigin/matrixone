@@ -25,7 +25,8 @@ const (
 	SchemaTombstone DataMetaType = 1
 
 	CkpMetaStart DataMetaType = 2
-	CkpMetaEnd   DataMetaType = 25 + 2
+	// TODO(ghs) check here
+	CkpMetaEnd DataMetaType = 27 + 2
 )
 
 const (

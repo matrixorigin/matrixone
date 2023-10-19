@@ -87,3 +87,19 @@ message TraceSpan {
     string spans       = 2;
     int64 threshold = 3;
 }
+
+message StorageUsage {
+    option (gogoproto.typedecl) = false;
+}
+
+message BlockMetaInfo {
+    option (gogoproto.typedecl)     = false;
+    repeated uint64 info            = 1;
+}
+
+message StorageUsageResp {
+    option (gogoproto.typedecl)     = false;
+    bool Succeed                    = 1;
+    string CkpLocations             = 2;
+    repeated BlockMetaInfo BlockEntries   = 3;
+}
