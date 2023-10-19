@@ -136,6 +136,10 @@ type Config struct {
 	MetaCache objectio.CacheConfig `toml:"metacache"`
 
 	// IsStandalone denotes the matrixone is running in standalone mode
+	// For the tn does not boost an independent queryservice.
+	// cn,tn shares the same queryservice in standalone mode.
+	// Under distributed deploy mode, cn,tn are independent os process.
+	// they have their own queryservice.
 	IsStandalone bool
 }
 
