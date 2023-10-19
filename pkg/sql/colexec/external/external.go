@@ -131,6 +131,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}()
 	anal.Input(nil, arg.info.IsFirst)
 
+	var err error
 	result := vm.NewCallResult()
 	param := arg.Es
 	if param.Fileparam.End {
@@ -145,17 +146,21 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		param.Fileparam.Filepath = param.FileList[param.Fileparam.FileIndex]
 		param.Fileparam.FileIndex++
 	}
-	bat, err := scanFileData(ctx, param, proc)
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+	arg.buf, err = scanFileData(ctx, param, proc)
 	if err != nil {
 		param.Fileparam.End = true
 		return result, err
 	}
 
-	if bat != nil {
-		anal.Output(bat, arg.info.IsLast)
-		anal.Alloc(int64(bat.Size()))
+	if arg.buf != nil {
+		anal.Output(arg.buf, arg.info.IsLast)
+		anal.Alloc(int64(arg.buf.Size()))
 	}
-	result.Batch = bat
+	result.Batch = arg.buf
 	return result, nil
 }
 

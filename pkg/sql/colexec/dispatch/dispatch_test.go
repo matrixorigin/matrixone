@@ -70,8 +70,11 @@ func TestDispatch(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bat := newBatch(t, tc.types, tc.proc, Rows)
-		resetChildren(tc.arg, bat)
+		bats := []*batch.Batch{
+			newBatch(t, tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
 		/*{
 			for _, vec := range bat.Vecs {
 				if vec.IsOriginal() {
@@ -80,16 +83,10 @@ func TestDispatch(t *testing.T) {
 			}
 		}*/
 		_, _ = tc.arg.Call(tc.proc)
-
-		resetChildren(tc.arg, batch.EmptyBatch)
-		_, _ = tc.arg.Call(tc.proc)
-
-		resetChildren(tc.arg, nil)
-		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
 		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
-				bat = <-re.Ch
+				bat := <-re.Ch
 				if bat == nil {
 					break
 				}
@@ -128,16 +125,16 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Argument, bat *batch.Batch) {
+func resetChildren(arg *Argument, bats []*batch.Batch) {
 	if len(arg.children) == 0 {
 		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+			Batchs: bats,
 		})
 
 	} else {
 		arg.children = arg.children[:0]
 		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+			Batchs: bats,
 		})
 	}
 }

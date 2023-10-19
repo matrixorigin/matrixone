@@ -53,7 +53,7 @@ func findBatchToSend(ap *Argument, threshHold int) int {
 // next time, set this bucket rowcount to 0 and reuse it
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
-	var index = -1
+	var index int
 
 	// clean last sent batch
 	if ap.ctr.lastSentIdx != -1 {

@@ -20,6 +20,7 @@ import (
 	"encoding/csv"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -99,6 +100,7 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+	buf      *batch.Batch
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -109,7 +111,12 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
 }
 
-func (arg *Argument) Free(*process.Process, bool, error) {}
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
+	}
+}
 
 type ParseLineHandler struct {
 	csvReader *csv.Reader

@@ -70,20 +70,20 @@ func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
 }
 
-func (ap *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if ap.ctr != nil {
-		ap.ctr.FreeMergeTypeOperator(pipelineFailed)
-		if len(ap.ctr.insertBats) > 0 {
-			for _, bat := range ap.ctr.insertBats {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.ctr != nil {
+		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if len(arg.ctr.insertBats) > 0 {
+			for _, bat := range arg.ctr.insertBats {
 				bat.Clean(proc.Mp())
 			}
-			ap.ctr.insertBats = nil
+			arg.ctr.insertBats = nil
 		}
-		if ap.ctr.rbat != nil {
-			ap.ctr.rbat.Clean(proc.GetMPool())
+		if arg.ctr.rbat != nil {
+			arg.ctr.rbat.Clean(proc.GetMPool())
 		}
-		if ap.ctr.checkConflictBat != nil {
-			ap.ctr.checkConflictBat.Clean(proc.GetMPool())
+		if arg.ctr.checkConflictBat != nil {
+			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
 		}
 	}
 }
