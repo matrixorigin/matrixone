@@ -1720,16 +1720,20 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 
 // databaseIsValid checks whether the database exists or not.
 func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+	connectDBFirst := false
+	if len(dbName) == 0 {
+		connectDBFirst = true
+	}
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 	}
 
-	if dbName == "" {
-		return "", moerr.NewNoDB(ctx.GetContext())
-	}
-
-	if !ctx.DatabaseExists(dbName) {
-		return "", moerr.NewBadDB(ctx.GetContext(), dbName)
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName) {
+		if connectDBFirst {
+			return "", moerr.NewNoDB(ctx.GetContext())
+		} else {
+			return "", moerr.NewBadDB(ctx.GetContext(), dbName)
+		}
 	}
 	return dbName, nil
 }

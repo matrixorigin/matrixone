@@ -2636,6 +2636,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
+		//connectDBFirst := false
 		if len(table) == 0 || table == "dual" { //special table name
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_VALUE_SCAN,
@@ -2649,6 +2650,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		if len(schema) == 0 && ctx.normalCTE && table == ctx.cteName {
 			return 0, moerr.NewParseError(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
 		} else if len(schema) == 0 {
+			//connectDBFirst = true
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
 				if ctx.recSelect {
@@ -2846,8 +2848,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			schema = ctx.defaultDatabase
 		}
 
+		schema, err = databaseIsValid(schema, builder.compCtx)
+		if err != nil {
+			return 0, err
+		}
+
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
+			/*
+				if ctx.need_connect_db_first {
+					return "not connect to a database"
+				}else{
+					return "invalid database"
+				}
+			*/
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}
 

@@ -37,6 +37,7 @@ const INFORMATION_SCHEMA = "information_schema"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
+	//TODO:
 	if !ctx.DatabaseExists(stmt.Name) {
 		return nil, moerr.NewBadDB(ctx.GetContext(), stmt.Name)
 	}
@@ -72,10 +73,17 @@ func formatStr(str string) string {
 }
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
+	var err error
 	tblName := stmt.Name.Parts[0]
-	dbName := ctx.DefaultDatabase()
+
+	dbName := ""
 	if stmt.Name.NumParts == 2 {
 		dbName = stmt.Name.Parts[1]
+	}
+
+	dbName, err = databaseIsValid(dbName, ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
@@ -1115,3 +1123,4 @@ func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
 	// 	},
 	// }, nil
 }
+
