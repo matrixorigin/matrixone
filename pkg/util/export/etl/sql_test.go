@@ -15,6 +15,7 @@
 package etl
 
 import (
+	"regexp"
 	"testing"
 	"time"
 
@@ -29,12 +30,8 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
 	defer db.Close()
-
-	mock.ExpectBegin()
-	// mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectPrepare("INSERT INTO `testDB`.`testTable`").ExpectExec().WithArgs("record1").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
+	mock.ExpectExec(regexp.QuoteMeta(`OAD DATA INLINE FORMAT='csv', DATA='record1
+' INTO TABLE testDB.testTable`)).WillReturnResult(sqlmock.NewResult(1, 1))
 	db_holder.SetDBConn(db)
 
 	// set up your DefaultSqlWriter and records
