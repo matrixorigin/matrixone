@@ -571,6 +571,7 @@ show create table index02;
 desc index02;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 select * from index02;
+drop table index02;
 
 
 -- foreign key
