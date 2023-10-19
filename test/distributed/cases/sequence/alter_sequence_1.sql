@@ -44,6 +44,3 @@ select nextval('alter_seq_04'),currval('alter_seq_04');
 alter sequence if exists alter_seq_04 as int increment by 200 minvalue 10 no cycle;
 select nextval('alter_seq_04'),currval('alter_seq_04');
 drop sequence alter_seq_04;
-create sequence if not exists alter_seq_05 as bigint increment by 100 minvalue 20 start with 50 cycle;
-alter sequence alter_seq_05 minvalue 10 maxvalue 10 no cycle;
-drop sequence alter_seq_05; 
