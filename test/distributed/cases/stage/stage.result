@@ -70,7 +70,7 @@ my_ext_stage    s3://load/files/    DISABLED
 my_ext_stage1    s3://load/files/    DISABLED    
 my_ext_stage2    s3://load/files/    DISABLED    
 my_ext_stage3    s3://load/files/    ENABLED    
-my_ext_stage4    s3://load/files/    ENABLED    
+my_ext_stage4    s3://load/files/    ENABLED    self stage
 SHOW STAGES like 'my_ext_stage3';
 STAGE_NAME    URL    STATUS    COMMENT
 my_ext_stage3    s3://load/files/    ENABLED    
@@ -88,7 +88,7 @@ my_ext_stage    s3://load/files/    DISABLED
 my_ext_stage2    s3://load/files/    DISABLED    
 my_ext_stage3    s3://load/files/    ENABLED    
 my_ext_stage1    s3://load/files2/    DISABLED    
-my_ext_stage4    s3://load/files/    ENABLED    
+my_ext_stage4    s3://load/files/    ENABLED    user stage
 SHOW STAGES like 'my_ext_stage1';
 STAGE_NAME    URL    STATUS    COMMENT
 my_ext_stage1    s3://load/files2/    DISABLED    

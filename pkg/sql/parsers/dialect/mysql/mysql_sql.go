@@ -15053,7 +15053,7 @@ yydefault:
 		{
 			yyLOCAL = tree.StageComment{
 				Exist:   true,
-				Comment: yyDollar[2].str,
+				Comment: yyDollar[3].str,
 			}
 		}
 		yyVAL.union = yyLOCAL
