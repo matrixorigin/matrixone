@@ -62,7 +62,6 @@ func (m *mockQueryService) NewRequest(method query.CmdMethod) *query.Request {
 }
 
 func (m *mockQueryService) Release(response *query.Response) {
-	return
 }
 
 func (m *mockQueryService) Start() error {
@@ -74,7 +73,6 @@ func (m *mockQueryService) Close() error {
 }
 
 func (m *mockQueryService) AddHandleFunc(method query.CmdMethod, h func(context.Context, *query.Request, *query.Response) error, async bool) {
-	return
 }
 
 func (m *mockQueryService) ServiceID() string {
