@@ -48,7 +48,7 @@ CREATE STAGE my_ext_stage2 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2
 SHOW STAGES;
 
 CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;
-CREATE STAGE my_ext_stage4 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE COMMENT 'self stage';
+CREATE STAGE my_ext_stage4 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE COMMENT = 'self stage';
 SHOW STAGES;
 SHOW STAGES like 'my_ext_stage3';
 
@@ -57,7 +57,7 @@ ALTER STAGE if exists my_ext_stage5 SET URL='s3://load/files2/';
 ALTER STAGE my_ext_stage1 SET URL='s3://load/files2/' CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KEY'='4x5y6z'};
 ALTER STAGE my_ext_stage1 SET URL='s3://load/files2/';
 ALTER STAGE my_ext_stage1 SET CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KEY'='4x5y6z'};
-ALTER STAGE my_ext_stage4 SET COMMENT 'user stage';
+ALTER STAGE my_ext_stage4 SET COMMENT = 'user stage';
 SHOW STAGES;
 SHOW STAGES like 'my_ext_stage1';
 
