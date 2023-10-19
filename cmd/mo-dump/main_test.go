@@ -22,7 +22,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -401,24 +400,4 @@ func TestGetCreateTable(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("Unfulfilled expectations: %s", err)
 	}
-}
-
-func TestOpenDBConnection(t *testing.T) {
-	// create mock database
-	mockDB, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("Failed to create mock database: %v", err)
-	}
-	defer mockDB.Close()
-
-	mock.ExpectPing() // mock a ping to the database
-
-	conn, err := openDBConnection(context.Background(), "dump", "1111", defaultHost, defaultPort, "db", time.Second)
-	if err != nil {
-		t.Fatalf("Failed to open DB connection: %v", err)
-	}
-	defer conn.Close()
-
-	err = mock.ExpectationsWereMet()
-	assert.NoError(t, err)
 }

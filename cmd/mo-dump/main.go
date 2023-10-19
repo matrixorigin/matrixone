@@ -33,6 +33,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+type Options struct {
+	username             string
+	password             string
+	host                 string
+	database             string
+	tbl                  string
+	dbs                  []string
+	tables               Tables
+	port                 int
+	netBufferLength      int
+	toCsv                bool
+	localInfile          bool
+	noData               bool
+	emptyTables          bool
+	csvConf              csvConfig
+	csvFieldDelimiterStr string
+}
+
 func (t *Tables) String() string {
 	return fmt.Sprint(*t)
 }
@@ -44,15 +62,8 @@ func (t *Tables) Set(value string) error {
 
 func main() {
 	var (
-		username, password, host, database      string
-		tables                                  Tables
-		port, netBufferLength                   int
-		createDb                                string
-		createTable                             []string
-		err                                     error
-		toCsv, localInfile, noData, emptyTables bool
-		csvFieldDelimiterStr                    string
-		csvConf                                 csvConfig
+		err error
+		opt *Options
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -67,98 +78,102 @@ func main() {
 		}
 		if err == nil {
 			fmt.Fprintf(os.Stdout, "/* MODUMP SUCCESS, COST %v */\n", time.Since(dumpStart))
-			if toCsv {
+			if opt.toCsv {
 				fmt.Fprintf(os.Stdout, "/* !!!MUST KEEP FILE IN CURRENT DIRECTORY, OR YOU SHOULD CHANGE THE PATH IN LOAD DATA STMT!!! */ \n")
 			}
 		}
 	}()
 
 	ctx := context.Background()
-	flag.StringVar(&username, "u", defaultUsername, "username")
-	flag.StringVar(&password, "p", defaultPassword, "password")
-	flag.StringVar(&host, "h", defaultHost, "hostname")
-	flag.IntVar(&port, "P", defaultPort, "portNumber")
-	flag.IntVar(&netBufferLength, "net-buffer-length", defaultNetBufferLength, "net_buffer_length")
-	flag.StringVar(&database, "db", "", "databaseName, must be specified")
-	flag.Var(&tables, "tbl", "tableNameList, default all")
-	flag.BoolVar(&toCsv, "csv", defaultCsv, "set export format to csv")
-	flag.StringVar(&csvFieldDelimiterStr, "csv-field-delimiter", string(defaultFieldDelimiter), "set csv field delimiter (only one utf8 character). enabled only when the option 'csv' is set.")
-	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
-	flag.BoolVar(&noData, "no-data", defaultNoData, "dump database and table definitions only without data")
+	flag.StringVar(&opt.username, "u", defaultUsername, "username")
+	flag.StringVar(&opt.password, "p", defaultPassword, "password")
+	flag.StringVar(&opt.host, "h", defaultHost, "hostname")
+	flag.IntVar(&opt.port, "P", defaultPort, "portNumber")
+	flag.IntVar(&opt.netBufferLength, "net-buffer-length", defaultNetBufferLength, "net_buffer_length")
+	flag.StringVar(&opt.database, "db", "", "databaseName, must be specified")
+	flag.StringVar(&opt.tbl, "tbl", "", "tableNameList, default all")
+	flag.BoolVar(&opt.toCsv, "csv", defaultCsv, "set export format to csv")
+	flag.StringVar(&opt.csvFieldDelimiterStr, "csv-field-delimiter", string(defaultFieldDelimiter), "set csv field delimiter (only one utf8 character). enabled only when the option 'csv' is set.")
+	flag.BoolVar(&opt.localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
+	flag.BoolVar(&opt.noData, "no-data", defaultNoData, "dump database and table definitions only without data")
 	flag.Parse()
 
-	dbs := strings.Split(database, ",")
-	if netBufferLength < minNetBufferLength {
+	if opt.netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
-		netBufferLength = minNetBufferLength
+		opt.netBufferLength = minNetBufferLength
 	}
-	if netBufferLength > maxNetBufferLength {
+	if opt.netBufferLength > maxNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be less than %d, set to %d\n", maxNetBufferLength, maxNetBufferLength)
-		netBufferLength = maxNetBufferLength
+		opt.netBufferLength = maxNetBufferLength
 	}
-	if len(dbs) == 0 {
+	opt.dbs = strings.Split(opt.database, ",")
+	if len(opt.dbs) == 0 {
 		err = moerr.NewInvalidInput(ctx, "database must be specified")
 		return
+	}
+	if len(opt.tbl) > 0 {
+		tbls := strings.Split(opt.tbl, ",")
+		for _, t := range tbls {
+			if len(t) != 0 {
+				opt.tables = append(opt.tables, Table{t, ""})
+			}
+		}
 	}
 
 	//replace : in username to #, because : is used as separator in dsn.
 	//password can have ":".
-	username = strings.ReplaceAll(username, ":", "#")
+	opt.username = strings.ReplaceAll(opt.username, ":", "#")
 
 	// if host has ":", reports error
-	if strings.Count(host, ":") > 0 {
+	if strings.Count(opt.host, ":") > 0 {
 		err = moerr.NewInvalidInput(ctx, "host can not have character ':'")
 		return
 	}
 
-	if toCsv {
-		csvConf.enable = toCsv
-		csvConf.fieldDelimiter, err = checkFieldDelimiter(ctx, csvFieldDelimiterStr)
+	if opt.toCsv {
+		opt.csvConf.enable = opt.toCsv
+		opt.csvConf.fieldDelimiter, err = checkFieldDelimiter(ctx, opt.csvFieldDelimiterStr)
 		if err != nil {
 			return
 		}
 	}
 
-	if database == "all" {
-		conn, err = openDBConnection(ctx, username, password, host, port, "", timeout)
+	if opt.database == "all" {
+		conn, err = opt.openDBConnection(ctx, "")
 		if err != nil {
 			return
 		}
 		defer conn.Close()
 
-		dbs, err = getDatabases(ctx)
+		opt.dbs, err = getDatabases(ctx)
 		if err != nil {
 			return
 		}
-		if tables == nil {
-			emptyTables = true
+		if opt.tables == nil {
+			opt.emptyTables = true
 		}
 	}
 
-	if len(dbs) == 0 {
-		err = moerr.NewInvalidInput(ctx, "database must be specified")
-		return
-	}
+	opt.dumpData(ctx)
+}
 
-	if toCsv {
-		csvConf.enable = toCsv
-		csvConf.fieldDelimiter, err = checkFieldDelimiter(ctx, csvFieldDelimiterStr)
-		if err != nil {
-			return
-		}
-	}
+func (opt *Options) dumpData(ctx context.Context) {
+	var (
+		createDb    string
+		createTable []string
+	)
 
-	for _, db := range dbs {
-		conn, err = openDBConnection(ctx, username, password, host, port, db, timeout)
+	for _, db := range opt.dbs {
+		conn, err := opt.openDBConnection(ctx, db)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
 
-		if emptyTables {
-			tables = nil
+		if opt.emptyTables {
+			opt.tables = nil
 		}
-		if len(tables) == 0 { //dump all tables
+		if len(opt.tables) == 0 { //dump all tables
 			createDb, err = getCreateDB(ctx, db)
 			if err != nil {
 				return
@@ -167,12 +182,12 @@ func main() {
 			fmt.Println(createDb, ";")
 			fmt.Printf("USE `%s`;\n\n\n", db)
 		}
-		tables, err = getTables(db, tables)
+		opt.tables, err = getTables(db, opt.tables)
 		if err != nil {
 			return
 		}
-		createTable = make([]string, len(tables))
-		for i, tbl := range tables {
+		createTable = make([]string, len(opt.tables))
+		for i, tbl := range opt.tables {
 			createTable[i], err = getCreateTable(db, tbl.Name)
 			if err != nil {
 				return
@@ -185,27 +200,27 @@ func main() {
 		}
 		left, right := 0, len(createTable)-1
 		for left < right {
-			for left < len(createTable) && tables[left].Kind != catalog.SystemViewRel {
+			for left < len(createTable) && opt.tables[left].Kind != catalog.SystemViewRel {
 				left++
 			}
-			for right >= 0 && tables[right].Kind == catalog.SystemViewRel {
+			for right >= 0 && opt.tables[right].Kind == catalog.SystemViewRel {
 				right--
 			}
 			if left >= right {
 				break
 			}
 			createTable[left], createTable[right] = createTable[right], createTable[left]
-			tables[left], tables[right] = tables[right], tables[left]
+			opt.tables[left], opt.tables[right] = opt.tables[right], opt.tables[left]
 		}
-		adjustViewOrder(createTable, tables, left)
+		adjustViewOrder(createTable, opt.tables, left)
 		for i, create := range createTable {
-			tbl := tables[i]
+			tbl := opt.tables[i]
 			switch tbl.Kind {
 			case catalog.SystemOrdinaryRel:
 				fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
 				showCreateTable(create, false)
-				if !noData {
-					err = genOutput(database, tbl.Name, bufPool, netBufferLength, localInfile, &csvConf)
+				if !opt.noData {
+					err = genOutput(db, tbl.Name, bufPool, opt.netBufferLength, opt.localInfile, &opt.csvConf)
 					if err != nil {
 						return
 					}
@@ -225,8 +240,8 @@ func main() {
 	}
 }
 
-func openDBConnection(ctx context.Context, username, password, host string, port int, database string, timeout time.Duration) (*sql.DB, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, host, port, database)
+func (opt *Options) openDBConnection(ctx context.Context, database string) (*sql.DB, error) {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", opt.username, opt.password, opt.host, opt.port, database)
 
 	conn, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -377,10 +392,7 @@ func getDatabases(ctx context.Context) ([]string, error) {
 		}
 		dbs = append(dbs, dbName)
 	}
-	err = r.Close()
-	if err != nil {
-		return nil, err
-	}
+	defer r.Close()
 
 	return dbs, nil
 }
