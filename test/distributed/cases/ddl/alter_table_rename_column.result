@@ -441,7 +441,7 @@ show create table ex_table_2_1;
 Table    Create Table
 ex_table_2_1    CREATE EXTERNAL TABLE `ex_table_2_1` (\n`num_col1` TINYINT DEFAULT NULL,\n`num_col2` SMALLINT DEFAULT NULL,\n`num_col3` INT DEFAULT NULL,\n`num_col4` BIGINT DEFAULT NULL,\n`num_col5` TINYINT UNSIGNED DEFAULT NULL,\n`num_col6` SMALLINT UNSIGNED DEFAULT NULL,\n`num_col7` INT UNSIGNED DEFAULT NULL,\n`num_col8` BIGINT UNSIGNED DEFAULT NULL,\n`num_col9` FLOAT(5,3) DEFAULT NULL,\n`num_col10` DOUBLE(6,5) DEFAULT NULL,\n`num_col11` DECIMAL(38,19) DEFAULT NULL\n) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
 select * from ex_table_2_1;
-txn need retry in rc mode
+internal error: the input value 'abc' is not int8 type for column 0
 drop table if exists view01;
 drop table if exists view02;
 drop view if exists v0;
