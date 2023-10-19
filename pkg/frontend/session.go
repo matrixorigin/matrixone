@@ -246,7 +246,7 @@ type Session struct {
 
 	stmtProfile process.StmtProfile
 	// queryEnd is the time when the query ends
-	queryEnd        time.Time
+	queryEnd time.Time
 	// queryInProgress indicates whether the query is in progress
 	queryInProgress atomic.Bool
 }
@@ -2225,7 +2225,7 @@ func (ses *Session) StatusSession() *status.Session {
 }
 
 func uuid2Str(uid uuid.UUID) string {
-	if bytes.Compare(uid[:], dumpUUID[:]) == 0 {
+	if bytes.Equal(uid[:], dumpUUID[:]) {
 		return ""
 	}
 	return uid.String()
