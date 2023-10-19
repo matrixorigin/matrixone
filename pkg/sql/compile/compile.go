@@ -886,6 +886,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(node, ss))), nil
 	case plan.Node_TABLE_SCAN:
+		if n.TableDef.Name == "employees" {
+			fmt.Println("---------------------------------")
+		}
+
 		ss, err := c.compileTableScan(n)
 		if err != nil {
 			return nil, err
