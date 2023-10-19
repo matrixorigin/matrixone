@@ -2576,10 +2576,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
-	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
-	defer ses.SetQueryEnd(time.Now())
-	defer ses.SetQueryInProgress(false)
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
