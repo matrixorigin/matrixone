@@ -265,7 +265,7 @@ func (r *taskRunner) fetch(ctx context.Context) {
 			}
 			tasks, err := r.doFetch()
 			if err != nil {
-				break
+				r.logger.Error("fetch task failed", zap.Error(err))
 			}
 			r.addTasks(ctx, tasks)
 		}
@@ -280,7 +280,6 @@ func (r *taskRunner) doFetch() ([]task.Task, error) {
 		WithTaskRunnerCond(EQ, r.runnerID))
 	cancel()
 	if err != nil {
-		r.logger.Error("fetch task failed", zap.Error(err))
 		return nil, err
 	}
 	newTasks := tasks[:0]
