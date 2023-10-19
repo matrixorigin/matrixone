@@ -34,7 +34,7 @@ select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
 43    10    1000    40    3    false    false
 alter sequence alter_seq_01 minvalue 10000 maxvalue 10;
-invalid input: MAXVALUE (10) of sequence must be bigger than MINVALUE (10000) of it
+invalid input: Max value of sequence must be bigger than min value of it
 alter sequence alter_seq_01 minvalue 1 maxvalue 1000000000 cycle;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
