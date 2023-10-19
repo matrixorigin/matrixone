@@ -847,12 +847,6 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
-func shortSegId(x objectio.Segmentid) string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], x[:4])
-	return string(shortuuid[:])
-}
-
 // HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	ctx context.Context,
