@@ -918,9 +918,6 @@ func (h *Handle) HandleWrite(
 				locations = append(locations, location)
 			}
 			err = tb.AddBlksWithMetaLoc(ctx, locations)
-			if req.TableName == "rawlog" {
-				logutil.Infof("mergeblocks add metaloc %s %d", shortSegId(locations[0].Name().SegmentId()), len(locations))
-			}
 			return
 		}
 		//check the input batch passed by cn is valid.
