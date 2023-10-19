@@ -833,10 +833,6 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 			table.Stats.Unlock()
 		}
 
-		if !table.Stats.FlushTableTailEnabled {
-			return nil
-		}
-
 		dirtyTree := entry.GetTree().GetTable(tableID)
 		_, endTs := entry.GetTimeRange()
 

@@ -65,8 +65,6 @@ type TableCompactStat struct {
 
 	// Configs
 
-	// make this table apply flush table tail policy
-	FlushTableTailEnabled bool
 	// how often to flush table tail
 	// this duration will be add some random value to avoid flush many tables at the same time
 	FlushGapDuration time.Duration
@@ -93,7 +91,6 @@ func (s *TableCompactStat) ResetDeadlineWithLock() {
 func (s *TableCompactStat) InitWithLock(durationHint time.Duration) {
 	s.FlushGapDuration = durationHint * 5
 	s.FlushMemCapacity = 20 * 1024 * 1024
-	s.FlushTableTailEnabled = true
 	s.Inited = true
 }
 
