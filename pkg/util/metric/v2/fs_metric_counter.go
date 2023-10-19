@@ -19,51 +19,19 @@ import (
 )
 
 var (
-	S3FSCounter = prometheus.NewCounterVec(
+	S3ConnectCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "cn",
 			Subsystem: "fs",
-			Name:      "s3_total",
-			Help:      "Total number of s3 fs io handled.",
-		}, []string{"type"})
+			Name:      "s3_connect_total",
+			Help:      "Total number of s3 connect count.",
+		})
 
-	LocalFSCounter = prometheus.NewCounterVec(
+	S3DNSResolveCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "cn",
 			Subsystem: "fs",
-			Name:      "local_total",
-			Help:      "Total number of local fs io handled.",
-		}, []string{"type"})
-
-	MemFSCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "cn",
-			Subsystem: "fs",
-			Name:      "mem_fs_total",
-			Help:      "Total number of mem fs io handled.",
-		}, []string{"type"})
+			Name:      "s3_dns_resolve_total",
+			Help:      "Total number of s3 dns resolve count.",
+		})
 )
-
-func GetS3FSReadCounter() prometheus.Counter {
-	return S3FSCounter.WithLabelValues("read")
-}
-
-func GetS3FSWriteCounter() prometheus.Counter {
-	return S3FSCounter.WithLabelValues("write")
-}
-
-func GetLocalFSReadCounter() prometheus.Counter {
-	return LocalFSCounter.WithLabelValues("read")
-}
-
-func GetLocalFSWriteCounter() prometheus.Counter {
-	return LocalFSCounter.WithLabelValues("write")
-}
-
-func GetMemFSReadCounter() prometheus.Counter {
-	return MemFSCounter.WithLabelValues("read")
-}
-
-func GetMemFSWriteCounter() prometheus.Counter {
-	return MemFSCounter.WithLabelValues("write")
-}

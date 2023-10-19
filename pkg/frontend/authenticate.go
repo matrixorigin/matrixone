@@ -3524,7 +3524,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 
 	if stageExist {
 		if !cs.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s exists", cs.Name)
+			return moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
@@ -3697,7 +3697,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error 
 
 	if !stageExist {
 		if !as.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s not exists", as.Name)
+			return moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
@@ -3768,7 +3768,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
 
 	if !stageExist {
 		if !ds.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s not exists", ds.Name)
+			return moerr.NewInternalError(ctx, "the stage %s not exists", ds.Name)
 		} else {
 			// do nothing
 			return err
