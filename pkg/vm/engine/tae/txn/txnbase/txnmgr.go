@@ -17,6 +17,7 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -465,6 +466,14 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	_ = op.Txn.WaitDone(err, isAbort)
 }
 
+type records struct {
+	duration int64
+}
+
+type RecordCtxKeyType string
+
+var recordCtxKey RecordCtxKeyType = "key"
+
 // 1PC and 2PC
 // dequeuePreparing the commit of 1PC txn and prepare of 2PC txn
 // must both enter into this queue for conflict check.
@@ -476,11 +485,21 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable {
+			op.Txn.GetContext() = context.WithValue(op.Txn.GetContext(), recordCtxKey, &records{time.Now().UnixMilli()})
+		}
+
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
 			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
 			continue
 		}
+
+		//x := 0
+		//time.Now().Sub(x) > threshold {
+		//	log(),
+		//}
 
 		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
 		//   		   2. push the AppendNode into the MVCCHandle of block

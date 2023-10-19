@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,39 +32,41 @@ import (
 )
 
 // handleEnableSpan enable or disable spans for some specified operation in TN service
-// or/and CN service.
+// or/and CN service, this operation last exceeds than the threshold (ms), it will record
+// this operation. threshold means not to consider time threshold.
 //
 // the cmd format for CN service:
-// 		mo_ctl("cn", "TranceSpan" "uuids of cn:enable/disable:kinds of span")
+// 		mo_ctl("cn", "TranceSpan" "uuids of cn:enable/disable:kinds of span:time threshold")
 // examples as below:
-// 		mo_ctl("cn", "TraceSpan", "cn_uuid1:enable:s3")
-// 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:s3,local,...")
-// 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:all")
-// 		mo_ctl("cn", "TraceSpan", "all:enable:all)
+// 		mo_ctl("cn", "TraceSpan", "cn_uuid1:enable:s3:0")
+// 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:s3,local,...:1")
+// 		mo_ctl("cn", "TraceSpan", "cn_uuid1,cn_uuid2,...:enable:all:1")
+// 		mo_ctl("cn", "TraceSpan", "all:enable:all:1)
 //
 // the cmd format for TN service:
-// 		mo_ctl("dn", "TraceSpan", "enable/disable:kinds of span")
+// 		mo_ctl("dn", "TraceSpan", "enable/disable:kinds of span:time threshold")
 // (because there only exist one dn service, so we don't need to specify the uuid,
 // 		but, the uuid will be ignored and will not check its validation even though it is specified.)
 // examples as below:
-// mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3")
-// mo_ctl("dn", "TraceSpan", "[uuid]:disable:local")
-// mo_ctl("dn", "TraceSpan", "[uuid]:disable:s3, local,...")
-// mo_ctl("dn", "TraceSpan", "[uuid]:enable:all")
+// mo_ctl("dn", "TraceSpan", "disable:s3:10")
+// mo_ctl("dn", "TraceSpan", "disable:local:1000")
+// mo_ctl("dn", "TraceSpan", "disable:s3, local,...:0")
+// mo_ctl("dn", "TraceSpan", "enable:all:0")
 
 var cmd2State = map[string]bool{
 	"enable":  true,
 	"disable": false,
 }
 
-func checkParameter(param string, ignoreUUID bool) (args []string, err error) {
+func checkParameter(param string, ignoreUUID bool) (args []string, threshold int64, err error) {
 	param = strings.ToLower(param)
-	// [uuids], enable/disable, spans
+	// [uuids], enable/disable, spans, time threshold
 	args = strings.Split(param, ":")
 
-	if (ignoreUUID && len(args) < 2) ||
-		(!ignoreUUID && len(args) != 3) {
-		return nil, moerr.NewInternalErrorNoCtx("parameter invalid")
+	// cmd for tn will ignore the uuid
+	if (ignoreUUID && len(args) < 3) ||
+		(!ignoreUUID && len(args) != 4) {
+		return nil, 0, moerr.NewInternalErrorNoCtx("parameter invalid")
 	}
 
 	cmdIdx := 0
@@ -72,10 +75,15 @@ func checkParameter(param string, ignoreUUID bool) (args []string, err error) {
 	}
 	_, ok := cmd2State[args[cmdIdx]]
 	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("cmd invalid, expected enable or disable")
+		return nil, 0, moerr.NewInternalErrorNoCtx("cmd invalid, expected enable or disable")
 	}
 
-	return args, nil
+	threshold, err = strconv.ParseInt(args[len(args)-1], 10, 64)
+	if err != nil {
+		return nil, 0, moerr.NewInvalidArgNoCtx("threshold", "convert to int failed")
+	}
+
+	return args, threshold, nil
 }
 
 func handleTraceSpan(proc *process.Process,
@@ -90,7 +98,7 @@ func handleTraceSpan(proc *process.Process,
 		return send2TNAndWaitResp(proc, service, parameter, sender)
 	}
 
-	args, err := checkParameter(parameter, false)
+	args, threshold, err := checkParameter(parameter, false)
 	if err != nil {
 		return pb.CtlResult{}, err
 	}
@@ -110,10 +118,10 @@ func handleTraceSpan(proc *process.Process,
 	for idx := range cns {
 		// the current cn also need to process this span cmd
 		if cns[idx] == proc.QueryService.ServiceID() {
-			info[cns[idx]] = SelfProcess(args[1], args[2])
+			info[cns[idx]] = SelfProcess(args[1], args[2], threshold)
 		} else {
 			// transfer query to another cn and receive its response
-			resp, _ := transferRequest(proc, cns[idx], args[1], args[2])
+			resp, _ := transferRequest(proc, cns[idx], args[1], args[2], threshold)
 			if resp == nil {
 				// no such cn service
 				info[cns[idx]] = "no such cn service"
@@ -134,11 +142,11 @@ func handleTraceSpan(proc *process.Process,
 	}, nil
 }
 
-func SelfProcess(cmd string, spans string) string {
+func SelfProcess(cmd string, spans string, threshold int64) string {
 	var succeed, failed []string
 	ss := strings.Split(spans, ",")
 	for _, t := range ss {
-		if trace.SetMoCtledSpanState(t, cmd2State[cmd]) {
+		if trace.SetMoCtledSpanState(t, cmd2State[cmd], threshold) {
 			succeed = append(succeed, t)
 		} else {
 			failed = append(failed, t)
@@ -148,13 +156,14 @@ func SelfProcess(cmd string, spans string) string {
 	return fmt.Sprintf("%v %sd, %v failed", succeed, cmd, failed)
 }
 
-func transferRequest(proc *process.Process, uuid string, cmd string, spans string) (resp *query.Response, err error) {
+func transferRequest(proc *process.Process, uuid string, cmd string, spans string, threshold int64) (resp *query.Response, err error) {
 	clusterservice.GetMOCluster().GetCNService(clusterservice.NewServiceIDSelector(uuid),
 		func(cn metadata.CNService) bool {
 			request := proc.QueryService.NewRequest(query.CmdMethod_TraceSpan)
 			request.TraceSpanRequest = &query.TraceSpanRequest{
-				Cmd:   cmd,
-				Spans: spans,
+				Cmd:       cmd,
+				Spans:     spans,
+				Threshold: threshold,
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -172,18 +181,19 @@ func send2TNAndWaitResp(proc *process.Process,
 
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payloadFn := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-		args, err := checkParameter(parameter, true)
+		args, threshold, err := checkParameter(parameter, true)
 		if err != nil {
 			return nil, err
 		}
 
-		if len(args) == 3 {
+		if len(args) == 4 {
 			args = args[1:]
 		}
 
 		req := db.TraceSpan{
-			Cmd:   args[0],
-			Spans: args[1],
+			Cmd:       args[0],
+			Spans:     args[1],
+			Threshold: threshold,
 		}
 
 		return req.MarshalBinary()

@@ -107,7 +107,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		if err := req.Unmarshal(data); err != nil {
 			return nil, err
 		}
-		ret := moctl.SelfProcess(req.Cmd, req.Spans)
+		ret := moctl.SelfProcess(req.Cmd, req.Spans, req.Threshold)
 		return []byte(ret), nil
 
 	default:
