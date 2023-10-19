@@ -17,7 +17,6 @@ package rpc
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 
 	"os"
