@@ -331,7 +331,9 @@ func (client *txnClient) determineTxnSnapshot(
 	ctx context.Context,
 	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
 	start := time.Now()
-	defer v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	// always use the current ts as txn's snapshot ts is enableSacrificingFreshness
 	if !client.enableSacrificingFreshness {
@@ -411,6 +413,8 @@ func (client *txnClient) closeTxn(txn txn.TxnMeta) {
 
 	key := cutil.UnsafeBytesToString(txn.ID)
 	if op, ok := client.mu.activeTxns[key]; ok {
+		v2.TxnTotalCostDurationHistogram.Observe(time.Since(op.createAt).Seconds())
+
 		delete(client.mu.activeTxns, key)
 		client.removeFromLeakCheck(txn.ID)
 		if !op.isUserTxn() {
