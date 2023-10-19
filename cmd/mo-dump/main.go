@@ -126,7 +126,10 @@ func main() {
 		}
 		defer conn.Close()
 
-		dbs = getDatabases(ctx)
+		dbs, err = getDatabases(ctx)
+		if err != nil {
+			return
+		}
 		if tables == nil {
 			emptyTables = true
 		}
@@ -356,10 +359,13 @@ func getCreateDB(ctx context.Context, db string) (string, error) {
 	return create, err
 }
 
-func getDatabases(ctx context.Context) []string {
+func getDatabases(ctx context.Context) ([]string, error) {
 	r, err := conn.QueryContext(ctx, "show databases")
-	if err != nil || r.Err() != nil {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if r.Err() != nil {
+		return nil, r.Err()
 	}
 	dbs := make([]string, 0)
 
@@ -367,12 +373,16 @@ func getDatabases(ctx context.Context) []string {
 		var dbName string
 		err := r.Scan(&dbName)
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		dbs = append(dbs, dbName)
 	}
+	err = r.Close()
+	if err != nil {
+		return nil, err
+	}
 
-	return dbs
+	return dbs, nil
 }
 
 func getCreateTable(db, tbl string) (string, error) {

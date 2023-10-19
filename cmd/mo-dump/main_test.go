@@ -318,9 +318,10 @@ func TestGetDatabases(t *testing.T) {
 	mock.ExpectQuery("show databases").WillReturnRows(rows)
 
 	conn = db
-	databases := getDatabases(ctx)
+	databases, err := getDatabases(ctx)
 
 	// check the results
+	assert.NoError(t, err)
 	expected := []string{"db1", "db2", "db3"}
 	if len(databases) != len(expected) {
 		t.Errorf("Unexpected number of databases. Expected: %d, Got: %d", len(expected), len(databases))
