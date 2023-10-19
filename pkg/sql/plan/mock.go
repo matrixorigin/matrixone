@@ -88,6 +88,7 @@ type col struct {
 type index struct {
 	indexName  string
 	tableName  string
+	unique     bool
 	parts      []string
 	cols       []col
 	tableExist bool
@@ -421,6 +422,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			comm decimal(7,2),
 			deptno int unsigned,
 			unique key(ename, job),
+			key (ename, job),
 			foreign key (deptno) references dept(deptno)
 		);
 	*/
@@ -456,6 +458,17 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 				},
 				tableExist: true,
+				unique:     true,
+			},
+			{
+				indexName: "",
+				tableName: catalog.SecondaryIndexTableNamePrefix + "512f4fad-77ba-11ed-b347-000c29847904",
+				parts:     []string{"ename", "job"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
+				},
+				tableExist: true,
+				unique:     false,
 			},
 		},
 		outcnt: 14,
@@ -463,6 +476,15 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 	// index table
 	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 13,
+	}
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"512f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
 		cols: []col{
 			{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
@@ -499,6 +521,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					{catalog.IndexTableIndexColName, types.T_varchar, true, 15, 0},
 				},
 				tableExist: true,
+				unique:     true,
 			},
 		},
 		outcnt: 4,
@@ -571,6 +594,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 				},
 				tableExist: true,
+				unique:     true,
 			},
 		},
 		outcnt: 14,
@@ -660,7 +684,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					indexdef := &plan.IndexDef{
 						IndexName:      idx.indexName,
 						Parts:          idx.parts,
-						Unique:         true,
+						Unique:         idx.unique,
 						IndexTableName: idx.tableName,
 						TableExist:     true,
 					}
