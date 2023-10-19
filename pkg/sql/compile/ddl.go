@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -526,10 +527,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
-	getLogger().Info("createTable",
-		zap.String("databaseName", c.db),
-		zap.String("tableName", qry.GetTableDef().GetName()),
-	)
+	// TODO: debug for #11917
+	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
@@ -554,6 +559,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
+			// TODO: debug for #11917
+			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				)
+			}
 			return moerr.NewNoDB(c.ctx)
 		}
 		getLogger().Info("createTable",
@@ -565,6 +578,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
+			// TODO: debug for #11917
+			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				)
+			}
 			return nil
 		}
 		if qry.GetReplace() {
@@ -620,11 +641,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 		)
 		return err
 	}
-	getLogger().Info("createTable ok",
-		zap.String("databaseName", c.db),
-		zap.String("tableName", qry.GetTableDef().GetName()),
-		zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-	)
+	// TODO: debug for #11917
+	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+		getLogger().Info("createTable ok",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
 
 	partitionTables := qry.GetPartitionTables()
 	for _, table := range partitionTables {
