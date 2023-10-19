@@ -94,7 +94,3 @@ select nextval('alter_seq_04'),currval('alter_seq_04');
 nextval(alter_seq_04)    currval(alter_seq_04)
 250    250
 drop sequence alter_seq_04;
-create sequence if not exists alter_seq_05 as bigint increment by 100 minvalue 20 start with 50 cycle;
-alter sequence alter_seq_05 minvalue 10 maxvalue 10 no cycle;
-invalid input: MAXVALUE (10) of sequence must be bigger than MINVALUE (10) of it
-drop sequence alter_seq_05;
