@@ -358,7 +358,7 @@ func getCreateDB(ctx context.Context, db string) (string, error) {
 
 func getDatabases(ctx context.Context) []string {
 	r, err := conn.QueryContext(ctx, "show databases")
-	if err != nil {
+	if err != nil || r.Err() != nil {
 		return nil
 	}
 	dbs := make([]string, 0)
