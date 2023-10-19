@@ -45,14 +45,14 @@ func (t *Tables) Set(value string) error {
 func main() {
 	var (
 		username, password, host, database, tbl string
-		tables                             Tables
-		port, netBufferLength              int
-		createDb                           string
-		createTable                        []string
-		err                                error
-		toCsv, localInfile, noData         bool
-		csvFieldDelimiterStr               string
-		csvConf                            csvConfig
+		tables                                  Tables
+		port, netBufferLength                   int
+		createDb                                string
+		createTable                             []string
+		err                                     error
+		toCsv, localInfile, noData              bool
+		csvFieldDelimiterStr                    string
+		csvConf                                 csvConfig
 	)
 	dumpStart := time.Now()
 	defer func() {
