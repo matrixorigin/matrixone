@@ -596,9 +596,13 @@ jobs:
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
       - name: NOTICE FAIL RESULT
         if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' }}
-        uses: chf007/action-wechat-work@master
-        env:
-          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}
-        with:
-          msgtype: markdown
-          content: "MO Checkin Regression On TKE failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  <@shuqi.qin><@JiejieJia><@SuDong>"
+        run: |
+          for i in {1..10}; do
+            curl -X POST -H "Content-Type: application/json" \
+            -d '{"msgtype":"markdown","markdown":{"content":"MO Checkin Regression On TKE failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin><@JiejieJia><@SuDong>"}}' \
+            '${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}';
+            if [ "$?" -eq 0 ]; then
+              echo "send wecom notice succeeded"；
+              break;
+            fi
+          done
