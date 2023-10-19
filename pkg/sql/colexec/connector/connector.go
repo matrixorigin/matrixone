@@ -42,15 +42,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 
-	// bat, err := result.Batch.Dup(proc.Mp())
-	// if err != nil {
-	// 	return result, err
-	// }
 	bat := result.Batch
-	bat.AddCnt(1)
 	if bat.IsEmpty() {
 		return result, nil
 	}
+	bat.AddCnt(1)
 
 	// there is no need to log anything here.
 	// because the context is already canceled means the pipeline closed normally.

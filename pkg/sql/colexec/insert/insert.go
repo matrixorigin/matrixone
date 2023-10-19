@@ -116,6 +116,11 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 
 	result := vm.NewCallResult()
 	if arg.ctr.state == vm.Eval {
+		if arg.ctr.buf != nil {
+			proc.PutBatch(arg.ctr.buf)
+			arg.ctr.buf = nil
+		}
+
 		// If the target is partition table
 		if len(arg.InsertCtx.PartitionTableIDs) > 0 {
 			for _, writer := range arg.ctr.partitionS3Writers {
@@ -144,7 +149,7 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 		arg.ctr.state = vm.End
-
+		arg.ctr.buf = result.Batch
 		return result, nil
 	}
 
@@ -166,16 +171,20 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 	bat := result.Batch
 	insertCtx := arg.InsertCtx
 
-	insertBat := batch.NewWithSize(len(arg.InsertCtx.Attrs))
-	insertBat.Attrs = arg.InsertCtx.Attrs
-	for i := range insertBat.Attrs {
+	if arg.ctr.buf != nil {
+		proc.PutBatch(arg.ctr.buf)
+		arg.ctr.buf = nil
+	}
+	arg.ctr.buf = batch.NewWithSize(len(arg.InsertCtx.Attrs))
+	arg.ctr.buf.Attrs = arg.InsertCtx.Attrs
+	for i := range arg.ctr.buf.Attrs {
 		vec := proc.GetVector(*bat.Vecs[i].GetType())
 		if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 			return result, err
 		}
-		insertBat.SetVector(int32(i), vec)
+		arg.ctr.buf.SetVector(int32(i), vec)
 	}
-	insertBat.SetRowCount(insertBat.RowCount() + bat.RowCount())
+	arg.ctr.buf.SetRowCount(arg.ctr.buf.RowCount() + bat.RowCount())
 
 	if len(arg.InsertCtx.PartitionTableIDs) > 0 {
 		insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, arg.InsertCtx.Attrs, arg.InsertCtx.PartitionIndexInBatch, len(arg.InsertCtx.PartitionTableIDs))
@@ -192,19 +201,17 @@ func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) 
 		}
 	} else {
 		// insert into table, insertBat will be deeply copied into txn's workspace.
-		err := insertCtx.Rel.Write(proc.Ctx, insertBat)
+		err := insertCtx.Rel.Write(proc.Ctx, arg.ctr.buf)
 		if err != nil {
-			insertBat.Clean(proc.GetMPool())
 			return result, err
 		}
 	}
 
 	if arg.InsertCtx.AddAffectedRows {
-		affectedRows := uint64(insertBat.Vecs[0].Length())
+		affectedRows := uint64(arg.ctr.buf.Vecs[0].Length())
 		atomic.AddUint64(&arg.affectedRows, affectedRows)
 	}
 	// `insertBat` does not include partition expression columns
-	insertBat.Clean(proc.GetMPool())
 	return result, nil
 }
 

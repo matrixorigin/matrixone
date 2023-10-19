@@ -15,6 +15,7 @@
 package insert
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -33,6 +34,7 @@ type container struct {
 	state              vm.CtrState
 	s3Writer           *colexec.S3Writer
 	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
+	buf                *batch.Batch
 }
 
 type Argument struct {
@@ -81,6 +83,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 				writer.Free(proc)
 			}
 			arg.ctr.partitionS3Writers = nil
+		}
+
+		if arg.ctr.buf != nil {
+			arg.ctr.buf.Clean(proc.Mp())
+			arg.ctr.buf = nil
 		}
 	}
 }

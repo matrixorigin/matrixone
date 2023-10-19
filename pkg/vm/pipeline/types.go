@@ -107,6 +107,6 @@ func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, err error
 
 	// clean operator hold memory.
 	for i := range p.instructions {
-		p.instructions[i].Arg.Free(proc, pipelineFailed, nil)
+		p.instructions[i].Arg.Free(proc, pipelineFailed, err)
 	}
 }
