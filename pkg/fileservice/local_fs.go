@@ -158,20 +158,15 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
-	var bytesWritten int
-	v2.GetLocalFSWriteCounter().Inc()
-	defer func() {
-		v2.GetLocalFSWriteSizeGauge().Set(float64(bytesWritten))
-	}()
-
-	start := time.Now()
-	defer v2.GetLocalWriteDurationHistogram().Observe(time.Since(start).Seconds())
-
 	var err error
+	var bytesWritten int
+	start := time.Now()
 	ctx, span := trace.Start(ctx, "LocalFS.Write", trace.WithKind(trace.SpanKindLocalFSVis))
 	defer func() {
 		// cover another func to catch the err when process Write
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, int64(bytesWritten)))
+		v2.GetLocalWriteDurationHistogram().Observe(time.Since(start).Seconds())
+		v2.GetLocalFSWriteBytesHistogram().Observe(float64(bytesWritten))
 	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
@@ -293,14 +288,11 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	bytesCounter := new(atomic.Int64)
-
-	v2.GetLocalFSReadCounter().Inc()
-	defer func() {
-		v2.GetLocalFSReadSizeGauge().Set(float64(bytesCounter.Load()))
-	}()
-
 	start := time.Now()
-	defer v2.GetLocalReadDurationHistogram().Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.GetLocalReadDurationHistogram().Observe(time.Since(start).Seconds())
+		v2.GetLocalFSReadBytesHistogram().Observe(float64(bytesCounter.Load()))
+	}()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
