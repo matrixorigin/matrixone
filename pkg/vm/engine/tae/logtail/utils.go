@@ -2569,7 +2569,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkAccInsAccIDVec := blkAccInsBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
 	blkAccInsDBIDVec := blkAccInsBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
 	blkAccInsTblIDVec := blkAccInsBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	blkAccInsRowsVec := blkAccInsBat.GetVectorByName(CheckpointMetaAttr_BlockRows).GetDownstreamVector()
+	//blkAccInsRowsVec := blkAccInsBat.GetVectorByName(CheckpointMetaAttr_BlockRows).GetDownstreamVector()
 	blkAccInsSizeVec := blkAccInsBat.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
 
 	//blkAccDelAccIDVec := blkAccDelBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
@@ -2638,21 +2638,12 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 
 	// recording the blk rows and size
 	// changing and the account, db, table info the blk belongs to.
-	var size, rows uint32
-	if entry.GetMetaLoc() != nil { // flushed
-		size = entry.GetMetaLoc().Extent().Length()
-		rows = entry.GetMetaLoc().Rows()
-	} else { // not flush yet
-		size = uint32(entry.GetBlockData().EstimateMemSize())
-		rows = uint32(entry.GetBlockData().Rows())
-	}
-	vector.AppendFixed(blkAccInsAccIDVec, entry.GetSegment().GetTable().GetDB().GetTenantID(),
-		false, common.DefaultAllocator)
-	vector.AppendFixed(blkAccInsDBIDVec, entry.GetSegment().GetTable().GetDB().ID,
-		false, common.DefaultAllocator)
-	vector.AppendFixed(blkAccInsTblIDVec, entry.GetSegment().GetTable().ID, false, common.DefaultAllocator)
-	vector.AppendFixed(blkAccInsRowsVec, rows, false, common.DefaultAllocator)
-	vector.AppendFixed(blkAccInsSizeVec, size, false, common.DefaultAllocator)
+	ret := entry.ExtractStorageUsageInfo()
+
+	vector.AppendFixed(blkAccInsAccIDVec, ret[0], false, common.DefaultAllocator)
+	vector.AppendFixed(blkAccInsDBIDVec, ret[1], false, common.DefaultAllocator)
+	vector.AppendFixed(blkAccInsTblIDVec, ret[2], false, common.DefaultAllocator)
+	vector.AppendFixed(blkAccInsSizeVec, ret[3], false, common.DefaultAllocator)
 
 	for _, node := range mvccNodes {
 		if node.IsAborted() {

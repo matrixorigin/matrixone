@@ -111,7 +111,9 @@ func (s *taeStorage) Debug(ctx context.Context,
 		return []byte(ret), nil
 
 	case uint32(ctl.CmdMethod_StorageUsage):
-		//TODO
+		resp, _ := handleRead(ctx, s, txnMeta, data, s.taeHandler.HandleStorageUsage)
+		return resp.Read()
+
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
 	}
