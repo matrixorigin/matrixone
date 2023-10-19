@@ -247,6 +247,7 @@ type Session struct {
 	stmtProfile process.StmtProfile
 	// queryEnd is the time when the query ends
 	queryEnd        time.Time
+	// queryInProgress indicates whether the query is in progress
 	queryInProgress atomic.Bool
 }
 
