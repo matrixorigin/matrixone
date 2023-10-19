@@ -86,8 +86,18 @@ func (zm ZM) doInit(v []byte) {
 func (zm ZM) String() string {
 	var b strings.Builder
 	if zm.IsString() {
+		minBuf, maxBuf := zm.GetMinBuf(), zm.GetMaxBuf()
+		smin, smax := string(minBuf), string(maxBuf)
+
+		if r, _, e := types.DecodeTuple(minBuf); e == nil {
+
+			smin = r.ErrString()
+		}
+		if r, _, e := types.DecodeTuple(maxBuf); e == nil {
+			smax = r.ErrString()
+		}
 		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
-			zm.GetType().String(), zm.GetScale(), string(zm.GetMinBuf()), string(zm.GetMaxBuf())))
+			zm.GetType().String(), zm.GetScale(), smin, smax))
 	} else {
 		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
 			zm.GetType().String(), zm.GetScale(), zm.GetMin(), zm.GetMax()))

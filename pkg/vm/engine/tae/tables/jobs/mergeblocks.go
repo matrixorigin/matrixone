@@ -159,11 +159,11 @@ func mergeColumnWithOutSort(
 }
 
 func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
-	blks := ""
-	for _, blk := range task.mergedBlks {
-		blks = fmt.Sprintf("%s%s,", blks, blk.ID.ShortStringEx())
-	}
-	enc.AddString("from-blks", blks)
+	// blks := ""
+	// for _, blk := range task.mergedBlks {
+	// 	blks = fmt.Sprintf("%s%s,", blks, blk.ID.ShortStringEx())
+	// }
+	// enc.AddString("from-blks", blks)
 	segs := ""
 	for _, seg := range task.mergedSegs {
 		segs = fmt.Sprintf("%s%s,", segs, seg.ID.ToString())
@@ -212,10 +212,10 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	var sortColDef *catalog.ColDef
 	if schema.HasSortKey() {
 		sortColDef = schema.GetSingleSortKey()
+		logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
 	} else {
 		sortColDef = schema.PhyAddrKey
 	}
-	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
 	phaseNumber = 1
 	seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
 	Idxs := make([]int, 0, len(schema.ColDefs))
@@ -234,7 +234,6 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
-	var size, rowCnt int
 	for i, block := range task.compacted {
 		if views[i], err = block.GetColumnDataByIds(ctx, Idxs); err != nil {
 			return
@@ -243,8 +242,6 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 
 		task.deletes[i] = views[i].DeleteMask
 		rowCntBeforeApplyDelete := views[i].Columns[0].Length()
-		rowCnt += rowCntBeforeApplyDelete
-		size += views[i].ApproxSize()
 
 		views[i].ApplyDeletes()
 		vec := views[i].Columns[sortColDef.Idx].GetData()
@@ -259,9 +256,6 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		fromAddr = append(fromAddr, uint32(length))
 		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
-	}
-	if rowsize := size / rowCnt; rowsize > schema.EstimateRowSize() {
-		task.rel.GetMeta().(*catalog.TableEntry).Stats.UpdateEstimateRowSize(rowsize)
 	}
 
 	if length == 0 {
