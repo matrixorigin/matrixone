@@ -5536,7 +5536,7 @@ stage_comment_opt:
     {
         $$ = tree.StageComment{
             Exist: true,
-            Comment: $2,
+            Comment: $3,
         }
     }
 
