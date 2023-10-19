@@ -2262,11 +2262,11 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 
 // Checkout values.
 func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx context.Context) error {
-	if maxValue <= minValue {
-		return moerr.NewInvalidInput(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
+	if maxValue < minValue {
+		return moerr.NewInvalidInput(ctx, "Max value of sequence must be bigger than min value of it")
 	}
 	if startNum < minValue || startNum > maxValue {
-		return moerr.NewInvalidInput(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
+		return moerr.NewInvalidInput(ctx, "Start value for sequence must between minvalue and maxvalue")
 	}
 	return nil
 }
