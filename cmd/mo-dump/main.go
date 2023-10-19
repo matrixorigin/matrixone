@@ -241,6 +241,9 @@ func openDBConnection(ctx context.Context, username, password, host string, port
 	case <-time.After(timeout):
 		return nil, moerr.NewInternalError(ctx, "connect to %s timeout", dsn)
 	}
+	if err != nil {
+		return nil, err
+	}
 
 	return conn, nil
 }
@@ -354,7 +357,10 @@ func getCreateDB(ctx context.Context, db string) (string, error) {
 }
 
 func getDatabases(ctx context.Context) []string {
-	r, _ := conn.QueryContext(ctx, "show databases")
+	r, err := conn.QueryContext(ctx, "show databases")
+	if err != nil {
+		return nil
+	}
 	dbs := make([]string, 0)
 
 	for r.Next() {
