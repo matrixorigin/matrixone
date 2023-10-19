@@ -402,6 +402,7 @@ commit;
 select * from trans_index_01;
 drop table trans_index_01;
 
+
 use unique_secondary_index;
 create table trans_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
 create unique index varchar_index on trans_index_01(col2) comment 'create varchar index';

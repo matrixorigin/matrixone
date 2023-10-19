@@ -1,8 +1,6 @@
 SELECT table_catalog,table_schema,table_name,table_type from `information_schema`.`tables` where table_name = 'mo_tables';
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
--- @bvt:issue#11406
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
--- @bvt:issue
 SELECT * FROM `information_schema`.`key_column_usage` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`profiling` LIMIT 0,1000;
 SELECT * FROM `information_schema`.`schemata` where schema_name = 'information_schema';
