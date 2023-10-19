@@ -605,4 +605,5 @@ jobs:
               echo "send wecom notice succeeded"；
               break;
             fi
+            sleep 5;
           done
