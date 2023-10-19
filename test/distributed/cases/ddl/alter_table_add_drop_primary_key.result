@@ -123,7 +123,7 @@ col1    col2
 alter table pri06 add constraint primary key (col1);
 show create table pri06;
 Table    Create Table
-pri06    CREATE TABLE `pri06` (\n`col1` SMALLINT DEFAULT null,\n`col2` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
+pri06    CREATE TABLE `pri06` (\n`col1` SMALLINT NOT NULL,\n`col2` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri06' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 pri06    col1    SMALLINT    NO
