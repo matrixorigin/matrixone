@@ -289,19 +289,19 @@ col1
 376
 426
 create sequence seq_an_01 as smallint start -1000;
-invalid input: Start value for sequence must between minvalue and maxvalue
+invalid input: STARTVALUE (-1000) for sequence must between MINVALUE (1) and MAXVALUE (32767)
 create sequence if not exists seq_an_01 as bigint increment by 10000 minvalue 500  start with 100;
-invalid input: Start value for sequence must between minvalue and maxvalue
+invalid input: STARTVALUE (100) for sequence must between MINVALUE (500) and MAXVALUE (9223372036854775807)
 create sequence seq_an_01 as smallint maxvalue 9999999 start with -10;
-invalid input: Max value of sequence must be bigger than min value of it
+invalid input: MAXVALUE (-27009) of sequence must be bigger than MINVALUE (1) of it
 create sequence seq_an_01 start with 0;
-invalid input: Start value for sequence must between minvalue and maxvalue
+invalid input: STARTVALUE (0) for sequence must between MINVALUE (1) and MAXVALUE (9223372036854775807)
 create sequence seq_an_02 as tinyint unsigned;
 not supported: Unsupported type for sequence
 create sequence seq_an_02 as tinyint;
 not supported: Unsupported type for sequence
 create sequence seq_an_03  increment -50 start with 126 no cycle;
-invalid input: Start value for sequence must between minvalue and maxvalue
+invalid input: STARTVALUE (126) for sequence must between MINVALUE (-9223372036854775808) and MAXVALUE (-1)
 show sequences;
 Names    Data Type
 seq_01    INT
