@@ -19,13 +19,22 @@ import (
 )
 
 var (
+	TxnTotalCostDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "cn",
+			Subsystem: "txn",
+			Name:      "total_cost_duration_seconds",
+			Help:      "Bucketed histogram of txn total cost duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
+
 	TxnDetermineSnapshotDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "cn",
 			Subsystem: "txn",
 			Name:      "determine_snapshot_duration_seconds",
 			Help:      "Bucketed histogram of determine snapshot duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	TxnWaitActiveDurationHistogram = prometheus.NewHistogram(
@@ -34,7 +43,7 @@ var (
 			Subsystem: "txn",
 			Name:      "wait_active_duration_seconds",
 			Help:      "Bucketed histogram of wait active duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	TxnLockDurationHistogram = prometheus.NewHistogram(
@@ -43,7 +52,7 @@ var (
 			Subsystem: "txn",
 			Name:      "lock_duration_seconds",
 			Help:      "Bucketed histogram of acquire lock duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	TxnUnlockDurationHistogram = prometheus.NewHistogram(
@@ -52,7 +61,7 @@ var (
 			Subsystem: "txn",
 			Name:      "unlock_duration_seconds",
 			Help:      "Bucketed histogram of release lock duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	TxnCommitDurationHistogram = prometheus.NewHistogram(
@@ -61,7 +70,7 @@ var (
 			Subsystem: "txn",
 			Name:      "commit_duration_seconds",
 			Help:      "Bucketed histogram of txn commit duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	TxnTableRangeDurationHistogram = prometheus.NewHistogram(
@@ -70,7 +79,7 @@ var (
 			Subsystem: "txn",
 			Name:      "ranges_duration_seconds",
 			Help:      "Bucketed histogram of txn table ranges duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	TxnSendRequestDurationHistogram = prometheus.NewHistogram(
@@ -79,7 +88,7 @@ var (
 			Subsystem: "txn",
 			Name:      "send_request_duration_seconds",
 			Help:      "Bucketed histogram of handle send txn request duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	TxnHandleQueueInDurationHistogram = prometheus.NewHistogram(
@@ -88,7 +97,7 @@ var (
 			Subsystem: "txn",
 			Name:      "handle_queue_in_duration_seconds",
 			Help:      "Bucketed histogram of add request into handle queue duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
 	TxnHandleCommitDurationHistogram = prometheus.NewHistogram(
@@ -97,6 +106,6 @@ var (
 			Subsystem: "txn",
 			Name:      "handle_commit_duration_seconds",
 			Help:      "Bucketed histogram of handle txn commit duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 )
