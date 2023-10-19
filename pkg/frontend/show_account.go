@@ -165,13 +165,56 @@ func makeStorageUsageRequest() []txn.CNOpRequest {
 	return requests
 }
 
+func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *Session) (resp []txn.CNOpResponse, err error) {
+	txnOperator := ses.proc.TxnOperator
+	if txnOperator == nil {
+		if _, txnOperator, err = ses.TxnCreate(); err != nil {
+			return nil, err
+		}
+	}
+
+	debugRequests := make([]txn.TxnRequest, 0, len(requests))
+	for _, req := range requests {
+		tq := txn.NewTxnRequest(&req)
+		tq.Method = txn.TxnMethod_DEBUG
+		debugRequests = append(debugRequests, tq)
+	}
+	result, err := txnOperator.Debug(ctx, debugRequests)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Release()
+
+	responses := make([]txn.CNOpResponse, 0, len(requests))
+	for _, resp := range result.Responses {
+		responses = append(responses, *resp.CNOpResponse)
+	}
+	return responses, nil
+}
+
+func handleStorageUsageResponse(resp txn.CNOpResponse) (map[int32]uint64, error) {
+	return map[int32]uint64{
+		0: 99,
+	}, nil
+
+}
+
 // getAccountStorageUsage calculates the storage usage of all accounts
 // by handling checkpoint
-func getAccountStorageUsage() map[int32]uint64 {
+func getAllAccountsStorageUsage(ctx context.Context, ses *Session) (map[int32]uint64, error) {
 	// step 1: pulling the newest ckp locations and block entries from tn
 	requests := makeStorageUsageRequest()
+	if len(requests) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("no tn service found")
+	}
+
+	responses, err := requestStorageUsage(ctx, requests, ses)
+	if err != nil {
+		return nil, err
+	}
 
 	// step 2: handling these pulled data
+	return handleStorageUsageResponse(responses[0])
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
@@ -267,7 +310,10 @@ func doShowAccountsInProgress(ctx context.Context, ses *Session, sa *tree.ShowAc
 	// step 2
 	// calculating the storage usage size of accounts
 	// the returned value is a map: account_id -> size (in bytes)
-	size := getAccountStorageUsage()
+	size, err := getAllAccountsStorageUsage(ctx, ses)
+	if err != nil {
+		return err
+	}
 
 	// step 3
 	outputBatches = make([]*batch.Batch, len(allAccountInfo))
