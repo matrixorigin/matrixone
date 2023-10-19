@@ -1135,8 +1135,10 @@ func BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResult
 
 	for _, v := range parameters {
 		if v.IsConstNull() {
-			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
-			return nil
+			for i := 0; i < v.Length(); i++ {
+				ps[i].EncodeNull()
+			}
+			continue
 		}
 
 		switch v.GetType().Oid {

@@ -348,10 +348,10 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 	proc := testutil.NewProcess()
 
 	// serial_full functionality (preserving nulls)
-	input1 := []bool{true, false, true}
-	input1Nulls := []bool{true, false, true}
-	input2 := []int8{10, 1, 120}
-	input2Nulls := []bool{false, true, false}
+	input1 := []bool{true, false, true, true}
+	input1Nulls := []bool{true, false, true, true}
+	input2 := []int8{10, 1, 120, -1}
+	input2Nulls := []bool{false, true, false, true}
 
 	tc := tcTemp{
 		info: "test serial_full(a, b, c)",
@@ -360,7 +360,7 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 			testutil.NewFunctionTestInput(types.T_int8.ToType(), input2, input2Nulls),
 		},
 		expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"serial_full(null, 10)", "serial_full(false, null)", "serial_full(null, 120)"}, nil),
+			[]string{"serial_full(null, 10)", "serial_full(false, null)", "serial_full(null, 120)", "serial_full(null, null)"}, nil),
 	}
 	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BuiltInSerialFull)
 	tcc.Run()
@@ -390,6 +390,14 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, nil, tuple[0]) // note: nulls are preserved
 		require.Equal(t, input2[2], tuple[1])
+	}
+	{
+		v, null := p1.GetStrValue(3)
+		require.False(t, null)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err)
+		require.Equal(t, nil, tuple[0]) // note: nulls are preserved
+		require.Equal(t, nil, tuple[1]) // note: nulls are preserved
 	}
 
 }
