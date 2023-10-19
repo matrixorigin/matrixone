@@ -99,7 +99,7 @@ jobs:
       - name: Check Log Messages Count per second
         if: ${{ always() && !cancelled() }}
         run: |
-          ./optools/check_log_count.sh 2000 60 # {count threshold} {metric collected interval}
+          ./optools/check_log_count.sh 1000 60 # {count threshold} {metric collected interval}
 
       - name: shutdown containers
         if: ${{ always() }}
@@ -191,7 +191,7 @@ jobs:
       - name: Check Log Messages Count per second
         if: ${{ always() && !cancelled() }}
         run: |
-          ./optools/check_log_count.sh 2000 60 # {count threshold} {metric collected interval}
+          ./optools/check_log_count.sh 1000 60 # {count threshold} {metric collected interval}
 
       - name: shutdown containers
         if: ${{ always() }}
