@@ -391,8 +391,8 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 	return -1, "", nil
 }
 
-func (ap *Argument) newInsertBatch(bat *batch.Batch) {
-	tableDef := ap.TableDef
+func (arg *Argument) newInsertBatch(bat *batch.Batch) {
+	tableDef := arg.TableDef
 	attrs := make([]string, 0, len(bat.Vecs))
 	for _, col := range tableDef.Cols {
 		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
@@ -410,5 +410,5 @@ func (ap *Argument) newInsertBatch(bat *batch.Batch) {
 		newVec := vector.NewVec(*v.GetType())
 		ibat.SetVector(int32(i), newVec)
 	}
-	ap.ctr.insertBats = append(ap.ctr.insertBats, bat)
+	arg.ctr.insertBats = append(arg.ctr.insertBats, bat)
 }
