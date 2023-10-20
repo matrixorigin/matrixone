@@ -22,14 +22,14 @@ type DurationRecords struct {
 
 type RecordCtxKeyType string
 
-var ActiveHandleCommit RecordCtxKeyType = "Active Handle Commit"//300
-var ActiveHandleRequests RecordCtxKeyType = "Active Handle Requests"//14
+var ActiveHandleCommit RecordCtxKeyType = "Active Handle Commit"
+var ActiveHandleRequests RecordCtxKeyType = "Active Handle Requests"
 
-var DequeuePreparing RecordCtxKeyType = "Dequeue Preparing"//11
-var PrepareWAL RecordCtxKeyType = "Prepare WAL"//12
-var DequeuePrepared RecordCtxKeyType = "Dequeue Prepared"//13
+var DequeuePreparing RecordCtxKeyType = "Dequeue Preparing"
+var PrepareWAL RecordCtxKeyType = "Prepare WAL"
+var DequeuePrepared RecordCtxKeyType = "Dequeue Prepared"
 
-var PrepareLogtail RecordCtxKeyType = "Prepare Logtail"//15
+var PrepareLogtail RecordCtxKeyType = "Prepare Logtail"
 var StorePrePrepare RecordCtxKeyType = "Store Pre Prepare"
 var StorePrepareCommit RecordCtxKeyType = "Store Prepare Commit"
 var StorePreApplyCommit RecordCtxKeyType = "Store Pre Apply Commit"
