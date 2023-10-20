@@ -170,7 +170,9 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	v2.TxnHandleCommitCounter.Inc()
 	start := time.Now()
-	defer v2.TxnHandleCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnHandleCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	s.waitRecoveryCompleted()
 
