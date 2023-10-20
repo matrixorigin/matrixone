@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -93,6 +94,7 @@ func (s *sqlExecutor) Exec(
 		},
 		opts)
 	if err != nil {
+		logutil.Errorf("internal sql executor run error '%s': %v", sql, err)
 		return executor.Result{}, err
 	}
 	return res, nil
