@@ -151,9 +151,12 @@ func (h *Handle) HandleCommit(
 		}
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
-				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()), zap.String("latency", s))
+				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
 			}
 		})
+		if s != "" {
+			logutil.Info("trace span", zap.String("lantency", s))
+		}
 	}()
 	var txn txnif.AsyncTxn
 	if ok {
@@ -170,7 +173,7 @@ func (h *Handle) HandleCommit(
 	}
 	activeDuration := time.Since(start)
 	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-	if enable && activeDuration.Milliseconds() > threshold {
+	if enable && activeDuration.Milliseconds() > threshold && txn.GetContext() != nil {
 		txn.GetStore().SetContext(context.WithValue(txn.GetContext(), common.ActiveHandleCommit, &common.DurationRecords{Duration: activeDuration}))
 	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
@@ -242,8 +245,6 @@ func (h *Handle) HandleCommit(
 			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[apply commit: %v]", s, duration.Duration)
 		}
-	} else {
-		s = "trace controller is disable"
 	}
 
 	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
@@ -290,7 +291,7 @@ func (h *Handle) handleRequests(
 	defer func() {
 		handleRequestDuration := time.Since(t0)
 		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && handleRequestDuration.Milliseconds() > threshold {
+		if enable && handleRequestDuration.Milliseconds() > threshold && txn.GetContext() != nil {
 			txn.GetStore().SetContext(context.WithValue(
 				txn.GetContext(),
 				common.ActiveHandleRequests,

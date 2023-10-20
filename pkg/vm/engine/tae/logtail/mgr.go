@@ -124,7 +124,7 @@ func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 		txn.GetStore().DoneWaitEvent(1)
 		collectLogtailDuration := time.Since(t0)
 		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && collectLogtailDuration.Milliseconds() > threshold {
+		if enable && collectLogtailDuration.Milliseconds() > threshold && txn.GetContext() != nil {
 			txn.GetStore().SetContext(context.WithValue(txn.GetContext(), common.PrepareLogtail, &common.DurationRecords{Duration: collectLogtailDuration}))
 		}
 		txnWithLogtails := &txnWithLogtails{
