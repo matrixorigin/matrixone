@@ -231,3 +231,5 @@ drop stage local_stage;
 -- @bvt:issue
 drop account stage_account;
 drop database if exists stage;
+drop stage if exists aws_stage;
+drop stage if exists local_stage;

@@ -303,5 +303,6 @@ alter stage local_stage set ENABLE=FALSE;
 drop stage local_stage;
 
 drop account stage_account;
-
-
+drop database if exists stage;
+drop stage if exists aws_stage;
+drop stage if exists local_stage;
