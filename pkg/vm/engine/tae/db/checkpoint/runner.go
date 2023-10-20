@@ -810,19 +810,6 @@ func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.Tab
 	return size
 }
 
-func humanReadableSize(size int) string {
-	if size < 1024 {
-		return fmt.Sprintf("%dB", size)
-	}
-	if size < 1024*1024 {
-		return fmt.Sprintf("%dKB", size/1024)
-	}
-	if size < 1024*1024*1024 {
-		return fmt.Sprintf("%dMB", size/1024/1024)
-	}
-	return fmt.Sprintf("%dGB", size/1024/1024/1024)
-}
-
 func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	if entry.IsEmpty() {
 		return
@@ -846,10 +833,6 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 			table.Stats.Unlock()
 		}
 
-		if !table.Stats.FlushTableTailEnabled {
-			return nil
-		}
-
 		dirtyTree := entry.GetTree().GetTable(tableID)
 		_, endTs := entry.GetTimeRange()
 
@@ -863,7 +846,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		if !stats.LastFlush.IsEmpty() && size > 2*1000*1024 {
 			logutil.Infof("[flushtabletail] %s(%s)  FlushCountDown %v",
 				table.GetLastestSchema().Name,
-				humanReadableSize(size),
+				common.HumanReadableBytes(size),
 				time.Until(stats.FlushDeadline))
 		}
 
