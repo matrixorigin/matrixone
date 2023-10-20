@@ -634,7 +634,10 @@ func (h *Handle) HandlePreCommitWrite(
 					DatabaseID:   cmd.DatabaseId,
 					Defs:         cmd.Defs,
 				}
-				logutil.Infof("create table: %s.%s\n", req.DatabaseName, req.Name)
+				// TODO: debug for #11917
+				if strings.Contains(req.Name, "sbtest") {
+					logutil.Infof("create table: %s.%s\n", req.DatabaseName, req.Name)
+				}
 				if err = h.CacheTxnRequest(ctx, meta, req,
 					new(db.CreateRelationResp)); err != nil {
 					return err
