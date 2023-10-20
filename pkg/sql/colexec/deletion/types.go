@@ -92,7 +92,7 @@ type DeleteCtx struct {
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.RemoteDelete {
 		for _, blockId_rowIdBatch := range arg.ctr.partitionId_blockId_rowIdBatch {
 			for _, bat := range blockId_rowIdBatch {
@@ -220,16 +220,16 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 
 		arg.ctr.blockId_type[str] = RawRowIdBatch
 		/* XXX why not only send the batch
-		// FIXME: string(segid[:]) means heap allocation, just take the id type itself
-		if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
-			arg.ctr.blockId_type[str] = RawBatchOffset
-			offsetFlag = true
-		} else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
-			arg.ctr.blockId_type[str] = CNBlockOffset
-			offsetFlag = true
-		} else {
-			arg.ctr.blockId_type[str] = RawRowIdBatch
-		}
+		   // FIXME: string(segid[:]) means heap allocation, just take the id type itself
+		   if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
+		   	arg.ctr.blockId_type[str] = RawBatchOffset
+		   	offsetFlag = true
+		   } else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
+		   	arg.ctr.blockId_type[str] = CNBlockOffset
+		   	offsetFlag = true
+		   } else {
+		   	arg.ctr.blockId_type[str] = RawRowIdBatch
+		   }
 		*/
 
 		if _, ok := arg.ctr.partitionId_blockId_rowIdBatch[pIdx]; !ok {

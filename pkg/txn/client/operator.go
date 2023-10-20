@@ -19,8 +19,10 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	gotrace "runtime/trace"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -181,6 +184,10 @@ type txnOperator struct {
 	timestampWaiter TimestampWaiter
 	clock           clock.Clock
 	createAt        time.Time
+	commitEnter     atomic.Int64
+	commitExit      atomic.Int64
+	rollbackEnter   atomic.Int64
+	rollbackExit    atomic.Int64
 }
 
 func newTxnOperator(
@@ -198,6 +205,12 @@ func newTxnOperator(
 	}
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
+
+	if tc.option.user {
+		v2.GetUserTxnCounter().Inc()
+	} else {
+		v2.GetInternalTxnCounter().Inc()
+	}
 	return tc
 }
 
@@ -234,6 +247,9 @@ func (tc *txnOperator) setWaitActive(v bool) {
 }
 
 func (tc *txnOperator) waitActive(ctx context.Context) error {
+	start := time.Now()
+	defer v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
+
 	if tc.waiter == nil {
 		return nil
 	}
@@ -284,6 +300,18 @@ func (tc *txnOperator) TxnRef() *txn.TxnMeta {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return &tc.mu.txn
+}
+
+func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.txn.SnapshotTS
+}
+
+func (tc *txnOperator) Status() txn.TxnStatus {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.txn.Status
 }
 
 func (tc *txnOperator) Snapshot() ([]byte, error) {
@@ -414,8 +442,13 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
+	start := time.Now()
+	v2.TxnCommitDurationHistogram.Observe(time.Since(start).Seconds())
+
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
 	defer task.End()
+	tc.enterCommit()
+	defer tc.exitCommit()
 	util.LogTxnCommit(tc.getTxnMeta(false))
 	defer util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "exit")
 	if tc.option.readyOnly {
@@ -438,6 +471,8 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 func (tc *txnOperator) Rollback(ctx context.Context) error {
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Rollback")
 	defer task.End()
+	tc.enterRollback()
+	defer tc.exitRollback()
 	txnMeta := tc.getTxnMeta(false)
 	defer util.LogTxnRollbackWithInfo(txnMeta, "exit")
 	util.LogTxnRollback(txnMeta)
@@ -915,7 +950,9 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 	// rc mode need to see the committed value, so wait logtail applied
 	if tc.mu.txn.IsRCIsolation() &&
 		tc.timestampWaiter != nil {
+		start := time.Now()
 		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+		v2.LogTailWaitDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
 			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
 				util.TxnField(tc.mu.txn),
@@ -996,4 +1033,28 @@ func (tc *txnOperator) getWaitLocksLocked() []Lock {
 		values = append(values, l)
 	}
 	return values
+}
+
+func (tc *txnOperator) enterCommit() {
+	tc.commitEnter.Add(1)
+}
+
+func (tc *txnOperator) exitCommit() {
+	tc.commitEnter.Add(1)
+}
+
+func (tc *txnOperator) enterRollback() {
+	tc.rollbackEnter.Add(1)
+}
+
+func (tc *txnOperator) exitRollback() {
+	tc.rollbackExit.Add(1)
+}
+
+func (tc *txnOperator) counter() string {
+	return fmt.Sprintf("commitEnter:%d commitExit:%d rollbackEnter:%d rollbackExit:%d",
+		tc.commitEnter.Load(),
+		tc.commitExit.Load(),
+		tc.rollbackEnter.Load(),
+		tc.rollbackExit.Load())
 }

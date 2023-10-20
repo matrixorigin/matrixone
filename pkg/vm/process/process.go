@@ -165,11 +165,6 @@ func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
 }
 
-// [tag-11768]
-func (proc *Process) SetMp(pool *mpool.MPool) {
-	proc.mp = pool
-}
-
 func (proc *Process) GetPrepareParams() *vector.Vector {
 	return proc.prepareParams
 }

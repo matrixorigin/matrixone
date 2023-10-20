@@ -31,4 +31,4 @@ type Argument struct {
 	configs map[string]interface{}
 }
 
-func (arg *Argument) Free(*process.Process, bool) {}
+func (arg *Argument) Free(*process.Process, bool, error) {}

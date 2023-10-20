@@ -300,14 +300,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
-	failed := false
-	defer func() {
-		lastArg.Free(s.Proc, failed)
-	}()
 
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, errEncode)
 		return errEncode
 	}
 	s.Instructions = append(s.Instructions, lastInstruction)
@@ -315,27 +311,25 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc)
 	if errEncodeProc != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 	defer sender.close()
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 
-	if err = receiveMessageFromCnServer(c, s, sender, lastInstruction); err != nil {
-		failed = true
-	}
-
+	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	lastArg.Free(s.Proc, err != nil, err)
 	return err
 }
 

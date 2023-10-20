@@ -430,17 +430,19 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	defer getCancel()
 	var opProc *process.Process
 	var ok bool
-	opUuid := receiver.messageUuid
 outter:
 	for {
 		select {
 		case <-getCtx.Done():
+			colexec.Srv.GetProcByUuid(uid, true)
 			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
+
 		case <-receiver.ctx.Done():
-			logutil.Errorf("receiver conctx done during get dispatch process")
+			colexec.Srv.GetProcByUuid(uid, true)
 			return nil, nil
+
 		default:
-			if opProc, ok = colexec.Srv.GetProcByUuid(opUuid); !ok {
+			if opProc, ok = colexec.Srv.GetProcByUuid(uid, false); !ok {
 				runtime.Gosched()
 			} else {
 				break outter

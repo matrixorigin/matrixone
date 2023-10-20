@@ -94,6 +94,10 @@ type TxnOperator interface {
 	// the w-w conflict.
 	// If ts is empty, it will use the latest commit timestamp which is received from DN.
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
+	// SnapshotTS returns the snapshot timestamp of the transaction.
+	SnapshotTS() timestamp.Timestamp
+	// Status returns the current transaction status.
+	Status() txn.TxnStatus
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
 	// operation information.
 	ApplySnapshot(data []byte) error

@@ -197,6 +197,14 @@ func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 	return s.meta
 }
 
+func (s *StorageTxnOperator) SnapshotTS() timestamp.Timestamp {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) Status() txn.TxnStatus {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {
 	return &s.meta
 }

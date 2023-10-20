@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1005,6 +1006,9 @@ func updatePartitionOfPush(
 	ctx context.Context,
 	tnId int,
 	e *Engine, tl *logtail.TableLogtail, lazyLoad bool) (err error) {
+	start := time.Now()
+	defer v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
+
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
