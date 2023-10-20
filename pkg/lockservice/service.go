@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -67,7 +68,6 @@ func NewLockService(cfg Config) LockService {
 		serviceID: getServiceIdentifier(cfg.ServiceID, time.Now().UnixNano()),
 		cfg:       cfg,
 		fsp:       newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
-		events:    newWaiterEvents(eventsWorkers),
 		stopper: stopper.NewStopper("lock-service",
 			stopper.WithLogger(getLogger().RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
@@ -77,6 +77,7 @@ func NewLockService(cfg Config) LockService {
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
+	s.events = newWaiterEvents(eventsWorkers, s.deadlockDetector)
 	s.clock = runtime.ProcessLevelRuntime().Clock()
 	s.initRemote()
 	s.events.start()
@@ -92,6 +93,11 @@ func (s *service) Lock(
 	rows [][]byte,
 	txnID []byte,
 	options pb.LockOptions) (pb.Result, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnLockDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
@@ -135,6 +141,11 @@ func (s *service) Unlock(
 	ctx context.Context,
 	txnID []byte,
 	commitTS timestamp.Timestamp) error {
+	start := time.Now()
+	defer func() {
+		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// FIXME(fagongzi): too many mem alloc in trace
 	_, span := trace.Debug(ctx, "lockservice.unlock")
 	defer span.End()
@@ -323,7 +334,6 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 		return newLocalLockTable(
 			bind,
 			s.fsp,
-			s.deadlockDetector,
 			s.events,
 			s.clock)
 	} else {

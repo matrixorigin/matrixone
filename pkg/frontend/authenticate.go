@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"math"
 	"math/bits"
 	"os"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -914,7 +915,7 @@ var (
     		);`,
 		`create table mo_account(
 				account_id int signed auto_increment primary key,
-				account_name varchar(300),
+				account_name varchar(300) unique key,
 				status varchar(300),
 				created_time timestamp,
 				comments varchar(256),
@@ -3523,7 +3524,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 
 	if stageExist {
 		if !cs.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s exists", cs.Name)
+			return moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
@@ -3696,7 +3697,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error 
 
 	if !stageExist {
 		if !as.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s not exists", as.Name)
+			return moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
@@ -3767,7 +3768,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
 
 	if !stageExist {
 		if !ds.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s not exists", ds.Name)
+			return moerr.NewInternalError(ctx, "the stage %s not exists", ds.Name)
 		} else {
 			// do nothing
 			return err

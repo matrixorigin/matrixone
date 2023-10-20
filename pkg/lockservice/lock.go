@@ -128,11 +128,27 @@ func (l Lock) release() {
 
 func (l Lock) closeTxn(
 	txn *activeTxn,
-	notify notifyValue) {
-	notify.defChanged = l.isLockTableDefChanged()
+	notify notifyValue) (lockCanRemoved bool) {
 	l.holders.remove(txn.txnID)
-	// notify first waiter, skip completed waiters
-	l.waiters.notify(notify)
+
+	// has another holders
+	if l.holders.size() > 0 {
+		return false
+	}
+
+	notify.defChanged = l.isLockTableDefChanged()
+
+	if l.isLockRow() {
+		// notify first waiter, skip completed waiters
+		l.waiters.notify(notify)
+		return l.isEmpty()
+	}
+
+	// No holders, and is range lock, the all waiters need to be notified.
+	// Because these waiters may be attempting to acquire a non-conflicting
+	// row locks or range locks between the current range.
+	l.waiters.notifyAll(notify)
+	return true
 }
 
 func (l Lock) toRowLock() Lock {

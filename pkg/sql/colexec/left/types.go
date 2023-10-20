@@ -68,10 +68,11 @@ type Argument struct {
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 
+	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

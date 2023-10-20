@@ -231,3 +231,12 @@ a    b    c
 4    4    4
 6    5    5
 drop table t2;
+
+create table t3(col1 int primary key, col2 int);
+create unique index key1 on t3(col2,col1);
+insert into t3 values(1 , 100);
+insert into t3 values(2, 200);
+insert into t3 values(3 , 300);
+update t3 set col2 = 300 where col1 = 3;
+update t3 set col2 = 100 where col1 = 1;
+update t3 set col2 = 200 where col1 = 2;

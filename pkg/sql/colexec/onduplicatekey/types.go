@@ -34,8 +34,8 @@ type container struct {
 	colexec.ReceiverOperator
 
 	state            int
-	checkConflictBat *batch.Batch //batch to check conflict
-	insertBat        *batch.Batch //the final batch
+	checkConflictBat *batch.Batch   //batch to check conflict
+	insertBats       []*batch.Batch //the final batch
 }
 
 type Argument struct {
@@ -58,15 +58,17 @@ type Argument struct {
 	IsIgnore bool
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		arg.ctr.FreeMergeTypeOperator(pipelineFailed)
-
-		if arg.ctr.insertBat != nil {
-			arg.ctr.insertBat.Clean(proc.GetMPool())
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if ap.ctr != nil {
+		ap.ctr.FreeMergeTypeOperator(pipelineFailed)
+		if len(ap.ctr.insertBats) > 0 {
+			for _, bat := range ap.ctr.insertBats {
+				bat.Clean(proc.Mp())
+			}
+			ap.ctr.insertBats = nil
 		}
-		if arg.ctr.checkConflictBat != nil {
-			arg.ctr.checkConflictBat.Clean(proc.GetMPool())
+		if ap.ctr.checkConflictBat != nil {
+			ap.ctr.checkConflictBat.Clean(proc.GetMPool())
 		}
 	}
 }

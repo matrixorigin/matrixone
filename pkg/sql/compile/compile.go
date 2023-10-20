@@ -67,6 +67,7 @@ import (
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -99,10 +100,7 @@ var pool = sync.Pool{
 func New(
 	addr, db, sql, tenant, uid string,
 	ctx context.Context,
-	e engine.Engine,
-	proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string,
-	tag11768 bool, // if tag11768 is true, it will build a new mpool to instead of the old one.
-) *Compile {
+	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
@@ -111,18 +109,6 @@ func New(
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
-	{
-		if tag11768 {
-			// [tag-11768]
-			m, err := mpool.NewMPool(uuid.Must(uuid.NewUUID()).String(), 0, mpool.NoFixed)
-			if err != nil {
-				panic(err)
-			}
-			c.proc.SetMp(m)
-			c.tag11768 = true
-		}
-	}
-
 	c.stmt = stmt
 	c.addr = addr
 	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
@@ -148,13 +134,6 @@ func putCompile(c *Compile) {
 	}
 
 	c.proc.CleanValueScanBatchs()
-	// XXX delete mpool here to avoid memory leak.
-	// not a true leak, but some bug will cause the record number of using memory incorrect.
-	// search the `[tag-11768]` to found all the codes harked for this problem.
-	if c.tag11768 {
-		mpool.ForceDeleteMPool(c.proc.Mp())
-	}
-
 	c.clear()
 	pool.Put(c)
 }
@@ -176,7 +155,6 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
-	c.tag11768 = false
 
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
@@ -379,6 +357,11 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
+	start := time.Now()
+	defer func() {
+		v2.SQlRunDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	var span trace.Span
 	var cc *Compile // compile structure for rerun.
 	var result = &util2.RunResult{}
@@ -399,12 +382,16 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 		c.proc.TxnOperator.ResetRetry(false)
 	}
+
+	v2.TxnStatementCounter.Inc()
 	if err = c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
 		if !c.ifNeedRerun(err) {
 			return nil, err
 		}
+		v2.TxnStatementRetryCounter.Inc()
+
 		c.proc.TxnOperator.ResetRetry(true)
 		c.proc.TxnOperator.GetWorkspace().IncrSQLCount()
 
@@ -420,7 +407,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 		// improved to refresh expression in the future.
-		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, false)
+		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel)
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 			pn, e := c.buildPlanFunc()
 			if e != nil {
@@ -476,6 +463,13 @@ func (c *Compile) runOnce() error {
 		wg.Add(1)
 		scope := c.scope[i]
 		ants.Submit(func() {
+			defer func() {
+				if e := recover(); e != nil {
+					err := moerr.ConvertPanicError(c.ctx, e)
+					errC <- err
+					wg.Done()
+				}
+			}()
 			errC <- c.run(scope)
 			wg.Done()
 		})
@@ -1124,7 +1118,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
 
 		if toWriteS3 {
-			logutil.Infof("insert of '%s' write s3\n", c.sql)
+			logutil.Debugf("insert of '%s' write s3\n", c.sql)
 			if !haveSinkScanInPlan(ns, n.Children[0]) && len(ss) != 1 {
 				insertArg, err := constructInsert(n, c.e, c.proc)
 				if err != nil {
@@ -3178,7 +3172,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 					continue
 				}
 				args := agg.F.Args[0]
-				col := args.Expr.(*plan.Expr_Col)
+				col, ok := args.Expr.(*plan.Expr_Col)
+				if !ok {
+					agg.F.Func.ObjName = "starcount"
+					continue
+				}
 				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Name2ColIndex[col.Col.Name])
 				if len(n.TableDef.Cols) > 0 {
 					columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[columnMap[int(col.Col.ColPos)]].Seqnum)

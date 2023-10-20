@@ -18,12 +18,14 @@ import (
 	"context"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -155,6 +157,10 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
+	if request.Method == txn.TxnMethod_Commit {
+		v2.TxnCommitSizeGauge.Set(float64(request.Size()))
+	}
+
 	ctx, span := trace.Debug(ctx, "sender.doSend")
 	defer span.End()
 	tn := request.GetTargetTN()
@@ -166,11 +172,13 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		}
 	}
 
+	start := time.Now()
 	f, err := s.client.Send(ctx, tn.Address, &request)
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
 	defer f.Close()
+	v2.TxnSendRequestDurationHistogram.Observe(time.Since(start).Seconds())
 
 	v, err := f.Get()
 	if err != nil {

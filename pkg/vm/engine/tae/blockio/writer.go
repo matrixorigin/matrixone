@@ -129,7 +129,7 @@ func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObj
 	return w.writer.WriteTombstone(batch)
 }
 
-func (w *BlockWriter) WriteSubBatch(batch *batch.Batch, dataType objectio.DataMetaType) (objectio.BlockObject, error) {
+func (w *BlockWriter) WriteSubBatch(batch *batch.Batch, dataType objectio.DataMetaType) (objectio.BlockObject, int, error) {
 	return w.writer.WriteSubBlock(batch, dataType)
 }
 
