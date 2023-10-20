@@ -282,6 +282,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					cancel()
 
 					resp := <-ch
+
 					if resp.err != nil {
 						// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
 						logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
@@ -289,6 +290,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					}
 
 					response := resp.response
+					v2.GetReceiveLogTailBytesHistogram().Observe(float64(response.Response.ProtoSize()))
 					// consume subscribe response
 					if sResponse := response.GetSubscribeResponse(); sResponse != nil {
 						if err := distributeSubscribeResponse(
@@ -1007,7 +1009,9 @@ func updatePartitionOfPush(
 	tnId int,
 	e *Engine, tl *logtail.TableLogtail, lazyLoad bool) (err error) {
 	start := time.Now()
-	defer v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
