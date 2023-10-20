@@ -61,4 +61,7 @@ func init() {
 	registry.MustRegister(TxnSendRequestDurationHistogram)
 	registry.MustRegister(TxnHandleQueueInDurationHistogram)
 	registry.MustRegister(TxnHandleCommitDurationHistogram)
+
+	registry.MustRegister(HeartbeatHistogram)
+	registry.MustRegister(HeartbeatFailureCounter)
 }
