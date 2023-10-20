@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -302,14 +303,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
-	failed := false
-	defer func() {
-		lastArg.Free(s.Proc, failed)
-	}()
 
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, errEncode)
 		return errEncode
 	}
 	s.Instructions = append(s.Instructions, lastInstruction)
@@ -317,27 +314,25 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc)
 	if errEncodeProc != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 	defer sender.close()
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 
-	if err = receiveMessageFromCnServer(c, s, sender, lastInstruction); err != nil {
-		failed = true
-	}
-
+	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	lastArg.Free(s.Proc, err != nil, err)
 	return err
 }
 
@@ -735,6 +730,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:  t.Conditions[0],
 			RightCond: t.Conditions[1],
 			Result:    t.Result,
+			HashOnPk:  t.HashOnPK,
 		}
 	case *shuffle.Argument:
 		in.Shuffle = &pipeline.Shuffle{}
@@ -817,6 +813,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			HashOnPk:               t.HashOnPK,
 		}
 	case *right.Argument:
 		rels, poses := getRelColList(t.Result)
@@ -831,6 +828,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			HashOnPk:               t.HashOnPK,
 		}
 	case *rightsemi.Argument:
 		in.RightSemiJoin = &pipeline.RightSemiJoin{
@@ -842,6 +840,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			HashOnPk:               t.HashOnPK,
 		}
 	case *rightanti.Argument:
 		in.RightAntiJoin = &pipeline.RightAntiJoin{
@@ -853,6 +852,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			HashOnPk:               t.HashOnPK,
 		}
 	case *limit.Argument:
 		in.Limit = t.Limit
@@ -923,6 +923,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			HashOnPk:               t.HashOnPK,
 		}
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -936,6 +937,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			LeftCond:               t.Conditions[0],
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			HashOnPk:               t.HashOnPK,
 		}
 	case *top.Argument:
 		in.Limit = uint64(t.Limit)
@@ -996,6 +998,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Types:     convertToPlanTypes(t.Typs),
 			Expr:      t.Cond,
 			OnList:    t.OnList,
+			HashOnPk:  t.HashOnPK,
 		}
 	case *table_function.Argument:
 		in.TableFunction = &pipeline.TableFunction{
@@ -1128,7 +1131,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Conditions: [][]*plan.Expr{
 				t.LeftCond, t.RightCond,
 			},
-			Result: t.Result,
+			Result:   t.Result,
+			HashOnPK: t.HashOnPk,
 		}
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -1213,6 +1217,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Result:             convertToResultPos(t.RelList, t.ColList),
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+			HashOnPK:           t.HashOnPk,
 		}
 	case vm.Right:
 		t := opr.GetRightJoin()
@@ -1225,6 +1230,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Cond:               t.Expr,
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+			HashOnPK:           t.HashOnPk,
 		}
 	case vm.RightSemi:
 		t := opr.GetRightSemiJoin()
@@ -1236,6 +1242,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Cond:               t.Expr,
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+			HashOnPK:           t.HashOnPk,
 		}
 	case vm.RightAnti:
 		t := opr.GetRightAntiJoin()
@@ -1247,6 +1254,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Cond:               t.Expr,
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+			HashOnPK:           t.HashOnPk,
 		}
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
@@ -1316,6 +1324,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Typs:               convertToTypes(t.Types),
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+			HashOnPK:           t.HashOnPk,
 		}
 	case vm.Single:
 		t := opr.GetSingleJoin()
@@ -1327,6 +1336,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Typs:               convertToTypes(t.Types),
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
+			HashOnPK:           t.HashOnPk,
 		}
 	case vm.Mark:
 		t := opr.GetMarkJoin()
@@ -1338,6 +1348,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Typs:       convertToTypes(t.Types),
 			Cond:       t.Expr,
 			OnList:     t.OnList,
+			HashOnPK:   t.HashOnPk,
 		}
 	case vm.Top:
 		v.Arg = &top.Argument{

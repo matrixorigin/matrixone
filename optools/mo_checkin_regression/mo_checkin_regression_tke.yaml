@@ -1,0 +1,126 @@
+apiVersion: core.matrixorigin.io/v1alpha1
+kind: MatrixOneCluster
+metadata:
+  name: mo-checkin-regression
+  namespace: nsformocheckin
+spec:
+  dn:
+    nodeSelector:
+      tke.matrixorigin.io/mo-checkin-regression: "true"
+    overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/mo-checkin-regression
+        operator: Exists    
+      imagePullSecrets:
+      - name: tke-registry
+      env:
+      - name: GOMEMLIMIT
+        value: "8000MiB"
+    cacheVolume:
+      size: 100Gi
+      storageClassName: cbs-hssd
+    sharedStorageCache:
+      memoryCacheSize: 512Mi
+      diskCacheSize: 100Gi
+    config: |
+      [dn.Txn.Storage]
+      backend = "TAE"
+      log-backend = "logservice"
+      [dn.Ckp]
+      flush-interval = "60s"
+      min-count = 100
+      scan-interval = "5s"
+      incremental-interval = "60s"
+      global-interval = "100000s"
+      [dn.LogtailServer]
+      rpc-max-message-size = "16KiB"
+      rpc-payload-copy-buffer-size = "16KiB"
+      rpc-enable-checksum = true
+      logtail-collect-interval = "2ms"
+      logtail-response-send-timeout = "10s"
+      max-logtail-fetch-failure = 5
+    replicas: 1
+    resources:
+      requests:
+        cpu: 7
+        memory: 12Gi
+      limits:
+        cpu: 8
+        memory: 16Gi
+  imageRepository: ccr.ccs.tencentyun.com/matrixone-dev/matrixone
+  logService:
+    nodeSelector:
+      tke.matrixorigin.io/mo-checkin-regression-log: "true"
+    overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/mo-checkin-regression-log
+        operator: Exists    
+      imagePullSecrets:
+      - name: tke-registry
+    replicas: 3
+    resources:
+      requests:
+        cpu: 1
+        memory: 2Gi
+      limits:
+        cpu: 2
+        memory: 4Gi
+    sharedStorage:
+      s3:
+        path: s3pathformocheckin
+        region: regionformocheckin
+        endpoint: endpointformocheckin
+        s3RetentionPolicy: Retain
+        secretRef:
+          name: tencent-token
+    pvcRetentionPolicy: Delete
+    volume:
+      size: 100Gi
+      storageClassName: cbs-hssd
+    config: |
+      [log]
+      level = "info"
+      format = "json"
+      max-size = 512
+  tp:
+    cacheVolume:
+      size: 100Gi
+      storageClassName: cbs-hssd
+    sharedStorageCache:
+      memoryCacheSize: 1Gi
+      diskCacheSize: 100Gi
+    config: |
+      [cn.Engine]
+      type = "distributed-tae"
+      [log]
+      level = "info"
+      format = "json"
+      max-size = 512
+      [cn.rpc]
+      send-queue-size = 2
+      busy-queue-size = 1
+      [cn.ctl.address]
+      listen-address = "0.0.0.0:19958"
+    replicas: 2
+    nodeSelector:
+      tke.matrixorigin.io/mo-checkin-regression: "true"
+    overlay:
+      tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/mo-checkin-regression
+        operator: Exists    
+      imagePullSecrets:
+      - name: tke-registry
+      env:
+      - name: GOMEMLIMIT
+        value: "8000MiB"
+    resources:
+      requests:
+        cpu: 7
+        memory: 12Gi
+      limits:
+        cpu: 8
+        memory: 16Gi
+  version: imagetag

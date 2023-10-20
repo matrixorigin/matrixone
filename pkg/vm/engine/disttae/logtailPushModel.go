@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -253,7 +253,7 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 	return err
 }
 
-func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine, mp *mpool.MPool) {
+func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	connectMsg := make(chan error)
 
 	// we should always make sure that we have received connection message from `connectMsg` channel if we want to do reconnect.
@@ -282,6 +282,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					cancel()
 
 					resp := <-ch
+
 					if resp.err != nil {
 						// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
 						logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
@@ -289,6 +290,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					}
 
 					response := resp.response
+					v2.GetReceiveLogTailBytesHistogram().Observe(float64(response.Response.ProtoSize()))
 					// consume subscribe response
 					if sResponse := response.GetSubscribeResponse(); sResponse != nil {
 						if err := distributeSubscribeResponse(
@@ -378,7 +380,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				e.abortAllRunningTxn()
 
 				// clean memory table.
-				err := e.init(ctx, mp)
+				err := e.init(ctx)
 				if err != nil {
 					logutil.Errorf("[log-tail-push-client] rebuild memory-table failed, err : '%s'.", err)
 					time.Sleep(retryReconnect)
@@ -731,10 +733,7 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 	return resp
 }
 
-func (e *Engine) InitLogTailPushModel(
-	ctx context.Context, mp *mpool.MPool,
-	timestampWaiter client.TimestampWaiter) error {
-
+func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
 	// try to init log tail client. if failed, retry.
 	for {
 		if err := ctx.Err(); err != nil {
@@ -750,7 +749,7 @@ func (e *Engine) InitLogTailPushModel(
 		break
 	}
 
-	e.pClient.receiveTableLogTailContinuously(ctx, e, mp)
+	e.pClient.receiveTableLogTailContinuously(ctx, e)
 	e.pClient.unusedTableGCTicker(ctx)
 	e.pClient.partitionStateGCTicker(ctx, e)
 	return nil
@@ -1009,6 +1008,11 @@ func updatePartitionOfPush(
 	ctx context.Context,
 	tnId int,
 	e *Engine, tl *logtail.TableLogtail, lazyLoad bool) (err error) {
+	start := time.Now()
+	defer func() {
+		v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 

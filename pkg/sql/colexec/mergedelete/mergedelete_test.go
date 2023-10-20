@@ -186,7 +186,7 @@ func TestMergeDelete(t *testing.T) {
 	}
 
 	// free resource
-	argument1.Free(proc, false)
+	argument1.Free(proc, false, nil)
 	metaLocBat0.Clean(proc.GetMPool())
 	metaLocBat1.Clean(proc.GetMPool())
 	metaLocBat2.Clean(proc.GetMPool())

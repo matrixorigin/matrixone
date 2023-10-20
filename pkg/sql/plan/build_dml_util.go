@@ -2043,12 +2043,13 @@ func appendPreInsertUkPlan(
 	uniqueTableDef *TableDef) (int32, error) {
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
-	partsMap := make(map[string]struct{})
-	for _, part := range idxDef.Parts {
-		partsMap[part] = struct{}{}
-	}
+	colsMap := make(map[string]int)
+
 	for i, col := range tableDef.Cols {
-		if _, ok := partsMap[col.Name]; ok {
+		colsMap[col.Name] = i
+	}
+	for _, part := range idxDef.Parts {
+		if i, ok := colsMap[part]; ok {
 			useColumns = append(useColumns, int32(i))
 		}
 	}

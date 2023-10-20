@@ -51,6 +51,7 @@ type CheckpointCfg struct {
 	// only for test
 	// it is used to control the block rows of the checkpoint
 	BlockRows int
+	Size      int
 }
 
 type GCCfg struct {

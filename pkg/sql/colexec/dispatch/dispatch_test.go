@@ -82,7 +82,7 @@ func TestDispatch(t *testing.T) {
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.arg.Free(tc.proc, false)
+		tc.arg.Free(tc.proc, false, nil)
 		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
 				bat = <-re.Ch
