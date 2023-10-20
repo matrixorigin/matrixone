@@ -213,14 +213,6 @@ func (client *txnClient) New(
 	defer task.End()
 	client.limiter.Take()
 
-	//!!!NOTE: for getting options
-	tmp := &txnOperator{}
-	for _, option := range options {
-		option(tmp)
-	}
-	util.LogTxnCreatedWithInfo("txnclient.new", tmp.option.createBy)
-	defer util.LogTxnCreatedWithInfo("txnclient.new exit", tmp.option.createBy)
-
 	ts, err := client.determineTxnSnapshot(ctx, minTS)
 	if err != nil {
 		return nil, err

@@ -99,13 +99,6 @@ func LogTxnCommit(txnMeta txn.TxnMeta) {
 	}
 }
 
-func LogTxnCommitWithInfo(txnMeta txn.TxnMeta, info string) {
-	logger := getSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("txn commit "+info, zap.String("txn", txnMeta.DebugString()))
-	}
-}
-
 // LogTxnRollback log txn rollback
 func LogTxnRollback(txnMeta txn.TxnMeta) {
 	logger := getSkipLogger()
@@ -114,32 +107,11 @@ func LogTxnRollback(txnMeta txn.TxnMeta) {
 	}
 }
 
-func LogTxnRollbackWithInfo(txnMeta txn.TxnMeta, info string) {
-	logger := getSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("txn rollback "+info, zap.String("txn", txnMeta.DebugString()))
-	}
-}
-
 // LogTxnCreated log txn created
 func LogTxnCreated(txnMeta txn.TxnMeta) {
 	logger := getSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("txn created", zap.String("txn", txnMeta.DebugString()))
-	}
-}
-
-func LogTxnCreatedWithInfo(info string, options string) {
-	logger := getSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("txn created "+info, zap.String("options", options))
-	}
-}
-
-func LogTxnCreatedWithInfo2(txnMeta txn.TxnMeta, info string, options string) {
-	logger := getSkipLogger()
-	if logger.Enabled(zap.InfoLevel) {
-		logger.Info("txn created "+info, zap.String("txn", txnMeta.DebugString()), zap.String("options", options))
 	}
 }
 
