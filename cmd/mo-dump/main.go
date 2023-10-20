@@ -94,6 +94,17 @@ func main() {
 		err = moerr.NewInvalidInput(ctx, "database must be specified")
 		return
 	}
+
+	//replace : in username to #, because : is used as separator in dsn.
+	//password can have ":".
+	username = strings.ReplaceAll(username, ":", "#")
+
+	// if host has ":", reports error
+	if strings.Count(host, ":") > 0 {
+		err = moerr.NewInvalidInput(ctx, "host can not have character ':'")
+		return
+	}
+
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, host, port, database)
 	conn, err = sql.Open("mysql", dsn) // Open doesn't open a connection. Validate DSN data:
 	if err != nil {
