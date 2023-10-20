@@ -369,8 +369,6 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
 		v2.GetS3FSReadBytesHistogram().Observe(float64(bytesCounter.Load()))
 	}()
-	start := time.Now()
-	defer v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
