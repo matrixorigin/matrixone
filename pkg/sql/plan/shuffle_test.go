@@ -16,10 +16,13 @@ package plan
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/stretchr/testify/require"
+	"fmt"
+	"math/rand"
 	"testing"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 )
 
 var area = make([]byte, 0, 10000)
@@ -119,4 +122,34 @@ func TestStringToUint64(t *testing.T) {
 	require.Equal(t, bytes.Compare(s5, s6), compareUint64(u5, u6))
 	require.Equal(t, bytes.Compare(s5, s7), compareUint64(u5, u7))
 	require.Equal(t, bytes.Compare(s6, s7), compareUint64(u6, u7))
+}
+
+type ShuffleFloatTestCase struct {
+	min    []float64
+	max    []float64
+	bucket int
+}
+
+func TestShuffleFloat(t *testing.T) {
+	testcase := make([]ShuffleFloatTestCase, 0)
+	testcase = append(testcase, ShuffleFloatTestCase{
+		min:    []float64{},
+		max:    []float64{},
+		bucket: 64,
+	})
+	testcase[0].min = append(testcase[0].min, 0)
+	testcase[0].max = append(testcase[0].max, 1000)
+	for i := 1; i <= 100000; i++ {
+		testcase[0].min = append(testcase[0].min, testcase[0].max[i-1]+float64(rand.Int()%10000))
+		testcase[0].max = append(testcase[0].max, testcase[0].min[i]+float64(rand.Int()%10000))
+	}
+
+	len := len(testcase)
+
+	for i := 0; i < len; i++ {
+		shufflefloat := NewShuffleFloat()
+		shufflefloat.Update(testcase[i].min, testcase[i].max)
+		shufflefloat.Eval(testcase[i].bucket)
+		fmt.Println(shufflefloat.Overlap)
+	}
 }
