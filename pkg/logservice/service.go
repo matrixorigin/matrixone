@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -462,9 +461,14 @@ func (s *Service) handleCNAllocateID(ctx context.Context, req pb.Request) pb.Res
 }
 
 func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	start := time.Now()
+	defer func() {
+		metricv2.HeartbeatRecvHistogram.WithLabelValues("tn").Observe(time.Since(start).Seconds())
+	}()
 	hb := req.TNHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addTNStoreHeartbeat(ctx, *hb); err != nil {
+		metricv2.HeartbeatRecvFailureCounter.WithLabelValues("tn").Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
