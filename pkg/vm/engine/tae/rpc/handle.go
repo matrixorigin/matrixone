@@ -141,6 +141,7 @@ func (h *Handle) HandleCommit(
 		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
 	})
+	s := ""
 	defer func() {
 		if ok {
 			//delete the txn's context.
@@ -150,7 +151,7 @@ func (h *Handle) HandleCommit(
 		}
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
-				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
+				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()), zap.String("latency", s))
 			}
 		})
 	}()
@@ -167,6 +168,11 @@ func (h *Handle) HandleCommit(
 			return
 		}
 	}
+	activeDuration := time.Since(start)
+	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+	if enable && activeDuration.Milliseconds() > threshold {
+		txn.GetStore().SetContext(context.WithValue(txn.GetContext(), common.ActiveHandleCommit, &common.DurationRecords{Duration: activeDuration}))
+	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
 	if err != nil {
 		return
@@ -177,6 +183,58 @@ func (h *Handle) HandleCommit(
 	}
 	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
+
+	if enable {
+		activeDuration := txn.GetContext().Value(common.ActiveHandleCommit).(*common.DurationRecords)
+		if activeDuration != nil {
+			s = fmt.Sprintf("%s[active: %v]", s, activeDuration.Duration)
+		}
+		handleRequestDuration := txn.GetContext().Value(common.ActiveHandleRequests).(*handleRequestsTraceValue)
+		if handleRequestDuration != nil {
+			s = fmt.Sprintf("%s[handle request: %v, createDB %d, createTbl %d, dropDB %d, dropTbl %d, alterTable %d, write %d]", s,
+				handleRequestDuration.Duration,
+				handleRequestDuration.CreateDB,
+				handleRequestDuration.CreateRelation,
+				handleRequestDuration.DropDB,
+				handleRequestDuration.DropOrTruncateRelation,
+				handleRequestDuration.AlterTable,
+				handleRequestDuration.Write)
+		}
+		duration := txn.GetContext().Value(common.DequeuePreparing).(*common.DurationRecords)
+		if duration != nil {
+			s = fmt.Sprintf("%s[dequeue preparing: %v]", s, duration.Duration)
+		}
+		duration = txn.GetContext().Value(common.StorePrePrepare).(*common.DurationRecords)
+		if duration != nil {
+			s = fmt.Sprintf("%s[pre prepare: %v]", s, duration.Duration)
+		}
+		duration = txn.GetContext().Value(common.StorePrepareCommit).(*common.DurationRecords)
+		if duration != nil {
+			s = fmt.Sprintf("%s[prepare commit: %v]", s, duration.Duration)
+		}
+		duration = txn.GetContext().Value(common.StorePreApplyCommit).(*common.DurationRecords)
+		if duration != nil {
+			s = fmt.Sprintf("%s[pre apply commit: %v]", s, duration.Duration)
+		}
+		duration = txn.GetContext().Value(common.PrepareWAL).(*common.DurationRecords)
+		if duration != nil {
+			s = fmt.Sprintf("%s[prepare wal: %v]", s, duration.Duration)
+		}
+		duration = txn.GetContext().Value(common.PrepareLogtail).(*common.DurationRecords)
+		if duration != nil {
+			s = fmt.Sprintf("%s[prepare logtail: %v]", s, duration.Duration)
+		}
+		duration = txn.GetContext().Value(common.DequeuePrepared).(*common.DurationRecords)
+		if duration != nil {
+			s = fmt.Sprintf("%s[dequeue prepared: %v]", s, duration.Duration)
+		}
+		duration = txn.GetContext().Value(common.StoreApplyCommit).(*common.DurationRecords)
+		if duration != nil {
+			s = fmt.Sprintf("%s[apply commit: %v]", s, duration.Duration)
+		}
+	} else {
+		s = "trace controller is disable"
+	}
 
 	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 		for {
@@ -202,12 +260,41 @@ func (h *Handle) HandleCommit(
 	return
 }
 
+type handleRequestsTraceValue struct {
+	Duration               time.Duration
+	CreateDB               int
+	CreateRelation         int
+	DropDB                 int
+	DropOrTruncateRelation int
+	AlterTable             int
+	Write                  int
+}
+
 func (h *Handle) handleRequests(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	txnCtx *txnContext,
 ) (err error) {
-
+	t0 := time.Now()
+	var createDB, createRelation, dropDB, dropRelation, alterTable, write int
+	defer func() {
+		handleRequestDuration := time.Since(t0)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && handleRequestDuration.Milliseconds() > threshold {
+			txn.GetStore().SetContext(context.WithValue(
+				txn.GetContext(),
+				common.ActiveHandleRequests,
+				&handleRequestsTraceValue{
+					Duration:               handleRequestDuration,
+					CreateDB:               createDB,
+					CreateRelation:         createRelation,
+					DropDB:                 dropDB,
+					DropOrTruncateRelation: dropRelation,
+					AlterTable:             alterTable,
+					Write:                  write,
+				}))
+		}
+	}()
 	for _, e := range txnCtx.reqs {
 		switch req := e.(type) {
 		case *db.CreateDatabaseReq:
@@ -217,6 +304,7 @@ func (h *Handle) handleRequests(
 				req,
 				&db.CreateDatabaseResp{},
 			)
+			createDB++
 		case *db.CreateRelationReq:
 			err = h.HandleCreateRelation(
 				ctx,
@@ -224,6 +312,7 @@ func (h *Handle) handleRequests(
 				req,
 				&db.CreateRelationResp{},
 			)
+			createRelation++
 		case *db.DropDatabaseReq:
 			err = h.HandleDropDatabase(
 				ctx,
@@ -231,6 +320,7 @@ func (h *Handle) handleRequests(
 				req,
 				&db.DropDatabaseResp{},
 			)
+			dropDB++
 		case *db.DropOrTruncateRelationReq:
 			err = h.HandleDropOrTruncateRelation(
 				ctx,
@@ -238,6 +328,7 @@ func (h *Handle) handleRequests(
 				req,
 				&db.DropOrTruncateRelationResp{},
 			)
+			dropRelation++
 		case *api.AlterTableReq:
 			err = h.HandleAlterTable(
 				ctx,
@@ -245,6 +336,7 @@ func (h *Handle) handleRequests(
 				req,
 				&db.WriteResp{},
 			)
+			alterTable++
 		case *db.WriteReq:
 			err = h.HandleWrite(
 				ctx,
@@ -263,6 +355,7 @@ func (h *Handle) handleRequests(
 					}
 				}
 			}
+			write++
 		default:
 			panic(moerr.NewNYI(ctx, "Pls implement me"))
 		}

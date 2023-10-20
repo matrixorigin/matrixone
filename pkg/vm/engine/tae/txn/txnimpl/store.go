@@ -728,7 +728,6 @@ func (store *txnStore) PreApplyCommit() (err error) {
 }
 
 func (store *txnStore) PrepareWAL() (err error) {
-	now := time.Now()
 	if err = store.CollectCmd(); err != nil {
 		return
 	}
@@ -753,11 +752,6 @@ func (store *txnStore) PrepareWAL() (err error) {
 		if err = db.Apply1PCCommit(); err != nil {
 			return
 		}
-	}
-	prepareWALDuration := time.Since(now)
-	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-	if enable && prepareWALDuration.Milliseconds() > threshold {
-		store.SetContext(context.WithValue(store.GetContext(), common.StorePrepareWAL, &common.DurationRecords{Duration: prepareWALDuration}))
 	}
 	// logutil.Debugf("Txn-%X PrepareWAL Takes %s", store.txn.GetID(), time.Since(now))
 	return
