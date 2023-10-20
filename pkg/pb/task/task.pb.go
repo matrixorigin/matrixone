@@ -563,6 +563,323 @@ func (m *CronTask) GetUpdateAt() int64 {
 	return 0
 }
 
+<<<<<<< Updated upstream
+=======
+type ConnectorDetails struct {
+	TableName            string            `protobuf:"bytes,1,opt,name=TableName,proto3" json:"TableName,omitempty"`
+	Options              map[string]string `protobuf:"bytes,2,rep,name=Options,proto3" json:"Options,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
+	XXX_unrecognized     []byte            `json:"-"`
+	XXX_sizecache        int32             `json:"-"`
+}
+
+func (m *ConnectorDetails) Reset()         { *m = ConnectorDetails{} }
+func (m *ConnectorDetails) String() string { return proto.CompactTextString(m) }
+func (*ConnectorDetails) ProtoMessage()    {}
+func (*ConnectorDetails) Descriptor() ([]byte, []int) {
+	return fileDescriptor_ce5d8dd45b4a91ff, []int{5}
+}
+func (m *ConnectorDetails) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *ConnectorDetails) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_ConnectorDetails.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *ConnectorDetails) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ConnectorDetails.Merge(m, src)
+}
+func (m *ConnectorDetails) XXX_Size() int {
+	return m.Size()
+}
+func (m *ConnectorDetails) XXX_DiscardUnknown() {
+	xxx_messageInfo_ConnectorDetails.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_ConnectorDetails proto.InternalMessageInfo
+
+func (m *ConnectorDetails) GetTableName() string {
+	if m != nil {
+		return m.TableName
+	}
+	return ""
+}
+
+func (m *ConnectorDetails) GetOptions() map[string]string {
+	if m != nil {
+		return m.Options
+	}
+	return nil
+}
+
+type Details struct {
+	Description string `protobuf:"bytes,1,opt,name=Description,proto3" json:"Description,omitempty"`
+	AccountID   uint32 `protobuf:"varint,2,opt,name=AccountID,proto3" json:"AccountID,omitempty"`
+	Account     string `protobuf:"bytes,3,opt,name=Account,proto3" json:"Account,omitempty"`
+	Username    string `protobuf:"bytes,4,opt,name=Username,proto3" json:"Username,omitempty"`
+	Error       string `protobuf:"bytes,5,opt,name=Error,proto3" json:"Error,omitempty"`
+	// Types that are valid to be assigned to Details:
+	//
+	//	*Details_Connector
+	Details              isDetails_Details `protobuf_oneof:"Details"`
+	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
+	XXX_unrecognized     []byte            `json:"-"`
+	XXX_sizecache        int32             `json:"-"`
+}
+
+func (m *Details) Reset()         { *m = Details{} }
+func (m *Details) String() string { return proto.CompactTextString(m) }
+func (*Details) ProtoMessage()    {}
+func (*Details) Descriptor() ([]byte, []int) {
+	return fileDescriptor_ce5d8dd45b4a91ff, []int{6}
+}
+func (m *Details) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *Details) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_Details.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *Details) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Details.Merge(m, src)
+}
+func (m *Details) XXX_Size() int {
+	return m.Size()
+}
+func (m *Details) XXX_DiscardUnknown() {
+	xxx_messageInfo_Details.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Details proto.InternalMessageInfo
+
+type isDetails_Details interface {
+	isDetails_Details()
+	MarshalTo([]byte) (int, error)
+	Size() int
+}
+
+type Details_Connector struct {
+	Connector *ConnectorDetails `protobuf:"bytes,10,opt,name=Connector,proto3,oneof" json:"Connector,omitempty"`
+}
+
+func (*Details_Connector) isDetails_Details() {}
+
+func (m *Details) GetDetails() isDetails_Details {
+	if m != nil {
+		return m.Details
+	}
+	return nil
+}
+
+func (m *Details) GetDescription() string {
+	if m != nil {
+		return m.Description
+	}
+	return ""
+}
+
+func (m *Details) GetAccountID() uint32 {
+	if m != nil {
+		return m.AccountID
+	}
+	return 0
+}
+
+func (m *Details) GetAccount() string {
+	if m != nil {
+		return m.Account
+	}
+	return ""
+}
+
+func (m *Details) GetUsername() string {
+	if m != nil {
+		return m.Username
+	}
+	return ""
+}
+
+func (m *Details) GetError() string {
+	if m != nil {
+		return m.Error
+	}
+	return ""
+}
+
+func (m *Details) GetConnector() *ConnectorDetails {
+	if x, ok := m.GetDetails().(*Details_Connector); ok {
+		return x.Connector
+	}
+	return nil
+}
+
+// XXX_OneofWrappers is for the internal use of the proto package.
+func (*Details) XXX_OneofWrappers() []interface{} {
+	return []interface{}{
+		(*Details_Connector)(nil),
+	}
+}
+
+type DaemonTask struct {
+	ID                   uint64       `protobuf:"varint,1,opt,name=ID,proto3" json:"ID,omitempty"`
+	Metadata             TaskMetadata `protobuf:"bytes,2,opt,name=Metadata,proto3" json:"Metadata"`
+	AccountID            uint32       `protobuf:"varint,3,opt,name=AccountID,proto3" json:"AccountID,omitempty"`
+	Account              string       `protobuf:"bytes,4,opt,name=Account,proto3" json:"Account,omitempty"`
+	TaskType             TaskType     `protobuf:"varint,5,opt,name=TaskType,proto3,enum=task.TaskType" json:"TaskType,omitempty"`
+	TaskRunner           string       `protobuf:"bytes,6,opt,name=TaskRunner,proto3" json:"TaskRunner,omitempty"`
+	TaskStatus           TaskStatus   `protobuf:"varint,7,opt,name=TaskStatus,proto3,enum=task.TaskStatus" json:"TaskStatus,omitempty"`
+	LastHeartbeat        time.Time    `protobuf:"bytes,8,opt,name=LastHeartbeat,proto3,stdtime" json:"LastHeartbeat"`
+	Details              *Details     `protobuf:"bytes,9,opt,name=Details,proto3" json:"Details,omitempty"`
+	CreateAt             time.Time    `protobuf:"bytes,10,opt,name=CreateAt,proto3,stdtime" json:"CreateAt"`
+	UpdateAt             time.Time    `protobuf:"bytes,11,opt,name=UpdateAt,proto3,stdtime" json:"UpdateAt"`
+	EndAt                time.Time    `protobuf:"bytes,12,opt,name=EndAt,proto3,stdtime" json:"EndAt"`
+	LastRun              time.Time    `protobuf:"bytes,13,opt,name=LastRun,proto3,stdtime" json:"LastRun"`
+	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
+	XXX_unrecognized     []byte       `json:"-"`
+	XXX_sizecache        int32        `json:"-"`
+}
+
+func (m *DaemonTask) Reset()         { *m = DaemonTask{} }
+func (m *DaemonTask) String() string { return proto.CompactTextString(m) }
+func (*DaemonTask) ProtoMessage()    {}
+func (*DaemonTask) Descriptor() ([]byte, []int) {
+	return fileDescriptor_ce5d8dd45b4a91ff, []int{7}
+}
+func (m *DaemonTask) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *DaemonTask) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_DaemonTask.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *DaemonTask) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_DaemonTask.Merge(m, src)
+}
+func (m *DaemonTask) XXX_Size() int {
+	return m.Size()
+}
+func (m *DaemonTask) XXX_DiscardUnknown() {
+	xxx_messageInfo_DaemonTask.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_DaemonTask proto.InternalMessageInfo
+
+func (m *DaemonTask) GetID() uint64 {
+	if m != nil {
+		return m.ID
+	}
+	return 0
+}
+
+func (m *DaemonTask) GetMetadata() TaskMetadata {
+	if m != nil {
+		return m.Metadata
+	}
+	return TaskMetadata{}
+}
+
+func (m *DaemonTask) GetAccountID() uint32 {
+	if m != nil {
+		return m.AccountID
+	}
+	return 0
+}
+
+func (m *DaemonTask) GetAccount() string {
+	if m != nil {
+		return m.Account
+	}
+	return ""
+}
+
+func (m *DaemonTask) GetTaskType() TaskType {
+	if m != nil {
+		return m.TaskType
+	}
+	return TaskType_TypeUnknown
+}
+
+func (m *DaemonTask) GetTaskRunner() string {
+	if m != nil {
+		return m.TaskRunner
+	}
+	return ""
+}
+
+func (m *DaemonTask) GetTaskStatus() TaskStatus {
+	if m != nil {
+		return m.TaskStatus
+	}
+	return TaskStatus_Created
+}
+
+func (m *DaemonTask) GetLastHeartbeat() time.Time {
+	if m != nil {
+		return m.LastHeartbeat
+	}
+	return time.Time{}
+}
+
+func (m *DaemonTask) GetDetails() *Details {
+	if m != nil {
+		return m.Details
+	}
+	return nil
+}
+
+func (m *DaemonTask) GetCreateAt() time.Time {
+	if m != nil {
+		return m.CreateAt
+	}
+	return time.Time{}
+}
+
+func (m *DaemonTask) GetUpdateAt() time.Time {
+	if m != nil {
+		return m.UpdateAt
+	}
+	return time.Time{}
+}
+
+func (m *DaemonTask) GetEndAt() time.Time {
+	if m != nil {
+		return m.EndAt
+	}
+	return time.Time{}
+}
+
+func (m *DaemonTask) GetLastRun() time.Time {
+	if m != nil {
+		return m.LastRun
+	}
+	return time.Time{}
+}
+
+>>>>>>> Stashed changes
 func init() {
 	proto.RegisterEnum("task.TaskStatus", TaskStatus_name, TaskStatus_value)
 	proto.RegisterEnum("task.TaskCode", TaskCode_name, TaskCode_value)
