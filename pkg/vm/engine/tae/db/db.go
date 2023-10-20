@@ -16,10 +16,11 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"io"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -59,6 +60,7 @@ type DB struct {
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
+	MergeHandle        *MergeTaskBuilder
 
 	DiskCleaner *gc2.DiskCleaner
 
