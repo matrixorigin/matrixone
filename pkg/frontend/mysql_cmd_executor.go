@@ -1625,6 +1625,10 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	start := time.Now()
 	defer v2.SQLBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
 
+	stats := statistic.StatsInfoFromContext(requestCtx)
+	stats.PlanStart()
+	defer stats.PlanEnd()
+
 	var ret *plan2.Plan
 	var err error
 	if ses != nil {
@@ -3639,6 +3643,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	singleStatement := len(cws) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+
+	averageParseDuration := time.Duration(time.Since(beginInstant).Nanoseconds() / int64(len(cws)))
+
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
@@ -3658,6 +3665,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
+
+		statsInfo := statistic.StatsInfo{}
+		statsInfo.ParseDuration = averageParseDuration
+		requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
+
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -4278,6 +4290,18 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.BytesScan += bytes
 			}
 		}
+
+		statsInfo := statistic.StatsInfoFromContext(ctx)
+		if statsInfo != nil {
+
+			statsByte.WithTimeConsumed(
+				statsByte.GetTimeConsumed() +
+					float64(statsInfo.ParseDuration) +
+					float64(statsInfo.CompileDuration) +
+					float64(statsInfo.PlanDuration))
+
+		}
+
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
