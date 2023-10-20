@@ -185,12 +185,14 @@ func (h *Handle) HandleCommit(
 	cts = txn.GetCommitTS().ToTimestamp()
 
 	if enable {
-		activeDuration := txn.GetContext().Value(common.ActiveHandleCommit).(*common.DurationRecords)
-		if activeDuration != nil {
-			s = fmt.Sprintf("%s[active: %v]", s, activeDuration.Duration)
+		vDuration := txn.GetContext().Value(common.ActiveHandleCommit)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
+			s = fmt.Sprintf("%s[active: %v]", s, duration.Duration)
 		}
-		handleRequestDuration := txn.GetContext().Value(common.ActiveHandleRequests).(*handleRequestsTraceValue)
-		if handleRequestDuration != nil {
+		vHandleRequestDuration := txn.GetContext().Value(common.ActiveHandleRequests)
+		if vHandleRequestDuration != nil {
+			handleRequestDuration := vHandleRequestDuration.(*handleRequestsTraceValue)
 			s = fmt.Sprintf("%s[handle request: %v, createDB %d, createTbl %d, dropDB %d, dropTbl %d, alterTable %d, write %d]", s,
 				handleRequestDuration.Duration,
 				handleRequestDuration.CreateDB,
@@ -200,36 +202,44 @@ func (h *Handle) HandleCommit(
 				handleRequestDuration.AlterTable,
 				handleRequestDuration.Write)
 		}
-		duration := txn.GetContext().Value(common.DequeuePreparing).(*common.DurationRecords)
-		if duration != nil {
+		vDuration = txn.GetContext().Value(common.DequeuePreparing)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[dequeue preparing: %v]", s, duration.Duration)
 		}
-		duration = txn.GetContext().Value(common.StorePrePrepare).(*common.DurationRecords)
-		if duration != nil {
+		vDuration = txn.GetContext().Value(common.StorePrePrepare)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[pre prepare: %v]", s, duration.Duration)
 		}
-		duration = txn.GetContext().Value(common.StorePrepareCommit).(*common.DurationRecords)
-		if duration != nil {
+		vDuration = txn.GetContext().Value(common.StorePrepareCommit)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[prepare commit: %v]", s, duration.Duration)
 		}
-		duration = txn.GetContext().Value(common.StorePreApplyCommit).(*common.DurationRecords)
-		if duration != nil {
+		vDuration = txn.GetContext().Value(common.StorePreApplyCommit)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[pre apply commit: %v]", s, duration.Duration)
 		}
-		duration = txn.GetContext().Value(common.PrepareWAL).(*common.DurationRecords)
-		if duration != nil {
+		vDuration = txn.GetContext().Value(common.PrepareWAL)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[prepare wal: %v]", s, duration.Duration)
 		}
-		duration = txn.GetContext().Value(common.PrepareLogtail).(*common.DurationRecords)
-		if duration != nil {
+		vDuration = txn.GetContext().Value(common.PrepareLogtail)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[prepare logtail: %v]", s, duration.Duration)
 		}
-		duration = txn.GetContext().Value(common.DequeuePrepared).(*common.DurationRecords)
-		if duration != nil {
+		vDuration = txn.GetContext().Value(common.DequeuePrepared)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[dequeue prepared: %v]", s, duration.Duration)
 		}
-		duration = txn.GetContext().Value(common.StoreApplyCommit).(*common.DurationRecords)
-		if duration != nil {
+		vDuration = txn.GetContext().Value(common.StoreApplyCommit)
+		if vDuration != nil {
+			duration := vDuration.(*common.DurationRecords)
 			s = fmt.Sprintf("%s[apply commit: %v]", s, duration.Duration)
 		}
 	} else {
