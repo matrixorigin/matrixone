@@ -237,7 +237,7 @@ func TestCompare(t *testing.T) {
 		{
 			name: "Test2 - float32-large",
 			args: args{leftArgF32: []float32{3, 2, 3}, rightArgF32: []float32{2, 3, 4}},
-			want: -1,
+			want: 1,
 		},
 		{
 			name: "Test3 - float32-equal",
@@ -252,7 +252,7 @@ func TestCompare(t *testing.T) {
 		{
 			name: "Test5 - float64-large",
 			args: args{leftArgF64: []float64{3, 2, 3}, rightArgF64: []float64{2, 3, 4}},
-			want: -1,
+			want: 1,
 		},
 		{
 			name: "Test6 - float64-equal",
@@ -263,6 +263,11 @@ func TestCompare(t *testing.T) {
 			name: "Test7 - float64 difference dims",
 			args: args{leftArgF64: []float64{3, 2}, rightArgF64: []float64{3, 2, 3}},
 			want: -1,
+		},
+		{
+			name: "Test7 - float64 difference dims",
+			args: args{leftArgF64: []float64{3, 2, 3}, rightArgF64: []float64{3, 2}},
+			want: 1,
 		},
 	}
 	for _, tt := range tests {
