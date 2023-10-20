@@ -668,6 +668,7 @@ func (store *txnStore) Freeze() (err error) {
 	return
 }
 
+// metric: 时间（直方图，分位图）
 func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 	now := time.Now()
 	defer func() {

@@ -83,6 +83,7 @@ func (b *TxnLogtailRespBuilder) Close() {
 
 func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
 	b.txn = txn
+	// metric: 时间（直方图，分位图）
 	txn.GetStore().ObserveTxn(
 		b.visitDatabase,
 		b.visitTable,

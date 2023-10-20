@@ -366,6 +366,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			logger.Error("stop subscription handler", zap.Error(ctx.Err()))
 			return
 
+			// metric: counter
 		case sub, ok := <-s.subChan:
 			if !ok {
 				logger.Info("subscription channel closed")
@@ -428,6 +429,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 			subscriptionFunc(sub)
 
+			// metric: counter
 		case e, ok := <-s.event.C:
 			if !ok {
 				logger.Info("publishemtn channel closed")
