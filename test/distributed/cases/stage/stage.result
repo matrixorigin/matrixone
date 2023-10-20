@@ -138,10 +138,10 @@ insert into stage_table values
 create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-local_stage    /Users/heni/matrixone/test/distributed/resources/into_outfile    ENABLED    local stage configure
+local_stage    /home/runner/work/matrixone/matrixone/head/test/distributed/resources/into_outfile    ENABLED    local stage configure
 select stage_name,url,stage_credentials,stage_status,comment from mo_catalog.mo_stages;
 stage_name    url    stage_credentials    stage_status    comment
-local_stage    /Users/heni/matrixone/test/distributed/resources/into_outfile        enabled    local stage configure
+local_stage    /home/runner/work/matrixone/matrixone/head/test/distributed/resources/into_outfile       enabled    local stage configure
 select * from stage_table into outfile 'local_stage:/stage_table.csv';
 r_regionkey    r_name    r_comment
 drop stage local_stage;
@@ -149,7 +149,7 @@ show stages;
 STAGE_NAME    URL    STATUS    COMMENT
 create stage local_stage URL= '$resources/abc' ENABLE=TRUE;
 select * from stage_table into outfile 'local_stage:/stage_table.csv';
-open /Users/heni/matrixone/test/distributed/resources/abc/stage_table.csv: no such file or directory
+open /home/runner/work/matrixone/matrixone/head/test/distributed/resources/abc/stage_table.csv: no such file or directory
 drop stage local_stage;
 create stage local_stage URL= '$resources/into_outfile' ENABLE=FALSE;
 select * from stage_table into outfile 'local_stage:/stage_table.csv';
@@ -166,7 +166,7 @@ create stage local_stage URL= '$resources/into_outfile' ENABLE=FALSE;
 alter stage local_stage set ENABLE=TRUE;
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-local_stage    /Users/heni/matrixone/test/distributed/resources/into_outfile    ENABLED
+local_stage    /home/runner/work/matrixone/matrixone/head/test/distributed/resources/into_outfile   ENABLED
 select * from stage_table into outfile 'local_stage:/stage_table1.csv';
 r_regionkey    r_name    r_comment
 truncate table stage_table;
@@ -181,7 +181,7 @@ r_regionkey    r_name    r_comment
 alter stage local_stage set URL= '$resources/into_outfile_2';
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-local_stage    /Users/heni/matrixone/test/distributed/resources/into_outfile_2    ENABLED
+local_stage    /home/runner/work/matrixone/matrixone/head/test/distributed/resources/into_outfile_2   ENABLED
 select * from stage_table into outfile 'local_stage:/stage_table2.csv';
 r_regionkey    r_name    r_comment
 truncate table stage_table;
@@ -196,27 +196,27 @@ r_regionkey    r_name    r_comment
 alter stage local_stage set comment = 'new comment';
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-local_stage    /Users/heni/matrixone/test/distributed/resources/into_outfile_2    ENABLED    new comment
+local_stage    /home/runner/work/matrixone/matrixone/head/test/distributed/resources/into_outfile_2    ENABLED    new comment
 create stage local_stage URL= '$resources/into_outfile_2' ENABLE=FALSE;
 internal error: the stage local_stage exists
 alter stage local_stage set URL= '$resources/into_outfile_2' comment='alter comment';
 internal error: at most one option at a time
 drop stage local_stage;
 create stage local_stage URL= '$resources/into_outfile_2' ENABLE=ffalse;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 109 near "ffalse;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 130 near "ffalse;";
 drop stage local_stage;
 internal error: the stage local_stage not exists
 create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
 select * from stage_table into outfile 'local_stage:/stage_table3.csv';
 r_regionkey    r_name    r_comment
 select * from stage_table into outfile 'local_stage:/stage_table3.csv';
-open /Users/heni/matrixone/test/distributed/resources/into_outfile/stage_table3.csv: file exists
+open /home/runner/work/matrixone/matrixone/head/test/distributed/resources/into_outfile/stage_table3.csv: file exists
 drop stage local_stage;
 create stage if not exists local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
 create stage if not exists local_stage URL= '$resources/into_outfile2' ENABLE=FALSE;
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-local_stage    /Users/heni/matrixone/test/distributed/resources/into_outfile    ENABLED    local stage configure
+local_stage     /home/runner/work/matrixone/matrixone/head/test/distributed/resources/into_outfile    ENABLED    local stage configure
 alter stage if exists l_stage set ENABLE=TRUE;
 create user "stage_user" identified by '123456';
 
@@ -281,7 +281,7 @@ insert into stage_table values
 (4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-local_stage    /Users/heni/matrixone/test/distributed/resources/into_outfile    ENABLED    local stage configure
+local_stage    /home/runner/work/matrixone/matrixone/head/test/distributed/resources/into_outfile   ENABLED    local stage configure
 select * from stage_table into outfile 'local_stage:/stage_table5.csv';
 r_regionkey    r_name    r_comment
 drop stage local_stage;

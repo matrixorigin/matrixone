@@ -228,5 +228,6 @@ show stages;
 alter stage local_stage set ENABLE=FALSE;
 drop stage local_stage;
 -- @session
-drop account stage_account;
 -- @bvt:issue
+drop account stage_account;
+drop database if exists stage;
