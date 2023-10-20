@@ -313,6 +313,7 @@ func (r *taskRunner) fetch(ctx context.Context) {
 			tasks, err := r.doFetch()
 			if err != nil {
 				r.logger.Error("fetch task failed", zap.Error(err))
+				break
 			}
 			r.addTasks(ctx, tasks)
 		}
