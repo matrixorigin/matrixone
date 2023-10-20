@@ -1623,7 +1623,9 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	start := time.Now()
-	defer v2.SQLBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.SQLBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	var ret *plan2.Plan
 	var err error

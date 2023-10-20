@@ -15,23 +15,17 @@
 package v2
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-var (
-	LogTailSendQueueSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "tn",
-			Subsystem: "logtail",
-			Name:      "sending_queue_size",
-			Help:      "Size of sending logtail queue size.",
-		})
+func TestCreateDashboard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
 
-	LogTailReceiveQueueSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "cn",
-			Subsystem: "logtail",
-			Name:      "receive_queue_size",
-			Help:      "Size of receiving logtail queue size.",
-		})
-)
+	c := NewDashboardCreator("http://127.0.0.1:3000", "admin", "admin", "Prometheus")
+	require.NoError(t, c.Create())
+}

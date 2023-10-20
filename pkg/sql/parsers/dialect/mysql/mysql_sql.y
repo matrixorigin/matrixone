@@ -5532,7 +5532,7 @@ stage_comment_opt:
             Exist: false,
         }
     }
-|   COMMENT_KEYWORD STRING
+|   COMMENT_KEYWORD '=' STRING
     {
         $$ = tree.StageComment{
             Exist: true,
