@@ -170,8 +170,8 @@ const (
 )
 
 type MoCtledState struct {
-	enable    bool
-	threshold int64
+	Enable    bool
+	Threshold int64
 }
 
 var MOCtledSpanEnableConfig struct {
@@ -210,7 +210,7 @@ func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold int64) {
 	defer MOCtledSpanEnableConfig.Unlock()
 
 	if state, exist := MOCtledSpanEnableConfig.KindToState[kind]; exist {
-		return true, state.enable, state.threshold
+		return true, state.Enable, state.Threshold
 	}
 	return false, false, 0
 }
@@ -222,8 +222,8 @@ func SetMoCtledSpanState(name string, enable bool, threshold int64) (succeed boo
 	defer MOCtledSpanEnableConfig.Unlock()
 
 	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
-		MOCtledSpanEnableConfig.KindToState[kind].enable = enable
-		MOCtledSpanEnableConfig.KindToState[kind].threshold = threshold
+		MOCtledSpanEnableConfig.KindToState[kind].Enable = enable
+		MOCtledSpanEnableConfig.KindToState[kind].Threshold = threshold
 		return true
 	}
 	return false
