@@ -1,0 +1,17 @@
+drop database if exists vecdb2;
+create database vecdb2;
+use vecdb2;
+drop table if exists vec_table;
+create table vec_table(a int, b vecf32(3), c vecf64(3));
+load data infile '$resources/array/array_out.csv' into table vec_table ignore 1 lines;
+select * from vec_table;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select * from vec_table into outfile '$resources/array/array_out.csv';
+open /Users/arjunsunilkumar/GolandProjects/matrixone/test/distributed/resources/array/array_out.csv: file exists
+delete from vec_table;
+load data infile '$resources/array/array_out.csv' into table vec_table ignore 1 lines;
+select * from vec_table;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+drop database vecdb2;
