@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/constant"
-	"os"
 	"strconv"
 	"strings"
 
@@ -2682,6 +2681,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					subCtx := NewBindContext(builder, ctx)
 					subCtx.maskedCTEs = cteRef.maskedCTEs
 					subCtx.cteName = table
+					//reset defaultDatabase
+					if len(cteRef.defaultDatabase) > 0 {
+						subCtx.defaultDatabase = cteRef.defaultDatabase
+					}
 					cteRef.isRecursive = false
 					nodeID, err = builder.buildSelect(s, subCtx, false)
 					if err != nil {
@@ -2728,6 +2731,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						subCtx := NewBindContext(builder, ctx)
 						subCtx.maskedCTEs = cteRef.maskedCTEs
 						subCtx.cteName = table
+						if len(cteRef.defaultDatabase) > 0 {
+							subCtx.defaultDatabase = cteRef.defaultDatabase
+						}
 						subCtx.recSelect = true
 						subCtx.sinkTag = initCtx.sinkTag
 						subCtx.cteByName = make(map[string]*CTERef)
@@ -2837,7 +2843,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 				break
 			}
-			schema = builder.compCtx.DefaultDatabase()
+			schema = ctx.defaultDatabase
 		}
 
 		schema, err = databaseIsValid(schema, builder.compCtx)
@@ -2847,13 +2853,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
-			/*
-				if ctx.need_connect_db_first {
-					return "not connect to a database"
-				}else{
-					return "invalid database"
-				}
-			*/
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}
 
@@ -2947,17 +2946,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					ExplicitCatalog: false,
 					ExplicitSchema:  false,
 				})
-				a, err := builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
-				if err != nil {
-					fmt.Fprintf(os.Stderr,
-						"build on view %s : default database: %s ctx:%s schema:%s\n",
-						viewDefString,
-						defaultDatabase,
-						builder.compCtx.DefaultDatabase(),
-						schema)
-					return 0, err
-				}
-				return a, err
+				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
 			}
 		}
 

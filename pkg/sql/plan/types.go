@@ -112,34 +112,6 @@ type CompilerContext interface {
 	SetQueryingSubscription(meta *SubscriptionMeta)
 	GetQueryingSubscription() *SubscriptionMeta
 	IsPublishing(dbName string) (bool, error)
-	/*
-		For issue 11319,
-		if ConnectDatabaseFirst() {
-			return error("not connect to a database")
-		}else{
-			return error("invalid database")
-		}
-	*/
-	//ConnectDatabaseFirst() bool
-	/*
-		For issue 11319,
-
-		1. Before doing any business, the operation should connect to a database first:
-		Examples:
-			show tables;
-			show create table t1;
-			select * from t1;
-
-		2. the operation can do some business without connecting to a database first:
-		Examples:
-			show tables from db;
-			show create table db.t1
-			show create database db;
-
-			use db;
-			select * from db.t1;
-	*/
-	//SetConnectDatabaseFirst(bool)
 }
 
 type Optimizer interface {
@@ -264,6 +236,8 @@ type BindContext struct {
 	parent     *BindContext
 	leftChild  *BindContext
 	rightChild *BindContext
+
+	defaultDatabase string
 
 	forceWindows bool
 }
