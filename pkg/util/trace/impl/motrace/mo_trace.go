@@ -337,7 +337,7 @@ func (s *MOSpan) NeedRecord() (bool, error) {
 	// hope it ignores the long time threshold set by the tracer and deadline restrictions.
 	// but the threshold set by mo ctl need to be considered
 	if has, state, threshold := trace.IsMOCtledSpan(s.Kind); has {
-		return state && (s.Duration >= time.Duration(threshold)*time.Millisecond), nil
+		return state && (s.Duration >= threshold), nil
 	}
 	// the default logic that before mo_ctl controlled spans have been introduced
 	deadline, hasDeadline := s.ctx.Deadline()

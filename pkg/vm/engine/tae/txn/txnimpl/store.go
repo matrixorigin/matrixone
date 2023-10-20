@@ -639,7 +639,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 	defer func() {
 		applyCommitDuration := time.Since(now)
 		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && applyCommitDuration.Milliseconds() > threshold && store.GetContext() != nil {
+		if enable && applyCommitDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StoreApplyCommit, &common.DurationRecords{Duration: applyCommitDuration}))
 		}
 
@@ -673,7 +673,7 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 	defer func() {
 		prePrepareDuration := time.Since(now)
 		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && prePrepareDuration.Milliseconds() > threshold && store.GetContext() != nil {
+		if enable && prePrepareDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StorePrePrepare, &common.DurationRecords{Duration: prePrepareDuration}))
 		}
 
@@ -691,7 +691,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 	defer func() {
 		prepareCommitDuration := time.Since(now)
 		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && prepareCommitDuration.Milliseconds() > threshold && store.GetContext() != nil {
+		if enable && prepareCommitDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StorePreApplyCommit, &common.DurationRecords{Duration: prepareCommitDuration}))
 		}
 
@@ -720,7 +720,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 	}
 	preApplyCommitDuration := time.Since(now)
 	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-	if enable && preApplyCommitDuration.Milliseconds() > threshold && store.GetContext() != nil {
+	if enable && preApplyCommitDuration > threshold && store.GetContext() != nil {
 		store.SetContext(context.WithValue(store.GetContext(), common.StorePreApplyCommit, &common.DurationRecords{Duration: preApplyCommitDuration}))
 	}
 	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
