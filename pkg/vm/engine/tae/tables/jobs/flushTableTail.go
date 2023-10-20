@@ -292,6 +292,9 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		common.DurationField(time.Since(now)),
 		common.OperandField(task))
 
+	// metric: 时间，直方图(now 指代的时间)
+	// metric: counter （记录 两次 flush 的时间）
+
 	sleep, name, exist := fault.TriggerFault("slow_flush")
 	if exist && name == task.schema.Name {
 		time.Sleep(time.Duration(sleep) * time.Second)

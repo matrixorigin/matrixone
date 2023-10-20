@@ -64,6 +64,8 @@ func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
 	e.ckpLSN = ckpLSN
 	e.truncateLSN = truncateLSN
 }
+
+// mertic: 报警 等checkpoint 需要记录的 node 刷盘时间太长
 func (e *CheckpointEntry) CheckPrintTime() bool {
 	e.RLock()
 	defer e.RUnlock()
