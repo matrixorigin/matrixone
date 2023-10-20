@@ -24,6 +24,7 @@ import (
 	pathpkg "path"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -245,19 +246,18 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	ctx = addGetConnMetric(ctx)
 
-	v2.GetS3FSWriteCounter().Inc()
-	v2.GetS3FSWriteSizeGauge().Set(float64(vector.EntriesSize()))
-
+	var bytesWritten int
 	start := time.Now()
-	defer v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
+		v2.GetS3FSWriteBytesHistogram().Observe(float64(bytesWritten))
+	}()
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
 	// check existence
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
@@ -272,17 +272,17 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 		return moerr.NewFileAlreadyExistsNoCtx(vector.FilePath)
 	}
 
-	err = s.write(ctx, vector)
+	bytesWritten, err = s.write(ctx, vector)
 	return err
 }
 
-func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
+func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, err error) {
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
 
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// sort
@@ -303,7 +303,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		// also write to disk cache
 		w, done, closeW, err := s.diskCache.newFileContentWriter(vector.FilePath)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		defer closeW()
 		defer func() {
@@ -318,7 +318,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		)
 		content, err = io.ReadAll(r)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 	} else if len(vector.Entries) == 1 &&
@@ -331,14 +331,14 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 		r := newIOEntriesReader(ctx, vector.Entries)
 		content, err = io.ReadAll(r)
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
 
 	if vector.Hash.Sum != nil && vector.Hash.New != nil {
 		h := vector.Hash.New()
 		if _, err := h.Write(content); err != nil {
-			return err
+			return 0, err
 		}
 		*vector.Hash.Sum = h.Sum(nil)
 	}
@@ -350,26 +350,25 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (err error) {
 	}
 	key := s.pathToKey(path.File)
 	if err := s.storage.Write(ctx, key, r, size, expire); err != nil {
-		return err
+		return 0, err
 	}
 
-	return nil
+	return len(content), nil
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	ctx = addGetConnMetric(ctx)
 
-	v2.GetS3FSReadCounter().Inc()
-	defer v2.GetS3FSReadSizeGauge().Set(float64(vector.EntriesSize()))
-
+	bytesCounter := new(atomic.Int64)
 	start := time.Now()
-	defer v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
+	defer func() {
+		v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
+		v2.GetS3FSReadBytesHistogram().Observe(float64(bytesCounter.Load()))
+	}()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
@@ -414,7 +413,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		}
 	}
 
-	return s.read(ctx, vector)
+	return s.read(ctx, vector, bytesCounter)
 }
 
 func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
@@ -446,7 +445,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
+func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.Int64) (err error) {
 	if vector.allDone() {
 		// all cache hit
 		return nil
@@ -486,7 +485,17 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		ctx, spanR := trace.Start(ctx, "S3FS.read.getReader")
 		defer spanR.End()
 		key := s.pathToKey(path.File)
-		return s.storage.Read(ctx, key, min, max)
+		r, err := s.storage.Read(ctx, key, min, max)
+		if err != nil {
+			return nil, err
+		}
+		return &readCloser{
+			r: &countingReader{
+				R: r,
+				C: bytesCounter,
+			},
+			closeFunc: r.Close,
+		}, nil
 	}
 
 	// a function to get data lazily
@@ -698,6 +707,7 @@ func addGetConnMetric(ctx context.Context) context.Context {
 		},
 
 		DNSStart: func(di httptrace.DNSStartInfo) {
+			v2.S3DNSResolveCounter.Inc()
 			dnsStart = time.Now()
 		},
 
@@ -706,6 +716,7 @@ func addGetConnMetric(ctx context.Context) context.Context {
 		},
 
 		ConnectStart: func(network, addr string) {
+			v2.S3ConnectCounter.Inc()
 			connectStart = time.Now()
 		},
 

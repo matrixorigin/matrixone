@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"reflect"
 	"time"
 
@@ -147,6 +148,10 @@ func (s *Service) heartbeatWorker(ctx context.Context) {
 }
 
 func (s *Service) heartbeat(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		metricv2.HeartbeatHistogram.WithLabelValues("log").Observe(time.Since(start).Seconds())
+	}()
 	ctx2, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -166,6 +171,7 @@ func (s *Service) heartbeat(ctx context.Context) {
 	hb.TaskServiceCreated = s.taskServiceCreated()
 	cb, err := s.haClient.SendLogHeartbeat(ctx2, hb)
 	if err != nil {
+		metricv2.HeartbeatFailureCounter.WithLabelValues("log").Inc()
 		s.runtime.Logger().Error("failed to send log service heartbeat", zap.Error(err))
 		return
 	}
