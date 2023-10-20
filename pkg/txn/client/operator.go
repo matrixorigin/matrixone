@@ -454,7 +454,6 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	tc.enterCommit()
 	defer tc.exitCommit()
 	util.LogTxnCommit(tc.getTxnMeta(false))
-	defer util.LogTxnCommitWithInfo(tc.getTxnMeta(false), "exit")
 	if tc.option.readyOnly {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
@@ -478,7 +477,6 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	tc.enterRollback()
 	defer tc.exitRollback()
 	txnMeta := tc.getTxnMeta(false)
-	defer util.LogTxnRollbackWithInfo(txnMeta, "exit")
 	util.LogTxnRollback(txnMeta)
 	if tc.workspace != nil {
 		if err := tc.workspace.Rollback(ctx); err != nil {
