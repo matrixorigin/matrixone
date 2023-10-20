@@ -23,7 +23,7 @@ type ShuffleTree struct {
 	Reverse bool
 }
 
-type ShuffleFloat struct {
+type ShuffleRange struct {
 	Tree      *ShuffleTree
 	Result    []float64
 	Size      int
@@ -77,11 +77,11 @@ func (t *ShuffleTree) Pop() (*ShuffleTree, float64, float64) {
 	return t.Left.Merge(t.Right), t.Key, t.Value
 }
 
-func NewShuffleFloat() *ShuffleFloat {
-	return &ShuffleFloat{}
+func NewShuffleFloat() *ShuffleRange {
+	return &ShuffleRange{}
 }
 
-func (s *ShuffleFloat) Update(zmmin []float64, zmmax []float64) {
+func (s *ShuffleRange) Update(zmmin []float64, zmmax []float64) {
 	len := len(zmmin)
 	s.Size += len
 	for i := 0; i < len; i++ {
@@ -101,7 +101,7 @@ func (s *ShuffleFloat) Update(zmmin []float64, zmmax []float64) {
 	}
 }
 
-func (s *ShuffleFloat) Eval(k int) {
+func (s *ShuffleRange) Eval(k int) {
 	if k <= 1 {
 		return
 	}
