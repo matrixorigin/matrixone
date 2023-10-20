@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -83,6 +84,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
 	})
+	fmt.Fprintf(os.Stderr, "genViewTableDef defaultDatabase %s \n", ctx.DefaultDatabase())
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +254,9 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if len(createTable.Database) == 0 {
 		createTable.Database = ctx.DefaultDatabase()
 	}
+
+	fmt.Fprintf(os.Stderr, "create view dbName: %s \n", createTable.Database)
+
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil, moerr.NewNoDB(ctx.GetContext())
