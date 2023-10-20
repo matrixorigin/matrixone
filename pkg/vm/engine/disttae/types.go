@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -327,6 +328,7 @@ func (txn *Transaction) adjustUpdateOrderLocked() error {
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	// If has s3 operation, can not rollback.
 	if txn.hasS3Op.Load() {
+		logutil.Errorf("txn s3 writes can not retry in rc mode. stack=\n %s", string(debug.Stack()))
 		return moerr.NewTxnCannotRetry(ctx)
 	}
 
