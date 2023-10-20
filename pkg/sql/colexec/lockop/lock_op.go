@@ -239,6 +239,13 @@ func performLock(
 				zap.Error(err))
 		}
 		if err != nil {
+			getLogger().Info("lock result",
+				zap.Uint64("table", target.tableID),
+				zap.Bool("locked", locked),
+				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
+				zap.String("refresh-ts", refreshTS.DebugString()),
+				zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
+				zap.Error(err))
 			return err
 		}
 		if !locked {
@@ -260,9 +267,23 @@ func performLock(
 		// if need to retry, do not return the retry error immediately, first try to get all
 		// the locks to avoid another conflict when retrying
 		if !needRetry && !refreshTS.IsEmpty() {
+			getLogger().Info("lock result",
+				zap.Uint64("table", target.tableID),
+				zap.Bool("locked", locked),
+				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
+				zap.String("refresh-ts", refreshTS.DebugString()),
+				zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
+			)
 			needRetry = true
 		}
 		if !arg.rt.defChanged {
+			getLogger().Info("lock result",
+				zap.Uint64("table", target.tableID),
+				zap.Bool("locked", locked),
+				zap.Int32("primary-index", target.primaryColumnIndexInBatch),
+				zap.String("refresh-ts", refreshTS.DebugString()),
+				zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
+			)
 			arg.rt.defChanged = defChanged
 		}
 	}
@@ -272,8 +293,14 @@ func performLock(
 	// so that the retry will definitely succeed because all the locks have been put.
 	if needRetry && arg.rt.retryError == nil {
 		arg.rt.retryError = retryError
+		getLogger().Info("lock result",
+			zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
+		)
 	}
 	if arg.rt.defChanged {
+		getLogger().Info("lock result",
+			zap.String("txnID", proc.TxnOperator.Txn().DebugString()),
+		)
 		arg.rt.retryError = retryWithDefChangedError
 	}
 	return nil

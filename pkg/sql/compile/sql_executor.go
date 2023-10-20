@@ -94,7 +94,7 @@ func (s *sqlExecutor) Exec(
 		},
 		opts)
 	if err != nil {
-		logutil.Errorf("internal sql executor run error '%s': %v", sql, err)
+		logutil.Errorf("internal sql executor run error '%s': %s - %v", sql, opts.Txn().Txn().DebugString(), err)
 		return executor.Result{}, err
 	}
 	return res, nil
