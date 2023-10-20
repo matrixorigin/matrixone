@@ -2683,10 +2683,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					subCtx := NewBindContext(builder, ctx)
 					subCtx.maskedCTEs = cteRef.maskedCTEs
 					subCtx.cteName = table
-					//reset defaultDatabase
-					if len(cteRef.defaultDatabase) > 0 {
-						subCtx.defaultDatabase = cteRef.defaultDatabase
-					}
 					cteRef.isRecursive = false
 					nodeID, err = builder.buildSelect(s, subCtx, false)
 					if err != nil {
@@ -2733,9 +2729,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						subCtx := NewBindContext(builder, ctx)
 						subCtx.maskedCTEs = cteRef.maskedCTEs
 						subCtx.cteName = table
-						if len(cteRef.defaultDatabase) > 0 {
-							subCtx.defaultDatabase = cteRef.defaultDatabase
-						}
 						subCtx.recSelect = true
 						subCtx.sinkTag = initCtx.sinkTag
 						subCtx.cteByName = make(map[string]*CTERef)
@@ -2845,7 +2838,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 				break
 			}
-			schema = ctx.defaultDatabase
+			schema = builder.compCtx.DefaultDatabase()
 		}
 
 		schema, err = databaseIsValid(schema, builder.compCtx)

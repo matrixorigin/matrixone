@@ -1737,3 +1737,24 @@ func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
 	}
 	return dbName, nil
 }
+
+/*
+*
+getSuitableDBName get the database name which need to be used in next steps.
+
+For Cases:
+
+	SHOW XXX FROM [DB_NAME1].TABLE_NAME [FROM [DB_NAME2]];
+
+	In mysql,
+		if the second FROM clause exists, the DB_NAME1 in first FROM clause if it exists will be ignored.
+		if the second FROM clause does not exist, the DB_NAME1 in first FROM clause if it exists  will be used.
+		if the DB_NAME1 and DB_NAME2 neither does not exist, the current connected database (by USE statement) will be used.
+		if neither case above succeeds, an error is reported.
+*/
+func getSuitableDBName(dbName1 string, dbName2 string) string {
+	if len(dbName2) != 0 {
+		return dbName2
+	}
+	return dbName1
+}

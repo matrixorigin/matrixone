@@ -265,8 +265,6 @@ type BindContext struct {
 	leftChild  *BindContext
 	rightChild *BindContext
 
-	defaultDatabase string
-
 	forceWindows bool
 }
 

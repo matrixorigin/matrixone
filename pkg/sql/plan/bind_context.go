@@ -37,7 +37,6 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		parent:         parent,
 	}
 	if parent != nil {
-		bc.defaultDatabase = parent.defaultDatabase
 		bc.normalCTE = parent.normalCTE
 		bc.cteName = parent.cteName
 		if parent.recSelect || parent.initSelect || parent.finalSelect {

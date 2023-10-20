@@ -37,12 +37,14 @@ const INFORMATION_SCHEMA = "information_schema"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	ctx CompilerContext) (*Plan, error) {
-	//TODO:
-	if !ctx.DatabaseExists(stmt.Name) {
-		return nil, moerr.NewBadDB(ctx.GetContext(), stmt.Name)
+	var err error
+	var name string
+	name, err = databaseIsValid(getSuitableDBName("", stmt.Name), ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(stmt.Name); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(name); err != nil {
 		return nil, err
 	} else if sub != nil {
 		accountId := ctx.GetAccountId()
@@ -53,9 +55,8 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 	}
 
 	sqlStr := "select \"%s\" as `Database`, \"%s\" as `Create Database`"
-	createSql := fmt.Sprintf("CREATE DATABASE `%s`", stmt.Name)
-	sqlStr = fmt.Sprintf(sqlStr, stmt.Name, createSql)
-	// logutil.Info(sqlStr)
+	createSql := fmt.Sprintf("CREATE DATABASE `%s`", name)
+	sqlStr = fmt.Sprintf(sqlStr, name, createSql)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
@@ -74,14 +75,9 @@ func formatStr(str string) string {
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
 	var err error
-	tblName := stmt.Name.Parts[0]
-
-	dbName := ""
-	if stmt.Name.NumParts == 2 {
-		dbName = stmt.Name.Parts[1]
-	}
-
-	dbName, err = databaseIsValid(dbName, ctx)
+	tblName := stmt.Name.GetTableName()
+	dbName := stmt.Name.GetDBName()
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -360,10 +356,12 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 // buildShowCreateView
 func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan, error) {
-	tblName := stmt.Name.Parts[0]
-	dbName := ctx.DefaultDatabase()
-	if stmt.Name.NumParts == 2 {
-		dbName = stmt.Name.Parts[1]
+	var err error
+	tblName := stmt.Name.GetTableName()
+	dbName := stmt.Name.GetDBName()
+	dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
@@ -377,7 +375,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	}
 
 	var viewData ViewData
-	err := json.Unmarshal([]byte(viewStr), &viewData)
+	err = json.Unmarshal([]byte(viewStr), &viewData)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +564,7 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 
 func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*Plan, error) {
 	accountId := ctx.GetAccountId()
-	dbName, err := databaseIsValid(stmt.Table.GetDBName(), ctx)
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DbName), ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -611,7 +609,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 }
 
 func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Plan, error) {
-	dbName, err := databaseIsValid(stmt.Table.GetDBName(), ctx)
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DbName), ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -667,7 +665,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	accountId := ctx.GetAccountId()
-	dbName, err := databaseIsValid(stmt.Table.GetDBName(), ctx)
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.Table.GetDBName(), stmt.DBName), ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -888,12 +886,11 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 }
 
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
-	dbName, err := databaseIsValid(string(stmt.TableName.Schema()), ctx)
+	dbName, err := databaseIsValid(getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName), ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	tblName := string(stmt.TableName.Name())
+	tblName := stmt.TableName.GetTableName()
 	obj, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
@@ -1123,4 +1120,3 @@ func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
 	// 	},
 	// }, nil
 }
-
