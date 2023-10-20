@@ -16,8 +16,10 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -414,7 +416,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if err != nil {
 		return nil, err
 	}
-	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
+	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.objInfos))
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
 		objName := location.Name().String()
@@ -458,11 +460,14 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	return infoList, nil
 }
 
-func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types.Blockid {
+func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
 	dirtyBlks := make([]types.Blockid, 0)
 	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
-		if !state.BlockVisible(
-			blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
+		//if !state.BlockVisible(
+		//	blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
+		//	continue
+		//}
+		if !state.BlockPersisted(blk) {
 			continue
 		}
 		dirtyBlks = append(dirtyBlks, blk)
@@ -509,8 +514,11 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 
 	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
 		//if blk is in partitionState.blks, it means that blk is persisted.
-		if state.BlockVisible(
-			blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
+		//if state.BlockVisible(
+		//	blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
+		//	continue
+		//}
+		if state.BlockPersisted(blk) {
 			continue
 		}
 		for _, bat := range bats {
@@ -555,14 +563,14 @@ func (tbl *txnTable) reset(newId uint64) {
 	}
 	tbl.tableId = newId
 	tbl._partState = nil
-	tbl.blockInfos = nil
-	tbl.blockInfosUpdated = false
+	tbl.objInfos = nil
+	tbl.objInfosUpdated = false
 }
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState = nil
-	tbl.blockInfos = nil
-	tbl.blockInfosUpdated = false
+	tbl.objInfos = nil
+	tbl.objInfosUpdated = false
 }
 
 // return all unmodified blocks
@@ -576,7 +584,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 
 	// make sure we have the block infos snapshot
-	if err = tbl.UpdateBlockInfos(ctx); err != nil {
+	if err = tbl.UpdateObjectInfos(ctx); err != nil {
 		return
 	}
 
@@ -589,7 +597,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 
-	if len(tbl.blockInfos) == 0 {
+	if len(tbl.objInfos) == 0 {
 		cnblks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
 		if err != nil {
 			return nil, err
@@ -616,7 +624,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		part,
 		tbl.getTableDef(),
 		newExprs,
-		tbl.blockInfos,
+		tbl.objInfos,
 		&ranges,
 		tbl.proc.Load(),
 	)
@@ -646,10 +654,51 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	committedblocks []catalog.BlockInfo, // whole block list
+	snapshotObjects []logtailreplay.ObjectEntry, // whole data object list on snapshot
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
+
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+	var objDataMeta objectio.ObjectDataMeta
+	var objMeta objectio.ObjectMeta
+	var snapshotBlks []catalog.BlockInfo
+	for _, obj := range snapshotObjects {
+		location := obj.Location()
+		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+			return err
+		}
+		objDataMeta = objMeta.MustDataMeta()
+		blkCnt := objDataMeta.BlockCount()
+		for i := 0; i < int(blkCnt); i++ {
+			blkMeta := objDataMeta.GetBlockMeta(uint32(i))
+			metaLoc := blockio.EncodeLocation(
+				obj.Loc.Name(),
+				blkMeta.GetExtent(),
+				blkMeta.GetRows(),
+				blkMeta.GetID(),
+			)
+			blkInfo := catalog.BlockInfo{
+				BlockID:    *blkMeta.BlockHeader().BlockID(),
+				EntryState: obj.EntryState,
+				Sorted:     obj.Sorted,
+				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+				CommitTs:   obj.CommitTS,
+				SegmentID:  obj.SegmentID,
+			}
+			if obj.HasDeltaLoc {
+				deltaLoc, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+				if !ok {
+					panic(fmt.Sprintf("block %v delta location not found", blkInfo.BlockID))
+				}
+				blkInfo.DeltaLoc = deltaLoc
+			}
+			snapshotBlks = append(snapshotBlks, blkInfo)
+		}
+	}
 
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
@@ -659,7 +708,7 @@ func (tbl *txnTable) rangesOnePart(
 		deleteBlks, createBlks := state.GetChangedBlocksBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 		if len(deleteBlks) > 0 {
-			if err := tbl.updateDeleteInfo(deleteBlks, createBlks, committedblocks); err != nil {
+			if err := tbl.updateDeleteInfo(deleteBlks, createBlks, snapshotBlks); err != nil {
 				return err
 			}
 		}
@@ -673,14 +722,14 @@ func (tbl *txnTable) rangesOnePart(
 		for iter.Next() {
 			entry := iter.Entry()
 			//lazy load deletes for block.
-			dirtyBlks[entry.BlockID] = struct{}{}
+			dirtyBlks[entry] = struct{}{}
 		}
 		iter.Close()
 
 	}
 
 	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
-	for _, bid := range tbl.GetDirtyBlksIn(state) {
+	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
 		dirtyBlks[bid] = struct{}{}
 	}
 
@@ -690,8 +739,8 @@ func (tbl *txnTable) rangesOnePart(
 	}
 	//blks contains all visible blocks to this txn, namely
 	//includes committed blocks and uncommitted blocks by CN writing S3.
-	blks := make([]catalog.BlockInfo, 0, len(committedblocks)+len(insertedS3Blks))
-	blks = append(blks, committedblocks...)
+	blks := make([]catalog.BlockInfo, 0, len(snapshotBlks)+len(insertedS3Blks))
+	blks = append(blks, snapshotBlks...)
 	blks = append(blks, insertedS3Blks...)
 	for _, blk := range insertedS3Blks {
 		if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
@@ -719,12 +768,12 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		objDataMeta objectio.ObjectDataMeta
-		objMeta     objectio.ObjectMeta
-		zms         []objectio.ZoneMap
-		vecs        []*vector.Vector
-		skipObj     bool
-		auxIdCnt    int32
+		//objDataMeta objectio.ObjectDataMeta
+		//objMeta     objectio.ObjectMeta
+		zms      []objectio.ZoneMap
+		vecs     []*vector.Vector
+		skipObj  bool
+		auxIdCnt int32
 	)
 
 	defer func() {
@@ -735,10 +784,10 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return err
-	}
+	//fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	//if err != nil {
+	//	return err
+	//}
 
 	if done, err := tbl.tryFastRanges(
 		exprs, blks, dirtyBlks, ranges, fs,
@@ -1618,7 +1667,7 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 	return tbl._partState, nil
 }
 
-func (tbl *txnTable) UpdateBlockInfos(ctx context.Context) (err error) {
+func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	tbl.tnList = []int{0}
 
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
@@ -1626,16 +1675,16 @@ func (tbl *txnTable) UpdateBlockInfos(ctx context.Context) (err error) {
 	// 1. update logtail
 	// 2. generate block infos
 	// 3. update the blockInfosUpdated and blockInfos fields of the table
-	if !created && !tbl.blockInfosUpdated {
+	if !created && !tbl.objInfosUpdated {
 		if err = tbl.updateLogtail(ctx); err != nil {
 			return
 		}
-		var blocks []catalog.BlockInfo
-		if blocks, err = tbl.db.txn.getBlockInfos(ctx, tbl); err != nil {
+		var objs []logtailreplay.ObjectEntry
+		if objs, err = tbl.db.txn.getObjInfos(ctx, tbl); err != nil {
 			return
 		}
-		tbl.blockInfos = blocks
-		tbl.blockInfosUpdated = true
+		tbl.objInfos = objs
+		tbl.objInfosUpdated = true
 	}
 	return
 }

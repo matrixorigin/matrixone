@@ -348,9 +348,8 @@ type BlockInfo struct {
 	Sorted     bool
 	MetaLoc    ObjectLocation
 	DeltaLoc   ObjectLocation
-	//It's only used by TN.
-	CommitTs  types.TS
-	SegmentID types.Uuid
+	CommitTs   types.TS
+	SegmentID  types.Uuid
 
 	//TODO:: putting them here is a bad idea, remove
 	//this block can be distributed to remote nodes.
