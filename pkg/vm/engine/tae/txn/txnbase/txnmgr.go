@@ -511,7 +511,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 		dequeuePreparingDuration := time.Since(t0)
 		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && dequeuePreparingDuration.Milliseconds() > threshold && op.Txn.GetContext() != nil {
+		if enable && dequeuePreparingDuration > threshold && op.Txn.GetContext() != nil {
 			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.DequeuePreparing, &common.DurationRecords{Duration: dequeuePreparingDuration}))
 		}
 
@@ -546,7 +546,7 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 			}
 			prepareWALDuration := time.Since(t0)
 			_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-			if enable && prepareWALDuration.Milliseconds() > threshold && op.Txn.GetContext() != nil {
+			if enable && prepareWALDuration > threshold && op.Txn.GetContext() != nil {
 				op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: prepareWALDuration}))
 			}
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
@@ -583,7 +583,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		}
 		dequeuePreparedDuration := time.Since(t0)
 		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && dequeuePreparedDuration.Milliseconds() > threshold && op.Txn.GetContext() != nil {
+		if enable && dequeuePreparedDuration > threshold && op.Txn.GetContext() != nil {
 			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: dequeuePreparedDuration}))
 		}
 	}

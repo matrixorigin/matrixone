@@ -173,7 +173,7 @@ func (h *Handle) HandleCommit(
 	}
 	activeDuration := time.Since(start)
 	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-	if enable && activeDuration.Milliseconds() > threshold && txn.GetContext() != nil {
+	if enable && activeDuration > threshold && txn.GetContext() != nil {
 		txn.GetStore().SetContext(context.WithValue(txn.GetContext(), common.ActiveHandleCommit, &common.DurationRecords{Duration: activeDuration}))
 	}
 	txn, err = h.db.GetTxnByID(meta.GetID())
@@ -291,7 +291,7 @@ func (h *Handle) handleRequests(
 	defer func() {
 		handleRequestDuration := time.Since(t0)
 		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
-		if enable && handleRequestDuration.Milliseconds() > threshold && txn.GetContext() != nil {
+		if enable && handleRequestDuration > threshold && txn.GetContext() != nil {
 			txn.GetStore().SetContext(context.WithValue(
 				txn.GetContext(),
 				common.ActiveHandleRequests,

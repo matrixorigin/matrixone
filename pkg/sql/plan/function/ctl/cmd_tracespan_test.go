@@ -107,9 +107,9 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	k1 := trace.MOCtledSpanEnableConfig.NameToKind["s3"]
 	k2 := trace.MOCtledSpanEnableConfig.NameToKind["local"]
 	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k1].Enable)
-	require.Equal(t, int64(10), trace.MOCtledSpanEnableConfig.KindToState[k1].Threshold)
+	require.Equal(t, int64(10), trace.MOCtledSpanEnableConfig.KindToState[k1].Threshold.Milliseconds())
 	require.Equal(t, true, trace.MOCtledSpanEnableConfig.KindToState[k2].Enable)
-	require.Equal(t, int64(10), trace.MOCtledSpanEnableConfig.KindToState[k2].Threshold)
+	require.Equal(t, int64(10), trace.MOCtledSpanEnableConfig.KindToState[k2].Threshold.Milliseconds())
 
 }
 

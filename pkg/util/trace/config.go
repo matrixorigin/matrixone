@@ -171,7 +171,7 @@ const (
 
 type MoCtledState struct {
 	Enable    bool
-	Threshold int64
+	Threshold time.Duration
 }
 
 var MOCtledSpanEnableConfig struct {
@@ -205,7 +205,7 @@ func InitMOCtledSpan() {
 
 // IsMOCtledSpan first checks if this kind exists in mo_ctl controlled spans,
 // if it is, return it's current state, or return not exist
-func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold int64) {
+func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold time.Duration) {
 	MOCtledSpanEnableConfig.Lock()
 	defer MOCtledSpanEnableConfig.Unlock()
 
@@ -223,7 +223,8 @@ func SetMoCtledSpanState(name string, enable bool, threshold int64) (succeed boo
 
 	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
 		MOCtledSpanEnableConfig.KindToState[kind].Enable = enable
-		MOCtledSpanEnableConfig.KindToState[kind].Threshold = threshold
+		// convert threshold to ms in time.Duration format
+		MOCtledSpanEnableConfig.KindToState[kind].Threshold = time.Duration(threshold) * time.Millisecond
 		return true
 	}
 	return false
