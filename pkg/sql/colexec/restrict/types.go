@@ -30,7 +30,7 @@ type container struct {
 	executors []colexec.ExpressionExecutor
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.cleanExecutor()
 	}

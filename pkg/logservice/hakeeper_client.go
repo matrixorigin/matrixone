@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -28,6 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+)
+
+const (
+	defaultBackendReadTimeout = time.Second * 8
 )
 
 type basicHAKeeperClient interface {
@@ -590,7 +595,15 @@ func connectToHAKeeper(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, defaultMaxMessageSize, cfg.EnableCompress, "connectToHAKeeper")
+		cc, err := getRPCClient(
+			ctx,
+			addr,
+			c.respPool,
+			defaultMaxMessageSize,
+			cfg.EnableCompress,
+			defaultBackendReadTimeout,
+			"connectToHAKeeper",
+		)
 		if err != nil {
 			e = err
 			continue

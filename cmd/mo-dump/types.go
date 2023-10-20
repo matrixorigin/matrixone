@@ -30,7 +30,10 @@ const (
 	maxNetBufferLength     = mpool.MB * 16
 	defaultCsv             = false
 	defaultLocalInfile     = true
+	defaultNoData          = false
 	timeout                = 10 * time.Second
+	//default Field delimiter (set to ',')
+	defaultFieldDelimiter rune = ','
 )
 
 const (
@@ -55,3 +58,9 @@ type Table struct {
 }
 
 type Tables []Table
+
+// csvConfig is the configuration for csv output
+type csvConfig struct {
+	enable         bool
+	fieldDelimiter rune
+}

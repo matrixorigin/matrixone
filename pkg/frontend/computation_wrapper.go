@@ -365,7 +365,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.stmt,
 		cwft.ses.isInternal,
 		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
-		true,
 	)
 	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
 		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)

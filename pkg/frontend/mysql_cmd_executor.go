@@ -1623,7 +1623,9 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	start := time.Now()
-	defer v2.SQLBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.SQLBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	stats := statistic.StatsInfoFromContext(requestCtx)
 	stats.PlanStart()
@@ -2578,7 +2580,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
+	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
+	defer ses.SetQueryEnd(time.Now())
+	defer ses.SetQueryInProgress(false)
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)

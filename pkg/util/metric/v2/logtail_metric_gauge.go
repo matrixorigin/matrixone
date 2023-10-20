@@ -19,11 +19,19 @@ import (
 )
 
 var (
-	LogTailSizeGauge = prometheus.NewGauge(
+	LogTailSendQueueSizeGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "tn",
 			Subsystem: "logtail",
-			Name:      "commit_bytes",
-			Help:      "Size of logtail size.",
+			Name:      "sending_queue_size",
+			Help:      "Size of sending logtail queue size.",
+		})
+
+	LogTailReceiveQueueSizeGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "cn",
+			Subsystem: "logtail",
+			Name:      "receive_queue_size",
+			Help:      "Size of receiving logtail queue size.",
 		})
 )

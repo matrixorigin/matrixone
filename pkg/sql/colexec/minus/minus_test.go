@@ -90,7 +90,7 @@ func TestMinus(t *testing.T) {
 			c.proc.InputBatch().Clean(c.proc.Mp())
 		}
 	}
-	c.arg.Free(c.proc, false)
+	c.arg.Free(c.proc, false, nil)
 	require.Equal(t, 1, cnt) // 1 row
 	c.proc.FreeVectors()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
