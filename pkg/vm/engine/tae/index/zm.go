@@ -83,19 +83,10 @@ func (zm ZM) doInit(v []byte) {
 	zm.setInited()
 }
 
-func (zm ZM) String() string {
+func (zm ZM) innerString(f func([]byte) string) string {
 	var b strings.Builder
 	if zm.IsString() {
-		minBuf, maxBuf := zm.GetMinBuf(), zm.GetMaxBuf()
-		smin, smax := string(minBuf), string(maxBuf)
-
-		if r, _, e := types.DecodeTuple(minBuf); e == nil {
-
-			smin = r.ErrString()
-		}
-		if r, _, e := types.DecodeTuple(maxBuf); e == nil {
-			smax = r.ErrString()
-		}
+		smin, smax := f(zm.GetMinBuf()), f(zm.GetMaxBuf())
 		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
 			zm.GetType().String(), zm.GetScale(), smin, smax))
 	} else {
@@ -112,6 +103,22 @@ func (zm ZM) String() string {
 		_, _ = b.WriteString("--")
 	}
 	return b.String()
+}
+
+func (zm ZM) StringForCompose() string {
+	return zm.innerString(func(b []byte) string {
+		s := string(b)
+		if r, _, e := types.DecodeTuple(b); e == nil {
+			s = r.ErrString()
+		}
+		return s
+	})
+}
+
+func (zm ZM) String() string {
+	return zm.innerString(func(b []byte) string {
+		return string(b)
+	})
 }
 
 func (zm ZM) supportSum() bool {
