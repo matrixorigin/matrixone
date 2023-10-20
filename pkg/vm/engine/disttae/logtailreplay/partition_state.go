@@ -514,21 +514,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			} else if objEntry.CommitTS.GreaterEq(commitTimeVector[i]) {
 				//FIXME::if objEntry.CommitTS == commitTimeVector[i] ??
 				// it possible to get an older version blk from lazy loaded checkpoint
-				var deltaLoc catalog.ObjectLocation
-				if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
-					deltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
-				}
-				isEmptyDelta := objectio.Location(deltaLoc[:]).IsEmpty()
-				if !isEmptyDelta {
-					blockDeltaEntry := BlockDeltaEntry{
-						BlockID:  blockID,
-						DeltaLoc: deltaLoc,
-					}
-					p.blockDeltas.Set(blockDeltaEntry)
-				}
-				if !objEntry.HasDeltaLoc {
-					objEntry.HasDeltaLoc = !isEmptyDelta
-				}
 				return
 			}
 			// the following codes handle created object or newer version of object
