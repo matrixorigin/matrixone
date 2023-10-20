@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -214,7 +215,9 @@ func (s *server) onMessage(
 		handler: handler,
 		s:       s,
 	}
+	v2.TxnHandleQueueInDurationHistogram.Observe(time.Since(t).Seconds())
 	n := len(s.queue)
+	v2.TxnHandleQueueSizeGauge.Set(float64(n))
 	if n > s.options.maxChannelBufferSize/2 {
 		s.rt.Logger().Warn("txn request handle channel is busy",
 			zap.Int("size", n),

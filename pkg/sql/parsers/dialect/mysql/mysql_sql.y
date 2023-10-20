@@ -306,7 +306,7 @@ import (
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
-%token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION
+%token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
 
 // Select option
 %token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
@@ -5532,11 +5532,11 @@ stage_comment_opt:
             Exist: false,
         }
     }
-|   COMMENT_KEYWORD STRING
+|   COMMENT_KEYWORD '=' STRING
     {
         $$ = tree.StageComment{
             Exist: true,
-            Comment: $2,
+            Comment: $3,
         }
     }
 
@@ -6331,6 +6331,14 @@ load_param_opt:
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.S3,
                 Option: $4,
+            },
+        }
+    }
+|   URL STAGEOPTION ident
+    {
+        $$ = &tree.ExternParam{
+            ExParamConst: tree.ExParamConst{
+                StageName: tree.Identifier($3.Compare()),
             },
         }
     }
@@ -10435,6 +10443,7 @@ non_reserved_keyword:
 |   HISTORY
 |   LOW_CARDINALITY
 |   S3OPTION
+|   STAGEOPTION
 |   EXTENSION
 |   NODE
 |   ROLES

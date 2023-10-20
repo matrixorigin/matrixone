@@ -466,9 +466,11 @@ func buildInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 					sql := fmt.Sprintf("delete from `%s`.`%s` where `%s` < %q",
 						tbl.Database, tbl.Table, tbl.TimestampColumn.Name, v2.String())
 					opts := executor.Options{}.WithDatabase(tbl.Database)
-					if _, err := exec.Exec(proc.Ctx, sql, opts); err != nil {
+					res, err := exec.Exec(proc.Ctx, sql, opts)
+					if err != nil {
 						return err
 					}
+					res.Close()
 				}
 			}
 		}
@@ -1594,6 +1596,50 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
 			}
 			if err = rs.Append(tempV2/tempV1, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			log2Value, err := momath.Log2(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(log2Value, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInLg(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			lgValue, err := momath.Lg(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(lgValue, false); err != nil {
 				return err
 			}
 		}

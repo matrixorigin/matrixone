@@ -138,12 +138,12 @@ func (w *objectWriterV1) WriteTombstone(batch *batch.Batch) (BlockObject, error)
 	return block, nil
 }
 
-func (w *objectWriterV1) WriteSubBlock(batch *batch.Batch, dataType DataMetaType) (BlockObject, error) {
+func (w *objectWriterV1) WriteSubBlock(batch *batch.Batch, dataType DataMetaType) (BlockObject, int, error) {
 	denseSeqnums := NewSeqnums(nil)
 	denseSeqnums.InitWithColCnt(len(batch.Vecs))
 	block := NewBlock(denseSeqnums)
-	w.AddSubBlock(block, batch, denseSeqnums, dataType)
-	return block, nil
+	size, err := w.AddSubBlock(block, batch, denseSeqnums, dataType)
+	return block, size, err
 }
 
 func (w *objectWriterV1) WriteWithoutSeqnum(batch *batch.Batch) (BlockObject, error) {
@@ -505,7 +505,7 @@ func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []by
 	return
 }
 
-func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
+func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
 	// CHANGE ME
 	// block.BlockHeader()return w.WriteWithCompress(offset, buf.Bytes()).SetBlockID(w.lastId)
 	blockMeta.BlockHeader().SetSequence(uint16(w.lastId))
@@ -514,6 +514,7 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 	var data []byte
 	var buf bytes.Buffer
 	var rows int
+	var size int
 	for i, vec := range bat.Vecs {
 		if i == 0 {
 			rows = vec.Length()
@@ -529,12 +530,13 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		buf.Write(EncodeIOEntryHeader(&h))
 		err := vec.MarshalBinaryWithBuffer(&buf)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		var ext Extent
 		if data, ext, err = w.WriteWithCompress(0, buf.Bytes()); err != nil {
-			return err
+			return 0, err
 		}
+		size += len(data)
 		block.data = append(block.data, data)
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).setLocation(ext)
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).setDataType(uint8(vec.GetType().Oid))
@@ -546,17 +548,17 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 	blockMeta.BlockHeader().SetRows(uint32(rows))
 	*blocks = append(*blocks, block)
 	w.lastId++
-	return nil
+	return size, nil
 }
 
-func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
+func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
 	w.Lock()
 	defer w.Unlock()
 
 	return w.addBlock(&w.blocks[SchemaData], blockMeta, bat, seqnums)
 }
 
-func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
+func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
 	w.Lock()
 	defer w.Unlock()
 	if w.tombstonesColmeta == nil {
@@ -568,20 +570,19 @@ func (w *objectWriterV1) AddTombstone(blockMeta BlockObject, bat *batch.Batch, s
 	return w.addBlock(&w.blocks[SchemaTombstone], blockMeta, bat, seqnums)
 }
 
-func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) error {
+func (w *objectWriterV1) AddSubBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums, dataType DataMetaType) (int, error) {
 	w.Lock()
 	defer w.Unlock()
 	if dataType < CkpMetaStart {
 		panic("invalid data type")
 	}
-	for i := int(CkpMetaStart); i <= int(dataType); i++ {
+	for i := int(CkpMetaStart); i <= int(CkpMetaEnd); i++ {
 		if len(w.blocks) <= i {
 			blocks := make([]blockData, 0)
 			w.blocks = append(w.blocks, blocks)
 		}
 	}
-	err := w.addBlock(&w.blocks[dataType], blockMeta, bat, seqnums)
-	return err
+	return w.addBlock(&w.blocks[dataType], blockMeta, bat, seqnums)
 }
 
 func (w *objectWriterV1) GetBlock(id uint32) BlockObject {

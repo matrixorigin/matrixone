@@ -48,7 +48,7 @@ type Argument struct {
 	NBucket uint64
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanHashMap()

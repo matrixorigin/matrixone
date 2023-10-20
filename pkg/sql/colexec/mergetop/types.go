@@ -42,7 +42,7 @@ type Argument struct {
 	Fs    []*plan.OrderBySpec // Fs store the order information
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

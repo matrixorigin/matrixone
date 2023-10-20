@@ -345,13 +345,23 @@ func (c *Config) createFileService(
 		if err != nil {
 			return nil, err
 		}
+		services = append(services, service)
+
+		// perf counter
 		counterSetName := strings.Join([]string{
 			serviceType.String(),
 			nodeUUID,
 			service.Name(),
 		}, " ")
 		perfCounterSet.FileServiceByName[counterSetName] = counterSet
-		services = append(services, service)
+
+		// set shared fs perf counter as node perf counter
+		if service.Name() == defines.SharedFileServiceName {
+			perfcounter.Named.Store(
+				perfcounter.NameForNode(nodeUUID),
+				counterSet,
+			)
+		}
 
 		// Create "Log Exporter" for this PerfCounter
 		counterLogExporter := perfcounter.NewCounterLogExporter(counterSet)
