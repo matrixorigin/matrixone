@@ -2603,8 +2603,8 @@ func appendLockNode(
 ) (int32, bool) {
 	// for insert stmt: do not lock rows if table have no PK.  that will make some bug before we got R lock
 	// todo: when we finish R lock for table. then we can remove lock node(only insert stmt) for the table with fake PK
-	ignoreFakePK := !isUpdate
-	// ignoreFakePK := false
+	// ignoreFakePK := !isUpdate
+	ignoreFakePK := false
 	pkPos, pkTyp := getPkPos(tableDef, ignoreFakePK)
 	if pkPos == -1 {
 		return -1, false
