@@ -98,6 +98,8 @@ const (
 	Entry_Delete Entry_EntryType = 1
 	Entry_Update Entry_EntryType = 2
 	Entry_Alter  Entry_EntryType = 3
+
+	Entry_SpecialDelete  Entry_EntryType = 4
 )
 
 var Entry_EntryType_name = map[int32]string{
