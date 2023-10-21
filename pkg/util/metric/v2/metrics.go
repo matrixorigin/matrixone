@@ -73,7 +73,7 @@ func init() {
 
 	registry.MustRegister(LogTailCollectDurationHistogram)
 	registry.MustRegister(LogTailSubscriptionAmountCounter)
-	registry.MustRegister(LogTailSentTrafficCounter)
+	registry.MustRegister(LogTailSentTrafficGauge)
 	registry.MustRegister(FlushTableDurationHistogram)
 	registry.MustRegister(FlushTableIntervalGauge)
 	registry.MustRegister(TxnPrePrepareDurationHistogram)

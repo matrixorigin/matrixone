@@ -473,7 +473,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 						}
 					}
 
-					v2.LogTailSentTrafficCounter.Add(float64(unsafe.Sizeof(wraps)) / (2 << 20))
+					v2.LogTailSentTrafficGauge.Set(float64(unsafe.Sizeof(wraps)) / (2 << 20))
 
 					refcount.Add(int32(len(sessions)))
 					for _, session := range sessions {

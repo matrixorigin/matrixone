@@ -34,4 +34,12 @@ var (
 			Name:      "receive_queue_size",
 			Help:      "Size of receiving logtail queue size.",
 		})
+
+	LogTailSentTrafficGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "tn",
+			Subsystem: "logtail",
+			Name:      "logtail_sent_in_megabytes",
+			Help:      "gauge for the total logtail traffic in megabytes the tn have sent",
+		})
 )

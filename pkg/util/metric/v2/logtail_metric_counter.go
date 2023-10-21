@@ -24,12 +24,4 @@ var (
 			Name:      "logtail_subscription_amount_total",
 			Help:      "counter for the total logtail subscription the tn have handled",
 		})
-
-	LogTailSentTrafficCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "tn",
-			Subsystem: "logtail",
-			Name:      "logtail_sent_amount_total",
-			Help:      "counter for the total logtail traffic in megabytes the tn have sent",
-		})
 )
