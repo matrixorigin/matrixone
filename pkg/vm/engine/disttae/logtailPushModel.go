@@ -1064,14 +1064,8 @@ func consumeLogTailOfPushWithLazyLoad(
 	engine *Engine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
-) (err error) {
-	for i := 0; i < len(lt.Commands); i++ {
-		if err = consumeEntry(ctx, primarySeqnum,
-			engine, state, &lt.Commands[i]); err != nil {
-			return
-		}
-	}
-	return nil
+) error {
+	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
 }
 
 func consumeLogTailOfPushWithoutLazyLoad(
@@ -1104,17 +1098,10 @@ func consumeLogTailOfPushWithoutLazyLoad(
 			return
 		}
 	}
-
-	for i := 0; i < len(lt.Commands); i++ {
-		if err = consumeEntry(ctx, primarySeqnum,
-			engine, state, &lt.Commands[i]); err != nil {
-			return
-		}
-	}
-	return nil
+	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
 }
 
-func hackConsumeLogTail(
+func hackConsumeLogtail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
