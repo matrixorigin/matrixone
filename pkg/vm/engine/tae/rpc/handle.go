@@ -149,7 +149,7 @@ func (h *Handle) HandleCommit(
 			delete(h.mu.txnCtxs, string(meta.GetID()))
 			h.mu.Unlock()
 		}
-		// metric: 时间（直方图，分位图）
+
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
 				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))

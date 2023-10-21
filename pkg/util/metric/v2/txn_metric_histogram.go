@@ -91,6 +91,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
+	TxnPrePrepareDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "tn",
+			Subsystem: "txn",
+			Name:      "prepare_duration_seconds",
+			Help:      "Bucketed histogram of txn prepare duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
+
 	TxnHandleQueueInDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "tn",

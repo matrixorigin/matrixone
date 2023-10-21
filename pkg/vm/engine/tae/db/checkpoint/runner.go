@@ -628,7 +628,6 @@ func (r *runner) tryScheduleCheckpoint() {
 		}
 	}
 
-	// 等待需要 checkpoint 的 Node 的刷盘
 	if entry.IsPendding() {
 		check := func() (done bool) {
 			if !r.source.IsCommitted(entry.GetStart(), entry.GetEnd()) {

@@ -16,8 +16,10 @@ package service
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
@@ -366,12 +368,13 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 			logger.Error("stop subscription handler", zap.Error(ctx.Err()))
 			return
 
-			// metric: counter
 		case sub, ok := <-s.subChan:
 			if !ok {
 				logger.Info("subscription channel closed")
 				return
 			}
+
+			v2.LogTailSubscriptionAmountCounter.Inc()
 
 			logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
 
@@ -429,7 +432,6 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 			subscriptionFunc(sub)
 
-			// metric: counter
 		case e, ok := <-s.event.C:
 			if !ok {
 				logger.Info("publishemtn channel closed")
@@ -470,6 +472,9 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 							}
 						}
 					}
+
+					v2.LogTailSentTrafficCounter.Add(float64(unsafe.Sizeof(wraps)) / (2 << 20))
+
 					refcount.Add(int32(len(sessions)))
 					for _, session := range sessions {
 						if err := session.Publish(ctx, from, to, closeCB, wraps...); err != nil {

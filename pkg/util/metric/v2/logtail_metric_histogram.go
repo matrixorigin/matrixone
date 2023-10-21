@@ -37,6 +37,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
+	LogTailCollectDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "tn",
+			Subsystem: "logtail",
+			Name:      "collect_logtail_duration_seconds",
+			Help:      "Bucketed histogram of logtail collecting duration distribution.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
+
 	LogTailAppendDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "tn",

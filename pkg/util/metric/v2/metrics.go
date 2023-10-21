@@ -70,4 +70,12 @@ func init() {
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
+
+	registry.MustRegister(LogTailCollectDurationHistogram)
+	registry.MustRegister(LogTailSubscriptionAmountCounter)
+	registry.MustRegister(LogTailSentTrafficCounter)
+	registry.MustRegister(FlushTableDurationHistogram)
+	registry.MustRegister(FlushTableIntervalGauge)
+	registry.MustRegister(TxnPrePrepareDurationHistogram)
+	registry.MustRegister(CkpPendingDurationHistogram)
 }

@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -668,7 +669,6 @@ func (store *txnStore) Freeze() (err error) {
 	return
 }
 
-// metric: 时间（直方图，分位图）
 func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 	now := time.Now()
 	defer func() {
@@ -678,7 +678,10 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 			store.SetContext(context.WithValue(store.GetContext(), common.StorePrePrepare, &common.DurationRecords{Duration: prePrepareDuration}))
 		}
 
+		v2.TxnPrePrepareDurationHistogram.Observe(prePrepareDuration.Seconds())
+
 	}()
+
 	for _, db := range store.dbs {
 		if err = db.PrePrepare(ctx); err != nil {
 			return

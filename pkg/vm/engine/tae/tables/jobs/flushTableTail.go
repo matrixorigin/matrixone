@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 	"unsafe"
 
@@ -178,9 +179,16 @@ func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err
 	return
 }
 
+// to estimate the interval of invocations on prometheus side
+var lastFlushTaskInvokedTime time.Time
+
 func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	task.rt.Throttle.AcquireCompactionQuota()
 	defer task.rt.Throttle.ReleaseCompactionQuota()
+
+	if !lastFlushTaskInvokedTime.IsZero() {
+		v2.FlushTableIntervalGauge.Set(time.Since(lastFlushTaskInvokedTime).Seconds())
+	}
 
 	logutil.Info("[Start]", common.OperationField(task.Name()), common.OperandField(task),
 		common.OperandField(len(task.ablksHandles)+len(task.delSrcHandles)))
@@ -292,8 +300,9 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		common.DurationField(time.Since(now)),
 		common.OperandField(task))
 
-	// metric: 时间，直方图(now 指代的时间)
-	// metric: counter （记录 两次 flush 的时间）
+	v2.FlushTableDurationHistogram.Observe(time.Since(now).Seconds())
+
+	lastFlushTaskInvokedTime = time.Now()
 
 	sleep, name, exist := fault.TriggerFault("slow_flush")
 	if exist && name == task.schema.Name {
