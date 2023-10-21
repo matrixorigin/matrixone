@@ -354,6 +354,30 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		Table:    tableID,
 		Commands: []api.Entry{*entry},
 	}
+	// specail delete batch and delete batch should be in the same TableLogtail
+	if batchIdx == dbDelBatch || batchIdx == tblDelBatch {
+		entryType = api.Entry_SpecialDelete
+	}
+	var bat2 *containers.Batch
+	if batchIdx == dbDelBatch {
+		bat2 = b.batches[dbSpecialDeleteBatch]
+	}
+	if batchIdx == tblDelBatch {
+		bat2 = b.batches[tblSpecialDeleteBatch]
+	}
+	apiBat2, err := containersBatchToProtoBatch(bat2)
+	if err != nil {
+		panic(err)
+	}
+	entry2 := &api.Entry{
+		EntryType:    api.Entry_SpecialDelete,
+		TableId:      tid,
+		TableName:    tableName,
+		DatabaseId:   dbid,
+		DatabaseName: dbName,
+		Bat:          apiBat2,
+	}
+	tail.Commands = append(tail.Commands, *entry2)
 	*b.logtails = append(*b.logtails, tail)
 }
 
@@ -399,12 +423,10 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 
 	b.buildLogtailEntry(pkgcatalog.MO_TABLES_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_TABLES, pkgcatalog.MO_CATALOG, tblInsBatch, false)
 	b.buildLogtailEntry(pkgcatalog.MO_TABLES_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_TABLES, pkgcatalog.MO_CATALOG, tblDelBatch, true)
-	b.buildLogtailEntry(pkgcatalog.MO_TABLES_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_TABLES, pkgcatalog.MO_CATALOG, tblSpecialDeleteBatch, true)
 	b.buildLogtailEntry(pkgcatalog.MO_COLUMNS_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_COLUMNS, pkgcatalog.MO_CATALOG, columnInsBatch, false)
 	b.buildLogtailEntry(pkgcatalog.MO_COLUMNS_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_COLUMNS, pkgcatalog.MO_CATALOG, columnDelBatch, true)
 	b.buildLogtailEntry(pkgcatalog.MO_DATABASE_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE, pkgcatalog.MO_CATALOG, dbInsBatch, false)
 	b.buildLogtailEntry(pkgcatalog.MO_DATABASE_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE, pkgcatalog.MO_CATALOG, dbDelBatch, true)
-	b.buildLogtailEntry(pkgcatalog.MO_DATABASE_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE, pkgcatalog.MO_CATALOG, dbSpecialDeleteBatch, true)
 	for i := range b.batches {
 		if b.batches[i] != nil {
 			if int8(i) == dataInsBatch {
