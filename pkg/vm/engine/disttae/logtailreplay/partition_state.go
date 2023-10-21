@@ -138,11 +138,16 @@ func (b BlockEntry) Less(than BlockEntry) bool {
 type BlockDeltaEntry struct {
 	BlockID types.Blockid
 
+	CommitTs types.TS
 	DeltaLoc catalog.ObjectLocation
 }
 
 func (b BlockDeltaEntry) Less(than BlockDeltaEntry) bool {
 	return b.BlockID.Compare(than.BlockID) < 0
+}
+
+func (b BlockDeltaEntry) DeltaLocation() objectio.Location {
+	return b.DeltaLoc[:]
 }
 
 type ObjectEntry struct {
@@ -505,59 +510,51 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleMetaInsert, func() {
 
-			objPivot := ObjectEntry{
-				ShortObjName: *(objectio.Location(metaLocationVector.GetBytesAt(i)).ShortName()),
+			pivot := BlockDeltaEntry{
+				BlockID: blockID,
 			}
-			objEntry, ok := p.dataObjects.Get(objPivot)
+			blockEntry, ok := p.blockDeltas.Get(pivot)
 			if !ok {
-				objEntry = objPivot
-			} else if objEntry.CommitTS.GreaterEq(commitTimeVector[i]) {
-				//FIXME::if objEntry.CommitTS == commitTimeVector[i] ??
+				blockEntry = pivot
+				numInserted++
+			} else if blockEntry.CommitTs.GreaterEq(commitTimeVector[i]) {
 				// it possible to get an older version blk from lazy loaded checkpoint
 				return
 			}
-			// the following codes handle created object or newer version of object
-			var deltaLoc catalog.ObjectLocation
-			if metaLocation := objectio.Location(metaLocationVector.GetBytesAt(i)); !metaLocation.IsEmpty() {
-				objEntry.Loc = metaLocation
 
-			}
+			// the following codes handle created block or newer version of block
+			//if location := objectio.Location(metaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
+			//	blockEntry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
+			//}
 			if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
-				deltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
+				blockEntry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
-			if id := segmentIDVector[i]; !objectio.IsEmptySegid(&id) {
-				objEntry.SegmentID = id
-			}
-			objEntry.Sorted = sortedStateVector[i]
-			if t := createTimeVector[i]; !t.IsEmpty() {
-				objEntry.CreateTime = t
-			}
+			//if id := segmentIDVector[i]; objectio.IsEmptySegid(&id) {
+			//	blockEntry.SegmentID = id
+			//}
+			//blockEntry.Sorted = sortedStateVector[i]
+			//if t := createTimeVector[i]; !t.IsEmpty() {
+			//	blockEntry.CreateTime = t
+			//}
 			if t := commitTimeVector[i]; !t.IsEmpty() {
-				objEntry.CommitTS = t
+				blockEntry.CommitTs = t
 			}
 
 			isAppendable := entryStateVector[i]
-			objEntry.EntryState = isAppendable
+			isEmptyDelta := blockEntry.DeltaLocation().IsEmpty()
+			//blockEntry.EntryState = isAppendable
 
-			isEmptyDelta := objectio.Location(deltaLoc[:]).IsEmpty()
-			if !isEmptyDelta {
-				blockDeltaEntry := BlockDeltaEntry{
-					BlockID:  blockID,
-					DeltaLoc: deltaLoc,
-				}
-				p.blockDeltas.Set(blockDeltaEntry)
-			}
-			if !objEntry.HasDeltaLoc {
-				objEntry.HasDeltaLoc = !isEmptyDelta
-			}
+			//p.blocks.Set(blockEntry)
 
-			p.dataObjects.Set(objEntry)
+			p.blockDeltas.Set(blockEntry)
 
 			{
 				e := BlockIndexByTSEntry{
-					Time:         createTimeVector[i],
-					BlockID:      blockID,
-					IsDelete:     false,
+					//Time:         blockEntry.CreateTime,
+					Time:     createTimeVector[i],
+					BlockID:  blockID,
+					IsDelete: false,
+					//IsAppendable: blockEntry.EntryState,
 					IsAppendable: isAppendable,
 				}
 				p.blockIndexByTS.Set(e)
@@ -616,6 +613,36 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					p.dirtyBlocks.Delete(blockID)
 				}
 			}
+
+			//create object by block insert
+			{
+				objPivot := ObjectEntry{
+					ShortObjName: *(objectio.Location(metaLocationVector.GetBytesAt(i)).ShortName()),
+				}
+				objEntry, ok := p.dataObjects.Get(objPivot)
+				if ok {
+					// don't need to update objEntry, except for HasDeltaLoc
+					if !isEmptyDelta {
+						objEntry.HasDeltaLoc = true
+					}
+					p.dataObjects.Set(objEntry)
+					return
+				}
+				objEntry = objPivot
+				if metaLocation := objectio.Location(metaLocationVector.GetBytesAt(i)); !metaLocation.IsEmpty() {
+					objEntry.Loc = metaLocation
+				}
+				objEntry.EntryState = entryStateVector[i]
+				objEntry.Sorted = sortedStateVector[i]
+				if !isEmptyDelta {
+					objEntry.HasDeltaLoc = true
+				}
+				objEntry.SegmentID = segmentIDVector[i]
+				objEntry.CommitTS = commitTimeVector[i]
+				objEntry.CreateTime = createTimeVector[i]
+				p.dataObjects.Set(objEntry)
+			}
+
 		})
 	}
 
@@ -669,7 +696,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 				}
 			} else {
 				// update deletetime, if incoming delete ts is less
-				//FIXME::??
 				if objEntry.DeleteTime.Greater(deleteTimeVector[i]) {
 					old := BlockIndexByTSEntry{
 						Time:         objEntry.DeleteTime,

@@ -174,6 +174,18 @@ func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (loc catalog.ObjectL
 	return catalog.ObjectLocation{}, false
 }
 
+func (p *PartitionState) GetBockCommitTs(bid types.Blockid) (ts types.TS, ok bool) {
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(BlockDeltaEntry{
+		BlockID: bid,
+	}); ok {
+		return iter.Item().CommitTs, true
+	}
+	return types.TS{}, false
+}
+
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 	iter := p.dataObjects.Copy().Iter()
 	defer iter.Release()

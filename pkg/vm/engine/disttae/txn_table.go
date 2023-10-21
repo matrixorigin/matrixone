@@ -686,8 +686,8 @@ func (tbl *txnTable) rangesOnePart(
 				EntryState: obj.EntryState,
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
-				CommitTs:   obj.CommitTS,
-				SegmentID:  obj.SegmentID,
+				//CommitTs:   obj.CommitTS,
+				SegmentID: obj.SegmentID,
 			}
 			if obj.HasDeltaLoc {
 				deltaLoc, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
@@ -696,6 +696,11 @@ func (tbl *txnTable) rangesOnePart(
 				}
 				blkInfo.DeltaLoc = deltaLoc
 			}
+			commitTs, ok := state.GetBockCommitTs(blkInfo.BlockID)
+			if !ok {
+				panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+			}
+			blkInfo.CommitTs = commitTs
 			snapshotBlks = append(snapshotBlks, blkInfo)
 		}
 	}
