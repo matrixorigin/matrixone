@@ -564,12 +564,14 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
 	tbl._partState = nil
 	tbl.objInfos = nil
+	tbl.snapshotBlocks = nil
 	tbl.objInfosUpdated = false
 }
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState = nil
 	tbl.objInfos = nil
+	tbl.snapshotBlocks = nil
 	tbl.objInfosUpdated = false
 }
 
@@ -624,7 +626,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		part,
 		tbl.getTableDef(),
 		newExprs,
-		tbl.objInfos,
+		tbl.snapshotBlocks,
 		&ranges,
 		tbl.proc.Load(),
 	)
@@ -654,57 +656,10 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	snapshotObjects []logtailreplay.ObjectEntry, // whole data object list on snapshot
+	snapshotBlks []catalog.BlockInfo, // whole block list on snapshot
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-
-	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return err
-	}
-	var objDataMeta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
-	var snapshotBlks []catalog.BlockInfo
-	for _, obj := range snapshotObjects {
-		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
-			return err
-		}
-		objDataMeta = objMeta.MustDataMeta()
-		blkCnt := objDataMeta.BlockCount()
-		for i := 0; i < int(blkCnt); i++ {
-			blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-			metaLoc := blockio.EncodeLocation(
-				obj.Loc.Name(),
-				blkMeta.GetExtent(),
-				blkMeta.GetRows(),
-				blkMeta.GetID(),
-			)
-			blkInfo := catalog.BlockInfo{
-				BlockID:    *blkMeta.BlockHeader().BlockID(),
-				EntryState: obj.EntryState,
-				Sorted:     obj.Sorted,
-				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
-				//CommitTs:   obj.CommitTS,
-				SegmentID: obj.SegmentID,
-			}
-			if obj.HasDeltaLoc {
-				deltaLoc, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
-				if !ok {
-					panic(fmt.Sprintf("block %v delta location not found", blkInfo.BlockID))
-				}
-				blkInfo.DeltaLoc = deltaLoc
-			}
-			commitTs, ok := state.GetBockCommitTs(blkInfo.BlockID)
-			if !ok {
-				panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
-			}
-			blkInfo.CommitTs = commitTs
-			snapshotBlks = append(snapshotBlks, blkInfo)
-		}
-	}
-
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
 		if err != nil {
@@ -773,12 +728,12 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		//objDataMeta objectio.ObjectDataMeta
-		//objMeta     objectio.ObjectMeta
-		zms      []objectio.ZoneMap
-		vecs     []*vector.Vector
-		skipObj  bool
-		auxIdCnt int32
+		objDataMeta objectio.ObjectDataMeta
+		objMeta     objectio.ObjectMeta
+		zms         []objectio.ZoneMap
+		vecs        []*vector.Vector
+		skipObj     bool
+		auxIdCnt    int32
 	)
 
 	defer func() {
@@ -789,10 +744,10 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
-	//fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
-	//if err != nil {
-	//	return err
-	//}
+	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
 
 	if done, err := tbl.tryFastRanges(
 		exprs, blks, dirtyBlks, ranges, fs,
@@ -1689,6 +1644,59 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 			return
 		}
 		tbl.objInfos = objs
+		//expand the objInfos
+		//TODO::remove it
+		fs, err := fileservice.Get[fileservice.FileService](
+			tbl.proc.Load().FileService,
+			defines.SharedFileServiceName)
+		if err != nil {
+			return err
+		}
+		state, err := tbl.getPartitionState(ctx)
+		if err != nil {
+			return err
+		}
+		var objDataMeta objectio.ObjectDataMeta
+		var objMeta objectio.ObjectMeta
+		//var snapshotBlks []catalog.BlockInfo
+		for _, obj := range objs {
+			location := obj.Location()
+			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+				return err
+			}
+			objDataMeta = objMeta.MustDataMeta()
+			blkCnt := objDataMeta.BlockCount()
+			for i := 0; i < int(blkCnt); i++ {
+				blkMeta := objDataMeta.GetBlockMeta(uint32(i))
+				metaLoc := blockio.EncodeLocation(
+					obj.Loc.Name(),
+					blkMeta.GetExtent(),
+					blkMeta.GetRows(),
+					blkMeta.GetID(),
+				)
+				blkInfo := catalog.BlockInfo{
+					BlockID:    *blkMeta.BlockHeader().BlockID(),
+					EntryState: obj.EntryState,
+					Sorted:     obj.Sorted,
+					MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+					//CommitTs:   obj.CommitTS,
+					SegmentID: obj.SegmentID,
+				}
+				if obj.HasDeltaLoc {
+					deltaLoc, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+					if !ok {
+						panic(fmt.Sprintf("block %v delta location not found", blkInfo.BlockID))
+					}
+					blkInfo.DeltaLoc = deltaLoc
+				}
+				commitTs, ok := state.GetBockCommitTs(blkInfo.BlockID)
+				if !ok {
+					panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+				}
+				blkInfo.CommitTs = commitTs
+				tbl.snapshotBlocks = append(tbl.snapshotBlocks, blkInfo)
+			}
+		}
 		tbl.objInfosUpdated = true
 	}
 	return
