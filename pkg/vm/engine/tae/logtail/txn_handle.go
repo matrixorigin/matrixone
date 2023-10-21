@@ -356,28 +356,27 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	}
 	// specail delete batch and delete batch should be in the same TableLogtail
 	if batchIdx == dbDelBatch || batchIdx == tblDelBatch {
-		entryType = api.Entry_SpecialDelete
+		var bat2 *containers.Batch
+		if batchIdx == dbDelBatch {
+			bat2 = b.batches[dbSpecialDeleteBatch]
+		}
+		if batchIdx == tblDelBatch {
+			bat2 = b.batches[tblSpecialDeleteBatch]
+		}
+		apiBat2, err := containersBatchToProtoBatch(bat2)
+		if err != nil {
+			panic(err)
+		}
+		entry2 := &api.Entry{
+			EntryType:    api.Entry_SpecialDelete,
+			TableId:      tid,
+			TableName:    tableName,
+			DatabaseId:   dbid,
+			DatabaseName: dbName,
+			Bat:          apiBat2,
+		}
+		tail.Commands = append(tail.Commands, *entry2)
 	}
-	var bat2 *containers.Batch
-	if batchIdx == dbDelBatch {
-		bat2 = b.batches[dbSpecialDeleteBatch]
-	}
-	if batchIdx == tblDelBatch {
-		bat2 = b.batches[tblSpecialDeleteBatch]
-	}
-	apiBat2, err := containersBatchToProtoBatch(bat2)
-	if err != nil {
-		panic(err)
-	}
-	entry2 := &api.Entry{
-		EntryType:    api.Entry_SpecialDelete,
-		TableId:      tid,
-		TableName:    tableName,
-		DatabaseId:   dbid,
-		DatabaseName: dbName,
-		Bat:          apiBat2,
-	}
-	tail.Commands = append(tail.Commands, *entry2)
 	*b.logtails = append(*b.logtails, tail)
 }
 
