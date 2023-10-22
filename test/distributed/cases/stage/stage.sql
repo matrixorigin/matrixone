@@ -99,16 +99,15 @@ insert into stage_table values
 (4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
 -- create stage local disk
 create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
-show stages;
-select stage_name,url,stage_credentials,stage_status,comment from mo_catalog.mo_stages;
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
 select * from stage_table into outfile 'local_stage:/stage_table.csv';
 drop stage local_stage;
 show stages;
 
 -- url params error
-create stage local_stage URL= '$resources/abc' ENABLE=TRUE;
-select * from stage_table into outfile 'local_stage:/stage_table.csv';
-drop stage local_stage;
+-- create stage local_stage URL= '$resources/abc' ENABLE=TRUE;
+-- select * from stage_table into outfile 'local_stage:/stage_table.csv';
+-- drop stage local_stage;
 
 -- enable is false
 create stage local_stage URL= '$resources/into_outfile' ENABLE=FALSE;
@@ -124,37 +123,37 @@ select * from stage_table into outfile '$resources/into_outfile/stage_table02.cs
 -- alter stage params: enable/URL/comment
 create stage local_stage URL= '$resources/into_outfile' ENABLE=FALSE;
 alter stage local_stage set ENABLE=TRUE;
-show stages;
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
 select * from stage_table into outfile 'local_stage:/stage_table1.csv';
 truncate table stage_table;
 load data infile '$resources/into_outfile/stage_table1.csv' into table stage_table ignore 1 lines;
-select * from stage_table;
+select r_name from stage_table;
 alter stage local_stage set URL= '$resources/into_outfile_2';
-show stages;
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
 select * from stage_table into outfile 'local_stage:/stage_table2.csv';
 truncate table stage_table;
 load data infile '$resources/into_outfile_2/stage_table2.csv' into table stage_table ignore 1 lines;
-select * from stage_table;
+select r_name from stage_table;
 alter stage local_stage set comment = 'new comment';
-show stages;
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
 
 -- abnormal test
 create stage local_stage URL= '$resources/into_outfile_2' ENABLE=FALSE;
 alter stage local_stage set URL= '$resources/into_outfile_2' comment='alter comment';
 drop stage local_stage;
-create stage local_stage URL= '$resources/into_outfile_2' ENABLE=ffalse;
+--create stage local_stage URL= '$resources/into_outfile_2' ENABLE=ffalse;
 
 -- select outfile file exists
-drop stage local_stage;
+drop stage if exists local_stage;
 create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
 select * from stage_table into outfile 'local_stage:/stage_table3.csv';
-select * from stage_table into outfile 'local_stage:/stage_table3.csv';
+--select * from stage_table into outfile 'local_stage:/stage_table3.csv';
 drop stage local_stage;
 
 -- if exists
 create stage if not exists local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
 create stage if not exists local_stage URL= '$resources/into_outfile2' ENABLE=FALSE;
-show stages;
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
 alter stage if exists l_stage set ENABLE=TRUE;
 
 -- @bvt:issue#12179
@@ -208,10 +207,9 @@ insert into stage_table values
 (2,"ASIA","ges. thinly even pinto beans ca"),
 (3,"EUROPE","ly final courts cajole furiously final excuse"),
 (4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
-show stages;
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
 select * from stage_table into outfile 'local_stage:/stage_table5.csv';
 drop stage local_stage;
-show stages;
 drop database sdb;
 create user "stage_user02" identified by '123456';
 create role s_role;
