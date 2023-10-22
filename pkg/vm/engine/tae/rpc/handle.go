@@ -18,19 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-
 	"github.com/google/shlex"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -55,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"go.uber.org/zap"
 )
 
 const (
@@ -1200,19 +1198,25 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
 
 	end := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	// get the newest global checkpoint and all increment checkpoints after it.
-	ckpLoc, checkpointed, err := h.db.BGCheckpointRunner.CollectCheckpointsInRange(ctx, types.TS{}, end)
-	if err != nil {
-		resp.Succeed = false
-		return nil, nil
+
+	// get the newest checkpoint.
+	ckp := h.db.BGCheckpointRunner.MaxCheckpoint()
+	if ckp == nil {
+		ckp = h.db.BGCheckpointRunner.MaxGlobalCheckpoint()
 	}
 
-	resp.CkpLocations = ckpLoc
+	var lastCkpTS types.TS
+
+	if ckp != nil {
+		lastCkpTS = ckp.GetEnd()
+		resp.CkpLocations = strings.Join(
+			[]string{ckp.GetLocation().String(), strconv.Itoa(int(ckp.GetVersion()))}, ";")
+	}
 
 	// exist a gap!
-	// collecting block entries that have been not checkpoint yet
-	if checkpointed.Less(end) {
-		visitBlkEntryForStorageUsage(h, resp, checkpointed)
+	// collecting block entries that have been not been checkpoint yet
+	if lastCkpTS.Less(end) {
+		visitBlkEntryForStorageUsage(h, resp, lastCkpTS)
 	}
 
 	return nil, nil

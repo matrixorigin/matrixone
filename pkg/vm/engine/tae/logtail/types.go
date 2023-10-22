@@ -86,6 +86,8 @@ var (
 	DBSpecialDeleteSchema  *catalog.Schema
 	TBLSpecialDeleteSchema *catalog.Schema
 	BlkAccSchema           *catalog.Schema
+
+	StorageUsageSchema *catalog.Schema
 )
 
 var (
@@ -289,16 +291,14 @@ var (
 		types.T_TS.ToType(),
 	}
 
-	BlkAccSchemaAttrs = []string{
+	StorageUsageSchemaAttrs = []string{
 		pkgcatalog.SystemColAttr_AccID,
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
-		CheckpointMetaAttr_BlockRows,
 		CheckpointMetaAttr_BlockSize,
 	}
 
-	BlkAccSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),
+	StorageUsageSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
@@ -555,14 +555,14 @@ func init() {
 		}
 	}
 
-	BlkAccSchema = catalog.NewEmptySchema("account_info")
-	for i, colname := range BlkAccSchemaAttrs {
+	StorageUsageSchema = catalog.NewEmptySchema("storage_usage")
+	for i, colname := range StorageUsageSchemaAttrs {
 		if i == 0 {
-			if err := BlkAccSchema.AppendPKCol(colname, BlkAccSchemaTypes[i], 0); err != nil {
+			if err := StorageUsageSchema.AppendPKCol(colname, StorageUsageSchemaTypes[i], 0); err != nil {
 				panic(err)
 			}
 		} else {
-			if err := BlkAccSchema.AppendCol(colname, BlkAccSchemaTypes[i]); err != nil {
+			if err := StorageUsageSchema.AppendCol(colname, StorageUsageSchemaTypes[i]); err != nil {
 				panic(err)
 			}
 		}

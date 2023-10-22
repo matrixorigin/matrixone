@@ -90,8 +90,7 @@ const (
 
 	// supporting `show accounts` by recording extra
 	// account-blk changing info in checkpoint
-	BLKAccInsIDX
-	BLKAccDelIDX
+	BLKStorageUsageIDX
 
 	TNMetaIDX
 )
@@ -161,9 +160,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		BlkAccSchema,
-		BlkAccSchema, // 25
-		TNMetaSchema,
+		StorageUsageSchema,
+		TNMetaSchema, // 25
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -190,8 +188,7 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		BlkAccSchema,
-		BlkAccSchema, // 25
+		StorageUsageSchema,
 		TNMetaSchema,
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
@@ -219,8 +216,7 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		BlkAccSchema,
-		BlkAccSchema, // 25
+		StorageUsageSchema,
 		TNMetaSchema,
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
@@ -248,8 +244,7 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		BlkAccSchema,
-		BlkAccSchema, // 25
+		StorageUsageSchema,
 		TNMetaSchema,
 	}
 	checkpointDataSchemas_V5 = [MaxIDX]*catalog.Schema{
@@ -277,8 +272,7 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		BlkAccSchema,
-		BlkAccSchema, // 25
+		StorageUsageSchema,
 		TNMetaSchema,
 	}
 
@@ -307,8 +301,7 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema, // 23
-		BlkAccSchema,
-		BlkAccSchema, // 25
+		StorageUsageSchema,
 		TNMetaSchema,
 	}
 	// Checkpoint V7, V8 update checkpoint metadata
@@ -343,8 +336,7 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema, // 23
-		BlkAccSchema,
-		BlkAccSchema, // 25
+		StorageUsageSchema,
 		TNMetaSchema,
 	}
 
@@ -1824,6 +1816,7 @@ func (data *CheckpointData) ReadTNMetaBatch(
 			if err != nil {
 				return
 			}
+			// TODO(ghs), len(bats) == 0 here
 			// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
 			data.bats[TNMetaIDX] = bats[0]
 		}
@@ -2563,20 +2556,12 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkCNMetaInsBat := collector.data.bats[BLKCNMetaInsertIDX]
 	blkMetaInsBat := collector.data.bats[BLKMetaInsertIDX]
 	blkMetaInsTxnBat := collector.data.bats[BLKMetaInsertTxnIDX]
-	blkAccInsBat := collector.data.bats[BLKAccInsIDX]
-	//blkAccDelBat := collector.data.bats[BLKAccDelIDX]
+	storageUsageBax := collector.data.bats[BLKStorageUsageIDX]
 
-	blkAccInsAccIDVec := blkAccInsBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
-	blkAccInsDBIDVec := blkAccInsBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
-	blkAccInsTblIDVec := blkAccInsBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	//blkAccInsRowsVec := blkAccInsBat.GetVectorByName(CheckpointMetaAttr_BlockRows).GetDownstreamVector()
-	blkAccInsSizeVec := blkAccInsBat.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
-
-	//blkAccDelAccIDVec := blkAccDelBat.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
-	//blkAccDelDBIDVec := blkAccDelBat.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
-	//blkAccDelTblIDVec := blkAccDelBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	//blkAccDelRowsVec := blkAccDelBat.GetVectorByName(CheckpointMetaAttr_BlockRows).GetDownstreamVector()
-	//blkAccDelSizeVec := blkAccDelBat.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
+	storageUsageAccIDVec := storageUsageBax.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
+	storageUsageDBIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
+	storageUsageTblIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	storageUsageSizeVec := storageUsageBax.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
 
 	blkTNMetaDelRowIDVec := blkTNMetaDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector()
 	blkTNMetaDelCommitTsVec := blkTNMetaDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
@@ -2636,14 +2621,29 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkMetaInsTxnMetaLocVec := blkMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
 	blkMetaInsTxnDeltaLocVec := blkMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
 
-	// recording the blk rows and size
-	// changing and the account, db, table info the blk belongs to.
+	appendToStorageUsageBat := func(ret []uint64) {
+		vector.AppendFixed(storageUsageAccIDVec, ret[0], false, common.DefaultAllocator)
+		vector.AppendFixed(storageUsageDBIDVec, ret[1], false, common.DefaultAllocator)
+		vector.AppendFixed(storageUsageTblIDVec, ret[2], false, common.DefaultAllocator)
+		vector.AppendFixed(storageUsageSizeVec, ret[3], false, common.DefaultAllocator)
+	}
+	// recording the total blk size within a table
+	// and the account, db, table info the blk belongs to.
+	// every checkpoint records the full datasets of the storage usage info.
+	// [ account_id, db_id, tbl_id, size_in_bytes]
 	ret := entry.ExtractStorageUsageInfo()
-
-	vector.AppendFixed(blkAccInsAccIDVec, ret[0], false, common.DefaultAllocator)
-	vector.AppendFixed(blkAccInsDBIDVec, ret[1], false, common.DefaultAllocator)
-	vector.AppendFixed(blkAccInsTblIDVec, ret[2], false, common.DefaultAllocator)
-	vector.AppendFixed(blkAccInsSizeVec, ret[3], false, common.DefaultAllocator)
+	if storageUsageSizeVec.Length() == 0 { // initial state
+		appendToStorageUsageBat(ret)
+	} else {
+		curLen := storageUsageTblIDVec.Length()
+		curTbl := vector.GetFixedAt[uint64](storageUsageTblIDVec, curLen)
+		if curTbl != ret[2] { // table id changes
+			appendToStorageUsageBat(ret)
+		} else { // accumulating the block size
+			curSize := vector.GetFixedAt[uint64](storageUsageSizeVec, curLen)
+			vector.SetFixedAt(storageUsageSizeVec, curLen, curSize+ret[3])
+		}
+	}
 
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
