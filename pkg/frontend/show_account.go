@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"math"
 	"strings"
 )
@@ -192,11 +193,22 @@ func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *S
 	return responses, nil
 }
 
-func handleStorageUsageResponse(resp txn.CNOpResponse) (map[int32]uint64, error) {
-	return map[int32]uint64{
-		0: 99,
-	}, nil
+func handleStorageUsageResponse(resp txn.CNOpResponse) (map[uint64]uint64, error) {
+	var usage db.StorageUsageResp
+	if err := usage.Unmarshal(resp.Payload); err != nil {
+		return nil, err
+	}
 
+	result := make(map[uint64]uint64, 0)
+	if usage.CkpLocations != "" {
+		// load checkpoint data and decode
+	}
+
+	for _, info := range usage.BlockEntries {
+		result[info.Info[0]] += info.Info[3]
+	}
+
+	return result, nil
 }
 
 // getAccountStorageUsage calculates the storage usage of all accounts

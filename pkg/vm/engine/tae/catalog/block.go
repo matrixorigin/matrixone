@@ -145,21 +145,20 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 }
 
 // ExtractStorageUsageInfo returns the storage usage related info:
-// [ account_id, db_id, tbl_id, size_in_bytes ]
+// [ account_id, db_id, tbl_id, size_in_bytes]
 func (entry *BlockEntry) ExtractStorageUsageInfo() []uint64 {
-	ret := make([]uint64, 4)
-
-	node := entry.GetLatestCommittedNode()
+	ret := make([]uint64, 0)
 
 	ret[0] = uint64(entry.segment.table.db.GetTenantID())
 	ret[1] = entry.segment.table.db.ID
 	ret[2] = entry.segment.table.ID
 
-	// TODO(bug here)
-	if entry.GetMetaLoc() != nil { // flushed
+	if entry.GetMetaLoc() != nil {
 		ret[3] = uint64(entry.GetMetaLoc().Extent().Length())
-	} else if entry.GetBlockData() != nil { // not flush yet
-		ret[3] = uint64(entry.GetBlockData().EstimateMemSize())
+	} else if entry.blkData != nil {
+		ret[3] = uint64(entry.blkData.EstimateMemSize())
+	} else {
+		panic(fmt.Sprintf("----------- entry: %+v", entry))
 	}
 
 	return ret
