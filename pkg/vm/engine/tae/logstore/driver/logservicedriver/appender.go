@@ -72,7 +72,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		trace.WithProfileCpuSecs(time.Second*10))
 	defer timeoutSpan.End()
 
-	v2.GetWriteLogTailBytesHistogram().Observe(float64(size))
+	v2.LogTailBytesHistogram.Observe(float64(size))
 	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {

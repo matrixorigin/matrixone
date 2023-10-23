@@ -40,7 +40,7 @@ import (
 )
 
 const DefaultCheckpointBlockRows = 10000
-const DefaultCheckpointSize = 1024 * 1024 * 1024
+const DefaultCheckpointSize = 512 * 1024 * 1024
 
 const (
 	CheckpointVersion1 uint32 = 1
