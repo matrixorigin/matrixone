@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
@@ -53,8 +54,9 @@ func newRowLock(c *lockContext) Lock {
 
 func newLock(c *lockContext) Lock {
 	l := Lock{
-		holders: holdersPool.Get().(*holders),
-		waiters: waitQueuePool.Get().(waiterQueue),
+		createAt: time.Now(),
+		holders:  holdersPool.Get().(*holders),
+		waiters:  waitQueuePool.Get().(waiterQueue),
 	}
 	l.holders.add(c.waitTxn)
 	if c.opts.Mode == pb.LockMode_Exclusive {

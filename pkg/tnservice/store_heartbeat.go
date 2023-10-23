@@ -65,6 +65,10 @@ func (s *store) heartbeat(ctx context.Context) {
 		ConfigData:           s.config.GetData(),
 	}
 
+	if s.queryService != nil {
+		hb.QueryAddress = s.queryServiceServiceAddr()
+	}
+
 	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
 	if err != nil {
 		s.rt.Logger().Error("failed to send tn heartbeat", zap.Error(err))
