@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // errorCode indicates the errors.
@@ -28,6 +29,9 @@ const (
 	codeAuthFailed
 	codeClientDisconnect
 	codeServerDisconnect
+
+	errMsgClosedConn  = "use of closed network connection"
+	errMsgResetByPeer = "connection reset by peer"
 )
 
 func (c errorCode) String() string {
@@ -78,6 +82,19 @@ func isEOFErr(err error) bool {
 	}
 	e, ok := err.(*errWithCode)
 	if ok && errors.Is(e.cause, io.EOF) {
+		return true
+	}
+	return false
+}
+
+func isConnEndErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), errMsgClosedConn) {
+		return true
+	}
+	if strings.Contains(err.Error(), errMsgResetByPeer) {
 		return true
 	}
 	return false
