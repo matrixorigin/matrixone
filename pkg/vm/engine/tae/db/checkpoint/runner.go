@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -592,6 +593,7 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 
 	r.storage.entries.Set(entry)
 
+	v2.CkpPendingDurationGauge.Set(0)
 	success = true
 	return
 }
@@ -636,6 +638,7 @@ func (r *runner) tryScheduleCheckpoint() {
 			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
 			tree.GetTree().Compact()
 			if !tree.IsEmpty() && entry.CheckPrintTime() {
+				v2.CkpPendingDurationGauge.Add(1)
 				logutil.Infof("waiting for dirty tree %s", tree.String())
 				entry.SetPrintTime()
 			}

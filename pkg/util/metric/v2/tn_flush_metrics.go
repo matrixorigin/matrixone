@@ -25,12 +25,4 @@ var (
 			Help:      "bucketed histogram of duration distribution of flush table",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
-
-	FlushTableIntervalGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "tn",
-			Subsystem: "task",
-			Name:      "flush_table_interval_gauge_seconds",
-			Help:      "the time interval, seconds, between tow flush actions",
-		})
 )

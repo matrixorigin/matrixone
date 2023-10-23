@@ -179,16 +179,9 @@ func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err
 	return
 }
 
-// to estimate the interval of invocations on prometheus side
-var lastFlushTaskInvokedTime time.Time
-
 func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	task.rt.Throttle.AcquireCompactionQuota()
 	defer task.rt.Throttle.ReleaseCompactionQuota()
-
-	if !lastFlushTaskInvokedTime.IsZero() {
-		v2.FlushTableIntervalGauge.Set(time.Since(lastFlushTaskInvokedTime).Seconds())
-	}
 
 	logutil.Info("[Start]", common.OperationField(task.Name()), common.OperandField(task),
 		common.OperandField(len(task.ablksHandles)+len(task.delSrcHandles)))
@@ -301,8 +294,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		common.OperandField(task))
 
 	v2.FlushTableDurationHistogram.Observe(time.Since(now).Seconds())
-
-	lastFlushTaskInvokedTime = time.Now()
 
 	sleep, name, exist := fault.TriggerFault("slow_flush")
 	if exist && name == task.schema.Name {

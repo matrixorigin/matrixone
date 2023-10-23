@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"time"
 
@@ -69,11 +68,7 @@ func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
 func (e *CheckpointEntry) CheckPrintTime() bool {
 	e.RLock()
 	defer e.RUnlock()
-
-	dur := time.Since(e.lastPrint)
-	v2.CkpPendingDurationHistogram.Observe(dur.Seconds())
-
-	return dur > 4*time.Minute
+	return time.Since(e.lastPrint) > 4*time.Minute
 }
 func (e *CheckpointEntry) LSNString() string {
 	if e.version < logtail.CheckpointVersion7 {

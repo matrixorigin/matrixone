@@ -17,12 +17,11 @@ package v2
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-	CkpPendingDurationHistogram = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
+	CkpPendingDurationGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
 			Namespace: "tn",
 			Subsystem: "checkpoint",
-			Name:      "checkpoint_pending_duration_in_seconds",
-			Help:      "bucketed histogram of duration distribution of checkpoint pending",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Name:      "entry_pending_duration",
+			Help:      "gauge of duration of checkpoint entry pending",
 		})
 )
