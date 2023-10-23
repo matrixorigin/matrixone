@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,11 +49,19 @@ type SegmentEntry struct {
 
 type SegStat struct {
 	// min max etc. later
+	sync.RWMutex
 	Loaded         bool
 	OriginSize     int
+	CompSize       int
 	SortKeyZonemap index.ZM
 	Rows           int
 	RemainingRows  int
+}
+
+func (s *SegStat) GetCompSize() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.CompSize
 }
 
 func (s *SegStat) String(composeSortKey bool) string {
@@ -156,6 +165,9 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 
 // LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
 func (entry *SegmentEntry) LoadObjectInfo() error {
+	entry.Stat.Lock()
+	defer entry.Stat.Unlock()
+
 	if entry.Stat.Loaded {
 		return nil
 	}
@@ -185,6 +197,7 @@ func (entry *SegmentEntry) LoadObjectInfo() error {
 		}
 		colmata := meta.MustGetColumn(uint16(col.SeqNum))
 		entry.Stat.OriginSize += int(colmata.Location().OriginSize())
+		entry.Stat.CompSize += int(colmata.Location().Length())
 	}
 	if schema.HasSortKey() {
 		col := schema.GetSingleSortKey()

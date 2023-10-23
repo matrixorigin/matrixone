@@ -89,8 +89,8 @@ const (
 	BLKCNMetaInsertIDX
 
 	// supporting `show accounts` by recording extra
-	// account-blk changing info in checkpoint
-	BLKStorageUsageIDX
+	// account related info in checkpoint
+	SEGStorageUsageIDX
 
 	TNMetaIDX
 )
@@ -2438,7 +2438,56 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	return collector.BaseCollector.VisitTable(entry)
 }
 
+// recording the total object size within a table
+// and the account, db, table info the object belongs to.
+// every checkpoint records the full datasets of the storage usage info.
+func fillSEGStorageUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
+	if !entry.IsSortedLocked() || entry.IsAppendable() || entry.HasDropCommitted() {
+		return
+	}
+
+	storageUsageBax := collector.data.bats[SEGStorageUsageIDX]
+
+	storageUsageAccIDVec := storageUsageBax.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
+	storageUsageDBIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
+	storageUsageTblIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	storageUsageSizeVec := storageUsageBax.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
+
+	appendToStorageUsageBat := func(size uint64) {
+		accId := uint64(entry.GetTable().GetDB().GetTenantID())
+		dbId := entry.GetTable().GetDB().ID
+		tblId := entry.GetTable().ID
+
+		vector.AppendFixed(storageUsageAccIDVec, accId, false, common.DefaultAllocator)
+		vector.AppendFixed(storageUsageDBIDVec, dbId, false, common.DefaultAllocator)
+		vector.AppendFixed(storageUsageTblIDVec, tblId, false, common.DefaultAllocator)
+		vector.AppendFixed(storageUsageSizeVec, size, false, common.DefaultAllocator)
+	}
+
+	if err := entry.LoadObjectInfo(); err != nil {
+		return
+	}
+	size := uint64(entry.Stat.GetCompSize())
+	if storageUsageSizeVec.Length() == 0 { // initial state
+		appendToStorageUsageBat(size)
+	} else {
+		curLen := storageUsageTblIDVec.Length() - 1
+		curTbl := vector.GetFixedAt[uint64](storageUsageTblIDVec, curLen)
+
+		if curTbl != entry.GetTable().ID { // table id changed
+			appendToStorageUsageBat(size)
+		} else {
+			curSize := vector.GetFixedAt[uint64](storageUsageSizeVec, curLen)
+			vector.SetFixedAt(storageUsageSizeVec, curLen, curSize+size)
+		}
+
+	}
+}
+
 func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
+
+	fillSEGStorageUsageBat(collector, entry)
+
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
@@ -2538,64 +2587,6 @@ func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
 	return collector.BaseCollector.VisitSeg(entry)
 }
 
-// recording the total blk size within a table
-// and the account, db, table info the blk belongs to.
-// every checkpoint records the full datasets of the storage usage info.
-//
-// help to filter the same object
-var filter map[*objectio.ObjectNameShort]objectio.Extent
-
-func fillBLKStorageUsageBat(collector *BaseCollector, entry *catalog.BlockEntry) {
-	metaLoc := entry.GetMetaLoc()
-	if len(metaLoc) == 0 {
-		return
-	}
-
-	if filter == nil {
-		filter = make(map[*objectio.ObjectNameShort]objectio.Extent)
-	}
-
-	storageUsageBax := collector.data.bats[BLKStorageUsageIDX]
-
-	storageUsageAccIDVec := storageUsageBax.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
-	storageUsageDBIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
-	storageUsageTblIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	storageUsageSizeVec := storageUsageBax.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
-
-	appendToStorageUsageBat := func() {
-		accId := uint64(entry.GetSegment().GetTable().GetDB().GetTenantID())
-		dbId := entry.GetSegment().GetTable().GetDB().ID
-		tblId := entry.GetSegment().GetTable().ID
-
-		vector.AppendFixed(storageUsageAccIDVec, accId, false, common.DefaultAllocator)
-		vector.AppendFixed(storageUsageDBIDVec, dbId, false, common.DefaultAllocator)
-		vector.AppendFixed(storageUsageTblIDVec, tblId, false, common.DefaultAllocator)
-		vector.AppendFixed(storageUsageSizeVec, uint64(0), false, common.DefaultAllocator)
-	}
-
-	if storageUsageSizeVec.Length() == 0 { // initial state
-		appendToStorageUsageBat()
-		filter[metaLoc.ShortName()] = metaLoc.Extent()
-	} else {
-		curLen := storageUsageTblIDVec.Length() - 1
-		curTbl := vector.GetFixedAt[uint64](storageUsageTblIDVec, curLen)
-
-		if curTbl != entry.GetSegment().GetTable().ID { // table id changed
-
-			size := entry.ExtractStorageUsageInfo(filter)
-			vector.SetFixedAt(storageUsageSizeVec, curLen, uint64(size))
-
-			filter = make(map[*objectio.ObjectNameShort]objectio.Extent)
-			appendToStorageUsageBat()
-		}
-
-		filter[metaLoc.ShortName()] = metaLoc.Extent()
-	}
-
-	// the last table and the last blk entry
-	entry.GetSegment().Less()
-}
-
 func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) {
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
@@ -2672,8 +2663,6 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	blkMetaInsTxnTIDVec := blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
 	blkMetaInsTxnMetaLocVec := blkMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
 	blkMetaInsTxnDeltaLocVec := blkMetaInsTxnBat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
-
-	fillBLKStorageUsageBat(collector, entry)
 
 	for _, node := range mvccNodes {
 		if node.IsAborted() {

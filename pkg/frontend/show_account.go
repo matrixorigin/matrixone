@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,13 +26,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	ctl2 "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 	"strconv"
 	"strings"
@@ -148,66 +148,40 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
-func makeStorageUsageRequest() []txn.CNOpRequest {
-	cluster := clusterservice.GetMOCluster()
-	var requests []txn.CNOpRequest
-	cluster.GetTNService(clusterservice.NewSelector(),
-		func(store metadata.TNService) bool {
-			for _, shard := range store.Shards {
-				requests = append(requests, txn.CNOpRequest{
-					OpCode: uint32(ctl.CmdMethod_StorageUsage),
-					Target: metadata.TNShard{
-						TNShardRecord: metadata.TNShardRecord{
-							ShardID: shard.ShardID,
-						},
-						ReplicaID: shard.ReplicaID,
-						Address:   store.TxnServiceAddress,
-					},
-					Payload: nil,
-				})
-			}
-			return true
-		})
-	return requests
-}
+func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *Session) (resp interface{}, err error) {
+	whichTN := func(string) ([]uint64, error) { return nil, nil }
+	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
+	responseUnmarshaler := func(payload []byte) (interface{}, error) {
+		usage := &db.StorageUsageResp{}
+		if err := usage.Unmarshal(payload); err != nil {
+			return nil, err
+		}
+		return usage, nil
+	}
 
-func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *Session) (resp []txn.CNOpResponse, err error) {
-	txnOperator := ses.proc.TxnOperator
-	if txnOperator == nil {
-		if _, txnOperator, err = ses.TxnCreate(); err != nil {
+	if ses.proc.TxnOperator == nil {
+		defer func() { // without this: the transaction xxx has been committed or aborted
+			ses.proc.TxnOperator = nil
+		}()
+		if _, ses.proc.TxnOperator, err = ses.TxnCreate(); err != nil {
 			return nil, err
 		}
 	}
 
-	debugRequests := make([]txn.TxnRequest, 0, len(requests))
-	for _, req := range requests {
-		tq := txn.NewTxnRequest(&req)
-		tq.Method = txn.TxnMethod_DEBUG
-		debugRequests = append(debugRequests, tq)
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	var cancel context.CancelFunc
+	ses.proc.Ctx, cancel = context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
 
-	result, err := txnOperator.Debug(ctx, debugRequests)
+	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
+	result, err := handler(ses.proc, "DN", "", ctl2.MoCtlTNCmdSender)
 	if err != nil {
 		return nil, err
 	}
-	defer result.Release()
-
-	responses := make([]txn.CNOpResponse, 0, len(requests))
-	for _, resp := range result.Responses {
-		responses = append(responses, *resp.CNOpResponse)
-	}
-	return responses, nil
+	//usages := result.Data.([]*db.StorageUsageResp)
+	return result.Data.([]interface{})[0], nil
 }
 
-func handleStorageUsageResponse(ctx context.Context, ses *Session, resp txn.CNOpResponse) (map[int32]uint64, error) {
-	var usage db.StorageUsageResp
-	if err := usage.Unmarshal(resp.Payload); err != nil {
-		return nil, err
-	}
-
+func handleStorageUsageResponse(ctx context.Context, ses *Session, usage *db.StorageUsageResp) (map[int32]uint64, error) {
 	result := make(map[int32]uint64, 0)
 	if usage.CkpLocations != "" {
 		// load checkpoint data and decode
@@ -232,7 +206,7 @@ func handleStorageUsageResponse(ctx context.Context, ses *Session, resp txn.CNOp
 			return nil, err
 		}
 
-		storageUsageBat := ckpData.GetBatches()[logtail.BLKStorageUsageIDX]
+		storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
 		accIDVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID)
 		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockSize)
 
@@ -253,18 +227,13 @@ func handleStorageUsageResponse(ctx context.Context, ses *Session, resp txn.CNOp
 // by handling checkpoint
 func getAllAccountsStorageUsage(ctx context.Context, ses *Session) (map[int32]uint64, error) {
 	// step 1: pulling the newest ckp locations and block entries from tn
-	requests := makeStorageUsageRequest()
-	if len(requests) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("no tn service found")
-	}
-
-	responses, err := requestStorageUsage(ctx, requests, ses)
+	response, err := requestStorageUsage(ctx, nil, ses)
 	if err != nil {
 		return nil, err
 	}
 
 	// step 2: handling these pulled data
-	return handleStorageUsageResponse(ctx, ses, responses[0])
+	return handleStorageUsageResponse(ctx, ses, response.(*db.StorageUsageResp))
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
