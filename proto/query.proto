@@ -134,6 +134,7 @@ message KillConnResponse {
 message TraceSpanRequest {
   string Cmd = 1;
   string Spans = 2;
+  int64 Threshold = 3;
 }
 
 message TraceSpanResponse {
