@@ -239,29 +239,37 @@ func (s *Scanner) Scan() (int, string) {
 	}
 }
 
+// ScanComment finds all Comment (/*  */, //) until gets EOF or LEX_ERROR
 func (s *Scanner) ScanComment() (int, string) {
 	s.PrePos = s.Pos
-	s.skipBlank()
-	ch := s.cur()
-	for ch != '/' {
-		s.inc()
-		ch = s.cur()
-	}
+	for {
+		s.skipBlank()
+		ch := s.cur()
+		for ch != '/' && ch != eofChar {
+			s.inc()
+			ch = s.cur()
+		}
 
-	s.inc()
-	switch s.cur() {
-	case '/':
+		if ch == eofChar {
+			break
+		}
+
 		s.inc()
-		return s.scanCommentTypeLine(2)
-	case '*':
-		s.inc()
-		return s.scanCommentTypeBlock()
-	default:
-		s.stepBackOneChar(ch)
-		return s.ScanComment()
+		switch s.cur() {
+		case '/': // //
+			s.inc()
+			return s.scanCommentTypeLine(2)
+		case '*': // /*
+			s.inc()
+			return s.scanCommentTypeBlock()
+		}
 	}
+	return eofChar, ""
 }
 
+func EofChar() int {
+	return eofChar
+}
 
 func (s *Scanner) readVersion() bool {
 	if s.Pos < len(s.buf) {
