@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
-		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
+		input:  "show index from db.t1 from db",
+		output: "show index from db.t1 from db",
 	}
 )
 
@@ -151,7 +151,7 @@ var (
 		output: "show variables like sql_mode",
 	}, {
 		input:  "show index from t1 from db",
-		output: "show index from db.t1",
+		output: "show index from t1 from db",
 	}, {
 		input:  "select * from (SELECT * FROM (SELECT 1, 2, 3)) AS t1",
 		output: "select * from (select * from (select 1, 2, 3)) as t1",
@@ -2612,6 +2612,22 @@ var (
 		{
 			input:  "show connectors",
 			output: "show connectors",
+		},
+		{
+			input:  "show index from t1 from db",
+			output: "show index from t1 from db",
+		},
+		{
+			input:  "show index from t1",
+			output: "show index from t1",
+		},
+		{
+			input:  "show index from db.t1",
+			output: "show index from db.t1",
+		},
+		{
+			input:  "show index from db.t1 from db",
+			output: "show index from db.t1 from db",
 		},
 	}
 )
