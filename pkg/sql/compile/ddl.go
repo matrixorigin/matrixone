@@ -1692,6 +1692,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 
 func (s *Scope) AlterSequence(c *Compile) error {
 	var values []interface{}
+	var curval string
 	qry := s.Plan.GetDdl().GetAlterSequence()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -1717,7 +1718,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return err
 	}
 
-	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
+	if rel, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
 		// sequence table exists
 		// get pre sequence table row values
 		values, err = c.proc.SessionInfo.SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
@@ -1727,6 +1728,9 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		if values == nil {
 			return moerr.NewInternalError(c.ctx, "Failed to get sequence meta data.")
 		}
+
+		// get pre curval
+		curval = c.proc.SessionInfo.SeqCurValues[rel.GetTableID(c.ctx)]
 
 		// dorp the pre sequence
 		err = c.runSql(fmt.Sprintf("drop sequence %s", tblName))
@@ -1754,7 +1758,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		if rel == nil {
 			return moerr.NewLockTableNotFound(c.ctx)
 		}
-		bat, err := makeSequenceAlterBatch(c.ctx, c.stmt.(*tree.AlterSequence), qry.GetTableDef(), c.proc, values)
+		bat, err := makeSequenceAlterBatch(c.ctx, c.stmt.(*tree.AlterSequence), qry.GetTableDef(), c.proc, values, curval)
 		defer func() {
 			if bat != nil {
 				bat.Clean(c.proc.Mp())
@@ -1780,7 +1784,7 @@ last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_cal
 ------------------------------------------------------------------------------------
 */
 
-func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}) (*batch.Batch, error) {
+func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.Ro = true
 	bat.Cnt = 0
@@ -1797,7 +1801,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 
 	switch typ.Oid {
 	case types.T_int16:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int16](ctx, stmt, result)
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int16](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -1813,7 +1817,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 			return nil, err
 		}
 	case types.T_int32:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int32](ctx, stmt, result)
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int32](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -1829,7 +1833,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 			return nil, err
 		}
 	case types.T_int64:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int64](ctx, stmt, result)
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int64](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -1845,7 +1849,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 			return nil, err
 		}
 	case types.T_uint16:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint16](ctx, stmt, result)
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint16](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -1858,7 +1862,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 			return nil, err
 		}
 	case types.T_uint32:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint32](ctx, stmt, result)
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint32](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -1871,7 +1875,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 			return nil, err
 		}
 	case types.T_uint64:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint64](ctx, stmt, result)
+		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint64](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -2157,13 +2161,14 @@ func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.Cr
 	return incrNum, minValue, maxValue, startNum, nil
 }
 
-func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}) (T, int64, T, T, T, bool, error) {
+func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}, curval string) (T, int64, T, T, T, bool, error) {
 	var minValue, maxValue, startNum, lastNum T
 	var incrNum int64
 	var cycle bool
 
+	var preincrNum int64
 	if incr, ok := result[4].(int64); ok {
-		incrNum = incr
+		preincrNum = incr
 	}
 
 	// if alter increment value
@@ -2173,6 +2178,8 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
 		}
 		incrNum = getValue[int64](stmt.IncrementBy.Minus, stmt.IncrementBy.Num)
+	} else {
+		incrNum = preincrNum
 	}
 	if incrNum == 0 {
 		return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
@@ -2197,7 +2204,7 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	preLastSeq := result[0]
 	preLastSeqNum := getInterfaceValue[T](preLastSeq)
 	// if alter startWith value of sequence
-	var preStartWith int64
+	preStartWith := preLastSeqNum
 	if stmt.StartWith != nil {
 		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
 		if startNum < T(preStartWith) {
@@ -2207,9 +2214,20 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		startNum = getInterfaceValue[T](preStartWith)
 	}
 
-	lastNum = startNum + T(incrNum)
-	if lastNum < preLastSeqNum+T(incrNum) {
+	if len(curval) != 0 {
 		lastNum = preLastSeqNum + T(incrNum)
+		if lastNum < startNum+T(incrNum) {
+			lastNum = startNum + T(incrNum)
+		}
+	} else {
+		if stmt.IncrementBy != nil {
+			lastNum = preLastSeqNum + T(incrNum) - T(preincrNum)
+			if lastNum < startNum+T(incrNum)-T(preincrNum) {
+				lastNum = startNum + T(incrNum) - T(preincrNum)
+			}
+		} else {
+			lastNum = preLastSeqNum
+		}
 	}
 
 	// if alter cycle state of sequence

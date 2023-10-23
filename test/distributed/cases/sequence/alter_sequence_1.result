@@ -1,3 +1,4 @@
+drop sequence if exists alter_seq_01;
 create sequence alter_seq_01  as smallint;
 show sequences;
 Names    Data Type
@@ -8,41 +9,39 @@ Names    Data Type
 alter_seq_01    BIGINT
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
+1    1
+alter sequence alter_seq_01 minvalue 1 maxvalue 100;
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
 2    2
-alter sequence alter_seq_01 minvalue 1 maxvalue 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 3    3
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 4    4
+alter sequence alter_seq_01 cycle;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 5    5
-alter sequence alter_seq_01 cycle;
-select * from alter_seq_01;
-last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-6    1    10    5    1    true    false
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 6    6
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 7    7
-select nextval('alter_seq_01'),currval('alter_seq_01');
-nextval(alter_seq_01)    currval(alter_seq_01)
-8    8
-alter sequence alter_seq_01 maxvalue 1000;
+alter sequence alter_seq_01 no cycle;
 alter sequence alter_seq_01 increment by 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-18    18
+17    17
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-28    28
+27    27
+alter sequence alter_seq_01 maxvalue 10000;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-38    38
+37    37
 alter sequence alter_seq_01 start with 900;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
@@ -54,6 +53,7 @@ select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 930    930
 drop sequence alter_seq_01;
+drop sequence if exists alter_seq_02;
 create sequence alter_seq_02 increment 3;
 select nextval('alter_seq_02');
 nextval(alter_seq_02)
@@ -66,6 +66,7 @@ select nextval('alter_seq_02'),currval('alter_seq_02');
 nextval(alter_seq_02)    currval(alter_seq_02)
 14    14
 drop sequence alter_seq_02;
+drop sequence if exists alter_seq_03;
 create sequence alter_seq_03 start 1000;
 select nextval('alter_seq_03'),currval('alter_seq_03');
 nextval(alter_seq_03)    currval(alter_seq_03)
@@ -81,10 +82,12 @@ select nextval('alter_seq_03'),currval('alter_seq_03');
 nextval(alter_seq_03)    currval(alter_seq_03)
 1003    1003
 drop sequence alter_seq_03;
+drop sequence if exists alter_seq_03;
 create sequence alter_seq_03 increment by 10;
 alter sequence alter_seq_03;
 SQL syntax error: synatx error, alter_seq_03 has nothing to alter
 drop sequence alter_seq_03;
+drop sequence if exists alter_seq_04;
 create sequence if not exists alter_seq_04 as bigint increment by 100 minvalue 20 start with 50 cycle;
 select nextval('alter_seq_04'),currval('alter_seq_04');
 nextval(alter_seq_04)    currval(alter_seq_04)
