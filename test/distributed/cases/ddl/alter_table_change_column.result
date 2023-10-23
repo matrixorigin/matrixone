@@ -1771,8 +1771,8 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 table_name    column_name    data_type    is_nullable
 cast04    col3    TEXT    YES
 cast04    col4    BLOB    YES
-cast04    col237289738yiuhckehvjnkehifewjdhwenbvrferf    DECIMAL128    YES
 cast04    col1hwejnejfwdewfr    INT UNSIGNED    YES
+cast04    col237289738yiuhckehvjnkehifewjdhwenbvrferf    DECIMAL128    YES
 drop table cast04;
 drop table if exists cast05;
 create table cast05 (col1 date);
