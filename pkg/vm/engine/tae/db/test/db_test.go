@@ -4269,7 +4269,7 @@ func TestLogtailBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
 	}, true)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(resp.Commands)) // insert and delete
+	require.Equal(t, 3, len(resp.Commands)) // insert and delete
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.Equal(t, len(catalog.SystemDBSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
