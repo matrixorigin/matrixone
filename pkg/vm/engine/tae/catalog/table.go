@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -294,6 +295,10 @@ func (entry *TableEntry) ObjectStatsString() string {
 	var w bytes.Buffer
 
 	it := entry.MakeSegmentIt(true)
+	composeSortKey := false
+	if schema := entry.GetLastestSchema(); schema.HasSortKey() {
+		composeSortKey = strings.HasPrefix(schema.GetSingleSortKey().Name, "__")
+	}
 	for ; it.Valid(); it.Next() {
 		segment := it.Get().GetPayload()
 		if !segment.IsActive() {
@@ -303,7 +308,7 @@ func (entry *TableEntry) ObjectStatsString() string {
 		_, _ = w.WriteString(segment.ID.ToString())
 		_ = w.WriteByte('\n')
 		_, _ = w.WriteString("    ")
-		_, _ = w.WriteString(segment.Stat.String())
+		_, _ = w.WriteString(segment.Stat.String(composeSortKey))
 	}
 	return w.String()
 }

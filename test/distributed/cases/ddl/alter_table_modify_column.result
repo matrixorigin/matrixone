@@ -1034,6 +1034,7 @@ a    b    c    d
 1    ab    1980-12-17    800.00
 2    ac    1981-02-20    1600.00
 3    ad    1981-02-22    500.00
+drop table index02;
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,
 col2 varchar(20),
@@ -1677,6 +1678,7 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO
 mix01    col1_2    VARBINARY    YES
+mix01    col2    DECIMAL128    YES
 mix01    col3    DATE    YES
 mix01    col4    VARCHAR    YES
 truncate table mix01;
