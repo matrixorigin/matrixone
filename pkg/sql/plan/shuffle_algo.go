@@ -14,68 +14,68 @@
 
 package plan
 
-type ShuffleHeap struct {
-	Left    *ShuffleHeap
-	Right   *ShuffleHeap
-	Key     float64
-	Value   float64
-	Height  int
-	Reverse bool
+type shuffleHeap struct {
+	left    *shuffleHeap
+	right   *shuffleHeap
+	key     float64
+	value   float64
+	height  int
+	reverse bool
 }
 
-type ShuffleList struct {
-	Next    *ShuffleList
-	Tree    *ShuffleHeap
-	Size    int
-	Value   float64
-	Overlap float64
+type shuffleList struct {
+	next    *shuffleList
+	tree    *shuffleHeap
+	size    int
+	value   float64
+	overlap float64
 }
 
 type ShuffleRange struct {
-	Tree    *ShuffleHeap
+	tree    *shuffleHeap
 	Result  []float64
-	Size    int
+	size    int
 	Overlap float64
 }
 
-func (t *ShuffleHeap) Merge(s *ShuffleHeap) *ShuffleHeap {
-	if t.Key > s.Key != t.Reverse {
-		if s.Right == nil {
-			s.Right = t
+func (t *shuffleHeap) Merge(s *shuffleHeap) *shuffleHeap {
+	if t.key > s.key != t.reverse {
+		if s.right == nil {
+			s.right = t
 		} else {
-			s.Right = t.Merge(s.Right)
+			s.right = t.Merge(s.right)
 		}
-		if s.Left == nil || s.Left.Height < s.Right.Height {
-			tmp := s.Left
-			s.Left = s.Right
-			s.Right = tmp
+		if s.left == nil || s.left.height < s.right.height {
+			tmp := s.left
+			s.left = s.right
+			s.right = tmp
 		}
-		s.Height = s.Left.Height + 1
+		s.height = s.left.height + 1
 		return s
 	} else {
-		if t.Right == nil {
-			t.Right = s
+		if t.right == nil {
+			t.right = s
 		} else {
-			t.Right = t.Right.Merge(s)
+			t.right = t.right.Merge(s)
 		}
-		if t.Left == nil || t.Left.Height < t.Right.Height {
-			tmp := t.Left
-			t.Left = t.Right
-			t.Right = tmp
+		if t.left == nil || t.left.height < t.right.height {
+			tmp := t.left
+			t.left = t.right
+			t.right = tmp
 		}
-		t.Height = t.Left.Height + 1
+		t.height = t.left.height + 1
 		return t
 	}
 }
 
-func (t *ShuffleHeap) Pop() (*ShuffleHeap, float64, float64) {
-	if t.Left == nil {
-		return nil, t.Key, t.Value
+func (t *shuffleHeap) Pop() (*shuffleHeap, float64, float64) {
+	if t.left == nil {
+		return nil, t.key, t.value
 	}
-	if t.Right == nil {
-		return t.Left, t.Key, t.Value
+	if t.right == nil {
+		return t.left, t.key, t.value
 	}
-	return t.Left.Merge(t.Right), t.Key, t.Value
+	return t.left.Merge(t.right), t.key, t.value
 }
 
 func NewShuffleRange() *ShuffleRange {
@@ -83,18 +83,18 @@ func NewShuffleRange() *ShuffleRange {
 }
 
 func (s *ShuffleRange) Update(zmmin float64, zmmax float64) {
-	s.Size++
-	if s.Tree == nil {
-		s.Tree = &ShuffleHeap{
-			Height: 1,
-			Key:    zmmax,
-			Value:  zmmin,
+	s.size++
+	if s.tree == nil {
+		s.tree = &shuffleHeap{
+			height: 1,
+			key:    zmmax,
+			value:  zmmin,
 		}
 	} else {
-		s.Tree = s.Tree.Merge(&ShuffleHeap{
-			Height: 1,
-			Key:    zmmax,
-			Value:  zmmin,
+		s.tree = s.tree.Merge(&shuffleHeap{
+			height: 1,
+			key:    zmmax,
+			value:  zmmin,
 		})
 	}
 }
@@ -103,59 +103,59 @@ func (s *ShuffleRange) Eval(k int) {
 	if k <= 1 {
 		return
 	}
-	var Head *ShuffleList
+	var Head *shuffleList
 	var key, value float64
 	s.Result = make([]float64, k-1)
-	for s.Tree != nil {
-		s.Tree, key, value = s.Tree.Pop()
-		Head = &ShuffleList{
-			Next: Head,
-			Tree: &ShuffleHeap{
-				Height:  1,
-				Key:     key,
-				Value:   value,
-				Reverse: true,
+	for s.tree != nil {
+		s.tree, key, value = s.tree.Pop()
+		Head = &shuffleList{
+			next: Head,
+			tree: &shuffleHeap{
+				height:  1,
+				key:     key,
+				value:   value,
+				reverse: true,
 			},
-			Size:    1,
-			Value:   value,
-			Overlap: 1,
+			size:    1,
+			value:   value,
+			overlap: 1,
 		}
-		for Head.Next != nil {
-			next := Head.Next
-			if Head.Tree.Value >= next.Tree.Key {
+		for Head.next != nil {
+			next := Head.next
+			if Head.tree.value >= next.tree.key {
 				break
 			}
 			var delta float64
-			if next.Value >= Head.Value {
-				delta = next.Overlap
+			if next.value >= Head.value {
+				delta = next.overlap
 			} else {
-				delta = (next.Tree.Key-Head.Value)/(next.Tree.Key-next.Value)*(next.Overlap) + (next.Tree.Key-Head.Value)/(Head.Tree.Key-Head.Value)*(Head.Overlap)
-				Head.Value = next.Value
+				delta = (next.tree.key-Head.value)/(next.tree.key-next.value)*(next.overlap) + (next.tree.key-Head.value)/(Head.tree.key-Head.value)*(Head.overlap)
+				Head.value = next.value
 			}
 			s.Overlap += delta
-			Head.Overlap += next.Overlap - delta
-			Head.Tree = Head.Tree.Merge(next.Tree)
-			Head.Size += next.Size
-			Head.Next = next.Next
+			Head.overlap += next.overlap - delta
+			Head.tree = Head.tree.Merge(next.tree)
+			Head.size += next.size
+			Head.next = next.next
 		}
 	}
 
-	step := float64(s.Size) / float64(k)
+	step := float64(s.size) / float64(k)
 	last := step
 	k -= 2
 	for {
-		size := float64(Head.Size)
+		size := float64(Head.size)
 		if last > size {
 			last -= size
-			Head = Head.Next
+			Head = Head.next
 			continue
 		}
-		var valuetree *ShuffleHeap
+		var valuetree *shuffleHeap
 		var speed float64
-		now := Head.Tree.Key
+		now := Head.tree.key
 		for last <= size {
-			if valuetree == nil || (Head.Tree != nil && valuetree.Key < Head.Tree.Key) {
-				Head.Tree, key, value = Head.Tree.Pop()
+			if valuetree == nil || (Head.tree != nil && valuetree.key < Head.tree.key) {
+				Head.tree, key, value = Head.tree.Pop()
 				delta := speed * (now - key)
 				last -= delta
 				size -= delta
@@ -191,18 +191,18 @@ func (s *ShuffleRange) Eval(k int) {
 				}
 				speed += 1.0 / (key - value)
 				if valuetree == nil {
-					valuetree = &ShuffleHeap{
-						Key:     value,
-						Value:   key,
-						Height:  1,
-						Reverse: true,
+					valuetree = &shuffleHeap{
+						key:     value,
+						value:   key,
+						height:  1,
+						reverse: true,
 					}
 				} else {
-					valuetree = valuetree.Merge(&ShuffleHeap{
-						Key:     value,
-						Value:   key,
-						Height:  1,
-						Reverse: true,
+					valuetree = valuetree.Merge(&shuffleHeap{
+						key:     value,
+						value:   key,
+						height:  1,
+						reverse: true,
 					})
 				}
 			} else {
@@ -230,7 +230,7 @@ func (s *ShuffleRange) Eval(k int) {
 			break
 		}
 		last -= size
-		Head = Head.Next
+		Head = Head.next
 	}
-	s.Overlap /= float64(s.Size)
+	s.Overlap /= float64(s.size)
 }
