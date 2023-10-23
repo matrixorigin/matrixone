@@ -17,10 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"time"
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,6 +39,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strconv"
+	"time"
+	"unsafe"
 )
 
 const (
@@ -564,14 +563,12 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
 	tbl._partState = nil
 	tbl.objInfos = nil
-	tbl.snapshotBlocks = nil
 	tbl.objInfosUpdated = false
 }
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState = nil
 	tbl.objInfos = nil
-	tbl.snapshotBlocks = nil
 	tbl.objInfosUpdated = false
 }
 
@@ -623,12 +620,72 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		}
 	}
 
+	//expand tbl.objInfos to snapshotBlocks
+	var snapshotBlks []catalog.BlockInfo
+	{
+		//expand the objInfos
+		fs, err := fileservice.Get[fileservice.FileService](
+			tbl.proc.Load().FileService,
+			defines.SharedFileServiceName)
+		if err != nil {
+			return nil, err
+		}
+		state, err := tbl.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var objDataMeta objectio.ObjectDataMeta
+		var objMeta objectio.ObjectMeta
+		for _, obj := range tbl.objInfos {
+			location := obj.Location()
+			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+				return nil, err
+			}
+			objDataMeta = objMeta.MustDataMeta()
+			blkCnt := objDataMeta.BlockCount()
+			for i := 0; i < int(blkCnt); i++ {
+				blkMeta := objDataMeta.GetBlockMeta(uint32(i))
+				metaLoc := blockio.EncodeLocation(
+					obj.Loc.Name(),
+					blkMeta.GetExtent(),
+					blkMeta.GetRows(),
+					blkMeta.GetID(),
+				)
+				segmentId := obj.Loc.Name().SegmentId()
+				blkInfo := catalog.BlockInfo{
+					BlockID: *objectio.NewBlockid(
+						&segmentId,
+						obj.Loc.Name().Num(),
+						blkMeta.BlockHeader().Sequence()),
+					EntryState: obj.EntryState,
+					Sorted:     obj.Sorted,
+					MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+					//CommitTs:   obj.CommitTS,
+					SegmentID: obj.SegmentID,
+				}
+				if obj.HasDeltaLoc {
+					deltaLoc, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+					if !ok {
+						panic(fmt.Sprintf("block %v delta location not found", blkInfo.BlockID))
+					}
+					blkInfo.DeltaLoc = deltaLoc
+				}
+				commitTs, ok := state.GetBockCommitTs(blkInfo.BlockID)
+				if !ok {
+					panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+				}
+				blkInfo.CommitTs = commitTs
+				snapshotBlks = append(snapshotBlks, blkInfo)
+			}
+		}
+	}
+
 	err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.getTableDef(),
 		newExprs,
-		tbl.snapshotBlocks,
+		snapshotBlks,
 		&ranges,
 		tbl.proc.Load(),
 	)
@@ -1646,59 +1703,6 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 			return
 		}
 		tbl.objInfos = objs
-		//expand the objInfos
-		//TODO::remove it
-		fs, err := fileservice.Get[fileservice.FileService](
-			tbl.proc.Load().FileService,
-			defines.SharedFileServiceName)
-		if err != nil {
-			return err
-		}
-		state, err := tbl.getPartitionState(ctx)
-		if err != nil {
-			return err
-		}
-		var objDataMeta objectio.ObjectDataMeta
-		var objMeta objectio.ObjectMeta
-		//var snapshotBlks []catalog.BlockInfo
-		for _, obj := range objs {
-			location := obj.Location()
-			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
-				return err
-			}
-			objDataMeta = objMeta.MustDataMeta()
-			blkCnt := objDataMeta.BlockCount()
-			for i := 0; i < int(blkCnt); i++ {
-				blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-				metaLoc := blockio.EncodeLocation(
-					obj.Loc.Name(),
-					blkMeta.GetExtent(),
-					blkMeta.GetRows(),
-					blkMeta.GetID(),
-				)
-				blkInfo := catalog.BlockInfo{
-					BlockID:    *blkMeta.BlockHeader().BlockID(),
-					EntryState: obj.EntryState,
-					Sorted:     obj.Sorted,
-					MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
-					//CommitTs:   obj.CommitTS,
-					SegmentID: obj.SegmentID,
-				}
-				if obj.HasDeltaLoc {
-					deltaLoc, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
-					if !ok {
-						panic(fmt.Sprintf("block %v delta location not found", blkInfo.BlockID))
-					}
-					blkInfo.DeltaLoc = deltaLoc
-				}
-				commitTs, ok := state.GetBockCommitTs(blkInfo.BlockID)
-				if !ok {
-					panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
-				}
-				blkInfo.CommitTs = commitTs
-				tbl.snapshotBlocks = append(tbl.snapshotBlocks, blkInfo)
-			}
-		}
 		tbl.objInfosUpdated = true
 	}
 	return
