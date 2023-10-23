@@ -1238,12 +1238,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
-
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
 
+		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true)
 		builder.applySwapRuleByStats(rootID, true)
 		rootID = builder.aggPushDown(rootID)
@@ -1259,7 +1258,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
-		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
+
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators

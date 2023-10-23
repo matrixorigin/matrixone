@@ -1082,17 +1082,6 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	return colexec.RewriteFilterExprList(exprList)
 }
 
-func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(tableDef, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
-	}
-}
-
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
