@@ -15,38 +15,45 @@
 package logtailreplay
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/tidwall/btree"
 )
 
-type BlocksIter interface {
+type ObjectsIter interface {
 	Next() bool
 	Close() error
-	Entry() BlockEntry
+	Entry() ObjectEntry
 }
 
-type blocksIter struct {
+type objectsIter struct {
 	ts          types.TS
-	iter        btree.IterG[BlockEntry]
+	iter        btree.IterG[ObjectEntry]
 	firstCalled bool
 }
 
-func (p *PartitionState) NewBlocksIter(ts types.TS) (*blocksIter, error) {
+// not accurate!  only used by stats
+func (p *PartitionState) ApproxObjectsNum() int {
+	return p.dataObjects.Len()
+}
+
+func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 	if ts.Less(p.minTS) {
 		return nil, moerr.NewTxnStaleNoCtx()
 	}
-	iter := p.blocks.Copy().Iter()
-	ret := &blocksIter{
+	iter := p.dataObjects.Copy().Iter()
+	ret := &objectsIter{
 		ts:   ts,
 		iter: iter,
 	}
 	return ret, nil
 }
 
-var _ BlocksIter = new(blocksIter)
+var _ ObjectsIter = new(objectsIter)
 
-func (b *blocksIter) Next() bool {
+func (b *objectsIter) Next() bool {
 	for {
 
 		if !b.firstCalled {
@@ -71,17 +78,23 @@ func (b *blocksIter) Next() bool {
 	}
 }
 
-func (b *blocksIter) Entry() BlockEntry {
+func (b *objectsIter) Entry() ObjectEntry {
 	return b.iter.Item()
 }
 
-func (b *blocksIter) Close() error {
+func (b *objectsIter) Close() error {
 	b.iter.Release()
 	return nil
 }
 
+type BlocksIter interface {
+	Next() bool
+	Close() error
+	Entry() types.Blockid
+}
+
 type dirtyBlocksIter struct {
-	iter        btree.IterG[BlockEntry]
+	iter        btree.IterG[types.Blockid]
 	firstCalled bool
 }
 
@@ -106,7 +119,7 @@ func (b *dirtyBlocksIter) Next() bool {
 	return b.iter.Next()
 }
 
-func (b *dirtyBlocksIter) Entry() BlockEntry {
+func (b *dirtyBlocksIter) Entry() types.Blockid {
 	return b.iter.Item()
 }
 
@@ -147,4 +160,40 @@ func (p *PartitionState) GetChangedBlocksBetween(
 	}
 
 	return
+}
+
+func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (loc catalog.ObjectLocation, ok bool) {
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(BlockDeltaEntry{
+		BlockID: bid,
+	}); ok {
+		return iter.Item().DeltaLoc, true
+	}
+	return catalog.ObjectLocation{}, false
+}
+
+func (p *PartitionState) GetBockCommitTs(bid types.Blockid) (ts types.TS, ok bool) {
+	iter := p.blockDeltas.Copy().Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(BlockDeltaEntry{
+		BlockID: bid,
+	}); ok {
+		return iter.Item().CommitTs, true
+	}
+	return types.TS{}, false
+}
+
+func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
+	iter := p.dataObjects.Copy().Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(ObjectEntry{
+		ShortObjName: *objectio.ShortName(&blockID),
+	}); ok {
+		return true
+	}
+	return false
 }

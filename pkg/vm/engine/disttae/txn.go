@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"math"
 	"strings"
 	"time"
@@ -25,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -37,36 +36,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-func (txn *Transaction) getBlockInfos(
+func (txn *Transaction) getObjInfos(
 	ctx context.Context,
 	tbl *txnTable,
-) (blocks []catalog.BlockInfo, err error) {
+) (objs []logtailreplay.ObjectEntry, err error) {
 	ts := types.TimestampToTS(txn.op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var objectName objectio.ObjectNameShort
-	iter, err := state.NewBlocksIter(ts)
-	if err != nil {
-		return nil, err
-	}
-	fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
+	iter, err := state.NewObjectsIter(ts)
 	if err != nil {
 		return nil, err
 	}
 	for iter.Next() {
 		entry := iter.Entry()
-		location := entry.MetaLocation()
-		if !objectio.IsSameObjectLocVsShort(location, &objectName) {
-			// Prefetch object meta
-			if err = blockio.PrefetchMeta(fs, location); err != nil {
-				iter.Close()
-				return
-			}
-			objectName = *location.Name().Short()
-		}
-		blocks = append(blocks, entry.BlockInfo)
+		objs = append(objs, entry)
 	}
 	iter.Close()
 	return
