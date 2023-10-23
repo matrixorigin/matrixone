@@ -164,7 +164,7 @@ func (s *morpcStream) write(
 
 		st := time.Now()
 		err := s.cs.Write(ctx, seg)
-		v2.GetSendWithStepNetworkLogTailDurationHistogram().Observe(time.Since(st).Seconds())
+		v2.LogtailSendNetworkHistogram.Observe(time.Since(st).Seconds())
 		if err != nil {
 			return err
 		}
@@ -261,11 +261,10 @@ func NewSession(
 					defer cancel()
 
 					now := time.Now()
-					v2.LogTailSendLatencyDurationHistogram.Observe(float64(now.Sub(msg.createAt).Seconds()))
+					v2.LogtailSendLatencyHistogram.Observe(float64(now.Sub(msg.createAt).Seconds()))
 
-					v2.GetSendLogTailBytesHistogram().Observe(float64(msg.response.Size()))
 					defer func() {
-						v2.GetSendLogTailTotalDurationHistogram().Observe(time.Since(now).Seconds())
+						v2.LogtailSendTotalHistogram.Observe(time.Since(now).Seconds())
 					}()
 
 					err := ss.stream.write(ctx, msg.response)

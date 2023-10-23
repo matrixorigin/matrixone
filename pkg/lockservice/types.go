@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -217,6 +218,7 @@ type LockOptions struct {
 // in the LockStorage at runtime, this object has been specially designed to save memory
 // usage.
 type Lock struct {
+	createAt time.Time
 	// all lock info will encode into this field to save memory overhead
 	value byte
 	// all active transactions which hold this lock. Every waiter has a reference to the lock
