@@ -135,7 +135,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		//v.(*txnTable).proc = p
-		// TODO: debug for #11917
 		v.(*txnTable).proc.Store(p)
 		return v.(*txnTable), nil
 	}
