@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -64,11 +65,11 @@ type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
 
-	entries   map[uint64]*common.GenericDLNode[*DBEntry]
-	nameNodes map[string]*nodeList[*DBEntry]
-	link      *common.GenericSortedDList[*DBEntry]
-
-	nodesMu sync.RWMutex
+	entries    map[uint64]*common.GenericDLNode[*DBEntry]
+	nameNodes  map[string]*nodeList[*DBEntry]
+	link       *common.GenericSortedDList[*DBEntry]
+	taeRuntime *dbutils.Runtime
+	nodesMu    sync.RWMutex
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -100,13 +101,14 @@ func NewEmptyCatalog() *Catalog {
 	}
 }
 
-func OpenCatalog() (*Catalog, error) {
+func OpenCatalog(runtime *dbutils.Runtime) (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
+		taeRuntime: runtime,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil

@@ -25,14 +25,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"math"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -180,6 +185,10 @@ func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *S
 		tq.Method = txn.TxnMethod_DEBUG
 		debugRequests = append(debugRequests, tq)
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+
 	result, err := txnOperator.Debug(ctx, debugRequests)
 	if err != nil {
 		return nil, err
@@ -193,19 +202,48 @@ func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *S
 	return responses, nil
 }
 
-func handleStorageUsageResponse(resp txn.CNOpResponse) (map[uint64]uint64, error) {
+func handleStorageUsageResponse(ctx context.Context, ses *Session, resp txn.CNOpResponse) (map[int32]uint64, error) {
 	var usage db.StorageUsageResp
 	if err := usage.Unmarshal(resp.Payload); err != nil {
 		return nil, err
 	}
 
-	result := make(map[uint64]uint64, 0)
+	result := make(map[int32]uint64, 0)
 	if usage.CkpLocations != "" {
 		// load checkpoint data and decode
+		strs := strings.Split(usage.CkpLocations, ";")
+		version, err := strconv.ParseUint(strs[1], 10, 32)
+		if err != nil {
+			return nil, err
+		}
+
+		loc, err := blockio.EncodeLocationFromString(strs[0])
+		if err != nil {
+			return nil, err
+		}
+
+		sharedFS, err := fileservice.Get[fileservice.FileService](ses.GetParameterUnit().FileService, defines.SharedFileServiceName)
+		if err != nil {
+			return nil, err
+		}
+
+		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, sharedFS, loc, uint32(version))
+		if err != nil {
+			return nil, err
+		}
+
+		storageUsageBat := ckpData.GetBatches()[logtail.BLKStorageUsageIDX]
+		accIDVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID)
+		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockSize)
+
+		length := accIDVec.Length()
+		for i := 0; i < length; i++ {
+			result[int32(accIDVec.Get(i).(uint64))] += sizeVec.Get(i).(uint64)
+		}
 	}
 
 	for _, info := range usage.BlockEntries {
-		result[info.Info[0]] += info.Info[3]
+		result[int32(info.Info[0])] += info.Info[3]
 	}
 
 	return result, nil
@@ -226,19 +264,20 @@ func getAllAccountsStorageUsage(ctx context.Context, ses *Session) (map[int32]ui
 	}
 
 	// step 2: handling these pulled data
-	return handleStorageUsageResponse(responses[0])
+	return handleStorageUsageResponse(ctx, ses, responses[0])
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
 	newVec := vector.NewVec(types.T_float64.ToType())
+	// size in megabytes
 	// round to six decimal places
-	vector.AppendFixed(newVec, math.Round(float64(size)/(1048576.0)*1e6)/1e6, false, mp)
+	vector.AppendFixed(newVec, math.Round(float64(size)/1048576.0*1e6)/1e6, false, mp)
 	ori.Vecs[idxOfSize].Free(mp)
 	ori.Vecs[idxOfSize] = newVec
 }
 
 // doShowAccountsInProgress is going to replace `doShowAccounts`.
-func doShowAccountsInProgress(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
+func doShowAccountsInProgress(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sa *tree.ShowAccounts) (err error) {
 	var sql string
 	var accountIds [][]int32
 	var allAccountInfo []*batch.Batch

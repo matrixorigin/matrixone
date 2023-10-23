@@ -107,7 +107,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
-	if db.Catalog, err = catalog.OpenCatalog(); err != nil {
+	if db.Catalog, err = catalog.OpenCatalog(db.Runtime); err != nil {
 		return
 	}
 	// Init and start txn manager

@@ -146,22 +146,28 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 
 // ExtractStorageUsageInfo returns the storage usage related info:
 // [ account_id, db_id, tbl_id, size_in_bytes]
-func (entry *BlockEntry) ExtractStorageUsageInfo() []uint64 {
-	ret := make([]uint64, 0)
+func (entry *BlockEntry) ExtractStorageUsageInfo(filter map[*objectio.ObjectNameShort]objectio.Extent) uint32 {
+	size := uint32(0)
 
-	ret[0] = uint64(entry.segment.table.db.GetTenantID())
-	ret[1] = entry.segment.table.db.ID
-	ret[2] = entry.segment.table.ID
+	for short, extent := range filter {
+		name := objectio.BuildObjectName(short.Segmentid(), short.Num())
+		sharedFS := entry.GetCatalog().taeRuntime.Fs.Service
 
-	if entry.GetMetaLoc() != nil {
-		ret[3] = uint64(entry.GetMetaLoc().Extent().Length())
-	} else if entry.blkData != nil {
-		ret[3] = uint64(entry.blkData.EstimateMemSize())
-	} else {
-		panic(fmt.Sprintf("----------- entry: %+v", entry))
+		objMeta, err := objectio.LoadObjectMetaByExtent(
+			context.Background(), &name, &extent, false, 0, sharedFS)
+		if err == nil {
+			cols := entry.segment.table.GetColDefs()
+			dataMeta := objMeta.MustDataMeta()
+
+			for idx := range cols {
+				if !cols[idx].IsHidden() {
+					size += dataMeta.MustGetColumn(cols[idx].SeqNum).Location().Length()
+				}
+			}
+		}
 	}
 
-	return ret
+	return size
 }
 
 func (entry *BlockEntry) BuildDeleteObjectName() objectio.ObjectName {
