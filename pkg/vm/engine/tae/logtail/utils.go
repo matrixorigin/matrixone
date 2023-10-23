@@ -2318,6 +2318,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			for _, name := range tblNode.BaseNode.Schema.Extra.DroppedAttrs {
 				tableColDelBat.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
 				tableColDelBat.GetVectorByName(catalog.AttrCommitTs).Append(tblNode.GetEnd(), false)
+				tableColDelBat.GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name)), false)
 			}
 			rowidVec := tableColInsBat.GetVectorByName(catalog.AttrRowID)
 			commitVec := tableColInsBat.GetVectorByName(catalog.AttrCommitTs)
