@@ -275,13 +275,6 @@ func (p *PartitionState) HandleLogtailEntry(
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
-	case api.Entry_SpecialDelete:
-		specialColumn := mustVectorFromProto(entry.Bat.Vecs[3])
-		for i := 0; i < specialColumn.Length(); i++ {
-			buf := specialColumn.GetBytesAt(i)
-			tuple, err := types.Unpack(buf)
-			logutil.Infof("specialBatch %v, err %v", tuple.String(), err)
-		}
 	default:
 		panic("unknown entry type")
 	}
