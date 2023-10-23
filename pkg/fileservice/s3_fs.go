@@ -249,13 +249,15 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	v2.FSWriteS3Counter.Add(float64(len(vector.Entries)))
+
 	ctx = addGetConnMetric(ctx)
 
 	var bytesWritten int
 	start := time.Now()
 	defer func() {
-		v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
-		v2.GetS3FSWriteBytesHistogram().Observe(float64(bytesWritten))
+		v2.S3WriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		v2.S3WriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
 	// check existence
@@ -366,8 +368,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	bytesCounter := new(atomic.Int64)
 	start := time.Now()
 	defer func() {
-		v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
-		v2.GetS3FSReadBytesHistogram().Observe(float64(bytesCounter.Load()))
+		v2.S3ReadIODurationHistogram.Observe(time.Since(start).Seconds())
+		v2.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 	}()
 
 	if len(vector.Entries) == 0 {
@@ -460,11 +462,13 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 	min := ptrTo(int64(math.MaxInt))
 	max := ptrTo(int64(0))
 	readToEnd := false
+	n := 0
 	for _, entry := range vector.Entries {
 		entry := entry
 		if entry.done {
 			continue
 		}
+		n++
 		if entry.Offset < *min {
 			min = &entry.Offset
 		}
@@ -479,6 +483,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 	if readToEnd {
 		max = nil
 	}
+
+	v2.FSReadS3Counter.Add(float64(n))
 
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
@@ -712,7 +718,7 @@ func addGetConnMetric(ctx context.Context) context.Context {
 		},
 
 		DNSDone: func(di httptrace.DNSDoneInfo) {
-			v2.S3DNSDurationHistogram.Observe(time.Since(dnsStart).Seconds())
+			v2.S3DNSResolveDurationHistogram.Observe(time.Since(dnsStart).Seconds())
 		},
 
 		ConnectStart: func(network, addr string) {
