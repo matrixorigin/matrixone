@@ -1034,6 +1034,7 @@ a    b    c    d
 1    ab    1980-12-17    800.00
 2    ac    1981-02-20    1600.00
 3    ad    1981-02-22    500.00
+drop table index02;
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,
 col2 varchar(20),

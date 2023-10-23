@@ -1717,10 +1717,10 @@ null    93024232    -32    324242132321
 234    32718    100    32894323237289
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
+cast02    col22361738278472874382    BIGINT    YES
+cast02    col4cdhewjruekhwjf    SMALLINT    YES
 cast02    col1new    INT UNSIGNED    YES
 cast02    col3vhejwh4i3uh4r    BIGINT UNSIGNED    YES
-cast02    col4cdhewjruekhwjf    SMALLINT    YES
-cast02    col22361738278472874382    BIGINT    YES
 drop table cast02;
 drop table if exists cast03;
 create table cast03 (col1 smallint unsigned, col2 float, col3 double, col4 decimal);

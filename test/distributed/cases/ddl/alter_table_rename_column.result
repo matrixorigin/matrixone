@@ -157,9 +157,10 @@ Unknown column 'col1' in 'rename06'
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename06' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 rename06    数据库系统    INT    YES
-drop table rename06;
 show columns from rename06;
-no such table test.rename06
+Field    Type    Null    Key    Default    Extra    Comment
+数据库系统    INT(32)    YES        null
+drop table rename06;
 alter table system.statement_info rename column role_id to role_idNew;
 internal error: do not have privilege to execute the statement
 alter table mo_catalog.mo_database rename column dat_type to newdat_type;
