@@ -14,30 +14,31 @@
 
 package plan
 
-type ShuffleTree struct {
-	Left    *ShuffleTree
-	Right   *ShuffleTree
+type ShuffleHeap struct {
+	Left    *ShuffleHeap
+	Right   *ShuffleHeap
 	Key     float64
 	Value   float64
 	Height  int
 	Reverse bool
 }
 
-type ShuffleRange struct {
-	Tree      *ShuffleTree
-	Result    []float64
-	Size      int
-	Overlap   int
-	IsRegular bool
-}
-
 type ShuffleList struct {
-	Next *ShuffleList
-	Tree *ShuffleTree
-	Size int
+	Next    *ShuffleList
+	Tree    *ShuffleHeap
+	Size    int
+	Value   float64
+	Overlap float64
 }
 
-func (t *ShuffleTree) Merge(s *ShuffleTree) *ShuffleTree {
+type ShuffleRange struct {
+	Tree    *ShuffleHeap
+	Result  []float64
+	Size    int
+	Overlap float64
+}
+
+func (t *ShuffleHeap) Merge(s *ShuffleHeap) *ShuffleHeap {
 	if t.Key > s.Key != t.Reverse {
 		if s.Right == nil {
 			s.Right = t
@@ -67,7 +68,7 @@ func (t *ShuffleTree) Merge(s *ShuffleTree) *ShuffleTree {
 	}
 }
 
-func (t *ShuffleTree) Pop() (*ShuffleTree, float64, float64) {
+func (t *ShuffleHeap) Pop() (*ShuffleHeap, float64, float64) {
 	if t.Left == nil {
 		return nil, t.Key, t.Value
 	}
@@ -77,7 +78,7 @@ func (t *ShuffleTree) Pop() (*ShuffleTree, float64, float64) {
 	return t.Left.Merge(t.Right), t.Key, t.Value
 }
 
-func NewShuffleFloat() *ShuffleRange {
+func NewShuffleRange() *ShuffleRange {
 	return &ShuffleRange{}
 }
 
@@ -86,13 +87,13 @@ func (s *ShuffleRange) Update(zmmin []float64, zmmax []float64) {
 	s.Size += len
 	for i := 0; i < len; i++ {
 		if s.Tree == nil {
-			s.Tree = &ShuffleTree{
+			s.Tree = &ShuffleHeap{
 				Height: 1,
 				Key:    zmmax[i],
 				Value:  zmmin[i],
 			}
 		} else {
-			s.Tree = s.Tree.Merge(&ShuffleTree{
+			s.Tree = s.Tree.Merge(&ShuffleHeap{
 				Height: 1,
 				Key:    zmmax[i],
 				Value:  zmmin[i],
@@ -107,25 +108,35 @@ func (s *ShuffleRange) Eval(k int) {
 	}
 	var Head *ShuffleList
 	var key, value float64
-	var overlap int
 	s.Result = make([]float64, k-1)
 	for s.Tree != nil {
 		s.Tree, key, value = s.Tree.Pop()
 		Head = &ShuffleList{
 			Next: Head,
-			Tree: &ShuffleTree{
+			Tree: &ShuffleHeap{
 				Height:  1,
 				Key:     key,
 				Value:   value,
 				Reverse: true,
 			},
-			Size: 1,
+			Size:    1,
+			Value:   value,
+			Overlap: 1,
 		}
 		for Head.Next != nil {
 			next := Head.Next
 			if Head.Tree.Value >= next.Tree.Key {
 				break
 			}
+			var delta float64
+			if next.Value >= Head.Value {
+				delta = next.Overlap
+			} else {
+				delta = (next.Tree.Key-Head.Value)/(next.Tree.Key-next.Value)*(next.Overlap) + (next.Tree.Key-Head.Value)/(Head.Tree.Key-Head.Value)*(Head.Overlap)
+				Head.Value = next.Value
+			}
+			s.Overlap += delta
+			Head.Overlap += next.Overlap - delta
 			Head.Tree = Head.Tree.Merge(next.Tree)
 			Head.Size += next.Size
 			Head.Next = next.Next
@@ -142,7 +153,7 @@ func (s *ShuffleRange) Eval(k int) {
 			Head = Head.Next
 			continue
 		}
-		var valuetree *ShuffleTree
+		var valuetree *ShuffleHeap
 		var speed float64
 		now := Head.Tree.Key
 		for last <= size {
@@ -151,7 +162,6 @@ func (s *ShuffleRange) Eval(k int) {
 				delta := speed * (now - key)
 				last -= delta
 				size -= delta
-				overlap++
 				for last < 0 {
 					s.Result[k] = key - (last/delta)*(now-key)
 					last += step
@@ -165,16 +175,33 @@ func (s *ShuffleRange) Eval(k int) {
 					break
 				}
 				now = key
+				if key == value {
+					last -= 1
+					size -= 1
+					for last < 0 {
+						s.Result[k] = key
+						last += step
+						k--
+						if k < 0 || last > size {
+							break
+						}
+
+					}
+					if k < 0 {
+						break
+					}
+					continue
+				}
 				speed += 1.0 / (key - value)
 				if valuetree == nil {
-					valuetree = &ShuffleTree{
+					valuetree = &ShuffleHeap{
 						Key:     value,
 						Value:   key,
 						Height:  1,
 						Reverse: true,
 					}
 				} else {
-					valuetree = valuetree.Merge(&ShuffleTree{
+					valuetree = valuetree.Merge(&ShuffleHeap{
 						Key:     value,
 						Value:   key,
 						Height:  1,
@@ -186,7 +213,6 @@ func (s *ShuffleRange) Eval(k int) {
 				delta := speed * (now - key)
 				last -= delta
 				size -= delta
-				overlap--
 				for last < 0 {
 					s.Result[k] = key - (last/delta)*(now-key)
 					last += step
@@ -209,5 +235,5 @@ func (s *ShuffleRange) Eval(k int) {
 		last -= size
 		Head = Head.Next
 	}
-	s.Overlap = overlap
+	s.Overlap /= float64(s.Size)
 }
