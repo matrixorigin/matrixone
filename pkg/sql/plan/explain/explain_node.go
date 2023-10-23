@@ -120,6 +120,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert"
 	case plan.Node_PRE_INSERT_UK:
 		pname = "PreInsert UniqueKey"
+	case plan.Node_PRE_INSERT_SK:
+		pname = "PreInsert SecondaryKey"
 	case plan.Node_PRE_DELETE:
 		pname = "PreDelete"
 	case plan.Node_ON_DUPLICATE_KEY:
