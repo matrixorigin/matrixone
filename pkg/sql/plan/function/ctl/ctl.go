@@ -29,6 +29,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var MoCtlTNCmdSender = func(ctx context.Context, proc *process.Process, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
+	txnOp := proc.TxnOperator
+	if txnOp == nil {
+		return nil, moerr.NewInternalError(ctx, "ctl: txn operator is nil")
+	}
+
+	debugRequests := make([]txn.TxnRequest, 0, len(requests))
+	for _, req := range requests {
+		tq := txn.NewTxnRequest(&req)
+		tq.Method = txn.TxnMethod_DEBUG
+		debugRequests = append(debugRequests, tq)
+	}
+	result, err := txnOp.Debug(ctx, debugRequests)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Release()
+
+	responses := make([]txn.CNOpResponse, 0, len(requests))
+	for _, resp := range result.Responses {
+		responses = append(responses, *resp.CNOpResponse)
+	}
+	return responses, nil
+}
+
 // mo_ctl functions are significantly different from oridinary functions and
 // deserve its own package.
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -67,30 +92,7 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		//    correctness of the transaction by forcing the timestamp of the transaction to
 		//    be modified, etc.
 		// TODO: add more ut tests for this.
-		func(ctx context.Context, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
-			txnOp := proc.TxnOperator
-			if txnOp == nil {
-				return nil, moerr.NewInternalError(ctx, "ctl: txn operator is nil")
-			}
-
-			debugRequests := make([]txn.TxnRequest, 0, len(requests))
-			for _, req := range requests {
-				tq := txn.NewTxnRequest(&req)
-				tq.Method = txn.TxnMethod_DEBUG
-				debugRequests = append(debugRequests, tq)
-			}
-			result, err := txnOp.Debug(ctx, debugRequests)
-			if err != nil {
-				return nil, err
-			}
-			defer result.Release()
-
-			responses := make([]txn.CNOpResponse, 0, len(requests))
-			for _, resp := range result.Responses {
-				responses = append(responses, *resp.CNOpResponse)
-			}
-			return responses, nil
-		})
+		MoCtlTNCmdSender)
 
 	if err != nil {
 		return err

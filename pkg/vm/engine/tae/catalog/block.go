@@ -144,32 +144,6 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 	return e
 }
 
-// ExtractStorageUsageInfo returns the storage usage related info:
-// [ account_id, db_id, tbl_id, size_in_bytes]
-func (entry *BlockEntry) ExtractStorageUsageInfo(filter map[*objectio.ObjectNameShort]objectio.Extent) uint32 {
-	size := uint32(0)
-
-	for short, extent := range filter {
-		name := objectio.BuildObjectName(short.Segmentid(), short.Num())
-		sharedFS := entry.GetCatalog().taeRuntime.Fs.Service
-
-		objMeta, err := objectio.LoadObjectMetaByExtent(
-			context.Background(), &name, &extent, false, 0, sharedFS)
-		if err == nil {
-			cols := entry.segment.table.GetColDefs()
-			dataMeta := objMeta.MustDataMeta()
-
-			for idx := range cols {
-				if !cols[idx].IsHidden() {
-					size += dataMeta.MustGetColumn(cols[idx].SeqNum).Location().Length()
-				}
-			}
-		}
-	}
-
-	return size
-}
-
 func (entry *BlockEntry) BuildDeleteObjectName() objectio.ObjectName {
 	entry.segment.Lock()
 	id := entry.segment.nextObjectIdx

@@ -23,12 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// getTNHandlerFunc used to handle dn's debug command handle func.
+// GetTNHandlerFunc used to handle dn's debug command handle func.
 // method: debug command type.
 // whichDN: used to decide which DNs to send the debug request to, nil returned means send all dns.
 // payload: used to get debug command request payload
 // repsonseUnmarshaler: used to unmarshal response
-func getTNHandlerFunc(method pb.CmdMethod,
+func GetTNHandlerFunc(method pb.CmdMethod,
 	whichTN func(parameter string) ([]uint64, error),
 	payload func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error),
 	repsonseUnmarshaler func([]byte) (interface{}, error)) handleFunc {
@@ -85,7 +85,7 @@ func getTNHandlerFunc(method pb.CmdMethod,
 
 		results := make([]interface{}, 0, len(requests))
 		if len(requests) > 0 {
-			responses, err := sender(proc.Ctx, requests)
+			responses, err := sender(proc.Ctx, proc, requests)
 			if err != nil {
 				return pb.CtlResult{}, err
 			}

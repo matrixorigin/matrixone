@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
@@ -1179,45 +1180,39 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
-var visitBlkEntryForStorageUsage = func(h *Handle, resp *db.StorageUsageResp, lastCkpEndTS types.TS) {
-	processor := new(catalog2.LoopProcessor)
-	processor.BlockFn = func(blkEntry *catalog2.BlockEntry) error {
-		// only collecting the blk it's last update happened behind the last checkpoint
-		if blkEntry.GetLatestCommittedNode().End.Greater(lastCkpEndTS) {
-			resp.BlockEntries = append(resp.BlockEntries, &db.BlockMetaInfo{
-				Info: blkEntry.ExtractStorageUsageInfo(),
-			})
-		}
-		return nil
-	}
-
-	h.db.Catalog.RecurLoop(processor)
-}
+//var visitBlkEntryForStorageUsage = func(h *Handle, resp *db.StorageUsageResp, lastCkpEndTS types.TS) {
+//	processor := new(catalog2.LoopProcessor)
+//	processor.SegmentFn = func(blkEntry *catalog2.SegmentEntry) error {
+//
+//		return nil
+//	}
+//
+//	h.db.Catalog.RecurLoop(processor)
+//}
 
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
 
-	end := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-
 	// get the newest checkpoint.
-	ckp := h.db.BGCheckpointRunner.MaxCheckpoint()
-	if ckp == nil {
-		ckp = h.db.BGCheckpointRunner.MaxGlobalCheckpoint()
+	var ckp *checkpoint.CheckpointEntry
+	allCkp := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	if len(allCkp) != 0 {
+		ckp = allCkp[len(allCkp)-1]
 	}
 
-	var lastCkpTS types.TS
-
-	if ckp != nil {
-		lastCkpTS = ckp.GetEnd()
+	if ckp != nil && len(ckp.GetLocation()) != 0 {
 		resp.CkpLocations = strings.Join(
 			[]string{ckp.GetLocation().String(), strconv.Itoa(int(ckp.GetVersion()))}, ";")
 	}
 
+	resp.Succeed = true
+
+	// TODO
 	// exist a gap!
 	// collecting block entries that have been not been checkpoint yet
-	if lastCkpTS.Less(end) {
-		visitBlkEntryForStorageUsage(h, resp, lastCkpTS)
-	}
+	//if lastCkpTS.Less(types.BuildTS(time.Now().UTC().UnixNano(), 0)) {
+	//	visitBlkEntryForStorageUsage(h, resp, lastCkpTS)
+	//}
 
 	return nil, nil
 }
