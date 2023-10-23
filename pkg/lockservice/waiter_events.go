@@ -33,19 +33,23 @@ var (
 )
 
 type lockContext struct {
-	ctx       context.Context
-	txn       *activeTxn
-	waitTxn   pb.WaitTxn
-	rows      [][]byte
-	opts      LockOptions
-	offset    int
-	idx       int
-	lockedTS  timestamp.Timestamp
-	result    pb.Result
-	cb        func(pb.Result, error)
-	lockFunc  func(*lockContext, bool)
-	w         *waiter
-	completed bool
+	ctx      context.Context
+	txn      *activeTxn
+	waitTxn  pb.WaitTxn
+	rows     [][]byte
+	opts     LockOptions
+	offset   int
+	idx      int
+	lockedTS timestamp.Timestamp
+	result   pb.Result
+	cb       func(pb.Result, error)
+	lockFunc func(*lockContext, bool)
+	w        *waiter
+
+	mu struct {
+		sync.RWMutex
+		completed bool
+	}
 }
 
 func (l *localLockTable) newLockContext(
@@ -68,7 +72,15 @@ func (l *localLockTable) newLockContext(
 
 func (c *lockContext) done(err error) {
 	c.cb(c.result, err)
-	c.completed = true
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mu.completed = true
+}
+
+func (c *lockContext) isDone() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mu.completed
 }
 
 func (c *lockContext) release() {
@@ -162,7 +174,7 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 			c.txn.Lock()
 			c.doLock()
 			c.txn.Unlock()
-			if c.completed {
+			if c.isDone() {
 				c.release()
 			}
 		case <-timer.C:

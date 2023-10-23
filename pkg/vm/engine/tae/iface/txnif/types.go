@@ -250,6 +250,7 @@ type TxnStore interface {
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 	GetContext() context.Context
+	SetContext(context.Context)
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 

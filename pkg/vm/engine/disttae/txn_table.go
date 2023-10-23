@@ -556,7 +556,9 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	start := time.Now()
-	defer v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
