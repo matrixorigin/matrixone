@@ -184,6 +184,7 @@ type txnOperator struct {
 	timestampWaiter TimestampWaiter
 	clock           clock.Clock
 	createAt        time.Time
+	commitAt        time.Time
 	commitEnter     atomic.Int64
 	commitExit      atomic.Int64
 	rollbackEnter   atomic.Int64
@@ -207,9 +208,9 @@ func newTxnOperator(
 	util.LogTxnCreated(tc.mu.txn)
 
 	if tc.option.user {
-		v2.GetUserTxnCounter().Inc()
+		v2.TxnUserCounter.Inc()
 	} else {
-		v2.GetInternalTxnCounter().Inc()
+		v2.TxnInternalCounter.Inc()
 	}
 	return tc
 }
@@ -444,9 +445,11 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
-	start := time.Now()
+	v2.TxnCNCommitCounter.Inc()
+
+	tc.commitAt = time.Now()
 	defer func() {
-		v2.TxnCommitDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnCNCommitDurationHistogram.Observe(time.Since(tc.commitAt).Seconds())
 	}()
 
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
@@ -472,6 +475,8 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
+	v2.TxnRollbackCounter.Inc()
+
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Rollback")
 	defer task.End()
 	tc.enterRollback()
@@ -949,12 +954,14 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
+	v2.TxnCNCommitResponseDurationHistogram.Observe(float64(time.Since(tc.commitAt).Seconds()))
+
 	// rc mode need to see the committed value, so wait logtail applied
 	if tc.mu.txn.IsRCIsolation() &&
 		tc.timestampWaiter != nil {
 		start := time.Now()
 		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
-		v2.LogTailWaitDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnCNCommitWaitLogtailDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
 			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
 				util.TxnField(tc.mu.txn),
