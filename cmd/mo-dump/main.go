@@ -481,6 +481,8 @@ func convertValue(v any, typ string) string {
 		// why empty string in column type?
 		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
 		return string(ret)
+	case "vecf32", "vecf64":
+		return string(ret)
 	default:
 		str := strings.Replace(string(ret), "\\", "\\\\", -1)
 		return "'" + strings.Replace(str, "'", "\\'", -1) + "'"
@@ -500,6 +502,8 @@ func convertValue2(v any, typ string) (sql.RawBytes, string) {
 		return ret, defaultFmt
 	case "json":
 		return ret, jsonFmt
+	case "vecf32", "vecf64":
+		return ret, defaultFmt
 	default:
 		//note: do not use the quoteFmt instead of the standard package csv,
 		//it is error-prone.
