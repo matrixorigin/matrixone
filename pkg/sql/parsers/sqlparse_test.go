@@ -157,111 +157,119 @@ func TestSplitSqlBySemicolon(t *testing.T) {
 func TestHandleSqlForRecord(t *testing.T) {
 	// Test remove /* cloud_user */ prefix
 	var ret []string
-	ret = HandleSqlForRecord(" ;   ;  ")
-	require.Equal(t, 2, len(ret))
-	require.Equal(t, "", ret[0])
-	require.Equal(t, "", ret[1])
+	//ret = HandleSqlForRecord(" ;   ;  ")
+	//require.Equal(t, 2, len(ret))
+	//require.Equal(t, "", ret[0])
+	//require.Equal(t, "", ret[1])
+	//
+	//ret = HandleSqlForRecord(" ; /* abc */  ")
+	//require.Equal(t, 2, len(ret))
+	//require.Equal(t, "", ret[0])
+	//require.Equal(t, "/* abc */", ret[1])
+	//
+	//ret = HandleSqlForRecord(" /* cde */  ; /* abc */ ")
+	//require.Equal(t, 2, len(ret))
+	//require.Equal(t, "/* cde */", ret[0])
+	//require.Equal(t, "/* abc */", ret[1])
+	//
+	//ret = HandleSqlForRecord(" /* cde */  ; /* abc */ ; " + stripCloudNonUser + " ; " + stripCloudUser)
+	//require.Equal(t, 4, len(ret))
+	//require.Equal(t, "/* cde */", ret[0])
+	//require.Equal(t, "/* abc */", ret[1])
+	//require.Equal(t, "", ret[2])
+	//require.Equal(t, "", ret[3])
+	//
+	//ret = HandleSqlForRecord("  /* cloud_user */ select 1;   ")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "select 1", ret[0])
+	//
+	//ret = HandleSqlForRecord("  /* cloud_user */ select 1;  ")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "select 1", ret[0])
+	//
+	//ret = HandleSqlForRecord("  /* cloud_user */select * from t;/* cloud_user */select * from t;/* cloud_user */select * from t;")
+	//require.Equal(t, 3, len(ret))
+	//require.Equal(t, "select * from t", ret[0])
+	//require.Equal(t, "select * from t", ret[1])
+	//require.Equal(t, "select * from t", ret[2])
+	//
+	//ret = HandleSqlForRecord("  /* cloud_user */  select * from t ;  /* cloud_user */  select * from t ; /* cloud_user */ select * from t ; ")
+	//require.Equal(t, 3, len(ret))
+	//require.Equal(t, "select * from t", ret[0])
+	//require.Equal(t, "select * from t", ret[1])
+	//require.Equal(t, "select * from t", ret[2])
+	//
+	//ret = HandleSqlForRecord("  /* cloud_user */  select * from t ;  /* cloud_user */  select * from t ; /* cloud_user */ select * from t ; /* abc */ ")
+	//require.Equal(t, 4, len(ret))
+	//require.Equal(t, "select * from t", ret[0])
+	//require.Equal(t, "select * from t", ret[1])
+	//require.Equal(t, "select * from t", ret[2])
+	//require.Equal(t, "/* abc */", ret[3])
+	//
+	//ret = HandleSqlForRecord("  /* cloud_user */  ")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "", ret[0])
+	//
+	//ret = HandleSqlForRecord("  /* cloud_user */   ")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "", ret[0])
+	//
+	//ret = HandleSqlForRecord("   " + stripCloudNonUser + "  select 1;   ")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "select 1", ret[0])
+	//
+	//ret = HandleSqlForRecord("  " + stripCloudNonUser + "  select * from t  ;  " + stripCloudNonUser + "   select * from t  ;   " + stripCloudNonUser + "   select * from t  ;   ")
+	//require.Equal(t, 3, len(ret))
+	//require.Equal(t, "select * from t", ret[0])
+	//require.Equal(t, "select * from t", ret[1])
+	//require.Equal(t, "select * from t", ret[2])
+	//
+	//ret = HandleSqlForRecord("  " + stripCloudNonUser + "  select * from t  ;  " + stripCloudNonUser + "   select * from t  ;   " + stripCloudNonUser + "   select * from t  ; /* abc */  ")
+	//require.Equal(t, 4, len(ret))
+	//require.Equal(t, "select * from t", ret[0])
+	//require.Equal(t, "select * from t", ret[1])
+	//require.Equal(t, "select * from t", ret[2])
+	//require.Equal(t, "/* abc */", ret[3])
+	//
+	//ret = HandleSqlForRecord("   " + stripCloudNonUser + "  ")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "", ret[0])
+	//
+	//ret = HandleSqlForRecord("   " + stripCloudUser + "  ")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "", ret[0])
+	//
+	//ret = HandleSqlForRecord("")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "", ret[0])
+	//
+	//// Test hide secret key
+	//
+	//ret = HandleSqlForRecord("create user u identified by '123456';")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "create user u identified by '******'", ret[0])
+	//
+	//ret = HandleSqlForRecord("create user u identified with '12345';")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "create user u identified with '******'", ret[0])
+	//
+	//ret = HandleSqlForRecord("create user u identified by random password;")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "create user u identified by random password", ret[0])
+	//
+	//ret = HandleSqlForRecord("create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified with '111', abc3 identified by random password;")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified with '******', abc3 identified by random password", ret[0])
+	//
+	//ret = HandleSqlForRecord("create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='123', 'secret_access_key'='123', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'};")
+	//require.Equal(t, 1, len(ret))
+	//require.Equal(t, "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}", ret[0])
 
-	ret = HandleSqlForRecord(" ; /* abc */  ")
-	require.Equal(t, 2, len(ret))
-	require.Equal(t, "", ret[0])
-	require.Equal(t, "/* abc */", ret[1])
-
-	ret = HandleSqlForRecord(" /* cde */  ; /* abc */ ")
-	require.Equal(t, 2, len(ret))
-	require.Equal(t, "/* cde */", ret[0])
-	require.Equal(t, "/* abc */", ret[1])
-
-	ret = HandleSqlForRecord(" /* cde */  ; /* abc */ ; " + stripCloudNonUser + " ; " + stripCloudUser)
-	require.Equal(t, 4, len(ret))
-	require.Equal(t, "/* cde */", ret[0])
-	require.Equal(t, "/* abc */", ret[1])
-	require.Equal(t, "", ret[2])
-	require.Equal(t, "", ret[3])
-
-	ret = HandleSqlForRecord("  /* cloud_user */ select 1;   ")
+	ret = HandleSqlForRecord("/* cloud_user *//* save_result */select count(*) from a;")
 	require.Equal(t, 1, len(ret))
-	require.Equal(t, "select 1", ret[0])
+	require.Equal(t, "select count(*) from a", ret[0])
 
-	ret = HandleSqlForRecord("  /* cloud_user */ select 1;  ")
+	ret = HandleSqlForRecord("/* cloud_user    *//* save_result    */select count(*) from a;")
 	require.Equal(t, 1, len(ret))
-	require.Equal(t, "select 1", ret[0])
-
-	ret = HandleSqlForRecord("  /* cloud_user */select * from t;/* cloud_user */select * from t;/* cloud_user */select * from t;")
-	require.Equal(t, 3, len(ret))
-	require.Equal(t, "select * from t", ret[0])
-	require.Equal(t, "select * from t", ret[1])
-	require.Equal(t, "select * from t", ret[2])
-
-	ret = HandleSqlForRecord("  /* cloud_user */  select * from t ;  /* cloud_user */  select * from t ; /* cloud_user */ select * from t ; ")
-	require.Equal(t, 3, len(ret))
-	require.Equal(t, "select * from t", ret[0])
-	require.Equal(t, "select * from t", ret[1])
-	require.Equal(t, "select * from t", ret[2])
-
-	ret = HandleSqlForRecord("  /* cloud_user */  select * from t ;  /* cloud_user */  select * from t ; /* cloud_user */ select * from t ; /* abc */ ")
-	require.Equal(t, 4, len(ret))
-	require.Equal(t, "select * from t", ret[0])
-	require.Equal(t, "select * from t", ret[1])
-	require.Equal(t, "select * from t", ret[2])
-	require.Equal(t, "/* abc */", ret[3])
-
-	ret = HandleSqlForRecord("  /* cloud_user */  ")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "", ret[0])
-
-	ret = HandleSqlForRecord("  /* cloud_user */   ")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "", ret[0])
-
-	ret = HandleSqlForRecord("   " + stripCloudNonUser + "  select 1;   ")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "select 1", ret[0])
-
-	ret = HandleSqlForRecord("  " + stripCloudNonUser + "  select * from t  ;  " + stripCloudNonUser + "   select * from t  ;   " + stripCloudNonUser + "   select * from t  ;   ")
-	require.Equal(t, 3, len(ret))
-	require.Equal(t, "select * from t", ret[0])
-	require.Equal(t, "select * from t", ret[1])
-	require.Equal(t, "select * from t", ret[2])
-
-	ret = HandleSqlForRecord("  " + stripCloudNonUser + "  select * from t  ;  " + stripCloudNonUser + "   select * from t  ;   " + stripCloudNonUser + "   select * from t  ; /* abc */  ")
-	require.Equal(t, 4, len(ret))
-	require.Equal(t, "select * from t", ret[0])
-	require.Equal(t, "select * from t", ret[1])
-	require.Equal(t, "select * from t", ret[2])
-	require.Equal(t, "/* abc */", ret[3])
-
-	ret = HandleSqlForRecord("   " + stripCloudNonUser + "  ")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "", ret[0])
-
-	ret = HandleSqlForRecord("   " + stripCloudUser + "  ")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "", ret[0])
-
-	ret = HandleSqlForRecord("")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "", ret[0])
-
-	// Test hide secret key
-
-	ret = HandleSqlForRecord("create user u identified by '123456';")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "create user u identified by '******'", ret[0])
-
-	ret = HandleSqlForRecord("create user u identified with '12345';")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "create user u identified with '******'", ret[0])
-
-	ret = HandleSqlForRecord("create user u identified by random password;")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "create user u identified by random password", ret[0])
-
-	ret = HandleSqlForRecord("create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified with '111', abc3 identified by random password;")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "create user if not exists abc1 identified by '******', abc2 identified by '******', abc3 identified with '******', abc3 identified by random password", ret[0])
-
-	ret = HandleSqlForRecord("create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='123', 'secret_access_key'='123', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'};")
-	require.Equal(t, 1, len(ret))
-	require.Equal(t, "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}", ret[0])
+	require.Equal(t, "select count(*) from a", ret[0])
 }

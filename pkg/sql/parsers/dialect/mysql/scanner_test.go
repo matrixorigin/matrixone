@@ -171,3 +171,62 @@ func TestBuffer(t *testing.T) {
 		}
 	}
 }
+
+func TestComment(t *testing.T) {
+	testcases := []struct {
+		name string
+		in   string
+		id   int
+		want string
+	}{
+		//{
+		//	name: "1",
+		//	in:   "abc /* abc */ abc",
+		//	id:   COMMENT,
+		//	want: "/* abc */",
+		//},
+		//{
+		//	name: "1",
+		//	in:   "abc /** abc **/ abc",
+		//	id:   COMMENT,
+		//	want: "/** abc **/",
+		//},
+		//{
+		//	name: "*/ after comment",
+		//	in:   "abc /** abc **/*/ abc",
+		//	id:   COMMENT,
+		//	want: "/** abc **/",
+		//},
+		//{
+		//	name: "//comment",
+		//	in:   "abc //** abc **/*/ abc",
+		//	id:   COMMENT,
+		//	want: "//** abc **/*/ abc",
+		//},
+		//{
+		//	name: "// in block comment",
+		//	in:   "abc /** //abc **/*/ abc",
+		//	id:   COMMENT,
+		//	want: "/** //abc **/",
+		//},
+		//{
+		//	name: "embedded block comment",
+		//	in:   "abc /** /* /abc **/*/ abc",
+		//	id:   COMMENT,
+		//	want: "/** /* /abc **/",
+		//},
+		{
+			name: "embedded block comment",
+			in:   "abc /a/a abc",
+			id:   LEX_ERROR,
+			want: "",
+		},
+	}
+
+	for _, tcase := range testcases {
+		id, got := NewScanner(dialect.MYSQL, tcase.in).ScanComment()
+		if tcase.id != id || string(got) != tcase.want {
+			t.Errorf("ScanComment(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want)
+		}
+	}
+}

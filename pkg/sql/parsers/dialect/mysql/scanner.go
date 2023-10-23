@@ -239,6 +239,30 @@ func (s *Scanner) Scan() (int, string) {
 	}
 }
 
+func (s *Scanner) ScanComment() (int, string) {
+	s.PrePos = s.Pos
+	s.skipBlank()
+	ch := s.cur()
+	for ch != '/' {
+		s.inc()
+		ch = s.cur()
+	}
+
+	s.inc()
+	switch s.cur() {
+	case '/':
+		s.inc()
+		return s.scanCommentTypeLine(2)
+	case '*':
+		s.inc()
+		return s.scanCommentTypeBlock()
+	default:
+		s.stepBackOneChar(ch)
+		return s.ScanComment()
+	}
+}
+
+
 func (s *Scanner) readVersion() bool {
 	if s.Pos < len(s.buf) {
 		if isDigit(s.cur()) {

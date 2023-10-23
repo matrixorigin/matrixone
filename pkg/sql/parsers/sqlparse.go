@@ -63,23 +63,44 @@ var HandleSqlForRecord = func(sql string) []string {
 		// can not be changed, otherwise, the following code will not work.
 		// It is case-sensitive and error-prone also.
 
-		// Remove /* cloud_user */ prefix
-		p0 := strings.Index(split[i], stripCloudUser)
-		if p0 >= 0 {
-			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudUser):len(split[i])]
+		//// Remove /* cloud_user */ prefix
+		//p0 := strings.Index(split[i], stripCloudUser)
+		//if p0 >= 0 {
+		//	split[i] = split[i][0:p0] + split[i][p0+len(stripCloudUser):len(split[i])]
+		//}
+		//
+		//// remove /* cloud_nonuser */ prefix
+		//p0 = strings.Index(split[i], stripCloudNonUser)
+		//if p0 >= 0 {
+		//	split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
+		//}
+		//
+		//// remove /* save_query */ prefix
+		//p0 = strings.Index(split[i], stripSaveQuery)
+		//if p0 >= 0 {
+		//	split[i] = split[i][0:p0] + split[i][p0+len(stripSaveQuery):len(split[i])]
+		//}
+		stripScanner := mysql.NewScanner(dialect.MYSQL, split[i])
+		commentIdx := []int{-1}
+		for stripScanner.Pos < len(split[i]) {
+			typ, comment := stripScanner.Scan()
+			if typ == mysql.COMMENT {
+				commentIdx = append(commentIdx, stripScanner.Pos-len(comment)-1, stripScanner.Pos-1)
+			}
 		}
+		commentIdx = append(commentIdx, len(split[i]))
 
-		// remove /* cloud_nonuser */ prefix
-		p0 = strings.Index(split[i], stripCloudNonUser)
-		if p0 >= 0 {
-			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
+		if len(commentIdx) > 2 {
+			var builder strings.Builder
+			for j := 0; j < len(commentIdx); j += 2 {
+				builder.WriteString(split[i][commentIdx[j]+1 : commentIdx[j+1]])
+				if j < len(commentIdx)-2 {
+					builder.WriteString("")
+				}
+			}
+			split[i] = builder.String()
 		}
-
-		// remove /* save_query */ prefix
-		p0 = strings.Index(split[i], stripSaveQuery)
-		if p0 >= 0 {
-			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
-		}
+		split[i] = strings.TrimSpace(split[i])
 
 		// Hide secret key for split[i],
 		// for example:
@@ -107,7 +128,7 @@ var HandleSqlForRecord = func(sql string) []string {
 						indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
 					}
 				}
-			} else if s == "access_key_id" || s == "secret_access_key" {
+			} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
 				typ, _ = scanner.Scan()
 				if typ == eq {
 					_, s = scanner.Scan()
