@@ -84,6 +84,9 @@ func (h *heapBuilder[T]) finish() []T {
 }
 
 func estimateMergeConsume(msegs []*catalog.SegmentEntry) (origSize, estSize int) {
+	if len(msegs) == 0 {
+		return
+	}
 	rows, merged := 0, 0
 	for _, m := range msegs {
 		rows += m.Stat.Rows
