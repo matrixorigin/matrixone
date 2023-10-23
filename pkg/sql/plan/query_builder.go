@@ -2845,6 +2845,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			schema = ctx.defaultDatabase
 		}
 
+		schema, err = databaseIsValid(schema, builder.compCtx)
+		if err != nil {
+			return 0, err
+		}
+
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
