@@ -169,47 +169,62 @@ const (
 	FlagProfileCpu
 )
 
+type MoCtledState struct {
+	Enable    bool
+	Threshold time.Duration
+}
+
 var MOCtledSpanEnableConfig struct {
 	sync.Mutex
 	NameToKind  map[string]SpanKind
-	KindToState map[SpanKind]bool
+	KindToState map[SpanKind]*MoCtledState
 }
 
 // InitMOCtledSpan registers all mo_ctl controlled span
 func InitMOCtledSpan() {
 	MOCtledSpanEnableConfig.NameToKind = make(map[string]SpanKind)
-	MOCtledSpanEnableConfig.KindToState = make(map[SpanKind]bool)
+	MOCtledSpanEnableConfig.KindToState = make(map[SpanKind]*MoCtledState)
 
+	// enable or disable the span with time threshold for remote file service operation
 	MOCtledSpanEnableConfig.NameToKind["s3"] = SpanKindRemoteFSVis
-	MOCtledSpanEnableConfig.KindToState[SpanKindRemoteFSVis] = false
+	MOCtledSpanEnableConfig.KindToState[SpanKindRemoteFSVis] = &MoCtledState{false, 0}
 
+	// enable or disable the span with time threshold for Local file service operation
 	MOCtledSpanEnableConfig.NameToKind["local"] = SpanKindLocalFSVis
-	MOCtledSpanEnableConfig.KindToState[SpanKindLocalFSVis] = false
+	MOCtledSpanEnableConfig.KindToState[SpanKindLocalFSVis] = &MoCtledState{false, 0}
 
+	// enable or disable the span with time threshold for sql statement operation
 	MOCtledSpanEnableConfig.NameToKind["statement"] = SpanKindStatement
-	MOCtledSpanEnableConfig.KindToState[SpanKindStatement] = false
+	MOCtledSpanEnableConfig.KindToState[SpanKindStatement] = &MoCtledState{false, 0}
+
+	// enable or disable the span with time threshold for recording some debug log when tn
+	// handles RPC operation, like handleCommit
+	MOCtledSpanEnableConfig.NameToKind["tnrpc"] = SpanKindTNRPCHandle
+	MOCtledSpanEnableConfig.KindToState[SpanKindTNRPCHandle] = &MoCtledState{false, 0}
 }
 
 // IsMOCtledSpan first checks if this kind exists in mo_ctl controlled spans,
 // if it is, return it's current state, or return not exist
-func IsMOCtledSpan(kind SpanKind) (exist bool, state bool) {
+func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold time.Duration) {
 	MOCtledSpanEnableConfig.Lock()
 	defer MOCtledSpanEnableConfig.Unlock()
 
-	if state, exist = MOCtledSpanEnableConfig.KindToState[kind]; exist {
-		return true, state
+	if state, exist := MOCtledSpanEnableConfig.KindToState[kind]; exist {
+		return true, state.Enable, state.Threshold
 	}
-	return false, false
+	return false, false, 0
 }
 
 // SetMoCtledSpanState first checks if this kind exists in mo_ctl controlled spans,
 // if it is, reset it's state to the specified and return succeed, or return not succeed
-func SetMoCtledSpanState(name string, state bool) (succeed bool) {
+func SetMoCtledSpanState(name string, enable bool, threshold int64) (succeed bool) {
 	MOCtledSpanEnableConfig.Lock()
 	defer MOCtledSpanEnableConfig.Unlock()
 
 	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
-		MOCtledSpanEnableConfig.KindToState[kind] = state
+		MOCtledSpanEnableConfig.KindToState[kind].Enable = enable
+		// convert threshold to ms in time.Duration format
+		MOCtledSpanEnableConfig.KindToState[kind].Threshold = time.Duration(threshold) * time.Millisecond
 		return true
 	}
 	return false
@@ -503,6 +518,11 @@ const (
 	// SpanKindLocalFSVis is a SpanKind for a Span that needs to collect info of
 	// local object operation
 	SpanKindLocalFSVis SpanKind = 5
+
+	// SpanKindTNRPCHandle is a SpanKind for TN service to control
+	// the enable or disable of debug logs recording when it handles the RPC requests, like HandleCommit.
+	// not for trace or span for now
+	SpanKindTNRPCHandle SpanKind = 6
 )
 
 func (k SpanKind) String() string {
@@ -519,6 +539,8 @@ func (k SpanKind) String() string {
 		return "remoteFSOperation"
 	case SpanKindLocalFSVis:
 		return "localFSOperation"
+	case SpanKindTNRPCHandle:
+		return "tnRPCHandle"
 	default:
 		return "unknown"
 	}
