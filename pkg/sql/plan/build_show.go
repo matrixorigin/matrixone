@@ -215,13 +215,19 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 				indexStr = "KEY "
 			}
 			indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
-			for num, part := range indexdef.Parts {
-				if num == len(indexdef.Parts)-1 {
-					indexStr += fmt.Sprintf("`%s`", formatStr(part))
-				} else {
-					indexStr += fmt.Sprintf("`%s`,", formatStr(part))
+			i := 0
+			for _, part := range indexdef.Parts {
+				if catalog.IsAlias(part) {
+					continue
 				}
+				if i > 0 {
+					indexStr += ","
+				}
+
+				indexStr += fmt.Sprintf("`%s`", formatStr(part))
+				i++
 			}
+
 			indexStr += ")"
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
@@ -911,8 +917,28 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		}()
 	}
 
-	sql := "select `tcl`.`att_relname` as `Table`, if(`idx`.`type` = 'MULTIPLE', 1, 0) as `Non_unique`, `idx`.`name` as `Key_name`, `idx`.`ordinal_position` as `Seq_in_index`, `idx`.`column_name` as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, '' as 'Index_type', '' as `Comment`, `idx`.`comment` as `Index_comment`, if(`idx`.`is_visible` = 1, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` from `%s`.`mo_indexes` `idx` left join `%s`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`) where `tcl`.`att_database` = '%s' AND `tcl`.`att_relname` = '%s';"
-	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
+	sql := "select " +
+		"`tcl`.`att_relname` as `Table`, " +
+		"if(`idx`.`type` = 'MULTIPLE', 1, 0) as `Non_unique`, " +
+		"`idx`.`name` as `Key_name`, " +
+		"`idx`.`ordinal_position` as `Seq_in_index`, " +
+		"`idx`.`column_name` as `Column_name`, " +
+		"'A' as `Collation`, 0 as `Cardinality`, " +
+		"'NULL' as `Sub_part`, " +
+		"'NULL' as `Packed`, " +
+		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
+		"'' as 'Index_type', " +
+		"'' as `Comment`, " +
+		"`idx`.`comment` as `Index_comment`, " +
+		"if(`idx`.`is_visible` = 1, 'YES', 'NO') as `Visible`, " +
+		"'NULL' as `Expression` " +
+		"from `%s`.`mo_indexes` `idx` left join `%s`.`mo_columns` `tcl` " +
+		"on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`) " +
+		"where `tcl`.`att_database` = '%s' AND " +
+		"`tcl`.`att_relname` = '%s' AND " +
+		"`idx`.`column_name` NOT LIKE '%s' " +
+		";"
+	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, showIndexSql, stmt.Where, ddlType)

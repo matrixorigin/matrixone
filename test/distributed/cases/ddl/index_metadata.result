@@ -21,7 +21,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't1' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't1' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 deptno    UNIQUE    deptno    1    0        t1    deptno    1    null
 select
@@ -62,7 +62,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't2' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't2' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t2    empno    1    null
 select
@@ -103,7 +103,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't3' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't3' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 empno    UNIQUE    empno    1    0        t3    empno    1    null
 empno    UNIQUE    empno    1    0        t3    ename    2    null
@@ -146,7 +146,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't4' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't4' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 empno    MULTIPLE    empno    1    0        t4    empno    1    null
 empno    MULTIPLE    empno    1    0        t4    ename    2    null
@@ -191,7 +191,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't5' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't5' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t5    empno    1    null
 PRIMARY    PRIMARY    PRIMARY    1    0        t5    ename    2    null
@@ -233,7 +233,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't6' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't6' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 select
 table_schema,
@@ -273,7 +273,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't7' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't7' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 col1    UNIQUE    col1    1    0        t7    col1    1    null
 col1    UNIQUE    col1    1    0        t7    col2    2    null
@@ -320,7 +320,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't8' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't8' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 empno    UNIQUE    empno    1    0        t8    empno    1    null
 empno    UNIQUE    empno    1    0        t8    ename    2    null
@@ -359,7 +359,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't9' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't9' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t9    id    1    null
 create unique index idx on t9(name);
@@ -376,7 +376,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't9';
+where  `tbl`.`relname` = 't9' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t9    id    1    null
 idx    UNIQUE    idx    1    0        t9    name    1    null
@@ -421,7 +421,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t10    col1    1    null
 create unique index idx on t10(col2) comment 'create varchar index';
@@ -438,7 +438,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t10    col1    1    null
 idx    UNIQUE    idx    1    0    create varchar index    t10    col2    1    null
@@ -482,7 +482,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 create index x11 ON t11(a) comment 'xxxxxxx';
 create index x12 ON t11(b, c) comment 'yyyyyyyyy';
@@ -499,7 +499,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 x11    MULTIPLE    x11    1    0    xxxxxxx    t11    a    1    null
 x12    MULTIPLE    x12    1    0    yyyyyyyyy    t11    b    1    null
@@ -534,7 +534,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 drop table t11;
 select
@@ -565,7 +565,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t12    a    1    null
 idx_1    MULTIPLE    idx_1    1    0    xxxxxxx    t12    a    1    null
@@ -600,7 +600,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t12    a    1    null
 idx_1    MULTIPLE    idx_1    1    0    xxxxxxx    t12    a    1    null
@@ -634,7 +634,7 @@ select
 `idx`.`options`
 from
 `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 name    type    name    is_visible    hidden    comment    relname    column_name    ordinal_position    options
 PRIMARY    PRIMARY    PRIMARY    1    0        t12    a    1    null
 select
