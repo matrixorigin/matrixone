@@ -785,7 +785,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 }
 
 func (m *MockCompilerContext) DatabaseExists(name string) bool {
-	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo"
+	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo" || strings.ToLower(name) == "mo_catalog"
 }
 
 func (m *MockCompilerContext) GetDatabaseId(dbName string) (uint64, error) {

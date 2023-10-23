@@ -359,7 +359,7 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
 	defer func() {
-		v2.SQlRunDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	var span trace.Span
@@ -383,7 +383,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 
-	v2.TxnStatementCounter.Inc()
+	v2.TxnStatementTotalCounter.Inc()
 	if err = c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
