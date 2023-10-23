@@ -82,23 +82,20 @@ func NewShuffleRange() *ShuffleRange {
 	return &ShuffleRange{}
 }
 
-func (s *ShuffleRange) Update(zmmin []float64, zmmax []float64) {
-	len := len(zmmin)
-	s.Size += len
-	for i := 0; i < len; i++ {
-		if s.Tree == nil {
-			s.Tree = &ShuffleHeap{
-				Height: 1,
-				Key:    zmmax[i],
-				Value:  zmmin[i],
-			}
-		} else {
-			s.Tree = s.Tree.Merge(&ShuffleHeap{
-				Height: 1,
-				Key:    zmmax[i],
-				Value:  zmmin[i],
-			})
+func (s *ShuffleRange) Update(zmmin float64, zmmax float64) {
+	s.Size++
+	if s.Tree == nil {
+		s.Tree = &ShuffleHeap{
+			Height: 1,
+			Key:    zmmax,
+			Value:  zmmin,
 		}
+	} else {
+		s.Tree = s.Tree.Merge(&ShuffleHeap{
+			Height: 1,
+			Key:    zmmax,
+			Value:  zmmin,
+		})
 	}
 }
 

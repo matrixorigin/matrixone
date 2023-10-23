@@ -175,11 +175,14 @@ func TestShuffleRange(t *testing.T) {
 		testcase[2].max = append(testcase[2].max, testcase[2].min[i]+10000)
 	}
 
-	len := len(testcase)
+	leng := len(testcase)
 
-	for i := 0; i < len; i++ {
+	for i := 0; i < leng; i++ {
 		shufflerange := NewShuffleRange()
-		shufflerange.Update(testcase[i].min, testcase[i].max)
+		for j := 0; j < len(testcase[i].min); j++ {
+			shufflerange.Update(testcase[i].min[j], testcase[i].max[j])
+		}
+
 		shufflerange.Eval(testcase[i].bucket)
 		var k float64
 		if testcase[i].expectoverlap >= 0.1 {
