@@ -50,6 +50,8 @@ const (
 	SnapshotAttr_BlockMaxRow     = "block_max_row"
 	SnapshotAttr_SegmentMaxBlock = "segment_max_block"
 	SnapshotAttr_SchemaExtra     = "schema_extra"
+	AccountIDDbNameTblName       = "account_id_db_name_tbl_name"
+	AccountIDDbName              = "account_id_db_name"
 )
 
 type DataFactory interface {

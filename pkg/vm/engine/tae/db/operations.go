@@ -290,8 +290,9 @@ func (m *CatalogResp) UnmarshalBinary(data []byte) error {
 }
 
 type TraceSpan struct {
-	Cmd   string
-	Spans string
+	Cmd       string
+	Spans     string
+	Threshold int64
 }
 
 func (t *TraceSpan) MarshalBinary() ([]byte, error) {
