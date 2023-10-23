@@ -425,7 +425,7 @@ loop:
 				if _, has := c.buffers[i.GetName()]; !has {
 					c.logger.Debug("doCollect: init buffer done.", zap.Int("idx", idx))
 					if impl, has := c.pipeImplHolder.Get(i.GetName()); !has {
-						panic(moerr.NewInternalError(ctx, "unknown item type: %s", i.GetName()))
+						c.logger.Panic("unknown item type", zap.String("item", i.GetName()))
 					} else {
 						buf = newBufferHolder(ctx, i, impl, awakeBufferFactory(c), c)
 						c.buffers[i.GetName()] = buf
