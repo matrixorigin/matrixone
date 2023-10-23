@@ -527,14 +527,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		getLogger().Info("createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
-	}
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
@@ -640,14 +632,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
-	}
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		getLogger().Info("createTable ok",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
 	}
 
 	partitionTables := qry.GetPartitionTables()
