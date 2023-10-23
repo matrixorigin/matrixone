@@ -93,7 +93,7 @@ show create table test_12;
 Table    Create Table
 test_12    CREATE TABLE `test_12` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `id_01` (`col2`)\n)
 show create table test_12;
-no such table .test_12
+not connect to a database
 rollback ;
 show create table test_12;
 no such table atomicity.test_12
@@ -156,7 +156,7 @@ drop database s_db_1;
 use s_db_1;
 invalid database s_db_1
 select * from test_13;
-SQL parser error: table "test_13" does not exist
+not connect to a database
 create database s_db_1;
 start transaction ;
 use s_db_1;
