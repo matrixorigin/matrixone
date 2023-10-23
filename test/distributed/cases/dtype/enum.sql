@@ -42,9 +42,7 @@ select * from enum01;
 update enum01 set col1 ='blue' where col1 = 'green';
 delete from enum01 where col1 = 'blue';
 show create table enum01;
--- @bvt:issue#11406
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 select * from enum01;
 
 
@@ -56,9 +54,7 @@ insert into enum02 values (null);
 insert into enum02 values ('');
 select * from enum02;
 show columns from enum03;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table enum02;
 
 
@@ -70,9 +66,7 @@ insert into enum03 values (null);
 select * from enum03;
 show create table enum03;
 show columns from enum03;
--- @bvt:issue#11406
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table enum03;
 
 
@@ -135,9 +129,7 @@ select * from pri02;
 alter table pri02 add primary key (col2);
 show create table pri02;
 show columns from pri02;
--- @bvt:issue#11406
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table pri02;
 
 
@@ -150,9 +142,7 @@ select * from pri03;
 alter table pri03 add primary key (col2);
 show create table pri03;
 show columns from pri03;
--- @bvt:issue#11406
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table pri03;
 
 
