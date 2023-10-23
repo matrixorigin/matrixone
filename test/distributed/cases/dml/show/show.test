@@ -290,7 +290,7 @@ drop database test;
 drop database if exists test;
 create database test;
 use test;
--- @bvt:issue#11406
+-- @bvt:issue#12224
 SHOW CREATE TABLE information_schema.columns;
 -- @bvt:issue
 drop database test;
