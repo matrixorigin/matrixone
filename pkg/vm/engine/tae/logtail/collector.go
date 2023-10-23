@@ -373,7 +373,7 @@ func (d *dirtyCollector) tryCompactTree(
 		}
 
 		tbl.Stats.RLock()
-		if tbl.Stats.FlushTableTailEnabled && tbl.Stats.LastFlush.GreaterEq(to) {
+		if tbl.Stats.LastFlush.GreaterEq(to) {
 			tree.Shrink(id)
 			tbl.Stats.RUnlock()
 			continue
