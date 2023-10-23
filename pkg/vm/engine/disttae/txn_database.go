@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -130,10 +129,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		//rel.Lock()
 		//defer rel.Unlock()
 		//rel.proc = p
-		// TODO: debug for #11917
-		if strings.Contains(name, "sbtest") {
-			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in cache", name, defines.GetAccountId(ctx), db.databaseId)
-		}
 		rel.proc.Store(p)
 		return rel, nil
 	}
@@ -141,9 +136,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		//v.(*txnTable).proc = p
 		// TODO: debug for #11917
-		if strings.Contains(name, "sbtest") {
-			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in create map", name, defines.GetAccountId(ctx), db.databaseId)
-		}
 		v.(*txnTable).proc.Store(p)
 		return v.(*txnTable), nil
 	}
@@ -172,10 +164,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		Ts:         db.txn.op.SnapshotTS(),
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
-		// TODO: debug for #11917
-		if strings.Contains(name, "sbtest") {
-			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) does not exist", name, defines.GetAccountId(ctx), db.databaseId)
-		}
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	tbl := &txnTable{
@@ -201,10 +189,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		lastTS: txn.op.SnapshotTS(),
 	}
 	tbl.proc.Store(p)
-	// TODO: debug for #11917
-	if strings.Contains(name, "sbtest") {
-		logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in logtail", name, defines.GetAccountId(ctx), db.databaseId)
-	}
 	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
