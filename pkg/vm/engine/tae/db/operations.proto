@@ -85,4 +85,5 @@ message TraceSpan {
     option (gogoproto.typedecl) = false;
     string cmd                  = 1;
     string spans       = 2;
+    int64 threshold = 3;
 }
