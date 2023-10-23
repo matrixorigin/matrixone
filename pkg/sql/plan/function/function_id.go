@@ -149,6 +149,8 @@ const (
 	LN       // LN
 	NOT_IN   // NOT_IN
 	LOG      // LOG
+	LOG2     // LOG2
+	LG       // LG
 	LOWER    // LOWER
 	LPAD     // LPAD
 	LTRIM    // LTRIM
@@ -471,6 +473,8 @@ var functionIdRegister = map[string]int32{
 	"char_length":                    LENGTH_UTF8,
 	"ln":                             LN,
 	"log":                            LOG,
+	"log2":                           LOG2,
+	"lg":                             LG,
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
 	"not_in_rows":                    NOT_IN_ROWS,

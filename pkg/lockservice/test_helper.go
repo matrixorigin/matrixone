@@ -110,6 +110,10 @@ func waitLocalWaiters(
 		defer lt.mu.Unlock()
 
 		lock, ok := lt.mu.store.Get(key)
+		if waitersCount == 0 && !ok {
+			return true
+		}
+
 		if !ok {
 			panic("missing lock")
 		}
@@ -128,4 +132,32 @@ func waitLocalWaiters(
 		}
 		time.Sleep(time.Millisecond * 10)
 	}
+}
+
+func checkLocalWaitersStatus(
+	lt *localLockTable,
+	key []byte,
+	status []waiterStatus) bool {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	lock, ok := lt.mu.store.Get(key)
+	if !ok {
+		panic("missing lock")
+	}
+
+	if lock.waiters.size() != len(status) {
+		return false
+	}
+
+	i := 0
+	statusCheckOK := true
+	lock.waiters.iter(func(w *waiter) bool {
+		if statusCheckOK {
+			statusCheckOK = w.getStatus() == status[i]
+		}
+		i++
+		return true
+	})
+	return statusCheckOK
 }

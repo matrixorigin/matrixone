@@ -242,7 +242,9 @@ func (tc *txnOperator) setWaitActive(v bool) {
 
 func (tc *txnOperator) waitActive(ctx context.Context) error {
 	start := time.Now()
-	defer v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	if tc.waiter == nil {
 		return nil
@@ -294,6 +296,18 @@ func (tc *txnOperator) TxnRef() *txn.TxnMeta {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return &tc.mu.txn
+}
+
+func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.txn.SnapshotTS
+}
+
+func (tc *txnOperator) Status() txn.TxnStatus {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.txn.Status
 }
 
 func (tc *txnOperator) Snapshot() ([]byte, error) {
@@ -427,7 +441,9 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
 	start := time.Now()
-	v2.TxnCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
 	defer task.End()

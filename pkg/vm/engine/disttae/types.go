@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -120,7 +119,7 @@ type Transaction struct {
 	// blockId uint64
 
 	// local timestamp for workspace operations
-	meta     *txn.TxnMeta
+	//meta     *txn.TxnMeta
 	op       client.TxnOperator
 	sqlCount atomic.Uint64
 
@@ -382,7 +381,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		txn.syncCommittedTSCount = newTimes
 		needResetSnapshot = true
 	}
-	if !commit && txn.meta.IsRCIsolation() &&
+	if !commit && txn.op.Txn().IsRCIsolation() &&
 		(txn.GetSQLCount() > 1 || needResetSnapshot) {
 		if err := txn.op.UpdateSnapshot(
 			ctx,

@@ -48,7 +48,7 @@ type container struct {
 	flatFn           []func(v, w *vector.Vector) error // method to flat const vector
 }
 
-func (arg *Argument) Free(proc *process.Process, _ bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		for i := range ctr.sortExprExecutor {

@@ -68,7 +68,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
 		}
-		p.Cleanup(s.Proc, err != nil)
+		p.Cleanup(s.Proc, err != nil, err)
 	}()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -141,11 +141,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 		select {
 		case <-s.Proc.Ctx.Done():
 		default:
-			p.Cleanup(s.Proc, true)
+			p.Cleanup(s.Proc, true, err)
 			return err
 		}
 	}
-	p.Cleanup(s.Proc, false)
+	p.Cleanup(s.Proc, false, nil)
 
 	// receive and check error from pre-scopes and remote scopes.
 	preScopeCount := len(s.PreScopes)

@@ -126,7 +126,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		}
 	}
 
-	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	partition, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return 0, err
@@ -154,7 +154,7 @@ func (tbl *txnTable) ForeachBlock(
 	state *logtailreplay.PartitionState,
 	fn func(block logtailreplay.BlockEntry) error,
 ) (err error) {
-	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	iter, err := state.NewBlocksIter(ts)
 	if err != nil {
 		return err
@@ -239,7 +239,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 
 // Get all neede column exclude the hidden size
 func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
-	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return 0, err
@@ -450,7 +450,7 @@ func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types
 	dirtyBlks := make([]types.Blockid, 0)
 	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
 		if !state.BlockVisible(
-			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
+			blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
 			continue
 		}
 		dirtyBlks = append(dirtyBlks, blk)
@@ -498,7 +498,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
 		//if blk is in partitionState.blks, it means that blk is persisted.
 		if state.BlockVisible(
-			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
+			blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
 			continue
 		}
 		for _, bat := range bats {
@@ -556,7 +556,9 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	start := time.Now()
-	defer v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
@@ -639,19 +641,19 @@ func (tbl *txnTable) rangesOnePart(
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
-	if tbl.db.txn.meta.IsRCIsolation() {
+	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
 		if err != nil {
 			return err
 		}
 		deleteBlks, createBlks := state.GetChangedBlocksBetween(types.TimestampToTS(tbl.lastTS),
-			types.TimestampToTS(tbl.db.txn.meta.SnapshotTS))
+			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 		if len(deleteBlks) > 0 {
 			if err := tbl.updateDeleteInfo(deleteBlks, createBlks, committedblocks); err != nil {
 				return err
 			}
 		}
-		tbl.lastTS = tbl.db.txn.meta.SnapshotTS
+		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
 	}
 
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
@@ -1429,7 +1431,7 @@ func (tbl *txnTable) newBlockReader(
 	blkInfos []*catalog.BlockInfo,
 	proc *process.Process) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	ts := tbl.db.txn.meta.SnapshotTS
+	ts := tbl.db.txn.op.SnapshotTS()
 	tableDef := tbl.getTableDef()
 
 	if len(blkInfos) < num || len(blkInfos) == 1 {
@@ -1481,7 +1483,7 @@ func (tbl *txnTable) newReader(
 	dirtyBlks []*catalog.BlockInfo,
 ) ([]engine.Reader, error) {
 	txn := tbl.db.txn
-	ts := txn.meta.SnapshotTS
+	ts := txn.op.SnapshotTS()
 	fs := txn.engine.fs
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -1667,7 +1669,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		tableId = tbl.oldTableId
 	}
 
-	if err = tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+	if err = tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.op.SnapshotTS()); err != nil {
 		return
 	}
 	if _, err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
@@ -1679,11 +1681,6 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
-	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return true, nil
-	}
-
 	part, err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
 	if err != nil {
 		return false, err
@@ -1802,7 +1799,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		}
 		// rowid + pk
 		bat, err := blockio.BlockRead(
-			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes, tbl.db.txn.meta.SnapshotTS,
+			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes, tbl.db.txn.op.SnapshotTS(),
 			nil, nil, nil,
 			tbl.db.txn.engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(),
 		)
