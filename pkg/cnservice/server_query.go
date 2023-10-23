@@ -80,7 +80,8 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 
 func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.TraceSpanResponse.Resp = ctl.SelfProcess(req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans)
+	resp.TraceSpanResponse.Resp = ctl.SelfProcess(
+		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
 	return nil
 }
 
