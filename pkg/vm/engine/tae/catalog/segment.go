@@ -50,31 +50,120 @@ type SegmentEntry struct {
 type SegStat struct {
 	// min max etc. later
 	sync.RWMutex
-	Loaded         bool
-	OriginSize     int
-	CompSize       int
-	SortKeyZonemap index.ZM
-	Rows           int
-	RemainingRows  int
+	loaded         bool
+	originSize     int
+	compSize       int
+	sortKeyZonemap index.ZM
+	rows           int
+	remainingRows  int
+}
+
+func (s *SegStat) loadObjectInfo(name string, blk *BlockEntry) error {
+	schema := blk.GetSchema()
+	loc := blk.GetMetaLoc()
+
+	if len(loc) == 0 {
+		return nil
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	if s.loaded {
+		return nil
+	}
+
+	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, blk.blkData.GetFs().Service)
+	if err != nil {
+		return err
+	}
+
+	meta := objMeta.MustDataMeta()
+
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		colmata := meta.MustGetColumn(uint16(col.SeqNum))
+		s.originSize += int(colmata.Location().OriginSize())
+		s.compSize += int(colmata.Location().Length())
+	}
+
+	if schema.HasSortKey() {
+		col := schema.GetSingleSortKey()
+		s.sortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
+	}
+
+	s.loaded = true
+
+	// after loading object info, original size is still 0, we have to estimate it by experience
+	if name == motrace.RawLogTbl && s.originSize == 0 && s.rows != 0 {
+		factor := 1 + s.rows/1600
+		s.originSize = (1 << 20) * factor
+	}
+
+	return nil
+}
+
+func (s *SegStat) GetLoaded() bool {
+	s.RLock()
+	defer s.RUnlock()
+	return s.loaded
+}
+
+func (s *SegStat) GetSortKeyZonemap() index.ZM {
+	s.RLock()
+	defer s.RUnlock()
+	return s.sortKeyZonemap.Clone()
+}
+
+func (s *SegStat) SetRows(rows int) {
+	s.RLock()
+	defer s.RUnlock()
+	s.rows = rows
+}
+
+func (s *SegStat) SetRemainingRows(rows int) {
+	s.RLock()
+	defer s.RUnlock()
+	s.remainingRows = rows
+}
+
+func (s *SegStat) GetRemainingRows() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.remainingRows
+}
+
+func (s *SegStat) GetRows() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.rows
+}
+
+func (s *SegStat) GetOriginSize() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.originSize
 }
 
 func (s *SegStat) GetCompSize() int {
 	s.RLock()
 	defer s.RUnlock()
-	return s.CompSize
+	return s.compSize
 }
 
 func (s *SegStat) String(composeSortKey bool) string {
 	zonemapStr := "nil"
-	if s.SortKeyZonemap != nil {
+	if s.sortKeyZonemap != nil {
 		if composeSortKey {
-			zonemapStr = s.SortKeyZonemap.StringForCompose()
+			zonemapStr = s.sortKeyZonemap.StringForCompose()
 		} else {
-			zonemapStr = s.SortKeyZonemap.String()
+			zonemapStr = s.sortKeyZonemap.String()
 		}
 	}
 	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
-		s.Loaded, common.HumanReadableBytes(s.OriginSize), s.Rows, s.RemainingRows, zonemapStr,
+		s.loaded, common.HumanReadableBytes(s.originSize), s.rows, s.remainingRows, zonemapStr,
 	)
 }
 
@@ -165,10 +254,7 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 
 // LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
 func (entry *SegmentEntry) LoadObjectInfo() error {
-	entry.Stat.Lock()
-	defer entry.Stat.Unlock()
-
-	if entry.Stat.Loaded {
+	if entry.Stat.GetLoaded() {
 		return nil
 	}
 	// special case for raw log table.
@@ -182,29 +268,8 @@ func (entry *SegmentEntry) LoadObjectInfo() error {
 	if blk == nil {
 		return nil
 	}
-	schema := blk.GetSchema()
-	loc := blk.GetMetaLoc()
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, blk.blkData.GetFs().Service)
-	if err != nil {
-		return err
-	}
 
-	meta := objMeta.MustDataMeta()
-
-	for _, col := range schema.ColDefs {
-		if col.IsPhyAddr() {
-			continue
-		}
-		colmata := meta.MustGetColumn(uint16(col.SeqNum))
-		entry.Stat.OriginSize += int(colmata.Location().OriginSize())
-		entry.Stat.CompSize += int(colmata.Location().Length())
-	}
-	if schema.HasSortKey() {
-		col := schema.GetSingleSortKey()
-		entry.Stat.SortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
-	}
-	entry.Stat.Loaded = true
-	return nil
+	return entry.Stat.loadObjectInfo(name, blk)
 }
 
 func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {

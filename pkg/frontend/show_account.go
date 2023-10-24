@@ -21,13 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	ctl2 "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -148,7 +146,7 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
-func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *Session) (resp interface{}, err error) {
+func requestStorageUsage(ctx context.Context, ses *Session) (resp interface{}, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
 	responseUnmarshaler := func(payload []byte) (interface{}, error) {
@@ -159,6 +157,9 @@ func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *S
 		return usage, nil
 	}
 
+	// two source:
+	// 	1. sql client
+	//	2. internal
 	if ses.proc.TxnOperator == nil {
 		defer func() { // without this: the transaction xxx has been committed or aborted
 			ses.proc.TxnOperator = nil
@@ -177,7 +178,7 @@ func requestStorageUsage(ctx context.Context, requests []txn.CNOpRequest, ses *S
 	if err != nil {
 		return nil, err
 	}
-	//usages := result.Data.([]*db.StorageUsageResp)
+
 	return result.Data.([]interface{})[0], nil
 }
 
@@ -227,7 +228,7 @@ func handleStorageUsageResponse(ctx context.Context, ses *Session, usage *db.Sto
 // by handling checkpoint
 func getAllAccountsStorageUsage(ctx context.Context, ses *Session) (map[int32]uint64, error) {
 	// step 1: pulling the newest ckp locations and block entries from tn
-	response, err := requestStorageUsage(ctx, nil, ses)
+	response, err := requestStorageUsage(ctx, ses)
 	if err != nil {
 		return nil, err
 	}
@@ -237,16 +238,11 @@ func getAllAccountsStorageUsage(ctx context.Context, ses *Session) (map[int32]ui
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
-	newVec := vector.NewVec(types.T_float64.ToType())
-	// size in megabytes
-	// round to six decimal places
-	vector.AppendFixed(newVec, math.Round(float64(size)/1048576.0*1e6)/1e6, false, mp)
-	ori.Vecs[idxOfSize].Free(mp)
-	ori.Vecs[idxOfSize] = newVec
+	vector.SetFixedAt(ori.Vecs[idxOfSize], 0, math.Round(float64(size)/1048576.0*1e6)/1e6)
 }
 
 // doShowAccountsInProgress is going to replace `doShowAccounts`.
-func doShowAccountsInProgress(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sa *tree.ShowAccounts) (err error) {
+func doShowAccountsInProgress(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
 	var sql string
 	var accountIds [][]int32
 	var allAccountInfo []*batch.Batch
@@ -647,7 +643,7 @@ func getAccountInfo(ctx context.Context,
 
 	rsOfMoAccount = bh.GetExecResultBatches()
 	if len(rsOfMoAccount) == 0 {
-		return nil, nil, moerr.NewInternalError(ctx, "get data from mo_account failed")
+		return nil, nil, moerr.NewInternalError(ctx, "no account info")
 	}
 	if returnAccountIds {
 		batchCount := len(rsOfMoAccount)
