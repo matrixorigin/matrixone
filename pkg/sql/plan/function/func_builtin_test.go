@@ -655,7 +655,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 
 	{
 		tc := tcTemp{
-			info: "test lg",
+			info: "test log10",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
@@ -666,14 +666,14 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
 				[]float64{2}, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLg)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
 
 	{
 		tc := tcTemp{
-			info: "test lg with err",
+			info: "test log10 with err",
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{
@@ -684,7 +684,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true,
 				nil, nil),
 		}
-		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLg)
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}

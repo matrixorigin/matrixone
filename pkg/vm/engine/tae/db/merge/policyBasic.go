@@ -114,6 +114,7 @@ func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
 func (o *Basic) Config(id uint64, c any) {
 	if id == 0 {
 		o.configProvider.ResetConfig()
+		return
 	}
 	cfg := c.(*BasicPolicyConfig)
 	o.configProvider.SetConfig(id, cfg)
@@ -123,7 +124,7 @@ func (o *Basic) GetConfig(id uint64) any {
 	r := o.configProvider.GetConfig(id)
 	if r == nil {
 		r = &BasicPolicyConfig{
-			ObjectMinRows:  40960,
+			ObjectMinRows:  int(common.RuntimeMinRowsQualified.Load()),
 			MergeMaxOneRun: int(common.RuntimeMaxMergeObjN.Load()),
 		}
 	}
@@ -220,6 +221,10 @@ func (o *Basic) ResetForTable(id uint64, entry *catalog.TableEntry) {
 }
 
 func determineObjectMinRows(schema *catalog.Schema) int {
+	runtimeMinRows := int(common.RuntimeMinRowsQualified.Load())
+	if runtimeMinRows > common.DefaultMinRowsQualified {
+		return runtimeMinRows
+	}
 	// the max rows of a full object
 	objectFullRows := int(schema.SegmentMaxBlocks) * int(schema.BlockMaxRows)
 	// we want every object has at least 5 blks rows
