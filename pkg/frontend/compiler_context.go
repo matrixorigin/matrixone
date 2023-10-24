@@ -267,7 +267,6 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 		return nil, nil
 	}
 	return disttae.GetTableDef(txnCtx, table, dbName, tableName, nil)
-	//return tcc.getTableDef(txnCtx, table, dbName, tableName, nil)
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
@@ -280,7 +279,6 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		return nil, nil
 	}
 	return disttae.GetTableDef(ctx, table, dbName, tableName, sub)
-	//return tcc.getTableDef(ctx, table, dbName, tableName, sub)
 }
 
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body string, err error) {
