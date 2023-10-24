@@ -94,7 +94,7 @@ func TestConnector(t *testing.T) {
 			bat.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.children[0].Free(tc.proc, false, nil)
+		tc.arg.Children[0].Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -129,13 +129,13 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.children) == 0 {
+	if len(arg.Children) == 0 {
 		arg.AppendChild(&value_scan.Argument{
 			Batchs: bats,
 		})
 
 	} else {
-		arg.children = arg.children[:0]
+		arg.Children = arg.Children[:0]
 		arg.AppendChild(&value_scan.Argument{
 			Batchs: bats,
 		})

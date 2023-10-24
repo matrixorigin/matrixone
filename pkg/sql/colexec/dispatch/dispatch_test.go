@@ -126,13 +126,13 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.children) == 0 {
+	if len(arg.Children) == 0 {
 		arg.AppendChild(&value_scan.Argument{
 			Batchs: bats,
 		})
 
 	} else {
-		arg.children = arg.children[:0]
+		arg.Children = arg.Children[:0]
 		arg.AppendChild(&value_scan.Argument{
 			Batchs: bats,
 		})

@@ -557,7 +557,6 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 		return false, nil
 
 	case dataFinished:
-		proc.SetInputBatch(nil)
 		return true, nil
 	default:
 		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)

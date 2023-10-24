@@ -107,7 +107,6 @@ func TestMergeBlock(t *testing.T) {
 		Tbl: &mockRelation{},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
-		notFreeBatch: true,
 		info: &vm.OperatorInfo{
 			Idx:     0,
 			IsFirst: false,

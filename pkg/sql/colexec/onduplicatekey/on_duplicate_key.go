@@ -77,7 +77,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		case Eval:
 			if len(ctr.insertBats) > 0 {
 				anal.Output(ctr.insertBats[0], arg.info.IsLast)
-				// proc.SetInputBatch(ctr.insertBats[0])
 				ctr.rbat = ctr.insertBats[0]
 				ctr.insertBats = ctr.insertBats[1:]
 				if len(ctr.insertBats) == 0 {

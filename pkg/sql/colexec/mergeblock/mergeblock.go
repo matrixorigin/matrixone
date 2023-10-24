@@ -44,17 +44,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-
 	if err := ap.Split(proc, bat); err != nil {
 		return result, err
-	}
-
-	if !ap.notFreeBatch {
-		defer func() {
-			for k := range ap.container.mp {
-				proc.PutBatch(ap.container.mp[k])
-			}
-		}()
 	}
 
 	// If the target is a partition table

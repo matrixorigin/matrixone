@@ -293,7 +293,9 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
-		return s.RemoteRun(c)
+		err := s.RemoteRun(c)
+		c.addAffectedRows(s.affectedRows())
+		return err
 	case CreateDatabase:
 		err := s.CreateDatabase(c)
 		if err != nil {
@@ -366,6 +368,10 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	var cc *Compile // compile structure for rerun.
 	var result = &util2.RunResult{}
 	var err error
+
+	if strings.Contains(c.sql, "select * from t") {
+		fmt.Printf("%s\n", DebugShowScopes(c.scope))
+	}
 
 	sp := c.proc.GetStmtProfile()
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))

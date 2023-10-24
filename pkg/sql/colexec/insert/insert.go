@@ -81,7 +81,7 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 			bat := result.Batch
 
 			if arg.InsertCtx.AddAffectedRows {
-				affectedRows := uint64(bat.Vecs[0].Length())
+				affectedRows := uint64(bat.RowCount())
 				atomic.AddUint64(&arg.affectedRows, affectedRows)
 			}
 

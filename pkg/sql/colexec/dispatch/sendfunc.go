@@ -249,7 +249,6 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			}
 
 		case reg.Ch <- bat:
-			proc.SetInputBatch(nil)
 			ap.ctr.sendCnt++
 			return false, nil
 		}

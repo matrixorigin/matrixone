@@ -32,7 +32,7 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	reg := arg.Reg
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.Children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}

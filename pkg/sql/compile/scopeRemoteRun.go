@@ -87,6 +87,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -207,22 +208,34 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 	}
 
-	var isConnector bool
 	var lastArg vm.Operator
+	var oldChild []vm.Operator
 	switch arg := lastInstruction.Arg.(type) {
 	case *connector.Argument:
-		isConnector = true
 		lastArg = arg
+		oldChild = arg.Children
+		arg.Children = nil
+		defer func() {
+			arg.Children = oldChild
+		}()
 	case *dispatch.Argument:
 		lastArg = arg
+		oldChild = arg.Children
+		defer func() {
+			arg.Children = oldChild
+		}()
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
+	valueScanOperator := &value_scan.Argument{}
 	for {
 		val, err = sender.receiveMessage()
-		if err != nil || val == nil {
+		if err != nil {
 			return err
+		}
+		if val == nil {
+			break
 		}
 
 		m := val.(*pipeline.Message)
@@ -239,7 +252,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 				}
 				mergeAnalyseInfo(c.anal, ana)
 			}
-			return nil
+			break
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
@@ -261,29 +274,34 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 
 		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
+		bat.AddCnt(1)
 		dataBuffer = nil
 		if err != nil {
 			return err
 		}
 		lastAnalyze.Network(bat)
-		s.Proc.SetInputBatch(bat)
+		valueScanOperator.Batchs = append(valueScanOperator.Batchs, bat)
+	}
 
-		info := &vm.OperatorInfo{
-			Idx:     -1,
-			IsFirst: false,
-			IsLast:  false,
+	info := &vm.OperatorInfo{
+		Idx:     -1,
+		IsFirst: false,
+		IsLast:  false,
+	}
+	lastArg.SetInfo(info)
+	lastArg.AppendChild(valueScanOperator)
+	for {
+		ok, err := lastArg.Call(s.Proc)
+		if err != nil {
+			valueScanOperator.Free(s.Proc, false, err)
+			return err
 		}
-		lastArg.SetInfo(info)
-		if isConnector {
-			if ok, err := lastArg.Call(s.Proc); err != nil || ok.Status == vm.ExecStop {
-				return err
-			}
-		} else {
-			if ok, err := lastArg.Call(s.Proc); err != nil || ok.Status == vm.ExecStop {
-				return err
-			}
+		if ok.Status == vm.ExecStop {
+			break
 		}
 	}
+	valueScanOperator.Free(s.Proc, false, err)
+	return nil
 }
 
 // remoteRun sends a scope for remote running and receive the results.

@@ -39,10 +39,7 @@ type Argument struct {
 	// 2. partition sub tables
 	PartitionSources []engine.Relation
 	affectedRows     uint64
-	// 3. used for ut_test, otherwise the batch will free,
-	// and we can't get the result to check
-	notFreeBatch bool
-	container    *Container
+	container        *Container
 
 	info     *vm.OperatorInfo
 	children []vm.Operator

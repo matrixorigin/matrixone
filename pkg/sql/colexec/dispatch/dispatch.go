@@ -95,7 +95,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.Children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
