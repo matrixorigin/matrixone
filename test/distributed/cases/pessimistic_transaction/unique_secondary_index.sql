@@ -412,7 +412,7 @@ drop index varchar_index on trans_index_01;
 -- @wait:0:commit
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
 -- @session}
--- @bvt:issue#12293
+-- @bvt:issue#12031
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
 -- @bvt:issue
 select * from trans_index_01;
