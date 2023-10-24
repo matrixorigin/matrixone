@@ -470,7 +470,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 
 		// read, write, commit and rollback for temporary tables
 		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) (err error) {
-			storage, ok := ctx.Value(defines.TemporaryTN{}).(*memorystorage.Storage)
+			storage, ok := ctx.Value(defines.TemporaryTN).(*memorystorage.Storage)
 			if !ok {
 				panic("tempStorage should never be nil")
 			}

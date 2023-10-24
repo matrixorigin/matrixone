@@ -226,7 +226,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	}
 
 	// Compile may exec some function that need engine.Engine.
-	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey{}, c.e)
+	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.EngineKey, c.e)
 	// generate logic pipeline for query.
 	c.scope, err = c.compileScope(ctx, pn)
 
@@ -1731,10 +1731,10 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		var cols []*plan.ColDef
 		ctx := c.ctx
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = context.WithValue(ctx, defines.TenantIDKey, catalog.System_Account)
 		}
 		if n.ObjRef.PubInfo != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.TenantId))
+			ctx = context.WithValue(ctx, defines.TenantIDKey, uint32(n.ObjRef.PubInfo.TenantId))
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
@@ -3074,13 +3074,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = context.WithValue(ctx, defines.TenantIDKey, catalog.System_Account)
 	}
 	if n.ObjRef.PubInfo != nil {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.GetTenantId()))
+		ctx = context.WithValue(ctx, defines.TenantIDKey, uint32(n.ObjRef.PubInfo.GetTenantId()))
 	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		ctx = context.WithValue(ctx, defines.TenantIDKey, catalog.System_Account)
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {

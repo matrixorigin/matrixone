@@ -813,7 +813,7 @@ func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
-	v := ctx.Value(defines.PkCheckByTN{})
+	v := ctx.Value(defines.PkCheckByTN)
 	for _, e := range writes {
 		//SKIP update/delete on mo_columns
 		//The TN does not counsume the update/delete on mo_columns.
@@ -1116,13 +1116,13 @@ func genColumns(accountId uint32, tableName, databaseName string,
 }
 
 func getSql(ctx context.Context) string {
-	if v := ctx.Value(defines.SqlKey{}); v != nil {
+	if v := ctx.Value(defines.SqlKey); v != nil {
 		return v.(string)
 	}
 	return ""
 }
 func getTyp(ctx context.Context) string {
-	if v := ctx.Value(defines.DatTypKey{}); v != nil {
+	if v := ctx.Value(defines.DatTypKey); v != nil {
 		return v.(string)
 	}
 	return ""
@@ -1131,13 +1131,13 @@ func getTyp(ctx context.Context) string {
 func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 	var accountId, userId, roleId uint32
 
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+	if v := ctx.Value(defines.TenantIDKey); v != nil {
 		accountId = v.(uint32)
 	}
-	if v := ctx.Value(defines.UserIDKey{}); v != nil {
+	if v := ctx.Value(defines.UserIDKey); v != nil {
 		userId = v.(uint32)
 	}
-	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
+	if v := ctx.Value(defines.RoleIDKey); v != nil {
 		roleId = v.(uint32)
 	}
 	return accountId, userId, roleId

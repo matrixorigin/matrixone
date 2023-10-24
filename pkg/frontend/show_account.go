@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 const (
@@ -191,7 +192,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		outputBatches = make([]*batch.Batch, len(allAccountInfo))
 		for i, ids := range accountIds {
 			for _, id := range ids {
-				newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(id))
+				newCtx := context.WithValue(ctx, defines.TenantIDKey, uint32(id))
 				tempBatch, err = getTableStats(newCtx, bh, id)
 				if err != nil {
 					return err
@@ -235,7 +236,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 		//under non-sys account
 		//step2.1: switch into the sys account, get the account info
-		newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		newCtx := context.WithValue(ctx, defines.TenantIDKey, uint32(sysAccountID))
 		sql = getSqlForAccountInfo(uint64(account.GetTenantID()))
 		allAccountInfo, _, err = getAccountInfo(newCtx, bh, sql, false)
 		if err != nil {

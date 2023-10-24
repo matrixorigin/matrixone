@@ -89,8 +89,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	case *tree.UnresolvedName:
 		// check existence
-		if b.GetContext() != nil && b.GetContext().Value(defines.InSp{}) != nil && b.GetContext().Value(defines.InSp{}).(bool) {
-			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+		if b.GetContext() != nil && b.GetContext().Value(defines.InSp) != nil && b.GetContext().Value(defines.InSp).(bool) {
+			tmpScope := b.GetContext().Value(defines.VarScopeKey).(*[]map[string]interface{})
 			for i := len(*tmpScope) - 1; i >= 0; i-- {
 				curScope := (*tmpScope)[i]
 				if _, ok := curScope[strings.ToLower(exprImpl.Parts[0])]; ok {

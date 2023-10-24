@@ -161,44 +161,31 @@ const (
 
 // use TenantIDKey{} UserIDKey{} RoleIDKey{} to get uint32 value from Context
 
-type TenantIDKey struct{}
-type UserIDKey struct{}
-type RoleIDKey struct{}
-type NodeIDKey struct{}
+const (
+	TenantIDKey = iota
+	UserIDKey
+	RoleIDKey
+	NodeIDKey
+	EngineKey
+	SqlKey
+	DatTypKey
+	TemporaryTN
+	IsMoLogger
+	BgKey
+	VarScopeKey
+	InSp
+	PkCheckByTN
+)
 
 func GetAccountId(ctx context.Context) uint32 {
-	if v := ctx.Value(TenantIDKey{}); v != nil {
+	if v := ctx.Value(TenantIDKey); v != nil {
 		return v.(uint32)
 	}
 	return 0
 }
 
-// EngineKey use EngineKey{} to get engine from Context
-type EngineKey struct{}
-
-// SqlKey use SqlKey{} to get string value from Context
-type SqlKey struct{}
-type DatTypKey struct{}
-
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
-var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
-
-// TemporaryTN use TemporaryTN to get temporary storage from Context
-type TemporaryTN struct{}
-
-type IsMoLogger struct{}
-
-// Determine if now is a bg sql.
-type BgKey struct{}
-
-// Sp variable scope
-type VarScopeKey struct{}
-
-// Determine if it is a stored procedure
-type InSp struct{}
-
-// PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
-type PkCheckByTN struct{}
+var CarryOnCtxKeys = []any{TenantIDKey, UserIDKey, RoleIDKey}
 
 /*
 The autoIncrCacheManager is initialized with a starting CN.

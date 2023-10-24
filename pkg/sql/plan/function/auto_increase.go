@@ -32,7 +32,7 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[uint64](result)
 
-	eng := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	eng := proc.Ctx.Value(defines.EngineKey).(engine.Engine)
 	for i := uint64(0); i < uint64(length); i++ {
 		s1, null1 := p1.GetStrValue(i)
 		s2, null2 := p2.GetStrValue(i)

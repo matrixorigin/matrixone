@@ -852,10 +852,10 @@ func (h *Handle) HandleCreateDatabase(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
-	ctx = context.WithValue(ctx, defines.DatTypKey{}, req.DatTyp)
+	ctx = context.WithValue(ctx, defines.TenantIDKey, req.AccessInfo.AccountID)
+	ctx = context.WithValue(ctx, defines.UserIDKey, req.AccessInfo.UserID)
+	ctx = context.WithValue(ctx, defines.RoleIDKey, req.AccessInfo.RoleID)
+	ctx = context.WithValue(ctx, defines.DatTypKey, req.DatTyp)
 	if _, err = txn.CreateDatabaseWithCtx(
 		ctx,
 		req.Name,
@@ -906,9 +906,9 @@ func (h *Handle) HandleCreateRelation(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = context.WithValue(ctx, defines.TenantIDKey, req.AccessInfo.AccountID)
+	ctx = context.WithValue(ctx, defines.UserIDKey, req.AccessInfo.UserID)
+	ctx = context.WithValue(ctx, defines.RoleIDKey, req.AccessInfo.RoleID)
 	dbH, err := txn.GetDatabaseWithCtx(ctx, req.DatabaseName)
 	if err != nil {
 		return

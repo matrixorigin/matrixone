@@ -206,8 +206,8 @@ func (interpreter *Interpreter) MatchExpr(expr tree.Expr) (tree.Expr, error) {
 // Evaluate condition by sending it to bh with a select
 func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 	interpreter.bh.ClearExecResultSet()
-	interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
-	interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp{}, true)
+	interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey, interpreter.varScope)
+	interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp, true)
 	err := interpreter.bh.Exec(interpreter.ctx, "select "+cond)
 	if err != nil {
 		return 0, err
@@ -543,8 +543,8 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		str := interpreter.GetStatementString(st)
 		interpreter.bh.ClearExecResultSet()
 		// For sp variable replacement
-		interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
-		interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp{}, true)
+		interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey, interpreter.varScope)
+		interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp, true)
 		err := interpreter.bh.Exec(interpreter.ctx, str)
 		if err != nil {
 			return SpNotOk, err

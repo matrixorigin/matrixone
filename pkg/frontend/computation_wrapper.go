@@ -203,9 +203,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.ses.IfInitedTempEngine() {
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN, cwft.ses.GetTempTableStorage())
 		cwft.ses.SetRequestContext(requestCtx)
-		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
+		cwft.proc.Ctx = context.WithValue(cwft.proc.Ctx, defines.TemporaryTN, cwft.ses.GetTempTableStorage())
 		cwft.ses.GetTxnHandler().AttachTempStorageToTxnCtx()
 	}
 
@@ -380,7 +380,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 
 		// temporary storage is passed through Ctx
-		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
+		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN, cwft.ses.GetTempTableStorage())
 
 		// 1. init memory-non-dist engine
 		tempEngine := memoryengine.New(

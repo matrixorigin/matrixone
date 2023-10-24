@@ -180,11 +180,11 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if isClusterTable(dbName, tableName) {
 		//if it is the cluster table in the general account, switch into the sys account
 		if account != nil && account.GetTenantID() != sysAccountID {
-			txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+			txnCtx = context.WithValue(txnCtx, defines.TenantIDKey, uint32(sysAccountID))
 		}
 	}
 	if sub != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sub.AccountId))
+		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey, uint32(sub.AccountId))
 		dbName = sub.DbName
 	}
 
@@ -547,8 +547,8 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
 
-	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
-		tmpScope := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if ctx.Value(defines.InSp) != nil && ctx.Value(defines.InSp).(bool) {
+		tmpScope := ctx.Value(defines.VarScopeKey).(*[]map[string]interface{})
 		for i := len(*tmpScope) - 1; i >= 0; i-- {
 			curScope := (*tmpScope)[i]
 			if val, ok := curScope[strings.ToLower(varName)]; ok {

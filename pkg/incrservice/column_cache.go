@@ -410,7 +410,7 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 	low := col.ranges.left() <= col.cfg.LowCapacity
 	col.Unlock()
 	if low {
-		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey{}, ctx.Value(defines.TenantIDKey{})),
+		col.preAllocate(context.WithValue(context.Background(), defines.TenantIDKey, ctx.Value(defines.TenantIDKey)),
 			tableID,
 			col.cfg.CountPerAllocate,
 			txnOp)

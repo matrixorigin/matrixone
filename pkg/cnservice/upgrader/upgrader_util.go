@@ -17,12 +17,13 @@ package upgrader
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"strings"
 )
 
 func ParseDataTypeToColType(dataType string) (table.ColType, error) {
@@ -58,9 +59,9 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 }
 
 func attachAccount(ctx context.Context, tenant *frontend.TenantInfo) context.Context {
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, tenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
+	ctx = context.WithValue(ctx, defines.TenantIDKey, tenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey, tenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey, tenant.GetDefaultRoleID())
 	return ctx
 }
 

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -145,7 +146,7 @@ func (s *sqlExecutor) adjustOptions(
 	if opts.HasAccountID() {
 		ctx = context.WithValue(
 			ctx,
-			defines.TenantIDKey{},
+			defines.TenantIDKey,
 			opts.AccountID())
 	}
 

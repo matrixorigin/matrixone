@@ -124,7 +124,7 @@ func (s *sqlStore) Allocate(
 				if rows != 1 {
 					getLogger().Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
-						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
+						zap.Any("account", ctx.Value(defines.TenantIDKey)),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Int("rows", rows),
@@ -151,7 +151,7 @@ func (s *sqlStore) Allocate(
 				} else {
 					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
-						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
+						zap.Any("account", ctx.Value(defines.TenantIDKey)),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Uint64("affected-rows", res.AffectedRows),

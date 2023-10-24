@@ -17,8 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"sync"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -80,27 +81,27 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	reqCtx := th.ses.GetRequestContext()
 	retTxnCtx := th.txnCtx
 
-	if v := reqCtx.Value(defines.TenantIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TenantIDKey{}, v)
+	if v := reqCtx.Value(defines.TenantIDKey); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TenantIDKey, v)
 	}
-	if v := reqCtx.Value(defines.UserIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.UserIDKey{}, v)
+	if v := reqCtx.Value(defines.UserIDKey); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.UserIDKey, v)
 	}
-	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
+	if v := reqCtx.Value(defines.RoleIDKey); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey, v)
 	}
-	if v := reqCtx.Value(defines.NodeIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey{}, v)
+	if v := reqCtx.Value(defines.NodeIDKey); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey, v)
 	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
 	if th.ses != nil && th.ses.tenant != nil && th.ses.tenant.User == db_holder.MOLoggerUser {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
+		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger, true)
 	}
 
-	if storage, ok := reqCtx.Value(defines.TemporaryTN{}).(*memorystorage.Storage); ok {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN{}, storage)
+	if storage, ok := reqCtx.Value(defines.TemporaryTN).(*memorystorage.Storage); ok {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN, storage)
 	} else if th.ses.IfInitedTempEngine() {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN{}, th.ses.GetTempTableStorage())
+		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN, th.ses.GetTempTableStorage())
 	}
 	return retTxnCtx
 }
@@ -108,7 +109,7 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 func (th *TxnHandler) AttachTempStorageToTxnCtx() {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryTN{}, th.ses.GetTempTableStorage())
+	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryTN, th.ses.GetTempTableStorage())
 }
 
 // we don't need to lock. TxnHandler is holded by one session.
@@ -300,7 +301,7 @@ func (th *TxnHandler) CommitTxn() error {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TemporaryTN{}, ses.tempTablestorage)
+		txnCtx = context.WithValue(txnCtx, defines.TemporaryTN, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(
@@ -313,7 +314,7 @@ func (th *TxnHandler) CommitTxn() error {
 		return e
 	}
 	if val != nil {
-		ctx2 = context.WithValue(ctx2, defines.PkCheckByTN{}, val.(int8))
+		ctx2 = context.WithValue(ctx2, defines.PkCheckByTN, val.(int8))
 	}
 	var err error
 	defer func() {
@@ -373,7 +374,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		panic("context should not be nil")
 	}
 	if ses.tempTablestorage != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TemporaryTN{}, ses.tempTablestorage)
+		txnCtx = context.WithValue(txnCtx, defines.TemporaryTN, ses.tempTablestorage)
 	}
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(

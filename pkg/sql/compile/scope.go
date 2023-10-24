@@ -71,7 +71,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		p.Cleanup(s.Proc, err != nil, err)
 	}()
 
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey, c.e)
 	// DataSource == nil specify the empty scan
 	if s.DataSource == nil {
 		p = pipeline.New(nil, s.Instructions, s.Reg)
@@ -130,7 +130,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 	defer wg.Wait()
 
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey, c.e)
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
@@ -213,7 +213,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
 
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey, c.e)
 	if s.IsJoin {
 		return s.JoinRun(c)
 	}
@@ -329,10 +329,10 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	case remote:
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = context.WithValue(ctx, defines.TenantIDKey, catalog.System_Account)
 		}
 		if s.DataSource.AccountId != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
+			ctx = context.WithValue(ctx, defines.TenantIDKey, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
@@ -354,7 +354,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = context.WithValue(ctx, defines.TenantIDKey, catalog.System_Account)
 		}
 		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {

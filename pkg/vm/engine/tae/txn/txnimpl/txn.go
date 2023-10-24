@@ -78,9 +78,9 @@ func (txn *txnImpl) bindCtxInfo(ctx context.Context) {
 	if ctx == nil {
 		return
 	}
-	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
-	uid, _ := ctx.Value(defines.UserIDKey{}).(uint32)
-	rid, _ := ctx.Value(defines.RoleIDKey{}).(uint32)
+	tid, okt := ctx.Value(defines.TenantIDKey).(uint32)
+	uid, _ := ctx.Value(defines.UserIDKey).(uint32)
+	rid, _ := ctx.Value(defines.RoleIDKey).(uint32)
 	if okt {
 		txn.BindAccessInfo(tid, uid, rid)
 	}

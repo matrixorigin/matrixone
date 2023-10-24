@@ -1456,9 +1456,9 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	ses.SetTenantInfo(tenant)
 
 	//step1 : check tenant exists or not in SYS tenant context
-	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey, uint32(sysAccountID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey, uint32(rootID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey, uint32(moAdminRoleID))
 	sqlForCheckTenant, err := getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
 	if err != nil {
 		return nil, err
@@ -1511,7 +1511,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
 
-	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
+	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey, uint32(tenantID))
 
 	logDebugf(sessionInfo, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
@@ -1668,9 +1668,9 @@ func (ses *Session) InitGlobalSystemVariables() error {
 	tenantInfo := ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-		sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
-		sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey, uint32(sysAccountID))
+		sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey, uint32(rootID))
+		sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey, uint32(moAdminRoleID))
 
 		// get system variable from mo_mysql_compatibility mode
 		sqlForGetVariables := getSystemVariablesWithAccount(sysAccountID)
@@ -1716,9 +1716,9 @@ func (ses *Session) InitGlobalSystemVariables() error {
 			return moerr.NewInternalError(sysTenantCtx, "there is no data in mo_mysql_compatibility_mode table for account %s", sysAccountName)
 		}
 	} else {
-		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey, tenantInfo.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey, tenantInfo.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey, uint32(accountAdminRoleID))
 
 		// get system variable from mo_mysql_compatibility mode
 		sqlForGetVariables := getSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
@@ -1952,7 +1952,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
 	// For determine this is a background sql.
-	ctx = context.WithValue(ctx, defines.BgKey{}, true)
+	ctx = context.WithValue(ctx, defines.BgKey, true)
 	bh.mce.GetSession().SetRequestContext(ctx)
 
 	//logutil.Debugf("-->bh:%s", sql)
@@ -1992,7 +1992,7 @@ func (bh *BackgroundHandler) ExecStmt(ctx context.Context, stmt tree.Statement) 
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
 	// For determine this is a background sql.
-	ctx = context.WithValue(ctx, defines.BgKey{}, true)
+	ctx = context.WithValue(ctx, defines.BgKey, true)
 	bh.mce.GetSession().SetRequestContext(ctx)
 
 	//share txn can not run transaction statement

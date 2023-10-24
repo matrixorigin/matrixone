@@ -63,12 +63,12 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	c.stmt.Format(fmtCtx)
-	ctx := context.WithValue(c.ctx, defines.SqlKey{}, fmtCtx.String())
+	ctx := context.WithValue(c.ctx, defines.SqlKey, fmtCtx.String())
 	datType := ""
 	if s.Plan.GetDdl().GetCreateDatabase().SubscriptionOption != nil {
 		datType = catalog.SystemDBTypeSubscription
 	}
-	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
+	ctx = context.WithValue(ctx, defines.DatTypKey, datType)
 	return c.e.Create(ctx, dbName, c.proc.TxnOperator)
 }
 
@@ -143,7 +143,7 @@ func (s *Scope) AlterView(c *Compile) error {
 	//  	 return moerr.NewTableAlreadyExists(c.ctx, tblName)
 	// }
 
-	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
+	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey, c.sql), tblName, append(exeCols, exeDefs...))
 }
 
 func addAlterKind(alterKind []api.AlterKind, kind api.AlterKind) []api.AlterKind {
@@ -636,7 +636,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		getLogger().Info("createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -1692,7 +1692,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 
@@ -1777,7 +1777,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return err
 	}
 
-	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 

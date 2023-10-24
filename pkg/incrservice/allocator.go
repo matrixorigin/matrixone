@@ -136,7 +136,7 @@ func (a *allocator) run(ctx context.Context) {
 }
 
 func (a *allocator) doAllocate(act action) {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey, act.accountID)
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
@@ -160,7 +160,7 @@ func (a *allocator) doAllocate(act action) {
 }
 
 func (a *allocator) doUpdate(act action) {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey, act.accountID)
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
@@ -204,7 +204,7 @@ type action struct {
 }
 
 func getAccountID(ctx context.Context) uint32 {
-	v := ctx.Value(defines.TenantIDKey{})
+	v := ctx.Value(defines.TenantIDKey)
 	if v != nil {
 		return v.(uint32)
 	}

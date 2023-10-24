@@ -46,8 +46,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
 
-	// XXX WTF
-	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	e := proc.Ctx.Value(defines.EngineKey).(engine.Engine)
 	if proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
@@ -69,7 +68,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			ctx := proc.Ctx
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey, uint32(sysAccountID))
 			}
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
@@ -144,7 +143,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
 
-	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	e := proc.Ctx.Value(defines.EngineKey).(engine.Engine)
 	if proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
 	}
@@ -166,7 +165,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey, uint32(sysAccountID))
 			}
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
@@ -245,7 +244,7 @@ func MoTableColMin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 }
 
 func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	e, ok := proc.Ctx.Value(defines.EngineKey).(engine.Engine)
 	if !ok || proc.TxnOperator == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableColMaxMin: txn operator is nil")
 	}

@@ -31,7 +31,7 @@ func GetAutoIncrementService(ctx context.Context) AutoIncrementService {
 		return nil
 	}
 	s := v.(AutoIncrementService)
-	uuid, ok := ctx.Value(defines.NodeIDKey{}).(string)
+	uuid, ok := ctx.Value(defines.NodeIDKey).(string)
 	if !ok || uuid == "" {
 		return s
 	}

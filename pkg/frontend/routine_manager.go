@@ -246,7 +246,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm, nil)
 	cancelCtx := routine.getCancelRoutineCtx()
 	if rm.baseService != nil {
-		cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, rm.baseService.ID())
+		cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey, rm.baseService.ID())
 	}
 	ses.SetRequestContext(cancelCtx)
 	ses.SetConnectContext(cancelCtx)

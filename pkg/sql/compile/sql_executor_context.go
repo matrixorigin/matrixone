@@ -162,7 +162,7 @@ func (c *compilerContext) GetUserName() string {
 }
 
 func (c *compilerContext) GetAccountId() uint32 {
-	if v := c.ctx.Value(defines.TenantIDKey{}); v != nil {
+	if v := c.ctx.Value(defines.TenantIDKey); v != nil {
 		return v.(uint32)
 	}
 	return 0
