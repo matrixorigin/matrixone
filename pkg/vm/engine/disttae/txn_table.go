@@ -840,6 +840,7 @@ func (tbl *txnTable) rangesOnePart(
 	//filter objects
 	var cnt uint32
 	zms = zms[:]
+	//FIXME::memory leak?
 	vecs = vecs[:]
 	for _, obj := range snapshotObjs {
 		var objDataMeta objectio.ObjectDataMeta
