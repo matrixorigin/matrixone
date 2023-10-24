@@ -12,26 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package dashboard
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-var (
-	TxnCommitSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "cn",
-			Subsystem: "txn",
-			Name:      "commit_bytes",
-			Help:      "Size of txn commit size.",
-		})
+func TestCreateDashboard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
 
-	TxnHandleQueueSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "cn",
-			Subsystem: "txn",
-			Name:      "handle_request_queue_size",
-			Help:      "Size of handle request queue size.",
-		})
-)
+	c := NewDashboardCreator("http://127.0.0.1:3000", "admin", "admin", "Prometheus")
+	require.NoError(t, c.Create())
+}

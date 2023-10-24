@@ -15,6 +15,8 @@
 package perfcounter
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -23,12 +25,20 @@ import (
 
 var Named sync.Map
 
-func NameForNode(uuid string) string {
-	return "node:" + uuid
+func NameForNode(nodeType, uuid string) string {
+	return "node:" + nodeType + ":" + uuid
+}
+
+func decodeName(name string) (string, string) {
+	s := strings.Split(name, ":")
+	if len(s) != 3 {
+		return "", ""
+	}
+	return strings.TrimSpace(s[1]), strings.TrimSpace(s[2])
 }
 
 func LogNodeCacheStats(uuid string) {
-	v, ok := Named.Load(NameForNode(uuid))
+	v, ok := Named.Load(NameForNode("", uuid))
 	if !ok {
 		return
 	}
@@ -47,4 +57,66 @@ func LogNodeCacheStats(uuid string) {
 		zap.Any("hit ratio", float64(counter.FileService.Cache.Disk.Hit.Load())/
 			float64(counter.FileService.Cache.Disk.Read.Load())),
 	)
+}
+
+// GetCacheStats returns the cache stats for nodes.
+func GetCacheStats(callback func(info []*query.CacheInfo)) {
+	var ok = false
+	var ptr *CounterSet
+	var name string
+	Named.Range(func(k, v interface{}) bool {
+		if callback != nil {
+			name = ""
+			ptr = nil
+
+			if name, ok = k.(string); !ok {
+				return true
+			}
+			if strings.Contains(strings.ToLower(name), "global") {
+				return true
+			}
+			if ptr, ok = v.(*CounterSet); !ok {
+				return true
+			}
+			if ptr == nil {
+				return true
+			}
+
+			nodeType, nodeId := decodeName(name)
+			if len(nodeType) == 0 || len(nodeId) == 0 {
+				return true
+			}
+
+			//memory
+			read1 := ptr.FileService.Cache.Memory.Read.Load()
+			if read1 <= 0 {
+				read1 = 1
+			}
+			ci1 := &query.CacheInfo{
+				NodeType:  nodeType,
+				NodeId:    nodeId,
+				CacheType: "memory",
+				Used:      uint64(ptr.FileService.Cache.Memory.Used.Load()),
+				Free:      uint64(ptr.FileService.Cache.Memory.Available.Load()),
+				HitRatio:  float32(ptr.FileService.Cache.Memory.Hit.Load()) / float32(read1),
+			}
+
+			read2 := ptr.FileService.Cache.Disk.Read.Load()
+			if read2 <= 0 {
+				read2 = 1
+			}
+			ci2 := &query.CacheInfo{
+				NodeType:  nodeType,
+				NodeId:    nodeId,
+				CacheType: "disk",
+				Used:      0,
+				Free:      0,
+				HitRatio:  float32(ptr.FileService.Cache.Disk.Hit.Load()) / float32(read2),
+			}
+
+			callback([]*query.CacheInfo{ci1, ci2})
+		}
+
+		return true
+	})
 }
