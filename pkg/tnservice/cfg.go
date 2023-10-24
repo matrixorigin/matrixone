@@ -162,6 +162,13 @@ type Config struct {
 	LockService lockservice.Config `toml:"lockservice"`
 
 	Ctl ctlservice.Config `toml:"ctl"`
+
+	// IsStandalone indicates whether the tn is in standalone cluster not an independent process.
+	// For the tn does not boost an independent queryservice in standalone mode.
+	// cn,tn shares the same queryservice in standalone mode.
+	// Under distributed deploy mode, cn,tn are independent os process.
+	// they have their own queryservice.
+	InStandalone bool
 }
 
 func (c *Config) Validate() error {
