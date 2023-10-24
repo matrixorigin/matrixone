@@ -1533,6 +1533,7 @@ func (data *CheckpointData) WriteTo(
 				if err != nil {
 					break
 				}
+				defer bat.Close()
 				if block, size, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 					return
 				}
