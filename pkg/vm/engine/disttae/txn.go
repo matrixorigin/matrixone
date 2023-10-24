@@ -191,7 +191,12 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		if err != nil {
 			return err
 		}
-		s3Writer, err := colexec.AllocS3Writer(txn.proc, tbl.(*txnTable).getTableDef())
+
+		databaseName := key[0]
+		tableName := key[1]
+		_, tableDef := GetTableDef(txn.proc.Ctx, tbl, databaseName, tableName, nil)
+
+		s3Writer, err := colexec.AllocS3Writer(txn.proc, tableDef)
 		if err != nil {
 			return err
 		}
