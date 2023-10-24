@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -230,6 +231,13 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 	}
 
 	valueScanOperator := &value_scan.Argument{}
+	info := &vm.OperatorInfo{
+		Idx:     -1,
+		IsFirst: false,
+		IsLast:  false,
+	}
+	lastArg.SetInfo(info)
+	lastArg.AppendChild(valueScanOperator)
 	for {
 		val, err = sender.receiveMessage()
 		if err != nil {
@@ -282,26 +290,24 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 		lastAnalyze.Network(bat)
 		valueScanOperator.Batchs = append(valueScanOperator.Batchs, bat)
-	}
-
-	info := &vm.OperatorInfo{
-		Idx:     -1,
-		IsFirst: false,
-		IsLast:  false,
-	}
-	lastArg.SetInfo(info)
-	lastArg.AppendChild(valueScanOperator)
-	for {
-		ok, err := lastArg.Call(s.Proc)
+		_, err = lastArg.Call(s.Proc)
 		if err != nil {
 			valueScanOperator.Free(s.Proc, false, err)
 			return err
 		}
-		if ok.Status == vm.ExecStop {
-			break
-		}
+		valueScanOperator.Free(s.Proc, false, err)
 	}
-	valueScanOperator.Free(s.Proc, false, err)
+	// for {
+	// 	ok, err := lastArg.Call(s.Proc)
+	// 	if err != nil {
+	// 		valueScanOperator.Free(s.Proc, false, err)
+	// 		return err
+	// 	}
+	// 	if ok.Status == vm.ExecStop {
+	// 		break
+	// 	}
+	// }
+	// valueScanOperator.Free(s.Proc, false, err)
 	return nil
 }
 

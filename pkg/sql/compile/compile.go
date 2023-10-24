@@ -369,10 +369,6 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	var result = &util2.RunResult{}
 	var err error
 
-	if strings.Contains(c.sql, "select * from t") {
-		fmt.Printf("%s\n", DebugShowScopes(c.scope))
-	}
-
 	sp := c.proc.GetStmtProfile()
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
