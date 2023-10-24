@@ -38,6 +38,7 @@ type CheckpointEntry struct {
 	cnLocation objectio.Location
 	tnLocation objectio.Location
 	lastPrint  time.Time
+	waterLine  time.Duration
 	version    uint32
 
 	ckpLSN      uint64
@@ -51,14 +52,15 @@ func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
 		state:     ST_Pending,
 		entryType: typ,
 		lastPrint: time.Now(),
+		waterLine: time.Minute * 4,
 		version:   logtail.CheckpointCurrentVersion,
 	}
 }
 
-func (e *CheckpointEntry) SetPrintTime() {
+func (e *CheckpointEntry) IncrWaterLine() {
 	e.Lock()
 	defer e.Unlock()
-	e.lastPrint = time.Now()
+	e.waterLine += time.Minute * 4
 }
 func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
 	e.ckpLSN = ckpLSN
@@ -67,7 +69,7 @@ func (e *CheckpointEntry) SetLSN(ckpLSN, truncateLSN uint64) {
 func (e *CheckpointEntry) CheckPrintTime() bool {
 	e.RLock()
 	defer e.RUnlock()
-	return time.Since(e.lastPrint) > 4*time.Minute
+	return time.Since(e.lastPrint) > e.waterLine
 }
 func (e *CheckpointEntry) LSNString() string {
 	if e.version < logtail.CheckpointVersion7 {
