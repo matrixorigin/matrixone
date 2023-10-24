@@ -31,8 +31,7 @@
 /test @aressu1985 @heni02
 
 # cmd
-/cmd/db-server @daviszhen
-/cmd/generate-config @daviszhen
+/cmd/mo-dump @daviszhen @qingxinhome
 /cmd/mo-service @zhangxu19830126
 
 /pkg/backup @daviszhen @LeftHandCold @qingxinhome

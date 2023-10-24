@@ -3351,22 +3351,14 @@ show_target:
     }
 
 show_index_stmt:
-    SHOW extended_opt index_kwd from_or_in table_name where_expression_opt
+    SHOW extended_opt index_kwd table_column_name database_name_opt where_expression_opt
     {
         $$ = &tree.ShowIndex{
-            TableName: *$5,
+            TableName: $4,
+            DbName: $5,
             Where: $6,
         }
     }
-|	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
-     {
-     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.Compare()), ExplicitSchema: true}
-         tbl := tree.NewTableName(tree.Identifier($5.Compare()), prefix)
-         $$ = &tree.ShowIndex{
-             TableName: *tbl,
-             Where: $8,
-         }
-     }
 
 extended_opt:
     {}
@@ -5532,11 +5524,11 @@ stage_comment_opt:
             Exist: false,
         }
     }
-|   COMMENT_KEYWORD STRING
+|   COMMENT_KEYWORD '=' STRING
     {
         $$ = tree.StageComment{
             Exist: true,
-            Comment: $2,
+            Comment: $3,
         }
     }
 
@@ -5966,7 +5958,9 @@ create_index_stmt:
         } else if $11 != nil{
             io = $11
             io.IType = $5
-        }
+        }else{
+	     io = &tree.IndexOption{IType: tree.INDEX_TYPE_INVALID}
+	 }
         $$ = &tree.CreateIndex{
             Name: tree.Identifier($4.Compare()),
             Table: *$7,
@@ -7189,6 +7183,12 @@ index_def:
         if $3[1] != "" {
                t := strings.ToLower($3[1])
             switch t {
+ 	    case "btree":
+            	keyTyp = tree.INDEX_TYPE_BTREE
+            case "hash":
+            	keyTyp = tree.INDEX_TYPE_HASH
+	    case "rtree":
+	   	keyTyp = tree.INDEX_TYPE_RTREE
             case "zonemap":
                 keyTyp = tree.INDEX_TYPE_ZONEMAP
             case "bsi":
@@ -7212,10 +7212,16 @@ index_def:
         if $3[1] != "" {
                t := strings.ToLower($3[1])
             switch t {
-            case "zonemap":
-                keyTyp = tree.INDEX_TYPE_ZONEMAP
-            case "bsi":
-                keyTyp = tree.INDEX_TYPE_BSI
+             case "btree":
+		keyTyp = tree.INDEX_TYPE_BTREE
+	     case "hash":
+		keyTyp = tree.INDEX_TYPE_HASH
+	     case "rtree":
+		keyTyp = tree.INDEX_TYPE_RTREE
+	     case "zonemap":
+		keyTyp = tree.INDEX_TYPE_ZONEMAP
+	     case "bsi":
+		keyTyp = tree.INDEX_TYPE_BSI
             default:
                 yylex.Error("Invail the type of index")
                 return 1

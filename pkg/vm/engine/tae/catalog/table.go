@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -287,6 +288,51 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 		_, _ = w.WriteString(segment.PPString(level, depth+1, prefix))
 		it.Next()
 	}
+	return w.String()
+}
+
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
+	var w bytes.Buffer
+
+	it := entry.MakeSegmentIt(true)
+	composeSortKey := false
+	if schema := entry.GetLastestSchema(); schema.HasSortKey() {
+		composeSortKey = strings.HasPrefix(schema.GetSingleSortKey().Name, "__")
+	}
+
+	var cnt, loadedCnt, rows, osize, avgRow, avgOsize int
+
+	for ; it.Valid(); it.Next() {
+		segment := it.Get().GetPayload()
+		if !segment.IsActive() {
+			continue
+		}
+		cnt++
+		if segment.Stat.Loaded {
+			loadedCnt++
+			rows += int(segment.Stat.Rows)
+			osize += int(segment.Stat.OriginSize)
+		}
+		if level > common.PPL0 {
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString(segment.ID.ToString())
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString("    ")
+			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
+		}
+	}
+	if level > common.PPL0 && cnt > 0 {
+		w.WriteByte('\n')
+	}
+	if loadedCnt > 0 {
+		avgRow = rows / cnt
+		avgOsize = osize / cnt
+	}
+	summary := fmt.Sprintf(
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s",
+		cnt, cnt-loadedCnt, avgRow, common.HumanReadableBytes(avgOsize),
+	)
+	w.WriteString(summary)
 	return w.String()
 }
 

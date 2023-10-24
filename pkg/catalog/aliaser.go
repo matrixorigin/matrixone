@@ -12,20 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package catalog
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/require"
+	"fmt"
+	"strings"
 )
 
-func TestCreateDashboard(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode.")
-		return
-	}
+// This class is used by "secondary index" to resolve the "programmatically generated PK" appended to the
+// end of the index key "__mo_index_idx_col".
 
-	c := NewDashboardCreator("http://127.0.0.1:3000", "admin", "admin", "Prometheus")
-	require.NoError(t, c.Create())
+const (
+	AliasPrefix = "__mo_alias_"
+)
+
+func CreateAlias(column string) string {
+	return fmt.Sprintf("%s%s", AliasPrefix, column)
+}
+
+func ResolveAlias(alias string) string {
+	return strings.TrimPrefix(alias, AliasPrefix)
+}
+
+func IsAlias(column string) bool {
+	return strings.HasPrefix(column, AliasPrefix)
 }

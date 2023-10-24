@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package preinsertsecondaryindex
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var (
-	S3ConnectCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "cn",
-			Subsystem: "fs",
-			Name:      "s3_connect_total",
-			Help:      "Total number of s3 connect count.",
-		})
+type Argument struct {
+	Ctx          context.Context
+	PreInsertCtx *plan.PreInsertUkCtx
+}
 
-	S3DNSResolveCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "cn",
-			Subsystem: "fs",
-			Name:      "s3_dns_resolve_total",
-			Help:      "Total number of s3 dns resolve count.",
-		})
-)
+func (arg *Argument) Free(*process.Process, bool, error) {}

@@ -35,3 +35,6 @@ select * from generate_series('2020-02-29 23:59:59','2020-03-01 00:01:00', '1 ho
 select * from generate_series('2020-02-29 23:59:59','2020-03-01 00:01:00', '1 minute') g;
 select * from generate_series('2020-02-29 23:59:59','2020-03-01 00:00:10', '1 second') g;
 select * from generate_series('2020-02-29 23:59:59.124356','2020-02-29 23:59:59.124360', '1 microsecond') g;
+
+# Test one parameter
+select * from generate_series(5) g;
