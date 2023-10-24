@@ -18,8 +18,6 @@ import (
 	"context"
 
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/variable/interval"
-	"github.com/K-Phoen/grabana/variable/query"
 )
 
 func (c *DashboardCreator) initFileServiceDashboard() error {
@@ -30,55 +28,23 @@ func (c *DashboardCreator) initFileServiceDashboard() error {
 
 	build, err := dashboard.New(
 		"FileService Metrics",
-		dashboard.AutoRefresh("5s"),
-		dashboard.VariableAsInterval(
-			"interval",
-			interval.Default("1m"),
-			interval.Values([]string{"1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
-		),
-		dashboard.VariableAsQuery(
-			"physicalCluster",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("matrixone_cloud_main_cluster"),
-			query.Request("label_values(matrixone_cloud_main_cluster)"),
-		),
-		dashboard.VariableAsQuery(
-			"cluster",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("matrixone_cloud_cluster"),
-			query.Request("label_values(matrixone_cloud_cluster)"),
-		),
-		dashboard.VariableAsQuery(
-			"pod",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("pod"),
-			query.Request("label_values(pod)"),
-		),
-		c.initFSReadOverviewRow(),
-		c.initFSWriteOverviewRow(),
-		c.initFSS3ReadDurationRow(),
-		c.initFSS3WriteDurationRow(),
-		c.initFSLocalReadDurationRow(),
-		c.initFSLocalWriteDurationRow(),
-		c.initFSS3ReadBytesRow(),
-		c.initFSS3WriteBytesRow(),
-		c.initFSLocalReadBytesRow(),
-		c.initFSLocalWriteBytesRow(),
-		c.initFSS3ConnectRequestsRow(),
-		c.initFSS3ConnectRow(),
-		c.initFSS3GetConnRow(),
-		c.initFSResolveS3DNSRow(),
-		c.initFSS3TLSHandshakeRow(),
-	)
+		c.withRowOptions(
+			c.initFSReadOverviewRow(),
+			c.initFSWriteOverviewRow(),
+			c.initFSS3ReadDurationRow(),
+			c.initFSS3WriteDurationRow(),
+			c.initFSLocalReadDurationRow(),
+			c.initFSLocalWriteDurationRow(),
+			c.initFSS3ReadBytesRow(),
+			c.initFSS3WriteBytesRow(),
+			c.initFSLocalReadBytesRow(),
+			c.initFSLocalWriteBytesRow(),
+			c.initFSS3ConnectRequestsRow(),
+			c.initFSS3ConnectRow(),
+			c.initFSS3GetConnRow(),
+			c.initFSResolveS3DNSRow(),
+			c.initFSS3TLSHandshakeRow(),
+		)...)
 	if err != nil {
 		return err
 	}

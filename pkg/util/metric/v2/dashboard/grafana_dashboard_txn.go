@@ -18,8 +18,6 @@ import (
 	"context"
 
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/variable/interval"
-	"github.com/K-Phoen/grabana/variable/query"
 )
 
 func (c *DashboardCreator) initTxnDashboard() error {
@@ -30,56 +28,25 @@ func (c *DashboardCreator) initTxnDashboard() error {
 
 	build, err := dashboard.New(
 		"Txn Metrics",
-		dashboard.AutoRefresh("5s"),
-		dashboard.VariableAsInterval(
-			"interval",
-			interval.Default("1m"),
-			interval.Values([]string{"1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
-		),
-		dashboard.VariableAsQuery(
-			"physicalCluster",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("matrixone_cloud_main_cluster"),
-			query.Request("label_values(matrixone_cloud_main_cluster)"),
-		),
-		dashboard.VariableAsQuery(
-			"cluster",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("matrixone_cloud_cluster"),
-			query.Request("label_values(matrixone_cloud_cluster)"),
-		),
-		dashboard.VariableAsQuery(
-			"pod",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("pod"),
-			query.Request("label_values(pod)"),
-		),
-		c.initTxnOverviewRow(),
-		c.initTxnLifeRow(),
-		c.initTxnCreateRow(),
-		c.initTxnDetermineSnapshotRow(),
-		c.initTxnWaitActiveRow(),
-		c.initTxnQueueRow(),
-		c.initTxnCNCommitRow(),
-		c.initTxnCNSendCommitRow(),
-		c.initTxnCNReceiveCommitResponseRow(),
-		c.initTxnCNWaitCommitLogtailResponseRow(),
-		c.initTxnTNCommitRow(),
-		c.initTxnBuildPlanRow(),
-		c.initTxnStatementExecuteRow(),
-		c.initTxnAcquireLockRow(),
-		c.initTxnHoldLockRow(),
-		c.initTxnUnlockRow(),
-		c.initTxnTableRangesRow())
+		c.withRowOptions(
+			c.initTxnOverviewRow(),
+			c.initTxnLifeRow(),
+			c.initTxnCreateRow(),
+			c.initTxnDetermineSnapshotRow(),
+			c.initTxnWaitActiveRow(),
+			c.initTxnQueueRow(),
+			c.initTxnCNCommitRow(),
+			c.initTxnCNSendCommitRow(),
+			c.initTxnCNReceiveCommitResponseRow(),
+			c.initTxnCNWaitCommitLogtailResponseRow(),
+			c.initTxnTNCommitRow(),
+			c.initTxnBuildPlanRow(),
+			c.initTxnStatementExecuteRow(),
+			c.initTxnAcquireLockRow(),
+			c.initTxnHoldLockRow(),
+			c.initTxnUnlockRow(),
+			c.initTxnTableRangesRow(),
+		)...)
 	if err != nil {
 		return err
 	}

@@ -21,9 +21,12 @@ import (
 
 	"github.com/K-Phoen/grabana"
 	"github.com/K-Phoen/grabana/axis"
+	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/graph"
 	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/target/prometheus"
+	"github.com/K-Phoen/grabana/variable/interval"
+	"github.com/K-Phoen/grabana/variable/query"
 )
 
 var (
@@ -119,4 +122,41 @@ func (c *DashboardCreator) getBytesHistogram(
 			axis.Min(0)))
 	}
 	return options
+}
+
+func (c *DashboardCreator) withRowOptions(rows ...dashboard.Option) []dashboard.Option {
+	return append(rows,
+		dashboard.AutoRefresh("5s"),
+		dashboard.VariableAsInterval(
+			"interval",
+			interval.Default("1m"),
+			interval.Values([]string{"1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
+		),
+		dashboard.VariableAsQuery(
+			"physicalCluster",
+			query.DataSource(c.dataSource),
+			query.DefaultAll(),
+			query.IncludeAll(),
+			query.Multiple(),
+			query.Label("matrixone_cloud_main_cluster"),
+			query.Request("label_values(matrixone_cloud_main_cluster)"),
+		),
+		dashboard.VariableAsQuery(
+			"cluster",
+			query.DataSource(c.dataSource),
+			query.DefaultAll(),
+			query.IncludeAll(),
+			query.Multiple(),
+			query.Label("matrixone_cloud_cluster"),
+			query.Request("label_values(matrixone_cloud_cluster)"),
+		),
+		dashboard.VariableAsQuery(
+			"pod",
+			query.DataSource(c.dataSource),
+			query.DefaultAll(),
+			query.IncludeAll(),
+			query.Multiple(),
+			query.Label("pod"),
+			query.Request("label_values(pod)"),
+		))
 }

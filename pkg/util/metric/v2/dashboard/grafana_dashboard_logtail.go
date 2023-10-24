@@ -18,8 +18,6 @@ import (
 	"context"
 
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/variable/interval"
-	"github.com/K-Phoen/grabana/variable/query"
 )
 
 func (c *DashboardCreator) initLogTailDashboard() error {
@@ -30,48 +28,16 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 
 	build, err := dashboard.New(
 		"Logtail Metrics",
-		dashboard.AutoRefresh("5s"),
-		dashboard.VariableAsInterval(
-			"interval",
-			interval.Default("1m"),
-			interval.Values([]string{"1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
-		),
-		dashboard.VariableAsQuery(
-			"physicalCluster",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("matrixone_cloud_main_cluster"),
-			query.Request("label_values(matrixone_cloud_main_cluster)"),
-		),
-		dashboard.VariableAsQuery(
-			"cluster",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("matrixone_cloud_cluster"),
-			query.Request("label_values(matrixone_cloud_cluster)"),
-		),
-		dashboard.VariableAsQuery(
-			"pod",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("pod"),
-			query.Request("label_values(pod)"),
-		),
-		c.initLogtailQueueRow(),
-		c.initLogtailLoadCheckpointRow(),
-		c.initLogtailBytesRow(),
-		c.initLogtailAppendRow(),
-		c.initLogtailApplyRow(),
-		c.initLogtailSendRow(),
-		c.initLogtailSendLatencyRow(),
-		c.initLogtailSendNetworkRow(),
-	)
+		c.withRowOptions(
+			c.initLogtailQueueRow(),
+			c.initLogtailLoadCheckpointRow(),
+			c.initLogtailBytesRow(),
+			c.initLogtailAppendRow(),
+			c.initLogtailApplyRow(),
+			c.initLogtailSendRow(),
+			c.initLogtailSendLatencyRow(),
+			c.initLogtailSendNetworkRow(),
+		)...)
 	if err != nil {
 		return err
 	}
