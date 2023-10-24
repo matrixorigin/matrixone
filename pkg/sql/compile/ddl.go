@@ -2193,9 +2193,8 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	var incrNum int64
 	var cycle bool
 
-	var preincrNum int64
 	if incr, ok := result[4].(int64); ok {
-		preincrNum = incr
+		incrNum = incr
 	}
 
 	// if alter increment value
@@ -2205,8 +2204,6 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
 		}
 		incrNum = getValue[int64](stmt.IncrementBy.Minus, stmt.IncrementBy.Num)
-	} else {
-		incrNum = preincrNum
 	}
 	if incrNum == 0 {
 		return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
@@ -2246,14 +2243,7 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 			lastNum = startNum + T(incrNum)
 		}
 	} else {
-		if stmt.IncrementBy != nil {
-			lastNum = preLastSeqNum + T(incrNum) - T(preincrNum)
-			if lastNum < startNum+T(incrNum)-T(preincrNum) {
-				lastNum = startNum + T(incrNum) - T(preincrNum)
-			}
-		} else {
-			lastNum = preLastSeqNum
-		}
+		lastNum = preLastSeqNum
 	}
 
 	// if alter cycle state of sequence
