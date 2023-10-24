@@ -359,7 +359,7 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
 	defer func() {
-		v2.SQlRunDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	var span trace.Span
@@ -383,7 +383,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 
-	v2.TxnStatementCounter.Inc()
+	v2.TxnStatementTotalCounter.Inc()
 	if err = c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
@@ -1063,7 +1063,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Arg: constructOnduplicateKey(n, c.e),
 		}
 		return []*Scope{rs}, nil
-	case plan.Node_PRE_INSERT_UK:
+	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
@@ -1071,16 +1071,30 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			preInsertUkArg, err := constructPreInsertUk(n, c.proc)
-			if err != nil {
-				return nil, err
+			if n.NodeType == plan.Node_PRE_INSERT_UK {
+				preInsertUkArg, err := constructPreInsertUk(n, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				ss[i].appendInstruction(vm.Instruction{
+					Op:      vm.PreInsertUnique,
+					Idx:     c.anal.curr,
+					IsFirst: currentFirstFlag,
+					Arg:     preInsertUkArg,
+				})
+			} else {
+				preInsertSkArg, err := constructPreInsertSk(n, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				ss[i].appendInstruction(vm.Instruction{
+					Op:      vm.PreInsertSecondaryIndex,
+					Idx:     c.anal.curr,
+					IsFirst: currentFirstFlag,
+					Arg:     preInsertSkArg,
+				})
 			}
-			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.PreInsertUnique,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     preInsertUkArg,
-			})
+
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
