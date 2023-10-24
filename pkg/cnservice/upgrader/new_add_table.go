@@ -314,8 +314,25 @@ var MoTransactionsView = &table.Table{
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_transactions`;",
 }
 
-var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView}
-var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView}
+var MoCacheView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_cache",
+	Columns: []table.Column{
+		table.StringColumn("node_type", "the type of the node. cn,tn"),
+		table.StringColumn("node_id", "the id of node"),
+		table.StringColumn("type", "the type of fileservice cache. memory, disk_cache"),
+		table.StringColumn("used", "used bytes of the cache"),
+		table.StringColumn("free", "free bytes of the cache"),
+		table.StringColumn("hit_ratio", "the hit ratio of the cache"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_cache` AS SELECT * FROM mo_cache() AS mo_cache_tmp;",
+	//actually drop view here
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
+}
+
+var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
+var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,

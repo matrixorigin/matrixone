@@ -675,9 +675,9 @@ func (t T) String() string {
 	case T_interval:
 		return "INTERVAL"
 	case T_array_float32:
-		return "VECTOR FLOAT"
+		return "VECF32"
 	case T_array_float64:
-		return "VECTOR DOUBLE"
+		return "VECF64"
 	case T_enum:
 		return "ENUM"
 	}
