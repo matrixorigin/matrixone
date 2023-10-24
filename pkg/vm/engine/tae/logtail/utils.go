@@ -39,8 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
-const DefaultCheckpointBlockRows = 10000
-const DefaultCheckpointSize = 512 * 1024 * 1024
+const DefaultCheckpointBlockRows = 50
+const DefaultCheckpointSize = 10 * 1024
 
 const (
 	CheckpointVersion1 uint32 = 1
@@ -1528,6 +1528,7 @@ func (data *CheckpointData) WriteTo(
 			objectSize += size
 		} else {
 			split := containers.NewBatchSplitter(data.bats[i], blockRows)
+			logutil.Infof("split batch %v", data.bats[i].Length())
 			for {
 				bat, err = split.Next()
 				if err != nil {
