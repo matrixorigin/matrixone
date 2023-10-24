@@ -76,7 +76,7 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 		c.withGraph(
 			"Commit requests",
 			3,
-			"sum(mo_txn_commit_total) by (type)",
+			"sum(rate(mo_txn_commit_total[$interval])) by (type)",
 			"{{ type }}"),
 
 		c.withGraph(
