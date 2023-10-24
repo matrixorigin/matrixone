@@ -19,12 +19,14 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -68,6 +70,8 @@ func (l *localLockTable) lock(
 	rows [][]byte,
 	opts LockOptions,
 	cb func(pb.Result, error)) {
+	v2.TxnLocalLockTotalCounter.Inc()
+
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock.local")
 	defer span.End()
@@ -199,6 +203,7 @@ func (l *localLockTable) unlock(
 				notifyValue{ts: commitTS})
 			logLockUnlocked(txn, key, lock)
 			if lockCanRemoved {
+				v2.TxnHoldLockDurationHistogram.Observe(time.Since(lock.createAt).Seconds())
 				l.mu.store.Delete(key)
 				if len(startKey) > 0 {
 					l.mu.store.Delete(startKey)
