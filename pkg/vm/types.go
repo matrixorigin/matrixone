@@ -24,6 +24,8 @@ const (
 	Order
 	Group
 	Window
+	TimeWin
+	Fill
 	Output
 	Offset
 	Product
@@ -77,6 +79,7 @@ const (
 	OnDuplicateKey
 	PreInsert
 	PreInsertUnique
+	PreInsertSecondaryIndex
 	// LastInstructionOp is not a true operator and must set at last.
 	// It was used by unit testing to ensure that
 	// all functions related to instructions can reach 100% coverage.
@@ -107,7 +110,7 @@ type Instruction struct {
 type InstructionArgument interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
-	Free(proc *process.Process, pipelineFailed bool)
+	Free(proc *process.Process, pipelineFailed bool, err error)
 }
 
 type Instructions []Instruction
@@ -125,6 +128,8 @@ func (ins *Instruction) IsBrokenNode() bool {
 	case Top, MergeTop:
 		return true
 	case Window:
+		return true
+	case TimeWin, Fill:
 		return true
 	case MergeRecursive:
 		return true

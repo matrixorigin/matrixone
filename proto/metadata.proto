@@ -142,6 +142,8 @@ message TNService {
   repeated TNShard Shards       = 6 [(gogoproto.nullable) = false];
   // Labels labels on service
   map<string, LabelList> Labels = 7 [(gogoproto.nullable) = false];
+  // QueryAddress it the address of query service on the tn
+  string          QueryAddress       = 8;
 }
 
 // LabelList defines the labels on CN store.

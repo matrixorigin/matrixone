@@ -43,7 +43,7 @@ jobs:
         uses: guguducken/milestone-add-action@check_mill_exist
         with:
           action-token: ${{ secrets.TOKEN_ACTION }}
-          milestone: "1.0.0"
+          milestone: "1.1.0"
 
   check-bvt-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'

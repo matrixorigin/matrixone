@@ -12,26 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package fileservice
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"context"
 )
 
-var (
-	TxnCommitSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "cn",
-			Subsystem: "txn",
-			Name:      "commit_bytes",
-			Help:      "Size of txn commit size.",
-		})
-
-	TxnHandleQueueSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "cn",
-			Subsystem: "txn",
-			Name:      "handle_request_queue_size",
-			Help:      "Size of handle request queue size.",
-		})
-)
+type FileCache interface {
+	SetFile(ctx context.Context, path string, content []byte) error
+}

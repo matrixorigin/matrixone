@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"go/constant"
 	"strings"
 
@@ -635,6 +636,17 @@ func stringSliceToMap(stringSlice []string, stringMap map[string]int) (bool, str
 	return false, ""
 }
 
+func stringSliceToMapForIndexParts(stringSlice []string, stringMap map[string]int) (bool, string) {
+	for _, s := range stringSlice {
+		s = catalog2.ResolveAlias(s)
+		if _, ok := stringMap[s]; ok {
+			return true, s
+		}
+		stringMap[s] = 0
+	}
+	return false, ""
+}
+
 // checkPartitionKeys checks the partitioning key is included in the table constraint.
 func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 	tableDef *TableDef, partitionDef *plan.PartitionByDef) error {
@@ -671,7 +683,7 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 		for _, indexDef := range tableDef.Indexes {
 			if indexDef.Unique {
 				uniqueKeys := make(map[string]int)
-				if dup, dupName := stringSliceToMap(indexDef.Parts, uniqueKeys); dup {
+				if dup, dupName := stringSliceToMapForIndexParts(indexDef.Parts, uniqueKeys); dup {
 					//return moerr.NewInvalidInput(ctx, "duplicate name %s", dupName)
 					return moerr.NewSameNamePartition(ctx, dupName)
 				}
@@ -839,7 +851,7 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 				if indexdef.Unique {
 					// A UNIQUE INDEX must include all columns in the table's partitioning function
 					uniqueKeys := make(map[string]int)
-					stringSliceToMap(indexdef.Parts, uniqueKeys)
+					stringSliceToMapForIndexParts(indexdef.Parts, uniqueKeys)
 					if !checkUniqueKeyIncludePartKey(pkcols, uniqueKeys) {
 						return moerr.NewUniqueKeyNeedAllFieldsInPf(partitionBinder.GetContext(), "PRIMARY KEY")
 					}
@@ -853,13 +865,13 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 		if uniqueIndexCount >= 2 {
 			firstUniqueKeyCols := make(map[string]int)
 			for _, indexdef := range tableDef.Indexes {
-				stringSliceToMap(indexdef.Parts, firstUniqueKeyCols)
+				stringSliceToMapForIndexParts(indexdef.Parts, firstUniqueKeyCols)
 				break
 			}
 
 			for _, indexdef := range tableDef.Indexes {
 				uniqueKeys := make(map[string]int)
-				stringSliceToMap(indexdef.Parts, uniqueKeys)
+				stringSliceToMapForIndexParts(indexdef.Parts, uniqueKeys)
 				if !checkUniqueKeyIncludePartKey(firstUniqueKeyCols, uniqueKeys) {
 					return moerr.NewUniqueKeyNeedAllFieldsInPf(partitionBinder.GetContext(), "PRIMARY KEY")
 				}

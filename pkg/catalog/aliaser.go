@@ -12,18 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package catalog
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"fmt"
+	"strings"
 )
 
-var (
-	LogTailSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "tn",
-			Subsystem: "logtail",
-			Name:      "commit_bytes",
-			Help:      "Size of logtail size.",
-		})
+// This class is used by "secondary index" to resolve the "programmatically generated PK" appended to the
+// end of the index key "__mo_index_idx_col".
+
+const (
+	AliasPrefix = "__mo_alias_"
 )
+
+func CreateAlias(column string) string {
+	return fmt.Sprintf("%s%s", AliasPrefix, column)
+}
+
+func ResolveAlias(alias string) string {
+	return strings.TrimPrefix(alias, AliasPrefix)
+}
+
+func IsAlias(column string) bool {
+	return strings.HasPrefix(column, AliasPrefix)
+}

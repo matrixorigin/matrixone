@@ -20,7 +20,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -95,7 +94,7 @@ type Argument struct {
 	ShuffleRegIdxRemote []int
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		if arg.ctr.isRemote {
 			if !arg.ctr.prepared {
@@ -112,7 +111,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 					message.Uuid = r.uuid[:]
 				}
 				if pipelineFailed {
-					err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
 					message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
 				}
 				r.cs.Write(timeoutCtx, message)

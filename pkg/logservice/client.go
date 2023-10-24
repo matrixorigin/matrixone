@@ -314,7 +314,15 @@ func connectToLogService(ctx context.Context,
 		addresses[i], addresses[j] = addresses[j], addresses[i]
 	})
 	for _, addr := range addresses {
-		cc, err := getRPCClient(ctx, addr, c.respPool, c.cfg.MaxMessageSize, cfg.EnableCompress, cfg.Tag)
+		cc, err := getRPCClient(
+			ctx,
+			addr,
+			c.respPool,
+			c.cfg.MaxMessageSize,
+			cfg.EnableCompress,
+			0,
+			cfg.Tag,
+		)
 		if err != nil {
 			e = err
 			continue
@@ -511,6 +519,7 @@ func getRPCClient(
 	pool *sync.Pool,
 	maxMessageSize int,
 	enableCompress bool,
+	readTimeout time.Duration,
 	tag ...string) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
 		return pool.Get().(*RPCResponse)
@@ -521,6 +530,7 @@ func getRPCClient(
 		morpc.WithBackendConnectTimeout(time.Second),
 		morpc.WithBackendHasPayloadResponse(),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("hakeeper-client-backend")),
+		morpc.WithBackendReadTimeout(readTimeout),
 	}
 	backendOpts = append(backendOpts, GetBackendOptions(ctx)...)
 
