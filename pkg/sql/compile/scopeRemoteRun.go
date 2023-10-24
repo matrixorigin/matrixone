@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -745,6 +746,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
 		}
+	case *preinsertsecondaryindex.Argument:
+		in.PreInsertSecondaryIndex = &pipeline.PreInsertSecondaryIndex{
+			PreInsertSkCtx: t.PreInsertCtx,
+		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
@@ -1136,6 +1141,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		t := opr.GetPreInsertUnique()
 		v.Arg = &preinsertunique.Argument{
 			PreInsertCtx: t.GetPreInsertUkCtx(),
+		}
+	case vm.PreInsertSecondaryIndex:
+		t := opr.GetPreInsertSecondaryIndex()
+		v.Arg = &preinsertsecondaryindex.Argument{
+			PreInsertCtx: t.GetPreInsertSkCtx(),
 		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()

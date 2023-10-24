@@ -40,6 +40,8 @@ enum CmdMethod {
   GetLockInfo = 5;
   // GetTxnInfo gets the txn info from the cn
   GetTxnInfo = 6;
+  // GetCacheInfo gets the cache info from the cn,tn
+  GetCacheInfo = 7;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -77,6 +79,8 @@ message Request {
   GetLockInfoRequest GetLockInfoRequest = 8;
   // GetTxnInfoRequest is the request for getting the txn info from the cn
   GetTxnInfoRequest GetTxnInfoRequest = 9;
+  // GetCacheInfoRequest is the request for getting the cache info from the cn,tn
+  GetCacheInfoRequest GetCacheInfoRequest = 10;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -104,6 +108,8 @@ message Response {
   GetLockInfoResponse GetLockInfoResponse = 8;
   // GetTxnInfoResponse is the response to GetTxnInfo
   GetTxnInfoResponse GetTxnInfoResponse = 9;
+  // GetCacheInfoResponse is the response to GetCacheInfo
+  GetCacheInfoResponse GetCacheInfoResponse = 10;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -134,6 +140,7 @@ message KillConnResponse {
 message TraceSpanRequest {
   string Cmd = 1;
   string Spans = 2;
+  int64 Threshold = 3;
 }
 
 message TraceSpanResponse {
@@ -186,4 +193,25 @@ message TxnInfo{
 message GetTxnInfoResponse{
   string CnId = 1;
   repeated TxnInfo TxnInfoList = 2;
+}
+
+message GetCacheInfoRequest{}
+
+message CacheInfo{
+  // NodeType is the type of the node. cn, tn
+  string NodeType = 1;
+  // NodeId is the uuid of the node.
+  string NodeId = 2;
+  // CacheType is the type of the cache. memory, disk
+  string CacheType = 3;
+  // Used is the used bytes of the cache for memory cache
+  uint64 Used = 4;
+  // Free is the free bytes of the cache for memory cache
+  uint64 Free = 5;
+  // HitRatio is the hit ratio of the cache.
+  float HitRatio = 6;
+}
+
+message GetCacheInfoResponse{
+  repeated CacheInfo CacheInfoList = 1;
 }

@@ -74,13 +74,21 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument, result *vm.
 		return true, nil
 	}
 
-	startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
-	if err != nil {
-		return false, err
-	}
-	endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
-	if err != nil {
-		return false, err
+	if len(arg.ctr.executorsForArgs) == 1 {
+		endVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			return false, err
+		}
+		startVec = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	} else {
+		startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			return false, err
+		}
+		endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			return false, err
+		}
 	}
 	rbat = batch.NewWithSize(len(arg.Attrs))
 	rbat.Attrs = arg.Attrs

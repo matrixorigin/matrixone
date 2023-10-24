@@ -58,6 +58,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		f, e = moConfigurationsCall(idx, proc, tblArg, &result)
 	case "mo_transactions":
 		f, e = moTransactionsCall(idx, proc, tblArg, &result)
+	case "mo_cache":
+		f, e = moCacheCall(idx, proc, tblArg)
 	default:
 		result.Status = vm.ExecStop
 		return result, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
@@ -134,6 +136,8 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		return moConfigurationsPrepare(proc, tblArg)
 	case "mo_transactions":
 		return moTransactionsPrepare(proc, tblArg)
+	case "mo_cache":
+		return moCachePrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}

@@ -67,7 +67,13 @@ package vm
 // 	IntersectAll: intersectall.String,
 
 // 	HashBuild: hashbuild.String,
-
+// Deletion:                deletion.String,
+// Insert:                  insert.String,
+// OnDuplicateKey:          onduplicatekey.String,
+// PreInsert:               preinsert.String,
+// PreInsertUnique:         preinsertunique.String,
+// PreInsertSecondaryIndex: preinsertsecondaryindex.String,
+// External:                external.String,
 // 	TableFunction: table_function.String,
 
 // 	LockOp: lockop.String,
@@ -129,7 +135,13 @@ package vm
 // 	IntersectAll: intersectall.Prepare,
 
 // 	HashBuild: hashbuild.Prepare,
-
+// Deletion:                deletion.Prepare,
+// Insert:                  insert.Prepare,
+// OnDuplicateKey:          onduplicatekey.Prepare,
+// PreInsert:               preinsert.Prepare,
+// PreInsertUnique:         preinsertunique.Prepare,
+// PreInsertSecondaryIndex: preinsertsecondaryindex.Prepare,
+// External:                external.Prepare,
 // 	TableFunction: table_function.Prepare,
 
 // 	LockOp: lockop.Prepare,
@@ -194,7 +206,10 @@ package vm
 // 	HashBuild: hashbuild.Call,
 
 // 	TableFunction: table_function.Call,
-
+// OnDuplicateKey:          onduplicatekey.Call,
+// PreInsert:               preinsert.Call,
+// PreInsertUnique:         preinsertunique.Call,
+// PreInsertSecondaryIndex: preinsertsecondaryindex.Call,
 // 	LockOp: lockop.Call,
 
 // 	Shuffle: shuffle.Call,
