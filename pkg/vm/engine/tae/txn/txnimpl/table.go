@@ -84,14 +84,15 @@ func (entries *txnEntries) Close() {
 }
 
 type deleteNode struct {
-	txnif.DeleteNode
-	idx int
+	DeleteNodes []txnif.DeleteNode
+	idx         []int
 }
 
 func newDeleteNode(node txnif.DeleteNode, idx int) *deleteNode {
+	nodes := []txnif.DeleteNode{node}
 	return &deleteNode{
-		DeleteNode: node,
-		idx:        idx,
+		DeleteNodes: nodes,
+		idx:         []int{idx},
 	}
 }
 
@@ -129,7 +130,18 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) 
 	}
 	return tbl, nil
 }
-
+func (tbl *txnTable) getNormalDeleteNode(id common.ID) *updates.DeleteNode {
+	nodes, ok := tbl.deleteNodes[id]
+	if !ok {
+		return nil
+	}
+	for _, node := range nodes.DeleteNodes {
+		if !node.IsPersistedDeletedNode() {
+			return node.(*updates.DeleteNode)
+		}
+	}
+	return nil
+}
 func (tbl *txnTable) PrePreareTransfer(phase string, ts types.TS) (err error) {
 	return tbl.TransferDeletes(ts, phase)
 }
@@ -176,30 +188,33 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	if len(tbl.deleteNodes) == 0 {
 		return
 	}
-	for id, node := range tbl.deleteNodes {
-		// search the read set to check wether the delete node relevant
-		// block was deleted.
-		// if not deleted, go to next
-		// if deleted, try to transfer the delete node
-		if err = tbl.store.warChecker.checkOne(
-			&id,
-			ts,
-		); err == nil {
-			continue
-		}
+	for id, nodes := range tbl.deleteNodes {
+		for offset, node := range nodes.DeleteNodes {
+			// search the read set to check wether the delete node relevant
+			// block was deleted.
+			// if not deleted, go to next
+			// if deleted, try to transfer the delete node
+			if err = tbl.store.warChecker.checkOne(
+				&id,
+				ts,
+			); err == nil {
+				continue
+			}
 
-		// if the error is not a r-w conflict. something wrong really happened
-		if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
-			return
-		}
+			// if the error is not a r-w conflict. something wrong really happened
+			if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
+				return
+			}
 
-		// try to transfer the delete node
-		// here are some possible returns
-		// nil: transferred successfully
-		// ErrTxnRWConflict: the target block was also be compacted
-		// ErrTxnWWConflict: w-w error
-		if _, err = tbl.TransferDeleteNode(&id, node, phase); err != nil {
-			return
+			// try to transfer the delete node
+			// here are some possible returns
+			// nil: transferred successfully
+			// ErrTxnRWConflict: the target block was also be compacted
+			// ErrTxnWWConflict: w-w error
+			if _, err = tbl.TransferDeleteNode(&id, node, offset, nodes.idx[offset], phase); err != nil {
+				return
+			}
+
 		}
 	}
 	return
@@ -266,7 +281,7 @@ func (tbl *txnTable) recurTransferDelete(
 }
 
 func (tbl *txnTable) TransferDeleteNode(
-	id *common.ID, node *deleteNode, phase string,
+	id *common.ID, node txnif.DeleteNode, offset, idx int, phase string,
 ) (transferred bool, err error) {
 	rows := node.DeletedRows()
 	pk := node.DeletedPK()
@@ -281,8 +296,7 @@ func (tbl *txnTable) TransferDeleteNode(
 	if err = node.ApplyRollback(); err != nil {
 		panic(err)
 	}
-
-	tbl.commitTransferDeleteNode(id, node)
+	tbl.commitTransferDeleteNode(id, offset, idx)
 	return
 }
 
@@ -334,10 +348,18 @@ func (tbl *txnTable) TransferDeleteRows(
 	return
 }
 
-func (tbl *txnTable) commitTransferDeleteNode(id *common.ID, node *deleteNode) {
+func (tbl *txnTable) commitTransferDeleteNode(id *common.ID, offset, idx int) {
 	tbl.store.warChecker.Delete(id)
-	tbl.txnEntries.Delete(node.idx)
-	delete(tbl.deleteNodes, *id)
+	tbl.txnEntries.Delete(idx)
+	nodes := tbl.deleteNodes[*id]
+	if offset == len(nodes.DeleteNodes)-1 {
+		nodes.DeleteNodes = nodes.DeleteNodes[:offset]
+	} else {
+		nodes.DeleteNodes = append(nodes.DeleteNodes[:offset], nodes.DeleteNodes[offset+1:]...)
+	}
+	if len(nodes.DeleteNodes) == 0 {
+		delete(tbl.deleteNodes, *id)
+	}
 }
 
 func (tbl *txnTable) WaitSynced() {
@@ -585,11 +607,20 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 	nid := *id
 	u := tbl.deleteNodes[nid]
 	if u != nil {
-		return ErrDuplicateNode
+		for _, n := range u.DeleteNodes {
+			if n.IsPersistedDeletedNode() == node.IsPersistedDeletedNode() {
+				return ErrDuplicateNode
+			}
+		}
+		u.DeleteNodes = append(u.DeleteNodes, node)
+		if !node.IsPersistedDeletedNode() {
+			u.idx = append(u.idx, tbl.txnEntries.Len())
+		}
+	} else {
+		tbl.store.IncreateWriteCnt()
+		tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
+		tbl.deleteNodes[nid] = newDeleteNode(node, tbl.txnEntries.Len())
 	}
-	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
-	tbl.deleteNodes[nid] = newDeleteNode(node, tbl.txnEntries.Len())
 	tbl.txnEntries.Append(node)
 	return nil
 }
@@ -738,7 +769,8 @@ func (tbl *txnTable) RangeDelete(
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}
-	node := tbl.deleteNodes[*id]
+	node := tbl.getNormalDeleteNode(*id)
+
 	if node != nil {
 		// TODO: refactor
 		chain := node.GetChain().(*updates.DeleteChain)
@@ -1070,7 +1102,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		var rowmask *roaring.Bitmap
 		if len(tbl.deleteNodes) > 0 {
 			fp := blk.AsCommonID()
-			deleteNode := tbl.deleteNodes[*fp]
+			deleteNode := tbl.getNormalDeleteNode(*fp)
 			if deleteNode != nil {
 				rowmask = deleteNode.GetRowMaskRefLocked()
 			}
@@ -1151,7 +1183,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
 				fp := blk.AsCommonID()
-				deleteNode := tbl.deleteNodes[*fp]
+				deleteNode := tbl.getNormalDeleteNode(*fp)
 				if deleteNode != nil {
 					rowmask = deleteNode.GetRowMaskRefLocked()
 				}
@@ -1260,7 +1292,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 						continue
 					}
 					fp := blk.AsCommonID()
-					deleteNode := tbl.deleteNodes[*fp]
+					deleteNode := tbl.getNormalDeleteNode(*fp)
 					if deleteNode != nil {
 						rowmask = deleteNode.GetRowMaskRefLocked()
 					}
@@ -1355,7 +1387,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 					continue
 				}
 				fp := blk.AsCommonID()
-				deleteNode := tbl.deleteNodes[*fp]
+				deleteNode := tbl.getNormalDeleteNode(*fp)
 				if deleteNode != nil {
 					rowmask = deleteNode.GetRowMaskRefLocked()
 				}
