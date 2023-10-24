@@ -3142,7 +3142,6 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 			}
 		}
 	}
-
 	//if len(n.AggList) > 0 && len(ranges) > 1 {
 	//	newranges := make([][]byte, 0, len(ranges))
 	//	newranges = append(newranges, ranges[0])
