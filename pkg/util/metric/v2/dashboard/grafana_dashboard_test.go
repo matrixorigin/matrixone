@@ -12,26 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package dashboard
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-var (
-	S3ConnectCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "cn",
-			Subsystem: "fs",
-			Name:      "s3_connect_total",
-			Help:      "Total number of s3 connect count.",
-		})
+func TestCreateDashboard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
 
-	S3DNSResolveCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "cn",
-			Subsystem: "fs",
-			Name:      "s3_dns_resolve_total",
-			Help:      "Total number of s3 dns resolve count.",
-		})
-)
+	c := NewDashboardCreator("http://127.0.0.1:3000", "admin", "admin", "Prometheus")
+	require.NoError(t, c.Create())
+}
