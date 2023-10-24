@@ -18,7 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
+	"net"
+	"syscall"
 )
 
 // errorCode indicates the errors.
@@ -29,9 +30,6 @@ const (
 	codeAuthFailed
 	codeClientDisconnect
 	codeServerDisconnect
-
-	errMsgClosedConn  = "use of closed network connection"
-	errMsgResetByPeer = "connection reset by peer"
 )
 
 func (c errorCode) String() string {
@@ -91,10 +89,10 @@ func isConnEndErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	if strings.Contains(err.Error(), errMsgClosedConn) {
+	if errors.Is(err, net.ErrClosed) {
 		return true
 	}
-	if strings.Contains(err.Error(), errMsgResetByPeer) {
+	if errors.Is(err, syscall.ECONNRESET) {
 		return true
 	}
 	return false
