@@ -45,4 +45,5 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		}
 	}
 	arg.Batchs = nil
+	arg.idx = 0
 }
