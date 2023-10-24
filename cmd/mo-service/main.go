@@ -183,7 +183,7 @@ func startService(
 		}
 	}
 
-	fs, err := cfg.createFileService(ctx, defines.LocalFileServiceName, globalCounterSet, st, uuid)
+	fs, err := cfg.createFileService(ctx, st, defines.LocalFileServiceName, globalCounterSet, st, uuid)
 	if err != nil {
 		return err
 	}
@@ -282,6 +282,8 @@ func startTNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
+		//notify the tn service it is in the standalone cluster
+		c.InStandalone = cfg.IsStandalone
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
 			perfCounterSet,
