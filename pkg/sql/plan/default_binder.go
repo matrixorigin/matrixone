@@ -80,3 +80,7 @@ func (b *DefaultBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dep
 func (b *DefaultBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
 }
+
+func (b *DefaultBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
+}
