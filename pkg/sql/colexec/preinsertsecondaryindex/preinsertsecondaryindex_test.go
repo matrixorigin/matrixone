@@ -25,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +61,7 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 	// (1, 11, 23)
 	// (2, 22, 23)
 	// (3, 33, 23)
-	inputBatch := &batch.Batch{
+	testBatch := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 3}, nil),
 			testutil.MakeInt64Vector([]int64{11, 22, 33}, nil),
@@ -67,7 +69,7 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 		},
 		Cnt: 1,
 	}
-	inputBatch.SetRowCount(3)
+	testBatch.SetRowCount(3)
 
 	argument := Argument{
 		PreInsertCtx: &plan.PreInsertUkCtx{
@@ -76,10 +78,29 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 			PkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
 			UkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
 		},
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
 
 	types.T_int64.ToType()
-	proc.Reg.InputBatch = inputBatch
-	_, err := Call(0, proc, &argument, false, false)
+	resetChildren(&argument, testBatch)
+	_, err := argument.Call(proc)
 	require.NoError(t, err)
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
 }

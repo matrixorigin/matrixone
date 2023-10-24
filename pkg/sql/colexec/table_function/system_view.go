@@ -614,7 +614,7 @@ func moCachePrepare(proc *process.Process, arg *Argument) error {
 	return nil
 }
 
-func moCacheCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
 
@@ -653,7 +653,7 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 		arg.ctr.state = dataFinished
 		return false, nil
 
