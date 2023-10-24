@@ -3,6 +3,11 @@ create database vecdb;
 use vecdb;
 drop table if exists vec_table;
 create table vec_table(a int, b vecf32(3), c vecf64(3));
+desc vec_table;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    VECF32(3)    YES        null        
+c    VECF64(3)    YES        null        
 insert into vec_table values(1, "[1,2,3]", "[4,5,6]");
 select * from vec_table;
 a    b    c
