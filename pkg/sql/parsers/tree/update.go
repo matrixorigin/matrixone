@@ -150,6 +150,7 @@ type ExParamConst struct {
 	Option       []string
 	Data         string
 	Tail         *TailParameter
+	StageName    Identifier
 }
 
 type ExParam struct {
@@ -206,17 +207,22 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" local")
 	}
 
-	if len(node.Param.Option) == 0 {
-		ctx.WriteString(" infile ")
-		ctx.WriteString(node.Param.Filepath)
+	if len(node.Param.StageName) != 0 {
+		ctx.WriteString(" url from stage ")
+		node.Param.StageName.Format(ctx)
 	} else {
-		if node.Param.ScanType == S3 {
-			ctx.WriteString(" url s3option ")
-		} else {
+		if len(node.Param.Option) == 0 {
 			ctx.WriteString(" infile ")
+			ctx.WriteString(node.Param.Filepath)
+		} else {
+			if node.Param.ScanType == S3 {
+				ctx.WriteString(" url s3option ")
+			} else {
+				ctx.WriteString(" infile ")
 
+			}
+			formatS3option(ctx, node.Param.Option)
 		}
-		formatS3option(ctx, node.Param.Option)
 	}
 
 	switch node.DuplicateHandling.(type) {

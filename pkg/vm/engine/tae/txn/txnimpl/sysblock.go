@@ -287,6 +287,13 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 		colData.Append(schema.Version, false)
 	case pkgcatalog.SystemRelAttr_CatalogVersion:
 		colData.Append(schema.CatalogVersion, false)
+	case catalog.AccountIDDbNameTblName:
+		packer := types.NewPacker(common.DefaultAllocator)
+		packer.EncodeUint32(schema.AcInfo.TenantID)
+		packer.EncodeStringType([]byte(table.GetDB().GetName()))
+		packer.EncodeStringType([]byte(schema.Name))
+		colData.Append(packer.Bytes(), false)
+		packer.Reset()
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
@@ -339,6 +346,12 @@ func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode],
 		colData.Append(db.GetTenantID(), false)
 	case pkgcatalog.SystemDBAttr_Type:
 		colData.Append([]byte(db.GetDatType()), false)
+	case catalog.AccountIDDbName:
+		packer := types.NewPacker(common.DefaultAllocator)
+		packer.EncodeUint32(db.GetTenantID())
+		packer.EncodeStringType([]byte(db.GetName()))
+		colData.Append(packer.Bytes(), false)
+		packer.Reset()
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}

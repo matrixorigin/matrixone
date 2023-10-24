@@ -17,6 +17,7 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -482,6 +483,8 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			continue
 		}
 
+		t0 := time.Now()
+
 		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
 		//   		   2. push the AppendNode into the MVCCHandle of block
 		mgr.onPrePrepare(op)
@@ -506,6 +509,12 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
 		}
 
+		dequeuePreparingDuration := time.Since(t0)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && dequeuePreparingDuration > threshold && op.Txn.GetContext() != nil {
+			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.DequeuePreparing, &common.DurationRecords{Duration: dequeuePreparingDuration}))
+		}
+
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
@@ -523,6 +532,7 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
+			t0 := time.Now()
 			if err := op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
@@ -533,6 +543,11 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 					}
 				}
 				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
+			}
+			prepareWALDuration := time.Since(t0)
+			_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+			if enable && prepareWALDuration > threshold && op.Txn.GetContext() != nil {
+				op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: prepareWALDuration}))
 			}
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
 		}
@@ -555,6 +570,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 		//Notice that WaitPrepared do nothing when op is OpRollback
+		t0 := time.Now()
 		if err = op.Txn.WaitPrepared(op.ctx); err != nil {
 			// v0.6 TODO: Error handling
 			panic(err)
@@ -564,6 +580,11 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			mgr.on2PCPrepared(op)
 		} else {
 			mgr.on1PCPrepared(op)
+		}
+		dequeuePreparedDuration := time.Since(t0)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && dequeuePreparedDuration > threshold && op.Txn.GetContext() != nil {
+			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: dequeuePreparedDuration}))
 		}
 	}
 	common.DoIfDebugEnabled(func() {

@@ -19,12 +19,14 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -68,6 +70,8 @@ func (l *localLockTable) lock(
 	rows [][]byte,
 	opts LockOptions,
 	cb func(pb.Result, error)) {
+	v2.TxnLocalLockTotalCounter.Inc()
+
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock.local")
 	defer span.End()
@@ -193,12 +197,16 @@ func (l *localLockTable) unlock(
 			if !lock.holders.contains(txn.txnID) {
 				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn")
 			}
+			if len(startKey) > 0 && !lock.isLockRangeEnd() {
+				panic("BUG: missing range end key")
+			}
 
-			lock.closeTxn(
+			lockCanRemoved := lock.closeTxn(
 				txn,
 				notifyValue{ts: commitTS})
 			logLockUnlocked(txn, key, lock)
-			if lock.isEmpty() {
+			if lockCanRemoved {
+				v2.TxnHoldLockDurationHistogram.Observe(time.Since(lock.createAt).Seconds())
 				l.mu.store.Delete(key)
 				if len(startKey) > 0 {
 					l.mu.store.Delete(startKey)

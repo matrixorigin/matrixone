@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -303,14 +304,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
-	failed := false
-	defer func() {
-		lastArg.Free(s.Proc, failed)
-	}()
 
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, errEncode)
 		return errEncode
 	}
 	s.Instructions = append(s.Instructions, lastInstruction)
@@ -318,27 +315,25 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// encode the process related information
 	pData, errEncodeProc := encodeProcessInfo(s.Proc)
 	if errEncodeProc != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 	defer sender.close()
 	err = sender.send(sData, pData, pipeline.PipelineMessage)
 	if err != nil {
-		failed = true
+		lastArg.Free(s.Proc, true, err)
 		return err
 	}
 
-	if err = receiveMessageFromCnServer(c, s, sender, lastInstruction); err != nil {
-		failed = true
-	}
-
+	err = receiveMessageFromCnServer(c, s, sender, lastInstruction)
+	lastArg.Free(s.Proc, err != nil, err)
 	return err
 }
 
@@ -726,6 +721,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *preinsertunique.Argument:
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
+		}
+	case *preinsertsecondaryindex.Argument:
+		in.PreInsertSecondaryIndex = &pipeline.PreInsertSecondaryIndex{
+			PreInsertSkCtx: t.PreInsertCtx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -1118,6 +1117,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		t := opr.GetPreInsertUnique()
 		v.Arg = &preinsertunique.Argument{
 			PreInsertCtx: t.GetPreInsertUkCtx(),
+		}
+	case vm.PreInsertSecondaryIndex:
+		t := opr.GetPreInsertSecondaryIndex()
+		v.Arg = &preinsertsecondaryindex.Argument{
+			PreInsertCtx: t.GetPreInsertSkCtx(),
 		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()

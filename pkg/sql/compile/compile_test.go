@@ -124,7 +124,7 @@ func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
 		tc.proc.TxnOperator = txnOperator
-		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil, false)
+		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil)
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
@@ -144,7 +144,7 @@ func TestCompileWithFaults(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
-	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil, false)
+	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil)
 	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()

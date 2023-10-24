@@ -16,10 +16,8 @@ package merge
 
 import (
 	"container/heap"
-	"encoding/hex"
-	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 // min heap item
@@ -60,20 +58,18 @@ func (is *itemSet[T]) Clear() {
 	*is = old[:0]
 }
 
-// heapBuilder founds out blocks to be merged via maintaining a min heap holding
-// up to default 300 items.
+// heapBuilder founds out blocks to be merged via maintaining a min heap
 type heapBuilder[T any] struct {
 	items itemSet[T]
-	cap   int
 }
 
 func (h *heapBuilder[T]) reset() {
 	h.items.Clear()
 }
 
-func (h *heapBuilder[T]) push(item *mItem[T]) {
+func (h *heapBuilder[T]) pushWithCap(item *mItem[T], cap int) {
 	heap.Push(&h.items, item)
-	if h.items.Len() > h.cap {
+	for h.items.Len() > cap {
 		heap.Pop(&h.items)
 	}
 }
@@ -87,21 +83,22 @@ func (h *heapBuilder[T]) finish() []T {
 	return ret
 }
 
-func humanReadableBytes(bytes int) string {
-	if bytes < 1024 {
-		return fmt.Sprintf("%dB", bytes)
+func estimateMergeConsume(msegs []*catalog.SegmentEntry) (origSize, estSize int) {
+	if len(msegs) == 0 {
+		return
 	}
-	if bytes < 1024*1024 {
-		return fmt.Sprintf("%.2fKB", float64(bytes)/1024)
+	rows, merged := 0, 0
+	for _, m := range msegs {
+		rows += m.Stat.Rows
+		merged += m.Stat.RemainingRows
+		origSize += m.Stat.OriginSize
 	}
-	if bytes < 1024*1024*1024 {
-		return fmt.Sprintf("%.2fMB", float64(bytes)/const1MBytes)
+	// by test exprience, full 8192 rows batch will expand to (6~8)x memory comsupation.
+	// the ExpansionRate will be moderated by the actual row number after applying deletes
+	rate := float64(constMergeExpansionRate*merged) / float64(rows)
+	if rate < 2 {
+		rate = 2
 	}
-	return fmt.Sprintf("%.2fGB", float64(bytes)/const1GBytes)
-}
-
-func shortSegId(x objectio.Segmentid) string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], x[:4])
-	return string(shortuuid[:])
+	estSize = int(float64(origSize) * rate)
+	return
 }

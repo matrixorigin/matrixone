@@ -229,7 +229,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
-	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, false)
+	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil)
 
 	result := executor.NewResult(exec.s.mp)
 	var batches []*batch.Batch
