@@ -264,4 +264,20 @@ func TestHandleSqlForRecord(t *testing.T) {
 	ret = HandleSqlForRecord("create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='123', 'secret_access_key'='123', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'};")
 	require.Equal(t, 1, len(ret))
 	require.Equal(t, "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}", ret[0])
+
+	ret = HandleSqlForRecord("/* cloud_user *//* save_result */select count(*) from a;")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "select count(*) from a", ret[0])
+
+	ret = HandleSqlForRecord("/* cloud_user    *//* save_result    */select count(*) from a;")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "select count(*) from a", ret[0])
+
+	ret = HandleSqlForRecord("/* cloud_user    *//* save_result    */ /*abc */select count(*) from a;")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "/*abc */select count(*) from a", ret[0])
+
+	ret = HandleSqlForRecord("/* cloud_user    *//* save_result    */ /*abc */select count(*) from a // def;")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "/*abc */select count(*) from a // def;", ret[0])
 }

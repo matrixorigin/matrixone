@@ -312,6 +312,7 @@ func (r *taskRunner) fetch(ctx context.Context) {
 			}
 			tasks, err := r.doFetch()
 			if err != nil {
+				r.logger.Error("fetch task failed", zap.Error(err))
 				break
 			}
 			r.addTasks(ctx, tasks)
@@ -327,7 +328,6 @@ func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
 		WithTaskRunnerCond(EQ, r.runnerID))
 	cancel()
 	if err != nil {
-		r.logger.Error("fetch task failed", zap.Error(err))
 		return nil, err
 	}
 	newTasks := tasks[:0]
@@ -434,9 +434,11 @@ func (r *taskRunner) run(rt runningTask) {
 		start := time.Now()
 		r.logger.Debug("task start execute",
 			zap.String("task", rt.task.DebugString()))
-		defer r.logger.Debug("task execute completed",
-			zap.String("task", rt.task.DebugString()),
-			zap.Duration("cost", time.Since(start)))
+		defer func() {
+			r.logger.Debug("task execute completed",
+				zap.String("task", rt.task.DebugString()),
+				zap.Duration("cost", time.Since(start)))
+		}()
 
 		executor, err := r.getExecutor(rt.task.Metadata.Executor)
 		result := &task.ExecuteResult{Code: task.ResultCode_Success}
