@@ -38,7 +38,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -417,12 +417,12 @@ func (s *Service) handleGetTruncatedIndex(ctx context.Context, req pb.Request) p
 func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Response {
 	start := time.Now()
 	defer func() {
-		metricv2.HeartbeatRecvHistogram.WithLabelValues("log").Observe(time.Since(start).Seconds())
+		v2.LogHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
 	}()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addLogStoreHeartbeat(ctx, *hb); err != nil {
-		metricv2.HeartbeatRecvFailureCounter.WithLabelValues("log").Inc()
+		v2.LogHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -435,12 +435,12 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
 	start := time.Now()
 	defer func() {
-		metricv2.HeartbeatRecvHistogram.WithLabelValues("cn").Observe(time.Since(start).Seconds())
+		v2.CNHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
 	}()
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
-		metricv2.HeartbeatRecvFailureCounter.WithLabelValues("cn").Inc()
+		v2.CNHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -464,12 +464,12 @@ func (s *Service) handleCNAllocateID(ctx context.Context, req pb.Request) pb.Res
 func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
 	start := time.Now()
 	defer func() {
-		metricv2.HeartbeatRecvHistogram.WithLabelValues("tn").Observe(time.Since(start).Seconds())
+		v2.TNHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
 	}()
 	hb := req.TNHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addTNStoreHeartbeat(ctx, *hb); err != nil {
-		metricv2.HeartbeatRecvFailureCounter.WithLabelValues("tn").Inc()
+		v2.TNHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
