@@ -88,14 +88,14 @@ const (
 
 	BLKCNMetaInsertIDX
 
+	TNMetaIDX
+
 	// supporting `show accounts` by recording extra
 	// account related info in checkpoint
 	SEGStorageUsageIDX
-
-	TNMetaIDX
 )
 
-const MaxIDX = TNMetaIDX + 1
+const MaxIDX = SEGStorageUsageIDX + 1
 
 const (
 	Checkpoint_Meta_TID_IDX                 = 2
@@ -160,8 +160,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		StorageUsageSchema,
-		TNMetaSchema, // 25
+		TNMetaSchema,
+		StorageUsageSchema, // 25
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -188,8 +188,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		StorageUsageSchema,
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -216,8 +216,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		StorageUsageSchema,
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -244,8 +244,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		StorageUsageSchema,
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 	}
 	checkpointDataSchemas_V5 = [MaxIDX]*catalog.Schema{
 		MetaSchema,
@@ -272,8 +272,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
-		StorageUsageSchema,
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 	}
 
 	checkpointDataSchemas_V6 = [MaxIDX]*catalog.Schema{
@@ -301,8 +301,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema, // 23
-		StorageUsageSchema,
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 	}
 	// Checkpoint V7, V8 update checkpoint metadata
 	checkpointDataSchemas_V7 = checkpointDataSchemas_V6
@@ -336,8 +336,8 @@ func init() {
 		DelSchema,
 		BlkTNSchema,
 		BlkMetaSchema, // 23
-		StorageUsageSchema,
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 	}
 
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
@@ -2028,6 +2028,7 @@ func (data *CheckpointData) readAll(
 				continue
 			}
 			item := checkpointDataReferVersions[version][idx]
+
 			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(idx), reader)
 			if err != nil {
 				return
