@@ -61,18 +61,7 @@ func (c *DashboardCreator) Create() error {
 }
 
 func (c *DashboardCreator) createFolder(name string) (*grabana.Folder, error) {
-	folder, err := c.cli.GetFolderByTitle(context.Background(), name)
-	if err != nil && err != grabana.ErrFolderNotFound {
-		return nil, err
-	}
-
-	if folder == nil {
-		folder, err = c.cli.CreateFolder(context.Background(), name)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return folder, nil
+	return c.cli.FindOrCreateFolder(context.Background(), name)
 }
 
 func (c *DashboardCreator) withGraph(
@@ -105,8 +94,8 @@ func (c *DashboardCreator) getHistogram(
 		options = append(options, c.withGraph(
 			fmt.Sprintf("P%f time", percent*100),
 			columns[i],
-			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, instance))", percent, metric),
-			"{{ instance }}",
+			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, pod))", percent, metric),
+			"{{ pod }}",
 			axis.Unit("s"),
 			axis.Min(0)))
 	}
@@ -124,8 +113,8 @@ func (c *DashboardCreator) getBytesHistogram(
 		options = append(options, c.withGraph(
 			fmt.Sprintf("P%f time", percent*100),
 			columns[i],
-			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, instance))", percent, metric),
-			"{{ instance }}",
+			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, pod))", percent, metric),
+			"{{ pod }}",
 			axis.Unit("bytes"),
 			axis.Min(0)))
 	}
