@@ -1411,17 +1411,15 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
+		determineHashOnPK(rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, false)
 
-		//-----------------------------------------------------------------
 		builder.partitionPrune(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
-		//-----------------------------------------------------------------
 
-		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
-		determineHashOnPK(rootID, builder)
+
 		builder.pushdownRuntimeFilters(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
