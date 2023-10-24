@@ -559,8 +559,9 @@ type service struct {
 	// queryService is used to send query request between CN services.
 	queryService queryservice.QueryService
 
-	stopper *stopper.Stopper
-	aicm    *defines.AutoIncrCacheManager
+	stopper     *stopper.Stopper
+	aicm        *defines.AutoIncrCacheManager
+	upgradeOnce sync.Once
 
 	task struct {
 		sync.RWMutex
