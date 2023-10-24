@@ -344,7 +344,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 
 				// 3. insert data into index table for unique index object
-				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
+				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
 				err = c.runSql(insertSQL)
 				if err != nil {
 					return err
@@ -987,7 +987,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			return err
 		}
 
-		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
+		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
 		err = c.runSql(insertSQL)
 		if err != nil {
 			return err
