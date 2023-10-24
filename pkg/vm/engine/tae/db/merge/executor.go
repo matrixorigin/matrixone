@@ -200,7 +200,11 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 
 func (e *MergeExecutor) memAvailBytes() int {
 	merging := int(atomic.LoadInt64(&e.activeEstimateBytes))
-	return e.memAvail - e.memSpare - merging
+	avail := e.memAvail - e.memSpare - merging
+	if avail < 0 {
+		avail = 0
+	}
+	return avail
 }
 
 func expandObjectList(segs []*catalog.SegmentEntry) (
