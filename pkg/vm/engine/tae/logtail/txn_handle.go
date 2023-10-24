@@ -17,7 +17,9 @@ package logtail
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sort"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -84,6 +86,9 @@ func (b *TxnLogtailRespBuilder) Close() {
 }
 
 func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
+	now := time.Now()
+	defer v2.LogTailCollectDurationHistogram.Observe(time.Since(now).Seconds())
+
 	b.txn = txn
 	txn.GetStore().ObserveTxn(
 		b.visitDatabase,
