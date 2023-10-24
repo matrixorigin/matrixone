@@ -99,6 +99,16 @@ func main() {
 		return
 	}
 
+	//replace : in username to #, because : is used as separator in dsn.
+	//password can have ":".
+	username = strings.ReplaceAll(username, ":", "#")
+
+	// if host has ":", reports error
+	if strings.Count(host, ":") > 0 {
+		err = moerr.NewInvalidInput(ctx, "host can not have character ':'")
+		return
+	}
+
 	if toCsv {
 		csvConf.enable = toCsv
 		csvConf.fieldDelimiter, err = checkFieldDelimiter(ctx, csvFieldDelimiterStr)

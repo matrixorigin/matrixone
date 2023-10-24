@@ -17,6 +17,7 @@ package queryservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"os"
 	"testing"
 	"time"
@@ -194,6 +195,45 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService,
 		}
 		return nil
 	}, false)
+	qs.AddHandleFunc(pb.CmdMethod_GetCacheInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response) error {
+		ci := &pb.CacheInfo{
+			NodeType:  cn.ServiceID,
+			NodeId:    "uuid",
+			CacheType: "memory",
+		}
+		resp.GetCacheInfoResponse = &pb.GetCacheInfoResponse{
+			CacheInfoList: []*pb.CacheInfo{ci},
+		}
+		return nil
+	}, false)
+	qs.AddHandleFunc(pb.CmdMethod_GetTxnInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response) error {
+		ti := &pb.TxnInfo{
+			CreateAt:  time.Now(),
+			Meta:      nil,
+			UserTxn:   true,
+			WaitLocks: nil,
+		}
+		resp.GetTxnInfoResponse = &pb.GetTxnInfoResponse{
+			CnId:        "uuid",
+			TxnInfoList: []*pb.TxnInfo{ti},
+		}
+		return nil
+	}, false)
+	qs.AddHandleFunc(pb.CmdMethod_GetLockInfo, func(ctx context.Context, request *pb.Request, resp *pb.Response) error {
+		li := &pb.LockInfo{
+			TableId:     100,
+			Keys:        nil,
+			LockMode:    lock.LockMode_Shared,
+			IsRangeLock: true,
+			Holders:     nil,
+			Waiters:     nil,
+		}
+		resp.GetLockInfoResponse = &pb.GetLockInfoResponse{
+			CnId:         "uuid1",
+			LockInfoList: []*pb.LockInfo{li},
+		}
+		return nil
+	}, false)
 	err = qs.Start()
 	assert.NoError(t, err)
 
@@ -237,4 +277,154 @@ func TestQueryServiceTraceSpan(t *testing.T) {
 		assert.NotNil(t, resp.TraceSpanResponse)
 		assert.Equal(t, "echo", resp.TraceSpanResponse.Resp)
 	})
+}
+
+func TestRequestMultipleCn(t *testing.T) {
+	type args struct {
+		ctx                   context.Context
+		nodes                 []string
+		qs                    QueryService
+		genRequest            func() *pb.Request
+		handleValidResponse   func(string, *pb.Response)
+		handleInvalidResponse func(string)
+	}
+
+	cn := metadata.CNService{ServiceID: "test_request_multi_cn"}
+	runTestWithQueryService(t, cn, func(svc QueryService, addr string, sm *SessionManager) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		defer cancel()
+
+		//////
+
+		tests := []struct {
+			name    string
+			args    args
+			wantErr assert.ErrorAssertionFunc
+		}{
+			{
+				name: "genRequest is nil",
+				args: args{
+					ctx:                   context.Background(),
+					nodes:                 []string{},
+					qs:                    nil,
+					genRequest:            nil,
+					handleValidResponse:   nil,
+					handleInvalidResponse: nil,
+				},
+				wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+					assert.NotNil(t, err)
+					return true
+				},
+			},
+			{
+				name: "handleValidResponse is nil",
+				args: args{
+					ctx:                   context.Background(),
+					nodes:                 []string{},
+					qs:                    nil,
+					genRequest:            func() *pb.Request { return nil },
+					handleValidResponse:   nil,
+					handleInvalidResponse: nil,
+				},
+				wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+					assert.NotNil(t, err)
+					return true
+				},
+			},
+			{
+				name: "get cache info",
+				args: args{
+					ctx:   context.Background(),
+					nodes: []string{},
+					qs:    nil,
+					genRequest: func() *pb.Request {
+						req := svc.NewRequest(pb.CmdMethod_GetCacheInfo)
+						req.GetCacheInfoRequest = &pb.GetCacheInfoRequest{}
+						return req
+					},
+					handleValidResponse: func(nodeAddr string, rsp *pb.Response) {
+						if rsp != nil && rsp.GetCacheInfoResponse != nil {
+							assert.GreaterOrEqual(t, len(rsp.GetCacheInfoResponse.GetCacheInfoList()), 1)
+						}
+					},
+					handleInvalidResponse: nil,
+				},
+				wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+					assert.Nil(t, err)
+					return true
+				},
+			},
+			{
+				name: "get txn info",
+				args: args{
+					ctx:   context.Background(),
+					nodes: []string{},
+					qs:    nil,
+					genRequest: func() *pb.Request {
+						req := svc.NewRequest(pb.CmdMethod_GetTxnInfo)
+						req.GetTxnInfoRequest = &pb.GetTxnInfoRequest{}
+						return req
+					},
+					handleValidResponse: func(nodeAddr string, rsp *pb.Response) {
+						if rsp != nil && rsp.GetTxnInfoResponse != nil {
+							fmt.Printf("%v\n", rsp.GetTxnInfoResponse.TxnInfoList[0].UserTxn)
+							assert.Equal(t, rsp.GetTxnInfoResponse.GetCnId(), "uuid")
+							assert.True(t, rsp.GetTxnInfoResponse.TxnInfoList[0].UserTxn)
+							assert.GreaterOrEqual(t, len(rsp.GetTxnInfoResponse.TxnInfoList), 1)
+						}
+					},
+					handleInvalidResponse: nil,
+				},
+				wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+					assert.Nil(t, err)
+					return true
+				},
+			},
+			{
+				name: "get lock info",
+				args: args{
+					ctx:   context.Background(),
+					nodes: []string{},
+					qs:    nil,
+					genRequest: func() *pb.Request {
+						req := svc.NewRequest(pb.CmdMethod_GetLockInfo)
+						req.GetLockInfoRequest = &pb.GetLockInfoRequest{}
+						return req
+					},
+					handleValidResponse: func(nodeAddr string, rsp *pb.Response) {
+						if rsp != nil && rsp.GetLockInfoResponse != nil {
+							li := rsp.GetLockInfoResponse.LockInfoList[0]
+							fmt.Printf("%v %v %v %v\n", rsp.GetLockInfoResponse.GetCnId(), li.TableId, li.LockMode, li.IsRangeLock)
+							assert.Equal(t, rsp.GetLockInfoResponse.GetCnId(), "uuid1")
+							assert.Equal(t, li.TableId, uint64(100))
+							assert.Equal(t, li.LockMode, lock.LockMode_Shared)
+							assert.True(t, li.IsRangeLock)
+							assert.GreaterOrEqual(t, len(rsp.GetLockInfoResponse.LockInfoList), 1)
+						}
+					},
+					handleInvalidResponse: nil,
+				},
+				wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+					assert.Nil(t, err)
+					return true
+				},
+			},
+		}
+
+		//////
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				tt.wantErr(t,
+					RequestMultipleCn(ctx,
+						[]string{addr},
+						svc,
+						tt.args.genRequest,
+						tt.args.handleValidResponse,
+						tt.args.handleInvalidResponse),
+					fmt.Sprintf("RequestMultipleCn(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.nodes, tt.args.qs, tt.args.genRequest != nil, tt.args.handleValidResponse != nil, tt.args.handleInvalidResponse != nil))
+			})
+		}
+	})
+
 }

@@ -12,26 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package fileservice
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"context"
 )
 
-var (
-	LogTailSendQueueSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "tn",
-			Subsystem: "logtail",
-			Name:      "sending_queue_size",
-			Help:      "Size of sending logtail queue size.",
-		})
-
-	LogTailReceiveQueueSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "cn",
-			Subsystem: "logtail",
-			Name:      "receive_queue_size",
-			Help:      "Size of receiving logtail queue size.",
-		})
-)
+type FileCache interface {
+	SetFile(ctx context.Context, path string, content []byte) error
+}

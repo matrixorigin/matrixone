@@ -276,6 +276,7 @@ func newTNService(tn logpb.TNStore) metadata.TNService {
 		LogTailServiceAddress: tn.LogtailServerAddress,
 		LockServiceAddress:    tn.LockServiceAddress,
 		CtlAddress:            tn.CtlAddress,
+		QueryAddress:          tn.QueryAddress,
 	}
 	v.Shards = make([]metadata.TNShard, 0, len(tn.Shards))
 	for _, s := range tn.Shards {

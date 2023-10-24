@@ -54,9 +54,9 @@ func NewAliyunSDK(
 	}
 
 	// env vars
-	if args.RoleARN == "" {
+	if args.OIDCRoleARN == "" {
 		if v := os.Getenv("ALIBABA_CLOUD_ROLE_ARN"); v != "" {
-			args.RoleARN = v
+			args.OIDCRoleARN = v
 		}
 	}
 	if args.OIDCProviderARN == "" {
@@ -542,33 +542,19 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 		if err != nil {
 			return
 		}
-		if o.RoleARN != "" {
-			var conf *credentials.Config
-
-			if o.OIDCProviderARN != "" {
-				// oidc role arn
-				logutil.Info("aliyun sdk credential", zap.Any("using", "oidc role arn"))
-				conf = &credentials.Config{
-					Type:              ptrTo("oidc_role_arn"),
-					RoleArn:           ptrTo(o.RoleARN),
-					OIDCProviderArn:   ptrTo(o.OIDCProviderARN),
-					OIDCTokenFilePath: ptrTo(o.OIDCTokenFilePath),
-				}
-
-			} else {
-				// ram role arn
-				logutil.Info("aliyun sdk credential", zap.Any("using", "ram role arn"))
-				if ret == nil {
-					err = moerr.NewBadConfig(ctx, "ram role arn without access key")
-					return
-				}
-				creds := ret.GetCredentials()
-				conf = &credentials.Config{
-					Type:            ptrTo("ram_role_arn"),
-					AccessKeyId:     ptrTo(creds.GetAccessKeyID()),
-					AccessKeySecret: ptrTo(creds.GetAccessKeySecret()),
-					RoleArn:         ptrTo(o.RoleARN),
-				}
+		if o.AssumeRoleARN != "" {
+			// assume ram role
+			logutil.Info("aliyun sdk credential", zap.Any("using", "assume ram role"))
+			if ret == nil {
+				err = moerr.NewBadConfig(ctx, "ram role arn without access key")
+				return
+			}
+			creds := ret.GetCredentials()
+			conf := &credentials.Config{
+				Type:            ptrTo("ram_role_arn"),
+				AccessKeyId:     ptrTo(creds.GetAccessKeyID()),
+				AccessKeySecret: ptrTo(creds.GetAccessKeySecret()),
+				RoleArn:         ptrTo(o.AssumeRoleARN),
 			}
 
 			if o.RoleSessionName != "" {
@@ -657,6 +643,37 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 		logutil.Info("aliyun sdk credential", zap.Any("using", "aws env"))
 		return aliyunCredentialsProviderFunc(func() (string, string, string) {
 			return v.AccessKeyID, v.SecretAccessKey, v.SessionToken
+		}), nil
+	}
+
+	// oidc role arn
+	if o.OIDCProviderARN != "" {
+		logutil.Info("aliyun sdk credential", zap.Any("using", "oidc role arn"))
+		conf := &credentials.Config{
+			Type:              ptrTo("oidc_role_arn"),
+			RoleArn:           ptrTo(o.OIDCRoleARN),
+			OIDCProviderArn:   ptrTo(o.OIDCProviderARN),
+			OIDCTokenFilePath: ptrTo(o.OIDCTokenFilePath),
+		}
+		if o.RoleSessionName != "" {
+			conf.RoleSessionName = &o.RoleSessionName
+		}
+		if o.ExternalID != "" {
+			conf.ExternalId = &o.ExternalID
+		}
+		var provider credentials.Credential
+		provider, err = credentials.NewCredential(conf)
+		if err != nil {
+			logutil.Error("aliyun credential error", zap.Error(err))
+			return
+		}
+		return aliyunCredentialsProviderFunc(func() (string, string, string) {
+			v, err := provider.GetCredential()
+			if err != nil {
+				logutil.Error("aliyun credential error", zap.Error(err))
+				return "", "", ""
+			}
+			return *v.AccessKeyId, *v.AccessKeySecret, *v.SecurityToken
 		}), nil
 	}
 
