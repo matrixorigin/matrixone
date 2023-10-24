@@ -671,7 +671,7 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	}()
 
 	// aws role arn
-	if o.RoleARN != "" {
+	if o.AssumeRoleARN != "" {
 		if provider := func() aws.CredentialsProvider {
 			loadConfigOptions := []func(*config.LoadOptions) error{
 				config.WithLogger(logutil.GetS3Logger()),
@@ -698,7 +698,7 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 			})
 			provider := stscreds.NewAssumeRoleProvider(
 				stsSvc,
-				o.RoleARN,
+				o.AssumeRoleARN,
 				func(opts *stscreds.AssumeRoleOptions) {
 					if o.ExternalID != "" {
 						opts.ExternalID = &o.ExternalID

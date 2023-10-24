@@ -99,11 +99,11 @@ func TestS3FS(t *testing.T) {
 			fs, err := NewS3FS(
 				ctx,
 				ObjectStorageArguments{
-					Name:      name,
-					Endpoint:  config.Endpoint,
-					Bucket:    config.Bucket,
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					RoleARN:   config.RoleARN,
+					Name:          name,
+					Endpoint:      config.Endpoint,
+					Bucket:        config.Bucket,
+					KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+					AssumeRoleARN: config.RoleARN,
 				},
 				DisabledCacheConfig,
 				nil,
@@ -128,10 +128,10 @@ func TestS3FS(t *testing.T) {
 		fs, err := NewS3FS(
 			ctx,
 			ObjectStorageArguments{
-				Name:     "s3",
-				Endpoint: config.Endpoint,
-				Bucket:   config.Bucket,
-				RoleARN:  config.RoleARN,
+				Name:          "s3",
+				Endpoint:      config.Endpoint,
+				Bucket:        config.Bucket,
+				AssumeRoleARN: config.RoleARN,
 			},
 			DisabledCacheConfig,
 			nil,
@@ -154,11 +154,11 @@ func TestS3FS(t *testing.T) {
 			fs, err := NewS3FS(
 				ctx,
 				ObjectStorageArguments{
-					Name:      "s3",
-					Endpoint:  config.Endpoint,
-					Bucket:    config.Bucket,
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					RoleARN:   config.RoleARN,
+					Name:          "s3",
+					Endpoint:      config.Endpoint,
+					Bucket:        config.Bucket,
+					KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+					AssumeRoleARN: config.RoleARN,
 				},
 				CacheConfig{
 					MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
@@ -177,11 +177,11 @@ func TestS3FS(t *testing.T) {
 			fs, err := NewS3FS(
 				ctx,
 				ObjectStorageArguments{
-					Name:      "s3",
-					Endpoint:  config.Endpoint,
-					Bucket:    config.Bucket,
-					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-					RoleARN:   config.RoleARN,
+					Name:          "s3",
+					Endpoint:      config.Endpoint,
+					Bucket:        config.Bucket,
+					KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+					AssumeRoleARN: config.RoleARN,
 				},
 				CacheConfig{
 					MemoryCapacity: ptrTo[toml.ByteSize](1),
@@ -481,11 +481,11 @@ func BenchmarkS3FS(b *testing.B) {
 		fs, err := NewS3FS(
 			ctx,
 			ObjectStorageArguments{
-				Name:      "s3",
-				Endpoint:  config.Endpoint,
-				Bucket:    config.Bucket,
-				KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-				RoleARN:   config.RoleARN,
+				Name:          "s3",
+				Endpoint:      config.Endpoint,
+				Bucket:        config.Bucket,
+				KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+				AssumeRoleARN: config.RoleARN,
 			},
 			CacheConfig{
 				DiskPath: ptrTo(cacheDir),
@@ -515,11 +515,11 @@ func TestS3FSWithSubPath(t *testing.T) {
 		fs, err := NewS3FS(
 			ctx,
 			ObjectStorageArguments{
-				Name:      name,
-				Endpoint:  config.Endpoint,
-				Bucket:    config.Bucket,
-				KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-				RoleARN:   config.RoleARN,
+				Name:          name,
+				Endpoint:      config.Endpoint,
+				Bucket:        config.Bucket,
+				KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+				AssumeRoleARN: config.RoleARN,
 			},
 			DisabledCacheConfig,
 			nil,
@@ -592,11 +592,11 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 	fs, err := NewS3FS(
 		ctx,
 		ObjectStorageArguments{
-			Name:      "bench",
-			Endpoint:  config.Endpoint,
-			Bucket:    config.Bucket,
-			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-			RoleARN:   config.RoleARN,
+			Name:          "bench",
+			Endpoint:      config.Endpoint,
+			Bucket:        config.Bucket,
+			KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+			AssumeRoleARN: config.RoleARN,
 		},
 		DisabledCacheConfig,
 		nil,
@@ -719,11 +719,11 @@ func TestSequentialS3Read(t *testing.T) {
 	fs, err := NewS3FS(
 		ctx,
 		ObjectStorageArguments{
-			Name:      "bench",
-			Endpoint:  config.Endpoint,
-			Bucket:    config.Bucket,
-			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-			RoleARN:   config.RoleARN,
+			Name:          "bench",
+			Endpoint:      config.Endpoint,
+			Bucket:        config.Bucket,
+			KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+			AssumeRoleARN: config.RoleARN,
 		},
 		DisabledCacheConfig,
 		nil,

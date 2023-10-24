@@ -6,6 +6,7 @@ drop table if exists vec_table;
 
 -- standard
 create table vec_table(a int, b vecf32(3), c vecf64(3));
+desc vec_table;
 insert into vec_table values(1, "[1,2,3]", "[4,5,6]");
 select * from vec_table;
 
