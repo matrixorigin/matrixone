@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -665,7 +664,6 @@ func (txn *Transaction) getCachedTable(
 
 func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	logDebugf(txn.op.Txn(), "Transaction.Commit")
-	logutil.Infof("transaction commit: %s\n", txn.op.Txn().DebugString())
 	txn.IncrStatementID(ctx, true)
 	defer txn.delTransaction()
 	if txn.readOnly.Load() {
