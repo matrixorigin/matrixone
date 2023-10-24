@@ -36,13 +36,13 @@ alter sequence alter_seq_01 maxvalue 1000;
 alter sequence alter_seq_01 increment by 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-17    17
+8    8
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-27    27
+18    18
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-37    37
+28    28
 alter sequence alter_seq_01 start with 900;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
