@@ -279,6 +279,7 @@ const (
 
 	UUID
 	SERIAL
+	SERIAL_FULL
 	BIN //BIN
 
 	ENABLE_FAULT_INJECTION
@@ -537,6 +538,7 @@ var functionIdRegister = map[string]int32{
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
 	"serial":                         SERIAL,
+	"serial_full":                    SERIAL_FULL,
 	"hash_value":                     HASH,
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,

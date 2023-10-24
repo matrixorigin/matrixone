@@ -51,6 +51,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		f, e = moConfigurationsCall(idx, proc, tblArg)
 	case "mo_transactions":
 		f, e = moTransactionsCall(idx, proc, tblArg)
+	case "mo_cache":
+		f, e = moCacheCall(idx, proc, tblArg)
 	default:
 		return process.ExecStop, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
@@ -119,6 +121,8 @@ func Prepare(proc *process.Process, arg any) error {
 		return moConfigurationsPrepare(proc, tblArg)
 	case "mo_transactions":
 		return moTransactionsPrepare(proc, tblArg)
+	case "mo_cache":
+		return moCachePrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}

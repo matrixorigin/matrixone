@@ -67,6 +67,7 @@ insert into dis_table_02 values (5,null,'1345-09-23');
 select * from dis_table_02;
 commit;
 -- @session}
+-- @pattern
 update dis_table_02 set a=90;
 commit;
 select * from dis_table_02;

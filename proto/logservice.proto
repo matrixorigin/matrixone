@@ -64,6 +64,8 @@ message TNStore {
   string LockServiceAddress = 7;
   string          CtlAddress         = 8;
   ConfigData ConfigData = 9;
+  // QueryAddress is the address of the queryservice on tn
+  string          QueryAddress       = 10;
 }
 
 message LogStore {
@@ -174,6 +176,8 @@ message TNStoreHeartbeat {
   string LockServiceAddress = 6;
   string          CtlAddress         = 7;
   ConfigData ConfigData = 8;
+  // QueryAddress is the address of queryservice on tn
+  string          QueryAddress       = 9;
 };
 
 message RSMState {
@@ -507,6 +511,8 @@ message TNStoreInfo {
   string LockServiceAddress = 6;
   string CtlAddress         = 7;
   ConfigData ConfigData = 8;
+  // QueryAddress is the address of queryservice on tn
+  string          QueryAddress       = 9;
 }
 
 // TNState contains all TN details known to the HAKeeper.
