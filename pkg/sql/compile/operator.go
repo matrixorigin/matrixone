@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -575,6 +576,14 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.Argument, error) {
 	preCtx := n.PreInsertUkCtx
 	return &preinsertunique.Argument{
+		Ctx:          proc.Ctx,
+		PreInsertCtx: preCtx,
+	}, nil
+}
+
+func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecondaryindex.Argument, error) {
+	preCtx := n.PreInsertSkCtx
+	return &preinsertsecondaryindex.Argument{
 		Ctx:          proc.Ctx,
 		PreInsertCtx: preCtx,
 	}, nil
@@ -1756,21 +1765,18 @@ func getRel(ctx context.Context, proc *process.Process, eg engine.Engine, ref *p
 		uniqueIndexTables = make([]engine.Relation, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
-				if indexdef.Unique {
-					var indexTable engine.Relation
-					if indexdef.TableExist {
-						if isTemp {
-							indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName), proc)
-						} else {
-							indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName, proc)
-						}
-						if err != nil {
-							return nil, nil, err
-						}
-						uniqueIndexTables = append(uniqueIndexTables, indexTable)
+				var indexTable engine.Relation
+				if indexdef.TableExist {
+					if isTemp {
+						indexTable, err = dbSource.Relation(ctx, engine.GetTempTableName(oldDbName, indexdef.IndexTableName), proc)
+					} else {
+						indexTable, err = dbSource.Relation(ctx, indexdef.IndexTableName, proc)
 					}
-				} else {
-					continue
+					if err != nil {
+						return nil, nil, err
+					}
+					// NOTE: uniqueIndexTables is not yet used by the callee
+					uniqueIndexTables = append(uniqueIndexTables, indexTable)
 				}
 			}
 		}
