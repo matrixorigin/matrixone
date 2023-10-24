@@ -173,10 +173,8 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
-	defer func() {
-		v2.TxnCNSendCommitDurationHistogram.Observe(time.Since(start).Seconds())
-		f.Close()
-	}()
+	v2.TxnCNSendCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	defer f.Close()
 
 	v, err := f.Get()
 	if err != nil {
