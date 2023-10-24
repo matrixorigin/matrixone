@@ -70,11 +70,12 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -88,6 +89,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -731,9 +733,10 @@ func LoadCheckpointEntries(
 	if metLoc == "" {
 		return nil, nil, nil
 	}
+	v2.LogtailLoadCheckpointCounter.Inc()
 	now := time.Now()
 	defer func() {
-		logutil.Debugf("LoadCheckpointEntries latency: %v", time.Since(now))
+		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 	locationsAndVersions := strings.Split(metLoc, ";")
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)

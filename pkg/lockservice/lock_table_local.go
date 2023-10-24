@@ -82,9 +82,6 @@ func (l *localLockTable) lock(
 		c.lockFunc = l.doLock
 	}
 	l.doLock(c, false)
-	if !opts.async {
-		c.release()
-	}
 }
 
 func (l *localLockTable) doLock(

@@ -72,3 +72,7 @@ func (s *SetBinder) BindWinFunc(_ string, expr *tree.FuncExpr, i int32, b bool) 
 func (s *SetBinder) BindSubquery(subquery *tree.Subquery, b bool) (*plan.Expr, error) {
 	return s.baseBindSubquery(subquery, b)
 }
+
+func (s *SetBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	return nil, moerr.NewInvalidInput(s.GetContext(), "cannot bind time window functions '%s'", funcName)
+}
