@@ -79,6 +79,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(true, "db", "v").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any()).Return(true).AnyTimes()
 
 	qb := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	tb := &tree.TableName{}

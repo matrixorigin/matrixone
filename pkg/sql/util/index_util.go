@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +29,7 @@ import (
 )
 
 var SerialWithCompacted = serialWithCompacted
+var SerialWithoutCompacted = serialWithoutCompacted
 var CompactSingleIndexCol = compactSingleIndexCol
 var CompactPrimaryCol = compactPrimaryCol
 
@@ -323,6 +325,32 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	vector.AppendBytesList(vec, val, nil, proc.Mp())
 
 	return vec, bitMap
+}
+
+// serialWithoutCompacted is similar to serialWithCompacted and builtInSerial
+// serialWithoutCompacted function is used by Secondary Index to support rows containing null entries
+// for example:
+// input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
+// result vec is [serial(1, 2, 3), serial(1, 2, null), serial(1, 2, 3)]
+// result bitmap is [] (empty)
+// Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
+// `preinsertunique` in `preinsertsecondaryindex`
+func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {
+
+	result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+
+	if len(vs) == 0 {
+		// return empty vector and empty bitmap
+		return vector.NewVec(types.T_varchar.ToType()), new(nulls.Nulls)
+	}
+
+	rowCount := vs[0].Length()
+	_ = function.BuiltInSerialFull(vs, result, proc, rowCount)
+	// here we create a deep copy of result.GetResultVector, so that we can free the FunctionResultWrapper upon return
+	resultVec, _ := result.GetResultVector().Dup(proc.Mp())
+	return resultVec, new(nulls.Nulls)
+
 }
 
 func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls) {

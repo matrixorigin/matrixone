@@ -55,10 +55,14 @@ type SegStat struct {
 	RemainingRows  int
 }
 
-func (s *SegStat) String() string {
+func (s *SegStat) String(composeSortKey bool) string {
 	zonemapStr := "nil"
 	if s.SortKeyZonemap != nil {
-		zonemapStr = s.SortKeyZonemap.String()
+		if composeSortKey {
+			zonemapStr = s.SortKeyZonemap.StringForCompose()
+		} else {
+			zonemapStr = s.SortKeyZonemap.String()
+		}
 	}
 	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
 		s.Loaded, common.HumanReadableBytes(s.OriginSize), s.Rows, s.RemainingRows, zonemapStr,

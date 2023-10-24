@@ -70,6 +70,10 @@ func (s *store) heartbeat(ctx context.Context) {
 		ConfigData:           s.config.GetData(),
 	}
 
+	if s.queryService != nil {
+		hb.QueryAddress = s.queryServiceServiceAddr()
+	}
+
 	cb, err := s.hakeeperClient.SendTNHeartbeat(ctx2, hb)
 	if err != nil {
 		metricv2.HeartbeatFailureCounter.WithLabelValues("tn").Inc()
