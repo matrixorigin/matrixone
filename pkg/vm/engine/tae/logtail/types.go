@@ -85,7 +85,6 @@ var (
 
 	DBSpecialDeleteSchema  *catalog.Schema
 	TBLSpecialDeleteSchema *catalog.Schema
-	BlkAccSchema           *catalog.Schema
 
 	StorageUsageSchema *catalog.Schema
 )
