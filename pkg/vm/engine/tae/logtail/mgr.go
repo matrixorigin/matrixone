@@ -26,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -116,9 +118,15 @@ func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 		if txn.IsReplay() {
 			continue
 		}
+		t0 := time.Now()
 		builder := NewTxnLogtailRespBuilder(mgr.rt)
 		entries, closeCB := builder.CollectLogtail(txn)
 		txn.GetStore().DoneWaitEvent(1)
+		collectLogtailDuration := time.Since(t0)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && collectLogtailDuration > threshold && txn.GetContext() != nil {
+			txn.GetStore().SetContext(context.WithValue(txn.GetContext(), common.PrepareLogtail, &common.DurationRecords{Duration: collectLogtailDuration}))
+		}
 		txnWithLogtails := &txnWithLogtails{
 			txn:     txn,
 			tails:   entries,

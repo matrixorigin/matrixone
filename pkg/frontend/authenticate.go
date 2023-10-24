@@ -824,6 +824,7 @@ var (
 		"mo_locks":                    0,
 		"mo_variables":                0,
 		"mo_transactions":             0,
+		"mo_cache":                    0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -855,6 +856,7 @@ var (
 		"mo_locks":                    0,
 		"mo_variables":                0,
 		"mo_transactions":             0,
+		"mo_cache":                    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1034,6 +1036,7 @@ var (
 		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_variables AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;`,
 		`CREATE VIEW IF NOT EXISTS mo_transactions AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;`,
+		`CREATE VIEW IF NOT EXISTS mo_cache AS SELECT * FROM mo_cache() AS mo_cache_tmp;`,
 	}
 
 	//drop tables for the tenant
@@ -1052,6 +1055,7 @@ var (
 		`drop view if exists mo_catalog.mo_locks;`,
 		`drop view if exists mo_catalog.mo_variables;`,
 		`drop view if exists mo_catalog.mo_transactions;`,
+		`drop view if exists mo_catalog.mo_cache;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
 	dropAutoIcrColSql     = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
@@ -3505,7 +3509,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3524,7 +3528,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 
 	if stageExist {
 		if !cs.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s exists", cs.Name)
+			return moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
@@ -3657,7 +3661,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error 
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	optionBits := uint8(0)
@@ -3697,7 +3701,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error 
 
 	if !stageExist {
 		if !as.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s not exists", as.Name)
+			return moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
@@ -3749,7 +3753,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3768,7 +3772,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
 
 	if !stageExist {
 		if !ds.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s not exists", ds.Name)
+			return moerr.NewInternalError(ctx, "the stage %s not exists", ds.Name)
 		} else {
 			// do nothing
 			return err

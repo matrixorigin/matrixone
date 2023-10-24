@@ -21,6 +21,7 @@ import (
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -42,6 +43,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_TraceSpan, s.handleTraceSpan, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetLockInfo, s.handleGetLockInfo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetTxnInfo, s.handleGetTxnInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -80,7 +82,8 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 
 func (s *service) handleTraceSpan(ctx context.Context, req *query.Request, resp *query.Response) error {
 	resp.TraceSpanResponse = new(query.TraceSpanResponse)
-	resp.TraceSpanResponse.Resp = ctl.SelfProcess(req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans)
+	resp.TraceSpanResponse.Resp = ctl.SelfProcess(
+		req.TraceSpanRequest.Cmd, req.TraceSpanRequest.Spans, req.TraceSpanRequest.Threshold)
 	return nil
 }
 
@@ -196,4 +199,18 @@ func copyTxnInfo(src client.Lock) *query.TxnLockInfo {
 		Options: copyLockOptions(src.Options),
 	}
 	return dst
+}
+
+func (s *service) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+	resp.GetCacheInfoResponse = new(query.GetCacheInfoResponse)
+
+	perfcounter.GetCacheStats(func(infos []*query.CacheInfo) {
+		for _, info := range infos {
+			if info != nil {
+				resp.GetCacheInfoResponse.CacheInfoList = append(resp.GetCacheInfoResponse.CacheInfoList, info)
+			}
+		}
+	})
+
+	return nil
 }
