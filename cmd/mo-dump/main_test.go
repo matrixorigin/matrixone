@@ -53,11 +53,13 @@ func TestConvertValue(t *testing.T) {
 		{"2021-01-01", "date"},
 		{"2021-01-01 00:00:00", "datetime"},
 		{"2021-01-01 00:00:00", "timestamp"},
+		{"[1,2,3]", "vecf32"},
+		{"[4,5,6]", "vecf64"},
 	}
 	for _, v := range kase {
 		s := convertValue(makeValue(v.val), v.typ)
 		switch v.typ {
-		case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double":
+		case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double", "vecf32", "vecf64":
 			require.Equal(t, v.val, s)
 		default:
 
