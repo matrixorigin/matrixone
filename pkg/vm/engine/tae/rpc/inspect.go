@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -74,7 +76,7 @@ func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.verbose = lv
 
 	address, _ := cmd.Flags().GetString("target")
-	c.tbl, err = parseTableTarget(address, c.ctx.db)
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
 		return err
 	}
@@ -120,17 +122,33 @@ func (c *catalogArg) Run() error {
 }
 
 type objStatArg struct {
-	ctx *inspectContext
-	tbl *catalog.TableEntry
+	ctx     *inspectContext
+	tbl     *catalog.TableEntry
+	verbose common.PPLevel
 }
 
 func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
+	count, _ := cmd.Flags().GetCount("verbose")
+	var lv common.PPLevel
+	switch count {
+	case 0:
+		lv = common.PPL0
+	case 1:
+		lv = common.PPL1
+	case 2:
+		lv = common.PPL2
+	case 3:
+		lv = common.PPL3
+	}
+	c.verbose = lv
 	address, _ := cmd.Flags().GetString("target")
-	c.tbl, err = parseTableTarget(address, c.ctx.db)
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
 		return err
+	}
+	if c.tbl == nil {
+		return moerr.NewInvalidInputNoCtx("need table target")
 	}
 	return nil
 }
@@ -147,7 +165,7 @@ func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
 		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl.ID).(*merge.BasicPolicyConfig)
-		b.WriteString(c.tbl.ObjectStatsString())
+		b.WriteString(c.tbl.ObjectStatsString(c.verbose))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
@@ -165,7 +183,7 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
 	address, _ := cmd.Flags().GetString("target")
-	c.tbl, err = parseTableTarget(address, c.ctx.db)
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
 		return err
 	}
@@ -244,7 +262,7 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
 	address, _ := cmd.Flags().GetString("target")
-	c.tbl, err = parseTableTarget(address, c.ctx.db)
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
 		return err
 	}
@@ -269,7 +287,9 @@ func (c *compactPolicyArg) Run() error {
 	if c.tbl == nil {
 		// reset all
 		c.ctx.db.MergeHandle.ConfigPolicy(0, nil)
+		// set runtime global config
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
+		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
 	} else {
 		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl.ID, &merge.BasicPolicyConfig{
 			MergeMaxOneRun: int(c.maxMergeObjN),
@@ -329,6 +349,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 		Short: "show object statistics",
 		Run:   RunFactory(&objStatArg{}),
 	}
+	objectCmd.Flags().CountP("verbose", "v", "verbose level")
 	objectCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	rootCmd.AddCommand(objectCmd)
 
@@ -339,7 +360,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	}
 	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	policyCmd.Flags().Int32P("maxMergeObjN", "o", common.DefaultMaxMergeObjN, "max number of objects merged for one")
-	policyCmd.Flags().Int32P("minRowsQualified", "m", 5*8192, "object with a few rows will be picked up to merge")
+	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "object with a few rows will be picked up to merge")
 	policyCmd.Flags().Int32P("notLoadMoreThan", "l", common.DefaultNotLoadMoreThan, "not load metadata if table has too much objects. Only works for rawlog table")
 	rootCmd.AddCommand(policyCmd)
 
@@ -361,7 +382,7 @@ func RunInspect(ctx context.Context, inspectCtx *inspectContext) {
 	rootCmd.Execute()
 }
 
-func parseTableTarget(address string, db *db.DB) (*catalog.TableEntry, error) {
+func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
 	if address == "*" {
 		return nil, nil
 	}
@@ -369,15 +390,37 @@ func parseTableTarget(address string, db *db.DB) (*catalog.TableEntry, error) {
 	if len(parts) != 2 {
 		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
 	}
+
 	txn, _ := db.StartTxn(nil)
-	dbHdl, err := txn.GetDatabase(parts[0])
-	if err != nil {
-		return nil, err
+	if ac != nil {
+		logutil.Infof("inspect with access info: %+v", ac)
+		txn.BindAccessInfo(ac.AccountID, ac.UserID, ac.RoleID)
 	}
-	tblHdl, err := dbHdl.GetRelationByName(parts[1])
-	if err != nil {
-		return nil, err
+
+	did, err1 := strconv.Atoi(parts[0])
+	tid, err2 := strconv.Atoi(parts[1])
+
+	if err1 == nil && err2 == nil {
+		dbHdl, err := txn.GetDatabaseByID(uint64(did))
+		if err != nil {
+			return nil, err
+		}
+		tblHdl, err := dbHdl.GetRelationByID(uint64(tid))
+		if err != nil {
+			return nil, err
+		}
+		txn.Commit(context.Background())
+		return tblHdl.GetMeta().(*catalog.TableEntry), nil
+	} else {
+		dbHdl, err := txn.GetDatabase(parts[0])
+		if err != nil {
+			return nil, err
+		}
+		tblHdl, err := dbHdl.GetRelationByName(parts[1])
+		if err != nil {
+			return nil, err
+		}
+		txn.Commit(context.Background())
+		return tblHdl.GetMeta().(*catalog.TableEntry), nil
 	}
-	txn.Commit(context.Background())
-	return tblHdl.GetMeta().(*catalog.TableEntry), nil
 }
