@@ -125,7 +125,7 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 			return fmt.Sprintf("%x", buf)
 		}
 	case types.T_array_float32:
-		//TODO: Should this behave like Varchar or JSON  type?
+		// The parent function is mostly used to print the vector content for debugging.
 		return types.BytesToArrayToString[float32](v.([]byte))
 	case types.T_array_float64:
 		return types.BytesToArrayToString[float64](v.([]byte))
