@@ -77,22 +77,27 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	return r, nil
 }
 
-// Compare the l2_norm between 2 ARRAY's. This is more accurate than element wise comparison because
-//  1. there won't be dimension mismatch issue
-//  2. for element-wise comparison, the float32[i] value in ARRAY/VECTOR is always going
-//     to have some subtle difference between v1 and v2, resulting in full element wise comparison of v1 and v2.
-//  3. l2_norm comparison helps in ordering ARRAYs by nearness on the cartesian plane.
+// Compare returns an integer comparing two arrays/vectors lexicographically.
 func Compare[T types.RealNumbers](v1, v2 []T) int {
-	a, _ := L2Norm[T](v1) // you can ignore the l2_norm error.
-	b, _ := L2Norm[T](v2)
+	minLen := len(v1)
+	if len(v2) < minLen {
+		minLen = len(v2)
+	}
 
-	if a == b {
-		return 0
+	for i := 0; i < minLen; i++ {
+		if v1[i] < v2[i] {
+			return -1
+		} else if v1[i] > v2[i] {
+			return 1
+		}
 	}
-	if a < b {
+
+	if len(v1) < len(v2) {
 		return -1
+	} else if len(v1) > len(v2) {
+		return 1
 	}
-	return +1
+	return 0
 }
 
 func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O) {

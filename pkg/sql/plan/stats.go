@@ -736,7 +736,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
-		fixColumnName(node.TableDef, node.FilterList[i])
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
 		if currentBlockSel < blockSelectivityThreshHold {

@@ -721,6 +721,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			LockServiceAddress:   info.LockServiceAddress,
 			CtlAddress:           info.CtlAddress,
 			ConfigData:           info.ConfigData,
+			QueryAddress:         info.QueryAddress,
 		}
 		cd.TNStores = append(cd.TNStores, n)
 	}

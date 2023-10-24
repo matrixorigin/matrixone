@@ -275,3 +275,73 @@ func (builder *QueryBuilder) buildMoTransactions(tbl *tree.TableFunction, ctx *B
 	}
 	return builder.appendNode(node, ctx), err
 }
+
+var MoCacheColNames = []string{
+	"node_type",
+	"node_id",
+	"type",
+	"used",
+	"free",
+	"hit_ratio",
+}
+
+var MoCacheColTypes = []types.Type{
+	types.New(types.T_varchar, types.MaxVarcharLen, 0),
+	types.New(types.T_varchar, types.MaxVarcharLen, 0),
+	types.New(types.T_varchar, types.MaxVarcharLen, 0),
+	types.New(types.T_uint64, 0, 0),
+	types.New(types.T_uint64, 0, 0),
+	types.New(types.T_float32, 0, 0),
+}
+
+var MoCacheColName2Index = map[string]int32{
+	"node_type": 0,
+	"node_id":   1,
+	"type":      2,
+	"used":      3,
+	"free":      4,
+	"hit_ratio": 5,
+}
+
+type MoCacheColType int32
+
+const (
+	MoCacheColTypeNodeType = iota
+	MoCacheColTypeNodeId
+	MoCacheColTypeType
+	MoCacheColTypeUsed
+	MoCacheColTypeFree
+	MoCacheColTypeHitRatio
+)
+
+func (builder *QueryBuilder) buildMoCache(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) (int32, error) {
+	var err error
+
+	colDefs := make([]*plan.ColDef, 0, len(MoCacheColNames))
+
+	for i, name := range MoCacheColNames {
+		colDefs = append(colDefs, &plan.ColDef{
+			Name: name,
+			Typ: &plan.Type{
+				Id:    int32(MoCacheColTypes[i].Oid),
+				Width: MoCacheColTypes[i].Width,
+			},
+		})
+	}
+
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc: &plan.TableFunction{
+				Name: "mo_cache",
+			},
+			Cols: colDefs,
+		},
+		BindingTags:     []int32{builder.genNewTag()},
+		Children:        []int32{childId},
+		TblFuncExprList: exprs,
+	}
+	return builder.appendNode(node, ctx), err
+}

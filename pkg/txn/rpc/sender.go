@@ -157,10 +157,6 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 }
 
 func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnResponse, error) {
-	if request.Method == txn.TxnMethod_Commit {
-		v2.TxnCommitSizeGauge.Set(float64(request.Size()))
-	}
-
 	ctx, span := trace.Debug(ctx, "sender.doSend")
 	defer span.End()
 	tn := request.GetTargetTN()
@@ -177,8 +173,10 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
-	defer f.Close()
-	v2.TxnSendRequestDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnCNSendCommitDurationHistogram.Observe(time.Since(start).Seconds())
+		f.Close()
+	}()
 
 	v, err := f.Get()
 	if err != nil {
