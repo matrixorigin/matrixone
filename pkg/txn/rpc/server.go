@@ -215,9 +215,8 @@ func (s *server) onMessage(
 		handler: handler,
 		s:       s,
 	}
-	v2.TxnHandleQueueInDurationHistogram.Observe(time.Since(t).Seconds())
 	n := len(s.queue)
-	v2.TxnHandleQueueSizeGauge.Set(float64(n))
+	v2.TxnCommitQueueSizeGauge.Set(float64(n))
 	if n > s.options.maxChannelBufferSize/2 {
 		s.rt.Logger().Warn("txn request handle channel is busy",
 			zap.Int("size", n),

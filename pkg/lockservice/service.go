@@ -93,9 +93,11 @@ func (s *service) Lock(
 	rows [][]byte,
 	txnID []byte,
 	options pb.LockOptions) (pb.Result, error) {
+	v2.TxnLockTotalCounter.Inc()
+
 	start := time.Now()
 	defer func() {
-		v2.TxnLockDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnAcquireLockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	// FIXME(fagongzi): too many mem alloc in trace
