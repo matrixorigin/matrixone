@@ -862,6 +862,27 @@ func TestCopy(t *testing.T) {
 	}
 }
 
+func TestCloneWindow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewConstNull(types.T_int32.ToType(), 10, mp)
+	defer v1.Free(mp)
+	v2, err := v1.CloneWindow(3, 5, mp)
+	defer v2.Free(mp)
+	require.NoError(t, err)
+	require.True(t, v2.IsConstNull())
+	require.Equal(t, 2, v2.Length())
+
+	v3 := NewConstFixed[int32](types.T_int32.ToType(), 10, 20, mp)
+	defer v3.Free(mp)
+	v4, err := v3.CloneWindow(3, 5, mp)
+	defer v4.Free(mp)
+	require.NoError(t, err)
+	require.True(t, v4.IsConst())
+	require.Equal(t, 2, v4.Length())
+	require.Equal(t, int32(10), GetFixedAt[int32](v4, 0))
+	require.Equal(t, int32(10), GetFixedAt[int32](v4, 1))
+}
+
 func TestCloneWindowWithMpNil(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec1 := NewVec(types.T_int32.ToType())
