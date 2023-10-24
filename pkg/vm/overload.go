@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
@@ -111,12 +112,13 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	MergeRecursive: mergerecursive.String,
 	MergeCTE:       mergecte.String,
 
-	Deletion:        deletion.String,
-	Insert:          insert.String,
-	OnDuplicateKey:  onduplicatekey.String,
-	PreInsert:       preinsert.String,
-	PreInsertUnique: preinsertunique.String,
-	External:        external.String,
+	Deletion:                deletion.String,
+	Insert:                  insert.String,
+	OnDuplicateKey:          onduplicatekey.String,
+	PreInsert:               preinsert.String,
+	PreInsertUnique:         preinsertunique.String,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.String,
+	External:                external.String,
 
 	Minus:        minus.String,
 	Intersect:    intersect.String,
@@ -172,12 +174,13 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	MergeRecursive: mergerecursive.Prepare,
 	MergeCTE:       mergecte.Prepare,
 
-	Deletion:        deletion.Prepare,
-	Insert:          insert.Prepare,
-	OnDuplicateKey:  onduplicatekey.Prepare,
-	PreInsert:       preinsert.Prepare,
-	PreInsertUnique: preinsertunique.Prepare,
-	External:        external.Prepare,
+	Deletion:                deletion.Prepare,
+	Insert:                  insert.Prepare,
+	OnDuplicateKey:          onduplicatekey.Prepare,
+	PreInsert:               preinsert.Prepare,
+	PreInsertUnique:         preinsertunique.Prepare,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.Prepare,
+	External:                external.Prepare,
 
 	Minus:        minus.Prepare,
 	Intersect:    intersect.Prepare,
@@ -237,9 +240,10 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecSt
 	Insert:   insert.Call,
 	External: external.Call,
 
-	OnDuplicateKey:  onduplicatekey.Call,
-	PreInsert:       preinsert.Call,
-	PreInsertUnique: preinsertunique.Call,
+	OnDuplicateKey:          onduplicatekey.Call,
+	PreInsert:               preinsert.Call,
+	PreInsertUnique:         preinsertunique.Call,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.Call,
 
 	Minus:        minus.Call,
 	Intersect:    intersect.Call,
