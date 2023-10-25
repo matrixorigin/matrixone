@@ -876,9 +876,7 @@ func (tbl *txnTable) rangesOnePart(
 			if skipBlk {
 				continue
 			}
-
-			segmentId := obj.Loc.Name().SegmentId()
-			bid := *objectio.NewBlockid(&segmentId, obj.Loc.Name().Num(), blkMeta.BlockHeader().Sequence())
+			bid := *blkMeta.GetBlockID(obj.Loc.Name())
 			metaLoc := blockio.EncodeLocation(
 				obj.Loc.Name(),
 				obj.Loc.Extent(),
@@ -1070,8 +1068,7 @@ func (tbl *txnTable) tryFastRanges(
 					continue
 				}
 			}
-			segmentId := obj.Loc.Name().SegmentId()
-			bid := *objectio.NewBlockid(&segmentId, obj.Loc.Name().Num(), blkMeta.BlockHeader().Sequence())
+			bid := *blkMeta.GetBlockID(obj.Loc.Name())
 			metaLoc := blockio.EncodeLocation(
 				obj.Loc.Name(),
 				//blkMeta.GetExtent(),
@@ -1927,11 +1924,7 @@ func (tbl *txnTable) updateDeleteInfo(
 				blkCnt := objDataMeta.BlockCount()
 				for i := 0; i < int(blkCnt); i++ {
 					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-					segmentId := obj.Loc.Name().SegmentId()
-					bid := *objectio.NewBlockid(
-						&segmentId,
-						obj.Loc.Name().Num(),
-						blkMeta.BlockHeader().Sequence())
+					bid := *blkMeta.GetBlockID(obj.Loc.Name())
 					if bid == id {
 						metaLoc := blockio.EncodeLocation(
 							obj.Loc.Name(),
