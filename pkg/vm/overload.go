@@ -16,11 +16,13 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -85,6 +87,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Order:       order.String,
 	Group:       group.String,
 	Window:      window.String,
+	TimeWin:     timewin.String,
+	Fill:        fill.String,
 	Merge:       merge.String,
 	Output:      output.String,
 	Offset:      offset.String,
@@ -147,6 +151,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Order:       order.Prepare,
 	Group:       group.Prepare,
 	Window:      window.Prepare,
+	TimeWin:     timewin.Prepare,
+	Fill:        fill.Prepare,
 	Merge:       merge.Prepare,
 	Output:      output.Prepare,
 	Offset:      offset.Prepare,
@@ -209,6 +215,8 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecSt
 	Order:       order.Call,
 	Group:       group.Call,
 	Window:      window.Call,
+	TimeWin:     timewin.Call,
+	Fill:        fill.Call,
 	Merge:       merge.Call,
 	Output:      output.Call,
 	Offset:      offset.Call,
