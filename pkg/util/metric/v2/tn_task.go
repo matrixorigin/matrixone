@@ -22,7 +22,7 @@ var (
 	taskDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
-			Subsystem: "tn_task",
+			Subsystem: "task",
 			Name:      "duration_seconds",
 			Help:      "Bucketed histogram of tn task execute duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
