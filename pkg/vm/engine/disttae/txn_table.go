@@ -701,13 +701,6 @@ func (tbl *txnTable) rangesOnePart(
 			dirtyBlks[blk.BlockID] = struct{}{}
 		}
 	}
-	//blks contains all visible blocks to this txn, namely
-	//includes committed blocks and uncommitted blocks by CN writing S3.
-	//blks := make([]catalog.BlockInfo, 0, len(snapshotBlks)+len(insertedS3Blks))
-	//blks = append(blks, snapshotBlks...)
-	//blks = append(blks, insertedS3Blks...)
-
-	//txn := tbl.db.txn
 	for _, entry := range tbl.writes {
 		if entry.typ == INSERT {
 			continue
@@ -888,7 +881,7 @@ func (tbl *txnTable) rangesOnePart(
 			bid := *objectio.NewBlockid(&segmentId, obj.Loc.Name().Num(), blkMeta.BlockHeader().Sequence())
 			metaLoc := blockio.EncodeLocation(
 				obj.Loc.Name(),
-				blkMeta.GetExtent(),
+				obj.Loc.Extent(),
 				blkMeta.GetRows(),
 				blkMeta.GetID(),
 			)
@@ -1922,7 +1915,11 @@ func (tbl *txnTable) updateDeleteInfo(
 		for _, id := range createBlks {
 			if obj, ok := objMap[*objectio.ShortName(&id)]; ok {
 				location := obj.Location()
-				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+				if objMeta, err = objectio.FastLoadObjectMeta(
+					ctx,
+					&location,
+					false,
+					fs); err != nil {
 					return err
 				}
 				objDataMeta = objMeta.MustDataMeta()
@@ -1930,11 +1927,14 @@ func (tbl *txnTable) updateDeleteInfo(
 				for i := 0; i < int(blkCnt); i++ {
 					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
 					segmentId := obj.Loc.Name().SegmentId()
-					bid := *objectio.NewBlockid(&segmentId, obj.Loc.Name().Num(), blkMeta.BlockHeader().Sequence())
+					bid := *objectio.NewBlockid(
+						&segmentId,
+						obj.Loc.Name().Num(),
+						blkMeta.BlockHeader().Sequence())
 					if bid == id {
 						metaLoc := blockio.EncodeLocation(
 							obj.Loc.Name(),
-							blkMeta.GetExtent(),
+							obj.Loc.Extent(),
 							blkMeta.GetRows(),
 							blkMeta.GetID(),
 						)
