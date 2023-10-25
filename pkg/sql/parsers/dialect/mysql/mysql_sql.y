@@ -244,6 +244,12 @@ import (
     transactionCharacteristicList []*tree.TransactionCharacteristic
     isolationLevel tree.IsolationLevelType
     accessMode tree.AccessModeType
+
+    timeWindow  *tree.TimeWindow
+    timeInterval *tree.Interval
+    timeSliding *tree.Sliding
+    timeFill *tree.Fill
+    fillMode tree.FillMode
 }
 
 %token LEX_ERROR
@@ -435,6 +441,10 @@ import (
 
 // Call
 %token <str> CALL
+
+
+// Time window
+%token <str> PREV SLIDING FILL
 
 // sp_begin_sym
 %token <str> SPBEGIN
@@ -738,8 +748,6 @@ import (
 %token <str> BACKUP FILESYSTEM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
-%start start_command
-
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -748,6 +756,14 @@ import (
 %type<transactionCharacteristicList> transaction_characteristic_list
 %type<isolationLevel> isolation_level
 %type<accessMode> access_mode
+
+%type <timeWindow> time_window_opt time_window
+%type <timeInterval> interval
+%type <timeSliding> sliding_opt
+%type <timeFill> fill_opt
+%type <fillMode> fill_mode
+
+%start start_command
 %%
 
 start_command:
@@ -3351,22 +3367,14 @@ show_target:
     }
 
 show_index_stmt:
-    SHOW extended_opt index_kwd from_or_in table_name where_expression_opt
+    SHOW extended_opt index_kwd table_column_name database_name_opt where_expression_opt
     {
         $$ = &tree.ShowIndex{
-            TableName: *$5,
+            TableName: $4,
+            DbName: $5,
             Where: $6,
         }
     }
-|	SHOW extended_opt index_kwd from_or_in ident from_or_in ident where_expression_opt
-     {
-     	 prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($7.Compare()), ExplicitSchema: true}
-         tbl := tree.NewTableName(tree.Identifier($5.Compare()), prefix)
-         $$ = &tree.ShowIndex{
-             TableName: *tbl,
-             Where: $8,
-         }
-     }
 
 extended_opt:
     {}
@@ -4273,21 +4281,21 @@ select_stmt:
     }
 
 select_no_parens:
-    simple_select order_by_opt limit_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4, SelectLockInfo: $5}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5, SelectLockInfo: $6}
     }
-|   select_with_parens order_by_clause export_data_param_opt
+|   select_with_parens time_window_opt order_by_clause export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, OrderBy: $2, Ep: $3}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: $4}
     }
-|   select_with_parens order_by_opt limit_clause export_data_param_opt
+|   select_with_parens time_window_opt order_by_opt limit_clause export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, Ep: $5}
     }
-|   with_clause simple_select order_by_opt limit_opt export_data_param_opt select_lock_opt
+|   with_clause simple_select time_window_opt order_by_opt limit_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, SelectLockInfo:$6, With: $1}
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, Ep: $6, SelectLockInfo:$7, With: $1}
     }
 |   with_clause select_with_parens order_by_clause export_data_param_opt
     {
@@ -4297,6 +4305,99 @@ select_no_parens:
     {
         $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
     }
+
+time_window_opt:
+	{
+		$$ = nil
+	}
+|	time_window
+	{
+		$$ = $1
+	}
+
+time_window:
+	interval sliding_opt fill_opt
+	{
+		$$ = &tree.TimeWindow{
+			Interval: $1,
+			Sliding: $2,
+			Fill: $3,
+		}
+	}
+
+interval:
+	INTERVAL '(' column_name ',' INTEGRAL ',' time_unit ')'
+	{
+		str := fmt.Sprintf("%v", $5)
+		v, errStr := util.GetInt64($5)
+        if errStr != "" {
+           yylex.Error(errStr)
+           return 1
+        }
+		$$ = &tree.Interval{
+			Col: $3,
+			Val: tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64),
+			Unit: $7,
+		}
+	}
+
+sliding_opt:
+	{
+		$$ = nil
+	}
+|	SLIDING '(' INTEGRAL ',' time_unit ')'
+	{
+		str := fmt.Sprintf("%v", $3)
+        v, errStr := util.GetInt64($3)
+        if errStr != "" {
+            yylex.Error(errStr)
+            return 1
+        }
+		$$ = &tree.Sliding{
+        	Val: tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64),
+        	Unit: $5,
+        }
+	}
+
+fill_opt:
+	{
+		$$ = nil
+	}
+|	FILL '(' fill_mode ')'
+	{
+		$$ = &tree.Fill{
+        	Mode: $3,
+        }
+	}
+|	FILL '(' VALUE ','  expression ')'
+	{
+		$$ = &tree.Fill{
+			Mode: tree.FillValue,
+			Val: $5,
+		}
+	}
+
+fill_mode:
+	PREV
+	{
+		$$ = tree.FillPrev
+	}
+|	NEXT
+	{
+		$$ = tree.FillNext
+	}
+|	NONE
+	{
+		$$ = tree.FillNone
+	}
+|	NULL
+	{
+		$$ = tree.FillNull
+	}
+|	LINEAR
+	{
+		$$ = tree.FillLinear
+	}
 
 with_clause:
     WITH cte_list
@@ -5532,11 +5633,11 @@ stage_comment_opt:
             Exist: false,
         }
     }
-|   COMMENT_KEYWORD STRING
+|   COMMENT_KEYWORD '=' STRING
     {
         $$ = tree.StageComment{
             Exist: true,
-            Comment: $2,
+            Comment: $3,
         }
     }
 
@@ -5966,7 +6067,9 @@ create_index_stmt:
         } else if $11 != nil{
             io = $11
             io.IType = $5
-        }
+        }else{
+	     io = &tree.IndexOption{IType: tree.INDEX_TYPE_INVALID}
+	 }
         $$ = &tree.CreateIndex{
             Name: tree.Identifier($4.Compare()),
             Table: *$7,
@@ -7189,6 +7292,12 @@ index_def:
         if $3[1] != "" {
                t := strings.ToLower($3[1])
             switch t {
+ 	    case "btree":
+            	keyTyp = tree.INDEX_TYPE_BTREE
+            case "hash":
+            	keyTyp = tree.INDEX_TYPE_HASH
+	    case "rtree":
+	   	keyTyp = tree.INDEX_TYPE_RTREE
             case "zonemap":
                 keyTyp = tree.INDEX_TYPE_ZONEMAP
             case "bsi":
@@ -7212,10 +7321,16 @@ index_def:
         if $3[1] != "" {
                t := strings.ToLower($3[1])
             switch t {
-            case "zonemap":
-                keyTyp = tree.INDEX_TYPE_ZONEMAP
-            case "bsi":
-                keyTyp = tree.INDEX_TYPE_BSI
+             case "btree":
+		keyTyp = tree.INDEX_TYPE_BTREE
+	     case "hash":
+		keyTyp = tree.INDEX_TYPE_HASH
+	     case "rtree":
+		keyTyp = tree.INDEX_TYPE_RTREE
+	     case "zonemap":
+		keyTyp = tree.INDEX_TYPE_ZONEMAP
+	     case "bsi":
+		keyTyp = tree.INDEX_TYPE_BSI
             default:
                 yylex.Error("Invail the type of index")
                 return 1
@@ -10463,7 +10578,8 @@ non_reserved_keyword:
 |   STAGE
 |   STAGES
 |   BACKUP
-| FILESYSTEM
+|  FILESYSTEM
+|	VALUE
 
 func_not_keyword:
     DATE_ADD

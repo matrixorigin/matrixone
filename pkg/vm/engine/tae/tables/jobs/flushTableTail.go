@@ -155,6 +155,7 @@ func (task *flushTableTailTask) Name() string {
 }
 
 func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
+	enc.AddString("endTs", task.dirtyEndTs.ToString())
 	blks := ""
 	for _, blk := range task.ablksMetas {
 		blks = fmt.Sprintf("%s%s,", blks, blk.ID.ShortStringEx())

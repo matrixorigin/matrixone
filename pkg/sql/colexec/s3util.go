@@ -283,13 +283,13 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	if proc != nil && proc.Ctx != nil {
 		isMoLogger, ok := proc.Ctx.Value(defines.IsMoLogger{}).(bool)
 		if ok && isMoLogger {
-			logutil.Info("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
+			logutil.Debug("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
 			S3SizeThreshold = TagS3SizeForMOLogger
 		}
 	}
 
 	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db_holder.MOLoggerUser {
-		logutil.Info("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
+		logutil.Debug("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
 		S3SizeThreshold = TagS3SizeForMOLogger
 	}
 	if w.batSize >= S3SizeThreshold {
@@ -476,6 +476,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[string](), getStrCols(w.Bats, pos), nulls)
 			//TODO: check if we need T_array here? T_json is missing here.
+			// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
+			// in case anything fails in vector S3 flush in future.
 		}
 		if _, err := w.generateWriter(proc); err != nil {
 			return err

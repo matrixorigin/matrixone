@@ -272,14 +272,37 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 	}, nil
 }
 
+const (
+	TimeWindowStart = "_wstart"
+	TimeWindowEnd   = "_wend"
+)
+
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", astExpr.Parts[0])
 	}
+	astStr := tree.String(astExpr, dialect.MYSQL)
 
 	col := astExpr.Parts[0]
 	table := astExpr.Parts[1]
 	name := tree.String(astExpr, dialect.MYSQL)
+
+	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
+		colPos := int32(len(b.ctx.times))
+		expr = &plan.Expr{
+			Typ: &plan.Type{Id: int32(types.T_timestamp)},
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.timeTag,
+					ColPos: colPos,
+					Name:   col,
+				},
+			},
+		}
+		b.ctx.timeByAst[astStr] = colPos
+		b.ctx.times = append(b.ctx.times, expr)
+		return
+	}
 
 	relPos := NotFound
 	colPos := NotFound
@@ -922,8 +945,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	funcName := funcRef.Parts[0]
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
+		if b.ctx.timeTag > 0 {
+			return b.impl.BindTimeWindowFunc(funcName, astExpr, depth, isRoot)
+		}
 		return b.impl.BindAggFunc(funcName, astExpr, depth, isRoot)
-	} else if function.GetFunctionIsWinFunByName(funcName) && astExpr.WindowSpec != nil {
+	} else if function.GetFunctionIsWinFunByName(funcName) {
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
