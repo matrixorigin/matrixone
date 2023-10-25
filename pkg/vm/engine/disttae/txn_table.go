@@ -462,10 +462,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
 	dirtyBlks := make([]types.Blockid, 0)
 	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
-		//if !state.BlockVisible(
-		//	blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
-		//	continue
-		//}
 		if !state.BlockPersisted(blk) {
 			continue
 		}
@@ -506,17 +502,13 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 	return nil
 }
 
-// LoadDeletesForBlockIn loads deletes for volatile blocks in PartitionState.
+// LoadDeletesForMemBlocksIn loads deletes for memory blocks whose data resides in PartitionState.rows
 func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	state *logtailreplay.PartitionState,
 	deletesRowId map[types.Rowid]uint8) error {
 
 	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
 		//if blk is in partitionState.blks, it means that blk is persisted.
-		//if state.BlockVisible(
-		//	blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
-		//	continue
-		//}
 		if state.BlockPersisted(blk) {
 			continue
 		}

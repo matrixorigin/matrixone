@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"net/http"
 	"runtime/trace"
 	"sync"
@@ -300,6 +301,7 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
+	fs fileservice.FileService,
 	entry *api.Entry,
 	primarySeqnum int,
 	packer *types.Packer,
@@ -307,7 +309,7 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
-			p.HandleMetadataInsert(ctx, entry.Bat)
+			p.HandleMetadataInsert(ctx, fs, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -482,7 +484,10 @@ func (p *PartitionState) HandleRowsDelete(
 	})
 }
 
-func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Batch) {
+func (p *PartitionState) HandleMetadataInsert(
+	ctx context.Context,
+	fs fileservice.FileService,
+	input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
 
@@ -525,39 +530,25 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			// the following codes handle block which be inserted or updated by a newer delta location.
 			// Notice that only delta location can be updated by a newer delta location.
-			//if location := objectio.Location(metaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
-			//	blockEntry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
-			//}
 			if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 				blockEntry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
-			//if id := segmentIDVector[i]; objectio.IsEmptySegid(&id) {
-			//	blockEntry.SegmentID = id
-			//}
-			//blockEntry.Sorted = sortedStateVector[i]
-			//if t := createTimeVector[i]; !t.IsEmpty() {
-			//	blockEntry.CreateTime = t
-			//}
 			if t := commitTimeVector[i]; !t.IsEmpty() {
 				blockEntry.CommitTs = t
 			}
 
 			isAppendable := entryStateVector[i]
 			isEmptyDelta := blockEntry.DeltaLocation().IsEmpty()
-			//blockEntry.EntryState = isAppendable
 
-			//p.blocks.Set(blockEntry)
 			if !isEmptyDelta {
 				p.blockDeltas.Set(blockEntry)
 			}
 
 			{
 				e := BlockIndexByTSEntry{
-					//Time:         blockEntry.CreateTime,
-					Time:     createTimeVector[i],
-					BlockID:  blockID,
-					IsDelete: false,
-					//IsAppendable: blockEntry.EntryState,
+					Time:         createTimeVector[i],
+					BlockID:      blockID,
+					IsDelete:     false,
 					IsAppendable: isAppendable,
 				}
 				p.blockIndexByTS.Set(e)
@@ -644,6 +635,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				objEntry.CommitTS = commitTimeVector[i]
 				objEntry.CreateTime = createTimeVector[i]
 				p.dataObjects.Set(objEntry)
+				//prefetch the object meta
+				if err := blockio.PrefetchMeta(fs, objEntry.Loc); err != nil {
+					logutil.Errorf("prefetch object meta failed. %v", err)
+				}
 			}
 
 		})
