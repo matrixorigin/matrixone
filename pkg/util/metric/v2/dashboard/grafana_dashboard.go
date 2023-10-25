@@ -61,6 +61,10 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
+	if err := c.initTaskDashboard(); err != nil {
+		return err
+	}
+
 	return c.initFileServiceDashboard()
 }
 
