@@ -96,7 +96,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be less than %d, set to %d\n", maxNetBufferLength, maxNetBufferLength)
 		netBufferLength = maxNetBufferLength
 	}
-	if len(database) == 0 {
+	if len(dbs) == 0 {
 		err = moerr.NewInvalidInput(ctx, "database must be specified")
 		return
 	}
@@ -132,6 +132,19 @@ func main() {
 		}
 	}
 
+	if len(dbs) == 0 {
+		err = moerr.NewInvalidInput(ctx, "database must be specified")
+		return
+	}
+
+	if toCsv {
+		csvConf.enable = toCsv
+		csvConf.fieldDelimiter, err = checkFieldDelimiter(ctx, csvFieldDelimiterStr)
+		if err != nil {
+			return
+		}
+	}
+
 	for _, db := range dbs {
 		conn, err = openDBConnection(ctx, username, password, host, port, db, timeout)
 		if err != nil {
@@ -154,7 +167,6 @@ func main() {
 		tables, err = getTables(db, tables)
 		if err != nil {
 			return
-
 		}
 		createTable = make([]string, len(tables))
 		for i, tbl := range tables {
