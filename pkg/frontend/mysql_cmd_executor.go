@@ -2571,10 +2571,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	tenant string,
 	userName string,
 ) (err error) {
-	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.executeStmt",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
+	//var span trace.Span
+	//requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.executeStmt",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
 	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
@@ -3612,10 +3612,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
-	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End()
+	//var span trace.Span
+	//requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End()
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
@@ -3841,10 +3841,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		}
 	}()
 
-	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.ExecRequest",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End()
+	//var span trace.Span
+	//requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.ExecRequest",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End()
 
 	var sql string
 	logDebugf(ses.GetDebugString(), "cmd %v", req.GetCmd())

@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -174,6 +175,7 @@ type MoCtledState struct {
 }
 
 var MOCtledSpanEnableConfig struct {
+	sync.Mutex
 	NameToKind  map[string]SpanKind
 	KindToState map[SpanKind]*MoCtledState
 }
@@ -204,6 +206,9 @@ func InitMOCtledSpan() {
 // IsMOCtledSpan first checks if this kind exists in mo_ctl controlled spans,
 // if it is, return it's current state, or return not exist
 func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold time.Duration) {
+	MOCtledSpanEnableConfig.Lock()
+	defer MOCtledSpanEnableConfig.Unlock()
+
 	if state, exist := MOCtledSpanEnableConfig.KindToState[kind]; exist {
 		return true, state.Enable, state.Threshold
 	}
@@ -213,6 +218,9 @@ func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold time.Durat
 // SetMoCtledSpanState first checks if this kind exists in mo_ctl controlled spans,
 // if it is, reset it's state to the specified and return succeed, or return not succeed
 func SetMoCtledSpanState(name string, enable bool, threshold int64) (succeed bool) {
+	MOCtledSpanEnableConfig.Lock()
+	defer MOCtledSpanEnableConfig.Unlock()
+	
 	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
 		MOCtledSpanEnableConfig.KindToState[kind].Enable = enable
 		// convert threshold to ms in time.Duration format

@@ -280,9 +280,9 @@ func (th *TxnHandler) GetSession() *Session {
 }
 
 func (th *TxnHandler) CommitTxn() error {
-	_, span := trace.Start(th.ses.requestCtx, "TxnHandler.CommitTxn",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
+	//_, span := trace.Start(th.ses.requestCtx, "TxnHandler.CommitTxn",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
 
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
@@ -351,9 +351,9 @@ func (th *TxnHandler) CommitTxn() error {
 }
 
 func (th *TxnHandler) RollbackTxn() error {
-	_, span := trace.Start(th.ses.requestCtx, "TxnHandler.RollbackTxn",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
+	//_, span := trace.Start(th.ses.requestCtx, "TxnHandler.RollbackTxn",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
 
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()

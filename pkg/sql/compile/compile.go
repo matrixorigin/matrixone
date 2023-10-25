@@ -362,20 +362,20 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	var span trace.Span
+	//var span trace.Span
 	var cc *Compile // compile structure for rerun.
 	var result = &util2.RunResult{}
 	var err error
 
-	sp := c.proc.GetStmtProfile()
-	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
-	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
+	//sp := c.proc.GetStmtProfile()
+	//c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
+	//_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
 		putCompile(c)
 		putCompile(cc)
 
-		task.End()
-		span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
+		//task.End()
+		//span.End(trace.WithStatementExtra(sp.GetTxnId(), sp.GetStmtId(), sp.GetSqlOfStmt()))
 	}()
 
 	if c.proc.TxnOperator != nil {

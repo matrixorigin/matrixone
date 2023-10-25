@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -195,10 +194,10 @@ func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 }
 
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
-	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "TxnComputationWrapper.Compile",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
+	//var span trace.Span
+	//requestCtx, span = trace.Start(requestCtx, "TxnComputationWrapper.Compile",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
 
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)

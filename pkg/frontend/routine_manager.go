@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -359,9 +358,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}()
 	var err error
 	var isTlsHeader bool
-	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End()
+	ctx := rm.getCtx()
+	//ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End()
 	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)
 	if routine == nil {

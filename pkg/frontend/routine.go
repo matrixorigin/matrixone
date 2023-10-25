@@ -194,10 +194,10 @@ func (rt *Routine) handleRequest(req *Request) error {
 	var quit bool
 
 	reqBegin := time.Now()
-	var span trace.Span
-	routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End()
+	//var span trace.Span
+	//routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End()
 
 	parameters := rt.getParameters()
 	mpi := rt.getProtocol()

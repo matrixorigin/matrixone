@@ -16,7 +16,6 @@ package tnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -100,9 +99,9 @@ func (s *store) doDebug(ctx context.Context, request *txn.TxnRequest, response *
 }
 
 func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	_, span := trace.Start(ctx, "store.handleCommit",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End()
+	//_, span := trace.Start(ctx, "store.handleCommit",
+	//	trace.WithKind(trace.SpanKindStatement))
+	//defer span.End()
 
 	r := s.validTNShard(ctx, request, response)
 	if r == nil {
