@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "show index from db.t1 from db",
-		output: "show index from db.t1 from db",
+		input:  "select (col + col) / 2",
+		output: "select (col + col) / 2",
 	}
 )
 
@@ -78,8 +78,17 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
+		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
+	}, {
 		input:  "create connector for s with (\"type\"='kafka', \"topic\"= 'user', \"partition\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create connector for s with (type = kafka, topic = user, partition = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
+	}, {
+		input:  "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > \"2023-08-01 00:00:00.000\" and ts < \"2023-08-01 00:50:00.000\" interval(ts, 10, minute) sliding(5, minute) fill(prev);",
+		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
+	}, {
+		input:  "create connector for s with (\"type\"='kafkamo', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
+		output: "create connector for s with (type = kafkamo, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
 	}, {
 		input:  "create stream s(a varchar, b varchar) with (\"type\"='kafka', \"topic\"= 'user', \"partion\" = '1', \"value\"= 'json', \"bootstrap.servers\" = '127.0.0.1:62610');",
 		output: "create stream s (a varchar, b varchar) with (type = kafka, topic = user, partion = 1, value = json, bootstrap.servers = 127.0.0.1:62610)",
