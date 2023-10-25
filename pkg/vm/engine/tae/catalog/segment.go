@@ -243,6 +243,19 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	return e
 }
 
+func (entry *SegmentEntry) GetFirstBlkEntry() *BlockEntry {
+	entry.RLock()
+	defer entry.RUnlock()
+
+	// head may be nil
+	head := entry.link.GetHead()
+	if head == nil {
+		return nil
+	}
+
+	return head.GetPayload()
+}
+
 func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 	if entry.SortHint < b.SortHint {
 		return -1
@@ -262,9 +275,8 @@ func (entry *SegmentEntry) LoadObjectInfo() error {
 		len(entry.table.entries) > int(common.RuntimeNotLoadMoreThan.Load()) {
 		return nil
 	}
-	entry.RLock()
-	blk := entry.link.GetHead().GetPayload()
-	entry.RUnlock()
+
+	blk := entry.GetFirstBlkEntry()
 	if blk == nil {
 		return nil
 	}
