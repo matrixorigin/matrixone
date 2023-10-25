@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -84,7 +85,7 @@ type CompilerContext interface {
 	// get the list of the account id
 	ResolveAccountIds(accountNames []string) ([]uint32, error)
 	// get the relevant information of udf
-	ResolveUdf(name string, args []*Expr) (string, error)
+	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get needed info for stats by table
