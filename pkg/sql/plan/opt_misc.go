@@ -194,6 +194,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	var canPushdown, cantPushdown []*plan.Expr
 
+	if node.Limit != nil {
+		// can not push down over limit
+		return nodeID, filters
+	}
+
 	switch node.NodeType {
 	case plan.Node_AGG:
 		groupTag := node.BindingTags[0]
