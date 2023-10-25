@@ -1053,12 +1053,7 @@ func TestFlushTableErrorHandle(t *testing.T) {
 	schema.Name = "table"
 	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 10
-	bats := catalog.MockBatch(schema, 2*(int(schema.BlockMaxRows)*2+int(schema.BlockMaxRows/2))).Split(2)
-	bat := bats[0] // 50 rows
-	// bat2 := bats[1] // 50 rows
-
-	// defer bat.Close()
-	// defer bat2.Close()
+	bat := catalog.MockBatch(schema, (int(schema.BlockMaxRows)*2 + int(schema.BlockMaxRows/2)))
 
 	txn, _ := tae.StartTxn(nil)
 	txn.CreateDatabase("db", "", "")
@@ -1081,8 +1076,8 @@ func TestFlushTableErrorHandle(t *testing.T) {
 		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.Runtime, types.MaxTs())
 		require.NoError(t, err)
 		worker.SendOp(task)
-		task.WaitDone()
-		// require.NoError(t, err)
+		err = task.WaitDone()
+		require.Error(t, err)
 		require.NoError(t, txn.Commit(context.Background()))
 	}
 	for i := 0; i < 20; i++ {
