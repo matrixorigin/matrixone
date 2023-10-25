@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -885,11 +884,10 @@ func (tbl *txnTable) rangesOnePart(
 			}
 			if obj.HasDeltaLoc {
 				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-				if !ok {
-					panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+				if ok {
+					blkInfo.DeltaLoc = deltaLoc
+					blkInfo.CommitTs = commitTs
 				}
-				blkInfo.DeltaLoc = deltaLoc
-				blkInfo.CommitTs = commitTs
 			}
 			if hasDeletes {
 				if _, ok := dirtyBlks[blkInfo.BlockID]; !ok {
@@ -1078,11 +1076,10 @@ func (tbl *txnTable) tryFastRanges(
 			}
 			if obj.HasDeltaLoc {
 				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-				if !ok {
-					panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+				if ok {
+					blkInfo.DeltaLoc = deltaLoc
+					blkInfo.CommitTs = commitTs
 				}
-				blkInfo.DeltaLoc = deltaLoc
-				blkInfo.CommitTs = commitTs
 			}
 			if hasDeletes {
 				if _, ok := dirtyBlks[blkInfo.BlockID]; !ok {
@@ -1934,11 +1931,10 @@ func (tbl *txnTable) updateDeleteInfo(
 						}
 						if obj.HasDeltaLoc {
 							deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-							if !ok {
-								panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+							if ok {
+								blkInfo.DeltaLoc = deltaLoc
+								blkInfo.CommitTs = commitTs
 							}
-							blkInfo.DeltaLoc = deltaLoc
-							blkInfo.CommitTs = commitTs
 						}
 						blks = append(blks, blkInfo)
 						break
