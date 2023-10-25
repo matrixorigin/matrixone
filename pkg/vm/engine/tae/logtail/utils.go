@@ -2442,6 +2442,7 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 // recording the total object size within a table
 // and the account, db, table info the object belongs to.
 // every checkpoint records the full datasets of the storage usage info.
+// [account_id, db_id, table_id, table_total_size_in_bytes]
 func fillSEGStorageUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
 	if !entry.IsSortedLocked() || entry.IsAppendable() || entry.HasDropCommitted() {
 		return
@@ -2478,6 +2479,7 @@ func fillSEGStorageUsageBat(collector *BaseCollector, entry *catalog.SegmentEntr
 		if curTbl != entry.GetTable().ID { // table id changed
 			appendToStorageUsageBat(size)
 		} else {
+			// accumulating table size
 			curSize := vector.GetFixedAt[uint64](storageUsageSizeVec, curLen)
 			vector.SetFixedAt(storageUsageSizeVec, curLen, curSize+size)
 		}
