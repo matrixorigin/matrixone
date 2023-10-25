@@ -80,7 +80,7 @@ var (
 	LogtailSendLatencyHistogram = logTailSendDurationHistogram.WithLabelValues("latency")
 	LogtailSendNetworkHistogram = logTailSendDurationHistogram.WithLabelValues("network")
   
-  LogTailLoadCheckpointDurationHistogram = prometheus.NewHistogram(
+	LogTailLoadCheckpointDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "logtail",
