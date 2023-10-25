@@ -42,12 +42,40 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 		c.initLogtailSendRow(),
 		c.initLogtailSendLatencyRow(),
 		c.initLogtailSendNetworkRow(),
+		c.initLogtailCollectRow(),
+		c.initLogtailSubscriptionRow(),
 	)
 	if err != nil {
 		return err
 	}
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
+}
+
+func (c *DashboardCreator) initLogtailCollectRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail collect duration",
+		c.getBytesHistogram(
+			`mo_logtail_collect_duration_seconds_bucket`,
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initLogtailSubscriptionRow() dashboard.Option {
+	return dashboard.Row(
+		"logtail subscription the tn have received",
+		c.withGraph(
+			"logtail subscription average increase",
+			6,
+			`rate(mo_logtail_subscription_request_total[$interval])`,
+			""),
+		c.withGraph(
+			"logtail subscription average increase, sensitive",
+			6,
+			`irate(mo_logtail_subscription_request_total[$interval])`,
+			""),
+	)
 }
 
 func (c *DashboardCreator) initLogtailQueueRow() dashboard.Option {
