@@ -199,6 +199,8 @@ func (rt *Routine) handleRequest(req *Request) error {
 	//	trace.WithKind(trace.SpanKindStatement))
 	//defer span.End()
 
+	routineCtx = rt.getCancelRoutineCtx()
+
 	parameters := rt.getParameters()
 	mpi := rt.getProtocol()
 	mpi.SetSequenceID(req.seq)
