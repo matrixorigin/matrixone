@@ -40,9 +40,11 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 			bestStore := selectStore(infos.Shards[shardID], working)
 			newReplicaID, ok := alloc.Next()
 			if !ok {
+				runtime.ProcessLevelRuntime().Logger().Error("failed to allocate new replica id")
 				return nil
 			}
 			if op, err := operator.CreateAddReplica(bestStore, infos.Shards[shardID], newReplicaID); err != nil {
+				runtime.ProcessLevelRuntime().Logger().Error("failed to create addReplica command", zap.Error(err))
 				return nil
 			} else {
 				operators = append(operators, op)
@@ -58,6 +60,7 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 			}
 			if op, err := operator.CreateRemoveReplica(toRemoveReplica.uuid,
 				infos.Shards[toRemoveReplica.shardID]); err != nil {
+				runtime.ProcessLevelRuntime().Logger().Error("failed to create removeReplica command", zap.Error(err))
 				return nil
 			} else {
 				operators = append(operators, op)

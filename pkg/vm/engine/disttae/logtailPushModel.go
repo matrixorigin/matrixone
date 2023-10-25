@@ -21,7 +21,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/fagongzi/goetty/v2"
@@ -282,6 +284,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					cancel()
 
 					resp := <-ch
+
 					if resp.err != nil {
 						// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
 						logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
@@ -1007,7 +1010,9 @@ func updatePartitionOfPush(
 	tnId int,
 	e *Engine, tl *logtail.TableLogtail, lazyLoad bool) (err error) {
 	start := time.Now()
-	defer v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
@@ -1058,14 +1063,8 @@ func consumeLogTailOfPushWithLazyLoad(
 	engine *Engine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
-) (err error) {
-	for i := 0; i < len(lt.Commands); i++ {
-		if err = consumeEntry(ctx, primarySeqnum,
-			engine, state, &lt.Commands[i]); err != nil {
-			return
-		}
-	}
-	return nil
+) error {
+	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
 }
 
 func consumeLogTailOfPushWithoutLazyLoad(
@@ -1098,11 +1097,91 @@ func consumeLogTailOfPushWithoutLazyLoad(
 			return
 		}
 	}
+	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
+}
 
+func hackConsumeLogtail(
+	ctx context.Context,
+	primarySeqnum int,
+	engine *Engine,
+	state *logtailreplay.PartitionState,
+	lt *logtail.TableLogtail) error {
+	var packer *types.Packer
+	put := engine.packerPool.Get(&packer)
+	defer put.Put()
+
+	switch lt.Table.TbId {
+	case catalog.MO_TABLES_ID:
+		primarySeqnum = catalog.MO_TABLES_CATALOG_VERSION_IDX + 1
+		for i := 0; i < len(lt.Commands); i++ {
+			if lt.Commands[i].EntryType == api.Entry_Insert {
+				bat, _ := batch.ProtoBatchToBatch(lt.Commands[i].Bat)
+				accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + 2))
+				names := bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + 2)
+				databases := bat.GetVector(catalog.MO_TABLES_RELDATABASE_IDX + 2)
+				vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
+				for i, acc := range accounts {
+					packer.EncodeUint32(acc)
+					packer.EncodeStringType(names.GetBytesAt(i))
+					packer.EncodeStringType(databases.GetBytesAt(i))
+					if err := vector.AppendBytes(vec, packer.Bytes(), false, engine.mp); err != nil {
+						panic(err)
+					}
+					packer.Reset()
+				}
+				hackVec, _ := vector.VectorToProtoVector(vec)
+				lt.Commands[i].Bat.Vecs = append(lt.Commands[i].Bat.Vecs, hackVec)
+				vec.Free(engine.mp)
+			}
+			if lt.Commands[i].EntryType == api.Entry_Delete {
+				continue
+			}
+			if lt.Commands[i].EntryType == api.Entry_SpecialDelete {
+				lt.Commands[i].EntryType = api.Entry_Delete
+			}
+			if err := consumeEntry(ctx, primarySeqnum,
+				engine, state, &lt.Commands[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	case catalog.MO_DATABASE_ID:
+		primarySeqnum = catalog.MO_DATABASE_DAT_TYPE_IDX + 1
+		for i := 0; i < len(lt.Commands); i++ {
+			if lt.Commands[i].EntryType == api.Entry_Insert {
+				bat, _ := batch.ProtoBatchToBatch(lt.Commands[i].Bat)
+				accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + 2))
+				names := bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + 2)
+				vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
+				for i, acc := range accounts {
+					packer.EncodeUint32(acc)
+					packer.EncodeStringType(names.GetBytesAt(i))
+					if err := vector.AppendBytes(vec, packer.Bytes(), false, engine.mp); err != nil {
+						panic(err)
+					}
+					packer.Reset()
+				}
+				hackVec, _ := vector.VectorToProtoVector(vec)
+				lt.Commands[i].Bat.Vecs = append(lt.Commands[i].Bat.Vecs, hackVec)
+				vec.Free(engine.mp)
+			}
+			if lt.Commands[i].EntryType == api.Entry_Delete {
+				continue
+			}
+			if lt.Commands[i].EntryType == api.Entry_SpecialDelete {
+				lt.Commands[i].EntryType = api.Entry_Delete
+			}
+			if err := consumeEntry(ctx, primarySeqnum,
+				engine, state, &lt.Commands[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := 0; i < len(lt.Commands); i++ {
-		if err = consumeEntry(ctx, primarySeqnum,
+		if err := consumeEntry(ctx, primarySeqnum,
 			engine, state, &lt.Commands[i]); err != nil {
-			return
+			return err
 		}
 	}
 	return nil

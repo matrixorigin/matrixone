@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync/atomic"
 	"time"
 
@@ -379,9 +380,11 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				return
 			}
 
+			v2.LogTailSubscriptionCounter.Inc()
 			interval := time.Since(lastUpdate)
 			if interval > updateEventMaxInterval {
 				s.logger.Info("long time passed since last update event", zap.Duration("interval", interval))
+				s.logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
 
 				select {
 				case e, ok := <-s.event.C:
