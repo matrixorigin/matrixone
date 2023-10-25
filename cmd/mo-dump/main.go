@@ -63,7 +63,7 @@ func (t *Tables) Set(value string) error {
 func main() {
 	var (
 		err error
-		opt *Options
+		opt Options
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -164,10 +164,11 @@ func (opt *Options) dumpData(ctx context.Context) error {
 	var (
 		createDb    string
 		createTable []string
+		err         error
 	)
 
 	for _, db := range opt.dbs {
-		conn, err := opt.openDBConnection(ctx, db)
+		conn, err = opt.openDBConnection(ctx, db)
 		if err != nil {
 			return err
 		}
