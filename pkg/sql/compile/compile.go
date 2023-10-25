@@ -101,7 +101,6 @@ func New(
 	addr, db, sql, tenant, uid string,
 	ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
-	logutil.Infof("run sql : %s", sql)
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
