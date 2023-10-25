@@ -77,6 +77,9 @@ func startCluster(
 			return err
 		}
 	}
+	if err := startPythonUdfServiceCluster(ctx, cfg.PythonUdfServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -189,6 +192,29 @@ func startProxyServiceCluster(
 		}
 	}
 
+	return nil
+}
+
+func startPythonUdfServiceCluster(
+	ctx context.Context,
+	files []string,
+	stopper *stopper.Stopper,
+	perfCounterSet *perfcounter.CounterSet,
+	shutdownC chan struct{},
+) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	for _, file := range files {
+		cfg := NewConfig()
+		if err := parseConfigFromFile(file, cfg); err != nil {
+			return err
+		}
+		if err := startService(ctx, cfg, stopper, perfCounterSet, shutdownC); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
