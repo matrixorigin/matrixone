@@ -99,8 +99,11 @@ func (c *Client) Run(ctx context.Context, request *udf.Request, pkgReader udf.Pk
 	case udf.ResponseType_DataResponse:
 		return response, nil
 	case udf.ResponseType_PkgRequest:
-		var reader io.Reader
+		var reader io.ReadCloser
 		reader, err = pkgReader.Get(ctx, request.Udf.Body)
+		if reader != nil {
+			defer reader.Close()
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -696,25 +696,13 @@ type DefaultPkgReader struct {
 	Proc *process.Process
 }
 
-func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.Reader, error) {
+func (d *DefaultPkgReader) Get(ctx context.Context, path string) (io.ReadCloser, error) {
 	reader, writer := io.Pipe()
 	var errGroup *errgroup.Group
-
-	// watch and cancel
-	// TODO use context.AfterFunc in go1.21
-	funcCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		defer func() {
-			reader.Close()
-			if errGroup == nil {
-				writer.Close()
-			} else {
-				errGroup.Wait()
-			}
-		}()
-
-		<-funcCtx.Done()
+	defer func() {
+		if errGroup == nil {
+			writer.Close()
+		}
 	}()
 
 	ioVector := &fileservice.IOVector{

@@ -29,11 +29,9 @@ type Service interface {
 	Run(ctx context.Context, request *Request, pkgReader PkgReader) (*Response, error)
 }
 
-type GetPkgFunc func(path string) (reader io.Reader, err error)
-
 // PkgReader read udf package from storage
 type PkgReader interface {
-	Get(ctx context.Context, path string) (reader io.Reader, err error)
+	Get(ctx context.Context, path string) (reader io.ReadCloser, err error)
 }
 
 // PkgUploader upload udf package to storage
