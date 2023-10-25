@@ -523,7 +523,8 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				return
 			}
 
-			// the following codes handle created block or newer version of block
+			// the following codes handle block which be inserted or updated by a newer delta location.
+			// Notice that only delta location can be updated by a newer delta location.
 			//if location := objectio.Location(metaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 			//	blockEntry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			//}

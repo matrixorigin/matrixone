@@ -888,17 +888,17 @@ func (tbl *txnTable) rangesOnePart(
 				EntryState: obj.EntryState,
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+				CommitTs:   obj.CommitTS,
 				SegmentID:  obj.SegmentID,
 			}
-			deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-			if !ok {
-				panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
-			}
 			if obj.HasDeltaLoc {
+				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				if !ok {
+					panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+				}
 				blkInfo.DeltaLoc = deltaLoc
+				blkInfo.CommitTs = commitTs
 			}
-			blkInfo.CommitTs = commitTs
-
 			if hasDeletes {
 				if _, ok := dirtyBlks[blkInfo.BlockID]; !ok {
 					blkInfo.CanRemote = true
@@ -1081,17 +1081,17 @@ func (tbl *txnTable) tryFastRanges(
 				EntryState: obj.EntryState,
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+				CommitTs:   obj.CommitTS,
 				SegmentID:  obj.SegmentID,
 			}
-			deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-			if !ok {
-				panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
-			}
 			if obj.HasDeltaLoc {
+				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				if !ok {
+					panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+				}
 				blkInfo.DeltaLoc = deltaLoc
+				blkInfo.CommitTs = commitTs
 			}
-			blkInfo.CommitTs = commitTs
-
 			if hasDeletes {
 				if _, ok := dirtyBlks[blkInfo.BlockID]; !ok {
 					blkInfo.CanRemote = true
@@ -1937,16 +1937,17 @@ func (tbl *txnTable) updateDeleteInfo(
 							EntryState: obj.EntryState,
 							Sorted:     obj.Sorted,
 							MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+							CommitTs:   obj.CommitTS,
 							SegmentID:  obj.SegmentID,
 						}
-						deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-						if !ok {
-							panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
-						}
 						if obj.HasDeltaLoc {
+							deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+							if !ok {
+								panic(fmt.Sprintf("block %v commitTs not found", blkInfo.BlockID))
+							}
 							blkInfo.DeltaLoc = deltaLoc
+							blkInfo.CommitTs = commitTs
 						}
-						blkInfo.CommitTs = commitTs
 						blks = append(blks, blkInfo)
 						break
 					}
