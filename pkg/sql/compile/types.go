@@ -101,7 +101,7 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic magicType
 
-	// IsJoin means the pipeline is join
+	// IsEnd means the pipeline is join
 	IsJoin bool
 
 	// IsEnd means the pipeline is end
@@ -110,7 +110,7 @@ type Scope struct {
 	// IsRemote means the pipeline is remote
 	IsRemote bool
 
-	// IsLoad means the pipeline is load
+	// IsRemote means the pipeline is load
 	IsLoad bool
 
 	Plan *plan.Plan
