@@ -94,6 +94,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Unique"
 	case plan.Node_WINDOW:
 		pname = "Window"
+	case plan.Node_TIME_WINDOW:
+		pname = "Time window"
+	case plan.Node_Fill:
+		pname = "Fill"
 	case plan.Node_BROADCAST:
 		pname = "Broadcast"
 	case plan.Node_SPLIT:
@@ -120,6 +124,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert"
 	case plan.Node_PRE_INSERT_UK:
 		pname = "PreInsert UniqueKey"
+	case plan.Node_PRE_INSERT_SK:
+		pname = "PreInsert SecondaryKey"
 	case plan.Node_PRE_DELETE:
 		pname = "PreDelete"
 	case plan.Node_ON_DUPLICATE_KEY:
@@ -276,8 +282,21 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, groupByInfo)
 	}
 
+	if ndesc.Node.NodeType == plan.Node_Fill {
+		fillCoslInfo, err := ndesc.GetFillColsInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, fillCoslInfo)
+		fillModelInfo, err := ndesc.GetFillModeInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, fillModelInfo)
+	}
+
 	// Get Aggregate function info
-	if len(ndesc.Node.AggList) > 0 {
+	if len(ndesc.Node.AggList) > 0 && ndesc.Node.NodeType != plan.Node_Fill {
 		aggListInfo, err := ndesc.GetAggregationInfo(ctx, options)
 		if err != nil {
 			return nil, err
@@ -605,6 +624,69 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *
 			err := describeExpr(ctx, v, options, buf)
 			if err != nil {
 				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetFillColsInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Fill Columns: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.GetAggList() {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetFillModeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Fill Mode: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		switch ndesc.Node.FillType {
+		case plan.Node_NONE:
+			buf.WriteString("None")
+		case plan.Node_LINEAR:
+			buf.WriteString("Linear")
+		case plan.Node_NULL:
+			buf.WriteString("Null")
+		case plan.Node_VALUE:
+			buf.WriteString("Value")
+		case plan.Node_PREV:
+			buf.WriteString("Prev")
+		case plan.Node_NEXT:
+			buf.WriteString("Next")
+		}
+		if len(ndesc.Node.FillVal) > 0 {
+			buf.WriteString(" Fill Value: ")
+			first := true
+			for _, v := range ndesc.Node.GetFillVal() {
+				if !first {
+					buf.WriteString(", ")
+				}
+				first = false
+				err := describeExpr(ctx, v, options, buf)
+				if err != nil {
+					return "", err
+				}
 			}
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {

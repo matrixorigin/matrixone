@@ -24,6 +24,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/cache"
 	gpb "github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // KeyRouter is an interface manages the remote cache information.
@@ -83,6 +84,7 @@ func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
 
 	var numHit, numRead int64
 	defer func() {
+		v2.FSReadHitRemoteCounter.Add(float64(numHit))
 		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 			c.FileService.Cache.Read.Add(numRead)
 			c.FileService.Cache.Hit.Add(numHit)

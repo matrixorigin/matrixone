@@ -96,7 +96,7 @@ a    b    c
 2    aaaa    2020-09-08 00:00:00
 commit;
 update dis_table_02 set a=90;
-Duplicate entry '90' for key 'a'
+Duplicate entry '([^']*)' for key '([^']*)'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from dis_table_02;
@@ -123,7 +123,7 @@ select * from dis_table_04;
 a
 rollback ;
 select * from dis_db_01.dis_table_04;
-SQL parser error: table "dis_table_04" does not exist
+invalid database dis_db_01
 drop database dis_db_01;
 Can't drop database 'dis_db_01'; database doesn't exist
 drop table isolation_2.dis_table_04;

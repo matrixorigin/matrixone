@@ -22,7 +22,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't1' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't1' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -62,7 +62,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't2' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't2' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -101,7 +101,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't3' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't3' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -140,7 +140,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't4' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't4' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -179,7 +179,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't5' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't5' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -217,7 +217,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't6' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't6' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -257,7 +257,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't7' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't7' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -296,7 +296,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't8' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't8' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -329,7 +329,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't9' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't9' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 create unique index idx on t9(name);
 select
     `idx`.`name`,
@@ -344,7 +344,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't9';
+where  `tbl`.`relname` = 't9' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -382,7 +382,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 create unique index idx on t10(col2) comment 'create varchar index';
 select
     `idx`.`name`,
@@ -397,7 +397,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't10' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -433,7 +433,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 create index x11 ON t11(a) comment 'xxxxxxx';
 create index x12 ON t11(b, c) comment 'yyyyyyyyy';
 select
@@ -449,7 +449,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -478,7 +478,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't11' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 drop table t11;
 
 select
@@ -509,7 +509,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -537,7 +537,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
@@ -565,7 +565,7 @@ select
     `idx`.`options`
 from
     `mo_catalog`.`mo_indexes` `idx` join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`)
-where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6';
+where  `tbl`.`relname` = 't12' and `tbl`.`reldatabase` = 'db6' and `idx`.`column_name` NOT LIKE '__mo_alias_%';
 
 select
     table_schema,
