@@ -50,7 +50,7 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 func (c *DashboardCreator) initLogtailCollectRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail collect duration",
-		c.getBytesHistogram(
+		c.getHistogram(
 			`mo_logtail_collect_duration_seconds_bucket{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
