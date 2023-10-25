@@ -1074,7 +1074,8 @@ func (tbl *txnTable) tryFastRanges(
 			bid := *objectio.NewBlockid(&segmentId, obj.Loc.Name().Num(), blkMeta.BlockHeader().Sequence())
 			metaLoc := blockio.EncodeLocation(
 				obj.Loc.Name(),
-				blkMeta.GetExtent(),
+				//blkMeta.GetExtent(),
+				obj.Loc.Extent(),
 				blkMeta.GetRows(),
 				blkMeta.GetID(),
 			)
