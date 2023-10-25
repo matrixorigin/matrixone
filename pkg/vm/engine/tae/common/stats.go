@@ -26,18 +26,21 @@ import (
 )
 
 const (
-	DefaultNotLoadMoreThan = 4096
-	DefaultMaxMergeObjN    = 4
+	DefaultNotLoadMoreThan  = 4096
+	DefaultMinRowsQualified = 40960
+	DefaultMaxMergeObjN     = 2
 )
 
 var (
-	RuntimeNotLoadMoreThan atomic.Int32
-	RuntimeMaxMergeObjN    atomic.Int32
+	RuntimeNotLoadMoreThan  atomic.Int32
+	RuntimeMaxMergeObjN     atomic.Int32
+	RuntimeMinRowsQualified atomic.Int32
 )
 
 func init() {
 	RuntimeNotLoadMoreThan.Store(DefaultNotLoadMoreThan)
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
+	RuntimeMinRowsQualified.Store(DefaultMinRowsQualified)
 }
 
 type MergeHistory struct {

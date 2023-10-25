@@ -21,9 +21,7 @@ create table rename01 (col1 int, col2 decimal);
 alter table rename01 rename column col1 to col1New;
 show create table rename01;
 show columns from rename01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'name01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table rename01;
 
 
@@ -39,9 +37,7 @@ delete from rename02 where colcolcol1 = 1;
 update rename02 set colcolcol2 = '&' where colcolcol1 = 2;
 select * from rename02;
 show columns from rename02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table rename02;
 
 
@@ -63,9 +59,7 @@ update rename03 set col3New = '2798u3d3frew' where col3New = 6;
 delete from rename03 where col3New is null;
 select * from rename03;
 show columns from rename03;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename03' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table rename03;
 
 
@@ -87,9 +81,7 @@ select * from rename04;
 delet from rename04 where newnewa = 10000;
 select * from rename04;
 show columns from rename04;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename04' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table rename04;
 
 
@@ -106,17 +98,14 @@ drop table rename06;
 
 
 -- rename column with ``
--- @bvt:issue#11269
 drop table if exists rename06;
 create table rename06(col1 int);
 insert into rename06 values(1),(2);
 alter table rename06 rename column col1 to `数据库系统`;
 alter table rename06 rename column col1 to `数据操作，数据收集7327323467dhhjfkrnfe`;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename06' and COLUMN_NAME not like '__mo%';
-drop table rename06;
 show columns from rename06;
--- @bvt:issue
-
+drop table rename06;
 
 -- rename internal table column: have no priviledge
 alter table system.statement_info rename column role_id to role_idNew;
@@ -138,9 +127,7 @@ update primary01 set col1 = 2873892 where col1New = 2389324;
 update primary01 set col1New = 2873892 where col1New = 2389324;
 select * from primary01;
 show columns from primary01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table primary01;
 
 
@@ -181,10 +168,8 @@ show create table foreign01;
 show create table foreign02;
 show columns from foreign01;
 show columns from foreign02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table foreign02;
 drop table foreign01;
 
@@ -209,9 +194,7 @@ select * from index01;
 update index01 set c = '2022-12-12' where bNew = 'ac';
 select * from index01;
 show columns from index01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table index01;
 
 
@@ -231,9 +214,7 @@ update index02 set bnewnew = 'database' where bnewnEW = 'ad';
 select * from index02;
 show index from index02;
 show columns from index02;
--- @bvt:issue#11392
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 select * from index02;
 
 
@@ -248,9 +229,7 @@ insert into cluster01 (a, b, c, d) values (-32, 32832, 8329, 893434);
 insert into cluster01 (NewAAAAAAAA, b, c, d) values (-32, 32, 8329, 893434);
 select * from cluster01;
 show columns from cluster01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table cluster01;
 
 
@@ -263,9 +242,7 @@ insert into temporary01 (col1, col2) values (-32893, -89232);
 insert into temporary01 (`UUUYGGBBJBJ`, col2) values (-32893, -89232);
 select * from temporary01;
 show columns from temporary01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temporary01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table temporary01;
 
 
