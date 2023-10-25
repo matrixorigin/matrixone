@@ -50,7 +50,8 @@ func (c *DashboardCreator) initTxnDashboard() error {
 		c.initTxnAcquireLockRow(),
 		c.initTxnHoldLockRow(),
 		c.initTxnUnlockRow(),
-		c.initTxnTableRangesRow())
+		c.initTxnTableRangesRow(),
+		c.initTxnPrePrepareRow())
 	if err != nil {
 		return err
 	}
@@ -84,6 +85,16 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			3,
 			"sum(mo_txn_rollback_total) by (instance)",
 			"{{ instance }}"),
+	)
+}
+
+func (c *DashboardCreator) initTxnPrePrepareRow() dashboard.Option {
+	return dashboard.Row(
+		"txn pre-prepare duration",
+		c.getHistogram(
+			`mo_txn_pre_prepare_duration_seconds`,
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
 	)
 }
 
