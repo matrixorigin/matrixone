@@ -3,7 +3,7 @@ show sequences;
 alter sequence alter_seq_01 as bigint;
 show sequences;
 select nextval('alter_seq_01'),currval('alter_seq_01');
-alter sequence alter_seq_01 minvalue 1 maxvalue 10;
+alter sequence alter_seq_01 minvalue 1 maxvalue 100;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 select nextval('alter_seq_01'),currval('alter_seq_01');
 select nextval('alter_seq_01'),currval('alter_seq_01');
