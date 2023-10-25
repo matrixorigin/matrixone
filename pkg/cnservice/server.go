@@ -67,6 +67,10 @@ func NewService(
 		return nil, err
 	}
 
+	//set frontend parameters
+	cfg.Frontend.SetDefaultValues()
+	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
+
 	configKVMap, _ := dumpCnConfig(*cfg)
 	options = append(options, WithConfigData(configKVMap))
 
@@ -128,8 +132,6 @@ func NewService(
 			Addr: srv.pipelineServiceServiceAddr(),
 		}})
 	pu.HAKeeperClient = srv._hakeeperClient
-	cfg.Frontend.SetDefaultValues()
-	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
 
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.

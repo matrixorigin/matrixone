@@ -511,6 +511,8 @@ func (c *Config) SetDefaultValue() {
 	if !metadata.ValidStateString(c.InitWorkState) {
 		c.InitWorkState = metadata.WorkState_Working.String()
 	}
+
+	c.Frontend.SetDefaultValues()
 }
 
 func (s *service) getLockServiceConfig() lockservice.Config {
