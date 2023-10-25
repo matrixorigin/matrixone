@@ -30,6 +30,7 @@ var (
 	txnFolderName     = "Txn"
 	logtailFolderName = "LogTail"
 	fsFolderName      = "FileService"
+	taskFolderName    = "Tasks"
 )
 
 type DashboardCreator struct {
@@ -54,6 +55,10 @@ func (c *DashboardCreator) Create() error {
 	}
 
 	if err := c.initLogTailDashboard(); err != nil {
+		return err
+	}
+
+	if err := c.initTaskDashboard(); err != nil {
 		return err
 	}
 
