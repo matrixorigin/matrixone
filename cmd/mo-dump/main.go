@@ -44,15 +44,15 @@ func (t *Tables) Set(value string) error {
 
 func main() {
 	var (
-		username, password, host, database string
-		tables                             Tables
-		port, netBufferLength              int
-		createDb                           string
-		createTable                        []string
-		err                                error
-		toCsv, localInfile, noData         bool
-		csvFieldDelimiterStr               string
-		csvConf                            csvConfig
+		username, password, host, database      string
+		tables                                  Tables
+		port, netBufferLength                   int
+		createDb                                string
+		createTable                             []string
+		err                                     error
+		toCsv, localInfile, noData, emptyTables bool
+		csvFieldDelimiterStr                    string
+		csvConf                                 csvConfig
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -86,6 +86,8 @@ func main() {
 	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
 	flag.BoolVar(&noData, "no-data", defaultNoData, "dump database and table definitions only without data")
 	flag.Parse()
+
+	dbs := strings.Split(database, ",")
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
 		netBufferLength = minNetBufferLength
@@ -117,89 +119,118 @@ func main() {
 		}
 	}
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, host, port, database)
-	conn, err = sql.Open("mysql", dsn) // Open doesn't open a connection. Validate DSN data:
-	if err != nil {
-		return
+	if database == "all" {
+		conn, err = openDBConnection(ctx, username, password, host, port, "", timeout)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		dbs = getDatabases(ctx)
+		if tables == nil {
+			emptyTables = true
+		}
 	}
+
+	for _, db := range dbs {
+		conn, err = openDBConnection(ctx, username, password, host, port, db, timeout)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		if emptyTables {
+			tables = nil
+		}
+		if len(tables) == 0 { //dump all tables
+			createDb, err = getCreateDB(ctx, db)
+			if err != nil {
+				return
+			}
+			fmt.Printf("DROP DATABASE IF EXISTS `%s`;\n", db)
+			fmt.Println(createDb, ";")
+			fmt.Printf("USE `%s`;\n\n\n", db)
+		}
+		tables, err = getTables(db, tables)
+		if err != nil {
+			return
+
+		}
+		createTable = make([]string, len(tables))
+		for i, tbl := range tables {
+			createTable[i], err = getCreateTable(db, tbl.Name)
+			if err != nil {
+				return
+			}
+		}
+		bufPool := &sync.Pool{
+			New: func() any {
+				return &bytes.Buffer{}
+			},
+		}
+		left, right := 0, len(createTable)-1
+		for left < right {
+			for left < len(createTable) && tables[left].Kind != catalog.SystemViewRel {
+				left++
+			}
+			for right >= 0 && tables[right].Kind == catalog.SystemViewRel {
+				right--
+			}
+			if left >= right {
+				break
+			}
+			createTable[left], createTable[right] = createTable[right], createTable[left]
+			tables[left], tables[right] = tables[right], tables[left]
+		}
+		adjustViewOrder(createTable, tables, left)
+		for i, create := range createTable {
+			tbl := tables[i]
+			switch tbl.Kind {
+			case catalog.SystemOrdinaryRel:
+				fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
+				showCreateTable(create, false)
+				if !noData {
+					err = genOutput(database, tbl.Name, bufPool, netBufferLength, localInfile, &csvConf)
+					if err != nil {
+						return
+					}
+				}
+			case catalog.SystemExternalRel:
+				fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)
+				fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
+				showCreateTable(create, true)
+			case catalog.SystemViewRel:
+				fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl.Name)
+				showCreateTable(create, true)
+			default:
+				err = moerr.NewNotSupported(ctx, "table type %s", tbl.Kind)
+				return
+			}
+		}
+	}
+}
+
+func openDBConnection(ctx context.Context, username, password, host string, port int, database string, timeout time.Duration) (*sql.DB, error) {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, host, port, database)
+
+	conn, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+
 	ch := make(chan error)
 	go func() {
-		err := conn.Ping() // Before use, we must ping to validate DSN data:
+		err := conn.Ping()
 		ch <- err
 	}()
 
 	select {
 	case err = <-ch:
 	case <-time.After(timeout):
-		err = moerr.NewInternalError(ctx, "connect to %s timeout", dsn)
+		return nil, moerr.NewInternalError(ctx, "connect to %s timeout", dsn)
 	}
-	if err != nil {
-		return
-	}
-	if len(tables) == 0 { //dump all tables
-		createDb, err = getCreateDB(ctx, database)
-		if err != nil {
-			return
-		}
-		fmt.Printf("DROP DATABASE IF EXISTS `%s`;\n", database)
-		fmt.Println(createDb, ";")
-		fmt.Printf("USE `%s`;\n\n\n", database)
-	}
-	tables, err = getTables(database, tables)
-	if err != nil {
-		return
-	}
-	createTable = make([]string, len(tables))
-	for i, tbl := range tables {
-		createTable[i], err = getCreateTable(database, tbl.Name)
-		if err != nil {
-			return
-		}
-	}
-	bufPool := &sync.Pool{
-		New: func() any {
-			return &bytes.Buffer{}
-		},
-	}
-	left, right := 0, len(createTable)-1
-	for left < right {
-		for left < len(createTable) && tables[left].Kind != catalog.SystemViewRel {
-			left++
-		}
-		for right >= 0 && tables[right].Kind == catalog.SystemViewRel {
-			right--
-		}
-		if left >= right {
-			break
-		}
-		createTable[left], createTable[right] = createTable[right], createTable[left]
-		tables[left], tables[right] = tables[right], tables[left]
-	}
-	adjustViewOrder(createTable, tables, left)
-	for i, create := range createTable {
-		tbl := tables[i]
-		switch tbl.Kind {
-		case catalog.SystemOrdinaryRel:
-			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
-			showCreateTable(create, false)
-			if !noData {
-				err = genOutput(database, tbl.Name, bufPool, netBufferLength, localInfile, &csvConf)
-				if err != nil {
-					return
-				}
-			}
-		case catalog.SystemExternalRel:
-			fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)
-			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
-			showCreateTable(create, true)
-		case catalog.SystemViewRel:
-			fmt.Printf("DROP VIEW IF EXISTS `%s`;\n", tbl.Name)
-			showCreateTable(create, true)
-		default:
-			err = moerr.NewNotSupported(ctx, "table type %s", tbl.Kind)
-			return
-		}
-	}
+
+	return conn, nil
 }
 
 func adjustViewOrder(createTable []string, tables Tables, start int) {
@@ -308,6 +339,22 @@ func getCreateDB(ctx context.Context, db string) (string, error) {
 	}
 	// What if it is a subscription database?
 	return create, err
+}
+
+func getDatabases(ctx context.Context) []string {
+	r, _ := conn.QueryContext(ctx, "show databases")
+	dbs := make([]string, 0)
+
+	for r.Next() {
+		var dbName string
+		err := r.Scan(&dbName)
+		if err != nil {
+			return nil
+		}
+		dbs = append(dbs, dbName)
+	}
+
+	return dbs
 }
 
 func getCreateTable(db, tbl string) (string, error) {
