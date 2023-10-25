@@ -1287,3 +1287,14 @@ func extractPKValueFromEqualExprs(
 	}
 	return
 }
+
+// ListTnService gets all tn service in the cluster
+func ListTnService(appendFn func(service *metadata.TNService)) {
+	mc := clusterservice.GetMOCluster()
+	mc.GetTNService(clusterservice.NewSelector(), func(tn metadata.TNService) bool {
+		if appendFn != nil {
+			appendFn(&tn)
+		}
+		return true
+	})
+}

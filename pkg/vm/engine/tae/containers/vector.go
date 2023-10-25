@@ -385,9 +385,11 @@ func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MP
 	}
 
 	cloned := NewVector(*vec.GetType(), opts)
-	if err := vec.wrapped.CloneWindowTo(cloned.wrapped, offset, offset+length, cloned.GetAllocator()); err != nil {
+	v, err := vec.wrapped.CloneWindow(offset, offset+length, cloned.GetAllocator())
+	if err != nil {
 		panic(err)
 	}
+	cloned.setDownstreamVector(v)
 	return cloned
 }
 

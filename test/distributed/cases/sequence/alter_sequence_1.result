@@ -8,41 +8,41 @@ Names    Data Type
 alter_seq_01    BIGINT
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
+1    1
+alter sequence alter_seq_01 minvalue 1 maxvalue 100;
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
 2    2
-alter sequence alter_seq_01 minvalue 1 maxvalue 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 3    3
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 4    4
-select nextval('alter_seq_01'),currval('alter_seq_01');
-nextval(alter_seq_01)    currval(alter_seq_01)
-5    5
 alter sequence alter_seq_01 cycle;
 select * from alter_seq_01;
 last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
-6    1    10    5    1    true    false
+5    1    100    4    1    true    false
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+5    5
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 6    6
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 7    7
+alter sequence alter_seq_01 maxvalue 1000;
+alter sequence alter_seq_01 increment by 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 8    8
-alter sequence alter_seq_01 maxvalue 1000;
-alter sequence alter_seq_01 increment by 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 18    18
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 28    28
-select nextval('alter_seq_01'),currval('alter_seq_01');
-nextval(alter_seq_01)    currval(alter_seq_01)
-38    38
 alter sequence alter_seq_01 start with 900;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)

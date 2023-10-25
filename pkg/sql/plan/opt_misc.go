@@ -52,7 +52,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			projMap[ref] = expr
 		}
 
-	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW:
+	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_Fill:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
 			node.Children[i] = newChildID
@@ -139,7 +139,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DELETE {
 		return false
 	}
-	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK {
+	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
 	}
 
@@ -220,6 +220,29 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_WINDOW:
+		windowTag := node.BindingTags[0]
+
+		for _, filter := range filters {
+			if !containsTag(filter, windowTag) {
+				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
+			} else {
+				node.FilterList = append(node.FilterList, filter)
+			}
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
+
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+
+		node.Children[0] = childID
+
+	case plan.Node_TIME_WINDOW:
 		windowTag := node.BindingTags[0]
 
 		for _, filter := range filters {

@@ -15,12 +15,15 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"os"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -50,11 +53,13 @@ func TestConvertValue(t *testing.T) {
 		{"2021-01-01", "date"},
 		{"2021-01-01 00:00:00", "datetime"},
 		{"2021-01-01 00:00:00", "timestamp"},
+		{"[1,2,3]", "vecf32"},
+		{"[4,5,6]", "vecf64"},
 	}
 	for _, v := range kase {
 		s := convertValue(makeValue(v.val), v.typ)
 		switch v.typ {
-		case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double":
+		case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "float", "double", "vecf32", "vecf64":
 			require.Equal(t, v.val, s)
 		default:
 
@@ -192,4 +197,103 @@ func Test_toCsvLine(t *testing.T) {
 	want := "\\10\\36\\86\\"
 	assert.Equal(t, want, line[0])
 	assert.Equal(t, bb.Bytes()[:len(bys1)], bys1)
+}
+
+func Test_checkFieldDelimiter(t *testing.T) {
+	type args struct {
+		ctx context.Context
+		s   string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    rune
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "t1",
+			args: args{
+				ctx: nil,
+				s:   "",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "csv field delimiter is invalid utf8 character"))
+				return false
+			},
+		},
+		{
+			name: "t2",
+			args: args{
+				ctx: nil,
+				s:   "fdaf",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "there are multiple utf8 characters for csv field delimiter."))
+				return false
+			},
+		},
+		{
+			name: "t3",
+			args: args{
+				ctx: nil,
+				s:   string([]rune{utf8.RuneError}),
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "csv field delimiter is invalid utf8 character"))
+				return false
+			},
+		},
+		{
+			name: "t4",
+			args: args{
+				ctx: nil,
+				s:   " ",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				return false
+			},
+		},
+		{
+			name: "t5",
+			args: args{
+				ctx: nil,
+				s:   "中文",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "there are multiple utf8 characters for csv field delimiter."))
+				return false
+			},
+		},
+		{
+			name: "t6",
+			args: args{
+				ctx: nil,
+				s:   "中",
+			},
+			want: defaultFieldDelimiter,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				assert.NoError(t, err)
+				return false
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := checkFieldDelimiter(tt.args.ctx, tt.args.s)
+			if !tt.wantErr(t, err, fmt.Sprintf("checkFieldDelimiter(%v, %v)", tt.args.ctx, tt.args.s)) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "checkFieldDelimiter(%v, %v)", tt.args.ctx, tt.args.s)
+		})
+	}
 }
