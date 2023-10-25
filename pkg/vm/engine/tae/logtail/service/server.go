@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync/atomic"
 	"time"
 
@@ -372,6 +373,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				return
 			}
 
+			v2.LogTailSubscriptionCounter.Inc()
 			logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
 
 			subscriptionFunc := func(sub subscription) {
