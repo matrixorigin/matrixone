@@ -119,7 +119,7 @@ func TestParseTimestamp(t *testing.T) {
 
 	a, err = ParseTimestamp(time.UTC, "1970-01-01 00:00:01.52345", 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(TimestampMinValue+microSecsPerSec), int64(a))
+	require.Equal(t, int64(TimestampMinValue+MicroSecsPerSec), int64(a))
 
 	a, err = ParseTimestamp(time.UTC, "1966-01-01 00:00:01.52345", 0)
 	require.NoError(t, err)
