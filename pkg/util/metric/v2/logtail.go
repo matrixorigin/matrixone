@@ -19,6 +19,16 @@ import (
 )
 
 var (
+	LogtailLoadCheckpointCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "load_checkpoint_total",
+			Help:      "Total number of load checkpoint handled.",
+		})
+)
+
+var (
 	logTailQueueSizeGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
@@ -69,4 +79,32 @@ var (
 	LogtailSendTotalHistogram   = logTailSendDurationHistogram.WithLabelValues("total")
 	LogtailSendLatencyHistogram = logTailSendDurationHistogram.WithLabelValues("latency")
 	LogtailSendNetworkHistogram = logTailSendDurationHistogram.WithLabelValues("network")
+
+	LogTailLoadCheckpointDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "load_checkpoint_duration_seconds",
+			Help:      "Bucketed histogram of load check point duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
+
+	LogTailCollectDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "collect_duration_seconds",
+			Help:      "Bucketed histogram of logtail collecting duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
+)
+
+var (
+	LogTailSubscriptionCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "subscription_request_total",
+			Help:      "Total numbers of logtail subscription the tn have received.",
+		})
 )

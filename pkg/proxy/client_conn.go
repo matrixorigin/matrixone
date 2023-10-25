@@ -238,7 +238,7 @@ func (c *clientConn) BuildConnWithServer(handshake bool) (ServerConn, error) {
 	if handshake {
 		// Step 1, proxy write initial handshake to client.
 		if err := c.writeInitialHandshake(); err != nil {
-			c.log.Error("failed to write Handshake packet", zap.Error(err))
+			c.log.Debug("failed to write Handshake packet", zap.Error(err))
 			return nil, err
 		}
 		// Step 2, client send handshake response, which is auth request,

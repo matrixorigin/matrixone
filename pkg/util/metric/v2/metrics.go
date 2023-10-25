@@ -26,11 +26,16 @@ func init() {
 	initFileServiceMetrics()
 	initLogtailMetrics()
 	initTxnMetrics()
+	initTaskMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
+}
+
+func initTaskMetrics() {
+	registry.MustRegister(taskDurationHistogram)
 }
 
 func initFileServiceMetrics() {
@@ -46,12 +51,19 @@ func initFileServiceMetrics() {
 }
 
 func initLogtailMetrics() {
+	registry.MustRegister(LogtailLoadCheckpointCounter)
+
 	registry.MustRegister(logTailQueueSizeGauge)
 
 	registry.MustRegister(LogTailBytesHistogram)
 	registry.MustRegister(LogTailApplyDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
 	registry.MustRegister(logTailSendDurationHistogram)
+	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
+
+	registry.MustRegister(LogTailCollectDurationHistogram)
+	registry.MustRegister(LogTailSubscriptionCounter)
+	registry.MustRegister(TxnPrePrepareDurationHistogram)
 }
 
 func initTxnMetrics() {

@@ -8420,6 +8420,47 @@ func TestApplyDeltalocation3(t *testing.T) {
 
 }
 
+func TestApplyDeltalocation4(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	rows := 10
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	bats := bat.Split(rows)
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.CompactBlocks(false)
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	v5 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(5)
+	tae.TryDeleteByDeltalocWithTxn([]any{v5}, txn)
+	v1 := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	filter1 := handle.NewEQFilter(v1)
+	db, err := txn.GetDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+	err = rel.DeleteByFilter(context.Background(), filter1)
+	assert.NoError(t, err)
+	tae.DoAppendWithTxn(bats[1], txn, false)
+	tae.DoAppendWithTxn(bats[5], txn, false)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	tae.CheckRowsByScan(rows, true)
+
+	tae.Restart(ctx)
+
+	tae.CheckRowsByScan(rows, true)
+}
+
 func TestReplayPersistedDelete(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()

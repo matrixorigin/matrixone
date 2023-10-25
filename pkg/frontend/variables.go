@@ -3485,16 +3485,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
-	oldVal := vars[name]
-	if oldVal == val {
-		return nil
-	}
-
 	tzStr := val.(string)
-	if tzStr == "SYSTEM" {
+	tzStr = strings.TrimSpace(strings.ToLower(tzStr))
+	if tzStr == "system" {
 		vars[name] = "SYSTEM"
 		sess.SetTimeZone(time.Local)
-	} else if tzStr[0] == '-' || tzStr[0] == '+' {
+	} else if len(tzStr) > 0 && (tzStr[0] == '-' || tzStr[0] == '+') {
 		if len(tzStr) != 5 && len(tzStr) != 6 {
 			return moerr.NewWrongDatetimeSpec(sess.requestCtx, tzStr)
 		}
