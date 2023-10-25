@@ -27,7 +27,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 	}
 
 	build, err := dashboard.New(
-		"Txn Metrics",
+		"Task Metrics",
 		c.withRowOptions(
 			c.initTaskFlushTableTailRow(),
 			c.initTaskCkpEntryPendingRow(),
