@@ -375,5 +375,7 @@ execute stmt3 using @a_var, @b_var;
 a    b
 1    1
 2    2
+select * from t1 where a > ?;
+invalid input: only prepare statement can use ? expr
 deallocate prepare stmt3;
 drop database abc;
