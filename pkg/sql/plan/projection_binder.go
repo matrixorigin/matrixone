@@ -76,6 +76,21 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
+	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
+		if astStr != TimeWindowEnd && astStr != TimeWindowStart {
+			b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
+		}
+		return &plan.Expr{
+			Typ: b.ctx.times[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.timeTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
@@ -312,4 +327,9 @@ func (b *ProjectionBinder) resetInterval(e *Expr) (*Expr, error) {
 
 func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr, isRoot)
+}
+
+func (b *ProjectionBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
+	return b.havingBinder.BindTimeWindowFunc(funcName, astExpr, depth, isRoot)
 }

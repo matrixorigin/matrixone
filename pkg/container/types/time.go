@@ -283,8 +283,8 @@ func (t Time) ToDecimal128(ctx context.Context, width, scale int32) (Decimal128,
 }
 
 func TimeFromClock(isNegative bool, hour uint64, minute, sec uint8, msec uint32) Time {
-	secs := int64(hour)*secsPerHour + int64(minute)*secsPerMinute + int64(sec)
-	t := secs*microSecsPerSec + int64(msec)
+	secs := int64(hour)*SecsPerHour + int64(minute)*SecsPerMinute + int64(sec)
+	t := secs*MicroSecsPerSec + int64(msec)
 	if isNegative {
 		return Time(-t)
 	}
@@ -298,30 +298,30 @@ func (t Time) ClockFormat() (hour uint64, minute, sec uint8, msec uint64, isNeg 
 		t = -t
 	}
 	ts := t.sec()
-	h := uint64(ts / secsPerHour)
-	m := uint8(ts % secsPerHour / secsPerMinute)
-	s := uint8(ts % secsPerMinute)
-	ms := uint64(t % microSecsPerSec)
+	h := uint64(ts / SecsPerHour)
+	m := uint8(ts % SecsPerHour / SecsPerMinute)
+	s := uint8(ts % SecsPerMinute)
+	ms := uint64(t % MicroSecsPerSec)
 
 	return h, m, s, ms, isNeg
 }
 
 func (t Time) MicroSec() int64 {
-	return int64(t) % microSecsPerSec
+	return int64(t) % MicroSecsPerSec
 }
 
 func (t Time) Sec() int8 {
-	s := int8((t.sec()) % secsPerMinute)
+	s := int8((t.sec()) % SecsPerMinute)
 	return s
 }
 
 func (t Time) Minute() int8 {
-	m := int8((t.sec()) % secsPerHour / secsPerMinute)
+	m := int8((t.sec()) % SecsPerHour / SecsPerMinute)
 	return m
 }
 
 func (t Time) Hour() int64 {
-	h := (t.sec()) / secsPerHour
+	h := (t.sec()) / SecsPerHour
 	return h
 }
 
@@ -354,11 +354,11 @@ func (t Time) ToDatetime(scale int32) Datetime {
 func (t Time) AddInterval(nums int64, its IntervalType) (Time, bool) {
 	switch its {
 	case Second:
-		nums *= microSecsPerSec
+		nums *= MicroSecsPerSec
 	case Minute:
-		nums *= microSecsPerSec * secsPerMinute
+		nums *= MicroSecsPerSec * SecsPerMinute
 	case Hour:
-		nums *= microSecsPerSec * secsPerHour
+		nums *= MicroSecsPerSec * SecsPerHour
 	}
 	newTime := t + Time(nums)
 
@@ -378,17 +378,17 @@ func (t Time) ConvertToInterval(ctx context.Context, its string) (int64, error) 
 	case "microsecond":
 		return int64(t), nil
 	case "second":
-		return int64(t) / microSecsPerSec, nil
+		return int64(t) / MicroSecsPerSec, nil
 	case "minute":
-		return int64(t) / (microSecsPerSec * secsPerMinute), nil
+		return int64(t) / (MicroSecsPerSec * SecsPerMinute), nil
 	case "hour":
-		return int64(t) / (microSecsPerSec * secsPerHour), nil
+		return int64(t) / (MicroSecsPerSec * SecsPerHour), nil
 	}
 	return 0, moerr.NewInvalidInput(ctx, "invalid time input")
 }
 
 func (t Time) sec() int64 {
-	return int64(t) / microSecsPerSec
+	return int64(t) / MicroSecsPerSec
 }
 
 func ValidTime(h, m, s uint64) bool {

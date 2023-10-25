@@ -35,6 +35,7 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 			interval.Values([]string{"30s", "1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
 		),
 		c.initLogtailQueueRow(),
+		c.initLogtailLoadCheckpointRow(),
 		c.initLogtailBytesRow(),
 		c.initLogtailAppendRow(),
 		c.initLogtailApplyRow(),
@@ -54,14 +55,20 @@ func (c *DashboardCreator) initLogtailQueueRow() dashboard.Option {
 		"Logtail Queue Status",
 		c.withGraph(
 			"Sending Queue",
-			6,
+			4,
 			`sum(mo_logtail_queue_size{type="send"})`,
 			""),
 		c.withGraph(
 			"Receiving Queue",
-			6,
+			4,
 			`sum(mo_logtail_queue_size{type="receive"})`,
 			""),
+
+		c.withGraph(
+			"Checkpoint logtail",
+			4,
+			"sum(mo_logtail_load_checkpoint_total) by (instance)",
+			"{{ instance }}"),
 	)
 }
 
@@ -120,6 +127,16 @@ func (c *DashboardCreator) initLogtailSendNetworkRow() dashboard.Option {
 		"Logtail send network",
 		c.getHistogram(
 			`mo_logtail_send_duration_seconds_bucket{step="network"}`,
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initLogtailLoadCheckpointRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail load checkpoint",
+		c.getHistogram(
+			`mo_logtail_load_checkpoint_duration_seconds_bucket`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
