@@ -33,6 +33,7 @@ var (
 	txnFolderName     = "Txn"
 	logtailFolderName = "LogTail"
 	fsFolderName      = "FileService"
+	taskFolderName    = "Tasks"
 )
 
 type DashboardCreator struct {

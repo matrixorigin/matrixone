@@ -46,6 +46,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnHoldLockRow(),
 			c.initTxnUnlockRow(),
 			c.initTxnTableRangesRow(),
+			c.initTxnPrePrepareRow(),
 		)...)
 	if err != nil {
 		return err
@@ -80,6 +81,16 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 			3,
 			`sum(rate(mo_txn_rollback_total{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}[$interval])) by (pod)`,
 			"{{ pod }}"),
+	)
+}
+
+func (c *DashboardCreator) initTxnPrePrepareRow() dashboard.Option {
+	return dashboard.Row(
+		"txn pre-prepare duration",
+		c.getHistogram(
+			`mo_txn_pre_prepare_duration_seconds_bucket{matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
 	)
 }
 
