@@ -264,6 +264,27 @@ func (stats *StatsInfo) PlanEnd() {
 	stats.PlanDuration = time.Since(stats.planStart)
 }
 
+// reset StatsInfo into zero state
+func (stats *StatsInfo) Reset() {
+	if stats == nil {
+		return
+	}
+	stats.ParseDuration = 0
+	stats.CompileDuration = 0
+	stats.PlanDuration = 0
+
+	stats.PipelineTimeConsumption = 0
+	stats.PipelineBlockTimeConsumption = 0
+
+	stats.S3AccessTimeConsumption = 0
+	stats.S3ReadBytes = 0
+	stats.S3WriteBytes = 0
+
+	stats.compileStart = time.Time{}
+	stats.planStart = time.Time{}
+
+}
+
 func ContextWithStatsInfo(requestCtx context.Context, stats *StatsInfo) context.Context {
 	return context.WithValue(requestCtx, statsInfoKey{}, stats)
 }

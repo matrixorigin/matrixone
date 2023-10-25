@@ -3650,6 +3650,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 
 	averageParseDuration := time.Duration(time.Since(beginInstant).Nanoseconds() / int64(len(cws)))
+	statsInfo := statistic.StatsInfo{}
+	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
 
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
@@ -3670,10 +3672,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
-
-		statsInfo := statistic.StatsInfo{}
+		
+		statsInfo.Reset()
 		statsInfo.ParseDuration = averageParseDuration
-		requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
 
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
