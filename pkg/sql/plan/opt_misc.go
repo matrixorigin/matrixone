@@ -196,7 +196,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	if node.Limit != nil {
 		// can not push down over limit
-		return nodeID, filters
+		cantPushdown = filters
+		filters = nil
 	}
 
 	switch node.NodeType {
