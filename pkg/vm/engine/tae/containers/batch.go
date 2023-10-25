@@ -542,7 +542,7 @@ func (bs *BatchSplitter) Next() (*Batch, error) {
 		nextOffset = bs.internal.Length()
 		length = nextOffset - bs.offset
 	}
-	bat := bs.internal.Window(bs.offset, length)
+	bat := bs.internal.CloneWindow(bs.offset, length)
 	bs.offset = nextOffset
 	return bat, nil
 }
