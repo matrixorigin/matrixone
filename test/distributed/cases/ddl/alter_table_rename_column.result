@@ -327,7 +327,7 @@ a    bnew    c    d
 2    ac    2022-12-12    1600.00
 show columns from index01;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO        null        
+a    INT(32)    NO    UNI    null        
 bnew    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
