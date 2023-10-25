@@ -547,8 +547,9 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			//blockEntry.EntryState = isAppendable
 
 			//p.blocks.Set(blockEntry)
-
-			p.blockDeltas.Set(blockEntry)
+			if !isEmptyDelta {
+				p.blockDeltas.Set(blockEntry)
+			}
 
 			{
 				e := BlockIndexByTSEntry{
