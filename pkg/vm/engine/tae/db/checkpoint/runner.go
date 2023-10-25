@@ -526,7 +526,7 @@ func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string,
 		return
 	}
 	defer data.Close()
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows)
+	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}

@@ -1105,7 +1105,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 			}
 		}
-		cnLocation, dnLocation, err := data.WriteTo(dstFs, 10000)
+		cnLocation, dnLocation, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 		if err != nil {
 			return nil, nil, nil, err
 		}
