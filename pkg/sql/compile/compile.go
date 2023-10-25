@@ -938,6 +938,26 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		ss = c.compileWin(n, ss)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+	case plan.Node_TIME_WINDOW:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		ss = c.compileTimeWin(n, c.compileSort(n, ss))
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+	case plan.Node_Fill:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		ss = c.compileFill(n, ss)
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_JOIN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -2341,6 +2361,26 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 		Op:  vm.Window,
 		Idx: c.anal.curr,
 		Arg: constructWindow(c.ctx, n, c.proc),
+	}
+	return []*Scope{rs}
+}
+
+func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.TimeWin,
+		Idx: c.anal.curr,
+		Arg: constructTimeWindow(c.ctx, n, c.proc),
+	}
+	return []*Scope{rs}
+}
+
+func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Fill,
+		Idx: c.anal.curr,
+		Arg: constructFill(n),
 	}
 	return []*Scope{rs}
 }

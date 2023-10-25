@@ -80,3 +80,7 @@ func (b *LimitBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth
 func (b *LimitBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return nil, moerr.NewSyntaxError(b.GetContext(), "subquery not allowed in limit clause")
 }
+
+func (b *LimitBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
+}

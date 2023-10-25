@@ -283,13 +283,13 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	if proc != nil && proc.Ctx != nil {
 		isMoLogger, ok := proc.Ctx.Value(defines.IsMoLogger{}).(bool)
 		if ok && isMoLogger {
-			logutil.Info("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
+			logutil.Debug("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
 			S3SizeThreshold = TagS3SizeForMOLogger
 		}
 	}
 
 	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db_holder.MOLoggerUser {
-		logutil.Info("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
+		logutil.Debug("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
 		S3SizeThreshold = TagS3SizeForMOLogger
 	}
 	if w.batSize >= S3SizeThreshold {
