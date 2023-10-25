@@ -154,10 +154,13 @@ func main() {
 		}
 	}
 
-	opt.dumpData(ctx)
+	err = opt.dumpData(ctx)
+	if err != nil {
+		return
+	}
 }
 
-func (opt *Options) dumpData(ctx context.Context) {
+func (opt *Options) dumpData(ctx context.Context) error {
 	var (
 		createDb    string
 		createTable []string
@@ -166,7 +169,7 @@ func (opt *Options) dumpData(ctx context.Context) {
 	for _, db := range opt.dbs {
 		conn, err := opt.openDBConnection(ctx, db)
 		if err != nil {
-			return
+			return err
 		}
 		defer conn.Close()
 
@@ -176,7 +179,7 @@ func (opt *Options) dumpData(ctx context.Context) {
 		if len(opt.tables) == 0 { //dump all tables
 			createDb, err = getCreateDB(ctx, db)
 			if err != nil {
-				return
+				return err
 			}
 			fmt.Printf("DROP DATABASE IF EXISTS `%s`;\n", db)
 			fmt.Println(createDb, ";")
@@ -184,13 +187,13 @@ func (opt *Options) dumpData(ctx context.Context) {
 		}
 		opt.tables, err = getTables(db, opt.tables)
 		if err != nil {
-			return
+			return err
 		}
 		createTable = make([]string, len(opt.tables))
 		for i, tbl := range opt.tables {
 			createTable[i], err = getCreateTable(db, tbl.Name)
 			if err != nil {
-				return
+				return err
 			}
 		}
 		bufPool := &sync.Pool{
@@ -222,7 +225,7 @@ func (opt *Options) dumpData(ctx context.Context) {
 				if !opt.noData {
 					err = genOutput(db, tbl.Name, bufPool, opt.netBufferLength, opt.localInfile, &opt.csvConf)
 					if err != nil {
-						return
+						return err
 					}
 				}
 			case catalog.SystemExternalRel:
@@ -234,10 +237,11 @@ func (opt *Options) dumpData(ctx context.Context) {
 				showCreateTable(create, true)
 			default:
 				err = moerr.NewNotSupported(ctx, "table type %s", tbl.Kind)
-				return
+				return err
 			}
 		}
 	}
+	return nil
 }
 
 func (opt *Options) openDBConnection(ctx context.Context, database string) (*sql.DB, error) {
