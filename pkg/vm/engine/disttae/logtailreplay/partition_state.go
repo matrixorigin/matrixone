@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -752,92 +753,86 @@ func (p *PartitionState) consumeCheckpoints(
 }
 
 func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
-	//if p.minTS.Greater(ts) {
-	//	logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
-	//	return
-	//}
-	//p.minTS = ts
-	//gced := false
-	//pivot := BlockIndexByTSEntry{
-	//	Time:     ts.Next(),
-	//	BlockID:  types.Blockid{},
-	//	IsDelete: true,
-	//}
-	//iter := p.blockIndexByTS.Copy().Iter()
-	//ok := iter.Seek(pivot)
-	//if !ok {
-	//	ok = iter.Last()
-	//}
-	//blksToDelete := ""
-	//for ; ok; ok = iter.Prev() {
-	//	entry := iter.Item()
-	//	if entry.Time.Greater(ts) {
-	//		continue
-	//	}
-	//	if entry.IsDelete {
-	//		p.blockIndexByTS.Delete(entry)
-	//		blockPivot := BlockEntry{
-	//			BlockInfo: catalog.BlockInfo{
-	//				BlockID: entry.BlockID,
-	//			},
-	//		}
-	//		blkEntry, ok := p.blocks.Get(blockPivot)
-	//		if !ok {
-	//			panic("blk entry not existed")
-	//		}
-	//		createEntry := BlockIndexByTSEntry{
-	//			Time:         blkEntry.CreateTime,
-	//			BlockID:      blkEntry.BlockID,
-	//			IsDelete:     false,
-	//			IsAppendable: blkEntry.EntryState,
-	//		}
-	//		p.blockIndexByTS.Delete(createEntry)
-	//		p.blockIndexByTS.Delete(entry)
-	//		p.blocks.Delete(blkEntry)
-	//		p.blockDeltas.Delete(BlockDeltaEntry{
-	//			BlockID: blkEntry.BlockID,
-	//		})
-	//		if gced {
-	//			blksToDelete = fmt.Sprintf("%s, %v", blksToDelete, entry.BlockID.ShortStringEx())
-	//		} else {
-	//			blksToDelete = fmt.Sprintf("%s%v", blksToDelete, entry.BlockID.ShortStringEx())
-	//		}
-	//		gced = true
-	//	}
-	//}
-	//if gced {
-	//	logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], blksToDelete)
-	//}
+	if p.minTS.Greater(ts) {
+		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
+		return
+	}
+	p.minTS = ts
+	gced := false
+	pivot := BlockIndexByTSEntry{
+		Time:     ts.Next(),
+		BlockID:  types.Blockid{},
+		IsDelete: true,
+	}
+	iter := p.blockIndexByTS.Copy().Iter()
+	ok := iter.Seek(pivot)
+	if !ok {
+		ok = iter.Last()
+	}
+	blkIDsToDelete := make(map[types.Blockid]struct{}, 0)
+	blksToDelete := ""
+	for ; ok; ok = iter.Prev() {
+		entry := iter.Item()
+		if entry.Time.Greater(ts) {
+			continue
+		}
+		if entry.IsDelete {
+			blkIDsToDelete[entry.BlockID] = struct{}{}
+			if gced {
+				blksToDelete = fmt.Sprintf("%s, %v", blksToDelete, entry.BlockID.ShortStringEx())
+			} else {
+				blksToDelete = fmt.Sprintf("%s%v", blksToDelete, entry.BlockID.ShortStringEx())
+			}
+			gced = true
+		}
+	}
+	iter = p.blockIndexByTS.Copy().Iter()
+	ok = iter.Seek(pivot)
+	if !ok {
+		ok = iter.Last()
+	}
+	for ; ok; ok = iter.Prev() {
+		entry := iter.Item()
+		if entry.Time.Greater(ts) {
+			continue
+		}
+		if _, ok := blkIDsToDelete[entry.BlockID]; ok {
+			p.blockIndexByTS.Delete(entry)
+		}
+	}
+	if gced {
+		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], blksToDelete)
+	}
 
-	//objsToDelete := ""
-	//objIter := p.dataObjects.Copy().Iter()
-	//objGced := false
-	//firstCalled := false
-	//for {
-	//	if !firstCalled {
-	//		if !objIter.First() {
-	//			break
-	//		}
-	//		firstCalled = true
-	//	} else {
-	//		if !objIter.Next() {
-	//			break
-	//		}
-	//	}
+	objsToDelete := ""
+	objIter := p.dataObjects.Copy().Iter()
+	objGced := false
+	firstCalled := false
+	for {
+		if !firstCalled {
+			if !objIter.First() {
+				break
+			}
+			firstCalled = true
+		} else {
+			if !objIter.Next() {
+				break
+			}
+		}
 
-	//	objEntry := objIter.Item()
+		objEntry := objIter.Item()
 
-	//	if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(ts) {
-	//		p.dataObjects.Delete(objEntry)
-	//		if objGced {
-	//			objsToDelete = fmt.Sprintf("%s, %s", objsToDelete, objEntry.Location().Name().String())
-	//		} else {
-	//			objsToDelete = fmt.Sprintf("%s%s", objsToDelete, objEntry.Location().Name().String())
-	//		}
-	//		objGced = true
-	//	}
-	//}
-	//if objGced {
-	//	logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objsToDelete)
-	//}
+		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(ts) {
+			p.dataObjects.Delete(objEntry)
+			if objGced {
+				objsToDelete = fmt.Sprintf("%s, %s", objsToDelete, objEntry.Location().Name().String())
+			} else {
+				objsToDelete = fmt.Sprintf("%s%s", objsToDelete, objEntry.Location().Name().String())
+			}
+			objGced = true
+		}
+	}
+	if objGced {
+		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objsToDelete)
+	}
 }
