@@ -723,7 +723,7 @@ func isLeap(year int32) bool {
 }
 
 func (d Date) ToDatetime() Datetime {
-	return Datetime(int64(d) * secsPerDay * microSecsPerSec)
+	return Datetime(int64(d) * SecsPerDay * MicroSecsPerSec)
 }
 
 func (d Date) ToTime() Time {
