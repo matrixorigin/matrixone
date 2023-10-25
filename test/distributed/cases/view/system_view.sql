@@ -23,7 +23,7 @@ select count(*) > 0 from mo_cache() c;
 select count(*) >0 from mo_configurations() t;
 select count(*) >0 from mo_configurations() t where node_type = 'cn';
 
-select node_type,default_value  from mo_configurations() t where  name like '%frontend.port';
+select distinct node_type,default_value  from mo_configurations() t where  name like '%frontend.port';
 select count(*) > 0  from mo_configurations() t where internal = 'advanced';
 
 -- test mo_variables

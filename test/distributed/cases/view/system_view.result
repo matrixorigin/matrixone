@@ -21,7 +21,7 @@ true
 select count(*) >0 from mo_configurations() t where node_type = 'cn';
 count(*) > 0
 true
-select node_type,default_value  from mo_configurations() t where  name like '%frontend.port';
+select distinct node_type,default_value  from mo_configurations() t where  name like '%frontend.port';
 node_type    default_value
 cn    6001
 select count(*) > 0  from mo_configurations() t where internal = 'advanced';
