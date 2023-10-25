@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/variable/interval"
 )
 
 func (c *DashboardCreator) initTaskDashboard() error {
@@ -28,14 +27,12 @@ func (c *DashboardCreator) initTaskDashboard() error {
 	}
 
 	build, err := dashboard.New(
-		"Task Status",
-		dashboard.AutoRefresh("5s"),
-		dashboard.VariableAsInterval(
-			"interval",
-			interval.Values([]string{"30s", "1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
-		),
-		c.initTaskFlushTableTailRow(),
-		c.initTaskCkpEntryPendingRow())
+		"Task Metrics",
+		c.withRowOptions(
+			c.initTaskFlushTableTailRow(),
+			c.initTaskCkpEntryPendingRow(),
+		)...)
+
 	if err != nil {
 		return err
 	}
@@ -47,7 +44,7 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 	return dashboard.Row(
 		"Flush Table Tail Duration",
 		c.getHistogram(
-			`mo_task_duration_seconds_bucket{type="flush_table_tail"}`,
+			`mo_task_duration_seconds_bucket{type="flush_table_tail", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -57,7 +54,7 @@ func (c *DashboardCreator) initTaskCkpEntryPendingRow() dashboard.Option {
 	return dashboard.Row(
 		"Flush Table Tail Duration",
 		c.getHistogram(
-			`mo_task_duration_seconds_bucket{type="ckp_entry_pending"}`,
+			`mo_task_duration_seconds_bucket{type="ckp_entry_pending", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)

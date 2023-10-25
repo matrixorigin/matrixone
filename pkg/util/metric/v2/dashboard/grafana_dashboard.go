@@ -21,9 +21,12 @@ import (
 
 	"github.com/K-Phoen/grabana"
 	"github.com/K-Phoen/grabana/axis"
+	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/graph"
 	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/target/prometheus"
+	"github.com/K-Phoen/grabana/variable/interval"
+	"github.com/K-Phoen/grabana/variable/query"
 )
 
 var (
@@ -66,18 +69,7 @@ func (c *DashboardCreator) Create() error {
 }
 
 func (c *DashboardCreator) createFolder(name string) (*grabana.Folder, error) {
-	folder, err := c.cli.GetFolderByTitle(context.Background(), name)
-	if err != nil && err != grabana.ErrFolderNotFound {
-		return nil, err
-	}
-
-	if folder == nil {
-		folder, err = c.cli.CreateFolder(context.Background(), name)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return folder, nil
+	return c.cli.FindOrCreateFolder(context.Background(), name)
 }
 
 func (c *DashboardCreator) withGraph(
@@ -110,8 +102,8 @@ func (c *DashboardCreator) getHistogram(
 		options = append(options, c.withGraph(
 			fmt.Sprintf("P%f time", percent*100),
 			columns[i],
-			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, instance))", percent, metric),
-			"{{ instance }}",
+			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, pod))", percent, metric),
+			"{{ pod }}",
 			axis.Unit("s"),
 			axis.Min(0)))
 	}
@@ -129,10 +121,47 @@ func (c *DashboardCreator) getBytesHistogram(
 		options = append(options, c.withGraph(
 			fmt.Sprintf("P%f time", percent*100),
 			columns[i],
-			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, instance))", percent, metric),
-			"{{ instance }}",
+			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, pod))", percent, metric),
+			"{{ pod }}",
 			axis.Unit("bytes"),
 			axis.Min(0)))
 	}
 	return options
+}
+
+func (c *DashboardCreator) withRowOptions(rows ...dashboard.Option) []dashboard.Option {
+	return append(rows,
+		dashboard.AutoRefresh("5s"),
+		dashboard.VariableAsInterval(
+			"interval",
+			interval.Default("1m"),
+			interval.Values([]string{"1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
+		),
+		dashboard.VariableAsQuery(
+			"physicalCluster",
+			query.DataSource(c.dataSource),
+			query.DefaultAll(),
+			query.IncludeAll(),
+			query.Multiple(),
+			query.Label("matrixone_cloud_main_cluster"),
+			query.Request("label_values(matrixone_cloud_main_cluster)"),
+		),
+		dashboard.VariableAsQuery(
+			"cluster",
+			query.DataSource(c.dataSource),
+			query.DefaultAll(),
+			query.IncludeAll(),
+			query.Multiple(),
+			query.Label("matrixone_cloud_cluster"),
+			query.Request("label_values(matrixone_cloud_cluster)"),
+		),
+		dashboard.VariableAsQuery(
+			"pod",
+			query.DataSource(c.dataSource),
+			query.DefaultAll(),
+			query.IncludeAll(),
+			query.Multiple(),
+			query.Label("pod"),
+			query.Request("label_values(pod)"),
+		))
 }

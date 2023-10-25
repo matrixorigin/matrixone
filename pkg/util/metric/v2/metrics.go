@@ -26,7 +26,7 @@ func init() {
 	initFileServiceMetrics()
 	initLogtailMetrics()
 	initTxnMetrics()
-	initTNTaskMetrics()
+	initTaskMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -34,7 +34,7 @@ func init() {
 	registry.MustRegister(HeartbeatRecvFailureCounter)
 }
 
-func initTNTaskMetrics() {
+func initTaskMetrics() {
 	registry.MustRegister(taskDurationHistogram)
 }
 
