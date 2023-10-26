@@ -573,6 +573,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		pu.LockService,
 		pu.QueryService,
 		pu.HAKeeperClient,
+		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 

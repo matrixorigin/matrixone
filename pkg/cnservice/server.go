@@ -48,6 +48,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
@@ -141,10 +143,26 @@ func NewService(
 		MaxSize:        pu.SV.AutoIncrCacheSize,
 	}
 
+	// init UdfService
+	var udfServices []udf.Service
+	// add python client to handle python udf
+	if srv.cfg.PythonUdfClient.ServerAddress != "" {
+		pc, err := pythonservice.NewClient(srv.cfg.PythonUdfClient)
+		if err != nil {
+			panic(err)
+		}
+		udfServices = append(udfServices, pc)
+	}
+	srv.udfService, err = udf.NewService(udfServices...)
+	if err != nil {
+		panic(err)
+	}
+
 	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
 	srv.pu.QueryService = srv.queryService
+	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
 
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
@@ -181,6 +199,7 @@ func NewService(
 		lockService lockservice.LockService,
 		queryService queryservice.QueryService,
 		hakeeper logservice.CNHAKeeperClient,
+		udfService udf.Service,
 		cli client.TxnClient,
 		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
@@ -362,6 +381,7 @@ func (s *service) handleRequest(
 			s.lockService,
 			s.queryService,
 			s._hakeeperClient,
+			s.udfService,
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
@@ -663,6 +683,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.fileService,
 		s.queryService,
 		s._hakeeperClient,
+		s.udfService,
 		s.aicm)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 }
