@@ -345,6 +345,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.ls,
 		e.qs,
 		e.hakeeper,
+		e.us,
 		nil,
 	)
 
