@@ -80,7 +80,6 @@ func TestBackupData(t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
-
 	db.ForceLongCheckpoint()
 
 	dir := path.Join(db.Dir, "/local")
@@ -91,7 +90,6 @@ func TestBackupData(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	db.ForceCheckpoint()
 	for _, data := range bats {
 		txn, rel := db.GetRelation()
 		v := testutil.GetSingleSortKeyValue(data, schema, 2)
@@ -100,6 +98,7 @@ func TestBackupData(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
+	db.ForceCheckpoint()
 	db.ForceCheckpoint()
 	db.BGCheckpointRunner.DisableCheckpoint()
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpoints()
