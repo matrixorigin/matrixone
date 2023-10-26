@@ -66,6 +66,7 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	proc.Lim.Size = 1 << 20
 	proc.Lim.BatchRows = 1 << 20

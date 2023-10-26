@@ -469,7 +469,7 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 }
 
 func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
-	logutil.Info("[Catalog]", common.OperationField("remove"),
+	logutil.Debug("[Catalog]", common.OperationField("remove"),
 		common.OperandField(block.String()))
 	entry.Lock()
 	defer entry.Unlock()
