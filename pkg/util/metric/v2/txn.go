@@ -112,7 +112,7 @@ var (
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "create_duration_seconds",
-			Help:      "Bucketed histogram of txn commit duration.",
+			Help:      "Bucketed histogram of txn create txn duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
 	TxnCreateTotalDurationHistogram       = txnCreateDurationHistogram.WithLabelValues("total")
@@ -124,7 +124,7 @@ var (
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "statement_duration_seconds",
-			Help:      "Bucketed histogram of txn commit duration.",
+			Help:      "Bucketed histogram of txn statement duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
 	TxnStatementBuildPlanDurationHistogram = txnStatementDurationHistogram.WithLabelValues("build-plan")
@@ -156,6 +156,15 @@ var (
 			Subsystem: "txn",
 			Name:      "ranges_duration_seconds",
 			Help:      "Bucketed histogram of txn table ranges duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
+
+	TxnPrePrepareDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "pre_prepare_duration_seconds",
+			Help:      "Bucketed histogram of txn pre-prepare duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 )
