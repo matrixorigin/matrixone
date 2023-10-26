@@ -107,6 +107,7 @@ const (
 	COUNT_IF          // COUNT_IF
 	COVAR_POP         // COVAR_POP
 	COVAR_SAMPLE      // COVAR_SAMPLE
+	CONVERT_TZ        // CONVERT_TZ
 	CUME_DIST         // CUME_DIST
 	CURRENT_DATE      // CURRENT_DATE
 	CURRENT_TIMESTAMP // CURRENT_TIMESTAMP
@@ -340,6 +341,8 @@ const (
 	COSINE_SIMILARITY
 	VECTOR_DIMS //VECTOR DIMENSIONS
 
+	PYTHON_UDF
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -509,6 +512,7 @@ var functionIdRegister = map[string]int32{
 	"connection_id":                  CONNECTION_ID,
 	"charset":                        CHARSET,
 	"convert":                        CONVERT,
+	"convert_tz":                     CONVERT_TZ,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
@@ -601,4 +605,6 @@ var functionIdRegister = map[string]int32{
 	"inner_product":     INNER_PRODUCT,
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
+
+	"python_user_defined_function": PYTHON_UDF,
 }

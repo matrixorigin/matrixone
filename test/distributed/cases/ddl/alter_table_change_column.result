@@ -296,7 +296,7 @@ t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES   
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-y    VARCHAR(20)    YES        null        
+y    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
@@ -315,7 +315,7 @@ t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES   
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-z    VARCHAR(20)    YES        null        
+z    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
@@ -421,7 +421,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
-y    VARCHAR(20)    YES        null        
+y    VARCHAR(20)    YES    UNI    null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
 a    b    y    d
@@ -1430,7 +1430,7 @@ update index02 set bnewnew = 'database' where bnewnEW = 'ad';
 desc index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-bnewnew    VARCHAR(20)    YES        null        
+bnewnew    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';

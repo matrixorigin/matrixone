@@ -222,7 +222,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
 	case *tree.ParamExpr:
-		expr, err = b.baseBindParam(exprImpl, depth, isRoot)
+		if !b.builder.isPrepareStatement {
+			err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
+		} else {
+			expr, err = b.baseBindParam(exprImpl, depth, isRoot)
+		}
 
 	case *tree.StrVal:
 		err = moerr.NewNYI(b.GetContext(), "expr str'%v'", exprImpl)
@@ -1085,51 +1089,94 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 
 	// not a builtin func, look to resolve udf
 	cmpCtx := b.builder.compCtx
-	udfSql, err := cmpCtx.ResolveUdf(name, args)
+	udf, err := cmpCtx.ResolveUdf(name, args)
 	if err != nil {
 		return nil, err
 	}
 
-	return bindFuncExprImplUdf(b, name, udfSql, astArgs, depth)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, depth)
 }
 
-func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Expr, depth int32) (*plan.Expr, error) {
-	// replace sql with actual arg value
-	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	for i := 0; i < len(args); i++ {
-		args[i].Format(fmtctx)
-		sql = strings.Replace(sql, "$"+strconv.Itoa(i+1), fmtctx.String(), 1)
-		fmtctx.Reset()
+func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []tree.Expr, depth int32) (*plan.Expr, error) {
+	if udf == nil {
+		return nil, moerr.NewNotSupported(b.GetContext(), "function '%s'", name)
 	}
 
-	// if does not contain SELECT, an expression. In order to pass the parser,
-	// make it start with a 'SELECT'.
+	switch udf.Language {
+	case string(tree.SQL):
+		sql := udf.Body
+		// replace sql with actual arg value
+		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		for i := 0; i < len(args); i++ {
+			args[i].Format(fmtctx)
+			sql = strings.Replace(sql, "$"+strconv.Itoa(i+1), fmtctx.String(), 1)
+			fmtctx.Reset()
+		}
 
-	var expr *plan.Expr
+		// if does not contain SELECT, an expression. In order to pass the parser,
+		// make it start with a 'SELECT'.
 
-	if !strings.Contains(sql, "select") {
-		sql = "select " + sql
-		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+		var expr *plan.Expr
+
+		if !strings.Contains(sql, "select") {
+			sql = "select " + sql
+			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			if err != nil {
+				return nil, err
+			}
+			expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			if err != nil {
+				return nil, err
+			}
+			subquery := tree.NewSubquery(substmts[0], false)
+			expr, err = b.impl.BindSubquery(subquery, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return expr, nil
+	case string(tree.PYTHON):
+		expr, err := b.bindPythonUdf(udf, args, depth)
 		if err != nil {
 			return nil, err
 		}
-		expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
+		return expr, nil
+	default:
+		return nil, moerr.NewInvalidArg(b.GetContext(), "function language", udf.Language)
+	}
+}
+
+func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	args := make([]*Expr, 2*len(astArgs)+2)
+
+	// python udf self info and query context
+	args[0] = udf.GetPlanExpr()
+
+	// bind ast function's args
+	for idx, arg := range astArgs {
+		expr, err := b.impl.BindExpr(arg, depth, false)
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
-		if err != nil {
-			return nil, err
-		}
-		subquery := tree.NewSubquery(substmts[0], false)
-		expr, err = b.impl.BindSubquery(subquery, false)
-		if err != nil {
-			return nil, err
-		}
+		args[idx+1] = expr
 	}
 
-	return expr, nil
+	// function args
+	fArgTypes := udf.GetArgsPlanType()
+	for i, t := range fArgTypes {
+		args[len(astArgs)+i+1] = &Expr{Typ: t}
+	}
+
+	// function ret
+	fRetType := udf.GetRetPlanType()
+	args[2*len(astArgs)+1] = &Expr{Typ: fRetType}
+
+	return bindFuncExprImplByPlanExpr(b.GetContext(), "python_user_defined_function", args)
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
@@ -1529,6 +1576,15 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					return nil, moerr.NewInvalidInput(ctx, name+" function have invalid input args type")
 				}
 			}
+		}
+
+	case "python_user_defined_function":
+		size := (argsLength - 2) / 2
+		args = args[:size+1]
+		argsLength = len(args)
+		argsType = argsType[:size+1]
+		if len(argsCastType) > 0 {
+			argsCastType = argsCastType[:size+1]
 		}
 	}
 
