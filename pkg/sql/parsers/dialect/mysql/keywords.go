@@ -605,5 +605,6 @@ func init() {
 		"vecf64":                     VECF64,
 		"backup":                     BACKUP,
 		"filesystem":                 FILESYSTEM,
+		"handler":                    HANDLER,
 	}
 }
