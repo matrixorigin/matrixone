@@ -31,7 +31,6 @@ import (
 type mockHAKeeperClient struct {
 	sync.RWMutex
 	value logpb.ClusterDetails
-	err   error
 }
 
 func (c *mockHAKeeperClient) updateCN(uuid string, addr string, labels map[string]metadata.LabelList) {
