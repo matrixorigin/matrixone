@@ -172,7 +172,6 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			}
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
 
-			fmt.Println("--------------------- usage: ", account, sizeMB)
 			metric.StorageUsage(account).Set(sizeMB)
 		}
 
@@ -296,7 +295,6 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
 				zap.String("created_time", createdTime))
 
-			fmt.Println("--------------------- usage: ", account, sizeMB)
 			metric.StorageUsage(account).Set(sizeMB)
 		}
 
