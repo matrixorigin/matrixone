@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -57,6 +58,7 @@ type cnInformation struct {
 	lockService  lockservice.LockService
 	queryService queryservice.QueryService
 	hakeeper     logservice.CNHAKeeperClient
+	udfService   udf.Service
 	aicm         *defines.AutoIncrCacheManager
 }
 
@@ -200,6 +202,7 @@ func newMessageReceiverOnServer(
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
 	hakeeper logservice.CNHAKeeperClient,
+	udfService udf.Service,
 	txnClient client.TxnClient,
 	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
@@ -219,6 +222,7 @@ func newMessageReceiverOnServer(
 		lockService:  lockService,
 		queryService: queryService,
 		hakeeper:     hakeeper,
+		udfService:   udfService,
 		aicm:         aicm,
 	}
 
@@ -274,6 +278,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		cnInfo.lockService,
 		cnInfo.queryService,
 		cnInfo.hakeeper,
+		cnInfo.udfService,
 		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id

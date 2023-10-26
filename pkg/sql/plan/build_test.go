@@ -484,11 +484,11 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"select 2222332222222223333333333333333333, 0x616263,-10, bit_and(2), bit_or(2), bit_xor(10.1), 'aaa' like '%a',str_to_date('04/31/2004', '%m/%d/%Y'),unix_timestamp(from_unixtime(2147483647))",
 		"select max(n_nationkey) over  (partition by N_REGIONKEY) from nation",
 		"select * from generate_series(1, 5) g",
-		"select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10'",
+		"prepare stmt1 from select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10'",
 
 		"values row(1,1), row(2,2), row(3,3) order by column_0 limit 2",
 		"select * from (values row(1,1), row(2,2), row(3,3)) a (c1, c2)",
-		"select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10' for update",
+		"prepare stmt1 from select * from nation where n_name like ? or n_nationkey > 10 order by 2 limit '10' for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -1027,7 +1027,7 @@ func TestBuildUnnest(t *testing.T) {
 }
 
 func TestVisitRule(t *testing.T) {
-	sql := "select * from nation where n_nationkey > ? or n_nationkey=@int_var or abs(-1) > 1"
+	sql := "select * from nation where n_nationkey > 10 or n_nationkey=@int_var or abs(-1) > 1"
 	mock := NewMockOptimizer(false)
 	ctx := context.TODO()
 	plan, err := runOneStmt(mock, t, sql)

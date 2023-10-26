@@ -569,6 +569,7 @@ func runLockOpTest(
 				services[0],
 				nil,
 				nil,
+				nil,
 				nil)
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 			defer func() {

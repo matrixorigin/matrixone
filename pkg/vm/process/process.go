@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -46,6 +47,7 @@ func New(
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
 	hakeeper logservice.CNHAKeeperClient,
+	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
 	return &Process{
 		mp:           m,
@@ -65,6 +67,7 @@ func New(
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
 		QueryService:   queryService,
 		Hakeeper:       hakeeper,
+		UdfService:     udfService,
 	}
 }
 
@@ -93,6 +96,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.IncrService = p.IncrService
 	proc.QueryService = p.QueryService
 	proc.Hakeeper = p.Hakeeper
+	proc.UdfService = p.UdfService
 	proc.UnixTime = p.UnixTime
 	proc.LastInsertID = p.LastInsertID
 	proc.LockService = p.LockService

@@ -45,11 +45,6 @@ type lockContext struct {
 	cb       func(pb.Result, error)
 	lockFunc func(*lockContext, bool)
 	w        *waiter
-
-	mu struct {
-		sync.RWMutex
-		completed bool
-	}
 }
 
 func (l *localLockTable) newLockContext(
@@ -72,15 +67,7 @@ func (l *localLockTable) newLockContext(
 
 func (c *lockContext) done(err error) {
 	c.cb(c.result, err)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.mu.completed = true
-}
-
-func (c *lockContext) isDone() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.mu.completed
+	c.release()
 }
 
 func (c *lockContext) release() {
@@ -171,12 +158,10 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case c := <-mw.eventC:
-			c.txn.Lock()
+			txn := c.txn
+			txn.Lock()
 			c.doLock()
-			c.txn.Unlock()
-			if c.isDone() {
-				c.release()
-			}
+			txn.Unlock()
 		case <-timer.C:
 			mw.check()
 			timer.Reset(defaultLazyCheckDuration)

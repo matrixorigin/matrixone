@@ -29,6 +29,8 @@ const (
 	Order
 	Group
 	Window
+	TimeWin
+	Fill
 	Output
 	Offset
 	Product
@@ -181,6 +183,8 @@ func (ins *Instruction) IsBrokenNode() bool {
 	case Top, MergeTop:
 		return true
 	case Window:
+		return true
+	case TimeWin, Fill:
 		return true
 	case MergeRecursive:
 		return true
