@@ -1034,13 +1034,12 @@ func TestFlushTableErrorHandle(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.Ctx = ctx
 
-	// db := initDB(ctx, t, opts)
 	tae := testutil.NewTestEngine(context.Background(), ModuleName, t, opts)
 	defer tae.Close()
 
 	worker := ops.NewOpWorker(ctx, "xx")
 	worker.Start()
-	// defer worker.Stop()
+	defer worker.Stop()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.Name = "table"
 	schema.BlockMaxRows = 20
