@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -281,11 +283,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	return disttae.GetTableDef(ctx, table, dbName, tableName, sub)
 }
 
-func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body string, err error) {
-	var expectInvalidArgErr bool
-	var expectedInvalidArgLengthErr bool
-	var badValue string
+func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
+	var matchNum int
 	var argstr string
+	var argTypeStr string
 	var sql string
 	var erArray []ExecResult
 
@@ -294,7 +295,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 
 	err = inputNameIsInvalid(ctx, name)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -303,76 +304,136 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
-		if expectedInvalidArgLengthErr {
-			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args)))
-		} else if expectInvalidArgErr {
-			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue))
+		if execResultArrayHasData(erArray) {
+			if matchNum < 1 {
+				err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("No matching function for call to %s(%s)", name, argTypeStr)))
+			} else if matchNum > 1 {
+				err = errors.Join(err, moerr.NewInvalidInput(ctx, fmt.Sprintf("call to %s(%s) is ambiguous", name, argTypeStr)))
+			}
 		}
 	}()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	sql = fmt.Sprintf(`select args, body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			// reset flag
-			expectedInvalidArgLengthErr = false
-			expectInvalidArgErr = false
-			argstr, err = erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return "", err
+		fromList := make([]types.Type, len(args))
+		for i, arg := range args {
+			fromList[i] = types.Type{
+				Oid:   types.T(arg.Typ.Id),
+				Width: arg.Typ.Width,
+				Scale: arg.Typ.Scale,
 			}
-			body, err = erArray[0].GetString(ctx, i, 1)
-			if err != nil {
-				return "", err
-			}
-			// arg type check
-			argMap := make(map[string]string)
-			json.Unmarshal([]byte(argstr), &argMap)
-			if len(argMap) != len(args) {
-				expectedInvalidArgLengthErr = true
-				continue
-			}
-			i := 0
-			for _, v := range argMap {
-				switch t := int32(types.Types[v]); {
-				case (t >= 20 && t <= 29): // int family
-					if args[i].Typ.Id < 20 || args[i].Typ.Id > 29 {
-						expectInvalidArgErr = true
-						badValue = v
-					}
-				case t == 10: // bool family
-					if args[i].Typ.Id != 10 {
-						expectInvalidArgErr = true
-						badValue = v
-					}
-				case (t >= 30 && t <= 33): // float family
-					if args[i].Typ.Id < 30 || args[i].Typ.Id > 33 {
-						expectInvalidArgErr = true
-						badValue = v
-					}
-				}
-				i++
-			}
-			if (!expectInvalidArgErr) && (!expectedInvalidArgLengthErr) {
-				return body, err
+
+			argTypeStr += strings.ToLower(fromList[i].String())
+			if i+1 != len(args) {
+				argTypeStr += ", "
 			}
 		}
-		return "", err
+
+		// find function which has min type cast cost in reload functions
+		type MatchUdf struct {
+			Udf      *function.Udf
+			Cost     int
+			TypeList []types.T
+		}
+		matchedList := make([]*MatchUdf, 0)
+
+		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+			argstr, err = erArray[0].GetString(ctx, i, 0)
+			if err != nil {
+				return nil, err
+			}
+			udf = &function.Udf{}
+			udf.Body, err = erArray[0].GetString(ctx, i, 1)
+			if err != nil {
+				return nil, err
+			}
+			udf.Language, err = erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return nil, err
+			}
+			udf.RetType, err = erArray[0].GetString(ctx, i, 3)
+			if err != nil {
+				return nil, err
+			}
+			udf.Db, err = erArray[0].GetString(ctx, i, 4)
+			if err != nil {
+				return nil, err
+			}
+			udf.ModifiedTime, err = erArray[0].GetString(ctx, i, 5)
+			if err != nil {
+				return nil, err
+			}
+			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, " ", "_")
+			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, ":", "-")
+			// arg type check
+			argList := make([]*function.Arg, 0)
+			err = json.Unmarshal([]byte(argstr), &argList)
+			if err != nil {
+				return nil, err
+			}
+			if len(argList) != len(args) { // mismatch
+				continue
+			}
+
+			toList := make([]types.T, len(args))
+			for j := range argList {
+				if fromList[j].IsDecimal() && argList[j].Type == "decimal" {
+					toList[j] = fromList[j].Oid
+				} else {
+					toList[j] = types.Types[argList[j].Type]
+				}
+			}
+
+			canCast, cost := function.UdfArgTypeMatch(fromList, toList)
+			if !canCast { // mismatch
+				continue
+			}
+
+			udf.Args = argList
+			matchedList = append(matchedList, &MatchUdf{
+				Udf:      udf,
+				Cost:     cost,
+				TypeList: toList,
+			})
+		}
+
+		if len(matchedList) == 0 {
+			return nil, err
+		}
+
+		sort.Slice(matchedList, func(i, j int) bool {
+			return matchedList[i].Cost < matchedList[j].Cost
+		})
+
+		minCost := matchedList[0].Cost
+		for _, matchUdf := range matchedList {
+			if matchUdf.Cost == minCost {
+				matchNum++
+			}
+		}
+
+		if matchNum == 1 {
+			matchedList[0].Udf.ArgsType = function.UdfArgTypeCast(fromList, matchedList[0].TypeList)
+			return matchedList[0].Udf, err
+		}
+
+		return nil, err
 	} else {
-		return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		return nil, moerr.NewNotSupported(ctx, "function or operator '%s'", name)
 	}
 }
 

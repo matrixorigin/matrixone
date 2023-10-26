@@ -141,6 +141,10 @@ func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
 }
 
+func (v *Vector) SetTypeScale(scale int32) {
+	v.typ.Scale = scale
+}
+
 func (v *Vector) GetNulls() *nulls.Nulls {
 	return &v.nsp
 }
@@ -3000,10 +3004,32 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 
 // CloneWindow Deep copies the content from start to end into another vector. Afterwise it's safe to destroy the original one.
 func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
-	w := NewVec(v.typ)
 	if start == end {
-		return w, nil
+		return NewVec(v.typ), nil
 	}
+	if end > v.Length() {
+		panic(fmt.Sprintf("CloneWindow end %d >= length %d", end, v.Length()))
+	}
+	if v.IsConstNull() {
+		return NewConstNull(v.typ, end-start, mp), nil
+	} else if v.IsConst() {
+		if v.typ.IsVarlen() {
+			return NewConstBytes(v.typ, v.GetBytesAt(0), end-start, mp), nil
+		} else {
+			vec := NewVec(v.typ)
+			vec.class = v.class
+			vec.col = v.col
+			vec.data = make([]byte, len(v.data))
+			copy(vec.data, v.data)
+			vec.capacity = v.capacity
+			vec.length = end - start
+			vec.cantFreeArea = true
+			vec.cantFreeData = true
+			vec.sorted = v.sorted
+			return vec, nil
+		}
+	}
+	w := NewVec(v.typ)
 	if err := v.CloneWindowTo(w, start, end, mp); err != nil {
 		return nil, err
 	}
