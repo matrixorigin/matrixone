@@ -156,7 +156,6 @@ create stage if not exists local_stage URL= '$resources/into_outfile2' ENABLE=FA
 select stage_name,stage_status,comment from mo_catalog.mo_stages;
 alter stage if exists l_stage set ENABLE=TRUE;
 
--- @bvt:issue#12179
 -- privs confirm
 create user "stage_user" identified by '123456';
 create role s_role;
@@ -164,7 +163,7 @@ grant all on table *.* to s_role;
 grant all on account * to s_role;
 grant all on database *.* to s_role;
 grant s_role to stage_user;
--- @session:id=1&user=sys:stage_user:s_role&password=123456
+-- @session:id=2&user=sys:stage_user:s_role&password=123456
 create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
 create database sdb;
 use sdb;
@@ -181,17 +180,15 @@ insert into stage_table values
 (3,"EUROPE","ly final courts cajole furiously final excuse"),
 (4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
 alter stage local_stage set ENABLE=FALSE;
-show stages;
 drop stage stage_user;
 drop database sdb;
 -- @session
 drop user stage_user;
 drop role s_role;
--- @bvt:issue
 
 drop account if exists stage_account;
 create account `stage_account` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
--- @session:id=2&user=stage_account:admin&password=123456
+-- @session:id=3&user=stage_account:admin&password=123456
 create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
 create database sdb;
 use sdb;
@@ -219,15 +216,15 @@ grant all on database *.* to s_role;
 grant s_role to stage_user02;
 -- @session
 
--- @bvt:issue#12179
--- @session:id=3&user=stage_account:stage_user02:s_role&password=123456
+-- @session:id=4&user=stage_account:stage_user02:s_role&password=123456
 create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE;
 show stages;
 alter stage local_stage set ENABLE=FALSE;
 drop stage local_stage;
 -- @session
--- @bvt:issue
 drop account stage_account;
 drop database if exists stage;
 drop stage if exists aws_stage;
 drop stage if exists local_stage;
+drop user if exists stage_user;
+drop role if exists s_role;

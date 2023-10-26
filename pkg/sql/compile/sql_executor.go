@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -47,6 +48,7 @@ type sqlExecutor struct {
 	ls        lockservice.LockService
 	qs        queryservice.QueryService
 	hakeeper  logservice.CNHAKeeperClient
+	us        udf.Service
 	aicm      *defines.AutoIncrCacheManager
 	buf       *buffer.Buffer
 }
@@ -60,6 +62,7 @@ func NewSQLExecutor(
 	fs fileservice.FileService,
 	qs queryservice.QueryService,
 	hakeeper logservice.CNHAKeeperClient,
+	us udf.Service,
 	aicm *defines.AutoIncrCacheManager) executor.SQLExecutor {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService)
 	if !ok {
@@ -73,6 +76,7 @@ func NewSQLExecutor(
 		ls:        v.(lockservice.LockService),
 		qs:        qs,
 		hakeeper:  hakeeper,
+		us:        us,
 		aicm:      aicm,
 		mp:        mp,
 		buf:       buffer.New(),
@@ -212,6 +216,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		exec.s.ls,
 		exec.s.qs,
 		exec.s.hakeeper,
+		exec.s.us,
 		exec.s.aicm,
 	)
 	proc.SetVectorPoolSize(0)
