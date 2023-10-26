@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"math"
 	"strings"
@@ -59,9 +58,9 @@ func (txn *Transaction) getObjInfos(
 		entry := iter.Entry()
 		objs = append(objs, entry)
 		//prefetch the object meta
-		if err = blockio.PrefetchMeta(fs, entry.Loc); err != nil {
-			logutil.Warnf("prefetch meta %s failed: %v", entry.Loc, err)
-		}
+		//if err = blockio.PrefetchMeta(fs, entry.Loc); err != nil {
+		//	logutil.Warnf("prefetch meta %s failed: %v", entry.Loc, err)
+		//}
 	}
 	iter.Close()
 	return

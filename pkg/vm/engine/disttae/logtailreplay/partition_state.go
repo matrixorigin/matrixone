@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"net/http"
 	"runtime/trace"
 	"sync"
@@ -635,9 +636,9 @@ func (p *PartitionState) HandleMetadataInsert(
 				objEntry.CreateTime = createTimeVector[i]
 				p.dataObjects.Set(objEntry)
 				//prefetch the object meta
-				//if err := blockio.PrefetchMeta(fs, objEntry.Loc); err != nil {
-				//	logutil.Errorf("prefetch object meta failed. %v", err)
-				//}
+				if err := blockio.PrefetchMeta(fs, objEntry.Loc); err != nil {
+					logutil.Errorf("prefetch object meta failed. %v", err)
+				}
 			}
 
 		})
