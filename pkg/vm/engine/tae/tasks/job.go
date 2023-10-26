@@ -65,12 +65,12 @@ type JobResult struct {
 	Res any
 }
 
-var SerialJobScheduler = new(simpleJobSceduler)
+var SerialJobScheduler = new(simpleJobScheduler)
 
-type simpleJobSceduler struct{}
+type simpleJobScheduler struct{}
 
-func (s *simpleJobSceduler) Stop() {}
-func (s *simpleJobSceduler) Schedule(job *Job) (err error) {
+func (s *simpleJobScheduler) Stop() {}
+func (s *simpleJobScheduler) Schedule(job *Job) (err error) {
 	job.Run()
 	return
 }

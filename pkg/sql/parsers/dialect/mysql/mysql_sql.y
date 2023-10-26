@@ -451,6 +451,9 @@ import (
 
 %token <str> BACKEND SERVERS
 
+// python udf
+%token <str> HANDLER
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
@@ -532,6 +535,7 @@ import (
 %type <funcArg> func_arg
 %type <funcArgDecl> func_arg_decl
 %type <funcReturn> func_return
+%type <boolVal> func_body_import
 %type <str> func_lang extension_lang extension_name
 
 %type <procName> proc_name
@@ -764,6 +768,9 @@ import (
 %type <fillMode> fill_mode
 
 %start start_command
+
+// python udf
+%type<str> func_handler func_handler_opt
 %%
 
 start_command:
@@ -5326,14 +5333,26 @@ proc_arg_in_out_type:
 
 
 create_function_stmt:
-    CREATE FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang AS STRING
+    CREATE replace_opt FUNCTION func_name '(' func_args_list_opt ')' RETURNS func_return LANGUAGE func_lang func_body_import STRING func_handler_opt
     {
+    	if $13 == "" {
+            yylex.Error("no function body error")
+            return 1
+        }
+        if $11 == "python" && $14 == "" {
+            yylex.Error("no handler error")
+            return 1
+        }
+
         $$ = &tree.CreateFunction{
-            Name: $3,
-            Args: $5,
-            ReturnType: $8,
-            Language: $10,
-            Body: $12,
+            Replace: $2,
+            Name: $4,
+            Args: $6,
+            ReturnType: $9,
+            Language: $11,
+            Import: $12,
+            Body: $13,
+            Handler: $14,
         }
     }
 
@@ -5395,6 +5414,29 @@ func_return:
     column_type
     {
         $$ = tree.NewReturnType($1)
+    }
+
+func_body_import:
+    AS
+    {
+    	$$ = false
+    }
+|   IMPORT
+    {
+    	$$ = true
+    }
+
+
+func_handler_opt:
+    {
+    	$$ = ""
+    }
+|   func_handler
+
+func_handler:
+    HANDLER STRING
+    {
+    	$$ = $2
     }
 
 create_view_stmt:

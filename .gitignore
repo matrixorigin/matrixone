@@ -27,6 +27,8 @@ node-*-data/
 pkg/catalog/test/
 pkg/config/system_vars.go
 pkg/config/system_vars_test.go
+pkg/udf/pythonservice/pyserver/udf/
+pkg/udf/pythonservice/pyserver/__pycache__/
 path_to_file
 tester-log/
 

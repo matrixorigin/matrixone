@@ -387,7 +387,8 @@ func Test_initFunction(t *testing.T) {
 		}
 
 		ses := &Session{tenant: tenant}
-		err := InitFunction(ctx, ses, tenant, cu)
+		mce := &MysqlCmdExecutor{}
+		err := mce.InitFunction(ctx, ses, tenant, cu)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -5489,7 +5490,7 @@ func Test_doDropFunction(t *testing.T) {
 		}
 
 		ses := &Session{}
-		err := doDropFunction(ctx, ses, cu)
+		err := doDropFunction(ctx, ses, cu, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
