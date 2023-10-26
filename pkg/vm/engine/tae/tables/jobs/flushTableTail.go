@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 	"unsafe"
 
@@ -284,13 +285,16 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	}
 	/////////////////////
 
+	duration := time.Since(now)
 	logutil.Info("[End]", common.OperationField(task.Name()),
 		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
 		zap.Int("ablks-deletes", task.ablksDeletesCnt),
 		zap.Int("ablks-merge-rows", task.mergeRowsCnt),
 		zap.Int("nblks-deletes", task.nblksDeletesCnt),
-		common.DurationField(time.Since(now)),
+		common.DurationField(duration),
 		common.OperandField(task))
+
+	v2.TaskFlushTableTailDurationHistogram.Observe(duration.Seconds())
 
 	sleep, name, exist := fault.TriggerFault("slow_flush")
 	if exist && name == task.schema.Name {

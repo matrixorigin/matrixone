@@ -5471,4 +5471,21 @@ var supportedOthersBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `python_user_defined_function`
+	{
+		functionId: PYTHON_UDF,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkPythonUdf,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType:    pythonUdfRetType,
+				newOp: func() executeLogicOfOverload {
+					return runPythonUdf
+				},
+			},
+		},
+	},
 }

@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -95,6 +96,7 @@ type Engine struct {
 	ls         lockservice.LockService
 	qs         queryservice.QueryService
 	hakeeper   logservice.CNHAKeeperClient
+	us         udf.Service
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
