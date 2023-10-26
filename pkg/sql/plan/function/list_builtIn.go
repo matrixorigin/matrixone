@@ -1585,7 +1585,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					// NOTE summation(vecf32) --> vecf64
+					// NOTE summation(vecf32) --> float64
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
