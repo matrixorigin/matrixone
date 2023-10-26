@@ -3601,6 +3601,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		proc.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
 		proc.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
+		proc.SessionInfo.ConnectionID = uint64(ses.GetMysqlProtocol().ConnectionID())
 
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()

@@ -24,6 +24,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -278,6 +279,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 // killQuery if there is a running query, just cancel it.
 func (rt *Routine) killQuery(killMyself bool, statementId string) {
 	if !killMyself {
+		logutil.Infof("cancel routine ctx on the connection %d", rt.getConnectionID())
 		//1,cancel request ctx
 		rt.cancelRequestCtx()
 		//2.cancel txn ctx

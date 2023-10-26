@@ -615,7 +615,7 @@ func Collation(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 }
 
 func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	r := proc.SessionInfo.ConnectionID
+	r := proc.GetSessionInfo().GetConnectionID()
 	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
 		return r
 	})
