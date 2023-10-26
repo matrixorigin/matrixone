@@ -27,6 +27,7 @@ type SelectStatement interface {
 type Select struct {
 	statementImpl
 	Select         SelectStatement
+	TimeWindow     *TimeWindow
 	OrderBy        OrderBy
 	Limit          *Limit
 	With           *With
@@ -43,6 +44,10 @@ func (node *Select) Format(ctx *FmtCtx) {
 	if len(node.OrderBy) > 0 {
 		ctx.WriteByte(' ')
 		node.OrderBy.Format(ctx)
+	}
+	if node.TimeWindow != nil {
+		ctx.WriteByte(' ')
+		node.TimeWindow.Format(ctx)
 	}
 	if node.Limit != nil {
 		ctx.WriteByte(' ')
@@ -67,6 +72,99 @@ func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
 		OrderBy: o,
 		Limit:   l,
 	}
+}
+
+type TimeWindow struct {
+	Interval *Interval
+	Sliding  *Sliding
+	Fill     *Fill
+}
+
+func (node *TimeWindow) Format(ctx *FmtCtx) {
+	node.Interval.Format(ctx)
+	if node.Sliding != nil {
+		ctx.WriteByte(' ')
+		node.Sliding.Format(ctx)
+	}
+	if node.Fill != nil {
+		ctx.WriteByte(' ')
+		node.Fill.Format(ctx)
+	}
+}
+
+type Interval struct {
+	Col  *UnresolvedName
+	Val  Expr
+	Unit string
+}
+
+func (node *Interval) Format(ctx *FmtCtx) {
+	ctx.WriteString("interval(")
+	node.Col.Format(ctx)
+	ctx.WriteString(", ")
+	node.Val.Format(ctx)
+	ctx.WriteString(", ")
+	ctx.WriteString(node.Unit)
+	ctx.WriteByte(')')
+}
+
+type Sliding struct {
+	Val  Expr
+	Unit string
+}
+
+func (node *Sliding) Format(ctx *FmtCtx) {
+	ctx.WriteString("sliding(")
+	node.Val.Format(ctx)
+	ctx.WriteString(", ")
+	ctx.WriteString(node.Unit)
+	ctx.WriteByte(')')
+}
+
+type FillMode int
+
+const (
+	FillNone FillMode = iota
+	FillPrev
+	FillNext
+	FillValue
+	FillNull
+	FillLinear
+)
+
+func (f FillMode) String() string {
+	switch f {
+	case FillNone:
+		return "none"
+	case FillPrev:
+		return "prev"
+	case FillNext:
+		return "next"
+	case FillValue:
+		return "value"
+	case FillNull:
+		return "null"
+	case FillLinear:
+		return "linear"
+	default:
+		return ""
+	}
+}
+
+type Fill struct {
+	Mode FillMode
+	Val  Expr
+}
+
+func (node *Fill) Format(ctx *FmtCtx) {
+	ctx.WriteString("fill(")
+	ctx.WriteString(node.Mode.String())
+
+	if node.Mode == FillValue {
+		ctx.WriteString(", ")
+		node.Val.Format(ctx)
+	}
+	ctx.WriteByte(')')
 }
 
 // OrderBy represents an ORDER BY clause.
