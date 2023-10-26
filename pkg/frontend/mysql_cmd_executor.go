@@ -3631,12 +3631,20 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(ses.proc)
 	ses.proc.SessionInfo = proc.SessionInfo
+
+	statsInfo := statistic.StatsInfo{}
+	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
+
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
 		ses.GetUserName(),
 		pu.StorageEngine,
 		proc, ses)
+
+	ParseDuration := time.Duration(time.Since(beginInstant).Nanoseconds())
+
 	if err != nil {
+		statsInfo.ParseDuration = ParseDuration
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -3654,10 +3662,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	singleStatement := len(cws) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
-
-	averageParseDuration := time.Duration(time.Since(beginInstant).Nanoseconds() / int64(len(cws)))
-	statsInfo := statistic.StatsInfo{}
-	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
 
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
@@ -3678,9 +3682,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
-		
+
 		statsInfo.Reset()
-		statsInfo.ParseDuration = averageParseDuration
+		//average parse duration
+		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
 
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
