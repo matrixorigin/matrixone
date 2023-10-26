@@ -12,18 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2
+package dashboard
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-var (
-	LogTailSizeGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "tn",
-			Subsystem: "logtail",
-			Name:      "commit_bytes",
-			Help:      "Size of logtail size.",
-		})
-)
+func TestCreateDashboard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
+	c := NewDashboardCreator("http://127.0.0.1:3000", "admin", "admin", "Prometheus")
+	require.NoError(t, c.Create())
+}

@@ -19,21 +19,15 @@ import (
 )
 
 var (
-	SQLBuildPlanDurationHistogram = prometheus.NewHistogram(
+	taskDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Namespace: "cn",
-			Subsystem: "sql",
-			Name:      "build_plan_duration_seconds",
-			Help:      "Bucketed histogram of build plan duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
-		})
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "duration_seconds",
+			Help:      "Bucketed histogram of tn task execute duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		}, []string{"type"})
 
-	SQlRunDurationHistogram = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "cn",
-			Subsystem: "sql",
-			Name:      "sql_run_duration_seconds",
-			Help:      "Bucketed histogram of sql run duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 20),
-		})
+	TaskFlushTableTailDurationHistogram  = taskDurationHistogram.WithLabelValues("flush_table_tail")
+	TaskCkpEntryPendingDurationHistogram = taskDurationHistogram.WithLabelValues("ckp_entry_pending")
 )

@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -527,14 +526,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		getLogger().Info("createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
-	}
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
@@ -640,14 +631,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
-	}
-	// TODO: debug for #11917
-	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
-		getLogger().Info("createTable ok",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-		)
 	}
 
 	partitionTables := qry.GetPartitionTables()
@@ -2190,7 +2173,6 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	var minValue, maxValue, startNum, lastNum T
 	var incrNum int64
 	var cycle bool
-	var err error
 
 	if incr, ok := result[4].(int64); ok {
 		incrNum = incr
@@ -2224,16 +2206,10 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		maxValue = getInterfaceValue[T](preMaxValue)
 	}
 
+	preLastSeq := result[0]
+	preLastSeqNum := getInterfaceValue[T](preLastSeq)
 	// if alter startWith value of sequence
-	var preStartWith int64
-	if len(curval) == 0 {
-		preStartWith = getInterfaceValue[int64](result[3])
-	} else {
-		preStartWith, err = strconv.ParseInt(curval, 10, 64)
-		if err != nil {
-			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Alter sequence currval parse err")
-		}
-	}
+	preStartWith := preLastSeqNum
 	if stmt.StartWith != nil {
 		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
 		if startNum < T(preStartWith) {
@@ -2242,7 +2218,14 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	} else {
 		startNum = getInterfaceValue[T](preStartWith)
 	}
-	lastNum = startNum + T(incrNum)
+	if len(curval) != 0 {
+		lastNum = preLastSeqNum + T(incrNum)
+		if lastNum < startNum+T(incrNum) {
+			lastNum = startNum + T(incrNum)
+		}
+	} else {
+		lastNum = preLastSeqNum
+	}
 
 	// if alter cycle state of sequence
 	preCycle := result[5]
@@ -2259,11 +2242,11 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 
 // Checkout values.
 func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx context.Context) error {
-	if maxValue < minValue {
-		return moerr.NewInvalidInput(ctx, "Max value of sequence must be bigger than min value of it")
+	if maxValue <= minValue {
+		return moerr.NewInvalidInput(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
 	}
 	if startNum < minValue || startNum > maxValue {
-		return moerr.NewInvalidInput(ctx, "Start value for sequence must between minvalue and maxvalue")
+		return moerr.NewInvalidInput(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
 	}
 	return nil
 }

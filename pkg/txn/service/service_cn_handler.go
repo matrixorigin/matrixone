@@ -168,9 +168,11 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 }
 
 func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	v2.TxnHandleCommitCounter.Inc()
+	v2.TxnTNReceiveCommitCounter.Inc()
 	start := time.Now()
-	defer v2.TxnHandleCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnTNCommitDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	s.waitRecoveryCompleted()
 
@@ -248,6 +250,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		util.LogTxnStart1PCCommit(newTxn)
 
 		commitTS, err := s.storage.Commit(ctx, newTxn)
+		v2.TxnTNCommitHandledCounter.Inc()
 		if err != nil {
 			util.LogTxnStart1PCCommitFailed(newTxn, err)
 			response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)

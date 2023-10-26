@@ -208,18 +208,15 @@ func (client *txnClient) New(
 	ctx context.Context,
 	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// we take a token from the limiter to control the number of transactions created per second.
 	_, task := gotrace.NewTask(context.TODO(), "transaction.New")
 	defer task.End()
 	client.limiter.Take()
-
-	//!!!NOTE: for getting options
-	tmp := &txnOperator{}
-	for _, option := range options {
-		option(tmp)
-	}
-	util.LogTxnCreatedWithInfo("txnclient.new", tmp.option.createBy)
-	defer util.LogTxnCreatedWithInfo("txnclient.new exit", tmp.option.createBy)
 
 	ts, err := client.determineTxnSnapshot(ctx, minTS)
 	if err != nil {
@@ -339,7 +336,9 @@ func (client *txnClient) determineTxnSnapshot(
 	ctx context.Context,
 	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
 	start := time.Now()
-	defer v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	// always use the current ts as txn's snapshot ts is enableSacrificingFreshness
 	if !client.enableSacrificingFreshness {
@@ -397,7 +396,11 @@ func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 
 func (client *txnClient) openTxn(op *txnOperator) error {
 	client.mu.Lock()
-	defer client.mu.Unlock()
+	defer func() {
+		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		client.mu.Unlock()
+	}()
 
 	if client.mu.state == normal {
 		if !op.isUserTxn() ||
@@ -415,10 +418,16 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 
 func (client *txnClient) closeTxn(txn txn.TxnMeta) {
 	client.mu.Lock()
-	defer client.mu.Unlock()
+	defer func() {
+		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		client.mu.Unlock()
+	}()
 
 	key := cutil.UnsafeBytesToString(txn.ID)
 	if op, ok := client.mu.activeTxns[key]; ok {
+		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.createAt).Seconds())
+
 		delete(client.mu.activeTxns, key)
 		client.removeFromLeakCheck(txn.ID)
 		if !op.isUserTxn() {

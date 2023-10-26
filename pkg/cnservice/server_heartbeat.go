@@ -18,6 +18,8 @@ import (
 	"context"
 	"time"
 
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
@@ -61,6 +63,11 @@ func (s *service) heartbeatTask(ctx context.Context) {
 }
 
 func (s *service) heartbeat(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		metricv2.HeartbeatHistogram.WithLabelValues("cn").Observe(time.Since(start).Seconds())
+	}()
+
 	ctx2, cancel := context.WithTimeout(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration)
 	defer cancel()
 
@@ -79,6 +86,7 @@ func (s *service) heartbeat(ctx context.Context) {
 	}
 	cb, err := s._hakeeperClient.SendCNHeartbeat(ctx2, hb)
 	if err != nil {
+		metricv2.HeartbeatFailureCounter.WithLabelValues("cn").Inc()
 		s.logger.Error("failed to send cn heartbeat", zap.Error(err))
 		return
 	}
@@ -94,7 +102,11 @@ func (s *service) handleCommands(cmds []logservicepb.ScheduleCommand) {
 		if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
-			s.upgrade()
+			s.upgradeOnce.Do(func() {
+				_ = s.stopper.RunNamedTask("upgrade", func(context.Context) {
+					s.upgrade()
+				})
+			})
 		} else if s.gossipNode.Created() && cmd.JoinGossipCluster != nil {
 			s.gossipNode.SetJoined()
 
