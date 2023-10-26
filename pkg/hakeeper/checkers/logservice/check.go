@@ -44,8 +44,9 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 				return nil
 			}
 			if op, err := operator.CreateAddReplica(bestStore, infos.Shards[shardID], newReplicaID); err != nil {
-				runtime.ProcessLevelRuntime().Logger().Error("failed to create addReplica command", zap.Error(err))
-				return nil
+				runtime.ProcessLevelRuntime().Logger().Error("create add replica operator failed", zap.Error(err))
+				// may be no more stores, skip this shard
+				break
 			} else {
 				operators = append(operators, op)
 				toAdd--
@@ -60,8 +61,9 @@ func Check(alloc util.IDAllocator, cfg hakeeper.Config, cluster pb.ClusterInfo, 
 			}
 			if op, err := operator.CreateRemoveReplica(toRemoveReplica.uuid,
 				infos.Shards[toRemoveReplica.shardID]); err != nil {
-				runtime.ProcessLevelRuntime().Logger().Error("failed to create removeReplica command", zap.Error(err))
-				return nil
+				runtime.ProcessLevelRuntime().Logger().Error("create remove replica operator failed", zap.Error(err))
+				// skip this replica
+				continue
 			} else {
 				operators = append(operators, op)
 			}
