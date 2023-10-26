@@ -371,6 +371,9 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					indexInfo.Parts[0] == catalog.FakePrimaryKeyColName ||
 					indexInfo.Parts[0] == catalog.CPrimaryKeyColName) {
 				// Handles deleting the secondary index when there is no more user defined secondary keys.
+
+				//NOTE: if the last SK column is an __mo_alias or __mo_fake or __mo_cp, then the index will be deleted.
+				// There is no way that user can add __mo_alias or __mo_fake or __mo_cp as the SK column.
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 			} else if len(indexInfo.Parts) == 0 {
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
