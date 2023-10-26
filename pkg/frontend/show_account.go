@@ -71,22 +71,22 @@ const (
 	idxOfSuspendedTime = 4
 	idxOfComment       = 5
 
-	getTableStatsFormat = "select " +
-		"( select " +
-		"        mu2.user_name as `admin_name` " +
-		"  from mo_catalog.mo_user as mu2 join " +
-		"      ( select " +
-		"              min(user_id) as `min_user_id` " +
-		"        from mo_catalog.mo_user " +
-		"      ) as mu1 on mu2.user_id = mu1.min_user_id " +
-		") as `admin_name`, " +
-		"count(distinct mt.reldatabase) as `db_count`, " +
-		"count(distinct mt.relname) as `table_count`, " +
-		"sum(mo_table_rows(mt.reldatabase,mt.relname)) as `row_count`, " +
-		"cast(sum(mo_table_size(mt.reldatabase,mt.relname))/1048576  as decimal(29,3)) as `size` " +
-		"from " +
-		"mo_catalog.mo_tables as mt " +
-		"where mt.relkind != '%s' and mt.account_id = %d;"
+	//getTableStatsFormat = "select " +
+	//	"( select " +
+	//	"        mu2.user_name as `admin_name` " +
+	//	"  from mo_catalog.mo_user as mu2 join " +
+	//	"      ( select " +
+	//	"              min(user_id) as `min_user_id` " +
+	//	"        from mo_catalog.mo_user " +
+	//	"      ) as mu1 on mu2.user_id = mu1.min_user_id " +
+	//	") as `admin_name`, " +
+	//	"count(distinct mt.reldatabase) as `db_count`, " +
+	//	"count(distinct mt.relname) as `table_count`, " +
+	//	"sum(mo_table_rows(mt.reldatabase,mt.relname)) as `row_count`, " +
+	//	"cast(sum(mo_table_size(mt.reldatabase,mt.relname))/1048576  as decimal(29,3)) as `size` " +
+	//	"from " +
+	//	"mo_catalog.mo_tables as mt " +
+	//	"where mt.relkind != '%s' and mt.account_id = %d;"
 
 	// have excluded the `mo_table_rows` and `mo_table_size`, compared to getTableStatsFormat
 	// and left the `size_in_mb` as a placeholder
@@ -182,7 +182,7 @@ func requestStorageUsage(ctx context.Context, ses *Session) (resp interface{}, e
 	return result.Data.([]interface{})[0], nil
 }
 
-func handleStorageUsageResponse(ctx context.Context, ses *Session, usage *db.StorageUsageResp) (map[int32]uint64, error) {
+func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService, usage *db.StorageUsageResp) (map[int32]uint64, error) {
 	result := make(map[int32]uint64, 0)
 	if usage.CkpLocations != "" {
 		// load checkpoint data and decode
@@ -197,12 +197,7 @@ func handleStorageUsageResponse(ctx context.Context, ses *Session, usage *db.Sto
 			return nil, err
 		}
 
-		sharedFS, err := fileservice.Get[fileservice.FileService](ses.GetParameterUnit().FileService, defines.SharedFileServiceName)
-		if err != nil {
-			return nil, err
-		}
-
-		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, sharedFS, loc, uint32(version))
+		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, fs, loc, uint32(version))
 		if err != nil {
 			return nil, err
 		}
@@ -217,6 +212,7 @@ func handleStorageUsageResponse(ctx context.Context, ses *Session, usage *db.Sto
 		}
 	}
 
+	// [account_id, db_id, table_id, table_total_size]
 	for _, info := range usage.BlockEntries {
 		result[int32(info.Info[0])] += info.Info[3]
 	}
@@ -233,16 +229,20 @@ func getAllAccountsStorageUsage(ctx context.Context, ses *Session) (map[int32]ui
 		return nil, err
 	}
 
+	fs, err := fileservice.Get[fileservice.FileService](ses.GetParameterUnit().FileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	// step 2: handling these pulled data
-	return handleStorageUsageResponse(ctx, ses, response.(*db.StorageUsageResp))
+	return handleStorageUsageResponse(ctx, fs, response.(*db.StorageUsageResp))
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
 	vector.SetFixedAt(ori.Vecs[idxOfSize], 0, math.Round(float64(size)/1048576.0*1e6)/1e6)
 }
 
-// doShowAccountsInProgress is going to replace `doShowAccounts`.
-func doShowAccountsInProgress(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
+func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
 	var sql string
 	var accountIds [][]int32
 	var allAccountInfo []*batch.Batch
@@ -377,173 +377,6 @@ func doShowAccountsInProgress(ctx context.Context, ses *Session, sa *tree.ShowAc
 		}
 	}
 	ses.SetMysqlResultSet(outputRS)
-
-	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)
-	if openSaveQueryResult(ses) {
-		err = saveResult(ses, outputBatches)
-	}
-
-	return err
-}
-
-func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
-	var sql string
-	var accountIds [][]int32
-	var allAccountInfo []*batch.Batch
-	var eachAccountInfo []*batch.Batch
-	var tempBatch *batch.Batch
-	var MoAccountColumns, EachAccountColumns *plan.ResultColDef
-	var outputBatches []*batch.Batch
-	mp := ses.GetMemPool()
-
-	defer func() {
-		for _, b := range allAccountInfo {
-			if b == nil {
-				continue
-			}
-			b.Clean(mp)
-		}
-		for _, b := range outputBatches {
-			if b == nil {
-				continue
-			}
-			b.Clean(mp)
-		}
-		for _, b := range eachAccountInfo {
-			if b == nil {
-				continue
-			}
-			b.Clean(mp)
-		}
-		if tempBatch != nil {
-			tempBatch.Clean(mp)
-		}
-	}()
-
-	bh := ses.GetRawBatchBackgroundExec(ctx)
-	defer bh.Close()
-
-	account := ses.GetTenantInfo()
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-
-	if err != nil {
-		return err
-	}
-
-	//step1: current account is sys or non-sys ?
-	//the result of the statement show accounts is different
-	//under the sys or non-sys.
-
-	//step2:
-	if account.IsSysTenant() {
-		//under sys account
-		//step2.1: get all account info from mo_account;
-
-		sql = getSqlForAllAccountInfo(sa.Like)
-		allAccountInfo, accountIds, err = getAccountInfo(ctx, bh, sql, true)
-		if err != nil {
-			return err
-		}
-		rsOfMoAccount := bh.ses.GetAllMysqlResultSet()[0]
-		MoAccountColumns = bh.ses.rs
-		bh.ClearExecResultSet()
-
-		//step2.2: for all accounts, switch into an account,
-		//get the admin_name, table size and table rows.
-		//then merge into the final result batch
-		outputBatches = make([]*batch.Batch, len(allAccountInfo))
-		for i, ids := range accountIds {
-			for _, id := range ids {
-				newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(id))
-				tempBatch, err = getTableStats(newCtx, bh, id)
-				if err != nil {
-					return err
-				}
-				eachAccountInfo = append(eachAccountInfo, tempBatch)
-			}
-
-			// merge result set from mo_account and table stats from each account
-			outputBatches[i] = batch.NewWithSize(finalColumnCount)
-			err = mergeOutputResult(ses, outputBatches[i], allAccountInfo[i], eachAccountInfo)
-			if err != nil {
-				return err
-			}
-
-			for _, b := range eachAccountInfo {
-				b.Clean(mp)
-			}
-			eachAccountInfo = nil
-		}
-		rsOfEachAccount := bh.ses.GetAllMysqlResultSet()[0]
-		EachAccountColumns = bh.ses.rs
-		bh.ClearExecResultSet()
-
-		//step3: generate mysql result set
-		outputRS := &MysqlResultSet{}
-		err = initOutputRs(outputRS, rsOfMoAccount, rsOfEachAccount, ctx)
-		if err != nil {
-			return err
-		}
-		oq := newFakeOutputQueue(outputRS)
-		for _, b := range outputBatches {
-			err = fillResultSet(oq, b, ses)
-			if err != nil {
-				return err
-			}
-		}
-		ses.SetMysqlResultSet(outputRS)
-	} else {
-		if sa.Like != nil {
-			return moerr.NewInternalError(ctx, "only sys account can use LIKE clause")
-		}
-		//under non-sys account
-		//step2.1: switch into the sys account, get the account info
-		newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-		sql = getSqlForAccountInfo(uint64(account.GetTenantID()))
-		allAccountInfo, _, err = getAccountInfo(newCtx, bh, sql, false)
-		if err != nil {
-			return err
-		}
-		if len(allAccountInfo) != 1 {
-			return moerr.NewInternalError(ctx, "no such account %v", account.TenantID)
-		}
-		rsOfMoAccount := bh.ses.GetAllMysqlResultSet()[0]
-		MoAccountColumns = bh.ses.rs
-		bh.ClearExecResultSet()
-
-		//step2.2: get the admin_name, table size and table rows.
-		//then merge into the final result batch
-		tempBatch, err = getTableStats(ctx, bh, int32(account.GetTenantID()))
-		if err != nil {
-			return err
-		}
-		rsOfEachAccount := bh.ses.GetAllMysqlResultSet()[0]
-		EachAccountColumns = bh.ses.rs
-		bh.ClearExecResultSet()
-
-		outputBatches = []*batch.Batch{batch.NewWithSize(finalColumnCount)}
-		err = mergeOutputResult(ses, outputBatches[0], allAccountInfo[0], []*batch.Batch{tempBatch})
-		if err != nil {
-			return err
-		}
-
-		//step3: generate mysql result set
-		outputRS := &MysqlResultSet{}
-		err = initOutputRs(outputRS, rsOfMoAccount, rsOfEachAccount, ctx)
-		if err != nil {
-			return err
-		}
-		oq := newFakeOutputQueue(outputRS)
-		err = fillResultSet(oq, outputBatches[0], ses)
-		if err != nil {
-			return err
-		}
-		ses.SetMysqlResultSet(outputRS)
-	}
 
 	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)
 	if openSaveQueryResult(ses) {

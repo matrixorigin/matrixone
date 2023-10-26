@@ -2439,11 +2439,11 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	return collector.BaseCollector.VisitTable(entry)
 }
 
-// recording the total object size within a table
+// FillSEGStorageUsageBat recording the total object size within a table
 // and the account, db, table info the object belongs to.
 // every checkpoint records the full datasets of the storage usage info.
 // [account_id, db_id, table_id, table_total_size_in_bytes]
-func fillSEGStorageUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
+func FillSEGStorageUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
 	if !entry.IsSortedLocked() || entry.IsAppendable() || entry.HasDropCommitted() {
 		return
 	}
@@ -2489,7 +2489,7 @@ func fillSEGStorageUsageBat(collector *BaseCollector, entry *catalog.SegmentEntr
 
 func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
 
-	fillSEGStorageUsageBat(collector, entry)
+	FillSEGStorageUsageBat(collector, entry)
 
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
