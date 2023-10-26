@@ -159,12 +159,17 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
-	TxnPrePrepareDurationHistogram = prometheus.NewHistogram(
+	txnTNSideDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
-			Name:      "pre_prepare_duration_seconds",
-			Help:      "Bucketed histogram of txn pre-prepare duration.",
+			Name:      "tn_side_duration_seconds",
+			Help:      "Bucketed histogram of txn duration on tn side.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
-		})
+		}, []string{"step"})
+
+	TxnOnPrepareWALDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal")
+	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
+	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
+	TxnBeforeCommitDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
 )
