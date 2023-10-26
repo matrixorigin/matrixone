@@ -313,14 +313,6 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		}
 	}
 
-	if vector.Hash.Sum != nil && vector.Hash.New != nil {
-		h := vector.Hash.New()
-		if _, err := h.Write(content); err != nil {
-			return 0, err
-		}
-		*vector.Hash.Sum = h.Sum(nil)
-	}
-
 	r := bytes.NewReader(content)
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
