@@ -16,6 +16,7 @@ package functionAgg
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"math"
 	"testing"
 
@@ -474,6 +475,61 @@ func TestBitXor(t *testing.T) {
 		data, err := s1.MarshalBinary()
 		require.NoError(t, err)
 		s3 := new(sAggBitXor[int64])
+		err = s3.UnmarshalBinary(data)
+		require.NoError(t, err)
+	}
+}
+
+func TestKmeans(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggKmeans, AggKmeansSupportedParameters, AggKmeansReturnType))
+
+	s1 := &sAggKmeans{
+		arrType: types.T_array_float64.ToType(),
+	}
+	input1 := [][]byte{
+		types.ArrayToBytes([]float64{1, 2, 3, 4}),
+		types.ArrayToBytes([]float64{2, 3, 4, 5}),
+	}
+	nsp1 := nulls.NewWithSize(4)
+	nsp1.Add(3)
+
+	{
+		// Test arraysToString
+		actual := s1.arraysToString(input1)
+		expected := "[1, 2, 3, 4]|[2, 3, 4, 5]|"
+		require.Equal(t, expected, actual)
+	}
+	{
+		// Test stringToArrays
+		actual := s1.stringToArrays("[1, 2, 3, 4]|[2, 3, 4, 5]|")
+		expected := input1
+		require.Equal(t, expected, actual)
+	}
+
+	{
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s1,
+			grow:   s1.Grows,
+			free:   s1.Free,
+			fill:   s1.Fill,
+			merge:  s1.Merge,
+			eval:   s1.Eval,
+		}
+		err := tr.testUnaryAgg(input1, nsp1, func(result []byte, isEmpty bool) bool {
+			fmt.Printf("result: %v\n", util.UnsafeBytesToString(result))
+			return !isEmpty
+		})
+		require.NoError(t, err)
+		// Error:
+		// internal error: agg test failed. fill failed.
+		// err is internal error: unable to decode tuple element with unknown typecode f0
+
+	}
+
+	{
+		data, err := s1.MarshalBinary()
+		require.NoError(t, err)
+		s3 := new(sAggKmeans)
 		err = s3.UnmarshalBinary(data)
 		require.NoError(t, err)
 	}

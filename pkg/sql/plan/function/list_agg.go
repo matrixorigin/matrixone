@@ -248,6 +248,26 @@ var supportedAggregateFunctions = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: KMEANS,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggKmeansSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggKmeansReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "kmeans",
+					aggNew: functionAgg.NewAggKmeans,
+				},
+			},
+		},
+	},
 
 	{
 		functionId: VAR_POP,

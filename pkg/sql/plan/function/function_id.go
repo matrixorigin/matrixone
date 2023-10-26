@@ -89,6 +89,7 @@ const (
 	BIT_NOT        // BIT_NOT
 	BIT_OR         // BIT_OR
 	BIT_XOR        // BIT_XOR
+	KMEANS         // KMEANS
 	BITAGG_AND     // BITAGG_AND
 	BITAGG_OR      // BITAGG_OR
 	BOOLAGG_AND    // BOOLAGG_AND
@@ -413,6 +414,7 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"kmeans":                KMEANS,
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
