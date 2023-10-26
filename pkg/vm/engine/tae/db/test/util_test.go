@@ -101,14 +101,13 @@ func createAndWriteSingleNASegment(t *testing.T, ctx context.Context,
 	segEntry.SetSorted()
 
 	schema := rel.Schema().(*catalog.Schema)
-	var vecs []containers.Vector
-	var seqNums []uint16
+	vecs := make([]containers.Vector, len(schema.ColDefs))
+	seqNums := make([]uint16, len(schema.ColDefs))
 	// mock data for segment
 	writtenBatches := make([]*containers.Batch, 0, len(schema.ColDefs))
-	for _, def := range schema.ColDefs {
-		vec := containers.MockVector(types.T_uint64.ToType(), 100, false, nil)
-		vecs = append(vecs, vec)
-		seqNums = append(seqNums, def.SeqNum)
+	for idx, def := range schema.ColDefs {
+		vecs[idx] = containers.MockVector(types.T_uint64.ToType(), 100, false, nil)
+		seqNums[idx] = def.SeqNum
 		writtenBatches = append(writtenBatches, containers.NewBatch())
 	}
 
@@ -160,12 +159,12 @@ func createTables(t *testing.T, ctx context.Context, colCnt int, tblCnt int) (*d
 	db, err := txn.CreateDatabase("db", "", "")
 	assert.Nil(t, err)
 
-	var rels []handle.Relation
+	rels := make([]handle.Relation, tblCnt)
 	for i := 0; i < tblCnt; i++ {
 		schema := catalog.MockSchemaAll(colCnt, 0)
 		rel, err := db.CreateRelation(schema)
 		assert.Nil(t, err)
-		rels = append(rels, rel)
+		rels[i] = rel
 	}
 
 	return tae, rels
@@ -179,10 +178,10 @@ func Test_FillSEGStorageUsageBat(t *testing.T) {
 
 	// table count
 	relCnt := 10
-	var naSegCnts []int
+	naSegCnts := make([]int, relCnt)
 	for i := 0; i < relCnt; i++ {
 		// generating the count of non appendable segment for each table
-		naSegCnts = append(naSegCnts, rand.Int()%50+1)
+		naSegCnts[i] = rand.Int()%50 + 1
 	}
 
 	tae, rels := createTables(t, ctx, 10, relCnt)
@@ -194,6 +193,15 @@ func Test_FillSEGStorageUsageBat(t *testing.T) {
 	collector.TableFn = nil
 	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
 		logtail.FillSEGStorageUsageBat(collector.BaseCollector, segment)
+
+		if !segment.IsAppendable() {
+			require.Equal(t, true, segment.Stat.GetLoaded())
+			require.NotEqual(t, int(0), segment.Stat.GetOriginSize())
+			require.NotEqual(t, int(0), segment.Stat.GetCompSize())
+			require.Equal(t, 0, segment.Stat.GetRows())
+			require.Equal(t, 0, segment.Stat.GetRemainingRows())
+		}
+
 		return nil
 	}
 
