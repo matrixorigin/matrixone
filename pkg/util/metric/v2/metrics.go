@@ -27,6 +27,7 @@ func init() {
 	initLogtailMetrics()
 	initTxnMetrics()
 	initTaskMetrics()
+	initRPCMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -80,4 +81,22 @@ func initTxnMetrics() {
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(TxnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+}
+
+func initRPCMetrics() {
+	registry.MustRegister(rpcBackendCreateCounter)
+	registry.MustRegister(rpcBackendClosedCounter)
+	registry.MustRegister(rpcBackendConnectCounter)
+	registry.MustRegister(rpcMessageCounter)
+
+	registry.MustRegister(rpcBackendPoolSizeGauge)
+	registry.MustRegister(rpcSendingQueueSizeGauge)
+	registry.MustRegister(rpcSendingBatchSizeGauge)
+	registry.MustRegister(rpcServerSessionSizeGauge)
+
+	registry.MustRegister(rpcBackendConnectDurationHistogram)
+	registry.MustRegister(rpcWriteDurationHistogram)
+	registry.MustRegister(rpcWriteLatencyDurationHistogram)
+	registry.MustRegister(rpcBackendDoneDurationHistogram)
+
 }
