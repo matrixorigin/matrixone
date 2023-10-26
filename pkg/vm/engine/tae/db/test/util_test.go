@@ -15,6 +15,16 @@
 package test
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/stretchr/testify/require"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -80,4 +90,135 @@ func TestAOT2(t *testing.T) {
 	}
 	aot.Scan(fn)
 	assert.Equal(t, 42, rows)
+}
+
+func createAndWriteSingleNASegment(t *testing.T, ctx context.Context,
+	rel handle.Relation, fs *objectio.ObjectFS) {
+	segHandle, err := rel.CreateNonAppendableSegment(false)
+	require.Nil(t, err)
+
+	segEntry := segHandle.GetMeta().(*catalog.SegmentEntry)
+	segEntry.SetSorted()
+
+	schema := rel.Schema().(*catalog.Schema)
+	var vecs []containers.Vector
+	var seqNums []uint16
+	// mock data for segment
+	writtenBatches := make([]*containers.Batch, 0, len(schema.ColDefs))
+	for _, def := range schema.ColDefs {
+		vec := containers.MockVector(types.T_uint64.ToType(), 100, false, nil)
+		vecs = append(vecs, vec)
+		seqNums = append(seqNums, def.SeqNum)
+		writtenBatches = append(writtenBatches, containers.NewBatch())
+	}
+
+	for idx := range vecs {
+		writtenBatches[idx].AddVector(schema.ColDefs[idx].Name, vecs[idx])
+	}
+
+	blk, err := segHandle.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(0)))
+	require.Nil(t, err)
+
+	name := objectio.BuildObjectName(&segEntry.ID, 0)
+	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, []uint16{0})
+	require.Nil(t, err)
+
+	for _, bat := range writtenBatches {
+		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+		require.Nil(t, err)
+	}
+
+	writtenBlocks, _, err := writer.Sync(ctx)
+	require.Nil(t, err)
+
+	for i, block := range writtenBlocks {
+		metaLoc := blockio.EncodeLocation(name, block.GetExtent(), uint32(writtenBatches[i].Length()), block.GetID())
+		err = blk.UpdateMetaLoc(metaLoc)
+		require.Nil(t, err)
+
+		err = blk.GetMeta().(*catalog.BlockEntry).GetBlockData().Init()
+		require.Nil(t, err)
+	}
+}
+
+// create segments for tables
+func createAndWriteBatchNASegment(t *testing.T, ctx context.Context, segCnts []int,
+	rels []handle.Relation, fs *objectio.ObjectFS) {
+
+	for idx, rel := range rels {
+		for i := 0; i < segCnts[idx]; i++ {
+			createAndWriteSingleNASegment(t, ctx, rel, fs)
+		}
+	}
+}
+
+func createTables(t *testing.T, ctx context.Context, colCnt int, tblCnt int) (*db.DB, []handle.Relation) {
+	tae := testutil.InitTestDB(ctx, "logtail", t, nil)
+	defer tae.Close()
+
+	txn, _ := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.Nil(t, err)
+
+	var rels []handle.Relation
+	for i := 0; i < tblCnt; i++ {
+		schema := catalog.MockSchemaAll(colCnt, 0)
+		rel, err := db.CreateRelation(schema)
+		assert.Nil(t, err)
+		rels = append(rels, rel)
+	}
+
+	return tae, rels
+}
+
+// test plan:
+//  1. test if the `fillSEGStorageUsageBat` work as expected
+//  2. benchmark the `fillSEGStorageUsageBat`
+func Test_FillSEGStorageUsageBat(t *testing.T) {
+	ctx := context.Background()
+
+	// table count
+	relCnt := 10
+	var naSegCnts []int
+	for i := 0; i < relCnt; i++ {
+		// generating the count of non appendable segment for each table
+		naSegCnts = append(naSegCnts, rand.Int()%50+1)
+	}
+
+	tae, rels := createTables(t, ctx, 10, relCnt)
+	createAndWriteBatchNASegment(t, ctx, naSegCnts, rels, tae.Runtime.Fs)
+
+	collector := logtail.NewIncrementalCollector(types.TS{}, types.TS{})
+	collector.BlockFn = nil
+	collector.DatabaseFn = nil
+	collector.TableFn = nil
+	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
+		logtail.FillSEGStorageUsageBat(collector.BaseCollector, segment)
+		return nil
+	}
+
+	tae.Catalog.RecurLoop(collector)
+
+	storageUsageBat := collector.OrphanData().GetBatches()[logtail.SEGStorageUsageIDX]
+	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockSize)
+
+	logutil.Info(storageUsageBat.String())
+
+	// should generate one size record for each table
+	require.Equal(t, relCnt, sizeVec.Length())
+}
+
+// segment: 1
+// Benchmark_FillSEGStorageUsageBat-12  64	18220491 ns/op
+// segment: 10
+// Benchmark_FillSEGStorageUsageBat-12  16	66122781 ns/op
+func Benchmark_FillSEGStorageUsageBat(b *testing.B) {
+	ctx := context.Background()
+
+	t := &testing.T{}
+
+	for i := 0; i < b.N; i++ {
+		tae, rels := createTables(t, ctx, 10, 1)
+		createAndWriteBatchNASegment(t, ctx, []int{10}, rels, tae.Runtime.Fs)
+	}
 }
