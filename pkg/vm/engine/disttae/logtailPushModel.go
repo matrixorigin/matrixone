@@ -21,20 +21,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/address"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -75,7 +75,7 @@ const (
 	consumerBufferLength   = 8192
 	consumerWarningPercent = 0.9
 
-	logTag = "[logtail-push]"
+	logTag = "[logtail-consumer]"
 )
 
 // pushClient is a structure responsible for all operations related to the log tail push model.
@@ -92,6 +92,7 @@ const (
 //		 1. if we want to lock both subscriber and subscribed, we should lock subscriber first.
 //		-----------------------------------------------------------------------------------------------------
 type pushClient struct {
+	serviceID string
 	// Responsible for sending subscription / unsubscription requests to the service
 	// and receiving the log tail from service.
 	subscriber *logTailSubscriber
@@ -108,8 +109,11 @@ type pushClient struct {
 
 func (client *pushClient) init(
 	serviceAddr string,
-	timestampWaiter client.TimestampWaiter) error {
+	timestampWaiter client.TimestampWaiter,
+	serviceID string,
+) error {
 
+	client.serviceID = serviceID
 	client.timestampWaiter = timestampWaiter
 	if client.subscriber == nil {
 		client.subscriber = new(logTailSubscriber)
@@ -260,7 +264,7 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 	close(ch)
 
 	if err != nil {
-		logutil.Errorf("%s connect to tn log tail server failed %v", logTag, err)
+		logutil.Errorf("%s %s: connect to tn log tail server failed, err %v", logTag, client.serviceID, err)
 	}
 	return err
 }
@@ -352,18 +356,18 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					}
 
 					e.setPushClientStatus(true)
-					logutil.Infof("%s connect to tn log tail service succeed", logTag)
+					logutil.Infof("%s %s: connect to tn log tail service succeed.", logTag, client.serviceID)
 					continue
 
 				case <-ctx.Done():
 					cancel()
-					logutil.Infof("%s context has done, log tail receive routine is going to clean and exit.", logTag)
+					logutil.Infof("%s context has done, log tail receive routine is going to clean and exit", logTag)
 					goto cleanAndReconnect
 				}
 			}
 
 		cleanAndReconnect:
-			logutil.Infof("%s start to clean log tail consume routines", logTag)
+			logutil.Infof("%s %s: start to clean log tail consume routines", logTag, client.serviceID)
 			for _, r := range receiver {
 				r.close()
 			}
@@ -373,24 +377,24 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 			e.setPushClientStatus(false)
 
-			logutil.Infof("%s clean finished, start to reconnect to tn log tail service", logTag)
+			logutil.Infof("%s %s: clean finished, start to reconnect to tn log tail service", logTag, client.serviceID)
 			for {
 				if ctx.Err() != nil {
-					logutil.Infof("%s mo context has done, exit log tail receive routine.", logTag)
+					logutil.Infof("%s mo context has done, exit log tail receive routine", logTag)
 					return
 				}
 
 				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
-				if err := client.init(tnLogTailServerBackend, client.timestampWaiter); err != nil {
+				if err := client.init(tnLogTailServerBackend, client.timestampWaiter, client.serviceID); err != nil {
 					logutil.Errorf("%s rebuild the cn log tail client failed, reason: %s", logTag, err)
 					time.Sleep(retryReconnect)
 					continue
 				}
-				logutil.Infof("%s logtail push client init finished", logTag)
+				logutil.Infof("%s %s: client init finished", logTag, client.serviceID)
 
 				// set all the running transaction to be aborted.
 				e.abortAllRunningTxn()
-				logutil.Infof("%s abort all running transactions finished", logTag)
+				logutil.Infof("%s %s: abort all running transactions finished", logTag, client.serviceID)
 
 				// clean memory table.
 				err := e.init(ctx)
@@ -399,13 +403,13 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					time.Sleep(retryReconnect)
 					continue
 				}
-				logutil.Infof("%s memory table init finished", logTag)
+				logutil.Infof("%s %s: clean memory table finished", logTag, client.serviceID)
 
 				hasReceivedConnectionMsg = false
 
 				go func() {
 					er := client.firstTimeConnectToLogTailServer(ctx)
-					logutil.Infof("%s connect to logtail server finished, err: %v", logTag, er)
+					logutil.Infof("%s %s: connected to server, err: %v", logTag, client.serviceID, er)
 					connectMsg <- er
 				}()
 				break
@@ -423,7 +427,7 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				logutil.Infof("%s unsubscribe process exit", logTag)
+				logutil.Infof("%s unsubscribe process exit.", logTag)
 				ticker.Stop()
 				return
 
@@ -440,7 +444,7 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 			// lock the subscriber and subscribed map.
 			b := <-client.subscriber.requestLock
 			client.subscribed.mutex.Lock()
-			logutil.Infof("%s start to unsubscribe unused table.", logTag)
+			logutil.Infof("%s start to unsubscribe unused table", logTag)
 			func() {
 				defer func() {
 					client.subscriber.requestLock <- b
@@ -741,7 +745,61 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 	return resp
 }
 
+func waitServerReady(addr string) {
+	dialTimeout := time.Second * 2
+	// If the logtail server is ready, just return and do not wait.
+	if address.RemoteAddressAvail(addr, dialTimeout) {
+		return
+	}
+
+	// If we still cannot connect to logtail server for serverTimeout, we consider
+	// it has something wrong happened and panic immediately.
+	serverTimeout := time.Minute * 5
+	serverFatal := time.NewTimer(serverTimeout)
+	defer serverFatal.Stop()
+
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+
+	resetTimout := time.Second
+	started := time.Now()
+
+	for {
+		current := time.Now()
+		// Calculation the proper reset timeout duration.
+		if current.Sub(started) < time.Minute {
+			resetTimout = time.Second
+		} else if current.Sub(started) < time.Minute*3 {
+			resetTimout = time.Second * 10
+		} else {
+			resetTimout = time.Second * 30
+		}
+
+		select {
+		case <-timer.C:
+			if address.RemoteAddressAvail(addr, dialTimeout) {
+				return
+			}
+			timer.Reset(resetTimout)
+			logutil.Warnf("%s logtail server is not ready yet", logTag)
+
+		case <-serverFatal.C:
+			panic(fmt.Sprintf("could not connect to logtail server for %s", serverTimeout))
+		}
+	}
+}
+
 func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter client.TimestampWaiter) error {
+	tnStores := e.getTNServices()
+	if len(tnStores) == 0 {
+		return moerr.NewInternalError(ctx, "no TN store found")
+	}
+
+	logTailServerAddr := tnStores[0].LogTailServiceAddress
+
+	// Wait for logtail server is ready.
+	waitServerReady(logTailServerAddr)
+
 	// try to init log tail client. if failed, retry.
 	for {
 		if err := ctx.Err(); err != nil {
@@ -750,8 +808,8 @@ func (e *Engine) InitLogTailPushModel(ctx context.Context, timestampWaiter clien
 		}
 
 		// get log tail service address.
-		tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
-		if err := e.pClient.init(tnLogTailServerBackend, timestampWaiter); err != nil {
+		if err := e.pClient.init(logTailServerAddr, timestampWaiter, e.ls.GetServiceID()); err != nil {
+			logutil.Errorf("%s client init failed, err is %s", logTag, err)
 			continue
 		}
 		break
