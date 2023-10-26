@@ -64,3 +64,4 @@ Project
                     Join Cond: (t3.c1 = t1.c1)
                     ->  Table Scan on d1.t3
                     ->  Table Scan on d1.t1
+drop database if exists d1;
