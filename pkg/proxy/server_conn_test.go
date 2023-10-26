@@ -120,7 +120,7 @@ type testHandler struct {
 	conn        goetty.IOSession
 	sessionVars map[string]string
 	prepareStmt map[string]struct{}
-	useStmt     map[string]string
+	useStmt     map[string]struct{}
 	labels      map[string]string
 	server      *testCNServer
 	status      uint16
@@ -237,6 +237,7 @@ func (s *testCNServer) Start() error {
 						cid, c, 0, &fp),
 					sessionVars: make(map[string]string),
 					prepareStmt: make(map[string]struct{}),
+					useStmt:     make(map[string]struct{}),
 					labels:      make(map[string]string),
 					server:      s,
 				}
@@ -343,7 +344,7 @@ func (h *testHandler) handleUse(packet *frontend.Packet) {
 	if len(words) < 2 {
 		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", "invalid stmt"))
 	}
-	h.prepareStmt[words[1]] = struct{}{}
+	h.useStmt[words[1]] = struct{}{}
 	h.mysqlProto.SetSequenceID(1)
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
 }

@@ -191,7 +191,7 @@ type useEvent struct {
 
 // makeUseEvent creates an event with TypeUse type.
 func makeUseEvent(stmt string) IEvent {
-	e := &prepareEvent{
+	e := &useEvent{
 		stmt: stmt,
 	}
 	e.typ = TypeUse
