@@ -88,12 +88,21 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	// delete all index object under the database from mo_catalog.mo_indexes
+
+	// delete all index object record under the database from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
 	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
 	}
+
+	// delete all partition object record under the database from mo_catalog.mo_table_partitions
+	deleteSql = fmt.Sprintf(deleteMoTablePartitionsWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
+	err = c.runSql(deleteSql)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -1477,10 +1486,21 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	// delete all index objects of the table in mo_catalog.mo_indexes
+	// delete all index objects record of the table in mo_catalog.mo_indexes
 	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
 		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
 			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
+			err = c.runSql(deleteSql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// delete all partition objects record of the table in mo_catalog.mo_table_partitions
+	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_TABLE_PARTITIONS {
+		if qry.TableDef.Partition != nil {
+			deleteSql := fmt.Sprintf(deleteMoTablePartitionsWithTableIdFormat, qry.GetTableDef().TblId)
 			err = c.runSql(deleteSql)
 			if err != nil {
 				return err
