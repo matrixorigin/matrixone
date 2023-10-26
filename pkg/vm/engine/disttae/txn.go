@@ -17,8 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"math"
 	"strings"
@@ -50,10 +48,10 @@ func (txn *Transaction) getObjInfos(
 	if err != nil {
 		return nil, err
 	}
-	fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
+	//fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
+	//if err != nil {
+	//	return nil, err
+	//}
 	for iter.Next() {
 		entry := iter.Entry()
 		objs = append(objs, entry)
