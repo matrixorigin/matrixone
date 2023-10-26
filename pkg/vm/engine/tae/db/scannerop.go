@@ -223,7 +223,7 @@ func (s *MergeTaskBuilder) onSegment(segmentEntry *catalog.SegmentEntry) (err er
 	defer segmentEntry.RUnlock()
 
 	// Skip uncommitted entries
-	if !segmentEntry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(segmentEntry.BaseEntryImpl) {
+	if !segmentEntry.IsCommitted() || !catalog.ActiveSegmentWithNoTxnFilter(segmentEntry.BaseEntryImpl) {
 		return moerr.GetOkStopCurrRecur()
 	}
 

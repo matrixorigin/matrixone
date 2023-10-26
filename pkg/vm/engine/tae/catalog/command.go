@@ -180,8 +180,8 @@ func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*Me
 	return impl
 }
 
-func newSegmentCmd(id uint32, cmdType uint16, entry *SegmentEntry) *EntryCommand[*MetadataMVCCNode, *SegmentNode] {
-	impl := &EntryCommand[*MetadataMVCCNode, *SegmentNode]{
+func newSegmentCmd(id uint32, cmdType uint16, entry *SegmentEntry) *EntryCommand[*ObjectMVCCNode, *SegmentNode] {
+	impl := &EntryCommand[*ObjectMVCCNode, *SegmentNode]{
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),

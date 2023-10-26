@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type MetadataMVCCNode struct {
@@ -84,6 +85,78 @@ func (e *MetadataMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64
 	}
 	n += sn
 	if e.DeltaLoc, sn, err = objectio.ReadBytes(r); err != nil {
+		return
+	}
+	n += sn
+	return
+}
+
+type ObjectMVCCNode struct {
+	Name           objectio.ObjectName
+	OriginSize     uint32
+	CompressedSize uint32
+	ZoneMap        index.ZM
+}
+
+func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		Name:           e.Name,
+		OriginSize:     e.OriginSize,
+		CompressedSize: e.CompressedSize,
+		ZoneMap:        e.ZoneMap,
+	}
+}
+func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		Name:           e.Name,
+		OriginSize:     e.OriginSize,
+		CompressedSize: e.CompressedSize,
+		ZoneMap:        e.ZoneMap,
+	}
+}
+func (e *ObjectMVCCNode) String() string {
+	return e.Name.String()
+}
+func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
+	e.Name = vun.Name
+	e.OriginSize = vun.OriginSize
+	e.CompressedSize = vun.CompressedSize
+	e.ZoneMap = vun.ZoneMap
+}
+func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
+	var sn int64
+	if sn, err = objectio.WriteBytes(e.Name, w); err != nil {
+		return
+	}
+	n += sn
+	if _, err = w.Write(types.EncodeUint32(&e.OriginSize)); err != nil {
+		return
+	}
+	if _, err = w.Write(types.EncodeUint32(&e.CompressedSize)); err != nil {
+		return
+	}
+	if sn, err = objectio.WriteBytes(e.ZoneMap, w); err != nil {
+		return
+	}
+	n += sn
+	return
+}
+func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
+	var sn int64
+	if e.Name, sn, err = objectio.ReadBytes(r); err != nil {
+		return
+	}
+	n += sn
+	var sn2 int
+	if sn2, err = r.Read(types.EncodeUint32(&e.OriginSize)); err != nil {
+		return
+	}
+	n += int64(sn2)
+	if sn2, err = r.Read(types.EncodeUint32(&e.CompressedSize)); err != nil {
+		return
+	}
+	n += int64(sn2)
+	if e.ZoneMap, sn, err = objectio.ReadBytes(r); err != nil {
 		return
 	}
 	n += sn

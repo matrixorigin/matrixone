@@ -195,7 +195,7 @@ func (catalog *Catalog) ReplayCmd(
 		cmd := txncmd.(*EntryCommand[*TableMVCCNode, *TableNode])
 		catalog.onReplayUpdateTable(cmd, dataFactory, observer)
 	case IOET_WALTxnCommand_Segment:
-		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *SegmentNode])
+		cmd := txncmd.(*EntryCommand[*ObjectMVCCNode, *SegmentNode])
 		catalog.onReplayUpdateSegment(cmd, dataFactory, observer)
 	case IOET_WALTxnCommand_Block:
 		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
@@ -503,7 +503,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 
 }
 func (catalog *Catalog) onReplayUpdateSegment(
-	cmd *EntryCommand[*MetadataMVCCNode, *SegmentNode],
+	cmd *EntryCommand[*ObjectMVCCNode, *SegmentNode],
 	dataFactory DataFactory,
 	observer wal.ReplayObserver) {
 	catalog.OnReplaySegmentID(cmd.node.SortHint)
@@ -599,12 +599,12 @@ func (catalog *Catalog) onReplayCreateSegment(
 	seg.ID = *segid
 	seg.segData = dataFactory.MakeSegmentFactory()(seg)
 	rel.AddEntryLocked(seg)
-	un := &MVCCNode[*MetadataMVCCNode]{
+	un := &MVCCNode[*ObjectMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
-		BaseNode:    &MetadataMVCCNode{},
+		BaseNode:    &ObjectMVCCNode{},
 	}
 	seg.Insert(un)
 }
@@ -637,7 +637,7 @@ func (catalog *Catalog) onReplayDeleteSegment(
 		return
 	}
 	prevUn := seg.MVCCChain.GetLatestNodeLocked()
-	un := &MVCCNode[*MetadataMVCCNode]{
+	un := &MVCCNode[*ObjectMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: prevUn.CreatedAt,
 			DeletedAt: txnNode.End,

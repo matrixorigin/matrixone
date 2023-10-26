@@ -37,7 +37,7 @@ type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 type SegmentEntry struct {
 	ID   objectio.Segmentid
 	Stat SegStat
-	*BaseEntryImpl[*MetadataMVCCNode]
+	*BaseEntryImpl[*ObjectMVCCNode]
 	table   *TableEntry
 	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
 	//link.head and tail is nil when new a segmentEntry object.
@@ -73,7 +73,7 @@ func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncT
 	e := &SegmentEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -82,7 +82,7 @@ func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncT
 			SortHint: table.GetDB().catalog.NextSegment(),
 		},
 	}
-	e.CreateWithTxn(txn, &MetadataMVCCNode{})
+	e.CreateWithTxn(txn, &ObjectMVCCNode{})
 	if dataFactory != nil {
 		e.segData = dataFactory(e)
 	}
@@ -92,7 +92,7 @@ func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncT
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
@@ -103,7 +103,7 @@ func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
 		ID: *objectio.NewSegmentid(),
 		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -112,14 +112,14 @@ func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 			IsLocal: true,
 		},
 	}
-	e.CreateWithTS(ts, &MetadataMVCCNode{})
+	e.CreateWithTS(ts, &ObjectMVCCNode{})
 	return e
 }
 
 func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewBaseEntry(
-			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -127,7 +127,7 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 			state: ES_Appendable,
 		},
 	}
-	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
+	e.CreateWithTS(types.SystemDBTS, &ObjectMVCCNode{})
 	var bid types.Blockid
 	schema := table.GetLastestSchema()
 	if schema.Name == SystemTableSchema.Name {
@@ -198,6 +198,29 @@ func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEn
 	entry.RLock()
 	defer entry.RUnlock()
 	return entry.GetBlockEntryByIDLocked(id)
+}
+
+func (entry *SegmentEntry) UpdateObjectInfo(txn txnif.TxnReader, metaLoc objectio.Location) (isNewNode bool, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		entry.Unlock()
+		txnToWait.GetTxnState(true)
+		entry.Lock()
+	}
+	err = entry.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	// TODO
+	baseNode := &ObjectMVCCNode{
+		Name: metaLoc.Name(),
+	}
+	var node *MVCCNode[*ObjectMVCCNode]
+	isNewNode, node = entry.getOrSetUpdateNode(txn)
+	node.BaseNode.Update(baseNode)
+	return
 }
 
 // XXX API like this, why do we need the error?   Isn't blk is nil enough?

@@ -902,6 +902,14 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (er
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
 	}
+	isNewNode, err = meta.GetSegment().UpdateObjectInfo(tbl.store.txn, metaLoc)
+	if err != nil {
+		return
+	}
+	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.GetSegment().ID)
+	if isNewNode {
+		tbl.txnEntries.Append(meta)
+	}
 	return
 }
 
