@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -80,17 +79,16 @@ func WithServerDisableAutoCancelContext() ServerOption {
 }
 
 type server struct {
-	name         string
-	metrics      *serverMetrics
-	address      string
-	logger       *zap.Logger
-	codec        Codec
-	application  goetty.NetApplication
-	stopper      *stopper.Stopper
-	handler      func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
-	sessions     *sync.Map // session-id => *clientSession
-	sessionCount atomic.Int64
-	options      struct {
+	name        string
+	metrics     *serverMetrics
+	address     string
+	logger      *zap.Logger
+	codec       Codec
+	application goetty.NetApplication
+	stopper     *stopper.Stopper
+	handler     func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
+	sessions    *sync.Map // session-id => *clientSession
+	options     struct {
 		goettyOptions            []goetty.Option
 		bufferSize               int
 		batchSendSize            int
@@ -402,9 +400,8 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 }
 
 func (s *server) closeClientSession(cs *clientSession) {
-	n := s.sessionCount.Add(-1)
 	s.sessions.Delete(cs.conn.ID())
-	s.metrics.sessionSizeGauge.Set(float64(n))
+	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
 	if err := cs.Close(); err != nil {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
@@ -423,8 +420,7 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 		return v.(*clientSession), nil
 	}
 
-	n := s.sessionCount.Add(1)
-	s.metrics.sessionSizeGauge.Set(float64(n))
+	s.metrics.sessionSizeGauge.Set(float64(s.getSessionCount()))
 	rs.Ref()
 	if err := s.startWriteLoop(cs); err != nil {
 		s.closeClientSession(cs)
@@ -461,6 +457,15 @@ func (s *server) closeDisconnectedSession(ctx context.Context) {
 			})
 		}
 	}
+}
+
+func (s *server) getSessionCount() int {
+	n := 0
+	s.sessions.Range(func(key, value any) bool {
+		n++
+		return true
+	})
+	return n
 }
 
 type clientSession struct {

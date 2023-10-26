@@ -162,7 +162,7 @@ func (c *DashboardCreator) initRPCRequestDoneDurationRow() dashboard.Option {
 	return dashboard.Row(
 		"Request done Duration",
 		c.getHistogramWithExtraBy(
-			c.getMetricWithFilter(`mo_rpc_backend_done_duration_seconds_bucket`, `side="server"`),
+			c.getMetricWithFilter(`mo_rpc_backend_done_duration_seconds_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
 			"name")...,
