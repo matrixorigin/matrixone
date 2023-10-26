@@ -49,7 +49,7 @@ insert into index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
 Duplicate entry '67834' for key '__mo_index_idx_col'
 insert into index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
 insert into index_04 values (3,2,20.23,4090),(2,4,100.00,4091),(4,4,100.00,4090);
-Duplicate entry ('\(\d{3}\,\d\)'|'\d') for key '__mo_index_idx_col'
+Duplicate entry ('\(\d{4}\,\d\)'|'\d') for key ('__mo_index_idx_col'|'\w{3}\d')
 select * from index_04;
 col1    col2    col3    col4
 1    2    20.23    4090
