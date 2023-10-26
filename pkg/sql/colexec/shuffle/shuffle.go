@@ -57,7 +57,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	// clean last sent batch
 	if ap.ctr.lastSentIdx != -1 {
-		ap.ctr.shuffledBats[ap.ctr.lastSentIdx].SetRowCount(0)
+		bat := ap.ctr.shuffledBats[ap.ctr.lastSentIdx]
+		// reuse this batch
+		//	bat.SetRowCount(0)
+		err := initShuffledBats(ap, bat, proc, ap.ctr.lastSentIdx)
+		proc.PutBatch(bat)
+		if err != nil {
+			result := vm.NewCallResult()
+			result.Status = vm.ExecStop
+			return result, err
+		}
 	}
 
 	//find output
