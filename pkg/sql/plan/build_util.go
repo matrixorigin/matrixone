@@ -39,6 +39,25 @@ import (
 // 	return nodeID
 // }
 
+// GetFunctionArgTypeStrFromAst function arg type do not have scale and width, it depends on the data that it process
+func GetFunctionArgTypeStrFromAst(arg tree.FunctionArg) (string, error) {
+	argDecl := arg.(*tree.FunctionArgDecl)
+	return GetFunctionTypeStrFromAst(argDecl.Type)
+}
+
+func GetFunctionTypeStrFromAst(typRef tree.ResolvableTypeReference) (string, error) {
+	typ, err := getTypeFromAst(moerr.Context(), typRef)
+	if err != nil {
+		return "", err
+	}
+	ret := strings.ToLower(types.T(typ.Id).String())
+	// do not display precision, because the choice of decimal64 or decimal128 is not exposed to user
+	if strings.HasPrefix(ret, "decimal") {
+		return "decimal", nil
+	}
+	return ret, nil
+}
+
 func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {

@@ -28,7 +28,7 @@ import (
 const (
 	DefaultNotLoadMoreThan  = 4096
 	DefaultMinRowsQualified = 40960
-	DefaultMaxMergeObjN     = 4
+	DefaultMaxMergeObjN     = 2
 )
 
 var (
