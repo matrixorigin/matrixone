@@ -16,10 +16,13 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -84,6 +87,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Order:       order.String,
 	Group:       group.String,
 	Window:      window.String,
+	TimeWin:     timewin.String,
+	Fill:        fill.String,
 	Merge:       merge.String,
 	Output:      output.String,
 	Offset:      offset.String,
@@ -111,12 +116,13 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	MergeRecursive: mergerecursive.String,
 	MergeCTE:       mergecte.String,
 
-	Deletion:        deletion.String,
-	Insert:          insert.String,
-	OnDuplicateKey:  onduplicatekey.String,
-	PreInsert:       preinsert.String,
-	PreInsertUnique: preinsertunique.String,
-	External:        external.String,
+	Deletion:                deletion.String,
+	Insert:                  insert.String,
+	OnDuplicateKey:          onduplicatekey.String,
+	PreInsert:               preinsert.String,
+	PreInsertUnique:         preinsertunique.String,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.String,
+	External:                external.String,
 
 	Minus:        minus.String,
 	Intersect:    intersect.String,
@@ -145,6 +151,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Order:       order.Prepare,
 	Group:       group.Prepare,
 	Window:      window.Prepare,
+	TimeWin:     timewin.Prepare,
+	Fill:        fill.Prepare,
 	Merge:       merge.Prepare,
 	Output:      output.Prepare,
 	Offset:      offset.Prepare,
@@ -172,12 +180,13 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	MergeRecursive: mergerecursive.Prepare,
 	MergeCTE:       mergecte.Prepare,
 
-	Deletion:        deletion.Prepare,
-	Insert:          insert.Prepare,
-	OnDuplicateKey:  onduplicatekey.Prepare,
-	PreInsert:       preinsert.Prepare,
-	PreInsertUnique: preinsertunique.Prepare,
-	External:        external.Prepare,
+	Deletion:                deletion.Prepare,
+	Insert:                  insert.Prepare,
+	OnDuplicateKey:          onduplicatekey.Prepare,
+	PreInsert:               preinsert.Prepare,
+	PreInsertUnique:         preinsertunique.Prepare,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.Prepare,
+	External:                external.Prepare,
 
 	Minus:        minus.Prepare,
 	Intersect:    intersect.Prepare,
@@ -206,6 +215,8 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecSt
 	Order:       order.Call,
 	Group:       group.Call,
 	Window:      window.Call,
+	TimeWin:     timewin.Call,
+	Fill:        fill.Call,
 	Merge:       merge.Call,
 	Output:      output.Call,
 	Offset:      offset.Call,
@@ -237,9 +248,10 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (process.ExecSt
 	Insert:   insert.Call,
 	External: external.Call,
 
-	OnDuplicateKey:  onduplicatekey.Call,
-	PreInsert:       preinsert.Call,
-	PreInsertUnique: preinsertunique.Call,
+	OnDuplicateKey:          onduplicatekey.Call,
+	PreInsert:               preinsert.Call,
+	PreInsertUnique:         preinsertunique.Call,
+	PreInsertSecondaryIndex: preinsertsecondaryindex.Call,
 
 	Minus:        minus.Call,
 	Intersect:    intersect.Call,

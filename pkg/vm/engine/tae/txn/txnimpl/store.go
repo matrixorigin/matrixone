@@ -16,10 +16,13 @@ package txnimpl
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
@@ -88,7 +91,8 @@ func newStore(
 	}
 }
 
-func (store *txnStore) GetContext() context.Context { return store.ctx }
+func (store *txnStore) GetContext() context.Context    { return store.ctx }
+func (store *txnStore) SetContext(ctx context.Context) { store.ctx = ctx }
 
 func (store *txnStore) IsReadonly() bool {
 	return store.writeOps.Load() == 0
@@ -632,6 +636,15 @@ func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
 }
 
 func (store *txnStore) ApplyCommit() (err error) {
+	now := time.Now()
+	defer func() {
+		applyCommitDuration := time.Since(now)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && applyCommitDuration > threshold && store.GetContext() != nil {
+			store.SetContext(context.WithValue(store.GetContext(), common.StoreApplyCommit, &common.DurationRecords{Duration: applyCommitDuration}))
+		}
+
+	}()
 	for _, db := range store.dbs {
 		if err = db.ApplyCommit(); err != nil {
 			break
@@ -657,6 +670,16 @@ func (store *txnStore) Freeze() (err error) {
 }
 
 func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
+	now := time.Now()
+	defer func() {
+		prePrepareDuration := time.Since(now)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && prePrepareDuration > threshold && store.GetContext() != nil {
+			store.SetContext(context.WithValue(store.GetContext(), common.StorePrePrepare, &common.DurationRecords{Duration: prePrepareDuration}))
+		}
+		v2.TxnPrePrepareDurationHistogram.Observe(prePrepareDuration.Seconds())
+
+	}()
 	for _, db := range store.dbs {
 		if err = db.PrePrepare(ctx); err != nil {
 			return
@@ -666,6 +689,15 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 }
 
 func (store *txnStore) PrepareCommit() (err error) {
+	now := time.Now()
+	defer func() {
+		prepareCommitDuration := time.Since(now)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && prepareCommitDuration > threshold && store.GetContext() != nil {
+			store.SetContext(context.WithValue(store.GetContext(), common.StorePreApplyCommit, &common.DurationRecords{Duration: prepareCommitDuration}))
+		}
+
+	}()
 	if store.warChecker != nil {
 		if err = store.warChecker.checkAll(
 			store.txn.GetPrepareTS()); err != nil {
@@ -682,18 +714,22 @@ func (store *txnStore) PrepareCommit() (err error) {
 }
 
 func (store *txnStore) PreApplyCommit() (err error) {
-	// now := time.Now()
+	now := time.Now()
 	for _, db := range store.dbs {
 		if err = db.PreApplyCommit(); err != nil {
 			return
 		}
+	}
+	preApplyCommitDuration := time.Since(now)
+	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+	if enable && preApplyCommitDuration > threshold && store.GetContext() != nil {
+		store.SetContext(context.WithValue(store.GetContext(), common.StorePreApplyCommit, &common.DurationRecords{Duration: preApplyCommitDuration}))
 	}
 	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 
 func (store *txnStore) PrepareWAL() (err error) {
-	// now := time.Now()
 	if err = store.CollectCmd(); err != nil {
 		return
 	}

@@ -309,9 +309,7 @@ insert into bool01 values (10, '3');
 select * from bool01;
 alter table bool01 modify col2 bool after col1;
 show create table bool01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'bool01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table bool01;
 
 
@@ -328,9 +326,7 @@ show create table char01;
 insert into char01 values (100, '**(*(&(*UJHI');
 truncate table char01;
 select * from char01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table char01;
 
 
@@ -347,9 +343,7 @@ insert into char02 values ('738fewhu&^YUH', 100);
 select * from char02;
 update char02 set col1 = 100 where col2 = 'w43234rfq';
 select * from char02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table char02;
 
 
@@ -366,9 +360,7 @@ insert into char03 values (4, 'eyuiwqewq3');
 select * from char03;
 delete from char03 where col2 = 'eyuiwqewq3';
 select * from char03;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char03' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table char03;
 
 
@@ -384,9 +376,7 @@ alter table char04 modify col2 char(10) not null;
 show create table char04;
 insert into char04 values (4, 'eyuiwqewq3');
 select * from char04;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char04' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table char04;
 
 -- text, mediumtext, longtext
@@ -396,9 +386,7 @@ insert into text01 values ('37268434','32718hcuwh432fr234f34g4f34e4','&*&YHRE%^&
 insert into text01 values ('jefwyq3uih2r321fr3', '38eu4jfc3w4e3dcewcevewcve', null);
 insert into text01 values (null, '2789378u2uifj4234r23', '32r43frecdrfedwq');
 select * from text01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'text01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table text01;
 
 
@@ -412,9 +400,7 @@ alter table alter03 modify col1 decimal after col3, modify col2 varbinary(20);
 show create table alter03;
 insert into alter03 values ('32143124', 42432321.000, 132432.214234);
 select * from alter03;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter03' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table alter03;
 
 
@@ -428,9 +414,7 @@ show create table alter04;
 insert into alter04 values ();
 insert into alter04 values ();
 select * from alter04;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter04' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table alter04;
 
 
@@ -445,9 +429,7 @@ show create table alter05;
 insert into alter05 values ();
 insert into alter05 values ();
 select * from alter05;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter05' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table alter05;
 
 
@@ -461,9 +443,7 @@ show create table primary01;
 insert into primary01 values (1, '432r2f234day89ujfw42342');
 insert into primary01 values (2378.32423, '234242))())_');
 select * from primary01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table primary01;
 
 
@@ -475,9 +455,7 @@ insert into primary02 values (1, '3e');
 select * from primary02;
 alter table primary02 modify col1 int primary key;
 show create table primary02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table primary02;
 
 
@@ -491,9 +469,7 @@ show create table primary03;
 insert into primary03 values (3, '*');
 insert into primary03 values (3, 'assad');
 select * from primary03;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary03' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table primary03;
 
 
@@ -507,9 +483,7 @@ show create table primary04;
 insert into primary04 values (1, '324342__');
 insert into primary04 values (3, 'qw');
 select * from primary04;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary04' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table primary04;
 
 
@@ -520,9 +494,7 @@ insert into primary05 values (1, 'qfreqvreq');
 insert into primary05 values (2, '324543##');
 alter table primary05 modify col2 binary(30) primary key;
 show create table primary05;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary05' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table primary05;
 
 
@@ -534,9 +506,7 @@ insert into primary06 values (2, '324543##');
 alter table primary06 modify col1 int unsigned primary key;
 alter table primary06 modify col2 binary(30) primary key;
 show create table primary06;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary06' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table primary06;
 
 
@@ -548,9 +518,7 @@ insert into primary07 values (2, -324.2342432423, -1243.42334234242);
 alter table primary07 modify col1 double default null;
 alter table primary07 modify col2 int default null;
 show create table primary07;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary07' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table primary07;
 
 
@@ -580,9 +548,7 @@ alter table index01 modify b VARCHAR(20) UNIQUE KEY;
 show index from index01;
 show create table index01;
 select * from index01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table index01;
 
 
@@ -603,10 +569,9 @@ alter table index02 modify c VARCHAR(20) UNIQUE KEY;
 show index from index02;
 show create table index02;
 desc index02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 select * from index02;
+drop table index02;
 
 
 -- foreign key
@@ -636,10 +601,8 @@ alter table foreign01 modify col2 varchar(100);
 alter table foreign02 modify col2 double after col3;
 show create table foreign01;
 show create table foreign02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table foreign02;
 drop table foreign01;
 
@@ -669,9 +632,7 @@ insert into null01 values (null, '3e');
 alter table null01 modify col1 int not null;
 show create table null01;
 select * from null01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'null01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table null01;
 
 
@@ -685,9 +646,7 @@ show create table null02;
 insert into null02 values (null, '1');
 insert into null02 values (342, 'aesd');
 select * from null02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'null02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table null02;
 
 
@@ -715,9 +674,7 @@ alter table cast01 modify col4 decimal(28,10) after col2;
 show create table cast01;
 insert into cast01 values (3271834.2134, -3823243.4324, 328943232.3234, -32423.43243);
 select * from cast01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table cast01;
 
 
@@ -773,9 +730,7 @@ alter table cast04 modify col3 double, modify col4 float;
 show create table cast04;
 insert into cast04 values ();
 select * from cast04;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast04' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table cast04;
 
 
@@ -790,9 +745,7 @@ alter table cast05 modify col1 varchar(100);
 alter table cast05 modify col1 datetime first;
 select * from cast05;
 show create table cast05;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast05' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table cast05;
 
 
@@ -806,9 +759,7 @@ alter table abnormal02 modify col1 int;
 alter table abnormal02 modify col2 smallint;
 select * from abnormal02;
 show create table abnormal02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table abnormal02;
 
 
@@ -824,9 +775,7 @@ alter table abnormal01 modify col1 smallint;
 alter table abnormal01 modify col3 decimal(10,0);
 select * from abnormal01;
 show create table abnormal01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table abnormal01;
 
 
@@ -840,9 +789,7 @@ alter table abnormal02 modify col1 int unsigned;
 alter table abnormal02 modify col2 smallint unsigned;
 select * from abnormal02;
 show create table abnormal02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table abnormal02;
 
 
@@ -856,9 +803,7 @@ alter table abnormal03 modify col1 varchar(100);
 alter table abnormal03 modify col2 int;
 select * from abnormal03;
 show create table abnormal03;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal03' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table abnormal03;
 
 
@@ -872,9 +817,7 @@ alter table abnormal04 modify col1 float;
 alter table abnormal04 modify col2 int;
 select * from abnormal04;
 show create table abnormal04;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal04' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table abnormal04;
 
 
@@ -888,9 +831,7 @@ alter table abnormal05 modify col1 float;
 alter table abnormal05 modify col2 int;
 select * from abnormal05;
 show create table abnormal05;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal05' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table abnormal05;
 
 
@@ -920,9 +861,7 @@ alter table cluster01 modify column col2 float;
 alter table cluster01 modify col1 double after col2;
 show create table cluster01;
 select * from cluster01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table cluster01;
 
 
@@ -949,9 +888,7 @@ insert into time01 (col1, col2, col3, col4) values ('2030-12-31', '2031-09-09 01
 select * from time01;
 alter table time01 modify col1 int, modify col2 int first, modify col3 int after col1, modify col4 int;
 show create table time01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table time01;
 
 
@@ -964,9 +901,7 @@ insert into time02 (col2, col3, col4) values ('2031-09-09 01:01:01', '2013-12-12
 select * from time02;
 alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after col2, modify col4 decimal(38,0);
 show create table time02;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table time02;
 
 
@@ -1024,20 +959,14 @@ insert into mix01 values (3, -82913942.3434, null, null);
 select * from mix01;
 alter table mix01 add column col1_2 binary after col1;
 show create table mix01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 alter table mix01 modify column col1_2 varbinary(10) first;
 show create table mix01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 truncate table mix01;
 alter table mix01 add column col5 int;
 show create table mix01;
--- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
--- @bvt:issue
 drop table mix01;
 
 drop database test;

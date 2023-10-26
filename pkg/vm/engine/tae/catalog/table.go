@@ -291,7 +291,7 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 	return w.String()
 }
 
-func (entry *TableEntry) ObjectStatsString() string {
+func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 	var w bytes.Buffer
 
 	it := entry.MakeSegmentIt(true)
@@ -299,17 +299,40 @@ func (entry *TableEntry) ObjectStatsString() string {
 	if schema := entry.GetLastestSchema(); schema.HasSortKey() {
 		composeSortKey = strings.HasPrefix(schema.GetSingleSortKey().Name, "__")
 	}
+
+	var cnt, loadedCnt, rows, osize, avgRow, avgOsize int
+
 	for ; it.Valid(); it.Next() {
 		segment := it.Get().GetPayload()
 		if !segment.IsActive() {
 			continue
 		}
-		_ = w.WriteByte('\n')
-		_, _ = w.WriteString(segment.ID.ToString())
-		_ = w.WriteByte('\n')
-		_, _ = w.WriteString("    ")
-		_, _ = w.WriteString(segment.Stat.String(composeSortKey))
+		cnt++
+		if segment.Stat.Loaded {
+			loadedCnt++
+			rows += int(segment.Stat.Rows)
+			osize += int(segment.Stat.OriginSize)
+		}
+		if level > common.PPL0 {
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString(segment.ID.ToString())
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString("    ")
+			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
+		}
 	}
+	if level > common.PPL0 && cnt > 0 {
+		w.WriteByte('\n')
+	}
+	if loadedCnt > 0 {
+		avgRow = rows / cnt
+		avgOsize = osize / cnt
+	}
+	summary := fmt.Sprintf(
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s",
+		cnt, cnt-loadedCnt, avgRow, common.HumanReadableBytes(avgOsize),
+	)
+	w.WriteString(summary)
 	return w.String()
 }
 
@@ -434,7 +457,7 @@ func (entry *TableEntry) DropSegmentEntry(id *types.Segmentid, txn txnif.AsyncTx
 }
 
 func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
-	logutil.Info("[Catalog]", common.OperationField("remove"),
+	logutil.Debug("[Catalog]", common.OperationField("remove"),
 		common.OperandField(segment.String()))
 	// segment.Close()
 	entry.Lock()

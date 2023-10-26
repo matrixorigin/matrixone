@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
@@ -57,6 +58,7 @@ func WithMessageHandle(f func(ctx context.Context,
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
 	hakeeper logservice.CNHAKeeperClient,
+	udfService udf.Service,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	mAcquirer func() morpc.Message) error) Option {

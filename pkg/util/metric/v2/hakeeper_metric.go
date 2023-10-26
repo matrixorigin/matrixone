@@ -33,4 +33,36 @@ var (
 			Name:      "failed_total",
 			Help:      "hakeeper heartbeat failed count",
 		}, []string{"type"})
+
+	HeartbeatRecvHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "hakeeper",
+			Subsystem: "heartbeat_recv",
+			Name:      "duration_seconds",
+			Help:      "hakeeper heartbeat recv durations",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		}, []string{"type"})
+
+	HeartbeatRecvFailureCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "hakeeper",
+			Subsystem: "heartbeat_recv",
+			Name:      "failed_total",
+			Help:      "hakeeper heartbeat recv failed count",
+		}, []string{"type"})
+
+	CNHeartbeatHistogram          = HeartbeatHistogram.WithLabelValues("cn")
+	CNHeartbeatFailureCounter     = HeartbeatFailureCounter.WithLabelValues("cn")
+	CNHeartbeatRecvHistogram      = HeartbeatRecvHistogram.WithLabelValues("cn")
+	CNHeartbeatRecvFailureCounter = HeartbeatRecvFailureCounter.WithLabelValues("cn")
+
+	TNHeartbeatHistogram          = HeartbeatHistogram.WithLabelValues("tn")
+	TNHeartbeatFailureCounter     = HeartbeatFailureCounter.WithLabelValues("tn")
+	TNHeartbeatRecvHistogram      = HeartbeatRecvHistogram.WithLabelValues("tn")
+	TNHeartbeatRecvFailureCounter = HeartbeatRecvFailureCounter.WithLabelValues("tn")
+
+	LogHeartbeatHistogram          = HeartbeatHistogram.WithLabelValues("log")
+	LogHeartbeatFailureCounter     = HeartbeatFailureCounter.WithLabelValues("log")
+	LogHeartbeatRecvHistogram      = HeartbeatRecvHistogram.WithLabelValues("log")
+	LogHeartbeatRecvFailureCounter = HeartbeatRecvFailureCounter.WithLabelValues("log")
 )
