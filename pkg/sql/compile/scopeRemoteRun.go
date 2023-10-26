@@ -292,8 +292,8 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 		lastAnalyze.Network(bat)
 		valueScanOperator.Batchs = append(valueScanOperator.Batchs, bat)
-		_, err = lastArg.Call(s.Proc)
-		if err != nil {
+		result, err := lastArg.Call(s.Proc)
+		if err != nil || result.Status == vm.ExecStop {
 			valueScanOperator.Free(s.Proc, false, err)
 			return err
 		}
