@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"math"
+	"os"
 	"path"
 	"strings"
 	"testing"
@@ -177,8 +178,7 @@ func mockCheckpointData(t *testing.T, accIds []uint64, sizes []uint64) *logtail.
 	return ckpData
 }
 
-func mockObjectFileService(ctx context.Context) *objectio.ObjectFS {
-	dirName := "show_account_test"
+func mockObjectFileService(ctx context.Context, dirName string) *objectio.ObjectFS {
 	fs := objectio.TmpNewFileservice(ctx, path.Join(dirName, "data"))
 	serviceDir := path.Join(dirName, "data")
 	return objectio.NewObjectFS(fs, serviceDir)
@@ -196,12 +196,13 @@ func Test_ShowAccounts(t *testing.T) {
 	ckpData := mockCheckpointData(t, accIds, sizes)
 	defer ckpData.Close()
 
-	objFs := mockObjectFileService(ctx)
+	dirName := "show_account_test"
+	objFs := mockObjectFileService(ctx, dirName)
 	cnLocation, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
 	require.Nil(t, err)
 
 	defer func() {
-		err = objFs.Delete(cnLocation.Name().String())
+		err = os.RemoveAll(dirName)
 		require.Nil(t, err)
 	}()
 
