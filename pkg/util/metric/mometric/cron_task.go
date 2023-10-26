@@ -171,6 +171,8 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 				return err
 			}
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
+
+			fmt.Println("--------------------- usage: ", account, sizeMB)
 			metric.StorageUsage(account).Set(sizeMB)
 		}
 
@@ -234,7 +236,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			spanQ.AddExtraFields(zap.Time("last_check_time", lastCheckTime))
 			spanQ.AddExtraFields(zap.Time("now", now))
 			logger.Debug("query new account", zap.String("sql", sql))
-			return executor.Query(ctx, ShowAllAccountSQL, opts)
+			return executor.Query(ctx, sql, opts)
 		}
 		result := getNewAccounts(ctx, sql, lastCheckTime, now)
 		lastCheckTime = now
@@ -269,7 +271,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				defer spanQ.End()
 				spanQ.AddExtraFields(zap.String("account", account))
 				logger.Debug("query one account", zap.String("sql", sql))
-				return executor.Query(ctx, ShowAllAccountSQL, opts)
+				return executor.Query(ctx, sql, opts)
 			}
 			showRet := getOneAccount(ctx, showSql)
 			err = showRet.Error()
@@ -293,6 +295,8 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			// update new accounts metric
 			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
 				zap.String("created_time", createdTime))
+
+			fmt.Println("--------------------- usage: ", account, sizeMB)
 			metric.StorageUsage(account).Set(sizeMB)
 		}
 
