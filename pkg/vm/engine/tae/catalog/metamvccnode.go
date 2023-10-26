@@ -96,6 +96,7 @@ type ObjectMVCCNode struct {
 	OriginSize     uint32
 	CompressedSize uint32
 	ZoneMap        index.ZM
+	BlockNumber    uint16
 }
 
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
@@ -104,6 +105,7 @@ func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
 		OriginSize:     e.OriginSize,
 		CompressedSize: e.CompressedSize,
 		ZoneMap:        e.ZoneMap,
+		BlockNumber:    e.BlockNumber,
 	}
 }
 func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
@@ -112,6 +114,7 @@ func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 		OriginSize:     e.OriginSize,
 		CompressedSize: e.CompressedSize,
 		ZoneMap:        e.ZoneMap,
+		BlockNumber:    e.BlockNumber,
 	}
 }
 func (e *ObjectMVCCNode) String() string {
@@ -122,6 +125,7 @@ func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
 	e.OriginSize = vun.OriginSize
 	e.CompressedSize = vun.CompressedSize
 	e.ZoneMap = vun.ZoneMap
+	e.BlockNumber = vun.BlockNumber
 }
 func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
@@ -132,13 +136,19 @@ func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(types.EncodeUint32(&e.OriginSize)); err != nil {
 		return
 	}
+	n += 4
 	if _, err = w.Write(types.EncodeUint32(&e.CompressedSize)); err != nil {
 		return
 	}
+	n += 4
 	if sn, err = objectio.WriteBytes(e.ZoneMap, w); err != nil {
 		return
 	}
 	n += sn
+	if _, err = w.Write(types.EncodeUint16(&e.BlockNumber)); err != nil {
+		return
+	}
+	n += 2
 	return
 }
 func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
@@ -160,7 +170,14 @@ func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, 
 		return
 	}
 	n += sn
+	if sn2, err = r.Read(types.EncodeUint16(&e.BlockNumber)); err != nil {
+		return
+	}
+	n += int64(sn2)
 	return
+}
+func (e *ObjectMVCCNode) IsEmpty() bool {
+	return e.Name == nil
 }
 
 type SegmentNode struct {

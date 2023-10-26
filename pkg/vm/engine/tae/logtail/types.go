@@ -42,6 +42,11 @@ const (
 	SegmentAttr_SegNode                         = catalog.SegmentAttr_SegNode
 	SnapshotAttr_BlockMaxRow                    = catalog.SnapshotAttr_BlockMaxRow
 	SnapshotAttr_SegmentMaxBlock                = catalog.SnapshotAttr_SegmentMaxBlock
+	ObjectAttr_Name                             = catalog.ObjectAttr_Name
+	ObjectAttr_OriginSize                       = catalog.ObjectAttr_OriginSize
+	ObjectAttr_CompressedSize                   = catalog.ObjectAttr_CompressedSize
+	ObjectAttr_ZoneMap                          = catalog.ObjectAttr_ZoneMap
+	ObjectAttr_BlockNumber                      = catalog.ObjectAttr_BlockNumber
 	SnapshotMetaAttr_BlockInsertBatchStart      = "block_insert_batch_start"
 	SnapshotMetaAttr_BlockInsertBatchEnd        = "block_insert_batch_end"
 	SnapshotMetaAttr_BlockInsertBatchLocation   = "block_insert_batch_location"
@@ -78,6 +83,7 @@ var (
 	TblDelSchema     *catalog.Schema
 	ColumnDelSchema  *catalog.Schema
 	TNMetaSchema     *catalog.Schema
+	ObjectInfoSchema *catalog.Schema
 
 	DBSpecialDeleteSchema  *catalog.Schema
 	TBLSpecialDeleteSchema *catalog.Schema
@@ -282,6 +288,20 @@ var (
 	BaseTypes = []types.Type{
 		types.T_Rowid.ToType(),
 		types.T_TS.ToType(),
+	}
+	ObjectInfoAttr = []string{
+		ObjectAttr_Name,
+		ObjectAttr_OriginSize,
+		ObjectAttr_CompressedSize,
+		ObjectAttr_ZoneMap,
+		ObjectAttr_BlockNumber,
+	}
+	ObjectInfoTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_int32, 0, 0),
+		types.New(types.T_int32, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_int16, 0, 0),
 	}
 )
 
@@ -529,6 +549,19 @@ func init() {
 			}
 		} else {
 			if err := TNMetaSchema.AppendCol(colname, TNMetaShcemaTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	ObjectInfoSchema = catalog.NewEmptySchema("object_info")
+	for i, colname := range ObjectInfoAttr {
+		if i == 0 {
+			if err := ObjectInfoSchema.AppendPKCol(colname, ObjectInfoTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := ObjectInfoSchema.AppendCol(colname, ObjectInfoTypes[i]); err != nil {
 				panic(err)
 			}
 		}

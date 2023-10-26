@@ -52,6 +52,11 @@ const (
 	SnapshotAttr_SchemaExtra     = "schema_extra"
 	AccountIDDbNameTblName       = "account_id_db_name_tbl_name"
 	AccountIDDbName              = "account_id_db_name"
+	ObjectAttr_Name              = "name"
+	ObjectAttr_OriginSize        = "origin_size"
+	ObjectAttr_CompressedSize    = "compressed_size"
+	ObjectAttr_ZoneMap           = "zone_map"
+	ObjectAttr_BlockNumber       = "block_number"
 )
 
 type DataFactory interface {

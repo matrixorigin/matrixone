@@ -51,6 +51,7 @@ const (
 	tblSpecialDeleteBatch
 	columnInsBatch
 	columnDelBatch
+	objectInfoBatch
 	batchTotalNum
 )
 
@@ -121,6 +122,12 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 
 	b.batches[segMetaDelBatch].GetVectorByName(catalog.AttrRowID).Append(rowid, false)
 	b.batches[segMetaDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(deleteAt, false)
+	if !node.BaseNode.IsEmpty() {
+		if b.batches[objectInfoBatch] == nil {
+			b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema)
+		}
+		visitObject(b.batches[objectInfoBatch], node)
+	}
 }
 
 func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {

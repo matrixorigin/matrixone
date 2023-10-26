@@ -87,6 +87,8 @@ const (
 
 	BLKCNMetaInsertIDX
 
+	ObjectInfoIDX
+
 	TNMetaIDX
 )
 
@@ -155,6 +157,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -182,6 +185,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -209,6 +213,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
 		MetaSchema_V1,
@@ -236,6 +241,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V5 = [MaxIDX]*catalog.Schema{
 		MetaSchema,
@@ -263,6 +269,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		ObjectInfoSchema,
 	}
 
 	checkpointDataSchemas_V6 = [MaxIDX]*catalog.Schema{
@@ -291,6 +298,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema, // 23
 		TNMetaSchema,
+		ObjectInfoSchema,
 	}
 	// Checkpoint V7, V8 update checkpoint metadata
 	checkpointDataSchemas_V7 = checkpointDataSchemas_V6
@@ -2408,6 +2416,9 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
+		}
+		if !node.BaseNode.IsEmpty() {
+			visitObject(collector.data.bats[ObjectInfoIDX], node)
 		}
 		segNode := node
 		if segNode.HasDropCommitted() {

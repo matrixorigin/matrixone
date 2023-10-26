@@ -445,6 +445,7 @@ type TableLogtailRespBuilder struct {
 	blkMetaInsBatch *containers.Batch
 	blkMetaDelBatch *containers.Batch
 	segMetaDelBatch *containers.Batch
+	objectMetaBatch *containers.Batch
 	dataInsBatches  map[uint32]*containers.Batch // schema version -> data batch
 	dataDelBatch    *containers.Batch
 }
@@ -470,6 +471,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema)
 	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema)
 	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema)
+	b.objectMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema)
 	return b
 }
 
@@ -505,8 +507,19 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackSegid2Rowid(&e.ID), false)
 		}
+		if !node.BaseNode.IsEmpty() {
+			visitObject(b.objectMetaBatch, node)
+		}
 	}
 	return nil
+}
+
+func visitObject(batch *containers.Batch, node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) {
+	batch.GetVectorByName(ObjectAttr_Name).Append(node.BaseNode.Name, false)
+	batch.GetVectorByName(ObjectAttr_OriginSize).Append(node.BaseNode.Name, false)
+	batch.GetVectorByName(ObjectAttr_CompressedSize).Append(node.BaseNode.Name, false)
+	batch.GetVectorByName(ObjectAttr_ZoneMap).Append(node.BaseNode.Name, false)
+	batch.GetVectorByName(ObjectAttr_BlockNumber).Append(node.BaseNode.BlockNumber, false)
 }
 
 // visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
