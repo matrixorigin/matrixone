@@ -60,27 +60,33 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 		"Txn overview",
 		c.withGraph(
 			"Txn requests",
-			3,
+			2.4,
 			`sum(rate(`+c.getMetricWithFilter("mo_txn_total", "")+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
 
 		c.withGraph(
 			"Statement requests",
-			3,
+			2.4,
 			`sum(rate(`+c.getMetricWithFilter("mo_txn_statement_total", "")+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
 
 		c.withGraph(
 			"Commit requests",
-			3,
+			2.4,
 			`sum(rate(`+c.getMetricWithFilter("mo_txn_commit_total", "")+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
 
 		c.withGraph(
 			"Rollback requests",
-			3,
+			2.4,
 			`sum(rate(`+c.getMetricWithFilter("mo_txn_rollback_total", "")+`[$interval])) by (`+c.by+`)`,
 			"{{ "+c.by+" }}"),
+
+		c.withGraph(
+			"Lock requests",
+			2.4,
+			`sum(rate(`+c.getMetricWithFilter("mo_txn_lock_total", "")+`[$interval])) by (`+c.by+`, type)`,
+			"{{ "+c.by+"-type }}"),
 	)
 }
 
