@@ -87,9 +87,7 @@ func (s *sAggKmeans) Fill(groupNumber int64, values []byte, lastResult []byte, c
 		return res
 	}
 	arrays := tupleToArrays(tuple)
-	if !isEmpty {
-		s.result[groupNumber] = append(s.result[groupNumber], arrays...)
-	}
+	s.result[groupNumber] = append(s.result[groupNumber], arrays...)
 
 	return nil, false, nil
 }
@@ -101,7 +99,7 @@ func (s *sAggKmeans) Merge(groupNumber1 int64, groupNumber2 int64, result1 []byt
 	}
 
 	s2 := priv2.(*sAggKmeans)
-	s.result[groupNumber1] = append(s.result[groupNumber1], s2.result[groupNumber2]...)
+	s.result[groupNumber1] = append(s.result[groupNumber1], s2.result[groupNumber2][:]...)
 
 	return nil, isEmpty1 && isEmpty2, nil
 }

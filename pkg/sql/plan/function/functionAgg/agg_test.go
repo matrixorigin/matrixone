@@ -504,7 +504,7 @@ func TestKmeans(t *testing.T) {
 	}
 
 	nsp := nulls.NewWithSize(4)
-	//nsp.Add(3)
+	nsp.Add(3)
 
 	//{
 	//	// Test arraysToString
@@ -529,9 +529,8 @@ func TestKmeans(t *testing.T) {
 			eval:   s1.Eval,
 		}
 		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
-			fmt.Printf("result: %v\n", util.UnsafeBytesToString(result))
-			//Error: Only printing  [2, 3, 4, 5]|[4, 3, 4, 5]|, but expected [1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|
-			return !isEmpty
+			res := util.UnsafeBytesToString(result)
+			return !isEmpty && res == "[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|"
 		})
 		require.NoError(t, err)
 
