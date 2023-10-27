@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"math"
@@ -766,11 +765,22 @@ func TestGetExprValue(t *testing.T) {
 	})
 }
 
+var _ error = &testError{}
+
+type testError struct {
+	s string
+}
+
+func (t testError) Error() string {
+	return t.s
+}
+
 func TestRewriteError(t *testing.T) {
 	type args struct {
 		err      error
 		username string
 	}
+
 	tests := []struct {
 		name  string
 		args  args
@@ -781,7 +791,7 @@ func TestRewriteError(t *testing.T) {
 		{
 			name: "t1",
 			args: args{
-				err: errors.New("non moerr"),
+				err: &testError{s: "non moerr"},
 			},
 			want:  moerr.ER_INTERNAL_ERROR,
 			want1: "HY000",
