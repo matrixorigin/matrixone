@@ -96,6 +96,12 @@ func (s *SegStat) loadObjectInfo(name string, blk *BlockEntry) error {
 
 	s.loaded = true
 
+	// after loading object info, original size is still 0, we have to estimate it by experience
+	if name == motrace.RawLogTbl && s.originSize == 0 && s.rows != 0 {
+		factor := 1 + s.rows/1600
+		s.originSize = (1 << 20) * factor
+	}
+
 	return nil
 }
 
@@ -112,14 +118,14 @@ func (s *SegStat) GetSortKeyZonemap() index.ZM {
 }
 
 func (s *SegStat) SetRows(rows int) {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	s.rows = rows
 }
 
 func (s *SegStat) SetRemainingRows(rows int) {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	s.remainingRows = rows
 }
 
@@ -139,12 +145,6 @@ func (s *SegStat) GetOriginSize() int {
 	s.RLock()
 	defer s.RUnlock()
 	return s.originSize
-}
-
-func (s *SegStat) SetOriginSize(size int) {
-	s.Lock()
-	defer s.Unlock()
-	s.originSize = size
 }
 
 func (s *SegStat) GetCompSize() int {
@@ -247,11 +247,9 @@ func (entry *SegmentEntry) GetFirstBlkEntry() *BlockEntry {
 	entry.RLock()
 	defer entry.RUnlock()
 
-	// TODO why nil? print log
 	// head may be nil
 	head := entry.link.GetHead()
 	if head == nil {
-		fmt.Println("--------------------- link head is nil \n", entry)
 		return nil
 	}
 
@@ -269,30 +267,18 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 
 // LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
 func (entry *SegmentEntry) LoadObjectInfo() error {
-	name := entry.GetTable().GetLastestSchema().Name
-	defer func() {
-		// after loading object info, original size is still 0, we have to estimate it by experience
-		rows := entry.Stat.GetRows()
-		if name == motrace.RawLogTbl && entry.Stat.GetOriginSize() == 0 && rows != 0 {
-			factor := 1 + rows/1600
-			entry.Stat.SetOriginSize((1 << 20) * factor)
-		}
-	}()
-
 	if entry.Stat.GetLoaded() {
 		return nil
 	}
 	// special case for raw log table.
 	if (name == motrace.RawLogTbl || name == "mixed_daily") && len(entry.table.entries) >
 		int(common.RuntimeNotLoadMoreThan.Load()) {
-		return nil
-	}
 
-	blk := entry.GetFirstBlkEntry()
-	if blk == nil {
-		return nil
+		blk := entry.GetFirstBlkEntry()
+		if blk == nil {
+			return nil
+		}
 	}
-
 	return entry.Stat.loadObjectInfo(name, blk)
 }
 
