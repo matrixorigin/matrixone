@@ -77,9 +77,9 @@ var (
 )
 
 var (
-	deleteMoTablePartitionsWithDatabaseIdFormat          = `delete from mo_catalog.mo_table_partitions where database_id = %v;`
-	deleteMoTablePartitionsWithTableIdFormat             = `delete from mo_catalog.mo_table_partitions where table_id = %v;`
-	deleteMoTablePartitionsWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_table_partitions where table_id = %v and name = '%s';`
+	deleteMoTablePartitionsWithDatabaseIdFormat = `delete from mo_catalog.mo_table_partitions where database_id = %v;`
+	deleteMoTablePartitionsWithTableIdFormat    = `delete from mo_catalog.mo_table_partitions where table_id = %v;`
+	//deleteMoTablePartitionsWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_table_partitions where table_id = %v and name = '%s';`
 )
 
 // genCreateIndexTableSql: Generate ddl statements for creating index table
