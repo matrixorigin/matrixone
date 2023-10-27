@@ -71,6 +71,7 @@ type RPCMessage struct {
 	internal       bool
 	stream         bool
 	streamSequence uint32
+	createAt       time.Time
 }
 
 // InternalMessage returns true means the rpc message is the internal message in morpc.
@@ -164,7 +165,7 @@ type HeaderCodec interface {
 // BackendFactory backend factory
 type BackendFactory interface {
 	// Create create the corresponding backend based on the given address.
-	Create(address string) (Backend, error)
+	Create(address string, extraOptions ...BackendOption) (Backend, error)
 }
 
 // Backend backend represents a wrapper for a client communicating with a
