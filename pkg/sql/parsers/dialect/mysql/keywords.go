@@ -577,6 +577,7 @@ func init() {
 		"table_number":               TABLE_NUMBER,
 		"table_values":               TABLE_VALUES,
 		"table_size":                 TABLE_SIZE,
+		"kmeans":                     KMEANS,
 		"column_number":              COLUMN_NUMBER,
 		"returns":                    RETURNS,
 		"extension":                  EXTENSION,

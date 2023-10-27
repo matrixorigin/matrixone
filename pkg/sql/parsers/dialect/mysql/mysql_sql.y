@@ -414,7 +414,7 @@ import (
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
-%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
+%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK BIT_CAST
@@ -8387,6 +8387,17 @@ function_call_aggregate:
             OrderBy:$5,
 	    }
     }
+|  KMEANS '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
+      {
+  	    name := tree.SetUnresolvedName(strings.ToLower($1))
+  	        $$ = &tree.FuncExpr{
+  	        Func: tree.FuncName2ResolvableFunctionReference(name),
+  	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
+  	        Type: $3,
+  	        WindowSpec: $8,
+              OrderBy:$5,
+  	    }
+      }
 |   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
@@ -10651,6 +10662,7 @@ not_keyword:
 |   DATE_SUB
 |   EXTRACT
 |   GROUP_CONCAT
+|   KMEANS
 |   MAX
 |   MID
 |   MIN
