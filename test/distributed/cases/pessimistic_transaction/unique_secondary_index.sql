@@ -409,7 +409,6 @@ start transaction;
 -- @session:id=3{
 use unique_secondary_index;
 drop index varchar_index on trans_index_01;
--- @wait:0:commit
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
 -- @session}
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
