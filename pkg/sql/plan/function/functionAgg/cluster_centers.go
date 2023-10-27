@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/arjunsk/kmeans"
+	"github.com/arjunsk/kmeans/containers"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -157,7 +158,16 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 		}
 
 		// 2. call kmeans.
-		clusterer, err := kmeans.NewCluster(kmeans.ELKAN, vecf64, 2)
+		var options []kmeans.Option
+		if s.distFn != "" {
+			switch s.distFn {
+			case "L2":
+				options = append(options, kmeans.WithDistanceFunction(containers.EuclideanDistance))
+			default:
+				options = append(options, kmeans.WithDistanceFunction(containers.EuclideanDistance))
+			}
+		}
+		clusterer, err := kmeans.NewCluster(kmeans.ELKAN, vecf64, int(s.k), options...)
 		if err != nil {
 			return nil, err
 		}
