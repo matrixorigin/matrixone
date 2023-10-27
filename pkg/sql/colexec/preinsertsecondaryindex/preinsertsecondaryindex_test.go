@@ -73,7 +73,7 @@ func TestPreInsertSecondaryIndex(t *testing.T) {
 
 	argument := Argument{
 		PreInsertCtx: &plan.PreInsertUkCtx{
-			Columns:  []int32{1, 0}, //NOTE: columns is always >=2 for PreInsertSK since PK will be appended to SK list.
+			Columns:  []int32{1, 0},
 			PkColumn: 0,
 			PkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
 			UkType:   &plan.Type{Id: int32(types.T_uint64), Width: types.T_int64.ToType().Width, Scale: -1},
