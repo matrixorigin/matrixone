@@ -261,6 +261,20 @@ func (c *Config) setDefaultValue() error {
 	if c.Log.StacktraceLevel == "" {
 		c.Log.StacktraceLevel = zap.PanicLevel.String()
 	}
+	//set set default value
+	c.Log = logutil.GetDefaultConfig()
+	// HAKeeperClient has been set in NewConfig
+	if c.TN_please_use_getTNServiceConfig != nil {
+		c.TN_please_use_getTNServiceConfig.SetDefaultValue()
+	}
+	if c.TNCompatible != nil {
+		c.TNCompatible.SetDefaultValue()
+	}
+	// LogService has been set in NewConfig
+	c.CN.SetDefaultValue()
+	//no default proxy config
+	// Observability has been set in NewConfig
+	c.initMetaCache()
 	return nil
 }
 
@@ -576,15 +590,15 @@ func dumpCommonConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
 
 	//specific config items should be remoted
 	filters := []string{
-		"Config.TN_please_use_getTNServiceConfig",
-		"Config.TNCompatible",
-		"Config.LogService",
-		"Config.CN",
-		"Config.ProxyConfig",
+		"config.tn_please_use_gettnserviceconfig",
+		"config.tncompatible",
+		"config.logservice",
+		"config.cn",
+		"config.proxyconfig",
 	}
 
 	//denote the common for cn,tn,log or proxy
-	prefix := "Common"
+	prefix := "common"
 
 	newMap := make(map[string]*logservicepb.ConfigItem)
 	for s, item := range ret {
