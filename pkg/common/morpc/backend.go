@@ -118,8 +118,16 @@ func WithBackendReadTimeout(value time.Duration) BackendOption {
 	}
 }
 
+// WithBackendMetrics setup backend metrics
+func WithBackendMetrics(metrics *metrics) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.metrics = metrics
+	}
+}
+
 type remoteBackend struct {
 	remote       string
+	metrics      *metrics
 	logger       *zap.Logger
 	codec        Codec
 	conn         goetty.IOSession
@@ -191,6 +199,8 @@ func NewRemoteBackend(
 		opt(rb)
 	}
 	rb.adjust()
+	rb.metrics.createCounter.Inc()
+
 	rb.ctx, rb.cancel = context.WithCancel(context.Background())
 	rb.pool.futures = &sync.Pool{
 		New: func() interface{} {
@@ -314,6 +324,8 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 }
 
 func (rb *remoteBackend) doSend(f *Future) error {
+	rb.metrics.sendCounter.Inc()
+
 	if err := rb.codec.Valid(f.send.Message); err != nil {
 		return err
 	}
@@ -330,6 +342,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 		// process writeC for a long time, causing the writeC buffer to reach its limit.
 		select {
 		case rb.writeC <- f:
+			rb.metrics.sendingQueueSizeGauge.Set(float64(len(rb.writeC)))
 			rb.stateMu.RUnlock()
 			return nil
 		case <-f.send.Ctx.Done():
@@ -342,6 +355,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 }
 
 func (rb *remoteBackend) Close() {
+	rb.metrics.closeCounter.Inc()
 	rb.cancelOnce.Do(func() {
 		rb.cancel()
 	})
@@ -437,9 +451,14 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 				zap.Duration("ping-interval", rb.getPingTimeout()))
 		}
 		if len(messages) > 0 {
+			rb.metrics.sendingBatchSizeGauge.Set(float64(len(messages)))
+			start := time.Now()
+
 			writeTimeout := time.Duration(0)
 			written := messages[:0]
 			for _, f := range messages {
+				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+
 				id := f.getSendMessageID()
 				if stopped {
 					f.messageSent(backendClosed)
@@ -467,6 +486,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					}
 				}
 			}
+
+			rb.metrics.writeDurationHistogram.Observe(time.Since(start).Seconds())
 		}
 		if stopped {
 			return
@@ -544,6 +565,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				rb.scheduleResetConn()
 				return
 			}
+			rb.metrics.receiveCounter.Inc()
 
 			rb.active()
 
@@ -560,6 +582,10 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 }
 
 func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future, bool) {
+	defer func() {
+		rb.metrics.sendingQueueSizeGauge.Set(float64(len(rb.writeC)))
+	}()
+
 	n := len(messages)
 	for i := 0; i < n; i++ {
 		messages[i] = nil
@@ -688,6 +714,11 @@ func (rb *remoteBackend) stopWriteLoop() {
 }
 
 func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMessage, err error, cb func()) {
+	start := time.Now()
+	defer func() {
+		rb.metrics.doneDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	response := msg.Message
 	if msg.Cancel != nil {
 		defer msg.Cancel()
@@ -750,6 +781,10 @@ func (rb *remoteBackend) running() bool {
 
 func (rb *remoteBackend) resetConn() error {
 	start := time.Now()
+	defer func() {
+		rb.metrics.connectDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	wait := time.Second
 	sleep := time.Millisecond * 200
 	for {
@@ -764,12 +799,15 @@ func (rb *remoteBackend) resetConn() error {
 
 		rb.logger.Debug("start connect to remote")
 		rb.closeConn(false)
+		rb.metrics.connectCounter.Inc()
 		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
 		if err == nil {
 			rb.logger.Debug("connect to remote succeed")
 			rb.activeReadLoop(false)
 			return nil
 		}
+
+		rb.metrics.connectFailedCounter.Inc()
 
 		// only retry on temp net error
 		canRetry := false
@@ -899,8 +937,11 @@ func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) Backend
 	}
 }
 
-func (bf *goettyBasedBackendFactory) Create(remote string) (Backend, error) {
-	return NewRemoteBackend(remote, bf.codec, bf.options...)
+func (bf *goettyBasedBackendFactory) Create(
+	remote string,
+	extraOptions ...BackendOption) (Backend, error) {
+	opts := append(bf.options, extraOptions...)
+	return NewRemoteBackend(remote, bf.codec, opts...)
 }
 
 type stream struct {
