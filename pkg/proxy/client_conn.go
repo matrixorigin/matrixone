@@ -80,7 +80,7 @@ type ClientConn interface {
 	// GetTenant returns the tenant which this connection belongs to.
 	GetTenant() Tenant
 	// SendErrToClient sends access error to MySQL client.
-	SendErrToClient(errMsg string)
+	SendErrToClient(err error)
 	// BuildConnWithServer selects a CN server and connects to it, then
 	// returns the connection. If sendToClient is true, means that the
 	// packet received from CN server should be sent to client because
@@ -225,9 +225,9 @@ func (c *clientConn) GetTenant() Tenant {
 }
 
 // SendErrToClient implements the ClientConn interface.
-func (c *clientConn) SendErrToClient(errMsg string) {
-	accErr := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
-	p := c.mysqlProto.MakeErrPayload(accErr.ErrorCode, accErr.SqlStates[0], errMsg)
+func (c *clientConn) SendErrToClient(err error) {
+	errorCode, sqlState, msg := frontend.RewriteError(err, "")
+	p := c.mysqlProto.MakeErrPayload(errorCode, sqlState, msg)
 	if err := c.mysqlProto.WritePacket(p); err != nil {
 		c.log.Error("failed to send access error to client", zap.Error(err))
 	}
@@ -272,23 +272,7 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 }
 
 func (c *clientConn) sendErr(err error, resp chan<- []byte) {
-	var errCode uint16
-	var sqlState, errMsg string
-	switch myErr := err.(type) {
-	case *moerr.Error:
-		if myErr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
-			errCode = myErr.MySQLCode()
-		} else {
-			errCode = myErr.ErrorCode()
-		}
-		errMsg = myErr.Error()
-		sqlState = myErr.SqlState()
-	default:
-		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
-		errCode = fail.ErrorCode
-		sqlState = fail.SqlStates[0]
-		errMsg = err.Error()
-	}
+	errCode, sqlState, errMsg := frontend.RewriteError(err, "")
 	payload := c.mysqlProto.MakeErrPayload(
 		errCode, sqlState, errMsg)
 	r := &frontend.Packet{

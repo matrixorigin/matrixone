@@ -22,17 +22,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	goetty_buf "github.com/fagongzi/goetty/v2/buf"
-	"math"
-	"math/rand"
-	"net"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
-	"unicode"
-
 	"github.com/fagongzi/goetty/v2"
+	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,6 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"math"
+	"math/rand"
+	"net"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+	"unicode"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -1260,10 +1259,8 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	mp.incDebugCount(0)
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
-		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
-		tipsFormat := "Access denied for user %s. %s"
-		msg := fmt.Sprintf(tipsFormat, getUserPart(mp.username), err.Error())
-		err2 := mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], msg)
+		errorCode, sqlState, msg := RewriteError(err, mp.username)
+		err2 := mp.sendErrPacket(errorCode, sqlState, msg)
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
 			return err2

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -123,7 +124,7 @@ func (c *mockClientConn) GetSalt() []byte                    { return nil }
 func (c *mockClientConn) GetHandshakePack() *frontend.Packet { return nil }
 func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
-func (c *mockClientConn) SendErrToClient(string)             {}
+func (c *mockClientConn) SendErrToClient(err error)          {}
 func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 	cn, err := c.router.Route(context.TODO(), c.clientInfo, nil)
 	if err != nil {
@@ -522,14 +523,14 @@ func TestClientConn_SendErrToClient(t *testing.T) {
 
 		n, err = remote.Read(b)
 		require.NoError(t, err)
-		require.Equal(t, 21, n)
-		require.Equal(t, "err msg1", string(b[4+1+2+1+5:n]))
+		require.Equal(t, 33, n)
+		require.True(t, strings.Contains(string(b[4+1+2+1+5:n]), "internal error: msg1"))
 	}()
 
 	_, err := cc.BuildConnWithServer(true)
 	require.Error(t, err) // just test client, no router set
 	require.Equal(t, "tenant1", string(cc.GetTenant()))
 	require.NotNil(t, cc.GetHandshakePack())
-	cc.SendErrToClient("err msg1")
+	cc.SendErrToClient(moerr.NewInternalErrorNoCtx("msg1"))
 	wg.Wait()
 }
