@@ -124,7 +124,7 @@ func NewTxnServer(
 		morpc.WithCodecPayloadCopyBufferSize(16*1024),
 		morpc.WithCodecMaxBodySize(s.options.maxMessageSize))
 	if s.options.enableCompress {
-		mp, err := mpool.NewMPool("txn_rpc_server", 0, mpool.NoFixed)
+		mp, err := mpool.NewMPool("txn-server", 0, mpool.NoFixed)
 		if err != nil {
 			return nil, err
 		}

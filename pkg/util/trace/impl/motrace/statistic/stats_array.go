@@ -15,7 +15,9 @@
 package statistic
 
 import (
+	"context"
 	"strconv"
+	"time"
 )
 
 type StatsArray [StatsArrayLength]float64
@@ -208,3 +210,106 @@ var initStatsArray = NewStatsArray()
 var DefaultStatsArray = *initStatsArray.Init()
 
 var DefaultStatsArrayJsonString = initStatsArray.Init().ToJsonString()
+
+type statsInfoKey struct{}
+
+// statistic info of sql
+type StatsInfo struct {
+	ParseDuration   time.Duration
+	PlanDuration    time.Duration
+	CompileDuration time.Duration
+
+	PipelineTimeConsumption      time.Duration
+	PipelineBlockTimeConsumption time.Duration
+
+	S3AccessTimeConsumption time.Duration
+	S3ReadBytes             uint
+	S3WriteBytes            uint
+
+	//temporary fields which is used to compute data above
+
+	planStart time.Time
+
+	compileStart time.Time
+}
+
+func (stats *StatsInfo) CompileStart() {
+	if stats == nil {
+		return
+	}
+	if !stats.compileStart.IsZero() {
+		return
+	}
+	stats.compileStart = time.Now()
+}
+
+func (stats *StatsInfo) CompileEnd() {
+	if stats == nil {
+		return
+	}
+	stats.CompileDuration = time.Since(stats.compileStart)
+}
+
+func (stats *StatsInfo) PlanStart() {
+	if stats == nil {
+		return
+	}
+	stats.planStart = time.Now()
+}
+
+func (stats *StatsInfo) PlanEnd() {
+	if stats == nil {
+		return
+	}
+	stats.PlanDuration = time.Since(stats.planStart)
+}
+
+// reset StatsInfo into zero state
+func (stats *StatsInfo) Reset() {
+	if stats == nil {
+		return
+	}
+	stats.ParseDuration = 0
+	stats.CompileDuration = 0
+	stats.PlanDuration = 0
+
+	stats.PipelineTimeConsumption = 0
+	stats.PipelineBlockTimeConsumption = 0
+
+	stats.S3AccessTimeConsumption = 0
+	stats.S3ReadBytes = 0
+	stats.S3WriteBytes = 0
+
+	stats.compileStart = time.Time{}
+	stats.planStart = time.Time{}
+
+}
+
+func ContextWithStatsInfo(requestCtx context.Context, stats *StatsInfo) context.Context {
+	return context.WithValue(requestCtx, statsInfoKey{}, stats)
+}
+
+func StatsInfoFromContext(requestCtx context.Context) *StatsInfo {
+	if requestCtx == nil {
+		return nil
+	}
+	if stats, ok := requestCtx.Value(statsInfoKey{}).(*StatsInfo); ok {
+		return stats
+	}
+	return nil
+}
+
+// EnsureStatsInfoCanBeFound ensure a statement statistic is set in context, if not, copy one from another context, this function is copied from EnsureStatementProfiler
+func EnsureStatsInfoCanBeFound(ctx context.Context, from context.Context) context.Context {
+	if v := ctx.Value(statsInfoKey{}); v != nil {
+		// already set
+		return ctx
+	}
+	v := from.Value(statsInfoKey{})
+	if v == nil {
+		// not set in from
+		return ctx
+	}
+	ctx = context.WithValue(ctx, statsInfoKey{}, v)
+	return ctx
+}
