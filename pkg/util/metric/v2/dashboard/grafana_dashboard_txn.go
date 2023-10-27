@@ -304,3 +304,14 @@ func (c *DashboardCreator) initTxnHoldLockRow() dashboard.Option {
 			[]float32{3, 3, 3, 3})...,
 	)
 }
+
+func (c *DashboardCreator) initTxnFastLoadObjectMetaRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn Fast Load Object Meta",
+		c.withGraph(
+			"Fast Load Object Meta",
+			12,
+			`sum(rate(`+c.getMetricWithFilter("tn_side_fast_load_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
+			"{{ "+c.by+"-type }}"),
+	)
+}
