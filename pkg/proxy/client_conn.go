@@ -123,12 +123,12 @@ type clientConn struct {
 	router Router
 	// tun is the tunnel which this client connection belongs to.
 	tun *tunnel
-	// setVarStmts keeps all set user variable statements. When connection
-	// is transferred, set all these variables first.
-	setVarStmts []string
-	// prepareStmts keeps all prepare statements. When connection
-	// is transferred, execute all these prepare statements first.
-	prepareStmts []string
+	// redoStmts keeps all the statements that need to re-execute in the
+	// new session after it is transferred. It should contain:
+	// 1. set variable stmts
+	// 2. prepare stmts
+	// 3. use stmts
+	redoStmts []string
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
@@ -266,6 +266,8 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleSetVar(ev)
 	case *prepareEvent:
 		return c.handlePrepare(ev)
+	case *useEvent:
+		return c.handleUse(ev)
 	default:
 	}
 	return nil
@@ -347,13 +349,19 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
-	c.setVarStmts = append(c.setVarStmts, e.stmt)
+	c.redoStmts = append(c.redoStmts, e.stmt)
 	return nil
 }
 
 // handleSetVar handles the prepare event.
 func (c *clientConn) handlePrepare(e *prepareEvent) error {
-	c.prepareStmts = append(c.prepareStmts, e.stmt)
+	c.redoStmts = append(c.redoStmts, e.stmt)
+	return nil
+}
+
+// handleUse handles the use event.
+func (c *clientConn) handleUse(e *useEvent) error {
+	c.redoStmts = append(c.redoStmts, e.stmt)
 	return nil
 }
 
@@ -432,19 +440,13 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 			codeAuthFailed)
 	}
 
-	// Set the use defined variables, including session variables and user variables.
-	for _, stmt := range c.setVarStmts {
+	// Re-execute the statements.
+	for _, stmt := range c.redoStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {
 			return nil, err
 		}
 	}
 
-	// Execute the prepare statements.
-	for _, stmt := range c.prepareStmts {
-		if _, err := sc.ExecStmt(stmt, nil); err != nil {
-			return nil, err
-		}
-	}
 	return sc, nil
 }
 
