@@ -179,14 +179,6 @@ func (rt *Routine) setCancelRequestFunc(cf context.CancelFunc) {
 	rt.cancelRequestFunc = cf
 }
 
-func (rt *Routine) cancelRequestCtx() {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if rt.cancelRequestFunc != nil {
-		rt.cancelRequestFunc()
-	}
-}
-
 func (rt *Routine) handleRequest(req *Request) error {
 	var ses *Session
 	var routineCtx context.Context
@@ -279,9 +271,9 @@ func (rt *Routine) handleRequest(req *Request) error {
 // killQuery if there is a running query, just cancel it.
 func (rt *Routine) killQuery(killMyself bool, statementId string) {
 	if !killMyself {
-		logutil.Infof("cancel routine ctx on the connection %d", rt.getConnectionID())
+		logutil.Infof("kill query: cancel routine ctx on the connection %d", rt.getConnectionID())
 		//1,cancel request ctx
-		rt.cancelRequestCtx()
+		rt.releaseRoutineCtx()
 		//2.cancel txn ctx
 		ses := rt.getSession()
 		if ses != nil {
@@ -375,6 +367,5 @@ func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecuto
 		cancelRoutineFunc: cancelRoutineFunc,
 		parameters:        parameters,
 	}
-
 	return ri
 }
