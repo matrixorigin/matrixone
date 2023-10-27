@@ -2444,7 +2444,7 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 // every checkpoint records the full datasets of the storage usage info.
 // [account_id, db_id, table_id, table_total_size_in_bytes]
 func FillSEGStorageUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
-	if !entry.IsSortedLocked() || entry.IsAppendable() || entry.HasDropCommitted() {
+	if !entry.IsSorted() || entry.IsAppendable() || entry.HasDropCommitted() {
 		return
 	}
 

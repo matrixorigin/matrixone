@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 	"unsafe"
@@ -570,6 +571,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	defer func() {
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	fmt.Println("-------------- ctx ", ctx)
 
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
