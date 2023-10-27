@@ -728,6 +728,8 @@ func TestClusterCenters(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggClusterCenters, AggClusterCentersSupportedParameters, AggClusterCentersReturnType))
 
 	s1 := &sAggClusterCenters{
+		k:       2,
+		distFn:  "L2",
 		arrType: types.T_array_float64.ToType(),
 	}
 	// input vectors/arrays
@@ -772,7 +774,7 @@ func TestClusterCenters(t *testing.T) {
 		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
 			var vecf64Output [][]float64
 			err := json.Unmarshal(result, &vecf64Output)
-			return err == nil && !isEmpty
+			return err == nil && !isEmpty && len(vecf64Output) == 2
 		})
 		require.NoError(t, err)
 
