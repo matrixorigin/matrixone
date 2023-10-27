@@ -538,7 +538,7 @@ func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		Srcs:       a.srcs,
 	}
 	switch {
-	case a.outputType.Oid.IsMySQLString() || a.outputType.Oid.IsArrayRelate():
+	case a.outputType.Oid.IsMySQLString():
 		source.Da = types.EncodeStringSlice(getDistAggStrVs(a))
 	default:
 		source.Da = a.da
@@ -596,7 +596,7 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 
 func setDistAggValues[T1, T2 any](agg any, typ types.Type) {
 	switch {
-	case typ.Oid.IsMySQLString() || typ.Oid.IsArrayRelate():
+	case typ.Oid.IsMySQLString():
 		a := agg.(*UnaryDistAgg[[]byte, []byte])
 		values := types.DecodeStringSlice(a.da)
 		a.vs = make([][]byte, len(values))
