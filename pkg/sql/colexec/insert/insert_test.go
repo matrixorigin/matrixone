@@ -40,7 +40,7 @@ func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
 	return nil
 }
 
-func pdaTestInsertOperator(t *testing.T) {
+func TestInsertOperator(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
