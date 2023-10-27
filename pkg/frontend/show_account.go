@@ -35,6 +35,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -70,7 +71,25 @@ const (
 	idxOfSuspendedTime = 4
 	idxOfComment       = 5
 
-	// left the `size` as a placeholder, the value will be embedding later
+	//getTableStatsFormat = "select " +
+	//	"( select " +
+	//	"        mu2.user_name as `admin_name` " +
+	//	"  from mo_catalog.mo_user as mu2 join " +
+	//	"      ( select " +
+	//	"              min(user_id) as `min_user_id` " +
+	//	"        from mo_catalog.mo_user " +
+	//	"      ) as mu1 on mu2.user_id = mu1.min_user_id " +
+	//	") as `admin_name`, " +
+	//	"count(distinct mt.reldatabase) as `db_count`, " +
+	//	"count(distinct mt.relname) as `table_count`, " +
+	//	"sum(mo_table_rows(mt.reldatabase,mt.relname)) as `row_count`, " +
+	//	"cast(sum(mo_table_size(mt.reldatabase,mt.relname))/1048576  as decimal(29,3)) as `size` " +
+	//	"from " +
+	//	"mo_catalog.mo_tables as mt " +
+	//	"where mt.relkind != '%s' and mt.account_id = %d;"
+
+	// have excluded the `mo_table_rows` and `mo_table_size`, compared to getTableStatsFormat
+	// and left the `size_in_mb` as a placeholder
 	getTableStatsFormatV2 = "select " +
 		"( select " +
 		"        mu2.user_name as `admin_name` " +
@@ -82,7 +101,7 @@ const (
 		") as `admin_name`, " +
 		"count(distinct mt.reldatabase) as `db_count`, " +
 		"count(distinct mt.relname) as `table_count`, " +
-		"cast(0 as double) as `size` " +
+		"cast(0 as double) as `size_in_mb` " +
 		"from " +
 		"mo_catalog.mo_tables as mt " +
 		"where mt.relkind != '%s' and mt.account_id = %d;"
@@ -138,9 +157,21 @@ func requestStorageUsage(ctx context.Context, ses *Session) (resp interface{}, e
 		return usage, nil
 	}
 
-	if ses.proc.Ctx, ses.proc.TxnOperator, err = ses.txnHandler.GetTxn(); err != nil {
-		return nil, err
+	// two source:
+	// 	1. sql client
+	//	2. internal
+	if ses.proc.TxnOperator == nil {
+		defer func() { // without this: the transaction xxx has been committed or aborted
+			ses.proc.TxnOperator = nil
+		}()
+		if _, ses.proc.TxnOperator, err = ses.TxnCreate(); err != nil {
+			return nil, err
+		}
 	}
+
+	var cancel context.CancelFunc
+	ses.proc.Ctx, cancel = context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
 
 	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
 	result, err := handler(ses.proc, "DN", "", ctl2.MoCtlTNCmdSender)
@@ -506,6 +537,7 @@ func mergeOutputResult(ses *Session, outputBatch *batch.Batch, rsOfMoAccount *ba
 		if err != nil {
 			return err
 		}
+		//err = outputBatch.Vecs[finalIdxOfRowCount].UnionOne(bat.Vecs[idxOfRowCount], 0, mp)
 		if err != nil {
 			return err
 		}
