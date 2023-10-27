@@ -252,6 +252,15 @@ func (m *InspectResp) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+func (m *InspectResp) ConsoleString() string {
+	switch m.Typ {
+	case InspectNormal:
+		return fmt.Sprintf("\nmsg: %s\n\n%v", m.Message, string(m.Payload))
+	default:
+		return fmt.Sprintf("\nmsg: %s\n\n unhandled resp type %v", m.Message, m.Typ)
+	}
+}
+
 const (
 	InspectNormal = 0
 	InspectCata   = 1
@@ -281,8 +290,9 @@ func (m *CatalogResp) UnmarshalBinary(data []byte) error {
 }
 
 type TraceSpan struct {
-	Cmd   string
-	Spans string
+	Cmd       string
+	Spans     string
+	Threshold int64
 }
 
 func (t *TraceSpan) MarshalBinary() ([]byte, error) {

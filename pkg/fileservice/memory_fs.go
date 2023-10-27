@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/tidwall/btree"
 )
 
@@ -108,8 +107,6 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 }
 
 func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
-	v2.GetMemFSWriteCounter().Inc()
-
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -161,16 +158,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		return vector.Entries[i].Offset < vector.Entries[j].Offset
 	})
 
-	var r io.Reader
-	r = newIOEntriesReader(ctx, vector.Entries)
-
-	if vector.Hash.Sum != nil && vector.Hash.New != nil {
-		h := vector.Hash.New()
-		r = io.TeeReader(r, h)
-		defer func() {
-			*vector.Hash.Sum = h.Sum(nil)
-		}()
-	}
+	r := newIOEntriesReader(ctx, vector.Entries)
 
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -186,8 +174,6 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 }
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
-	v2.GetMemFSWriteCounter().Inc()
-
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

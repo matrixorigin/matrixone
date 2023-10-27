@@ -1,0 +1,53 @@
+drop table if exists t1;
+create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
+create index idx1 on t1(name);
+insert into t1 values(1,"Abby", 24);
+insert into t1 values(2,"Dora", 25);
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                    YES    NULL
+t1    1    idx1    1    name    A    0    NULL    NULL    YES                YES    NULL
+drop table t1;
+select name, type, column_name from mo_catalog.mo_indexes mi where name="idx1";
+name    type    column_name
+drop table if exists t1;
+create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
+create index idx2 on t1(name,age);
+insert into t1 values(1,"Abby", 24);
+insert into t1 values(2,"Dora", 25);
+delete from t1 where id = 1;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                    YES    NULL
+t1    1    idx2    1    name    A    0    NULL    NULL    YES                YES    NULL
+t1    1    idx2    2    age    A    0    NULL    NULL    YES                YES    NULL
+select name, type,column_name from mo_catalog.mo_indexes mi where name="idx2";
+name    type    column_name
+idx2    MULTIPLE    name
+idx2    MULTIPLE    age
+idx2    MULTIPLE    __mo_alias_id
+drop table if exists t1;
+create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
+create index idx3 on t1(name);
+insert into t1 values(1,"Abby", 24);
+insert into t1 values(2,"Dora", 25);
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                    YES    NULL
+t1    1    idx3    1    name    A    0    NULL    NULL    YES                YES    NULL
+select name, type,column_name from mo_catalog.mo_indexes mi where name="idx3";
+name    type    column_name
+idx3    MULTIPLE    name
+idx3    MULTIPLE    __mo_alias_id
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx3` (`name`)\n)
+DROP INDEX idx3 ON t1;
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                    YES    NULL
+select name, type,column_name from mo_catalog.mo_indexes mi where name="idx3";
+name    type    column_name
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`)\n)

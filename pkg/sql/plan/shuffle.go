@@ -362,9 +362,6 @@ func GetShuffleDop() (dop int) {
 // for table with primary key, and ndv of first column in primary key is high enough, use range shuffle
 // only support integer type
 func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
-	if n.Stats.HashmapStats == nil {
-		n.Stats.HashmapStats = &plan.HashMapStats{}
-	}
 	n.Stats.HashmapStats.Shuffle = true
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
 	if n.TableDef.Pkey != nil {

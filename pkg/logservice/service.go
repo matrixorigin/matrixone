@@ -20,15 +20,12 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"sync"
 	"sync/atomic"
-
-	"go.uber.org/zap"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,11 +34,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
-	LogServiceRPCName = "logservice-rpc"
+	LogServiceRPCName = "logservice-server"
 )
 
 type Lsn = uint64
@@ -413,9 +413,14 @@ func (s *Service) handleGetTruncatedIndex(ctx context.Context, req pb.Request) p
 
 // TODO: add tests to see what happens when request is sent to non hakeeper stores
 func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	start := time.Now()
+	defer func() {
+		v2.LogHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
+	}()
 	hb := req.LogHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addLogStoreHeartbeat(ctx, *hb); err != nil {
+		v2.LogHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -426,9 +431,14 @@ func (s *Service) handleLogHeartbeat(ctx context.Context, req pb.Request) pb.Res
 }
 
 func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	start := time.Now()
+	defer func() {
+		v2.CNHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
+	}()
 	hb := req.CNHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addCNStoreHeartbeat(ctx, *hb); err != nil {
+		v2.CNHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -450,9 +460,14 @@ func (s *Service) handleCNAllocateID(ctx context.Context, req pb.Request) pb.Res
 }
 
 func (s *Service) handleTNHeartbeat(ctx context.Context, req pb.Request) pb.Response {
+	start := time.Now()
+	defer func() {
+		v2.TNHeartbeatRecvHistogram.Observe(time.Since(start).Seconds())
+	}()
 	hb := req.TNHeartbeat
 	resp := getResponse(req)
 	if cb, err := s.store.addTNStoreHeartbeat(ctx, *hb); err != nil {
+		v2.TNHeartbeatRecvFailureCounter.Inc()
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 		return resp
 	} else {
@@ -532,7 +547,5 @@ func (s *Service) getBackendOptions() []morpc.BackendOption {
 
 // NB: leave an empty method for future extension.
 func (s *Service) getClientOptions() []morpc.ClientOption {
-	return []morpc.ClientOption{
-		morpc.WithClientTag("log-heartbeat"),
-	}
+	return []morpc.ClientOption{}
 }

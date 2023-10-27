@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -88,8 +88,16 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	// delete all index object under the database from mo_catalog.mo_indexes
+
+	// 1.delete all index object record under the database from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
+	err = c.runSql(deleteSql)
+	if err != nil {
+		return err
+	}
+
+	// 2.delete all partition object record under the database from mo_catalog.mo_table_partitions
+	deleteSql = fmt.Sprintf(deleteMoTablePartitionsWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
 	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
@@ -343,7 +351,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 
 				// 3. insert data into index table for unique index object
-				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
+				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
 				err = c.runSql(insertSQL)
 				if err != nil {
 					return err
@@ -526,13 +534,17 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
-	getLogger().Info("createTable",
-		zap.String("databaseName", c.db),
-		zap.String("tableName", qry.GetTableDef().GetName()),
-	)
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
+	// TODO: debug for #11917
+	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+		getLogger().Info("createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
 
 	// convert the plan's defs to the execution's defs
 	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
@@ -554,17 +566,36 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
+			// TODO: debug for #11917
+			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+				getLogger().Info("createTable",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				)
+			}
 			return moerr.NewNoDB(c.ctx)
 		}
-		getLogger().Info("createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.Error(err),
-		)
+		// TODO: debug for #11917
+		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+			getLogger().Info("createTable no exist",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			)
+		}
 		return err
 	}
 	if _, err := dbSource.Relation(c.ctx, tblName, nil); err == nil {
 		if qry.GetIfNotExists() {
+			// TODO: debug for #11917
+			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+				getLogger().Info("createTable no exist",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				)
+			}
 			return nil
 		}
 		if qry.GetReplace() {
@@ -620,11 +651,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 		)
 		return err
 	}
-	getLogger().Info("createTable ok",
-		zap.String("databaseName", c.db),
-		zap.String("tableName", qry.GetTableDef().GetName()),
-		zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
-	)
+	// TODO: debug for #11917
+	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+		getLogger().Info("createTable ok",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
 
 	partitionTables := qry.GetPartitionTables()
 	for _, table := range partitionTables {
@@ -960,7 +994,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			return err
 		}
 
-		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
+		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
 		err = c.runSql(insertSQL)
 		if err != nil {
 			return err
@@ -1451,10 +1485,21 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	// delete all index objects of the table in mo_catalog.mo_indexes
+	// delete all index objects record of the table in mo_catalog.mo_indexes
 	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
 		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
 			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
+			err = c.runSql(deleteSql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// delete all partition objects record of the table in mo_catalog.mo_table_partitions
+	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_TABLE_PARTITIONS {
+		if qry.TableDef.Partition != nil {
+			deleteSql := fmt.Sprintf(deleteMoTablePartitionsWithTableIdFormat, qry.GetTableDef().TblId)
 			err = c.runSql(deleteSql)
 			if err != nil {
 				return err
@@ -1499,7 +1544,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 
-		//delete partition table
+		// delete partition subtable
 		for _, name := range qry.GetPartitionTableNames() {
 			if err = dbSource.Delete(c.ctx, name); err != nil {
 				return err
@@ -2166,7 +2211,6 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	var minValue, maxValue, startNum, lastNum T
 	var incrNum int64
 	var cycle bool
-	var err error
 
 	if incr, ok := result[4].(int64); ok {
 		incrNum = incr
@@ -2200,16 +2244,10 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		maxValue = getInterfaceValue[T](preMaxValue)
 	}
 
+	preLastSeq := result[0]
+	preLastSeqNum := getInterfaceValue[T](preLastSeq)
 	// if alter startWith value of sequence
-	var preStartWith int64
-	if len(curval) == 0 {
-		preStartWith = getInterfaceValue[int64](result[3])
-	} else {
-		preStartWith, err = strconv.ParseInt(curval, 10, 64)
-		if err != nil {
-			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Alter sequence currval parse err")
-		}
-	}
+	preStartWith := preLastSeqNum
 	if stmt.StartWith != nil {
 		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
 		if startNum < T(preStartWith) {
@@ -2218,7 +2256,14 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	} else {
 		startNum = getInterfaceValue[T](preStartWith)
 	}
-	lastNum = startNum + T(incrNum)
+	if len(curval) != 0 {
+		lastNum = preLastSeqNum + T(incrNum)
+		if lastNum < startNum+T(incrNum) {
+			lastNum = startNum + T(incrNum)
+		}
+	} else {
+		lastNum = preLastSeqNum
+	}
 
 	// if alter cycle state of sequence
 	preCycle := result[5]
@@ -2235,11 +2280,11 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 
 // Checkout values.
 func valueCheckOut[T constraints.Integer](maxValue, minValue, startNum T, ctx context.Context) error {
-	if maxValue < minValue {
-		return moerr.NewInvalidInput(ctx, "Max value of sequence must be bigger than min value of it")
+	if maxValue <= minValue {
+		return moerr.NewInvalidInput(ctx, "MAXVALUE (%d) of sequence must be bigger than MINVALUE (%d) of it", maxValue, minValue)
 	}
 	if startNum < minValue || startNum > maxValue {
-		return moerr.NewInvalidInput(ctx, "Start value for sequence must between minvalue and maxvalue")
+		return moerr.NewInvalidInput(ctx, "STARTVALUE (%d) for sequence must between MINVALUE (%d) and MAXVALUE (%d)", startNum, minValue, maxValue)
 	}
 	return nil
 }

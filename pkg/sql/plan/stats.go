@@ -455,8 +455,18 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		rightStats = builder.qry.Nodes[node.Children[1]].Stats
 	}
 
+	if node.Stats == nil {
+		if node.NodeType != plan.Node_EXTERNAL_SCAN && node.NodeType != plan.Node_TABLE_SCAN {
+			node.Stats = DefaultStats()
+		}
+	}
+
 	switch node.NodeType {
 	case plan.Node_JOIN:
+		if node.Stats.HashmapStats == nil {
+			node.Stats.HashmapStats = &plan.HashMapStats{}
+		}
+
 		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
 		if ndv < 1 {
 			ndv = 1
@@ -473,9 +483,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				pred.Ndv = getExprNdv(pred, builder)
 			}
 		}
-		hashmapStats := &plan.HashMapStats{
-			HashmapSize: rightStats.Outcnt,
-		}
 
 		switch node.JoinType {
 		case plan.Node_INNER:
@@ -486,65 +493,52 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if outcnt < rightStats.Outcnt && leftStats.Selectivity > 0.95 {
 				outcnt = rightStats.Outcnt
 			}
-			node.Stats = &plan.Stats{
-				Outcnt:       outcnt,
-				Cost:         leftStats.Cost + rightStats.Cost,
-				HashmapStats: hashmapStats,
-				Selectivity:  selectivity_out,
-			}
+			node.Stats.Outcnt = outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
 
 		case plan.Node_LEFT:
-			outcnt := leftStats.Outcnt
-			node.Stats = &plan.Stats{
-				Outcnt:       outcnt,
-				Cost:         leftStats.Cost + rightStats.Cost,
-				HashmapStats: hashmapStats,
-				Selectivity:  selectivity_out,
-			}
+			node.Stats.Outcnt = leftStats.Outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
 
 		case plan.Node_RIGHT:
-			outcnt := rightStats.Outcnt
-			node.Stats = &plan.Stats{
-				Outcnt:       outcnt,
-				Cost:         leftStats.Cost + rightStats.Cost,
-				HashmapStats: hashmapStats,
-				Selectivity:  selectivity_out,
-			}
+			node.Stats.Outcnt = rightStats.Outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
 
 		case plan.Node_OUTER:
-			outcnt := leftStats.Outcnt + rightStats.Outcnt
-			node.Stats = &plan.Stats{
-				Outcnt:       outcnt,
-				Cost:         leftStats.Cost + rightStats.Cost,
-				HashmapStats: hashmapStats,
-				Selectivity:  selectivity_out,
-			}
+			node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
 
 		case plan.Node_SEMI:
-			node.Stats = &plan.Stats{
-				Outcnt:       leftStats.Outcnt * selectivity,
-				Cost:         leftStats.Cost + rightStats.Cost,
-				HashmapStats: hashmapStats,
-				Selectivity:  selectivity_out,
-			}
+			node.Stats.Outcnt = leftStats.Outcnt * selectivity
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
+
 		case plan.Node_ANTI:
-			node.Stats = &plan.Stats{
-				Outcnt:       leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5,
-				Cost:         leftStats.Cost + rightStats.Cost,
-				HashmapStats: hashmapStats,
-				Selectivity:  selectivity_out * 0.5,
-			}
+			node.Stats.Outcnt = leftStats.Outcnt * (1 - rightStats.Selectivity) * 0.5
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
 
 		case plan.Node_SINGLE, plan.Node_MARK:
-			node.Stats = &plan.Stats{
-				Outcnt:       leftStats.Outcnt,
-				Cost:         leftStats.Cost + rightStats.Cost,
-				HashmapStats: hashmapStats,
-				Selectivity:  selectivity_out,
-			}
+			node.Stats.Outcnt = leftStats.Outcnt
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = selectivity_out
 		}
 
 	case plan.Node_AGG:
+		if node.Stats.HashmapStats == nil {
+			node.Stats.HashmapStats = &plan.HashMapStats{}
+		}
 		if len(node.GroupBy) > 0 {
 			incnt := childStats.Outcnt
 			outcnt := 1.0
@@ -558,92 +552,75 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if outcnt > incnt {
 				outcnt = math.Min(incnt, outcnt*math.Pow(childStats.Selectivity, 0.8))
 			}
-			hashmapStats := &plan.HashMapStats{
-				HashmapSize: outcnt,
-			}
-			node.Stats = &plan.Stats{
-				Outcnt:       outcnt,
-				Cost:         incnt + outcnt,
-				HashmapStats: hashmapStats,
-				Selectivity:  1,
-			}
+			node.Stats.Outcnt = outcnt
+			node.Stats.Cost = incnt + outcnt
+			node.Stats.HashmapStats.HashmapSize = outcnt
+			node.Stats.Selectivity = 1
 			if len(node.FilterList) > 0 {
 				node.Stats.Outcnt *= 0.0001
 				node.Stats.Selectivity *= 0.0001
 			}
 		} else {
-			hashmapStats := &plan.HashMapStats{
-				HashmapSize: 1,
-			}
-			node.Stats = &plan.Stats{
-				Outcnt:       1,
-				Cost:         childStats.Cost,
-				Selectivity:  1,
-				HashmapStats: hashmapStats,
-			}
+			node.Stats.Outcnt = 1
+			node.Stats.Cost = childStats.Cost
+			node.Stats.HashmapStats.HashmapSize = 1
+			node.Stats.Selectivity = 1
 		}
 
 	case plan.Node_UNION:
-		hashmapStats := &plan.HashMapStats{
-			HashmapSize: rightStats.Outcnt,
+		if node.Stats.HashmapStats == nil {
+			node.Stats.HashmapStats = &plan.HashMapStats{}
 		}
-		node.Stats = &plan.Stats{
-			Outcnt:       (leftStats.Outcnt + rightStats.Outcnt) * 0.7,
-			Cost:         leftStats.Outcnt + rightStats.Outcnt,
-			HashmapStats: hashmapStats,
-			Selectivity:  1,
-		}
+		node.Stats.Outcnt = (leftStats.Outcnt + rightStats.Outcnt) * 0.7
+		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
+		node.Stats.Selectivity = 1
+		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+
 	case plan.Node_UNION_ALL:
-		node.Stats = &plan.Stats{
-			Outcnt:      leftStats.Outcnt + rightStats.Outcnt,
-			Cost:        leftStats.Outcnt + rightStats.Outcnt,
-			Selectivity: 1,
-		}
+		node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
+		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
+		node.Stats.Selectivity = 1
+
 	case plan.Node_INTERSECT:
-		hashmapStats := &plan.HashMapStats{
-			HashmapSize: rightStats.Outcnt,
+		if node.Stats.HashmapStats == nil {
+			node.Stats.HashmapStats = &plan.HashMapStats{}
 		}
-		node.Stats = &plan.Stats{
-			Outcnt:       math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5,
-			Cost:         leftStats.Outcnt + rightStats.Outcnt,
-			HashmapStats: hashmapStats,
-			Selectivity:  1,
-		}
+		node.Stats.Outcnt = math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5
+		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
+		node.Stats.Selectivity = 1
+		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+
 	case plan.Node_INTERSECT_ALL:
-		hashmapStats := &plan.HashMapStats{
-			HashmapSize: rightStats.Outcnt,
+		if node.Stats.HashmapStats == nil {
+			node.Stats.HashmapStats = &plan.HashMapStats{}
 		}
-		node.Stats = &plan.Stats{
-			Outcnt:       math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7,
-			Cost:         leftStats.Outcnt + rightStats.Outcnt,
-			HashmapStats: hashmapStats,
-			Selectivity:  1,
-		}
+		node.Stats.Outcnt = math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7
+		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
+		node.Stats.Selectivity = 1
+		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+
 	case plan.Node_MINUS:
+		if node.Stats.HashmapStats == nil {
+			node.Stats.HashmapStats = &plan.HashMapStats{}
+		}
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
-		hashmapStats := &plan.HashMapStats{
-			HashmapSize: rightStats.Outcnt,
-		}
-		node.Stats = &plan.Stats{
-			Outcnt:       minus * 0.5,
-			Cost:         leftStats.Outcnt + rightStats.Outcnt,
-			HashmapStats: hashmapStats,
-			Selectivity:  1,
-		}
+		node.Stats.Outcnt = minus * 0.5
+		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
+		node.Stats.Selectivity = 1
+		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+
 	case plan.Node_MINUS_ALL:
+		if node.Stats.HashmapStats == nil {
+			node.Stats.HashmapStats = &plan.HashMapStats{}
+		}
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
-		hashmapStats := &plan.HashMapStats{
-			HashmapSize: rightStats.Outcnt,
-		}
-		node.Stats = &plan.Stats{
-			Outcnt:       minus * 0.7,
-			Cost:         leftStats.Outcnt + rightStats.Outcnt,
-			HashmapStats: hashmapStats,
-			Selectivity:  1,
-		}
+		node.Stats.Outcnt = minus * 0.7
+		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
+		node.Stats.Selectivity = 1
+		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_VALUE_SCAN:
-		node.Stats = DefaultStats()
+		//do nothing and just return default stats, fix this in the future
 		/*
 			if node.RowsetData == nil {
 				node.Stats = DefaultStats()
@@ -678,26 +655,35 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if len(node.BindingTags) > 0 {
 				builder.tag2Table[node.BindingTags[0]] = node.TableDef
 			}
-			node.Stats = calcScanStats(node, builder)
+			newStats := calcScanStats(node, builder)
+			if node.Stats != nil && node.Stats.HashmapStats != nil {
+				newStats.HashmapStats = node.Stats.HashmapStats
+			} else {
+				newStats.HashmapStats = &plan.HashMapStats{}
+			}
+			node.Stats = newStats
 		}
 
 	case plan.Node_FILTER:
 		//filters which can not push down to scan nodes. hard to estimate selectivity
-		node.Stats = &plan.Stats{
-			Outcnt:      childStats.Outcnt * 0.05,
-			Cost:        childStats.Cost,
-			Selectivity: 0.05,
-		}
+		node.Stats.Outcnt = childStats.Outcnt * 0.05
+		node.Stats.Cost = childStats.Cost
+		node.Stats.Selectivity = 0.05
 
 	default:
 		if len(node.Children) > 0 && childStats != nil {
-			node.Stats = &plan.Stats{
-				Outcnt:      childStats.Outcnt,
-				Cost:        childStats.Outcnt,
-				Selectivity: childStats.Selectivity,
+			node.Stats.Outcnt = childStats.Outcnt
+			node.Stats.Cost = childStats.Outcnt
+			node.Stats.Selectivity = childStats.Selectivity
+		}
+	}
+
+	// if there is a limit, outcnt is limit number
+	if node.Limit != nil {
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
+			if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+				node.Stats.Outcnt = float64(c.I64Val)
 			}
-		} else if node.Stats == nil {
-			node.Stats = DefaultStats()
 		}
 	}
 }
@@ -742,7 +728,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
-		fixColumnName(node.TableDef, node.FilterList[i])
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
 		if currentBlockSel < blockSelectivityThreshHold {

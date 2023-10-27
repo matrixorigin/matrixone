@@ -57,7 +57,7 @@ func TestService(t *testing.T) {
 		morpc.WithCodecMaxBodySize(16*mpool.KB),
 	)
 	bf := morpc.NewGoettyBasedBackendFactory(codec)
-	rpcClient, err := morpc.NewClient(bf, morpc.WithClientMaxBackendPerHost(1))
+	rpcClient, err := morpc.NewClient("", bf, morpc.WithClientMaxBackendPerHost(1))
 	require.NoError(t, err)
 
 	rpcStream, err := rpcClient.NewStream(address, false)

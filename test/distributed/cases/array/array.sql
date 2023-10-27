@@ -6,6 +6,7 @@ drop table if exists vec_table;
 
 -- standard
 create table vec_table(a int, b vecf32(3), c vecf64(3));
+desc vec_table;
 insert into vec_table values(1, "[1,2,3]", "[4,5,6]");
 select * from vec_table;
 
@@ -84,11 +85,21 @@ select * from t5 where t5.b > "[0,0,0]";
 -- output vector as binary (the output is little endian hex encoding)
 select encode(b,'hex') from t5;
 
+-- insert nulls
+create table t6(a int, b vecf32(3));
+insert into t6 values(1, null);
+insert into t6 (a,b) values (1, '[1,2,3]'), (2, '[4,5,6]'), (3, '[2,1,1]'), (4, '[7,8,9]'), (5, '[0,0,0]'), (6, '[3,1,2]');
+select * from t6;
+update t6 set b = NULL;
+select * from t6;
+
 -- insert, flush and select
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
 insert into vec_table values(3, "[1,3,3]", "[4,1,6]");
 -- @separator:table
 select mo_ctl('dn', 'flush', 'vecdb.vec_table');
+-- @separator:table
+select mo_ctl('dn', 'flush', 'vecdb.t6');
 select * from vec_table where b> "[1,2,3]";
 select * from vec_table where b!= "[1,2,3]";
 select * from vec_table where b= "[1,2,3]";

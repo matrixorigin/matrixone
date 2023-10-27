@@ -686,6 +686,115 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
+	case plan.Node_TIME_WINDOW:
+		for _, expr := range node.AggList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
+		increaseRefCnt(node.OrderBy[0].Expr, 1, colRefCnt)
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		timeTag := node.BindingTags[0]
+
+		for i, expr := range node.FilterList {
+			builder.remapWindowClause(expr, timeTag, int32(i))
+		}
+
+		increaseRefCnt(node.OrderBy[0].Expr, -1, colRefCnt)
+		err = builder.remapColRefForExpr(node.OrderBy[0].Expr, childRemapping.globalToLocal)
+		if err != nil {
+			return nil, err
+		}
+
+		idx := 0
+		var wstart, wend *plan.Expr
+		var i, j int
+		for k, expr := range node.AggList {
+			if e, ok := expr.Expr.(*plan.Expr_Col); ok {
+				if e.Col.Name == TimeWindowStart {
+					wstart = expr
+					i = k
+				}
+				if e.Col.Name == TimeWindowEnd {
+					wend = expr
+					j = k
+				}
+				continue
+			}
+			increaseRefCnt(expr, -1, colRefCnt)
+			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+
+			globalRef := [2]int32{timeTag, int32(k)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -1,
+						ColPos: int32(idx),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+			idx++
+		}
+
+		if wstart != nil {
+			increaseRefCnt(wstart, -1, colRefCnt)
+
+			globalRef := [2]int32{timeTag, int32(i)}
+			if colRefCnt[globalRef] == 0 {
+				break
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: wstart.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -1,
+						ColPos: int32(idx),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+			idx++
+		}
+
+		if wend != nil {
+			increaseRefCnt(wend, -1, colRefCnt)
+
+			globalRef := [2]int32{timeTag, int32(j)}
+			if colRefCnt[globalRef] == 0 {
+				break
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: wstart.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -1,
+						ColPos: int32(idx),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
 	case plan.Node_WINDOW:
 		for _, expr := range node.WinSpecList {
 			increaseRefCnt(expr, 1, colRefCnt)
@@ -748,6 +857,45 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				},
 			})
 		}
+
+	case plan.Node_Fill:
+
+		//for _, expr := range node.AggList {
+		//	increaseRefCnt(expr, 1, colRefCnt)
+		//}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+		if err != nil {
+			return nil, err
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		for i, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		//for _, expr := range node.AggList {
+		//	increaseRefCnt(expr, -1, colRefCnt)
+		//	err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//}
 
 	case plan.Node_SORT:
 		for _, orderBy := range node.OrderBy {
@@ -1238,14 +1386,17 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
 
-		tagCnt := make(map[int32]int)
-		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
-
+		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true)
 		builder.applySwapRuleByStats(rootID, true)
+
+		determineHashOnPK(rootID, builder)
+		tagCnt := make(map[int32]int)
+		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
+		ReCalcNodeStats(rootID, builder, true, false)
+
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
@@ -1259,22 +1410,20 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
-		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
+
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
+		determineHashOnPK(rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, false)
 
-		//-----------------------------------------------------------------
 		builder.partitionPrune(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
-		//-----------------------------------------------------------------
 
-		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
-		determineHashOnPK(rootID, builder)
+
 		builder.pushdownRuntimeFilters(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
@@ -1811,6 +1960,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var err error
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
+	astTimeWindow := stmt.TimeWindow
 
 	if stmt.SelectLockInfo != nil && stmt.SelectLockInfo.LockType == tree.SelectLockForUpdate {
 		builder.isForUpdate = true
@@ -2151,6 +2301,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		ctx.aggregateTag = builder.genNewTag()
 		ctx.projectTag = builder.genNewTag()
 		ctx.windowTag = builder.genNewTag()
+		if astTimeWindow != nil {
+			ctx.timeTag = builder.genNewTag() // ctx.timeTag > 0
+		}
 
 		// bind GROUP BY clause
 		if clause.GroupBy != nil {
@@ -2204,6 +2357,125 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		exprStr := proj.String()
 		if _, ok := ctx.projectByExpr[exprStr]; !ok {
 			ctx.projectByExpr[exprStr] = int32(i)
+		}
+	}
+
+	// bind TIME WINDOW
+	var fillType plan.Node_FillType
+	var fillVals, fillCols []*Expr
+	var inteval, sliding *Expr
+	var orderBy *plan.OrderBySpec
+	if astTimeWindow != nil {
+		h := projectionBinder.havingBinder
+		col, err := ctx.qualifyColumnNames(astTimeWindow.Interval.Col, NoAlias)
+		if err != nil {
+			return 0, err
+		}
+		r := col.(*tree.UnresolvedName)
+		table := r.Parts[1]
+		schema := ctx.defaultDatabase
+		if len(r.Parts[2]) > 0 {
+			schema = r.Parts[2]
+		}
+		pk := builder.compCtx.GetPrimaryKeyDef(schema, table)
+		if len(pk) > 1 || pk[0].Name != r.Parts[0] {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not only primary key in time window", tree.String(col, dialect.MYSQL))
+		}
+		h.insideAgg = true
+		expr, err := h.BindExpr(col, 0, true)
+		if err != nil {
+			return 0, err
+		}
+		h.insideAgg = false
+		if expr.Typ.Id != int32(types.T_timestamp) {
+			return 0, moerr.NewNotSupported(builder.GetContext(), "the type of %s must be timestamp in time window", tree.String(col, dialect.MYSQL))
+		}
+		orderBy = &plan.OrderBySpec{
+			Expr: expr,
+			Flag: plan.OrderBySpec_INTERNAL | plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
+		}
+
+		name := tree.SetUnresolvedName("interval")
+		arg2 := tree.NewNumValWithType(constant.MakeString(astTimeWindow.Interval.Unit), astTimeWindow.Interval.Unit, false, tree.P_char)
+		itr := &tree.FuncExpr{
+			Func:  tree.FuncName2ResolvableFunctionReference(name),
+			Exprs: tree.Exprs{astTimeWindow.Interval.Val, arg2},
+		}
+		inteval, err = projectionBinder.BindExpr(itr, 0, true)
+		if err != nil {
+			return 0, err
+		}
+
+		if astTimeWindow.Sliding != nil {
+			arg2 = tree.NewNumValWithType(constant.MakeString(astTimeWindow.Sliding.Unit), astTimeWindow.Sliding.Unit, false, tree.P_char)
+			sld := &tree.FuncExpr{
+				Func:  tree.FuncName2ResolvableFunctionReference(name),
+				Exprs: tree.Exprs{astTimeWindow.Sliding.Val, arg2},
+			}
+			sliding, err = projectionBinder.BindExpr(sld, 0, true)
+			if err != nil {
+				return 0, err
+			}
+		}
+
+		if astTimeWindow.Fill != nil && astTimeWindow.Fill.Mode != tree.FillNone && astTimeWindow.Fill.Mode != tree.FillNull {
+			switch astTimeWindow.Fill.Mode {
+			case tree.FillPrev:
+				fillType = plan.Node_PREV
+			case tree.FillNext:
+				fillType = plan.Node_NEXT
+			case tree.FillValue:
+				fillType = plan.Node_VALUE
+			case tree.FillLinear:
+				fillType = plan.Node_LINEAR
+			}
+			var v *Expr
+			if astTimeWindow.Fill.Val != nil {
+				v, err = projectionBinder.BindExpr(astTimeWindow.Fill.Val, 0, true)
+				if err != nil {
+					return 0, err
+				}
+			}
+
+			for _, t := range ctx.times {
+				if e, ok := t.Expr.(*plan.Expr_Col); ok {
+					if e.Col.Name == TimeWindowStart || e.Col.Name == TimeWindowEnd {
+						continue
+					}
+				}
+				if astTimeWindow.Fill.Val != nil {
+					e, err := appendCastBeforeExpr(builder.GetContext(), v, t.Typ)
+					if err != nil {
+						return 0, err
+					}
+					fillVals = append(fillVals, e)
+				}
+				fillCols = append(fillCols, t)
+			}
+			if astTimeWindow.Fill.Mode == tree.FillLinear {
+				for i, e := range ctx.timeAsts {
+					b := &tree.BinaryExpr{
+						Op: tree.DIV,
+						Left: &tree.ParenExpr{
+							Expr: &tree.BinaryExpr{
+								Op:    tree.PLUS,
+								Left:  e,
+								Right: e,
+							},
+						},
+						Right: tree.NewNumValWithType(constant.MakeInt64(2), "2", false, tree.P_int64),
+					}
+					v, err = projectionBinder.BindExpr(b, 0, true)
+					if err != nil {
+						return 0, err
+					}
+					col, err := appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ)
+					if err != nil {
+						return 0, err
+					}
+					fillVals = append(fillVals, col)
+				}
+			}
 		}
 	}
 
@@ -2284,7 +2556,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 	}
 
-	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
+	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0 || len(ctx.times) > 0) && len(projectionBinder.boundCols) > 0 {
 		if !builder.mysqlCompatible {
 			return 0, moerr.NewSyntaxError(builder.GetContext(), "column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0])
 		}
@@ -2362,10 +2634,41 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 	}
 
+	// append TIME WINDOW node
+	if len(ctx.times) > 0 {
+		if ctx.recSelect {
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support time window in recursive cte")
+		}
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_TIME_WINDOW,
+			Children:    []int32{nodeID},
+			AggList:     ctx.times,
+			BindingTags: []int32{ctx.timeTag},
+			OrderBy:     []*plan.OrderBySpec{orderBy},
+			Interval:    inteval,
+			Sliding:     sliding,
+		}, ctx)
+
+		for name, id := range ctx.timeByAst {
+			builder.nameByColRef[[2]int32{ctx.timeTag, id}] = name
+		}
+
+		if astTimeWindow.Fill != nil {
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_Fill,
+				Children:    []int32{nodeID},
+				AggList:     fillCols,
+				BindingTags: []int32{ctx.timeTag},
+				FillType:    fillType,
+				FillVal:     fillVals,
+			}, ctx)
+		}
+	}
+
 	// append WINDOW node
 	if len(ctx.windows) > 0 {
 		if ctx.recSelect {
-			return 0, moerr.NewInternalError(builder.GetContext(), "not support window function recursive cte")
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support window function in recursive cte")
 		}
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_WINDOW,
@@ -2844,6 +3147,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				break
 			}
 			schema = ctx.defaultDatabase
+		}
+
+		schema, err = databaseIsValid(schema, builder.compCtx)
+		if err != nil {
+			return 0, err
 		}
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
@@ -3346,6 +3654,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildMoLocks(tbl, ctx, exprs, childId)
 	case "mo_transactions":
 		nodeId, err = builder.buildMoTransactions(tbl, ctx, exprs, childId)
+	case "mo_cache":
+		nodeId, err = builder.buildMoCache(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

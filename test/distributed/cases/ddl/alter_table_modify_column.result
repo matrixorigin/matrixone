@@ -280,7 +280,7 @@ t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES   
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-b    VARCHAR(20)    YES        null        
+b    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
@@ -333,7 +333,7 @@ t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES   
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-b    VARCHAR(20)    YES        null        
+b    VARCHAR(20)    YES    UNI    null        
 c    VARCHAR(20)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
@@ -1020,7 +1020,7 @@ index02    CREATE TABLE `index02` (\n`a` INT NOT NULL,\n`b` VARCHAR(20) DEFAULT 
 desc index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-b    VARCHAR(20)    YES        null        
+b    VARCHAR(20)    YES    UNI    null        
 c    VARCHAR(20)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
@@ -1034,6 +1034,7 @@ a    b    c    d
 1    ab    1980-12-17    800.00
 2    ac    1981-02-20    1600.00
 3    ad    1981-02-22    500.00
+drop table index02;
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,
 col2 varchar(20),
@@ -1094,17 +1095,11 @@ foreign02    col3    INT    NO
 drop table foreign02;
 drop table foreign01;
 drop table if exists decimal01;
-
 create table decimal01 (col1 decimal,col2 decimal(38,10));
-
 insert into decimal01 values (23746723468723.242334243, 38208439024234.43242342423423423422342);
-
 insert into decimal01 values (32487329847923424, -4324324324.3297932749028949373324242423424);
-
 alter table decimal01 modify column col1 decimal(38,6);
-
 alter table decimal01 modify col2 decimal(38,9);
-
 show create table decimal01;
 Table    Create Table
 decimal01    CREATE TABLE `decimal01` (\n`col1` DECIMAL(38,6) DEFAULT NULL,\n`col2` DECIMAL(38,9) DEFAULT NULL\n)
@@ -1677,6 +1672,7 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 table_name    column_name    data_type    is_nullable
 mix01    col1    INT    NO
 mix01    col1_2    VARBINARY    YES
+mix01    col2    DECIMAL128    YES
 mix01    col3    DATE    YES
 mix01    col4    VARCHAR    YES
 truncate table mix01;

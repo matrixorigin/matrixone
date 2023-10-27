@@ -40,7 +40,7 @@ import (
 )
 
 const DefaultCheckpointBlockRows = 10000
-const DefaultCheckpointSize = 1024 * 1024 * 1024
+const DefaultCheckpointSize = 512 * 1024 * 1024
 
 const (
 	CheckpointVersion1 uint32 = 1
@@ -716,10 +716,9 @@ func (data *CNCheckpointData) PrefetchFrom(
 	if meta == nil {
 		return
 	}
-	var pref blockio.PrefetchParams
-	var location objectio.Location
 	// for ver less than 5, some tablemeta is empty
 	empty := true
+	files := make(map[string]*blockio.PrefetchParams)
 	for i, table := range meta.tables {
 		if table == nil {
 			continue
@@ -740,13 +739,16 @@ func (data *CNCheckpointData) PrefetchFrom(
 		it := table.locations.MakeIterator()
 		for it.HasNext() {
 			block := it.Next()
-			if location.IsEmpty() {
-				location = block.GetLocation()
+			location := block.GetLocation()
+			if files[location.Name().String()] == nil {
+				var pref blockio.PrefetchParams
 				pref, err = blockio.BuildPrefetchParams(service, location)
 				if err != nil {
 					return
 				}
+				files[location.Name().String()] = &pref
 			}
+			pref := *files[location.Name().String()]
 			pref.AddBlockWithType(idxes, []uint16{block.GetID()}, uint16(objectio.ConvertToSchemaType(idx)))
 			empty = false
 		}
@@ -754,8 +756,15 @@ func (data *CNCheckpointData) PrefetchFrom(
 	if empty {
 		return
 	}
-	return blockio.PrefetchWithMerged(pref)
+	for _, pref := range files {
+		err = blockio.PrefetchWithMerged(*pref)
+		if err != nil {
+			return
+		}
+	}
+	return nil
 }
+
 func (data *CNCheckpointData) isMOCatalogTables(tid uint64) bool {
 	return tid == pkgcatalog.MO_DATABASE_ID || tid == pkgcatalog.MO_TABLES_ID || tid == pkgcatalog.MO_COLUMNS_ID
 }
@@ -1524,6 +1533,7 @@ func (data *CheckpointData) WriteTo(
 				if err != nil {
 					break
 				}
+				defer bat.Close()
 				if block, size, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 					return
 				}
@@ -2308,6 +2318,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			for _, name := range tblNode.BaseNode.Schema.Extra.DroppedAttrs {
 				tableColDelBat.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
 				tableColDelBat.GetVectorByName(catalog.AttrCommitTs).Append(tblNode.GetEnd(), false)
+				tableColDelBat.GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name)), false)
 			}
 			rowidVec := tableColInsBat.GetVectorByName(catalog.AttrRowID)
 			commitVec := tableColInsBat.GetVectorByName(catalog.AttrCommitTs)

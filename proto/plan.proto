@@ -672,6 +672,10 @@ message Node {
 		PRE_DELETE = 61;
 		// the node which build insert batch for hidden table(unique key)
 		PRE_INSERT_UK = 62;
+		PRE_INSERT_SK = 63;
+		//
+		TIME_WINDOW = 64;
+		Fill = 65;
 	}
 
 	enum JoinType {
@@ -690,6 +694,15 @@ message Node {
 		FULL = 0;
 		BOTTOM = 1;
 		TOP = 2;
+	}
+
+	enum FillType {
+		NONE = 0;
+		PREV = 1;
+		NEXT = 2;
+		NULL = 3;
+		VALUE = 4;
+		LINEAR = 5;
 	}
 
 	NodeType node_type = 1;
@@ -763,6 +776,13 @@ message Node {
 	bool recursive_sink = 43;
 	ExternScan extern_scan = 44;
 	PartitionPrune partition_prune = 45;
+
+	PreInsertUkCtx pre_insert_sk_ctx = 46;
+	Expr interval = 47;
+	Expr sliding = 48;
+
+	FillType fill_type = 49;
+	repeated Expr fill_val = 50;
 }
 
 message ExternScan {

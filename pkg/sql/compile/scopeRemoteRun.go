@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -89,6 +90,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -106,6 +108,7 @@ func CnServerMessageHandler(
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
 	hakeeper logservice.CNHAKeeperClient,
+	udfService udf.Service,
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
@@ -117,7 +120,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, cli, aicm)
+		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, udfService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(&receiver)
@@ -721,6 +724,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
 		}
+	case *preinsertsecondaryindex.Argument:
+		in.PreInsertSecondaryIndex = &pipeline.PreInsertSecondaryIndex{
+			PreInsertSkCtx: t.PreInsertCtx,
+		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
 			Ibucket:   t.Ibucket,
@@ -1112,6 +1119,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		t := opr.GetPreInsertUnique()
 		v.Arg = &preinsertunique.Argument{
 			PreInsertCtx: t.GetPreInsertUkCtx(),
+		}
+	case vm.PreInsertSecondaryIndex:
+		t := opr.GetPreInsertSecondaryIndex()
+		v.Arg = &preinsertsecondaryindex.Argument{
+			PreInsertCtx: t.GetPreInsertSkCtx(),
 		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()

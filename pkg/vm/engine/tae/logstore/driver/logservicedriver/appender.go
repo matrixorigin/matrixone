@@ -47,7 +47,9 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 
 func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	start := time.Now()
-	defer v2.LogTailAppendDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.LogTailAppendDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
@@ -70,7 +72,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		trace.WithProfileCpuSecs(time.Second*10))
 	defer timeoutSpan.End()
 
-	v2.LogTailSizeGauge.Set(float64(size))
+	v2.LogTailBytesHistogram.Observe(float64(size))
 	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {

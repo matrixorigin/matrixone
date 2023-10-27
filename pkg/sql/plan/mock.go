@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type MockCompilerContext struct {
@@ -46,8 +47,8 @@ func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pu
 	panic("implement me")
 }
 
-func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
-	return "", nil
+func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
+	return nil, nil
 }
 
 func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
@@ -88,6 +89,7 @@ type col struct {
 type index struct {
 	indexName  string
 	tableName  string
+	unique     bool
 	parts      []string
 	cols       []col
 	tableExist bool
@@ -421,6 +423,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			comm decimal(7,2),
 			deptno int unsigned,
 			unique key(ename, job),
+			key (ename, job),
 			foreign key (deptno) references dept(deptno)
 		);
 	*/
@@ -450,19 +453,39 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: catalog.IndexTableNamePrefix + "412f4fad-77ba-11ed-b347-000c29847904",
+				tableName: catalog.UniqueIndexTableNamePrefix + "412f4fad-77ba-11ed-b347-000c29847904",
 				parts:     []string{"ename", "job"},
 				cols: []col{
 					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 				},
 				tableExist: true,
+				unique:     true,
+			},
+			{
+				indexName: "",
+				tableName: catalog.SecondaryIndexTableNamePrefix + "512f4fad-77ba-11ed-b347-000c29847904",
+				parts:     []string{"ename", "job"},
+				cols: []col{
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
+				},
+				tableExist: true,
+				unique:     false,
 			},
 		},
 		outcnt: 14,
 	}
 
 	// index table
-	constraintTestSchema[catalog.IndexTableNamePrefix+"412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
+		cols: []col{
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
+		},
+		pks:    []int{0},
+		outcnt: 13,
+	}
+	constraintTestSchema[catalog.SecondaryIndexTableNamePrefix+"512f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
 		cols: []col{
 			{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
@@ -493,19 +516,20 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: catalog.IndexTableNamePrefix + "8e3246dd-7a19-11ed-ba7d-000c29847904",
+				tableName: catalog.UniqueIndexTableNamePrefix + "8e3246dd-7a19-11ed-ba7d-000c29847904",
 				parts:     []string{"dname"},
 				cols: []col{
 					{catalog.IndexTableIndexColName, types.T_varchar, true, 15, 0},
 				},
 				tableExist: true,
+				unique:     true,
 			},
 		},
 		outcnt: 4,
 	}
 
 	// index table
-	constraintTestSchema[catalog.IndexTableNamePrefix+"8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
 		cols: []col{
 			{catalog.IndexTableIndexColName, types.T_varchar, true, 15, 0},
 			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
@@ -565,18 +589,19 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		idxs: []index{
 			{
 				indexName: "",
-				tableName: catalog.IndexTableNamePrefix + "6380d30e-79f8-11ed-9c02-000c29847904",
+				tableName: catalog.UniqueIndexTableNamePrefix + "6380d30e-79f8-11ed-9c02-000c29847904",
 				parts:     []string{"empno", "ename"},
 				cols: []col{
 					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 				},
 				tableExist: true,
+				unique:     true,
 			},
 		},
 		outcnt: 14,
 	}
 
-	constraintTestSchema[catalog.IndexTableNamePrefix+"6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
+	constraintTestSchema[catalog.UniqueIndexTableNamePrefix+"6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
 		cols: []col{
 			{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
@@ -660,7 +685,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					indexdef := &plan.IndexDef{
 						IndexName:      idx.indexName,
 						Parts:          idx.parts,
-						Unique:         true,
+						Unique:         idx.unique,
 						IndexTableName: idx.tableName,
 						TableExist:     true,
 					}
@@ -761,7 +786,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 }
 
 func (m *MockCompilerContext) DatabaseExists(name string) bool {
-	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo"
+	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo" || strings.ToLower(name) == "mo_catalog"
 }
 
 func (m *MockCompilerContext) GetDatabaseId(dbName string) (uint64, error) {

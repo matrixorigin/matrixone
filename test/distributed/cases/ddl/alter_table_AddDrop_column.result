@@ -355,12 +355,12 @@ transaction03    CREATE TABLE `transaction03` (\n`c` INT NOT NULL,\n`d` INT DEFA
 use isolation;
 invalid database isolation
 show create table transaction03;
-no such table .transaction03
+not connect to a database
 commit;
 alter table transaction03 drop column d;
 no such table .transaction03
 show create table transaction03;
-no such table .transaction03
+not connect to a database
 drop table transaction03;
 drop table if exists transaction05;
 create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
@@ -522,7 +522,7 @@ Previous DML conflicts with existing constraints or data format. This transactio
 use isolation;
 invalid database isolation
 select * from transaction04;
-SQL parser error: table "transaction04" does not exist
+not connect to a database
 commit;
 select * from transaction04;
 SQL parser error: table "transaction04" does not exist

@@ -568,7 +568,9 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	start := time.Now()
-	defer v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
@@ -777,6 +779,7 @@ func (tbl *txnTable) rangesOnePart(
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+				v2.TxnFastLoadObjectMetaTotalCounter.Inc()
 				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 					return
 				}
@@ -1691,11 +1694,6 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 }
 
 func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
-	switch tbl.tableId {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return true, nil
-	}
-
 	part, err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
 	if err != nil {
 		return false, err

@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"hash"
 	"io"
 	"time"
 )
@@ -76,25 +75,6 @@ type IOVector struct {
 	ExpireAt time.Time
 	// CachePolicy controls cache policy for the vector
 	CachePolicy CachePolicy
-
-	// Hash stores hash sum of written file if both Sum and New is not null
-	// Hash.Sum may be incorrect if Write fails
-	Hash Hash
-}
-
-func (i *IOVector) EntriesSize() int64 {
-	size := int64(0)
-	length := len(i.Entries)
-	if length > 0 {
-		end := &i.Entries[length-1]
-		size = end.Offset + end.Size
-	}
-	return size
-}
-
-type Hash struct {
-	Sum *[]byte
-	New func() hash.Hash
 }
 
 type IOEntry struct {
