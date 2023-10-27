@@ -18,30 +18,28 @@ import (
 	"context"
 
 	"github.com/K-Phoen/grabana/dashboard"
-	"github.com/K-Phoen/grabana/variable/interval"
 )
 
 func (c *DashboardCreator) initLogTailDashboard() error {
-	folder, err := c.createFolder(logtailFolderName)
+	folder, err := c.createFolder(moFolderName)
 	if err != nil {
 		return err
 	}
 
 	build, err := dashboard.New(
-		"Logtail Status",
-		dashboard.AutoRefresh("5s"),
-		dashboard.VariableAsInterval(
-			"interval",
-			interval.Values([]string{"30s", "1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
-		),
-		c.initLogtailQueueRow(),
-		c.initLogtailBytesRow(),
-		c.initLogtailAppendRow(),
-		c.initLogtailApplyRow(),
-		c.initLogtailSendRow(),
-		c.initLogtailSendLatencyRow(),
-		c.initLogtailSendNetworkRow(),
-	)
+		"Logtail Metrics",
+		c.withRowOptions(
+			c.initLogtailQueueRow(),
+			c.initLogtailLoadCheckpointRow(),
+			c.initLogtailBytesRow(),
+			c.initLogtailAppendRow(),
+			c.initLogtailApplyRow(),
+			c.initLogtailSendRow(),
+			c.initLogtailSendLatencyRow(),
+			c.initLogtailSendNetworkRow(),
+			c.initLogtailCollectRow(),
+			c.initLogtailSubscriptionRow(),
+		)...)
 	if err != nil {
 		return err
 	}
@@ -49,19 +47,51 @@ func (c *DashboardCreator) initLogTailDashboard() error {
 	return err
 }
 
+func (c *DashboardCreator) initLogtailCollectRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail collect duration",
+		c.getHistogram(
+			c.getMetricWithFilter("mo_logtail_collect_duration_seconds_bucket", ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initLogtailSubscriptionRow() dashboard.Option {
+	return dashboard.Row(
+		"logtail subscription the tn have received",
+		c.withGraph(
+			"logtail subscription average increase",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_logtail_subscription_request_total", "")+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}"),
+		c.withGraph(
+			"logtail subscription average increase, sensitive",
+			6,
+			`sum(irate(`+c.getMetricWithFilter("mo_logtail_subscription_request_total", "")+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}"),
+	)
+}
+
 func (c *DashboardCreator) initLogtailQueueRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail Queue Status",
 		c.withGraph(
 			"Sending Queue",
-			6,
-			`sum(mo_logtail_queue_size{type="send"})`,
-			""),
+			4,
+			`sum(`+c.getMetricWithFilter("mo_logtail_queue_size", `type="send"`)+`) by (`+c.by+`)`,
+			"{{ "+c.by+" }}"),
 		c.withGraph(
 			"Receiving Queue",
-			6,
-			`sum(mo_logtail_queue_size{type="receive"})`,
-			""),
+			4,
+			`sum(`+c.getMetricWithFilter("mo_logtail_queue_size", `type="receive"`)+`) by (`+c.by+`)`,
+			"{{ "+c.by+" }}"),
+
+		c.withGraph(
+			"Checkpoint logtail",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_logtail_load_checkpoint_total", "")+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}"),
 	)
 }
 
@@ -69,7 +99,7 @@ func (c *DashboardCreator) initLogtailBytesRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail size",
 		c.getBytesHistogram(
-			`mo_logtail_bytes_bucket`,
+			c.getMetricWithFilter(`mo_logtail_bytes_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -79,7 +109,7 @@ func (c *DashboardCreator) initLogtailAppendRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail append",
 		c.getHistogram(
-			`mo_logtail_append_duration_seconds_bucket`,
+			c.getMetricWithFilter(`mo_logtail_append_duration_seconds_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -89,7 +119,7 @@ func (c *DashboardCreator) initLogtailApplyRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail apply",
 		c.getHistogram(
-			`mo_logtail_apply_duration_seconds_bucket`,
+			c.getMetricWithFilter(`mo_logtail_apply_duration_seconds_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -99,7 +129,7 @@ func (c *DashboardCreator) initLogtailSendRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail send total",
 		c.getHistogram(
-			`mo_logtail_send_duration_seconds_bucket{step="total"}`,
+			c.getMetricWithFilter(`mo_logtail_send_duration_seconds_bucket`, `step="total"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -109,7 +139,7 @@ func (c *DashboardCreator) initLogtailSendLatencyRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail send latency",
 		c.getHistogram(
-			`mo_logtail_send_duration_seconds_bucket{step="latency"}`,
+			c.getMetricWithFilter(`mo_logtail_send_duration_seconds_bucket`, `step="latency"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -119,7 +149,17 @@ func (c *DashboardCreator) initLogtailSendNetworkRow() dashboard.Option {
 	return dashboard.Row(
 		"Logtail send network",
 		c.getHistogram(
-			`mo_logtail_send_duration_seconds_bucket{step="network"}`,
+			c.getMetricWithFilter(`mo_logtail_send_duration_seconds_bucket`, `step="network"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initLogtailLoadCheckpointRow() dashboard.Option {
+	return dashboard.Row(
+		"Logtail load checkpoint",
+		c.getHistogram(
+			c.getMetricWithFilter(`mo_logtail_load_checkpoint_duration_seconds_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)

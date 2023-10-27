@@ -1297,11 +1297,13 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
 
-	return InitFunction(ctx, ses, tenant, cf)
+	return mce.InitFunction(ctx, ses, tenant, cf)
 }
 
-func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction) error {
-	return doDropFunction(ctx, mce.GetSession(), df)
+func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction, proc *process.Process) error {
+	return doDropFunction(ctx, mce.GetSession(), df, func(path string) error {
+		return proc.FileService.Delete(ctx, path)
+	})
 }
 
 func (mce *MysqlCmdExecutor) handleCreateProcedure(ctx context.Context, cp *tree.CreateProcedure) error {
@@ -3129,12 +3131,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.CreateFunction:
 		selfHandle = true
+		if err = st.Valid(); err != nil {
+			return err
+		}
 		if err = mce.handleCreateFunction(requestCtx, st); err != nil {
 			return
 		}
 	case *tree.DropFunction:
 		selfHandle = true
-		if err = mce.handleDropFunction(requestCtx, st); err != nil {
+		if err = mce.handleDropFunction(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.CreateProcedure:
@@ -3569,6 +3574,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.LockService,
 		pu.QueryService,
 		pu.HAKeeperClient,
+		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -3760,6 +3766,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		pu.LockService,
 		pu.QueryService,
 		pu.HAKeeperClient,
+		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)

@@ -16,9 +16,7 @@ package preinsertsecondaryindex
 
 import (
 	"bytes"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -79,16 +77,15 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 
 	colCount := len(secondaryColumnPos)
 
-	if colCount < 2 {
-		msg := fmt.Sprintf("invalid secondary index column count in %s", catalog.IndexTableIndexColName)
-		return process.ExecNext, moerr.NewInternalErrorNoCtx(msg)
-	} else {
-		vs := make([]*vector.Vector, colCount)
-		for vIdx, pIdx := range secondaryColumnPos {
-			vs[vIdx] = inputBat.Vecs[pIdx]
-		}
-		vec, bitMap = util.SerialWithoutCompacted(vs, proc)
+	// colCount = 1 means the user chose SK as only PK.
+	// colCount >= 2 is more common.
+
+	vs := make([]*vector.Vector, colCount)
+	for vIdx, pIdx := range secondaryColumnPos {
+		vs[vIdx] = inputBat.Vecs[pIdx]
 	}
+	vec, bitMap = util.SerialWithoutCompacted(vs, proc)
+
 	insertSecondaryBat.SetVector(indexColPos, vec)
 	insertSecondaryBat.SetRowCount(vec.Length())
 

@@ -16,7 +16,6 @@ package morpc
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,14 +68,9 @@ func WithClientMaxBackendMaxIdleDuration(value time.Duration) ClientOption {
 	}
 }
 
-func WithClientTag(tag string) ClientOption {
-	return func(c *client) {
-		c.tag = tag
-	}
-}
-
 type client struct {
-	tag         string
+	name        string
+	metrics     *metrics
 	logger      *zap.Logger
 	stopper     *stopper.Stopper
 	factory     BackendFactory
@@ -99,8 +93,13 @@ type client struct {
 }
 
 // NewClient create rpc client with options
-func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, error) {
+func NewClient(
+	name string,
+	factory BackendFactory,
+	options ...ClientOption) (RPCClient, error) {
 	c := &client{
+		name:        name,
+		metrics:     newMetrics(name),
 		factory:     factory,
 		gcInactiveC: make(chan string),
 	}
@@ -111,7 +110,7 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 		opt(c)
 	}
 	c.adjust()
-	c.stopper = stopper.NewStopper(c.tag, stopper.WithLogger(c.logger))
+	c.stopper = stopper.NewStopper(c.name, stopper.WithLogger(c.logger))
 
 	if err := c.maybeInitBackends(); err != nil {
 		c.Close()
@@ -133,8 +132,7 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 }
 
 func (c *client) adjust() {
-	c.tag = fmt.Sprintf("rpc-client[%s]", c.tag)
-	c.logger = logutil.Adjust(c.logger).Named(c.tag)
+	c.logger = logutil.Adjust(c.logger).Named(c.name)
 	if c.createC == nil {
 		c.createC = make(chan string, 16)
 	}
@@ -269,6 +267,13 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 	if c.mu.closed {
 		return nil, moerr.NewClientClosedNoCtx()
 	}
+	defer func() {
+		n := 0
+		for backends := range c.mu.backends {
+			n += len(backends)
+		}
+		c.metrics.poolSizeGauge.Set(float64(n))
+	}()
 
 	lockedCnt := 0
 	inactiveCnt := 0
@@ -407,7 +412,6 @@ func (c *client) closeIdleBackends() {
 			if !b.Locked() &&
 				time.Since(b.LastActiveTime()) > c.options.maxIdleDuration {
 				idleBackends = append(idleBackends, b)
-				// panic(2)
 				continue
 			}
 			newBackends = append(newBackends, b)
@@ -479,7 +483,7 @@ func (c *client) createBackendLocked(backend string) (Backend, error) {
 }
 
 func (c *client) doCreate(backend string) (Backend, error) {
-	b, err := c.factory.Create(backend)
+	b, err := c.factory.Create(backend, WithBackendMetrics(c.metrics))
 	if err != nil {
 		c.logger.Error("create backend failed",
 			zap.String("backend", backend),

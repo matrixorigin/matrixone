@@ -703,7 +703,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
 		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
 	} else {
-		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 {
+		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || haveUniqueKey(tableDef) {
 			keyStr += "case"
 			if tableDef.Pkey != nil {
 				for _, name := range tableDef.Pkey.Names {
@@ -717,6 +717,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 					keyStr += " when attname = "
 					keyStr += "'" + tableDef.Cols[fk.Cols[0]].GetName() + "'"
 					keyStr += " then 'MUL'"
+				}
+			}
+			if haveUniqueKey(tableDef) {
+				for _, indexdef := range tableDef.Indexes {
+					if indexdef.Unique {
+						keyStr += " when attname = "
+						keyStr += "'" + indexdef.IndexName + "'"
+						keyStr += " then 'UNI'"
+					}
 				}
 			}
 			keyStr += " else '' END as `Key`"

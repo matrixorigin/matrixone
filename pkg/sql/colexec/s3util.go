@@ -169,7 +169,9 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 		writer.isClusterBy = true
 		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 			// the serialized clusterby col is located in the last of the bat.vecs
-			writer.sortIndex = len(tableDef.Cols) - 1
+			// When INSERT, the TableDef columns list in the table contains a rowid column, but the inserted data
+			// does not have a rowid column, so it needs to be excluded. Therefore, is `len(tableDef.Cols) - 2`
+			writer.sortIndex = len(tableDef.Cols) - 2
 		} else {
 			for idx, colDef := range tableDef.Cols {
 				if colDef.Name == tableDef.ClusterBy.Name {
@@ -278,18 +280,18 @@ func (w *S3Writer) Output(proc *process.Process) error {
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	var S3SizeThreshold = TagS3SizeForMOLogger
+	var S3SizeThreshold = TagS3Size
 
 	if proc != nil && proc.Ctx != nil {
 		isMoLogger, ok := proc.Ctx.Value(defines.IsMoLogger{}).(bool)
 		if ok && isMoLogger {
-			logutil.Info("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
+			logutil.Debug("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
 			S3SizeThreshold = TagS3SizeForMOLogger
 		}
 	}
 
 	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db_holder.MOLoggerUser {
-		logutil.Info("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
+		logutil.Debug("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
 		S3SizeThreshold = TagS3SizeForMOLogger
 	}
 	if w.batSize >= S3SizeThreshold {

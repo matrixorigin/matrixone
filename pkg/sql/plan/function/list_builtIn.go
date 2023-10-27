@@ -1585,7 +1585,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					// NOTE summation(vecf32) --> vecf64
+					// NOTE summation(vecf32) --> float64
 					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -2842,6 +2842,27 @@ var supportedMathBuiltIns = []FuncNew{
 }
 
 var supportedDateAndTimeBuiltIns = []FuncNew{
+	// function `convert_tz`
+	{
+		functionId: CONVERT_TZ,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_datetime, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ConvertTz
+				},
+			},
+		},
+	},
+
 	// function `current_date`, `curdate`
 	{
 		functionId: CURRENT_DATE,
@@ -5446,6 +5467,23 @@ var supportedOthersBuiltIns = []FuncNew{
 						}
 						return nil
 					}
+				},
+			},
+		},
+	},
+
+	// function `python_user_defined_function`
+	{
+		functionId: PYTHON_UDF,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkPythonUdf,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType:    pythonUdfRetType,
+				newOp: func() executeLogicOfOverload {
+					return runPythonUdf
 				},
 			},
 		},
