@@ -166,7 +166,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 		}
 		h.logger.Error("failed to create server conn", zap.Error(err))
 		h.counterSet.updateWithErr(err)
-		cc.SendErrToClient(err.Error())
+		cc.SendErrToClient(err)
 		return err
 	}
 	h.logger.Debug("server conn created")
