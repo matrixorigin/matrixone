@@ -89,20 +89,19 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
-	// delete all index object record under the database from mo_catalog.mo_indexes
+	// 1.delete all index object record under the database from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
 	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
 	}
 
-	// delete all partition object record under the database from mo_catalog.mo_table_partitions
+	// 2.delete all partition object record under the database from mo_catalog.mo_table_partitions
 	deleteSql = fmt.Sprintf(deleteMoTablePartitionsWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
 	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -1545,7 +1544,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 
-		//delete partition table
+		// delete partition subtable
 		for _, name := range qry.GetPartitionTableNames() {
 			if err = dbSource.Delete(c.ctx, name); err != nil {
 				return err
