@@ -684,10 +684,23 @@ func RewriteError(err error, username string) (uint16, string, string) {
 		errorCode = failed.ErrorCode
 		sqlState = failed.SqlStates[0]
 	} else {
-		failed := moerr.MysqlErrorMsgRefer[moerr.ER_INTERNAL_ERROR]
-		msg = err.Error()
-		errorCode = failed.ErrorCode
-		sqlState = failed.SqlStates[0]
+		//Reference To : https://github.com/matrixorigin/matrixone/pull/12396/files#r1374443578
+		switch errImpl := err.(type) {
+		case *moerr.Error:
+			if errImpl.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
+				errorCode = errImpl.MySQLCode()
+			} else {
+				errorCode = errImpl.ErrorCode()
+			}
+			msg = err.Error()
+			sqlState = errImpl.SqlState()
+		default:
+			failed := moerr.MysqlErrorMsgRefer[moerr.ER_INTERNAL_ERROR]
+			msg = err.Error()
+			errorCode = failed.ErrorCode
+			sqlState = failed.SqlStates[0]
+		}
+
 	}
 	return errorCode, sqlState, msg
 }
