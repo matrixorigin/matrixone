@@ -16,17 +16,13 @@ package functionAgg
 
 import (
 	"bytes"
-	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"strconv"
 	"strings"
-)
-
-const (
-	defaultClusterCount = 1 // this is aka K in Kmeans
 )
 
 var (
@@ -44,17 +40,10 @@ var (
 func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any, _ any) (agg.Agg[any], error) {
 	aggPriv := &sAggClusterCenters{}
 
-	bts, ok := config.([]byte)
-	if ok && bts != nil {
-		var intVal int64
-		buf := bytes.NewReader(bts)
-		err := binary.Read(buf, binary.BigEndian, &intVal)
-		if err != nil {
-			return nil, err
-		}
-		aggPriv.k = intVal
-	} else {
-		aggPriv.k = defaultClusterCount
+	var err error
+	aggPriv.k, aggPriv.distFn, err = decodeConfig(config)
+	if err != nil {
+		return nil, err
 	}
 
 	switch inputTypes[0].Oid {
@@ -75,7 +64,8 @@ type sAggClusterCenters struct {
 	// NOTE: here array is []byte ie types.T_varchar
 	result [][][]byte
 
-	k int64
+	k      int64
+	distFn string
 
 	// arrType is the type of the array/vector
 	// It is used while converting array/vector to string and vice versa
@@ -255,4 +245,31 @@ func (s *sAggClusterCenters) stringToArrays(str string) [][]byte {
 	}
 	return res
 
+}
+
+func decodeConfig(config any) (k int64, distFn string, err error) {
+	bts, ok := config.([]byte)
+	if ok && bts != nil {
+		commaSeperatedConfigStr := string(bts)
+		configs := strings.Split(commaSeperatedConfigStr, ",")
+		if len(configs) == 1 {
+			k, err = strconv.ParseInt(configs[0], 10, 64)
+			if err != nil {
+				return 0, "", err
+			}
+			return 1, "L2", nil
+		}
+
+		if len(configs) == 2 {
+			k, err = strconv.ParseInt(configs[0], 10, 64)
+			if err != nil {
+				return 0, "", err
+			}
+
+			distFn = configs[1]
+			return 1, "", nil
+		}
+
+	}
+	return 1, "L2", nil
 }
