@@ -79,13 +79,16 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (process.ExecStatu
 
 	// colCount = 1 means the user chose SK as only PK.
 	// colCount >= 2 is more common.
-
-	vs := make([]*vector.Vector, colCount)
-	for vIdx, pIdx := range secondaryColumnPos {
-		vs[vIdx] = inputBat.Vecs[pIdx]
+	if colCount == 1 {
+		pos := secondaryColumnPos[indexColPos]
+		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+	} else {
+		vs := make([]*vector.Vector, colCount)
+		for vIdx, pIdx := range secondaryColumnPos {
+			vs[vIdx] = inputBat.Vecs[pIdx]
+		}
+		vec, bitMap = util.SerialWithoutCompacted(vs, proc)
 	}
-	vec, bitMap = util.SerialWithoutCompacted(vs, proc)
-
 	insertSecondaryBat.SetVector(indexColPos, vec)
 	insertSecondaryBat.SetRowCount(vec.Length())
 
