@@ -21,7 +21,7 @@ import (
 )
 
 func (c *DashboardCreator) initTaskDashboard() error {
-	folder, err := c.createFolder(taskFolderName)
+	folder, err := c.createFolder(moFolderName)
 	if err != nil {
 		return err
 	}
@@ -44,7 +44,7 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 	return dashboard.Row(
 		"Flush Table Tail Duration",
 		c.getHistogram(
-			`mo_task_duration_seconds_bucket{type="flush_table_tail", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
+			c.getMetricWithFilter(`mo_task_duration_seconds_bucket`, `type="flush_table_tail"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -54,7 +54,7 @@ func (c *DashboardCreator) initTaskCkpEntryPendingRow() dashboard.Option {
 	return dashboard.Row(
 		"Flush Table Tail Duration",
 		c.getHistogram(
-			`mo_task_duration_seconds_bucket{type="ckp_entry_pending", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
+			c.getMetricWithFilter(`mo_task_duration_seconds_bucket`, `type="ckp_entry_pending"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
