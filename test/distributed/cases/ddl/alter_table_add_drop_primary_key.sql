@@ -89,9 +89,7 @@ insert into pri06 (col1, col2) values (100, -32734928490.3284032);
 insert into pri06 values (200, 3289323423);
 select * from pri06;
 alter table pri06 add constraint primary key (col1);
--- @bvt:issue#11289
 show create table pri06;
--- @bvt:issue
 -- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri06' and COLUMN_NAME not like '__mo%';
 -- @bvt:issue
@@ -240,9 +238,7 @@ show create table pri01;
 alter table pri01 drop primary key;
 show create table pri01;
 alter table pri01 add constraint primary key(col2);
--- @bvt:issue#11299
 show create table pri01;
--- @bvt:issue
 show columns from pri01;
 -- @bvt:issue#11406
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'pri01' and COLUMN_NAME not like '__mo%';
