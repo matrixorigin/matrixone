@@ -655,7 +655,10 @@ func TestLastActiveWithStream(t *testing.T) {
 }
 
 func TestBackendConnectTimeout(t *testing.T) {
-	rb, err := NewRemoteBackend(testAddr, newTestCodec(),
+	rb, err := NewRemoteBackend(
+		testAddr,
+		newTestCodec(),
+		WithBackendMetrics(newMetrics("")),
 		WithBackendConnectTimeout(time.Millisecond*200),
 	)
 	assert.Error(t, err)
@@ -822,7 +825,9 @@ func testBackendSendWithoutServer(t *testing.T, addr string,
 	testFunc func(b *remoteBackend),
 	options ...BackendOption) {
 
-	options = append(options,
+	options = append(
+		options,
+		WithBackendMetrics(newMetrics("")),
 		WithBackendBufferSize(1),
 		WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel).With(zap.String("testcase", t.Name()))))
 	rb, err := NewRemoteBackend(addr, newTestCodec(), options...)
@@ -857,7 +862,7 @@ func newTestBackendFactory() *testBackendFactory {
 	return &testBackendFactory{}
 }
 
-func (bf *testBackendFactory) Create(backend string) (Backend, error) {
+func (bf *testBackendFactory) Create(backend string, opts ...BackendOption) (Backend, error) {
 	bf.Lock()
 	defer bf.Unlock()
 	b := &testBackend{id: bf.id}
