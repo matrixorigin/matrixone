@@ -169,7 +169,7 @@ func NewService(
 		return nil, err
 	}
 
-	server, err := morpc.NewRPCServer(PipelineService.String(), srv.pipelineServiceListenAddr(),
+	server, err := morpc.NewRPCServer("pipeline-server", srv.pipelineServiceListenAddr(),
 		morpc.NewMessageCodec(srv.acquireMessage,
 			morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize))),
 		morpc.WithServerLogger(srv.logger),
