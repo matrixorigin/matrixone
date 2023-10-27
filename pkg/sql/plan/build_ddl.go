@@ -1396,14 +1396,12 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 
 		var keyName string
 		if len(indexParts) == 1 {
+			// This means indexParts only contains the primary key column
 			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ: &Type{
-					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
-					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
-				},
+				Typ:  colMap[pkeyName].Typ, // Take Type of primary key column
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
