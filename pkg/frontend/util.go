@@ -673,7 +673,7 @@ func RewriteError(err error, username string) (uint16, string, string) {
 	var msg string
 
 	errMsg := strings.ToLower(err.Error())
-	if NeedConvertedToAccessDeniedError(errMsg) {
+	if needConvertedToAccessDeniedError(errMsg) {
 		failed := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
 		if len(username) > 0 {
 			tipsFormat := "Access denied for user %s. %s"
@@ -692,7 +692,7 @@ func RewriteError(err error, username string) (uint16, string, string) {
 	return errorCode, sqlState, msg
 }
 
-func NeedConvertedToAccessDeniedError(errMsg string) bool {
+func needConvertedToAccessDeniedError(errMsg string) bool {
 	if strings.Contains(errMsg, "check password failed") ||
 		/*
 			following two cases are suggested by the peers from the mo cloud team.
