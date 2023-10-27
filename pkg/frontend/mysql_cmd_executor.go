@@ -3641,7 +3641,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.StorageEngine,
 		proc, ses)
 
-ParseDuration := time.Since(beginInstant)
+	ParseDuration := time.Since(beginInstant)
 
 	if err != nil {
 		statsInfo.ParseDuration = ParseDuration
