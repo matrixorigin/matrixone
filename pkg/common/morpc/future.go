@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 func newFuture(releaseFunc func(f *Future)) *Future {
@@ -56,6 +57,7 @@ func (f *Future) init(send RPCMessage) {
 	}
 	f.waiting.Store(false)
 	f.send = send
+	f.send.createAt = time.Now()
 	f.id = send.Message.GetID()
 	f.mu.Lock()
 	f.mu.closed = false
