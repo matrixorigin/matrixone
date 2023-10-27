@@ -24,11 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -40,10 +37,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
-	LogServiceRPCName = "logservice-rpc"
+	LogServiceRPCName = "logservice-server"
 )
 
 type Lsn = uint64
@@ -549,7 +547,5 @@ func (s *Service) getBackendOptions() []morpc.BackendOption {
 
 // NB: leave an empty method for future extension.
 func (s *Service) getClientOptions() []morpc.ClientOption {
-	return []morpc.ClientOption{
-		morpc.WithClientTag("log-heartbeat"),
-	}
+	return []morpc.ClientOption{}
 }

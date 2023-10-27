@@ -636,9 +636,10 @@ func newRpcStreamToTnLogTailService(serviceAddr string) (morpc.Stream, error) {
 		morpc.WithBackendLogger(logger),
 	)
 
-	c, err1 := morpc.NewClient(factory,
+	c, err1 := morpc.NewClient(
+		"logtail-client",
+		factory,
 		morpc.WithClientMaxBackendPerHost(10000),
-		morpc.WithClientTag("cn-log-tail-client"),
 		morpc.WithClientLogger(logger),
 	)
 	if err1 != nil {
