@@ -194,6 +194,7 @@ func Test_FillSEGStorageUsageBat(t *testing.T) {
 	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
 		logtail.FillSEGStorageUsageBat(collector.BaseCollector, segment)
 
+		require.NotNil(t, segment.GetFirstBlkEntry())
 		if !segment.IsAppendable() {
 			require.Equal(t, true, segment.Stat.GetLoaded())
 			require.NotEqual(t, int(0), segment.Stat.GetOriginSize())
