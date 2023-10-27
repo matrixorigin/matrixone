@@ -70,14 +70,15 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config, sm *Ses
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
 
-	client, err := cfg.NewClient(serviceName,
+	client, err := cfg.NewClient(
+		"query-client",
 		logger.RawLogger(),
 		func() morpc.Message { return pool.AcquireResponse() })
 	if err != nil {
 		return nil, err
 	}
 
-	h, err := morpc.NewMessageHandler(serviceName, address, cfg, pool)
+	h, err := morpc.NewMessageHandler("query-server", address, cfg, pool)
 	if err != nil {
 		return nil, err
 	}
