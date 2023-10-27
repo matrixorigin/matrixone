@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"reflect"
+	"strings"
 	"sync/atomic"
 )
 
@@ -50,6 +51,7 @@ func newExporter() *exporter {
 }
 
 func (et *exporter) Export(k, v, userSet string) {
+	k = strings.ToLower(k)
 	et.kvs[k] = item{
 		v:       v,
 		userSet: userSet,
