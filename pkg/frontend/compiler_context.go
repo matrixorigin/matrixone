@@ -19,11 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-<<<<<<< HEAD
-=======
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"sort"
->>>>>>> a8f8ed5... Handle sortcluster by column (#12352)
 	"strconv"
 	"strings"
 	"sync"
