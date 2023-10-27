@@ -384,12 +384,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		if err := s.diskCache.Read(ctx, vector); err != nil {
 			return err
 		}
-		defer func() {
-			if err != nil {
-				return
-			}
-			err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
-		}()
+		// we don't cache IOEntry to disk
+		// disk cache will be set by diskCache.SetFile in S3FS.read and S3FS.write
 	}
 
 	if s.remoteCache != nil {
