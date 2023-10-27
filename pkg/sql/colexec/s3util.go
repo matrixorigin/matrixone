@@ -169,7 +169,9 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 		writer.isClusterBy = true
 		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 			// the serialized clusterby col is located in the last of the bat.vecs
-			writer.sortIndex = len(tableDef.Cols) - 1
+			// When INSERT, the TableDef columns list in the table contains a rowid column, but the inserted data
+			// does not have a rowid column, so it needs to be excluded. Therefore, is `len(tableDef.Cols) - 2`
+			writer.sortIndex = len(tableDef.Cols) - 2
 		} else {
 			for idx, colDef := range tableDef.Cols {
 				if colDef.Name == tableDef.ClusterBy.Name {
