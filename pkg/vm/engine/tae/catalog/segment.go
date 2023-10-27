@@ -247,11 +247,9 @@ func (entry *SegmentEntry) GetFirstBlkEntry() *BlockEntry {
 	entry.RLock()
 	defer entry.RUnlock()
 
-	// TODO why nil? print log
 	// head may be nil
 	head := entry.link.GetHead()
 	if head == nil {
-		fmt.Println("--------------------- link head is nil \n", entry)
 		return nil
 	}
 
