@@ -16,9 +16,10 @@ package functionAgg
 
 import (
 	"bytes"
+	"encoding/json"
+	"github.com/arjunsk/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"strconv"
@@ -119,44 +120,67 @@ func (s *sAggClusterCenters) Merge(groupNumber1 int64, groupNumber2 int64, resul
 func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 	result := make([][]byte, 0, len(s.result))
 
+	// The kmeans logic
 	for i := 0; i < len(s.result); i++ {
-		byteArray := util.UnsafeStringToBytes(s.arraysToString(s.result[i]))
-		result = append(result, byteArray)
-	}
+		if len(s.result[i]) == 0 {
+			continue
+		}
 
-	//// The kmeans logic
-	//for i := 0; i < len(s.result); i++ {
-	//	var vecf64 [][]float64
-	//	// 1. convert []byte to []float64
-	//	switch s.arrType.Oid {
-	//	case types.T_array_float32:
-	//		for _, arr := range s.result[i] {
-	//			vecf32 := types.BytesToArray[float32](arr)
-	//
-	//			// 1.a cast to []float64
-	//			_vecf64 := make([]float64, len(vecf32))
-	//			for j, v := range vecf32 {
-	//				_vecf64[j] = float64(v)
-	//			}
-	//
-	//			vecf64 = append(vecf64, _vecf64)
-	//		}
-	//	case types.T_array_float64:
-	//		for _, arr := range s.result[i] {
-	//			vecf64 = append(vecf64, types.BytesToArray[float64](arr))
-	//		}
-	//	}
-	//
-	//	// 2. call kmeans.
-	//	//TODO: need to understand how to pass optional parameters
-	//	centroids := kmeans.Cluster(vecf64, 2, 100, 0.0001)
-	//
-	//	// 3. convert centroids to json string
-	//	jsonStr, _ := jsoniter.MarshalToString(centroids)
-	//
-	//	// 4. convert json string to []byte
-	//	result = append(result, util.UnsafeStringToBytes(jsonStr))
-	//}
+		if len(s.result[i]) == 1 {
+			jsonData, err := json.Marshal(s.result[i])
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, jsonData)
+			continue
+		}
+
+		// each result acts more like group by clause.
+		var vecf64 [][]float64
+		for _, arr := range s.result[i] {
+			switch s.arrType.Oid {
+			case types.T_array_float32:
+				// 1. convert []byte to []float64
+				vecf32 := types.BytesToArray[float32](arr)
+
+				// 1.a cast to []float64
+				_vecf64 := make([]float64, len(vecf32))
+				for j, v := range vecf32 {
+					_vecf64[j] = float64(v)
+				}
+
+				vecf64 = append(vecf64, _vecf64)
+
+			case types.T_array_float64:
+				vecf64 = append(vecf64, types.BytesToArray[float64](arr))
+			}
+		}
+
+		// 2. call kmeans.
+		clusterer, err := kmeans.NewCluster(kmeans.ELKAN, vecf64, 2)
+		if err != nil {
+			return nil, err
+		}
+
+		clusters, err := clusterer.Cluster()
+		if err != nil {
+			return nil, err
+		}
+
+		var centers [][]float64
+		for _, cluster := range clusters {
+			centers = append(centers, cluster.Center())
+		}
+
+		// 3. convert centroids to json string
+		jsonData, err := json.Marshal(centers)
+		if err != nil {
+			return nil, err
+		}
+
+		// 4. convert json string to []byte
+		result = append(result, jsonData)
+	}
 
 	return result, nil
 }

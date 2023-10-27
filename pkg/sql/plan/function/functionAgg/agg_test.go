@@ -15,6 +15,7 @@
 package functionAgg
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"math"
@@ -480,75 +481,6 @@ func TestBitXor(t *testing.T) {
 	}
 }
 
-func TestClusterCenters(t *testing.T) {
-	require.NoError(t, testUnaryAggSupported(NewAggClusterCenters, AggClusterCentersSupportedParameters, AggClusterCentersReturnType))
-
-	s1 := &sAggClusterCenters{
-		arrType: types.T_array_float64.ToType(),
-	}
-
-	// input vectors/arrays
-	var vecf64Input = [][]float64{
-		{1, 2, 3, 4},
-		{2, 3, 4, 5},
-		{3, 3, 4, 5},
-		{4, 3, 4, 5},
-	}
-
-	// pack the input vectors into [][]byte
-	var packedInput = make([][]byte, len(vecf64Input))
-	for i, vec := range vecf64Input {
-		packedInput[i] = types.ArrayToBytes[float64](vec)
-	}
-
-	nsp := nulls.NewWithSize(4)
-	nsp.Add(3)
-
-	{
-		// Test arraysToString
-		actual := s1.arraysToString(packedInput)
-		expected := "[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|"
-		require.Equal(t, expected, actual)
-	}
-	{
-		// Test stringToArrays
-		actual := s1.stringToArrays("[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|")
-		expected := packedInput
-		require.Equal(t, expected, actual)
-	}
-
-	{
-		tr := &simpleAggTester[[]byte, []byte]{
-			source: s1,
-			grow:   s1.Grows,
-			free:   s1.Free,
-			fill:   s1.Fill,
-			merge:  s1.Merge,
-			eval:   s1.Eval,
-		}
-		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
-			res := util.UnsafeBytesToString(result)
-			return !isEmpty && res == "[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|"
-		})
-		require.NoError(t, err)
-
-	}
-
-	{
-		data, err := s1.MarshalBinary()
-		require.NoError(t, err)
-		s2 := new(sAggClusterCenters)
-		err = s2.UnmarshalBinary(data)
-		require.NoError(t, err)
-
-		require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later. Contents of result might not be the same.
-		require.Equal(t, len(s1.result), len(s2.result))
-		for i := range s1.result {
-			require.Equal(t, s1.result[i], s2.result[i])
-		}
-	}
-}
-
 func TestCount(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggCount, testMoAllTypes, AggCountReturnType))
 
@@ -785,6 +717,75 @@ func TestGroupConcat(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, s1.separator, s2.separator)
+		require.Equal(t, len(s1.result), len(s2.result))
+		for i := range s1.result {
+			require.Equal(t, s1.result[i], s2.result[i])
+		}
+	}
+}
+
+func TestClusterCenters(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggClusterCenters, AggClusterCentersSupportedParameters, AggClusterCentersReturnType))
+
+	s1 := &sAggClusterCenters{
+		arrType: types.T_array_float64.ToType(),
+	}
+	// input vectors/arrays
+	var vecf64Input = [][]float64{
+		{1, 2, 3, 4},
+		{2, 3, 4, 5},
+		{3, 3, 4, 5},
+		{4, 3, 4, 5},
+	}
+
+	// pack the input vectors into [][]byte
+	var packedInput = make([][]byte, len(vecf64Input))
+	for i, vec := range vecf64Input {
+		packedInput[i] = types.ArrayToBytes[float64](vec)
+	}
+
+	nsp := nulls.NewWithSize(4)
+	nsp.Add(3)
+
+	{
+		// Test arraysToString
+		actual := s1.arraysToString(packedInput)
+		expected := "[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|"
+		require.Equal(t, expected, actual)
+	}
+	{
+		// Test stringToArrays
+		actual := s1.stringToArrays("[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|")
+		expected := packedInput
+		require.Equal(t, expected, actual)
+	}
+
+	{
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s1,
+			grow:   s1.Grows,
+			free:   s1.Free,
+			fill:   s1.Fill,
+			merge:  s1.Merge,
+			eval:   s1.Eval,
+		}
+		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
+			var vecf64Output [][]float64
+			err := json.Unmarshal(result, &vecf64Output)
+			return err == nil && !isEmpty
+		})
+		require.NoError(t, err)
+
+	}
+
+	{
+		data, err := s1.MarshalBinary()
+		require.NoError(t, err)
+		s2 := new(sAggClusterCenters)
+		err = s2.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later. Contents of result might not be the same.
 		require.Equal(t, len(s1.result), len(s2.result))
 		for i := range s1.result {
 			require.Equal(t, s1.result[i], s2.result[i])
