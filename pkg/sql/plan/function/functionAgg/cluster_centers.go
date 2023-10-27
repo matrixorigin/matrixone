@@ -16,6 +16,7 @@ package functionAgg
 
 import (
 	"bytes"
+	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -24,50 +25,69 @@ import (
 	"strings"
 )
 
+const (
+	defaultClusterCount = 1 // this is aka K in Kmeans
+)
+
 var (
-	AggKmeansSupportedParameters = []types.T{
+	AggClusterCentersSupportedParameters = []types.T{
 		types.T_array_float32, types.T_array_float64,
 	}
 
-	AggKmeansReturnType = func(typs []types.Type) types.Type {
+	AggClusterCentersReturnType = func(typs []types.Type) types.Type {
 		return types.T_text.ToType()
 	}
 )
 
-// NewAggKmeans right now this agg function just converts a list of vectors/array to string. This is used for testing purpose agg function.
+// NewAggClusterCenters right now this agg function just converts a list of vectors/array to string. This is used for testing purpose agg function.
 // e.g. [[1,2,3],[4,5,6]] -> "1,2,3|4,5,6|"
-func NewAggKmeans(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any, _ any) (agg.Agg[any], error) {
+func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any, _ any) (agg.Agg[any], error) {
+	aggPriv := &sAggClusterCenters{}
+
+	bts, ok := config.([]byte)
+	if ok && bts != nil {
+		var intVal int64
+		buf := bytes.NewReader(bts)
+		err := binary.Read(buf, binary.BigEndian, &intVal)
+		if err != nil {
+			return nil, err
+		}
+		aggPriv.k = intVal
+	} else {
+		aggPriv.k = defaultClusterCount
+	}
+
 	switch inputTypes[0].Oid {
 	case types.T_array_float32, types.T_array_float64:
-		aggPriv := &sAggKmeans{
-			arrType: inputTypes[0],
-		}
+		aggPriv.arrType = inputTypes[0]
 		if dist {
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 		}
 		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	}
-	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for kmeans", inputTypes[0])
+	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for cluster_centers", inputTypes[0])
 }
 
-type sAggKmeans struct {
+type sAggClusterCenters struct {
 	// result will hold
 	//[group1] -> [array1, array2]
 	//[group2] -> [array3, array4, array5]
 	// NOTE: here array is []byte ie types.T_varchar
 	result [][][]byte
 
+	k int64
+
 	// arrType is the type of the array/vector
 	// It is used while converting array/vector to string and vice versa
 	arrType types.Type
 }
 
-func (s *sAggKmeans) Grows(cnt int) {
+func (s *sAggClusterCenters) Grows(cnt int) {
 	// grow the result slice based on the number of groups
 	s.result = append(s.result, make([][][]byte, cnt)...)
 }
-func (s *sAggKmeans) Free(_ *mpool.MPool) {}
-func (s *sAggKmeans) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
+func (s *sAggClusterCenters) Free(_ *mpool.MPool) {}
+func (s *sAggClusterCenters) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
 	// NOTE: this function is copied from group_concat.go
 
 	if isNull {
@@ -93,20 +113,20 @@ func (s *sAggKmeans) Fill(groupNumber int64, values []byte, lastResult []byte, c
 
 	return nil, false, nil
 }
-func (s *sAggKmeans) Merge(groupNumber1 int64, groupNumber2 int64, result1 []byte, result2 []byte, isEmpty1 bool, isEmpty2 bool, priv2 any) ([]byte, bool, error) {
+func (s *sAggClusterCenters) Merge(groupNumber1 int64, groupNumber2 int64, result1 []byte, result2 []byte, isEmpty1 bool, isEmpty2 bool, priv2 any) ([]byte, bool, error) {
 	// NOTE: this function is copied from group_concat.go
 
 	if isEmpty2 {
 		return nil, isEmpty1 && isEmpty2, nil
 	}
 
-	s2 := priv2.(*sAggKmeans)
+	s2 := priv2.(*sAggClusterCenters)
 	s.result[groupNumber1] = append(s.result[groupNumber1], s2.result[groupNumber2][:]...)
 
 	return nil, isEmpty1 && isEmpty2, nil
 }
 
-func (s *sAggKmeans) Eval(lastResult [][]byte) ([][]byte, error) {
+func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 	result := make([][]byte, 0, len(s.result))
 
 	for i := 0; i < len(s.result); i++ {
@@ -151,7 +171,7 @@ func (s *sAggKmeans) Eval(lastResult [][]byte) ([][]byte, error) {
 	return result, nil
 }
 
-func (s *sAggKmeans) MarshalBinary() ([]byte, error) {
+func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
 
 	if len(s.result) == 0 {
 		return nil, nil
@@ -176,7 +196,7 @@ func (s *sAggKmeans) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (s *sAggKmeans) UnmarshalBinary(data []byte) error {
+func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -199,7 +219,7 @@ func (s *sAggKmeans) UnmarshalBinary(data []byte) error {
 
 // arraysToString converts list of array/vector to string
 // e.g. []array -> "1,2,3|4,5,6|"
-func (s *sAggKmeans) arraysToString(arrays [][]byte) string {
+func (s *sAggClusterCenters) arraysToString(arrays [][]byte) string {
 	var res string
 	var commaSeperatedArrString string
 	for _, arr := range arrays {
@@ -217,7 +237,7 @@ func (s *sAggKmeans) arraysToString(arrays [][]byte) string {
 
 // stringToArrays converts string to a list of array/vector
 // e.g. "1,2,3|4,5,6|" -> []array
-func (s *sAggKmeans) stringToArrays(str string) [][]byte {
+func (s *sAggClusterCenters) stringToArrays(str string) [][]byte {
 	arrays := strings.Split(str, "|")
 	var res [][]byte
 	var array []byte

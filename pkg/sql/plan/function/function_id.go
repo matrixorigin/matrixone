@@ -62,43 +62,43 @@ const (
 	OP_BIT_SHIFT_LEFT         // <<
 	OP_BIT_SHIFT_RIGHT        // >>
 
-	ABS            // ABS
-	ACOS           // ACOS
-	ADDDATE        // ADDDATE
-	ADDTIME        // ADDTIME
-	AES_DECRYPT    // AES_DECRYPT
-	AES_ENCRYPT    // AES_ENCRYPT
-	ANY_VALUE      // ANY_VALUE
-	APPROX_COUNT   // APPROX_COUNT
-	ARRAY_AGG      // ARRAY_AGG
-	ARRAY_APPEND   // ARRAY_APPEND
-	ARRAY_CAT      // ARRAY_CAT
-	ARRAY_CONTAINS // ARRAY_CONTAINS
-	ARRAY_POSITION // ARRAY_POSITION
-	ARRAY_SIZE     // ARRAY_SIZE
-	ASCII          // ASCII
-	ASIN           // ASIN
-	ASSERT         // ASSERT
-	ATAN           // ATAN
-	ATAN2          // ATAN2
-	AVG            // AVG
-	BASE64_DECODE  // BASE64_DECODE
-	BASE64_ENCODE  // BASE64_ENCODE
-	BIT_AND        // BIT_AND
-	BIT_LENGTH     // BIT_LENGTH
-	BIT_NOT        // BIT_NOT
-	BIT_OR         // BIT_OR
-	BIT_XOR        // BIT_XOR
-	KMEANS         // KMEANS
-	BITAGG_AND     // BITAGG_AND
-	BITAGG_OR      // BITAGG_OR
-	BOOLAGG_AND    // BOOLAGG_AND
-	BOOLAGG_OR     // BOOLAGG_OR
-	CASE           // CASE
-	CEIL           // CEIL
-	CHR            // CHR
-	COALESCE       // COALESCE
-	FIELD          // FIELD
+	ABS             // ABS
+	ACOS            // ACOS
+	ADDDATE         // ADDDATE
+	ADDTIME         // ADDTIME
+	AES_DECRYPT     // AES_DECRYPT
+	AES_ENCRYPT     // AES_ENCRYPT
+	ANY_VALUE       // ANY_VALUE
+	APPROX_COUNT    // APPROX_COUNT
+	ARRAY_AGG       // ARRAY_AGG
+	ARRAY_APPEND    // ARRAY_APPEND
+	ARRAY_CAT       // ARRAY_CAT
+	ARRAY_CONTAINS  // ARRAY_CONTAINS
+	ARRAY_POSITION  // ARRAY_POSITION
+	ARRAY_SIZE      // ARRAY_SIZE
+	ASCII           // ASCII
+	ASIN            // ASIN
+	ASSERT          // ASSERT
+	ATAN            // ATAN
+	ATAN2           // ATAN2
+	AVG             // AVG
+	BASE64_DECODE   // BASE64_DECODE
+	BASE64_ENCODE   // BASE64_ENCODE
+	BIT_AND         // BIT_AND
+	BIT_LENGTH      // BIT_LENGTH
+	BIT_NOT         // BIT_NOT
+	BIT_OR          // BIT_OR
+	BIT_XOR         // BIT_XOR
+	CLUSTER_CENTERS // CLUSTER_CENTERS
+	BITAGG_AND      // BITAGG_AND
+	BITAGG_OR       // BITAGG_OR
+	BOOLAGG_AND     // BOOLAGG_AND
+	BOOLAGG_OR      // BOOLAGG_OR
+	CASE            // CASE
+	CEIL            // CEIL
+	CHR             // CHR
+	COALESCE        // COALESCE
+	FIELD           // FIELD
 	CONCAT_WS
 	CONTAINS          // CONTAINS
 	CORR              // CORR
@@ -414,7 +414,7 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
-	"kmeans":                KMEANS,
+	"cluster_centers":       CLUSTER_CENTERS,
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,

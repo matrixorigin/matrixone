@@ -249,21 +249,21 @@ var supportedAggregateFunctions = []FuncNew{
 		},
 	},
 	{
-		functionId: KMEANS,
+		functionId: CLUSTER_CENTERS,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggKmeansSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggClusterCentersSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    functionAgg.AggKmeansReturnType,
+				retType:    functionAgg.AggClusterCentersReturnType,
 				aggFramework: aggregationLogicOfOverload{
-					str:    "kmeans",
-					aggNew: functionAgg.NewAggKmeans,
+					str:    "cluster_centers",
+					aggNew: functionAgg.NewAggClusterCenters,
 				},
 			},
 		},

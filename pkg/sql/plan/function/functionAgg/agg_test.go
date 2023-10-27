@@ -480,10 +480,10 @@ func TestBitXor(t *testing.T) {
 	}
 }
 
-func TestKmeans(t *testing.T) {
-	require.NoError(t, testUnaryAggSupported(NewAggKmeans, AggKmeansSupportedParameters, AggKmeansReturnType))
+func TestClusterCenters(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggClusterCenters, AggClusterCentersSupportedParameters, AggClusterCentersReturnType))
 
-	s1 := &sAggKmeans{
+	s1 := &sAggClusterCenters{
 		arrType: types.T_array_float64.ToType(),
 	}
 
@@ -537,7 +537,7 @@ func TestKmeans(t *testing.T) {
 	{
 		data, err := s1.MarshalBinary()
 		require.NoError(t, err)
-		s2 := new(sAggKmeans)
+		s2 := new(sAggClusterCenters)
 		err = s2.UnmarshalBinary(data)
 		require.NoError(t, err)
 
