@@ -111,7 +111,7 @@ func (c *Config) Adjust() {
 
 // NewClient create client from config
 func (c Config) NewClient(
-	tag string,
+	name string,
 	logger *zap.Logger,
 	responseFactory func() Message) (RPCClient, error) {
 	var codecOpts []CodecOption
@@ -121,7 +121,7 @@ func (c Config) NewClient(
 		WithCodecMaxBodySize(int(c.MaxMessageSize)))
 	codecOpts = append(codecOpts, c.CodecOptions...)
 	if c.EnableCompress {
-		mp, err := mpool.NewMPool(tag, 0, mpool.NoFixed)
+		mp, err := mpool.NewMPool(name, 0, mpool.NoFixed)
 		if err != nil {
 			return nil, err
 		}
@@ -131,13 +131,13 @@ func (c Config) NewClient(
 	codec := NewMessageCodec(
 		responseFactory,
 		codecOpts...)
-	bf := NewGoettyBasedBackendFactory(codec, c.getBackendOptions(logger.Named(tag))...)
-	return NewClient(bf, c.getClientOptions(tag, logger.Named(tag))...)
+	bf := NewGoettyBasedBackendFactory(codec, c.getBackendOptions(logger.Named(name))...)
+	return NewClient(name, bf, c.getClientOptions(logger.Named(name))...)
 }
 
 // NewServer new rpc server
 func (c Config) NewServer(
-	tag string,
+	name string,
 	address string,
 	logger *zap.Logger,
 	requestFactory func() Message,
@@ -150,14 +150,14 @@ func (c Config) NewServer(
 		WithCodecMaxBodySize(int(c.MaxMessageSize)))
 	codecOpts = append(codecOpts, c.CodecOptions...)
 	if c.EnableCompress {
-		mp, err := mpool.NewMPool(tag, 0, mpool.NoFixed)
+		mp, err := mpool.NewMPool(name, 0, mpool.NoFixed)
 		if err != nil {
 			return nil, err
 		}
 		codecOpts = append(codecOpts, WithCodecEnableCompress(mp))
 	}
 	opts = append(opts,
-		WithServerLogger(logger.Named(tag)),
+		WithServerLogger(logger.Named(name)),
 		WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(RPCMessage)
 			if !m.InternalMessage() {
@@ -165,7 +165,7 @@ func (c Config) NewServer(
 			}
 		})))
 	return NewRPCServer(
-		tag,
+		name,
 		address,
 		NewMessageCodec(requestFactory, codecOpts...),
 		opts...)
@@ -184,13 +184,12 @@ func (c Config) getBackendOptions(logger *zap.Logger) []BackendOption {
 	return opts
 }
 
-func (c Config) getClientOptions(tag string, logger *zap.Logger) []ClientOption {
+func (c Config) getClientOptions(logger *zap.Logger) []ClientOption {
 	var opts []ClientOption
 	opts = append(opts,
 		WithClientLogger(logger),
 		WithClientMaxBackendPerHost(c.MaxConnections),
-		WithClientMaxBackendMaxIdleDuration(c.MaxIdleDuration.Duration),
-		WithClientTag(tag))
+		WithClientMaxBackendMaxIdleDuration(c.MaxIdleDuration.Duration))
 	opts = append(opts, c.ClientOptions...)
 	return opts
 }
