@@ -541,7 +541,7 @@ func TestKmeans(t *testing.T) {
 		err = s2.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later
+		require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later. Contents of result might not be the same.
 		require.Equal(t, len(s1.result), len(s2.result))
 		for i := range s1.result {
 			require.Equal(t, s1.result[i], s2.result[i])

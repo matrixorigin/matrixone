@@ -15,6 +15,7 @@
 package functionAgg
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -151,15 +152,44 @@ func (s *sAggKmeans) Eval(lastResult [][]byte) ([][]byte, error) {
 }
 
 func (s *sAggKmeans) MarshalBinary() ([]byte, error) {
+
+	if len(s.result) == 0 {
+		return nil, nil
+	}
+
+	var buf bytes.Buffer
+
+	// arrType
+	a, err := s.arrType.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(a)
+
+	// result
 	strList := make([]string, 0, len(s.result))
 	for i := range s.result {
 		strList = append(strList, s.arraysToString(s.result[i]))
 	}
-	return types.EncodeStringSlice(strList), nil
+	buf.Write(types.EncodeStringSlice(strList))
+
+	return buf.Bytes(), nil
 }
 
-func (s *sAggKmeans) UnmarshalBinary(originData []byte) error {
-	strList := types.DecodeStringSlice(originData)
+func (s *sAggKmeans) UnmarshalBinary(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	// arrType
+	err := s.arrType.UnmarshalBinary(data[:20])
+	if err != nil {
+		return err
+	}
+
+	// result
+	data = data[20:]
+	strList := types.DecodeStringSlice(data)
 	s.result = make([][][]byte, len(strList))
 	for i := range s.result {
 		s.result[i] = s.stringToArrays(strList[i])
