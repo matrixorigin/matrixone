@@ -718,6 +718,9 @@ func decodeTuple(b []byte) (Tuple, int, error) {
 			el, off = decodeBytes(b[i+1:])
 			off += 1
 		default:
+			//ERROR:
+			//panic(fmt.Sprintf("unknown typecode %v %v %v %02x", b[i] == enumCode, b[i], enumCode, b[i]))
+			// ERROR 20101 (HY000): internal error: panic unknown typecode false 128 80 80:
 			return nil, i, moerr.NewInternalErrorNoCtx("unable to decode tuple element with unknown typecode %02x", b[i])
 		}
 		t = append(t, el)
