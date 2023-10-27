@@ -94,13 +94,12 @@ func (c *mockNetConn) SetWriteDeadline(t time.Time) error {
 }
 
 type mockClientConn struct {
-	conn         net.Conn
-	tenant       Tenant
-	clientInfo   clientInfo // need to set it explicitly
-	router       Router
-	tun          *tunnel
-	setVarStmts  []string
-	prepareStmts []string
+	conn       net.Conn
+	tenant     Tenant
+	clientInfo clientInfo // need to set it explicitly
+	router     Router
+	tun        *tunnel
+	redoStmts  []string
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -135,12 +134,7 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 		return nil, err
 	}
 	// Set the use defined variables, including session variables and user variables.
-	for _, stmt := range c.setVarStmts {
-		if _, err := sc.ExecStmt(stmt, nil); err != nil {
-			return nil, err
-		}
-	}
-	for _, stmt := range c.prepareStmts {
+	for _, stmt := range c.redoStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {
 			return nil, err
 		}
@@ -159,11 +153,15 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		sendResp([]byte(cn.addr), resp)
 		return nil
 	case *setVarEvent:
-		c.setVarStmts = append(c.setVarStmts, ev.stmt)
+		c.redoStmts = append(c.redoStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
 	case *prepareEvent:
-		c.prepareStmts = append(c.prepareStmts, ev.stmt)
+		c.redoStmts = append(c.redoStmts, ev.stmt)
+		sendResp([]byte("ok"), resp)
+		return nil
+	case *useEvent:
+		c.redoStmts = append(c.redoStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
 	default:
