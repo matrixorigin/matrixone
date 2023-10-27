@@ -497,27 +497,25 @@ func TestKmeans(t *testing.T) {
 
 	// pack the input vectors into [][]byte
 	var packedInput = make([][]byte, len(vecf64Input))
-	packers := types.NewPackerArray(len(vecf64Input), mpool.MustNewZero())
 	for i, vec := range vecf64Input {
-		packers[i].EncodeStringType(types.ArrayToBytes(vec))
-		packedInput[i] = packers[i].GetBuf()
+		packedInput[i] = types.ArrayToBytes[float64](vec)
 	}
 
 	nsp := nulls.NewWithSize(4)
 	nsp.Add(3)
 
-	//{
-	//	// Test arraysToString
-	//	actual := s1.arraysToString(packedInput)
-	//	expected := "[1, 2, 3, 4]|[2, 3, 4, 5]|"
-	//	require.Equal(t, expected, actual)
-	//}
-	//{
-	//	// Test stringToArrays
-	//	actual := s1.stringToArrays("[1, 2, 3, 4]|[2, 3, 4, 5]|")
-	//	expected := packedInput
-	//	require.Equal(t, expected, actual)
-	//}
+	{
+		// Test arraysToString
+		actual := s1.arraysToString(packedInput)
+		expected := "[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|"
+		require.Equal(t, expected, actual)
+	}
+	{
+		// Test stringToArrays
+		actual := s1.stringToArrays("[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|")
+		expected := packedInput
+		require.Equal(t, expected, actual)
+	}
 
 	{
 		tr := &simpleAggTester[[]byte, []byte]{
@@ -536,19 +534,19 @@ func TestKmeans(t *testing.T) {
 
 	}
 
-	//{
-	//	data, err := s1.MarshalBinary()
-	//	require.NoError(t, err)
-	//	s2 := new(sAggKmeans)
-	//	err = s2.UnmarshalBinary(data)
-	//	require.NoError(t, err)
-	//
-	//	require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later
-	//	require.Equal(t, len(s1.result), len(s2.result))
-	//	for i := range s1.result {
-	//		require.Equal(t, s1.result[i], s2.result[i])
-	//	}
-	//}
+	{
+		data, err := s1.MarshalBinary()
+		require.NoError(t, err)
+		s2 := new(sAggKmeans)
+		err = s2.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later
+		require.Equal(t, len(s1.result), len(s2.result))
+		for i := range s1.result {
+			require.Equal(t, s1.result[i], s2.result[i])
+		}
+	}
 }
 
 func TestCount(t *testing.T) {

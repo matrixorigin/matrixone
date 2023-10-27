@@ -73,20 +73,21 @@ func (s *sAggKmeans) Fill(groupNumber int64, values []byte, lastResult []byte, c
 		return nil, isEmpty, nil
 	}
 
-	// tuple should be ideally having list of vectors/arrays
-	tuple, err := types.Unpack(values)
-	if err != nil {
-		return nil, isEmpty, err
+	oneDimByteArrToTwoDimByteArr := func(data []byte, chunkSize int64) [][]byte {
+		var chunks [][]byte
+
+		for i := int64(0); i < int64(len(data)); i += chunkSize {
+			end := i + chunkSize
+			if end > int64(len(data)) {
+				end = int64(len(data))
+			}
+			chunks = append(chunks, data[i:end])
+		}
+		return chunks
 	}
 
-	tupleToArrays := func(tp types.Tuple) [][]byte {
-		var res [][]byte
-		for _, t := range tp {
-			res = append(res, t.([]byte))
-		}
-		return res
-	}
-	arrays := tupleToArrays(tuple)
+	// values should be ideally having list of vectors/arrays
+	arrays := oneDimByteArrToTwoDimByteArr(values, int64(len(values))/count)
 	s.result[groupNumber] = append(s.result[groupNumber], arrays...)
 
 	return nil, false, nil
