@@ -50,6 +50,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnBeforeCommitRow(),
 			c.initTxnDequeuePreparedRow(),
 			c.initTxnDequeuePreparingRow(),
+			c.initTxnFastLoadObjectMetaRow(),
 		)...)
 	if err != nil {
 		return err
