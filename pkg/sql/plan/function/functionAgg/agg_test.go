@@ -742,7 +742,11 @@ func TestGroupConcat(t *testing.T) {
 
 	nsp := nulls.NewWithSize(4)
 	nsp.Add(3)
-	s1 := &sAggGroupConcat{}
+	s1 := &sAggGroupConcat{
+		separator: "",
+		//TODO: There is a bug here.
+		// MarshalBinary is not considering Separator Field. Will be fixed later.
+	}
 
 	{
 		tr := &simpleAggTester[[]byte, []byte]{
