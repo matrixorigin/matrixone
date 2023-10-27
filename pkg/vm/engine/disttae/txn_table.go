@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -560,6 +561,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	fmt.Println("-------------- ctx ", ctx)
+
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
 
@@ -634,11 +637,11 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
-	tableDef *plan.TableDef, // table definition (schema)
-	exprs []*plan.Expr, // filter expression
+	tableDef *plan.TableDef,             // table definition (schema)
+	exprs []*plan.Expr,                  // filter expression
 	committedblocks []catalog.BlockInfo, // whole block list
-	ranges *[][]byte, // output marshaled block list after filtering
-	proc *process.Process, // process of this transaction
+	ranges *[][]byte,                    // output marshaled block list after filtering
+	proc *process.Process,               // process of this transaction
 ) (err error) {
 	dirtyBlks := make(map[types.Blockid]struct{})
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
