@@ -291,7 +291,7 @@ func decodeConfig(config any) (k int64, distFn string, err error) {
 			if err != nil {
 				return 0, "", err
 			}
-			return 1, "L2", nil
+			return k, "L2", nil
 		}
 
 		if len(configs) == 2 {
@@ -301,7 +301,7 @@ func decodeConfig(config any) (k int64, distFn string, err error) {
 			}
 
 			distFn = configs[1]
-			return 1, "", nil
+			return k, distFn, nil
 		}
 
 	}

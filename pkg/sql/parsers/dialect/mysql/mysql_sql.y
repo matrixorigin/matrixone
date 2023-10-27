@@ -8399,14 +8399,14 @@ function_call_aggregate:
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
-  	    name := tree.SetUnresolvedName(strings.ToLower($1))
-  	        $$ = &tree.FuncExpr{
-  	        Func: tree.FuncName2ResolvableFunctionReference(name),
-  	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
-  	        Type: $3,
-  	        WindowSpec: $8,
-              OrderBy:$5,
-  	    }
+  	     name := tree.SetUnresolvedName(strings.ToLower($1))
+		$$ = &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(name),
+		Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
+		Type: $3,
+		WindowSpec: $8,
+		OrderBy:$5,
+	    }
       }
 |   AVG '(' func_type_opt expression  ')' window_spec_opt
     {
