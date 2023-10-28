@@ -16,7 +16,7 @@ package elkans_kmeans
 
 import (
 	"errors"
-	"math"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
 
 type DistanceType uint16
@@ -27,6 +27,12 @@ const (
 	CosineDistance
 )
 
+// findCorrespondingDistanceFunc returns the distance function corresponding to the distance type
+// Distance function should satisfy triangle inequality.
+// We use
+// - L2Distance distance for L2
+// - AngularDistance for InnerProduct and CosineDistance
+// Ref: https://github.com/pgvector/pgvector/blob/c599f92b52d20d1555654803f8f9a4955a97bc11/src/ivfkmeans.c#L155
 func findCorrespondingDistanceFunc(distType DistanceType) (DistanceFunction, error) {
 	var distanceFunction DistanceFunction
 	switch distType {
@@ -42,37 +48,15 @@ func findCorrespondingDistanceFunc(distType DistanceType) (DistanceFunction, err
 
 // DistanceFunction is a function that computes the distance between two vectors
 // NOTE: clusterer already ensures that the all the input vectors are of the same length,
-// so we don't need to check for that here again.
+// so we don't need to check for that here again and return error if the lengths are different.
 type DistanceFunction func(v1, v2 []float64) float64
 
 func L2Distance(v1, v2 []float64) float64 {
-	distance := 0.0
-	for c := range v1 {
-		distance += math.Pow(v1[c]-v2[c], 2)
-	}
-	return math.Sqrt(distance)
+	val, _ := moarray.L2Distance[float64](v1, v2)
+	return val
 }
 
 func AngularDistance(v1, v2 []float64) float64 {
-
-	// Dot product and magnitude calculation
-	var dotProduct, magV1, magV2 float64
-	for i := range v1 {
-		dotProduct += v1[i] * v2[i]
-		magV1 += v1[i] * v1[i]
-		magV2 += v2[i] * v2[i]
-	}
-
-	// Cosine similarity calculation
-	cosTheta := dotProduct / (math.Sqrt(magV1) * math.Sqrt(magV2))
-
-	// Clamp the value between -1 and 1 to avoid NaNs due to floating point errors
-	if cosTheta > 1 {
-		cosTheta = 1
-	} else if cosTheta < -1 {
-		cosTheta = -1
-	}
-
-	// Compute the angular distance
-	return math.Acos(cosTheta)
+	val, _ := moarray.AngularDistance[float64](v1, v2)
+	return val
 }
