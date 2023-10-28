@@ -280,7 +280,7 @@ func (w *S3Writer) Output(proc *process.Process) error {
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	var S3SizeThreshold = TagS3Size
+	var S3SizeThreshold = TagS3SizeForMOLogger
 
 	if proc != nil && proc.Ctx != nil {
 		isMoLogger, ok := proc.Ctx.Value(defines.IsMoLogger{}).(bool)
