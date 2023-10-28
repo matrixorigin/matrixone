@@ -728,9 +728,9 @@ func TestClusterCenters(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggClusterCenters, AggClusterCentersSupportedParameters, AggClusterCentersReturnType))
 
 	s1 := &sAggClusterCenters{
-		k:       2,
-		distFn:  "L2",
-		arrType: types.T_array_float64.ToType(),
+		clusterCnt: 2,
+		distFn:     "L2",
+		arrType:    types.T_array_float64.ToType(),
 	}
 	// input vectors/arrays
 	var vecf64Input = [][]float64{

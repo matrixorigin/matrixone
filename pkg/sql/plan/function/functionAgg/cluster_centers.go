@@ -17,14 +17,18 @@ package functionAgg
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/arjunsk/kmeans"
-	"github.com/arjunsk/kmeans/containers"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algo/elkans_kmeans"
 	"strconv"
 	"strings"
+)
+
+const (
+	defaultKmeansMaxIteration   = 500
+	defaultKmeansDeltaThreshold = 0.01
 )
 
 var (
@@ -43,7 +47,7 @@ func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, 
 	aggPriv := &sAggClusterCenters{}
 
 	var err error
-	aggPriv.k, aggPriv.distFn, err = decodeConfig(config)
+	aggPriv.clusterCnt, aggPriv.distFn, err = decodeConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -66,8 +70,8 @@ type sAggClusterCenters struct {
 	// NOTE: here array is []byte ie types.T_varchar
 	result [][][]byte
 
-	k      int64
-	distFn string
+	clusterCnt int64
+	distFn     string
 
 	// arrType is the type of the array/vector
 	// It is used while converting array/vector to string and vice versa
@@ -158,28 +162,32 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 		}
 
 		// 2. call kmeans.
-		var options []kmeans.Option
+		var distanceType elkans_kmeans.DistanceType
 		if s.distFn != "" {
 			switch s.distFn {
 			case "L2":
-				options = append(options, kmeans.WithDistanceFunction(containers.EuclideanDistance))
+				distanceType = elkans_kmeans.L2
+			case "IP":
+				distanceType = elkans_kmeans.InnerProduct
+			case "COSINE":
+				distanceType = elkans_kmeans.CosineDistance
 			default:
-				options = append(options, kmeans.WithDistanceFunction(containers.EuclideanDistance))
+				distanceType = elkans_kmeans.L2
 			}
 		}
-		clusterer, err := kmeans.NewCluster(kmeans.ELKAN, vecf64, int(s.k), options...)
+
+		clusterer, err := elkans_kmeans.NewElkansKMeans(vecf64,
+			int(s.clusterCnt),
+			defaultKmeansMaxIteration,
+			defaultKmeansDeltaThreshold,
+			distanceType)
 		if err != nil {
 			return nil, err
 		}
 
-		clusters, err := clusterer.Cluster()
+		centers, err := clusterer.Cluster()
 		if err != nil {
 			return nil, err
-		}
-
-		var centers [][]float64
-		for _, cluster := range clusters {
-			centers = append(centers, cluster.Center())
 		}
 
 		// 3. convert centroids to json string
