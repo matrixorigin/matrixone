@@ -41,12 +41,13 @@ var (
 	}
 )
 
-// NewAggClusterCenters this agg func will take list of vectors/arrays and run clustering algorithm like kmeans and
-// return list of centroids for each cluster.
+// NewAggClusterCenters this agg func will take a vector/array column and run clustering algorithm like kmeans and
+// return the 'k' centroids.
 func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any, _ any) (agg.Agg[any], error) {
 	aggPriv := &sAggClusterCenters{}
 
 	var err error
+	//TODO: The config is getting as nil. Need help from @m-schen.
 	aggPriv.clusterCnt, aggPriv.distType, err = decodeConfig(config)
 	if err != nil {
 		return nil, err
@@ -65,17 +66,18 @@ func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, 
 
 type sAggClusterCenters struct {
 	// groupedData will hold the list of vectors/arrays. It is a 3D slice because it is a list of groups (based on group by)
-	// and each group will have list of vectors/arrays
+	// and each group will have list of vectors/arrays based on agg condition.
 	// [group1] -> [array1, array2]
 	// [group2] -> [array3, array4, array5]
-	// NOTE: here array is []byte ie types.T_varchar
+	// NOTE: here array is []byte ie types.T_array_float32 or types.T_array_float64
 	groupedData [][][]byte
 
+	// Kmeans parameters
 	clusterCnt int64
 	distType   string
 
 	// arrType is the type of the array/vector
-	// It is used while converting array/vector to string and vice versa
+	// It is used while converting array/vector from []byte to []float64 or []float32
 	arrType types.Type
 }
 
@@ -85,33 +87,35 @@ func (s *sAggClusterCenters) Grows(cnt int) {
 }
 func (s *sAggClusterCenters) Free(_ *mpool.MPool) {}
 func (s *sAggClusterCenters) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
-	// NOTE: this function is copied from group_concat.go
+	// NOTE: this function is mostly copied from group_concat.go
 
 	if isNull {
 		return nil, isEmpty, nil
 	}
 
-	oneDimByteArrToTwoDimByteArr := func(data []byte, chunkSize int64) [][]byte {
-		var chunks [][]byte
+	getArrays := func(bytes []byte, arrDim int64) [][]byte {
+		var arrays [][]byte
 
-		for i := int64(0); i < int64(len(data)); i += chunkSize {
-			end := i + chunkSize
-			if end > int64(len(data)) {
-				end = int64(len(data))
+		for i := int64(0); i < int64(len(bytes)); i += arrDim {
+			end := i + arrDim
+			if end > int64(len(bytes)) {
+				end = int64(len(bytes))
 			}
-			chunks = append(chunks, data[i:end])
+			arrays = append(arrays, bytes[i:end])
 		}
-		return chunks
+		return arrays
 	}
 
-	// values should be ideally having list of vectors/arrays
-	arrays := oneDimByteArrToTwoDimByteArr(values, int64(len(values))/count)
+	// values would be having list of vectors/arrays combined as one []byte
+	//TODO: need to verify with @m-schen
+	arrays := getArrays(values, int64(len(values))/count)
 	s.groupedData[groupNumber] = append(s.groupedData[groupNumber], arrays...)
 
 	return nil, false, nil
 }
+
 func (s *sAggClusterCenters) Merge(groupNumber1 int64, groupNumber2 int64, result1 []byte, result2 []byte, isEmpty1 bool, isEmpty2 bool, priv2 any) ([]byte, bool, error) {
-	// NOTE: this function is copied from group_concat.go
+	// NOTE: this function is mostly copied from group_concat.go
 
 	if isEmpty2 {
 		return nil, isEmpty1 && isEmpty2, nil
@@ -126,14 +130,16 @@ func (s *sAggClusterCenters) Merge(groupNumber1 int64, groupNumber2 int64, resul
 func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 	result := make([][]byte, 0, len(s.groupedData))
 
-	// The kmeans logic
-	for i := 0; i < len(s.groupedData); i++ {
-		if len(s.groupedData[i]) == 0 {
+	// Run kmeans logic on each group.
+	for _, arrGroup := range s.groupedData {
+		if len(arrGroup) == 0 {
+			// if there is only no element in the group, then we skip it.
 			continue
 		}
 
-		if len(s.groupedData[i]) == 1 {
-			jsonData, err := json.Marshal(s.groupedData[i])
+		if len(arrGroup) == 1 {
+			// if there is only one element in the group, then that element is the centroid.
+			jsonData, err := json.Marshal(arrGroup)
 			if err != nil {
 				return nil, err
 			}
@@ -141,10 +147,9 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 			continue
 		}
 
-		// each groupedData contains vectors based on group by clause.
-		// if no group by is mentioned, we have groupedData[0] having all the data.
-		var vecf64 [][]float64
-		for _, arr := range s.groupedData[i] {
+		// 1. convert [][]byte to [][]float64
+		var vecf64List [][]float64
+		for _, arr := range arrGroup {
 			switch s.arrType.Oid {
 			case types.T_array_float32:
 				// 1. convert []byte to []float64
@@ -156,20 +161,21 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 					_vecf64[j] = float64(v)
 				}
 
-				vecf64 = append(vecf64, _vecf64)
+				vecf64List = append(vecf64List, _vecf64)
 
 			case types.T_array_float64:
-				vecf64 = append(vecf64, types.BytesToArray[float64](arr))
+				vecf64List = append(vecf64List, types.BytesToArray[float64](arr))
 			}
 		}
 
-		// 2. call kmeans.
-		distanceType, err := s.findDistanceType()
+		// 2. get the kmeans distance type
+		distanceType, err := s.getDistanceType()
 		if err != nil {
 			return nil, err
 		}
 
-		clusterer, err := elkans_kmeans.NewElkansKMeans(vecf64,
+		// 3. run kmeans
+		clusterer, err := elkans_kmeans.NewElkansKMeans(vecf64List,
 			int(s.clusterCnt),
 			defaultKmeansMaxIteration,
 			defaultKmeansDeltaThreshold,
@@ -183,20 +189,20 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 			return nil, err
 		}
 
-		// 3. convert centroids to json string
-		jsonData, err := json.Marshal(centers)
+		// 4. convert centroids (ie [][]float64) to `json array` string
+		jsonStr, err := json.Marshal(centers)
 		if err != nil {
 			return nil, err
 		}
 
-		// 4. convert json string to []byte
-		result = append(result, jsonData)
+		// 5. add the json-string byte[] to result
+		result = append(result, jsonStr)
 	}
 
 	return result, nil
 }
 
-func (s *sAggClusterCenters) findDistanceType() (elkans_kmeans.DistanceType, error) {
+func (s *sAggClusterCenters) getDistanceType() (elkans_kmeans.DistanceType, error) {
 	var distanceType elkans_kmeans.DistanceType
 	switch s.distType {
 	case "L2", "":
