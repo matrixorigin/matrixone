@@ -311,9 +311,9 @@ func (kmeans *ElkansKMeansClusterer) updateBounds(m [][]float64) {
 	}
 }
 
-func (kmeans *ElkansKMeansClusterer) isConverged(i int, changes int) bool {
+func (kmeans *ElkansKMeansClusterer) isConverged(iter int, changes int) bool {
 	vectorCnt := float64(len(kmeans.vectorList))
-	if i == kmeans.maxIterations ||
+	if iter == kmeans.maxIterations ||
 		changes < int(vectorCnt*kmeans.deltaThreshold) ||
 		changes == 0 {
 		return true
