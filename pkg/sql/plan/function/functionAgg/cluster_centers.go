@@ -162,18 +162,9 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 		}
 
 		// 2. call kmeans.
-		var distanceType elkans_kmeans.DistanceType
-		if s.distFn != "" {
-			switch s.distFn {
-			case "L2":
-				distanceType = elkans_kmeans.L2
-			case "IP":
-				distanceType = elkans_kmeans.InnerProduct
-			case "COSINE":
-				distanceType = elkans_kmeans.CosineDistance
-			default:
-				distanceType = elkans_kmeans.L2
-			}
+		distanceType, err := s.findDistanceType()
+		if err != nil {
+			return nil, err
 		}
 
 		clusterer, err := elkans_kmeans.NewElkansKMeans(vecf64,
@@ -201,6 +192,19 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 	}
 
 	return result, nil
+}
+
+func (s *sAggClusterCenters) findDistanceType() (elkans_kmeans.DistanceType, error) {
+	var distanceType elkans_kmeans.DistanceType
+	switch s.distFn {
+	case "L2", "":
+		distanceType = elkans_kmeans.L2
+	case "IP":
+		distanceType = elkans_kmeans.InnerProduct
+	case "COSINE":
+		distanceType = elkans_kmeans.CosineDistance
+	}
+	return distanceType, moerr.NewInternalErrorNoCtx("unsupported distance function '%s' for cluster_centers", s.distFn)
 }
 
 func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
@@ -295,7 +299,7 @@ func decodeConfig(config any) (k int64, distFn string, err error) {
 		commaSeperatedConfigStr := string(bts)
 		configs := strings.Split(commaSeperatedConfigStr, ",")
 		if len(configs) == 1 {
-			k, err = strconv.ParseInt(configs[0], 10, 64)
+			k, err = strconv.ParseInt(strings.TrimSpace(configs[0]), 10, 64)
 			if err != nil {
 				return 0, "", err
 			}
@@ -303,12 +307,12 @@ func decodeConfig(config any) (k int64, distFn string, err error) {
 		}
 
 		if len(configs) == 2 {
-			k, err = strconv.ParseInt(configs[0], 10, 64)
+			k, err = strconv.ParseInt(strings.TrimSpace(configs[0]), 10, 64)
 			if err != nil {
 				return 0, "", err
 			}
 
-			distFn = configs[1]
+			distFn = strings.TrimSpace(configs[1])
 			return k, distFn, nil
 		}
 
