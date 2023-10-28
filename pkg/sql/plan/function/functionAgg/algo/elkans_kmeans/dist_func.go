@@ -37,6 +37,9 @@ func findCorrespondingDistanceFunc(distType DistanceType) DistanceFunction {
 	return distanceFunction
 }
 
+// DistanceFunction is a function that computes the distance between two vectors
+// NOTE: clusterer already ensures that the all the input vectors are of the same length,
+// so we don't need to check for that here again.
 type DistanceFunction func(v1, v2 []float64) float64
 
 func L2Distance(v1, v2 []float64) float64 {
@@ -48,9 +51,6 @@ func L2Distance(v1, v2 []float64) float64 {
 }
 
 func AngularDistance(v1, v2 []float64) float64 {
-	if len(v1) != len(v2) {
-		panic("Vectors must be of the same length")
-	}
 
 	// Dot product and magnitude calculation
 	var dotProduct, magV1, magV2 float64
