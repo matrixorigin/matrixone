@@ -196,6 +196,7 @@ func (kmeans *ElkansKMeansClusterer) assignData() int {
 			// (i) c != c(x) and
 			// (ii) u(x)>l(x, c) and
 			// (iii) u(x)> 0.5 x d(c(x), c)
+			// NOTE: we proactively use the otherwise case
 			if c == cx && // (i)
 				ux <= kmeans.vectorMetas[x].l[c] && // ii)
 				ux <= kmeans.d[cx][c] { // (iii)
