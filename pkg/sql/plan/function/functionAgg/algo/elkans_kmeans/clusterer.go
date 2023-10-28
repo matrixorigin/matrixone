@@ -18,6 +18,8 @@ import (
 	"errors"
 	"math"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -108,7 +110,7 @@ func (kmeans *ElkansKMeansClusterer) Cluster() ([][]float64, error) {
 	changes := 0
 
 	for iter := 0; ; iter++ {
-		kmeans.computeCentroidDistanceMatrix() // step 1
+		kmeans.computeCentroidDistances() // step 1
 
 		changes = kmeans.assignData() // step 2 and 3
 
@@ -138,6 +140,24 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 	if deltaThreshold <= 0.0 || deltaThreshold >= 1.0 {
 		return errors.New("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
 	}
+
+	vecDim := len(vectorList[0])
+	var dimMismatch atomic.Bool
+	var wg sync.WaitGroup
+	for i := 1; i < len(vectorList); i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if len(vectorList[i]) != vecDim {
+				dimMismatch.Store(true)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if dimMismatch.Load() {
+		return errors.New("the list of vectors must contain vectors of the same dimension")
+	}
+
 	return nil
 }
 
@@ -149,12 +169,13 @@ func (kmeans *ElkansKMeansClusterer) InitCentroids() {
 	}
 }
 
-func (kmeans *ElkansKMeansClusterer) computeCentroidDistanceMatrix() {
+func (kmeans *ElkansKMeansClusterer) computeCentroidDistances() {
 
 	// step 1.a
 	// For all centers c and c', compute 0.5 x d(c, c').
 	for i := 0; i < kmeans.clusterCnt-1; i++ {
 		for j := i + 1; j < kmeans.clusterCnt; j++ {
+			//TODO: can be parallelized.
 			kmeans.d[i][j] = 0.5 * kmeans.distFn(kmeans.Centroids[i], kmeans.Centroids[j])
 			kmeans.d[j][i] = kmeans.d[i][j]
 		}
@@ -274,6 +295,7 @@ func (kmeans *ElkansKMeansClusterer) updateBounds(m [][]float64) {
 	//For each point x and center c, assign
 	// l(x, c)= max{ l(x, c)-d(c, m(c)), 0 }
 	for x := range kmeans.vectorList {
+		//TODO: can be parallelized.
 		for c := range kmeans.Centroids {
 			shift := kmeans.vectorMetas[x].l[c] - kmeans.distFn(kmeans.Centroids[c], m[c])
 			kmeans.vectorMetas[x].l[c] = math.Max(shift, 0)
