@@ -1084,6 +1084,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 				blocks, extent, err := writer.Sync(ctx)
 				if err != nil {
+					logutil.Infof("sync error: %v", err)
 					return nil, nil, nil, err
 				}
 
@@ -1107,6 +1108,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 		cnLocation, dnLocation, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 		if err != nil {
+			logutil.Infof("write to error: %v", err)
 			return nil, nil, nil, err
 		}
 		loc = cnLocation

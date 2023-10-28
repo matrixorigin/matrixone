@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -145,8 +146,10 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 		checksum, err := CopyFile(ctx, srcFs, dstFs, dentry, "")
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
-				isGC(gcFileMap, dentry.Name) {
+			if (moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+				isGC(gcFileMap, dentry.Name)) ||
+				moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+				logutil.Infof("file %s not found or already exists", dentry.Name)
 				continue
 			} else {
 				return err
