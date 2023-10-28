@@ -729,7 +729,7 @@ func TestClusterCenters(t *testing.T) {
 
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
-		distFn:     "L2",
+		distType:   "L2",
 		arrType:    types.T_array_float64.ToType(),
 	}
 	// input vectors/arrays
@@ -787,10 +787,10 @@ func TestClusterCenters(t *testing.T) {
 		err = s2.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later. Contents of result might not be the same.
-		require.Equal(t, len(s1.result), len(s2.result))
-		for i := range s1.result {
-			require.Equal(t, s1.result[i], s2.result[i])
+		require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later. Contents of groupedData might not be the same.
+		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
+		for i := range s1.groupedData {
+			require.Equal(t, s1.groupedData[i], s2.groupedData[i])
 		}
 	}
 }

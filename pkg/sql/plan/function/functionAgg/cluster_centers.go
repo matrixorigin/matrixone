@@ -37,17 +37,17 @@ var (
 	}
 
 	AggClusterCentersReturnType = func(typs []types.Type) types.Type {
-		return types.T_text.ToType()
+		return types.T_json.ToType()
 	}
 )
 
-// NewAggClusterCenters right now this agg function just converts a list of vectors/array to string. This is used for testing purpose agg function.
-// e.g. [[1,2,3],[4,5,6]] -> "1,2,3|4,5,6|"
+// NewAggClusterCenters this agg func will take list of vectors/arrays and run clustering algorithm like kmeans and
+// return list of centroids for each cluster.
 func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any, _ any) (agg.Agg[any], error) {
 	aggPriv := &sAggClusterCenters{}
 
 	var err error
-	aggPriv.clusterCnt, aggPriv.distFn, err = decodeConfig(config)
+	aggPriv.clusterCnt, aggPriv.distType, err = decodeConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -64,14 +64,15 @@ func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, 
 }
 
 type sAggClusterCenters struct {
-	// result will hold
-	//[group1] -> [array1, array2]
-	//[group2] -> [array3, array4, array5]
+	// groupedData will hold the list of vectors/arrays. It is a 3D slice because it is a list of groups (based on group by)
+	// and each group will have list of vectors/arrays
+	// [group1] -> [array1, array2]
+	// [group2] -> [array3, array4, array5]
 	// NOTE: here array is []byte ie types.T_varchar
-	result [][][]byte
+	groupedData [][][]byte
 
 	clusterCnt int64
-	distFn     string
+	distType   string
 
 	// arrType is the type of the array/vector
 	// It is used while converting array/vector to string and vice versa
@@ -79,8 +80,8 @@ type sAggClusterCenters struct {
 }
 
 func (s *sAggClusterCenters) Grows(cnt int) {
-	// grow the result slice based on the number of groups
-	s.result = append(s.result, make([][][]byte, cnt)...)
+	// grow the groupedData slice based on the number of groups
+	s.groupedData = append(s.groupedData, make([][][]byte, cnt)...)
 }
 func (s *sAggClusterCenters) Free(_ *mpool.MPool) {}
 func (s *sAggClusterCenters) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
@@ -105,7 +106,7 @@ func (s *sAggClusterCenters) Fill(groupNumber int64, values []byte, lastResult [
 
 	// values should be ideally having list of vectors/arrays
 	arrays := oneDimByteArrToTwoDimByteArr(values, int64(len(values))/count)
-	s.result[groupNumber] = append(s.result[groupNumber], arrays...)
+	s.groupedData[groupNumber] = append(s.groupedData[groupNumber], arrays...)
 
 	return nil, false, nil
 }
@@ -117,22 +118,22 @@ func (s *sAggClusterCenters) Merge(groupNumber1 int64, groupNumber2 int64, resul
 	}
 
 	s2 := priv2.(*sAggClusterCenters)
-	s.result[groupNumber1] = append(s.result[groupNumber1], s2.result[groupNumber2][:]...)
+	s.groupedData[groupNumber1] = append(s.groupedData[groupNumber1], s2.groupedData[groupNumber2][:]...)
 
 	return nil, isEmpty1 && isEmpty2, nil
 }
 
 func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
-	result := make([][]byte, 0, len(s.result))
+	result := make([][]byte, 0, len(s.groupedData))
 
 	// The kmeans logic
-	for i := 0; i < len(s.result); i++ {
-		if len(s.result[i]) == 0 {
+	for i := 0; i < len(s.groupedData); i++ {
+		if len(s.groupedData[i]) == 0 {
 			continue
 		}
 
-		if len(s.result[i]) == 1 {
-			jsonData, err := json.Marshal(s.result[i])
+		if len(s.groupedData[i]) == 1 {
+			jsonData, err := json.Marshal(s.groupedData[i])
 			if err != nil {
 				return nil, err
 			}
@@ -140,9 +141,10 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 			continue
 		}
 
-		// each result acts more like group by clause.
+		// each groupedData contains vectors based on group by clause.
+		// if no group by is mentioned, we have groupedData[0] having all the data.
 		var vecf64 [][]float64
-		for _, arr := range s.result[i] {
+		for _, arr := range s.groupedData[i] {
 			switch s.arrType.Oid {
 			case types.T_array_float32:
 				// 1. convert []byte to []float64
@@ -196,7 +198,7 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 
 func (s *sAggClusterCenters) findDistanceType() (elkans_kmeans.DistanceType, error) {
 	var distanceType elkans_kmeans.DistanceType
-	switch s.distFn {
+	switch s.distType {
 	case "L2", "":
 		distanceType = elkans_kmeans.L2
 	case "IP":
@@ -204,12 +206,12 @@ func (s *sAggClusterCenters) findDistanceType() (elkans_kmeans.DistanceType, err
 	case "COSINE":
 		distanceType = elkans_kmeans.CosineDistance
 	}
-	return distanceType, moerr.NewInternalErrorNoCtx("unsupported distance function '%s' for cluster_centers", s.distFn)
+	return distanceType, moerr.NewInternalErrorNoCtx("unsupported distance function '%s' for cluster_centers", s.distType)
 }
 
 func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
 
-	if len(s.result) == 0 {
+	if len(s.groupedData) == 0 {
 		return nil, nil
 	}
 
@@ -222,10 +224,10 @@ func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
 	}
 	buf.Write(a)
 
-	// result
-	strList := make([]string, 0, len(s.result))
-	for i := range s.result {
-		strList = append(strList, s.arraysToString(s.result[i]))
+	// groupedData
+	strList := make([]string, 0, len(s.groupedData))
+	for i := range s.groupedData {
+		strList = append(strList, s.arraysToString(s.groupedData[i]))
 	}
 	buf.Write(types.EncodeStringSlice(strList))
 
@@ -243,12 +245,12 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
-	// result
+	// groupedData
 	data = data[20:]
 	strList := types.DecodeStringSlice(data)
-	s.result = make([][][]byte, len(strList))
-	for i := range s.result {
-		s.result[i] = s.stringToArrays(strList[i])
+	s.groupedData = make([][][]byte, len(strList))
+	for i := range s.groupedData {
+		s.groupedData[i] = s.stringToArrays(strList[i])
 	}
 	return nil
 }
