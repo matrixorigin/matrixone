@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algo/elkans_kmeans"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/elkans_kmeans"
 	"strconv"
 	"strings"
 )

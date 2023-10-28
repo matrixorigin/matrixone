@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algo/elkans_kmeans"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/elkans_kmeans"
 	"math"
 	"testing"
 
