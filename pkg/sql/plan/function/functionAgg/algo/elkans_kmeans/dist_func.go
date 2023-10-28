@@ -14,7 +14,10 @@
 
 package elkans_kmeans
 
-import "math"
+import (
+	"errors"
+	"math"
+)
 
 type DistanceType uint16
 
@@ -24,7 +27,7 @@ const (
 	CosineDistance
 )
 
-func findCorrespondingDistanceFunc(distType DistanceType) DistanceFunction {
+func findCorrespondingDistanceFunc(distType DistanceType) (DistanceFunction, error) {
 	var distanceFunction DistanceFunction
 	switch distType {
 	case L2:
@@ -32,9 +35,9 @@ func findCorrespondingDistanceFunc(distType DistanceType) DistanceFunction {
 	case InnerProduct, CosineDistance:
 		distanceFunction = AngularDistance
 	default:
-		distanceFunction = L2Distance
+		return nil, errors.New("invalid distance type")
 	}
-	return distanceFunction
+	return distanceFunction, nil
 }
 
 // DistanceFunction is a function that computes the distance between two vectors

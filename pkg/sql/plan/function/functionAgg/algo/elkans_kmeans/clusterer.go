@@ -28,7 +28,20 @@ type Clusterer interface {
 	Cluster() ([][]float64, error)
 }
 
+// ElkansKMeansClusterer is an improved kmeans algorithm which using the triangle inequality to reduce the number of
+// distance calculations. As quoted from the paper:
+// " The main contribution of this paper is an optimized version of the standard k-means method, with which the number
+// of distance computations is in practice closer to n than to nke"
+//
+// However, during each iteration of the algorithm, the lower bounds l(x, c) are updated for all points x and centers c.
+// These updates take O(nk) time, so the complexity of the algorithm remains at least O(nke), even though the number
+// of distance calculations is roughly O(n) only.
+// NOTE that, distance calculation is very expensive for higher dimension vectors.
+//
+// Ref Paper: https://cdn.aaai.org/ICML/2003/ICML03-022.pdf
+// Ref Material :https://www.cse.iitd.ac.in/~rjaiswal/2015/col870/Project/Nipun.pdf
 type ElkansKMeansClusterer struct {
+	// thresholds
 	maxIterations  int
 	deltaThreshold float64
 
@@ -48,7 +61,7 @@ type ElkansKMeansClusterer struct {
 }
 
 type vectorMeta struct {
-	l []float64 // lower
+	l []float64 // lower bound
 	u float64   // upper bound
 	r bool      // recompute
 }
@@ -60,7 +73,7 @@ func NewElkansKMeans(vectors [][]float64,
 	deltaThreshold float64,
 	distanceType DistanceType) (Clusterer, error) {
 
-	err := validateArgs(vectors, clusterCnt, maxIterations, deltaThreshold)
+	err := validateArgs(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +97,10 @@ func NewElkansKMeans(vectors [][]float64,
 		centroidDist[i] = make([]float64, clusterCnt)
 	}
 
-	distanceFunction := findCorrespondingDistanceFunc(distanceType)
+	distanceFunction, err := findCorrespondingDistanceFunc(distanceType)
+	if err != nil {
+		return nil, err
+	}
 
 	return &ElkansKMeansClusterer{
 		maxIterations:  maxIterations,
@@ -104,6 +120,9 @@ func NewElkansKMeans(vectors [][]float64,
 	}, nil
 }
 
+// Cluster returns the final centroids and the error if any.
+// The algorithm variables are named to match the paper for easy understanding.
+// Ref Paper: https://cdn.aaai.org/ICML/2003/ICML03-022.pdf
 func (kmeans *ElkansKMeansClusterer) Cluster() ([][]float64, error) {
 
 	kmeans.InitCentroids() // step 0
@@ -127,7 +146,7 @@ func (kmeans *ElkansKMeansClusterer) Cluster() ([][]float64, error) {
 	return kmeans.Centroids, nil
 }
 
-func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaThreshold float64) error {
+func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaThreshold float64, distanceType DistanceType) error {
 	if vectorList == nil || len(vectorList) == 0 || len(vectorList[0]) == 0 {
 		return errors.New("input vectors is empty")
 	}
@@ -140,7 +159,11 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 	if deltaThreshold <= 0.0 || deltaThreshold >= 1.0 {
 		return errors.New("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
 	}
+	if distanceType < 0 || distanceType > 3 {
+		return errors.New("distance type is not supported")
+	}
 
+	// validate that all vectors have the same dimension
 	vecDim := len(vectorList[0])
 	var dimMismatch atomic.Bool
 	var wg sync.WaitGroup
@@ -161,6 +184,12 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 	return nil
 }
 
+// InitCentroids initializes the centroids to random vectors from the vector list.
+// We are not using Kmeans++ initialization because it is expensive for higher dimension vectors.
+// As mentioned in the FAISS discussion here https://github.com/facebookresearch/faiss/issues/268#issuecomment-348184505
+// "We have not implemented it in Faiss, because with our former Yael library, which implements both k-means++
+// and regular random initialization, we observed that the overhead computational cost was not
+// worth the saving (negligible) in all large-scale settings we have considered."
 func (kmeans *ElkansKMeansClusterer) InitCentroids() {
 	random := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for i := 0; i < kmeans.clusterCnt; i++ {
@@ -169,6 +198,8 @@ func (kmeans *ElkansKMeansClusterer) InitCentroids() {
 	}
 }
 
+// computeCentroidDistances computes the centroid distances and the min centroid distances.
+// NOTE: here we are save 0.5 of centroid distance to avoid 0.5 multiplication in step 3(iii) and 3.b.
 func (kmeans *ElkansKMeansClusterer) computeCentroidDistances() {
 
 	// step 1.a
@@ -195,6 +226,8 @@ func (kmeans *ElkansKMeansClusterer) computeCentroidDistances() {
 	}
 }
 
+// assignData assigns each vector to the nearest centroid.
+// This is the place where most of the pruning happens.
 func (kmeans *ElkansKMeansClusterer) assignData() int {
 
 	var ux float64 // currVecUpperBound
@@ -253,6 +286,7 @@ func (kmeans *ElkansKMeansClusterer) assignData() int {
 	return changes
 }
 
+// recalculateCentroids calculates the new mean centroids based on the new assignments.
 func (kmeans *ElkansKMeansClusterer) recalculateCentroids() [][]float64 {
 	clusterMembersCount := make([]int64, len(kmeans.Centroids))
 	clusterMembersDimWiseSum := make([][]float64, len(kmeans.Centroids))
@@ -290,6 +324,7 @@ func (kmeans *ElkansKMeansClusterer) recalculateCentroids() [][]float64 {
 	return newCentroids
 }
 
+// updateBounds updates the lower and upper bounds for each vector.
 func (kmeans *ElkansKMeansClusterer) updateBounds(m [][]float64) {
 	// step 5
 	//For each point x and center c, assign
@@ -311,6 +346,7 @@ func (kmeans *ElkansKMeansClusterer) updateBounds(m [][]float64) {
 	}
 }
 
+// isConverged checks if the algorithm has converged.
 func (kmeans *ElkansKMeansClusterer) isConverged(iter int, changes int) bool {
 	vectorCnt := float64(len(kmeans.vectorList))
 	if iter == kmeans.maxIterations ||
