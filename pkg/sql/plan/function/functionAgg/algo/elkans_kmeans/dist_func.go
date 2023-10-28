@@ -16,7 +16,7 @@ package elkans_kmeans
 
 import "math"
 
-type DistanceType uint8
+type DistanceType uint16
 
 const (
 	L2 DistanceType = iota

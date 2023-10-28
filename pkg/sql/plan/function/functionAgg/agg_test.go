@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algo/elkans_kmeans"
 	"math"
 	"testing"
 
@@ -729,40 +730,34 @@ func TestClusterCenters(t *testing.T) {
 
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
-		distType:   "L2",
+		distType:   elkans_kmeans.L2,
 		arrType:    types.T_array_float64.ToType(),
 	}
-	// input vectors/arrays
-	var vecf64Input = [][]float64{
-		{1, 2, 3, 4},
-		{2, 3, 4, 5},
-		{3, 3, 4, 5},
-		{4, 3, 4, 5},
+	// input vectors/arrays of 4 rows with 4th row as null
+	var vecf64Input = [][]byte{
+		types.ArrayToBytes[float64]([]float64{1, 2, 3, 4}),
+		types.ArrayToBytes[float64]([]float64{2, 3, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{3, 3, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{4, 3, 4, 5}), //<-- null
 	}
-
-	// pack the input vectors into [][]byte
-	var packedInput = make([][]byte, len(vecf64Input))
-	for i, vec := range vecf64Input {
-		packedInput[i] = types.ArrayToBytes[float64](vec)
-	}
-
 	nsp := nulls.NewWithSize(4)
 	nsp.Add(3)
 
 	{
 		// Test arraysToString
-		actual := s1.arraysToString(packedInput)
+		actual := s1.arraysToString(vecf64Input)
 		expected := "[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|"
 		require.Equal(t, expected, actual)
 	}
 	{
 		// Test stringToArrays
-		actual := s1.stringToArrays("[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|")
-		expected := packedInput
+		actual, _ := s1.stringToArrays("[1, 2, 3, 4]|[2, 3, 4, 5]|[3, 3, 4, 5]|[4, 3, 4, 5]|")
+		expected := vecf64Input
 		require.Equal(t, expected, actual)
 	}
 
 	{
+		// Test aggFn
 		tr := &simpleAggTester[[]byte, []byte]{
 			source: s1,
 			grow:   s1.Grows,
@@ -771,7 +766,7 @@ func TestClusterCenters(t *testing.T) {
 			merge:  s1.Merge,
 			eval:   s1.Eval,
 		}
-		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
+		err := tr.testUnaryAgg(vecf64Input, nsp, func(result []byte, isEmpty bool) bool {
 			var vecf64Output [][]float64
 			err := json.Unmarshal(result, &vecf64Output)
 			return err == nil && !isEmpty && len(vecf64Output) == 2
@@ -781,13 +776,16 @@ func TestClusterCenters(t *testing.T) {
 	}
 
 	{
+		// Test Marshall and Unmarshall
 		data, err := s1.MarshalBinary()
 		require.NoError(t, err)
 		s2 := new(sAggClusterCenters)
 		err = s2.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		require.Equal(t, s1.arrType, s2.arrType) //TODO: Fix the bug later. Contents of groupedData might not be the same.
+		require.Equal(t, s1.arrType, s2.arrType)
+		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
+		require.Equal(t, s1.distType, s2.distType)
 		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
 		for i := range s1.groupedData {
 			require.Equal(t, s1.groupedData[i], s2.groupedData[i])

@@ -16,6 +16,7 @@ package functionAgg
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +30,11 @@ import (
 const (
 	defaultKmeansMaxIteration   = 500
 	defaultKmeansDeltaThreshold = 0.01
+	defaultKmeansDistanceType   = elkans_kmeans.L2
+	defaultKmeansClusterCnt     = 1
+
+	configSeparator     = ","
+	arrayGroupSeparator = "|"
 )
 
 var (
@@ -73,8 +79,8 @@ type sAggClusterCenters struct {
 	groupedData [][][]byte
 
 	// Kmeans parameters
-	clusterCnt int64
-	distType   string
+	clusterCnt uint64
+	distType   elkans_kmeans.DistanceType
 
 	// arrType is the type of the array/vector
 	// It is used while converting array/vector from []byte to []float64 or []float32
@@ -168,18 +174,12 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 			}
 		}
 
-		// 2. get the kmeans distance type
-		distanceType, err := s.getDistanceType()
-		if err != nil {
-			return nil, err
-		}
-
-		// 3. run kmeans
+		// 2. run kmeans
 		clusterer, err := elkans_kmeans.NewElkansKMeans(vecf64List,
 			int(s.clusterCnt),
 			defaultKmeansMaxIteration,
 			defaultKmeansDeltaThreshold,
-			distanceType)
+			s.distType)
 		if err != nil {
 			return nil, err
 		}
@@ -189,30 +189,17 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 			return nil, err
 		}
 
-		// 4. convert centroids (ie [][]float64) to `json array` string
+		// 3. convert centroids (ie [][]float64) to `json array` string
 		jsonStr, err := json.Marshal(centers)
 		if err != nil {
 			return nil, err
 		}
 
-		// 5. add the json-string byte[] to result
+		// 4. add the json-string byte[] to result
 		result = append(result, jsonStr)
 	}
 
 	return result, nil
-}
-
-func (s *sAggClusterCenters) getDistanceType() (elkans_kmeans.DistanceType, error) {
-	var distanceType elkans_kmeans.DistanceType
-	switch s.distType {
-	case "L2", "":
-		distanceType = elkans_kmeans.L2
-	case "IP":
-		distanceType = elkans_kmeans.InnerProduct
-	case "COSINE":
-		distanceType = elkans_kmeans.CosineDistance
-	}
-	return distanceType, moerr.NewInternalErrorNoCtx("unsupported distance function '%s' for cluster_centers", s.distType)
 }
 
 func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
@@ -223,14 +210,24 @@ func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
 
 	var buf bytes.Buffer
 
-	// arrType
+	// 1. arrType
 	a, err := s.arrType.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
 	buf.Write(a)
 
-	// groupedData
+	// 2. clusterCnt
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b[0:], s.clusterCnt)
+	buf.Write(b)
+
+	// 3. distType
+	c := make([]byte, 2)
+	binary.BigEndian.PutUint16(c[0:], uint16(s.distType))
+	buf.Write(c)
+
+	// 4. groupedData
 	strList := make([]string, 0, len(s.groupedData))
 	for i := range s.groupedData {
 		strList = append(strList, s.arraysToString(s.groupedData[i]))
@@ -245,24 +242,35 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 		return nil
 	}
 
-	// arrType
-	err := s.arrType.UnmarshalBinary(data[:20])
+	// 1.arrType
+	err := s.arrType.UnmarshalBinary(data[:s.arrType.ProtoSize()])
 	if err != nil {
 		return err
 	}
+	data = data[s.arrType.ProtoSize():]
 
-	// groupedData
-	data = data[20:]
+	// 2. clusterCnt
+	s.clusterCnt = binary.BigEndian.Uint64(data[:8])
+	data = data[8:]
+
+	// 3. distType
+	s.distType = elkans_kmeans.DistanceType(binary.BigEndian.Uint16(data[:2]))
+	data = data[2:]
+
+	// 4. groupedData
 	strList := types.DecodeStringSlice(data)
 	s.groupedData = make([][][]byte, len(strList))
 	for i := range s.groupedData {
-		s.groupedData[i] = s.stringToArrays(strList[i])
+		s.groupedData[i], err = s.stringToArrays(strList[i])
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // arraysToString converts list of array/vector to string
-// e.g. []array -> "1,2,3|4,5,6|"
+// e.g. []vector -> "1,2,3|4,5,6|"
 func (s *sAggClusterCenters) arraysToString(arrays [][]byte) string {
 	var res string
 	var commaSeperatedArrString string
@@ -273,7 +281,7 @@ func (s *sAggClusterCenters) arraysToString(arrays [][]byte) string {
 		case types.T_array_float64:
 			commaSeperatedArrString = types.BytesToArrayToString[float64](arr)
 		}
-		res += commaSeperatedArrString + "|"
+		res += commaSeperatedArrString + arrayGroupSeparator
 	}
 	return res
 
@@ -281,49 +289,68 @@ func (s *sAggClusterCenters) arraysToString(arrays [][]byte) string {
 
 // stringToArrays converts string to a list of array/vector
 // e.g. "1,2,3|4,5,6|" -> []array
-func (s *sAggClusterCenters) stringToArrays(str string) [][]byte {
-	arrays := strings.Split(str, "|")
+func (s *sAggClusterCenters) stringToArrays(str string) ([][]byte, error) {
 	var res [][]byte
-	var array []byte
+	var vecf []byte
+	var err error
+
+	arrays := strings.Split(str, arrayGroupSeparator)
 	for _, arr := range arrays {
 		if len(strings.TrimSpace(arr)) == 0 {
 			continue
 		}
 		switch s.arrType.Oid {
 		case types.T_array_float32:
-			array, _ = types.StringToArrayToBytes[float32](arr)
+			vecf, err = types.StringToArrayToBytes[float32](arr)
+			if err != nil {
+				return nil, err
+			}
 		case types.T_array_float64:
-			array, _ = types.StringToArrayToBytes[float64](arr)
+			vecf, err = types.StringToArrayToBytes[float64](arr)
+			if err != nil {
+				return nil, err
+			}
 		}
-		res = append(res, array)
+		res = append(res, vecf)
 	}
-	return res
+	return res, nil
 
 }
 
-func decodeConfig(config any) (k int64, distFn string, err error) {
+func decodeConfig(config any) (k uint64, distType elkans_kmeans.DistanceType, err error) {
 	bts, ok := config.([]byte)
 	if ok && bts != nil {
 		commaSeperatedConfigStr := string(bts)
-		configs := strings.Split(commaSeperatedConfigStr, ",")
+		configs := strings.Split(commaSeperatedConfigStr, configSeparator)
 		if len(configs) == 1 {
-			k, err = strconv.ParseInt(strings.TrimSpace(configs[0]), 10, 64)
+			k, err = strconv.ParseUint(strings.TrimSpace(configs[0]), 10, 64)
 			if err != nil {
-				return 0, "", err
+				return 0, defaultKmeansDistanceType, err
 			}
-			return k, "L2", nil
+			return k, defaultKmeansDistanceType, nil
 		}
 
 		if len(configs) == 2 {
-			k, err = strconv.ParseInt(strings.TrimSpace(configs[0]), 10, 64)
+			k, err = strconv.ParseUint(strings.TrimSpace(configs[0]), 10, 64)
 			if err != nil {
-				return 0, "", err
+				return 0, defaultKmeansDistanceType, err
 			}
 
-			distFn = strings.TrimSpace(configs[1])
-			return k, distFn, nil
+			distTypeStr := strings.TrimSpace(configs[1])
+			switch distTypeStr {
+			case "L2":
+				distType = elkans_kmeans.L2
+			case "IP":
+				distType = elkans_kmeans.InnerProduct
+			case "COSINE":
+				distType = elkans_kmeans.CosineDistance
+			default:
+				return 0, defaultKmeansDistanceType, moerr.NewInternalErrorNoCtx("unsupported distance_type '%s' for cluster_centers", distTypeStr)
+			}
+
+			return k, distType, nil
 		}
 
 	}
-	return 1, "L2", nil
+	return defaultKmeansClusterCnt, defaultKmeansDistanceType, nil
 }
