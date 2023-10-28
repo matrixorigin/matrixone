@@ -36,9 +36,9 @@ type ElkansKMeansClusterer struct {
 	assignments []int
 
 	// for each of the k centroids, we keep track of the following data
-	Centroids       [][]float64
-	centroidDist    [][]float64
-	minCentroidDist []float64
+	Centroids [][]float64
+	d         [][]float64 // centroidDist
+	s         []float64   // minCentroidDist
 
 	distFn     DistanceFunction
 	clusterCnt int
@@ -46,9 +46,9 @@ type ElkansKMeansClusterer struct {
 }
 
 type vectorMeta struct {
-	lower     []float64
-	upper     float64
-	recompute bool
+	l []float64 // lower
+	u float64   // upper bound
+	r bool      // recompute
 }
 
 var _ Clusterer = new(ElkansKMeansClusterer)
@@ -67,9 +67,9 @@ func NewElkansKMeans(vectors [][]float64,
 	var metas = make([]vectorMeta, len(vectors))
 	for i := range metas {
 		metas[i] = vectorMeta{
-			lower:     make([]float64, clusterCnt),
-			upper:     0,
-			recompute: true,
+			l: make([]float64, clusterCnt),
+			u: 0,
+			r: true,
 		}
 	}
 
@@ -92,9 +92,9 @@ func NewElkansKMeans(vectors [][]float64,
 		assignments: assignments,
 		vectorMetas: metas,
 
-		Centroids:       centroids,
-		centroidDist:    centroidDist,
-		minCentroidDist: minCentroidDist,
+		Centroids: centroids,
+		d:         centroidDist,
+		s:         minCentroidDist,
 
 		distFn:     distanceFunction,
 		clusterCnt: clusterCnt,
@@ -155,70 +155,74 @@ func (kmeans *ElkansKMeansClusterer) computeCentroidDistanceMatrix() {
 	// For all centers c and c', compute 0.5 x d(c, c').
 	for i := 0; i < kmeans.clusterCnt-1; i++ {
 		for j := i + 1; j < kmeans.clusterCnt; j++ {
-			kmeans.centroidDist[i][j] = 0.5 * kmeans.distFn(kmeans.Centroids[i], kmeans.Centroids[j])
-			kmeans.centroidDist[j][i] = kmeans.centroidDist[i][j]
+			kmeans.d[i][j] = 0.5 * kmeans.distFn(kmeans.Centroids[i], kmeans.Centroids[j])
+			kmeans.d[j][i] = kmeans.d[i][j]
 		}
 	}
 
 	// step 1.b
-	//  For all centers c, compute s(c)=0.5 min {d(c, c') | c'!= c}.
+	//  For all centers c, compute s(c)=0.5 x min{d(c, c') | c'!= c}.
 	for i := 0; i < kmeans.clusterCnt; i++ {
 		currMinDist := math.MaxFloat64
 		for j := 0; j < kmeans.clusterCnt; j++ {
 			if i == j {
 				continue
 			}
-			currMinDist = math.Min(kmeans.centroidDist[i][j], currMinDist)
+			currMinDist = math.Min(kmeans.d[i][j], currMinDist)
 		}
-		kmeans.minCentroidDist[i] = currMinDist
+		kmeans.s[i] = currMinDist
 	}
 }
 
 func (kmeans *ElkansKMeansClusterer) assignData() int {
 
-	var currVecUpperBound float64
-	var currVecClusterAssignmentIdx int
+	var ux float64 // currVecUpperBound
+	var cx int     // currVecClusterAssignmentIdx
 	changes := 0
 
-	for currVectorIdx, x := range kmeans.vectorList {
+	for x := range kmeans.vectorList { // x is currVectorIdx
 
-		currVecUpperBound = kmeans.vectorMetas[currVectorIdx].upper     // u(x) in the paper
-		currVecClusterAssignmentIdx = kmeans.assignments[currVectorIdx] // c(x) in the paper
+		ux = kmeans.vectorMetas[x].u // u(x) in the paper
+		cx = kmeans.assignments[x]   // c(x) in the paper
 
 		// step 2 u(x) <= s(c(x))
-		if currVecUpperBound <= kmeans.minCentroidDist[currVecClusterAssignmentIdx] {
+		if ux <= kmeans.s[cx] {
 			continue
 		}
 
-		// step 3
-		for nextPossibleCentroidIdx := range kmeans.Centroids {
-			if nextPossibleCentroidIdx == currVecClusterAssignmentIdx && // (i)
-				currVecUpperBound <= kmeans.vectorMetas[currVectorIdx].lower[nextPossibleCentroidIdx] && // ii)
-				currVecUpperBound <= kmeans.centroidDist[currVecClusterAssignmentIdx][nextPossibleCentroidIdx] { // (iii)
+		for c := range kmeans.Centroids { // c is nextPossibleCentroidIdx
+			// step 3
+			// For all remaining points x and centers c such that
+			// (i) c != c(x) and
+			// (ii) u(x)>l(x, c) and
+			// (iii) u(x)> 0.5 x d(c(x), c)
+			if c == cx && // (i)
+				ux <= kmeans.vectorMetas[x].l[c] && // ii)
+				ux <= kmeans.d[cx][c] { // (iii)
 				continue
 			}
 
-			/* Step 3.a */
-			// proactively use the otherwise case
-			distToCentroid := currVecUpperBound
-			if kmeans.vectorMetas[currVectorIdx].recompute {
-				// then recompute the distance to the assigned
-				// centroid
-				distToCentroid = kmeans.distFn(x, kmeans.Centroids[currVecClusterAssignmentIdx])
-				kmeans.vectorMetas[currVectorIdx].upper = distToCentroid
-				kmeans.vectorMetas[currVectorIdx].lower[currVecClusterAssignmentIdx] = distToCentroid
-				kmeans.vectorMetas[currVectorIdx].recompute = false
+			//step 3.a - Bounds update
+			// If r(x) then compute d(x, c(x)) and assign r(x)= false. Otherwise, d(x, c(x))=u(x).
+			dxcx := ux // d(x, c(x)) in the paper ie distToCentroid
+			if kmeans.vectorMetas[x].r {
+				dxcx = kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[cx])
+				kmeans.vectorMetas[x].u = dxcx
+				kmeans.vectorMetas[x].l[cx] = dxcx
+				kmeans.vectorMetas[x].r = false
 			}
 
-			/* Step 3.b */
-			if distToCentroid > kmeans.vectorMetas[currVectorIdx].lower[nextPossibleCentroidIdx] ||
-				distToCentroid > kmeans.centroidDist[currVecClusterAssignmentIdx][nextPossibleCentroidIdx] {
-				// only now compute the distance to the
-				// centroid
-				dist := kmeans.distFn(x, kmeans.Centroids[nextPossibleCentroidIdx])
-				kmeans.vectorMetas[currVectorIdx].lower[nextPossibleCentroidIdx] = dist
-				if dist < distToCentroid {
-					kmeans.assignments[currVectorIdx] = nextPossibleCentroidIdx
+			//step 3.b - Update
+			// If d(x, c(x))>l(x, c) or d(x, c(x))> 0.5 d(c(x), c) then
+			// Compute d(x, c)
+			// If d(x, c)<d(x, c(x)) then assign c(x)=c.
+			if dxcx > kmeans.vectorMetas[x].l[c] ||
+				dxcx > kmeans.d[cx][c] {
+
+				dxc := kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[c]) // d(x,c) in the paper
+				kmeans.vectorMetas[x].l[c] = dxc
+				if dxc < dxcx {
+					kmeans.assignments[x] = c
 					changes++
 				}
 			}
@@ -231,14 +235,14 @@ func (kmeans *ElkansKMeansClusterer) recalculateCentroids() [][]float64 {
 	clusterElementsSum := make([][]float64, len(kmeans.Centroids))
 	clusterElementsCount := make([]int64, len(kmeans.Centroids))
 
-	for j := range kmeans.Centroids {
-		clusterElementsSum[j] = make([]float64, len(kmeans.vectorList[0]))
+	for c := range kmeans.Centroids {
+		clusterElementsSum[c] = make([]float64, len(kmeans.vectorList[0]))
 	}
 
-	for i, x := range kmeans.vectorList {
-		clusterElementsCount[kmeans.assignments[i]]++
-		for j := range x {
-			clusterElementsSum[kmeans.assignments[i]][j] += x[j]
+	for x, vec := range kmeans.vectorList {
+		clusterElementsCount[kmeans.assignments[x]]++
+		for e := range vec {
+			clusterElementsSum[kmeans.assignments[x]][e] += vec[e]
 		}
 	}
 
@@ -261,27 +265,23 @@ func (kmeans *ElkansKMeansClusterer) recalculateCentroids() [][]float64 {
 	return centroids
 }
 
-func (kmeans *ElkansKMeansClusterer) updateBounds(newCentroids [][]float64) {
-	for i := range kmeans.vectorList {
-		/* Step 5 */
-		for j := range kmeans.Centroids {
-			// calculate the shift to the new centroid
-			shift := kmeans.vectorMetas[i].lower[j] - kmeans.distFn(kmeans.Centroids[j], newCentroids[j])
-
-			// bound the shift at 0 and assign it
-			// as the new lower bound
-			if shift < 0 {
-				shift = 0
-			}
-			kmeans.vectorMetas[i].lower[j] = shift
+func (kmeans *ElkansKMeansClusterer) updateBounds(m [][]float64) {
+	// step 5
+	//For each point x and center c, assign
+	// l(x, c)= max{ l(x, c)-d(c, m(c)), 0 }
+	for x := range kmeans.vectorList {
+		for c := range kmeans.Centroids {
+			shift := kmeans.vectorMetas[x].l[c] - kmeans.distFn(kmeans.Centroids[c], m[c])
+			kmeans.vectorMetas[x].l[c] = math.Max(shift, 0)
 		}
 
-		/* Step 6 */
-		// reassign the currVecUpperBound bound to account
-		// for the centroid shift
-		currVecClusterAssignmentIdx := kmeans.assignments[i]
-		kmeans.vectorMetas[i].upper += kmeans.distFn(newCentroids[currVecClusterAssignmentIdx], kmeans.Centroids[currVecClusterAssignmentIdx])
-		kmeans.vectorMetas[i].recompute = true
+		// step 6
+		// For each point x, assign
+		// u(x)=u(x)+d(m(c(x)), c(x))
+		// r(x)= true
+		cx := kmeans.assignments[x] // ie currVecClusterAssignmentIdx
+		kmeans.vectorMetas[x].u += kmeans.distFn(m[cx], kmeans.Centroids[cx])
+		kmeans.vectorMetas[x].r = true
 	}
 }
 
