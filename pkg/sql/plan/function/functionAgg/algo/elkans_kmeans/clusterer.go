@@ -233,37 +233,40 @@ func (kmeans *ElkansKMeansClusterer) assignData() int {
 }
 
 func (kmeans *ElkansKMeansClusterer) recalculateCentroids() [][]float64 {
-	clusterElementsSum := make([][]float64, len(kmeans.Centroids))
-	clusterElementsCount := make([]int64, len(kmeans.Centroids))
+	clusterMembersCount := make([]int64, len(kmeans.Centroids))
+	clusterMembersDimWiseSum := make([][]float64, len(kmeans.Centroids))
 
 	for c := range kmeans.Centroids {
-		clusterElementsSum[c] = make([]float64, len(kmeans.vectorList[0]))
+		clusterMembersDimWiseSum[c] = make([]float64, len(kmeans.vectorList[0]))
 	}
 
 	for x, vec := range kmeans.vectorList {
-		clusterElementsCount[kmeans.assignments[x]]++
-		for e := range vec {
-			clusterElementsSum[kmeans.assignments[x]][e] += vec[e]
+		cx := kmeans.assignments[x]
+		clusterMembersCount[cx]++
+		for dim := range vec {
+			clusterMembersDimWiseSum[cx][dim] += vec[dim]
 		}
 	}
 
-	centroids := append([][]float64{}, kmeans.Centroids...)
-	for j := range centroids {
-		// if no objects are in the same class,
-		// reinitialize it to a random vector
-		if clusterElementsCount[j] == 0 {
-			for l := range centroids[j] {
-				centroids[j][l] = 10 * (rand.Float64() - 0.5)
+	newCentroids := append([][]float64{}, kmeans.Centroids...)
+	for c, newCentroid := range newCentroids {
+		memberCnt := float64(clusterMembersCount[c])
+
+		if memberCnt == 0 {
+			// if the cluster is empty, reinitialize it to a random vector, since you can't find the median of an empty set
+			for l := range newCentroid {
+				newCentroid[l] = 10 * (rand.Float64() - 0.5)
 			}
-			continue
+		} else {
+			// find the mean of the cluster members
+			for dim := range newCentroid {
+				newCentroid[dim] = clusterMembersDimWiseSum[c][dim] / memberCnt
+			}
 		}
 
-		for l := range centroids[j] {
-			centroids[j][l] = clusterElementsSum[j][l] / float64(clusterElementsCount[j])
-		}
 	}
 
-	return centroids
+	return newCentroids
 }
 
 func (kmeans *ElkansKMeansClusterer) updateBounds(m [][]float64) {
