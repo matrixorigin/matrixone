@@ -31,7 +31,6 @@ import (
 type mockHAKeeperClient struct {
 	sync.RWMutex
 	value logpb.ClusterDetails
-	err   error
 }
 
 func (c *mockHAKeeperClient) updateCN(uuid string, addr string, labels map[string]metadata.LabelList) {
@@ -69,9 +68,19 @@ func (c *mockHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key s
 func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
 	c.RLock()
 	defer c.RUnlock()
-	return c.value, c.err
+
+	// return a deepcopy of inner state to avoid data race
+	r := logpb.ClusterDetails{}
+	bytes, err := c.value.Marshal()
+	if err != nil {
+		return r, err
+	}
+	if err := r.Unmarshal(bytes); err != nil {
+		return r, err
+	}
+	return r, nil
 }
-func (c *mockHAKeeperClient) GetClusterState(ctx context.Context) (logpb.CheckerState, error) {
+func (c *mockHAKeeperClient) GetClusterState(_ context.Context) (logpb.CheckerState, error) {
 	return logpb.CheckerState{
 		TaskTableUser: logpb.TaskTableUser{
 			Username: "u1",
