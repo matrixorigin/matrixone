@@ -215,7 +215,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			return err
 		}
 		taeFileList = append(taeFileList, &taeFile{
-			path: "ckp/" + dentry.Name,
+			path: dentry.Name,
 			size: dentry.Size,
 		})
 		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, cnLocation, tnLocation, start, end)
