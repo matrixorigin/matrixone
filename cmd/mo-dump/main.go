@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -43,13 +44,15 @@ func (t *Tables) Set(value string) error {
 
 func main() {
 	var (
-		username, password, host, database string
-		tables                             Tables
-		port, netBufferLength              int
-		createDb                           string
-		createTable                        []string
-		err                                error
-		toCsv, localInfile                 bool
+		username, password, host, database, tbl string
+		tables                                  Tables
+		port, netBufferLength                   int
+		createDb                                string
+		createTable                             []string
+		err                                     error
+		toCsv, localInfile, noData              bool
+		csvFieldDelimiterStr                    string
+		csvConf                                 csvConfig
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -77,10 +80,21 @@ func main() {
 	flag.IntVar(&port, "P", defaultPort, "portNumber")
 	flag.IntVar(&netBufferLength, "net-buffer-length", defaultNetBufferLength, "net_buffer_length")
 	flag.StringVar(&database, "db", "", "databaseName, must be specified")
-	flag.Var(&tables, "tbl", "tableNameList, default all")
+	flag.StringVar(&tbl, "tbl", "", "tableNameList, default all")
 	flag.BoolVar(&toCsv, "csv", defaultCsv, "set export format to csv")
+	flag.StringVar(&csvFieldDelimiterStr, "csv-field-delimiter", string(defaultFieldDelimiter), "set csv field delimiter (only one utf8 character). enabled only when the option 'csv' is set.")
 	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
+	flag.BoolVar(&noData, "no-data", defaultNoData, "dump database and table definitions only without data")
 	flag.Parse()
+
+	if len(tbl) > 0 {
+		tbls := strings.Split(tbl, ",")
+		for _, t := range tbls {
+			if len(t) != 0 {
+				tables = append(tables, Table{t, ""})
+			}
+		}
+	}
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
 		netBufferLength = minNetBufferLength
@@ -93,6 +107,25 @@ func main() {
 		err = moerr.NewInvalidInput(ctx, "database must be specified")
 		return
 	}
+
+	//replace : in username to #, because : is used as separator in dsn.
+	//password can have ":".
+	username = strings.ReplaceAll(username, ":", "#")
+
+	// if host has ":", reports error
+	if strings.Count(host, ":") > 0 {
+		err = moerr.NewInvalidInput(ctx, "host can not have character ':'")
+		return
+	}
+
+	if toCsv {
+		csvConf.enable = toCsv
+		csvConf.fieldDelimiter, err = checkFieldDelimiter(ctx, csvFieldDelimiterStr)
+		if err != nil {
+			return
+		}
+	}
+
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, host, port, database)
 	conn, err = sql.Open("mysql", dsn) // Open doesn't open a connection. Validate DSN data:
 	if err != nil {
@@ -158,9 +191,11 @@ func main() {
 		case catalog.SystemOrdinaryRel:
 			fmt.Printf("DROP TABLE IF EXISTS `%s`;\n", tbl.Name)
 			showCreateTable(create, false)
-			err = genOutput(database, tbl.Name, bufPool, netBufferLength, toCsv, localInfile)
-			if err != nil {
-				return
+			if !noData {
+				err = genOutput(database, tbl.Name, bufPool, netBufferLength, localInfile, &csvConf)
+				if err != nil {
+					return
+				}
 			}
 		case catalog.SystemExternalRel:
 			fmt.Printf("/*!EXTERNAL TABLE `%s`*/\n", tbl.Name)
@@ -359,7 +394,7 @@ func showInsert(r *sql.Rows, args []any, cols []*Column, tbl string, bufPool *sy
 	return nil
 }
 
-func showLoad(r *sql.Rows, rowResults []any, cols []*Column, db string, tbl string, localInfile bool) error {
+func showLoad(r *sql.Rows, rowResults []any, cols []*Column, db string, tbl string, localInfile bool, csvConf *csvConfig) error {
 	fname := fmt.Sprintf("%s_%s.%s", db, tbl, "csv")
 	pwd := os.Getenv("PWD")
 	f, err := os.Create(fname)
@@ -368,7 +403,7 @@ func showLoad(r *sql.Rows, rowResults []any, cols []*Column, db string, tbl stri
 	}
 	defer f.Close()
 
-	err = toCsv(r, f, rowResults, cols)
+	err = toCsv(r, f, rowResults, cols, csvConf)
 	if err != nil {
 		return err
 	}
@@ -381,10 +416,10 @@ func showLoad(r *sql.Rows, rowResults []any, cols []*Column, db string, tbl stri
 }
 
 // toCsv converts the result from mo to csv file
-func toCsv(r *sql.Rows, output io.Writer, rowResults []any, cols []*Column) error {
+func toCsv(r *sql.Rows, output io.Writer, rowResults []any, cols []*Column, csvConf *csvConfig) error {
 	var err error
 	csvWriter := csv.NewWriter(output)
-	csvWriter.Comma = '\t'
+	csvWriter.Comma = csvConf.fieldDelimiter
 	line := make([]string, len(rowResults))
 
 	for r.Next() {
@@ -421,7 +456,7 @@ func toCsvLine(csvWriter *csv.Writer, rowResults []any, cols []*Column, line []s
 	return err
 }
 
-func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, toCsv bool, localInfile bool) error {
+func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, localInfile bool, csvConf *csvConfig) error {
 	r, err := conn.Query("select * from `" + db + "`.`" + tbl + "`")
 	if err != nil {
 		return err
@@ -442,10 +477,10 @@ func genOutput(db string, tbl string, bufPool *sync.Pool, netBufferLength int, t
 		var v sql.RawBytes
 		rowResults = append(rowResults, &v)
 	}
-	if !toCsv {
+	if !csvConf.enable {
 		return showInsert(r, rowResults, cols, tbl, bufPool, netBufferLength)
 	}
-	return showLoad(r, rowResults, cols, db, tbl, localInfile)
+	return showLoad(r, rowResults, cols, db, tbl, localInfile, csvConf)
 }
 
 func convertValue(v any, typ string) string {
@@ -464,6 +499,8 @@ func convertValue(v any, typ string) string {
 	case "int", "tinyint", "smallint", "bigint", "unsigned bigint", "unsigned int", "unsigned tinyint", "unsigned smallint", "double", "bool", "boolean", "":
 		// why empty string in column type?
 		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
+		return string(ret)
+	case "vecf32", "vecf64":
 		return string(ret)
 	default:
 		str := strings.Replace(string(ret), "\\", "\\\\", -1)
@@ -484,9 +521,27 @@ func convertValue2(v any, typ string) (sql.RawBytes, string) {
 		return ret, defaultFmt
 	case "json":
 		return ret, jsonFmt
+	case "vecf32", "vecf64":
+		return ret, defaultFmt
 	default:
 		//note: do not use the quoteFmt instead of the standard package csv,
 		//it is error-prone.
 		return ret, defaultFmt
+	}
+}
+
+// checkFieldDelimiter checks string is valid utf8 character and returns rune
+func checkFieldDelimiter(ctx context.Context, s string) (rune, error) {
+	if utf8.ValidString(s) {
+		if utf8.RuneCountInString(s) > 1 {
+			return rune(0), moerr.NewInvalidInput(ctx, "there are multiple utf8 characters for csv field delimiter. only one utf8 character is allowed")
+		}
+		runCh, _ := utf8.DecodeRuneInString(s)
+		if runCh == utf8.RuneError {
+			return rune(0), moerr.NewInvalidInput(ctx, "csv field delimiter is invalid utf8 character")
+		}
+		return runCh, nil
+	} else {
+		return rune(0), moerr.NewInvalidInput(ctx, "csv field delimiter is invalid utf8 character")
 	}
 }

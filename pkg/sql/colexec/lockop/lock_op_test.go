@@ -434,7 +434,7 @@ func runLockNonBlockingOpTest(
 			}
 			proc.SetInputBatch(bat)
 			fn(proc, arg)
-			arg.Free(proc, false)
+			arg.Free(proc, false, nil)
 		},
 		opts...)
 }
@@ -494,7 +494,7 @@ func runLockBlockingOpTest(
 				i++
 			}
 			checkFunc(arg)
-			arg.Free(proc, false)
+			arg.Free(proc, false, nil)
 		},
 		opts...)
 }
@@ -534,6 +534,7 @@ func runLockOpTest(
 				txnOp,
 				nil,
 				services[0],
+				nil,
 				nil,
 				nil,
 				nil)

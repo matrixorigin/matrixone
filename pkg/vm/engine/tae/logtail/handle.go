@@ -70,11 +70,12 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -88,6 +89,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -205,11 +207,12 @@ type RespBuilder interface {
 type CatalogLogtailRespBuilder struct {
 	ctx context.Context
 	*catalog.LoopProcessor
-	scope      Scope
-	start, end types.TS
-	checkpoint string
-	insBatch   *containers.Batch
-	delBatch   *containers.Batch
+	scope              Scope
+	start, end         types.TS
+	checkpoint         string
+	insBatch           *containers.Batch
+	delBatch           *containers.Batch
+	specailDeleteBatch *containers.Batch
 }
 
 func NewCatalogLogtailRespBuilder(ctx context.Context, scope Scope, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
@@ -225,9 +228,11 @@ func NewCatalogLogtailRespBuilder(ctx context.Context, scope Scope, ckp string, 
 	case ScopeDatabases:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema)
 		b.delBatch = makeRespBatchFromSchema(DBDelSchema)
+		b.specailDeleteBatch = makeRespBatchFromSchema(DBSpecialDeleteSchema)
 	case ScopeTables:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema)
 		b.delBatch = makeRespBatchFromSchema(TblDelSchema)
+		b.specailDeleteBatch = makeRespBatchFromSchema(TBLSpecialDeleteSchema)
 	case ScopeColumns:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 		b.delBatch = makeRespBatchFromSchema(ColumnDelSchema)
@@ -266,6 +271,7 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		if dbNode.HasDropCommitted() {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(b.delBatch, entry, dbNode, DBDelSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(entry.GetID()), dbNode.GetEnd())
+			catalogEntry2Batch(b.specailDeleteBatch, entry, node, DBSpecialDeleteSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(entry.GetID()), node.GetEnd())
 		} else {
 			catalogEntry2Batch(b.insBatch, entry, dbNode, catalog.SystemDBSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(entry.GetID()), dbNode.GetEnd())
 		}
@@ -316,6 +322,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		} else {
 			if node.HasDropCommitted() {
 				catalogEntry2Batch(b.delBatch, entry, node, TblDelSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(entry.GetID()), node.GetEnd())
+				catalogEntry2Batch(b.specailDeleteBatch, entry, node, TBLSpecialDeleteSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(entry.GetID()), node.GetEnd())
 			} else {
 				catalogEntry2Batch(b.insBatch, entry, node, catalog.SystemTableSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(entry.GetID()), node.GetEnd())
 			}
@@ -370,6 +377,25 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		}
 		delEntry := &api.Entry{
 			EntryType:    api.Entry_Delete,
+			TableId:      tblID,
+			TableName:    tableName,
+			DatabaseId:   pkgcatalog.MO_CATALOG_ID,
+			DatabaseName: pkgcatalog.MO_CATALOG,
+			Bat:          bat,
+		}
+		entries = append(entries, delEntry)
+		perfcounter.Update(b.ctx, func(counter *perfcounter.CounterSet) {
+			counter.TAE.LogTail.Entries.Add(int64(b.delBatch.Length()))
+			counter.TAE.LogTail.DeleteEntries.Add(int64(b.delBatch.Length()))
+		})
+	}
+	if b.specailDeleteBatch != nil && b.specailDeleteBatch.Length() > 0 {
+		bat, err := containersBatchToProtoBatch(b.specailDeleteBatch)
+		if err != nil {
+			return api.SyncLogTailResp{}, err
+		}
+		delEntry := &api.Entry{
+			EntryType:    api.Entry_SpecialDelete,
 			TableId:      tblID,
 			TableName:    tableName,
 			DatabaseId:   pkgcatalog.MO_CATALOG_ID,
@@ -707,9 +733,10 @@ func LoadCheckpointEntries(
 	if metLoc == "" {
 		return nil, nil, nil
 	}
+	v2.LogtailLoadCheckpointCounter.Inc()
 	now := time.Now()
 	defer func() {
-		logutil.Debugf("LoadCheckpointEntries latency: %v", time.Since(now))
+		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 	locationsAndVersions := strings.Split(metLoc, ";")
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
@@ -785,7 +812,12 @@ func LoadCheckpointEntries(
 		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
-			return nil, closeCBs, err
+			for j := range closeCBs {
+				if closeCBs[j] != nil {
+					closeCBs[j]()
+				}
+			}
+			return nil, nil, err
 		}
 		bats[i] = bat
 	}
@@ -795,7 +827,12 @@ func LoadCheckpointEntries(
 		data := datas[i]
 		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
-			return nil, closeCBs, err
+			for j := range closeCBs {
+				if closeCBs[j] != nil {
+					closeCBs[j]()
+				}
+			}
+			return nil, nil, err
 		}
 		if tableName != pkgcatalog.MO_DATABASE &&
 			tableName != pkgcatalog.MO_COLUMNS &&

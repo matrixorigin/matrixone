@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -51,9 +52,21 @@ type SegStat struct {
 	OriginSize     int
 	SortKeyZonemap index.ZM
 	Rows           int
-	Dels           int
-	SameDelsStreak int
-	MergeIntent    int
+	RemainingRows  int
+}
+
+func (s *SegStat) String(composeSortKey bool) string {
+	zonemapStr := "nil"
+	if s.SortKeyZonemap != nil {
+		if composeSortKey {
+			zonemapStr = s.SortKeyZonemap.StringForCompose()
+		} else {
+			zonemapStr = s.SortKeyZonemap.String()
+		}
+	}
+	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
+		s.Loaded, common.HumanReadableBytes(s.OriginSize), s.Rows, s.RemainingRows, zonemapStr,
+	)
 }
 
 func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
@@ -144,6 +157,11 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 // LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
 func (entry *SegmentEntry) LoadObjectInfo() error {
 	if entry.Stat.Loaded {
+		return nil
+	}
+	// special case for raw log table.
+	if entry.GetTable().GetLastestSchema().Name == motrace.RawLogTbl &&
+		len(entry.table.entries) > int(common.RuntimeNotLoadMoreThan.Load()) {
 		return nil
 	}
 	entry.RLock()
@@ -451,7 +469,7 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 }
 
 func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
-	logutil.Info("[Catalog]", common.OperationField("remove"),
+	logutil.Debug("[Catalog]", common.OperationField("remove"),
 		common.OperandField(block.String()))
 	entry.Lock()
 	defer entry.Unlock()

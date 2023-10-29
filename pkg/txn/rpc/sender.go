@@ -18,12 +18,14 @@ import (
 	"context"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -83,7 +85,8 @@ func NewSender(
 
 	s.cfg.BackendOptions = append(s.cfg.BackendOptions,
 		morpc.WithBackendStreamBufferSize(10000))
-	client, err := s.cfg.NewClient("txn-rpc-sender",
+	client, err := s.cfg.NewClient(
+		"txn-client",
 		s.rt.Logger().RawLogger(),
 		func() morpc.Message { return s.acquireResponse() })
 	if err != nil {
@@ -166,10 +169,12 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		}
 	}
 
+	start := time.Now()
 	f, err := s.client.Send(ctx, tn.Address, &request)
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
+	v2.TxnCNSendCommitDurationHistogram.Observe(time.Since(start).Seconds())
 	defer f.Close()
 
 	v, err := f.Get()

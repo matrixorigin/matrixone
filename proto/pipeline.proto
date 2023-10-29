@@ -166,6 +166,10 @@ message PreInsertUnique {
   plan.PreInsertUkCtx pre_insert_uk_ctx = 1;
 }
 
+message PreInsertSecondaryIndex{
+  plan.PreInsertUkCtx pre_insert_sk_ctx = 1;
+}
+
 message OnDuplicateKey{
   plan.TableDef table_def                   = 1;
   repeated int32 on_duplicate_idx           = 2;
@@ -194,6 +198,7 @@ message AntiJoin{
   repeated plan.Type  types = 5;
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
+  bool hash_on_pk = 8;
 }
 
 message LeftJoin {
@@ -206,6 +211,7 @@ message LeftJoin {
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
+  bool hash_on_pk = 10;
 }
 
 message RightJoin {
@@ -219,6 +225,7 @@ message RightJoin {
   repeated plan.Expr left_cond = 8;
   repeated plan.Expr right_cond = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 10;
+  bool hash_on_pk = 11;
 }
 
 message RightSemiJoin {
@@ -230,6 +237,7 @@ message RightSemiJoin {
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  bool hash_on_pk = 9;
 }
 
 message RightAntiJoin {
@@ -241,6 +249,7 @@ message RightAntiJoin {
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  bool hash_on_pk = 9;
 }
 
 message SemiJoin {
@@ -252,6 +261,7 @@ message SemiJoin {
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
+  bool hash_on_pk = 9;
 }
 
 message SingleJoin {
@@ -264,6 +274,7 @@ message SingleJoin {
   repeated plan.Expr left_cond = 7;
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
+  bool hash_on_pk = 10;
 }
 
 message MarkJoin {
@@ -275,6 +286,7 @@ message MarkJoin {
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   repeated plan.Expr on_list = 8;
+  bool hash_on_pk = 9;
 }
 
 message Product {
@@ -370,6 +382,7 @@ message Instruction{
   Shuffle shuffle = 33;
   Merge merge = 34;
   StreamScan stream_scan = 35;
+  PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
 }
 
 message AnalysisList {

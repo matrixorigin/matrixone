@@ -77,6 +77,9 @@ func startCluster(
 			return err
 		}
 	}
+	if err := startPythonUdfServiceCluster(ctx, cfg.PythonUdfServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -117,6 +120,8 @@ func startTNServiceCluster(
 
 	for _, file := range files {
 		cfg := NewConfig()
+		// mo boosting in standalone mode
+		cfg.IsStandalone = true
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
@@ -190,6 +195,29 @@ func startProxyServiceCluster(
 	return nil
 }
 
+func startPythonUdfServiceCluster(
+	ctx context.Context,
+	files []string,
+	stopper *stopper.Stopper,
+	perfCounterSet *perfcounter.CounterSet,
+	shutdownC chan struct{},
+) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	for _, file := range files {
+		cfg := NewConfig()
+		if err := parseConfigFromFile(file, cfg); err != nil {
+			return err
+		}
+		if err := startService(ctx, cfg, stopper, perfCounterSet, shutdownC); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func waitHAKeeperReady(cfg logservice.HAKeeperClientConfig) (logservice.CNHAKeeperClient, error) {
 	// wait hakeeper ready
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
@@ -237,7 +265,12 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 		if ok, err := func() (bool, error) {
 			details, err := client.GetClusterDetails(ctx)
 			if err != nil {
-				return false, err
+				if errors.Is(err, context.DeadlineExceeded) {
+					logutil.Errorf("wait TN ready timeout: %s", err)
+					return false, err
+				}
+				logutil.Errorf("failed to get cluster details %s", err)
+				return false, nil
 			}
 			for _, store := range details.TNStores {
 				if len(store.Shards) > 0 {

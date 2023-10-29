@@ -17,8 +17,9 @@ package motrace
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
@@ -181,7 +182,7 @@ var (
 			sessionIDCol,
 		},
 		PrimaryKeyColumn: nil,
-		ClusterBy:        []table.Column{timestampCol, rawItemCol},
+		ClusterBy:        []table.Column{timestampCol},
 		Engine:           table.NormalTableEngine,
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      table.NewAccountDatePathBuilder(),

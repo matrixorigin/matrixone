@@ -23,7 +23,7 @@ type Argument struct {
 	Reg *process.WaitRegister
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if !pipelineFailed {
 		select {
 		case arg.Reg.Ch <- nil:

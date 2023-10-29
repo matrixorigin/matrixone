@@ -51,34 +51,53 @@ func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, 
 }
 
 const (
-	stripCloudUser    = "/* cloud_user */"
-	stripCloudNonUser = "/* cloud_nonuser */"
-	stripSaveQuery    = "/* save_result */"
+	stripCloudUser           = "/* cloud_user */"
+	stripCloudUserContent    = "cloud_user"
+	stripCloudNonUser        = "/* cloud_nonuser */"
+	stripCloudNonUserContent = "cloud_nonuser"
+	stripSaveQuery           = "/* save_result */"
+	stripSaveQueryContent    = "save_result"
 )
+
+var stripContents = map[string]int8{
+	stripCloudUserContent:    0,
+	stripCloudNonUserContent: 0,
+	stripSaveQueryContent:    0,
+}
 
 var HandleSqlForRecord = func(sql string) []string {
 	split := SplitSqlBySemicolon(sql)
 	for i := range split {
-		//!!! remove method here assumes that the format of stripCloudUser or stripCloudNonUser
-		// can not be changed, otherwise, the following code will not work.
-		// It is case-sensitive and error-prone also.
-
-		// Remove /* cloud_user */ prefix
-		p0 := strings.Index(split[i], stripCloudUser)
-		if p0 >= 0 {
-			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudUser):len(split[i])]
+		stripScanner := mysql.NewScanner(dialect.MYSQL, split[i])
+		//strip needed comment "/*XXX*/"
+		var commentIdx [][]int
+		for stripScanner.Pos < len(split[i]) {
+			typ, comment := stripScanner.ScanComment()
+			if typ == mysql.COMMENT {
+				//only strip needed comment "/*XXX*/"
+				if strings.HasPrefix(comment, "/*") && strings.HasSuffix(comment, "*/") {
+					commentContent := strings.ToLower(strings.TrimSpace(comment[2 : len(comment)-2]))
+					if _, ok := stripContents[commentContent]; ok {
+						commentIdx = append(commentIdx, []int{stripScanner.Pos - len(comment), stripScanner.Pos})
+					}
+				}
+			} else if typ == mysql.EofChar() || typ == mysql.LEX_ERROR {
+				break
+			}
 		}
 
-		// remove /* cloud_nonuser */ prefix
-		p0 = strings.Index(split[i], stripCloudNonUser)
-		if p0 >= 0 {
-			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
-		}
+		if len(commentIdx) > 0 {
+			var builder strings.Builder
+			for j := 0; j < len(commentIdx); j++ {
+				if j == 0 {
+					builder.WriteString(split[i][0:commentIdx[j][0]])
+				} else {
+					builder.WriteString(split[i][commentIdx[j-1][1]:commentIdx[j][0]])
+				}
+			}
 
-		// remove /* save_query */ prefix
-		p0 = strings.Index(split[i], stripSaveQuery)
-		if p0 >= 0 {
-			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
+			builder.WriteString(split[i][commentIdx[len(commentIdx)-1][1]:len(split[i])])
+			split[i] = strings.TrimSpace(builder.String())
 		}
 
 		// Hide secret key for split[i],
@@ -107,7 +126,7 @@ var HandleSqlForRecord = func(sql string) []string {
 						indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
 					}
 				}
-			} else if s == "access_key_id" || s == "secret_access_key" {
+			} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
 				typ, _ = scanner.Scan()
 				if typ == eq {
 					_, s = scanner.Scan()

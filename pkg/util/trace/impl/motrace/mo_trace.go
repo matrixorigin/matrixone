@@ -121,7 +121,7 @@ func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 	enable := t.provider.IsEnable()
 
 	// check if is this span kind controlled by mo_ctl.
-	if has, state := trace.IsMOCtledSpan(cfg.Kind); has {
+	if has, state, _ := trace.IsMOCtledSpan(cfg.Kind); has {
 		return enable && state
 	}
 
@@ -334,9 +334,10 @@ func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
 
 func (s *MOSpan) NeedRecord() (bool, error) {
 	// if the span kind falls in mo_ctl controlled spans, we
-	// hope it ignores the long time threshold and deadline restrictions.
-	if has, state := trace.IsMOCtledSpan(s.Kind); has {
-		return state, nil
+	// hope it ignores the long time threshold set by the tracer and deadline restrictions.
+	// but the threshold set by mo ctl need to be considered
+	if has, state, threshold := trace.IsMOCtledSpan(s.Kind); has {
+		return state && (s.Duration >= threshold), nil
 	}
 	// the default logic that before mo_ctl controlled spans have been introduced
 	deadline, hasDeadline := s.ctx.Deadline()

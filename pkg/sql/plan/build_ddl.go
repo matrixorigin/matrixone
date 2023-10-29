@@ -498,6 +498,10 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 }
 
 func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, error) {
+	if stmt.Type == nil && stmt.IncrementBy == nil && stmt.MaxValue == nil && stmt.MinValue == nil && stmt.StartWith == nil && stmt.Cycle == nil {
+		return nil, moerr.NewSyntaxError(ctx.GetContext(), "synatx error, %s has nothing to alter", string(stmt.Name.ObjectName))
+	}
+
 	alterSequence := &plan.AlterSequence{
 		IfExists: stmt.IfExists,
 		TableDef: &TableDef{
@@ -1207,7 +1211,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 	if len(secondaryIndexInfos) != 0 {
-		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
+		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
@@ -1340,15 +1344,28 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
-func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, ctx CompilerContext) error {
+func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
 	nameCount := make(map[string]int)
+
+	if len(pkeyName) == 0 {
+		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
+	}
 
 	for _, indexInfo := range indexInfos {
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = false
 
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+
+		if err != nil {
+			return err
+		}
+		tableDef := &TableDef{
+			Name: indexTableName,
+		}
 		indexParts := make([]string, 0)
 
+		isPkAlreadyPresentInIndexParts := false
 		for _, keyPart := range indexInfo.KeyParts {
 			name := keyPart.ColName.Parts[0]
 			if _, ok := colMap[name]; !ok {
@@ -1363,7 +1380,54 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			if colMap[name].Typ.Id == int32(types.T_json) {
 				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", name))
 			}
+			if colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64) {
+				return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in index", name))
+			}
+
+			if strings.Compare(name, pkeyName) == 0 || catalog.IsAlias(name) {
+				isPkAlreadyPresentInIndexParts = true
+			}
 			indexParts = append(indexParts, name)
+		}
+
+		if !isPkAlreadyPresentInIndexParts {
+			indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
+		}
+
+		var keyName string
+		{
+			keyName = catalog.IndexTableIndexColName
+			colDef := &ColDef{
+				Name: keyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:    int32(types.T_varchar),
+					Width: types.MaxVarcharLen,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
+		}
+		if pkeyName != "" {
+			colDef := &ColDef{
+				Name: catalog.IndexTablePrimaryColName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colMap[pkeyName].Typ,
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
 		}
 
 		if indexInfo.Name == "" {
@@ -1378,14 +1442,16 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		} else {
 			indexDef.IndexName = indexInfo.Name
 		}
-		indexDef.IndexTableName = ""
+
+		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
-		indexDef.TableExist = false
+		indexDef.TableExist = true
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
 			indexDef.Comment = ""
 		}
+		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
 	}
 	return nil
@@ -1718,10 +1784,10 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		createIndex.TableExist = true
 	}
 	if sIdx != nil {
-		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, ctx); err != nil {
+		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
-		createIndex.TableExist = false
+		createIndex.TableExist = true
 	}
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
@@ -2044,7 +2110,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, ctx); err != nil {
+				if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, oriPriKeyName, ctx); err != nil {
 					return nil, err
 				}
 
@@ -2055,7 +2121,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							TableName:             tableName,
 							OriginTablePrimaryKey: oriPriKeyName,
 							IndexInfo:             indexInfo,
-							IndexTableExist:       false,
+							IndexTableExist:       true,
 						},
 					},
 				}

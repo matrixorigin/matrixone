@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -65,7 +66,7 @@ func newCompilerContext(
 	}
 }
 
-func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (string, error) {
+func (c *compilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
 	panic("not supported in internal sql executor")
 }
 

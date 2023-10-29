@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -1296,11 +1297,13 @@ func (mce *MysqlCmdExecutor) handleCreateFunction(ctx context.Context, cf *tree.
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
 
-	return InitFunction(ctx, ses, tenant, cf)
+	return mce.InitFunction(ctx, ses, tenant, cf)
 }
 
-func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction) error {
-	return doDropFunction(ctx, mce.GetSession(), df)
+func (mce *MysqlCmdExecutor) handleDropFunction(ctx context.Context, df *tree.DropFunction, proc *process.Process) error {
+	return doDropFunction(ctx, mce.GetSession(), df, func(path string) error {
+		return proc.FileService.Delete(ctx, path)
+	})
 }
 
 func (mce *MysqlCmdExecutor) handleCreateProcedure(ctx context.Context, cp *tree.CreateProcedure) error {
@@ -1621,6 +1624,15 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 }
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	stats := statistic.StatsInfoFromContext(requestCtx)
+	stats.PlanStart()
+	defer stats.PlanEnd()
+
 	var ret *plan2.Plan
 	var err error
 	if ses != nil {
@@ -2570,7 +2582,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
+	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
+	defer ses.SetQueryEnd(time.Now())
+	defer ses.SetQueryInProgress(false)
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
@@ -3120,12 +3135,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.CreateFunction:
 		selfHandle = true
+		if err = st.Valid(); err != nil {
+			return err
+		}
 		if err = mce.handleCreateFunction(requestCtx, st); err != nil {
 			return
 		}
 	case *tree.DropFunction:
 		selfHandle = true
-		if err = mce.handleDropFunction(requestCtx, st); err != nil {
+		if err = mce.handleDropFunction(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.CreateProcedure:
@@ -3560,6 +3578,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.LockService,
 		pu.QueryService,
 		pu.HAKeeperClient,
+		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -3612,12 +3631,20 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(ses.proc)
 	ses.proc.SessionInfo = proc.SessionInfo
+
+	statsInfo := statistic.StatsInfo{}
+	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
+
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
 		ses.GetUserName(),
 		pu.StorageEngine,
 		proc, ses)
+
+	ParseDuration := time.Since(beginInstant)
+
 	if err != nil {
+		statsInfo.ParseDuration = ParseDuration
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
@@ -3635,6 +3662,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	singleStatement := len(cws) == 1
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
@@ -3654,6 +3682,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
+
+		statsInfo.Reset()
+		//average parse duration
+		statsInfo.ParseDuration = time.Duration(ParseDuration.Nanoseconds() / int64(len(cws)))
+
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -3750,6 +3783,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		pu.LockService,
 		pu.QueryService,
 		pu.HAKeeperClient,
+		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
@@ -4274,6 +4308,18 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.BytesScan += bytes
 			}
 		}
+
+		statsInfo := statistic.StatsInfoFromContext(ctx)
+		if statsInfo != nil {
+
+			statsByte.WithTimeConsumed(
+				statsByte.GetTimeConsumed() +
+					float64(statsInfo.ParseDuration) +
+					float64(statsInfo.CompileDuration) +
+					float64(statsInfo.PlanDuration))
+
+		}
+
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}

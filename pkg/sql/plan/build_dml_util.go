@@ -255,9 +255,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	isUpdate := delCtx.updateColLength > 0
 
-	// delete unique table
+	// delete unique/secondary index table
+	// Refer to this PR:https://github.com/matrixorigin/matrixone/pull/12093
+	// we have build SK using UK code path. So we might see UK in function signature even thought it could be for
+	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
-	if hasUniqueKey {
+	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
+	if hasUniqueKey || hasSecondaryKey {
 		uniqueDeleteIdx := len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		typMap := make(map[string]*plan.Type)
 		posMap := make(map[string]int)
@@ -266,7 +270,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			typMap[col.Name] = col.Typ
 		}
 		for idx, indexdef := range delCtx.tableDef.Indexes {
-			if indexdef.Unique {
+			if indexdef.TableExist {
+				var isUk = indexdef.Unique
+				var isSK = !isUk
+
 				uniqueObjRef, uniqueTableDef := builder.compCtx.Resolve(delCtx.objRef.SchemaName, indexdef.IndexTableName)
 				if uniqueTableDef == nil {
 					return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexTableName)
@@ -274,7 +281,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 				lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 
-				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId)
+				lastNodeId, err := appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk)
 				if err != nil {
 					return err
 				}
@@ -290,7 +297,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						//sink_scan -> lock -> delete
 						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, true)
+						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK)
 						putDeleteNodeInfo(delNodeInfo)
 						if err != nil {
 							return err
@@ -320,7 +327,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: projectProjection,
 						}
 						lastNodeId = builder.appendNode(projectNode, bindCtx)
-						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef)
+						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef, isUk)
 						if err != nil {
 							return err
 						}
@@ -339,7 +346,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				} else {
 					// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, true)
+					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK)
 					putDeleteNodeInfo(delNodeInfo)
 					if err != nil {
 						return err
@@ -359,7 +366,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp, delCtx.lockTable)
-	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false)
+	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false)
 	putDeleteNodeInfo(delNodeInfo)
 	if err != nil {
 		return err
@@ -836,7 +843,7 @@ func makeInsertPlan(
 	// append plan for the hidden tables of unique keys
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
-			if indexdef.Unique {
+			if indexdef.TableExist {
 				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
 				// remove row_id
 				for i, col := range idxTableDef.Cols {
@@ -847,7 +854,7 @@ func makeInsertPlan(
 				}
 
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef)
+				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef, indexdef.Unique)
 				if err != nil {
 					return err
 				}
@@ -1440,8 +1447,9 @@ func makeOneDeletePlan(
 	lastNodeId int32,
 	delNodeInfo *deleteNodeInfo,
 	isUK bool, // is delete unique key hidden table
+	isSK bool,
 ) (int32, error) {
-	if isUK {
+	if isUK || isSK {
 		// append lock
 		lockTarget := &plan.LockTarget{
 			TableId:            delNodeInfo.tableDef.TblId,
@@ -1540,6 +1548,15 @@ func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32
 func haveUniqueKey(tableDef *TableDef) bool {
 	for _, indexdef := range tableDef.Indexes {
 		if indexdef.Unique {
+			return true
+		}
+	}
+	return false
+}
+
+func haveSecondaryKey(tableDef *TableDef) bool {
+	for _, indexdef := range tableDef.Indexes {
+		if !indexdef.Unique && indexdef.TableExist {
 			return true
 		}
 	}
@@ -2040,15 +2057,18 @@ func appendPreInsertUkPlan(
 	lastNodeId int32,
 	indexIdx int,
 	isUpddate bool,
-	uniqueTableDef *TableDef) (int32, error) {
+	uniqueTableDef *TableDef,
+	isUK bool) (int32, error) {
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
-	partsMap := make(map[string]struct{})
-	for _, part := range idxDef.Parts {
-		partsMap[part] = struct{}{}
-	}
+	colsMap := make(map[string]int)
+
 	for i, col := range tableDef.Cols {
-		if _, ok := partsMap[col.Name]; ok {
+		colsMap[col.Name] = i
+	}
+	for _, part := range idxDef.Parts {
+		part = catalog.ResolveAlias(part)
+		if i, ok := colsMap[part]; ok {
 			useColumns = append(useColumns, int32(i))
 		}
 	}
@@ -2098,18 +2118,39 @@ func appendPreInsertUkPlan(
 			},
 		})
 	}
-
-	preInsertUkNode := &Node{
-		NodeType:    plan.Node_PRE_INSERT_UK,
-		Children:    []int32{lastNodeId},
-		ProjectList: preinsertUkProjection,
-		PreInsertUkCtx: &plan.PreInsertUkCtx{
-			Columns:  useColumns,
-			PkColumn: int32(pkColumn),
-			PkType:   originPkType,
-			UkType:   ukType,
-			TableDef: tableDef,
-		},
+	//TODO: once everything works, rename all the UK to a more generic name that means UK and SK.
+	// ie preInsertUkNode -> preInsertIKNode
+	// NOTE: we have build secondary index by reusing the whole code flow of Unique Index.
+	// This would be done in a separate PR after verifying the correctness of the current code.
+	var preInsertUkNode *Node
+	if isUK {
+		preInsertUkNode = &Node{
+			NodeType:    plan.Node_PRE_INSERT_UK,
+			Children:    []int32{lastNodeId},
+			ProjectList: preinsertUkProjection,
+			PreInsertUkCtx: &plan.PreInsertUkCtx{
+				Columns:  useColumns,
+				PkColumn: int32(pkColumn),
+				PkType:   originPkType,
+				UkType:   ukType,
+				TableDef: tableDef,
+			},
+		}
+	} else {
+		// NOTE: We don't defined PreInsertSkCtx. Instead, we use PreInsertUkCtx for both UK and SK since there
+		// is no difference in the contents.
+		preInsertUkNode = &Node{
+			NodeType:    plan.Node_PRE_INSERT_SK,
+			Children:    []int32{lastNodeId},
+			ProjectList: preinsertUkProjection,
+			PreInsertSkCtx: &plan.PreInsertUkCtx{
+				Columns:  useColumns,
+				PkColumn: int32(pkColumn),
+				PkType:   originPkType,
+				UkType:   ukType,
+				TableDef: tableDef,
+			},
+		}
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
 
@@ -2142,6 +2183,7 @@ func appendDeleteUniqueTablePlan(
 	typMap map[string]*plan.Type,
 	posMap map[string]int,
 	baseNodeId int32,
+	isUK bool,
 ) (int32, error) {
 	lastNodeId := baseNodeId
 	var err error
@@ -2226,6 +2268,7 @@ func appendDeleteUniqueTablePlan(
 	} else {
 		args := make([]*Expr, partsLength)
 		for i, column := range indexdef.Parts {
+			column = catalog.ResolveAlias(column)
 			typ := typMap[column]
 			args[i] = &plan.Expr{
 				Typ: typ,
@@ -2238,7 +2281,11 @@ func appendDeleteUniqueTablePlan(
 				},
 			}
 		}
-		leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		if isUK {
+			leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		} else {
+			leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+		}
 		if err != nil {
 			return -1, err
 		}

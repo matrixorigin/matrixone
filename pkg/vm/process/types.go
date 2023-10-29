@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -324,11 +325,16 @@ type Process struct {
 	QueryService queryservice.QueryService
 
 	Hakeeper logservice.CNHAKeeperClient
+
+	UdfService udf.Service
 }
 
 type vectorPool struct {
 	sync.Mutex
 	vecs map[uint8][]*vector.Vector
+
+	// max vector count limit for each type in pool.
+	Limit int
 }
 
 type sqlHelper interface {

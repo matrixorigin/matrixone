@@ -372,10 +372,17 @@ func TestMOSpan_doProfile(t *testing.T) {
 	tracer := p.Tracer("test").(*MOTracer)
 	ctx := context.TODO()
 
+	prepareCheckCpu := func(t *testing.T) {
+		if runtime.NumCPU() < 4 {
+			t.Skip("machine's performance too low to handle time sensitive case, issue #11864")
+		}
+	}
+
 	tests := []struct {
-		name   string
-		fields fields
-		want   bool
+		name    string
+		fields  fields
+		prepare func(t *testing.T)
+		want    bool
 	}{
 		{
 			name: "normal",
@@ -446,7 +453,8 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
-			want: true,
+			prepare: prepareCheckCpu,
+			want:    true,
 		},
 		{
 			name: "trace",
@@ -455,11 +463,15 @@ func TestMOSpan_doProfile(t *testing.T) {
 				ctx:    ctx,
 				tracer: tracer,
 			},
-			want: true,
+			prepare: prepareCheckCpu,
+			want:    true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.prepare != nil {
+				tt.prepare(t)
+			}
 			_, s := tt.fields.tracer.Start(tt.fields.ctx, "test", tt.fields.opts...)
 			ms, _ := s.(*MOSpan)
 			t.Logf("span.LongTimeThreshold: %v", ms.LongTimeThreshold)
@@ -529,7 +541,7 @@ func TestMOTracer_FSSpanIsEnable(t *testing.T) {
 	tracer.provider.enable = true
 
 	trace.InitMOCtledSpan()
-	trace.SetMoCtledSpanState("local", true)
+	trace.SetMoCtledSpanState("local", true, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -580,16 +592,16 @@ func TestMOSpan_NeedRecord(t *testing.T) {
 	require.True(t, ret)
 	span.End()
 
-	trace.SetMoCtledSpanState("statement", true)
+	trace.SetMoCtledSpanState("statement", true, 0)
 	_, span = tracer.Start(ctx, "mo_ctl controlled span",
 		trace.WithKind(trace.SpanKindStatement))
 	// ctx expired, but not to record
-	trace.SetMoCtledSpanState("statement", false)
+	trace.SetMoCtledSpanState("statement", false, 0)
 	ret, _ = span.(*MOSpan).NeedRecord()
 	require.False(t, ret)
 	span.End()
 
-	trace.SetMoCtledSpanState("statement", true)
+	trace.SetMoCtledSpanState("statement", true, 0)
 	_, span = tracer.Start(ctx, "mo_ctl controlled span",
 		trace.WithKind(trace.SpanKindStatement))
 	// record
@@ -597,6 +609,28 @@ func TestMOSpan_NeedRecord(t *testing.T) {
 	require.True(t, ret)
 	span.End()
 
+	// it won't record until this trace last more than 1000ms
+	trace.SetMoCtledSpanState("statement", true, 1000)
+	_, span = tracer.Start(ctx, "mo_ctl controlled span",
+		trace.WithKind(trace.SpanKindStatement))
+
+	span.(*MOSpan).Duration = time.Since(span.(*MOSpan).StartTime)
+
+	ret, _ = span.(*MOSpan).NeedRecord()
+	require.False(t, ret)
+	span.End()
+
+	trace.SetMoCtledSpanState("statement", true, 100)
+	_, span = tracer.Start(ctx, "mo_ctl controlled span",
+		trace.WithKind(trace.SpanKindStatement))
+	time.Sleep(time.Millisecond * 200)
+	// record
+
+	span.(*MOSpan).Duration = time.Since(span.(*MOSpan).StartTime)
+
+	ret, _ = span.(*MOSpan).NeedRecord()
+	require.True(t, ret)
+	span.End()
 }
 
 func TestMOCtledKindOverwrite(t *testing.T) {
@@ -612,7 +646,7 @@ func TestMOCtledKindOverwrite(t *testing.T) {
 	defer fspan.End()
 	require.Equal(t, fspan.SpanContext().Kind, trace.SpanKindRemote)
 
-	trace.SetMoCtledSpanState("statement", true)
+	trace.SetMoCtledSpanState("statement", true, 0)
 	// won't be overwritten
 	_, span := tracer.Start(fctx, "test3", trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
@@ -629,7 +663,7 @@ func TestMOCtledKindPassDown(t *testing.T) {
 	tracer.provider.enable = true
 
 	trace.InitMOCtledSpan()
-	trace.SetMoCtledSpanState("s3", true)
+	trace.SetMoCtledSpanState("s3", true, 0)
 	specialCtx, specialSpan := tracer.Start(context.Background(), "special span",
 		trace.WithKind(trace.SpanKindRemoteFSVis))
 	defer specialSpan.End()

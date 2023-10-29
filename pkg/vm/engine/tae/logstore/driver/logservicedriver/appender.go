@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
@@ -45,6 +46,11 @@ func (a *driverAppender) appendEntry(e *entry.Entry) {
 }
 
 func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
+	start := time.Now()
+	defer func() {
+		v2.LogTailAppendDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
 	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))
@@ -66,6 +72,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		trace.WithProfileCpuSecs(time.Second*10))
 	defer timeoutSpan.End()
 
+	v2.LogTailBytesHistogram.Observe(float64(size))
 	logutil.Debugf("Log Service Driver: append start %p", a.client.record.Data)
 	lsn, err := a.client.c.Append(ctx, record)
 	if err != nil {

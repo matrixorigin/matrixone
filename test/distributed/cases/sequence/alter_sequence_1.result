@@ -9,44 +9,178 @@ alter_seq_01    BIGINT
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 1    1
-alter sequence alter_seq_01 minvalue 1 maxvalue 2;
-select nextval('alter_seq_01'),currval('alter_seq_01');
-nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
+alter sequence alter_seq_01 minvalue 1 maxvalue 100;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 2    2
 select nextval('alter_seq_01'),currval('alter_seq_01');
-internal error: Reached maximum value of sequence alter_seq_01
+nextval(alter_seq_01)    currval(alter_seq_01)
+3    3
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+4    4
 alter sequence alter_seq_01 cycle;
+select * from alter_seq_01;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+5    1    100    4    1    true    false
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
+5    5
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-2    2
+6    6
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
+7    7
 alter sequence alter_seq_01 maxvalue 1000;
 alter sequence alter_seq_01 increment by 10;
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-1    1
+8    8
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-11    11
+18    18
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
-21    21
+28    28
 alter sequence alter_seq_01 start with 900;
-select nextval('alter_seq_01'),currval('alter_seq_01');
-nextval(alter_seq_01)    currval(alter_seq_01)
-900    900
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 910    910
 select nextval('alter_seq_01'),currval('alter_seq_01');
 nextval(alter_seq_01)    currval(alter_seq_01)
 920    920
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+930    930
 drop sequence alter_seq_01;
+create sequence if not exists alter_seq_01 as bigint increment by 100 minvalue 20  start with 50 cycle;
+select * from alter_seq_01;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+50    20    9223372036854775807    50    100    true    false
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+50    50
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+150    150
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+250    250
+alter sequence if exists alter_seq_01 as int increment by 200 minvalue 10 no cycle;
+select * from alter_seq_01;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+450    10    2147483647    250    200    false    false
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+450    450
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+650    650
+select nextval('alter_seq_01'),currval('alter_seq_01');
+nextval(alter_seq_01)    currval(alter_seq_01)
+850    850
+drop sequence alter_seq_01;
+create sequence alter_seq_02 increment 3;
+select nextval('alter_seq_02');
+nextval(alter_seq_02)
+1
+select nextval('alter_seq_02'),currval('alter_seq_02');
+nextval(alter_seq_02)    currval(alter_seq_02)
+4    4
+select * from alter_seq_02;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+4    1    9223372036854775807    1    3    false    true
+alter sequence alter_seq_02 increment 10;
+select nextval('alter_seq_02'),currval('alter_seq_02');
+nextval(alter_seq_02)    currval(alter_seq_02)
+14    14
+select nextval('alter_seq_02'),currval('alter_seq_02');
+nextval(alter_seq_02)    currval(alter_seq_02)
+24    24
+alter sequence alter_seq_02 increment by -10;
+select nextval('alter_seq_02');
+nextval(alter_seq_02)
+14
+select nextval('alter_seq_02'),currval('alter_seq_02');
+nextval(alter_seq_02)    currval(alter_seq_02)
+4    4
+select nextval('alter_seq_02'),currval('alter_seq_02');
+internal error: Reached maximum value of sequence alter_seq_02
+drop sequence alter_seq_02;
+create sequence alter_seq_03 start 10000;
+select nextval('alter_seq_03');
+nextval(alter_seq_03)
+10000
+select nextval('alter_seq_03'),currval('alter_seq_03');
+nextval(alter_seq_03)    currval(alter_seq_03)
+10001    10001
+alter sequence alter_seq_03 minvalue 999 maxvalue 1999;
+invalid input: STARTVALUE (10001) for sequence must between MINVALUE (999) and MAXVALUE (1999)
+alter sequence alter_seq_03;
+SQL syntax error: synatx error, alter_seq_03 has nothing to alter
+alter sequence alter_seq_03 start 9999;
+select nextval('alter_seq_03'),currval('alter_seq_03');
+nextval(alter_seq_03)    currval(alter_seq_03)
+10002    10002
+select nextval('alter_seq_03'),currval('alter_seq_03');
+nextval(alter_seq_03)    currval(alter_seq_03)
+10003    10003
+drop sequence alter_seq_03;
+create sequence alter_seq_04 start 9;
+select nextval('alter_seq_04'),currval('alter_seq_04');
+nextval(alter_seq_04)    currval(alter_seq_04)
+9    9
+select nextval('alter_seq_04'),currval('alter_seq_04');
+nextval(alter_seq_04)    currval(alter_seq_04)
+10    10
+alter sequence alter_seq_04 minvalue 10 maxvalue 10 no cycle;
+invalid input: MAXVALUE (10) of sequence must be bigger than MINVALUE (10) of it
+select * from alter_seq_04;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+10    1    9223372036854775807    9    1    false    true
+select nextval('alter_seq_04'),currval('alter_seq_04');
+nextval(alter_seq_04)    currval(alter_seq_04)
+11    11
+drop sequence alter_seq_04 ;
+create sequence alter_seq_05 increment 2 minvalue 1 maxvalue 6 no cycle;
+select nextval('alter_seq_05'),currval('alter_seq_05');
+nextval(alter_seq_05)    currval(alter_seq_05)
+1    1
+select nextval('alter_seq_05'),currval('alter_seq_05');
+nextval(alter_seq_05)    currval(alter_seq_05)
+3    3
+alter sequence alter_seq_05 increment 2 minvalue 1 maxvalue 6 cycle;
+select nextval('alter_seq_05'),currval('alter_seq_05');
+nextval(alter_seq_05)    currval(alter_seq_05)
+5    5
+select nextval('alter_seq_05'),currval('alter_seq_05');
+nextval(alter_seq_05)    currval(alter_seq_05)
+1    1
+select nextval('alter_seq_05'),currval('alter_seq_05');
+nextval(alter_seq_05)    currval(alter_seq_05)
+3    3
+select * from alter_seq_05;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+3    1    6    3    2    true    true
+create sequence alter_seq_06 increment 20 minvalue 140 maxvalue 200 no cycle;
+select nextval('alter_seq_06'),currval('alter_seq_06');
+nextval(alter_seq_06)    currval(alter_seq_06)
+140    140
+select nextval('alter_seq_06'),currval('alter_seq_06');
+nextval(alter_seq_06)    currval(alter_seq_06)
+160    160
+alter sequence alter_seq_06 maxvalue 220;
+select nextval('alter_seq_06'),currval('alter_seq_06');
+nextval(alter_seq_06)    currval(alter_seq_06)
+180    180
+select nextval('alter_seq_06'),currval('alter_seq_06');
+nextval(alter_seq_06)    currval(alter_seq_06)
+200    200
+select nextval('alter_seq_06'),currval('alter_seq_06');
+nextval(alter_seq_06)    currval(alter_seq_06)
+220    220
+select nextval('alter_seq_06'),currval('alter_seq_06');
+internal error: Reached maximum value of sequence alter_seq_06
+alter sequence alter_seq_02 increment by -10;
+invalid input: no such sequence alter_seq_02

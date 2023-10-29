@@ -119,14 +119,14 @@ func hasSubquery(expr *plan.Expr) bool {
 	}
 }
 
-func hasTag(expr *plan.Expr, tag int32) bool {
+func HasTag(expr *plan.Expr, tag int32) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		return exprImpl.Col.RelPos == tag
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			if hasTag(arg, tag) {
+			if HasTag(arg, tag) {
 				return true
 			}
 		}
@@ -134,7 +134,7 @@ func hasTag(expr *plan.Expr, tag int32) bool {
 
 	case *plan.Expr_List:
 		for _, arg := range exprImpl.List.List {
-			if hasTag(arg, tag) {
+			if HasTag(arg, tag) {
 				return true
 			}
 		}
@@ -1082,17 +1082,6 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	return colexec.RewriteFilterExprList(exprList)
 }
 
-func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(tableDef, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
-	}
-}
-
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
@@ -1720,16 +1709,41 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 
 // databaseIsValid checks whether the database exists or not.
 func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
+	connectDBFirst := false
+	if len(dbName) == 0 {
+		connectDBFirst = true
+	}
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 	}
 
-	if dbName == "" {
-		return "", moerr.NewNoDB(ctx.GetContext())
-	}
-
-	if !ctx.DatabaseExists(dbName) {
-		return "", moerr.NewBadDB(ctx.GetContext(), dbName)
+	if len(dbName) == 0 || !ctx.DatabaseExists(dbName) {
+		if connectDBFirst {
+			return "", moerr.NewNoDB(ctx.GetContext())
+		} else {
+			return "", moerr.NewBadDB(ctx.GetContext(), dbName)
+		}
 	}
 	return dbName, nil
+}
+
+/*
+*
+getSuitableDBName get the database name which need to be used in next steps.
+
+For Cases:
+
+	SHOW XXX FROM [DB_NAME1].TABLE_NAME [FROM [DB_NAME2]];
+
+	In mysql,
+		if the second FROM clause exists, the DB_NAME1 in first FROM clause if it exists will be ignored.
+		if the second FROM clause does not exist, the DB_NAME1 in first FROM clause if it exists  will be used.
+		if the DB_NAME1 and DB_NAME2 neither does not exist, the current connected database (by USE statement) will be used.
+		if neither case above succeeds, an error is reported.
+*/
+func getSuitableDBName(dbName1 string, dbName2 string) string {
+	if len(dbName2) != 0 {
+		return dbName2
+	}
+	return dbName1
 }

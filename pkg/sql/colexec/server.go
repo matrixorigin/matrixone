@@ -56,17 +56,24 @@ func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
 	return srv.id
 }
 
-func (srv *Server) GetProcByUuid(u uuid.UUID) (*process.Process, bool) {
+// GetProcByUuid try to get process from map, and decrease referenceCount by 1 when get succeed.
+// if forcedDelete is true, it will do action to avoid other goroutine to put a new item into map when get failed.
+func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Process, bool) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	p, ok := srv.uuidCsChanMap.mp[u]
 	if !ok {
+		if forcedDelete {
+			srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: nil, referenceCount: 1}
+		}
 		return nil, false
 	}
 	p.referenceCount--
 	if p.referenceCount == 0 {
 		delete(srv.uuidCsChanMap.mp, u)
 		return nil, true
+	} else {
+		srv.uuidCsChanMap.mp[u] = p
 	}
 	return p.proc, true
 }
@@ -74,6 +81,11 @@ func (srv *Server) GetProcByUuid(u uuid.UUID) (*process.Process, bool) {
 func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
+	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
+		delete(srv.uuidCsChanMap.mp, u)
+		return nil
+	}
+
 	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, referenceCount: 2}
 	return nil
 }
@@ -90,6 +102,8 @@ func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
 		uid.referenceCount--
 		if uid.referenceCount == 0 {
 			delete(srv.uuidCsChanMap.mp, uuids[i])
+		} else {
+			srv.uuidCsChanMap.mp[uuids[i]] = uid
 		}
 	}
 }

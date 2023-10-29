@@ -456,7 +456,10 @@ func testRPCServer(t assert.TestingT, testFunc func(*server), options ...ServerO
 
 func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
 	bf := NewGoettyBasedBackendFactory(newTestCodec())
-	c, err := NewClient(bf, options...)
+	c, err := NewClient(
+		"",
+		bf,
+		options...)
 	assert.NoError(t, err)
 	return c
 }

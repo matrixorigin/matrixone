@@ -296,7 +296,7 @@ t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES   
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-y    VARCHAR(20)    YES        null        
+y    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
@@ -315,7 +315,7 @@ t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES   
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-z    VARCHAR(20)    YES        null        
+z    VARCHAR(20)    YES    UNI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
@@ -421,7 +421,7 @@ desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 b    CHAR(10)    YES        null        
-y    VARCHAR(20)    YES        null        
+y    VARCHAR(20)    YES    UNI    null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
 a    b    y    d
@@ -1428,7 +1428,11 @@ insert into index02 values (5, 'gh', '1999-12-31', 20000);
 delete from index02 where bnewnew = 'ab';
 update index02 set bnewnew = 'database' where bnewnEW = 'ad';
 desc index02;
-[unknown result because it is related to issue#11270]
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO    PRI    null        
+bnewnew    VARCHAR(20)    YES    UNI    null        
+c    DATE(0)    YES        null        
+d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 index02    a    INT    NO
@@ -1713,10 +1717,10 @@ null    93024232    -32    324242132321
 234    32718    100    32894323237289
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
+cast02    col22361738278472874382    BIGINT    YES
+cast02    col4cdhewjruekhwjf    SMALLINT    YES
 cast02    col1new    INT UNSIGNED    YES
 cast02    col3vhejwh4i3uh4r    BIGINT UNSIGNED    YES
-cast02    col4cdhewjruekhwjf    SMALLINT    YES
-cast02    col22361738278472874382    BIGINT    YES
 drop table cast02;
 drop table if exists cast03;
 create table cast03 (col1 smallint unsigned, col2 float, col3 double, col4 decimal);
@@ -1978,8 +1982,8 @@ col2worejnfenrororiri    iwijwehfndatabasectm
 -2893428.0    2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
-cluster01    iwijwehfndatabasectm    DOUBLE    YES
 cluster01    col2worejnfenrororiri    FLOAT    YES
+cluster01    iwijwehfndatabasectm    DOUBLE    YES
 drop table cluster01;
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);

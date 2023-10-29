@@ -141,6 +141,6 @@ func TestMergeBlock(t *testing.T) {
 	//		require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
 	//	}
 	//}
-	argument1.Free(proc, false)
+	argument1.Free(proc, false, nil)
 	//require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
