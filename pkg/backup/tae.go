@@ -88,7 +88,13 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 	if err != nil {
 		return err
 	}
-	return execBackup(ctx, srcFs, dstFs, fileName)
+	err = execBackup(ctx, srcFs, dstFs, fileName)
+	if err != nil {
+		logutil.Infof("backup failed, err: %v", err)
+		return err
+	}
+	logutil.Infof("backup success")
+	return nil
 }
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
@@ -196,9 +202,12 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 		end := types.StringToTS(mergeEnd)
 		start := types.StringToTS(mergeStart)
+		logutil.Infof("merge checkpoint from %s to %s", start.ToString(), end.ToString())
 		cnLocation, tnLocation, _, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
 			cnLocation, tnLocation, uint32(version), start)
+		logutil.Infof("ReWriteCheckpointAndBlockFromKey cnLocation %s, tnLocation %s", cnLocation.String(), tnLocation.String())
 		if err != nil {
+			logutil.Infof("ReWriteCheckpointAndBlockFromKey failed is %v", err.Error())
 			return err
 		}
 		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, cnLocation, tnLocation, start, end)

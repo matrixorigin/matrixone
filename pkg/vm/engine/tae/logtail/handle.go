@@ -1058,6 +1058,9 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 	}
 
+	logutil.Infof("rewrite checkpoint %s", loc.String())
+	logutil.Infof("objectsData len(%d)", len(objectsData))
+	defer logutil.Infof("rewrite checkpoint %s done", loc.String())
 	if isCkpChange {
 		for fileName, objectData := range objectsData {
 			if objectData.isChange {
