@@ -73,7 +73,7 @@ type vectorMeta struct {
 
 var _ kmeans.Clusterer = new(KMeansClusterer)
 
-func NewElkansKMeans(vectors [][]float64,
+func NewKMeans(vectors [][]float64,
 	clusterCnt, maxIterations int,
 	deltaThreshold float64,
 	distanceType kmeans.DistanceType) (kmeans.Clusterer, error) {
@@ -127,6 +127,12 @@ func NewElkansKMeans(vectors [][]float64,
 	}, nil
 }
 
+// InitCentroids initializes the centroids using initialization algorithms like kmeans++ or random.
+func (kmeans *KMeansClusterer) InitCentroids() {
+	// Here we use random initialization, as it is the better suited for large-scale use-case.
+	kmeans.randomInit()
+}
+
 // Cluster returns the final centroids and the error if any.
 func (kmeans *KMeansClusterer) Cluster() ([][]float64, error) {
 
@@ -143,10 +149,9 @@ func (kmeans *KMeansClusterer) Cluster() ([][]float64, error) {
 func (kmeans *KMeansClusterer) elkansCluster() ([][]float64, error) {
 
 	for iter := 0; ; iter++ {
-		changes := 0
 		kmeans.computeCentroidDistances() // step 1
 
-		changes = kmeans.assignData() // step 2 and 3
+		changes := kmeans.assignData() // step 2 and 3
 
 		newCentroids := kmeans.recalculateCentroids() // step 4
 
@@ -200,24 +205,21 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 	return nil
 }
 
-func (kmeans *KMeansClusterer) InitCentroids() {
-	kmeans.randomInit()
-}
-
+// initBounds initializes the lower bounds, upper bound and assignment for each vector.
 func (kmeans *KMeansClusterer) initBounds() {
 	for x := range kmeans.vectorList {
-		minDiff := math.MaxFloat64
+		minDist := math.MaxFloat64
 		closestCenter := 0
 		for c := 0; c < len(kmeans.Centroids); c++ {
-			diff := kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[c])
-			kmeans.vectorMetas[x].lower[c] = diff
-			if diff < minDiff {
-				minDiff = diff
+			dist := kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[c])
+			kmeans.vectorMetas[x].lower[c] = dist
+			if dist < minDist {
+				minDist = dist
 				closestCenter = c
 			}
 		}
 
-		kmeans.vectorMetas[x].upper = minDiff
+		kmeans.vectorMetas[x].upper = minDist
 		kmeans.assignments[x] = closestCenter
 	}
 }
