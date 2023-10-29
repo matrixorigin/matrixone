@@ -210,11 +210,19 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			logutil.Infof("ReWriteCheckpointAndBlockFromKey failed is %v", err.Error())
 			return err
 		}
+		dentry, err := dstFs.StatFile(ctx, cnLocation.Name().String())
+		if err != nil {
+			return err
+		}
+		taeFileList = append(taeFileList, &taeFile{
+			path: "ckp/" + dentry.Name,
+			size: dentry.Size,
+		})
 		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, cnLocation, tnLocation, start, end)
 		if err != nil {
 			return err
 		}
-		dentry, err := dstFs.StatFile(ctx, file)
+		dentry, err = dstFs.StatFile(ctx, file)
 		if err != nil {
 			return err
 		}

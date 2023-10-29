@@ -71,7 +71,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sort"
 	"strconv"
 	"strings"
@@ -1132,7 +1131,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 		loc = cnLocation
 		tnLocation = dnLocation
-
+		logutil.Infof("cnLocation is %v, dnLocation is %v", cnLocation.String(), dnLocation.String())
 	}
 	return loc, tnLocation, data, nil
 }
