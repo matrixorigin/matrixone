@@ -86,6 +86,7 @@ func initTxnMetrics() {
 }
 
 func initRPCMetrics() {
+	registry.MustRegister(RPCClientCreateCounter)
 	registry.MustRegister(rpcBackendCreateCounter)
 	registry.MustRegister(rpcBackendClosedCounter)
 	registry.MustRegister(rpcBackendConnectCounter)

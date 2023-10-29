@@ -49,26 +49,32 @@ func (c *DashboardCreator) initRPCOverviewRow() dashboard.Option {
 	return dashboard.Row(
 		"RPC overview",
 		c.withGraph(
+			"RPC Client Create",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_client_create_total", "")+`[$interval])) by (`+c.by+`, name)`,
+			"{{ "+c.by+"-name }}"),
+
+		c.withGraph(
 			"Connection pool",
-			3,
+			6,
 			`sum(`+c.getMetricWithFilter("mo_rpc_backend_pool_size", ``)+`) by (`+c.by+`, name)`,
 			"{{ "+c.by+"-name }}"),
 
 		c.withGraph(
 			"Sending queue",
-			3,
+			4,
 			`sum(`+c.getMetricWithFilter("mo_rpc_sending_queue_size", ``)+`) by (`+c.by+`, name, side)`,
 			"{{ "+c.by+"-name-side }}"),
 
 		c.withGraph(
 			"Write Batch Size",
-			3,
+			4,
 			`sum(`+c.getMetricWithFilter("mo_rpc_sending_batch_size", ``)+`) by (`+c.by+`, name)`,
 			"{{ "+c.by+"-name }}"),
 
 		c.withGraph(
 			"Server sessions",
-			3,
+			4,
 			`sum(`+c.getMetricWithFilter("mo_rpc_server_session_size", ``)+`) by (`+c.by+`, name)`,
 			"{{ "+c.by+"-name }}"),
 	)
