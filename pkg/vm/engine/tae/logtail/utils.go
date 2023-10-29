@@ -1521,6 +1521,7 @@ func (data *CheckpointData) WriteTo(
 		}
 		offset := 0
 		formatBatch(data.bats[i])
+		logutil.Infof("checkpointDataSchemas_Curr[%d]", i)
 		var block objectio.BlockObject
 		var bat *containers.Batch
 		var size int
@@ -1560,6 +1561,7 @@ func (data *CheckpointData) WriteTo(
 				if err != nil {
 					break
 				}
+				logutil.Infof("checkpointDataSchemas_Curr1111[%d] bat length %d", i, bat.Length())
 				if block, size, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 					return
 				}
@@ -1575,10 +1577,12 @@ func (data *CheckpointData) WriteTo(
 			}
 		}
 	}
+	logutil.Infof("write sync start")
 	blks, _, err := writer.Sync(context.Background())
 	if err != nil {
 		return
 	}
+	logutil.Infof("write sync end")
 	schemas = append(schemas, schemaTypes)
 	objectBlocks = append(objectBlocks, blks)
 
@@ -1635,6 +1639,7 @@ func (data *CheckpointData) WriteTo(
 		}
 	}
 
+	logutil.Infof("NewCheckpointMeta")
 	data.meta[0] = NewCheckpointMeta()
 	data.meta[0].tables[0] = NewTableMeta()
 	for num, fileName := range checkpointNames {
@@ -1644,6 +1649,7 @@ func (data *CheckpointData) WriteTo(
 			0, 0)
 		data.meta[0].tables[0].locations.Append(blockLoc)
 	}
+	logutil.Infof("prepareMeta start")
 	data.prepareMeta()
 	if err != nil {
 		return
@@ -1671,6 +1677,7 @@ func (data *CheckpointData) WriteTo(
 	if err != nil {
 		return
 	}
+	logutil.Infof("writer2.Sync start")
 	blks2, _, err := writer2.Sync(context.Background())
 	CNLocation = objectio.BuildLocation(name2, blks2[0].GetExtent(), 0, blks2[0].GetID())
 	TNLocation = objectio.BuildLocation(name2, blks2[1].GetExtent(), 0, blks2[1].GetID())

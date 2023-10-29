@@ -1007,9 +1007,10 @@ func ReWriteCheckpointAndBlockFromKey(
 					return nil, nil, nil, err
 				}
 				if !commitTs.LessEq(ts) {
-					windowCNBatch(bat, 0, uint64(v))
+					//windowCNBatch(bat, 0, uint64(v))
 					isChange = true
 					isCkpChange = true
+					break
 				}
 			}
 		}
@@ -1020,9 +1021,10 @@ func ReWriteCheckpointAndBlockFromKey(
 					return nil, nil, nil, err
 				}
 				if !deltaCommitTs.LessEq(ts) {
-					windowCNBatch(deltaBat, 0, uint64(v))
+					//windowCNBatch(deltaBat, 0, uint64(v))
 					isChange = true
 					isCkpChange = true
+					break
 				}
 			}
 		}
@@ -1064,6 +1066,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	if isCkpChange {
 		for fileName, objectData := range objectsData {
 			if objectData.isChange {
+				logutil.Infof("checkpoint change %s, block length %d", fileName, len(objectData.data))
 				writer, err := blockio.NewBlockWriter(fs, fileName)
 				if err != nil {
 					return nil, nil, nil, err
@@ -1119,6 +1122,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 			}
 		}
+		logutil.Infof("write to start" )
 		cnLocation, dnLocation, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 		if err != nil {
 			logutil.Infof("write to error: %v", err)
