@@ -1007,7 +1007,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					return nil, nil, nil, err
 				}
 				if !commitTs.LessEq(ts) {
-					//windowCNBatch(bat, 0, uint64(v))
+					windowCNBatch(bat, 0, uint64(v))
 					isChange = true
 					isCkpChange = true
 					break
@@ -1021,7 +1021,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					return nil, nil, nil, err
 				}
 				if !deltaCommitTs.LessEq(ts) {
-					//windowCNBatch(deltaBat, 0, uint64(v))
+					windowCNBatch(deltaBat, 0, uint64(v))
 					isChange = true
 					isCkpChange = true
 					break
@@ -1123,6 +1123,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 		}
 		logutil.Infof("write to start" )
+		common.InitTAEMPool()
 		cnLocation, dnLocation, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 		if err != nil {
 			logutil.Infof("write to error: %v", err)
