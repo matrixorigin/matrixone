@@ -1496,6 +1496,16 @@ type blockIndexes struct {
 	indexes *BlockLocation
 }
 
+func (data *CheckpointData) FormatData(mp *mpool.MPool) (err error) {
+	for idx := range data.bats {
+		for i, col := range data.bats[idx].Vecs {
+			vec := col.CloneWindow(0, col.Length(), mp)
+			data.bats[idx].Vecs[i] = vec
+		}
+	}
+	return
+}
+
 func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
 	blockRows int,
@@ -1654,7 +1664,7 @@ func (data *CheckpointData) WriteTo(
 	if err != nil {
 		return
 	}
-
+	logutil.Infof("prepareMeta end")
 	segmentid2 := objectio.NewSegmentid()
 	name2 := objectio.BuildObjectName(segmentid2, 0)
 	writer2, err := blockio.NewBlockWriterNew(fs, name2, 0, nil)

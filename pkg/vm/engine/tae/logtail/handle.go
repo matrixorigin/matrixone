@@ -71,6 +71,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sort"
 	"strconv"
 	"strings"
@@ -1123,7 +1124,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 		}
 		logutil.Infof("write to start" )
-		common.InitTAEMPool()
+		data.FormatData(common.DefaultAllocator)
 		cnLocation, dnLocation, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 		if err != nil {
 			logutil.Infof("write to error: %v", err)
