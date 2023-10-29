@@ -127,6 +127,12 @@ func NewElkansKMeans(vectors [][]float64,
 	}, nil
 }
 
+// InitCentroids initializes the centroids using initialization algorithms like kmeans++ or random.
+func (kmeans *KMeansClusterer) InitCentroids() {
+	// Here we use random initialization, as it is the better suited for large-scale use-case.
+	kmeans.randomInit()
+}
+
 // Cluster returns the final centroids and the error if any.
 func (kmeans *KMeansClusterer) Cluster() ([][]float64, error) {
 
@@ -143,10 +149,9 @@ func (kmeans *KMeansClusterer) Cluster() ([][]float64, error) {
 func (kmeans *KMeansClusterer) elkansCluster() ([][]float64, error) {
 
 	for iter := 0; ; iter++ {
-		changes := 0
 		kmeans.computeCentroidDistances() // step 1
 
-		changes = kmeans.assignData() // step 2 and 3
+		changes := kmeans.assignData() // step 2 and 3
 
 		newCentroids := kmeans.recalculateCentroids() // step 4
 
@@ -198,10 +203,6 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 	}
 
 	return nil
-}
-
-func (kmeans *KMeansClusterer) InitCentroids() {
-	kmeans.randomInit()
 }
 
 func (kmeans *KMeansClusterer) initBounds() {
