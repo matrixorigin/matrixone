@@ -206,28 +206,31 @@ func InitMOCtledSpan() {
 // IsMOCtledSpan first checks if this kind exists in mo_ctl controlled spans,
 // if it is, return it's current state, or return not exist
 func IsMOCtledSpan(kind SpanKind) (exist bool, enable bool, threshold time.Duration) {
-	MOCtledSpanEnableConfig.Lock()
-	defer MOCtledSpanEnableConfig.Unlock()
-
-	if state, exist := MOCtledSpanEnableConfig.KindToState[kind]; exist {
-		return true, state.Enable, state.Threshold
-	}
 	return false, false, 0
+
+	//MOCtledSpanEnableConfig.Lock()
+	//defer MOCtledSpanEnableConfig.Unlock()
+	//
+	//if state, exist := MOCtledSpanEnableConfig.KindToState[kind]; exist {
+	//	return true, state.Enable, state.Threshold
+	//}
+	//return false, false, 0
 }
 
 // SetMoCtledSpanState first checks if this kind exists in mo_ctl controlled spans,
 // if it is, reset it's state to the specified and return succeed, or return not succeed
 func SetMoCtledSpanState(name string, enable bool, threshold int64) (succeed bool) {
-	MOCtledSpanEnableConfig.Lock()
-	defer MOCtledSpanEnableConfig.Unlock()
-	
-	if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
-		MOCtledSpanEnableConfig.KindToState[kind].Enable = enable
-		// convert threshold to ms in time.Duration format
-		MOCtledSpanEnableConfig.KindToState[kind].Threshold = time.Duration(threshold) * time.Millisecond
-		return true
-	}
 	return false
+	//MOCtledSpanEnableConfig.Lock()
+	//defer MOCtledSpanEnableConfig.Unlock()
+	//
+	//if kind, ok := MOCtledSpanEnableConfig.NameToKind[name]; ok {
+	//	MOCtledSpanEnableConfig.KindToState[kind].Enable = enable
+	//	// convert threshold to ms in time.Duration format
+	//	MOCtledSpanEnableConfig.KindToState[kind].Threshold = time.Duration(threshold) * time.Millisecond
+	//	return true
+	//}
+	//return false
 }
 
 // SpanConfig is a group of options for a Span.
