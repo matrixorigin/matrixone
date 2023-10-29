@@ -1084,8 +1084,18 @@ func ReWriteCheckpointAndBlockFromKey(
 
 				blocks, extent, err := writer.Sync(ctx)
 				if err != nil {
-					logutil.Infof("sync error: %v", err)
-					return nil, nil, nil, err
+					if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+						err = fs.Delete(ctx, fileName)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+						blocks, extent, err = writer.Sync(ctx)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+					} else {
+						return nil, nil, nil, err
+					}
 				}
 
 				for row, block := range blocks {
