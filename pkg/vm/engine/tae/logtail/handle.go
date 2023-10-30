@@ -507,13 +507,13 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
 		}
-		visitObject(b.objectMetaBatch, node)
+		visitObject(b.objectMetaBatch,&e.ID, node)
 	}
 	return nil
 }
 
-func visitObject(batch *containers.Batch, node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) {
-	node.BaseNode.AppendTuple(batch)
+func visitObject(batch *containers.Batch,sid *types.Objectid, node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) {
+	node.BaseNode.AppendTuple(sid,batch)
 	node.TxnMVCCNode.AppendTuple(batch)
 	node.EntryMVCCNode.AppendTuple(batch)
 }

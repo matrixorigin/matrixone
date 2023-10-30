@@ -196,10 +196,10 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 	return e.OriginSize == 0
 }
 
-func (e *ObjectMVCCNode) AppendTuple(batch *containers.Batch) {
+func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
 	// for segment without metalocation, object mvcc node is empty.
 	if e == nil || e.IsEmpty() {
-		batch.GetVectorByName(ObjectAttr_Name).Append(nil, true)
+		batch.GetVectorByName(ObjectAttr_Name).Append([]byte(sid[:]), false) // when replay, sid is get from object name
 		batch.GetVectorByName(ObjectAttr_OriginSize).Append(nil, true)
 		batch.GetVectorByName(ObjectAttr_CompressedSize).Append(nil, true)
 		batch.GetVectorByName(ObjectAttr_ZoneMap).Append(nil, true)

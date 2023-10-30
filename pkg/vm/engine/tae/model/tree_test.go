@@ -27,7 +27,7 @@ func TestTree(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	tree := NewTree()
 	seg1 := objectio.NewSegmentid()
-	seg2 := objectio.NewSegmentid()
+	seg2 := objectio.NewObjectid()
 	blk0 := objectio.NewBlockid(seg1, 0, 0)
 	blk1 := objectio.NewBlockid(seg1, 1, 0)
 	blk2 := objectio.NewBlockid(seg1, 2, 0)

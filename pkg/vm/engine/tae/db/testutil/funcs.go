@@ -286,6 +286,9 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 		it.Next()
 	}
 	_ = txn.Commit(context.Background())
+	if len(metas)==0{
+		return
+	}
 	txn, _ = GetRelation(t, tenantID, e, dbName, schema.Name)
 	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, e.Runtime, txn.GetStartTS())
 	if skipConflict && err != nil {
