@@ -42,9 +42,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
 		}
-		if bat != nil {
-			bat.Clean(proc.GetMPool())
-		}
 	}()
 	if bat == nil {
 		return true, nil

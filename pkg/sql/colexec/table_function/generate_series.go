@@ -66,9 +66,6 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument, result *vm.
 		if endVecTmp != nil {
 			endVecTmp.Free(proc.Mp())
 		}
-		if bat != nil {
-			bat.Clean(proc.GetMPool())
-		}
 	}()
 	if bat == nil {
 		return true, nil

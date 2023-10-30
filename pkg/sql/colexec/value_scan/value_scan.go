@@ -42,7 +42,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if arg.idx < len(arg.Batchs) {
 		result.Batch = arg.Batchs[arg.idx]
 		if arg.idx > 0 {
-			arg.Batchs[arg.idx-1].Clean(proc.Mp())
+			proc.PutBatch(arg.Batchs[arg.idx-1])
+			arg.Batchs[arg.idx-1] = nil
 		}
 		arg.idx += 1
 	}

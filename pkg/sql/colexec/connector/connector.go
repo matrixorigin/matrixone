@@ -17,6 +17,7 @@ package connector
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -44,6 +45,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	bat := result.Batch
 	if bat.IsEmpty() {
+		result.Batch = batch.EmptyBatch
 		return result, nil
 	}
 	bat.AddCnt(1)

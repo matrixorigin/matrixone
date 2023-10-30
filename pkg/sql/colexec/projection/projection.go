@@ -76,7 +76,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.buf, bat)
 	if err != nil {
-		bat.Clean(proc.Mp())
 		return result, err
 	}
 	anal.Alloc(int64(newAlloc))

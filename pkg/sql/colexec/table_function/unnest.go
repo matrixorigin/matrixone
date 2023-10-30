@@ -113,9 +113,6 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 		if outerVec != nil {
 			outerVec.Free(proc.Mp())
 		}
-		if bat != nil {
-			bat.Clean(proc.GetMPool())
-		}
 	}()
 	if bat == nil {
 		return true, nil

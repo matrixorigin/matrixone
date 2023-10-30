@@ -99,35 +99,36 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	ap.ctr.buf = result.Batch
+	bat := result.Batch
 
 	if result.Batch == nil {
 		if ap.RecSink {
-			ap.ctr.buf = makeEndBatch(proc)
-			ap.ctr.buf.AddCnt(1)
+			bat = makeEndBatch(proc)
+			defer func() {
+				if bat != nil {
+					bat.Clean(proc.Mp())
+				}
+			}()
 		} else {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-	} else {
-		ap.ctr.buf = result.Batch
-		ap.ctr.buf.AddCnt(1)
 	}
 
-	if ap.ctr.buf.Last() {
+	if bat.Last() {
 		if !ap.ctr.hasData {
-			ap.ctr.buf.SetEnd()
+			bat.SetEnd()
 		} else {
 			ap.ctr.hasData = false
 		}
-	} else if ap.ctr.buf.IsEmpty() {
-		// proc.PutBatch(bat)
+	} else if bat.IsEmpty() {
 		result.Batch = batch.EmptyBatch
 		return result, nil
 	} else {
 		ap.ctr.hasData = true
 	}
-	ok, err := ap.ctr.sendFunc(ap.ctr.buf, ap, proc)
+	bat.AddCnt(1)
+	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {
 		result.Status = vm.ExecStop
 		return result, err

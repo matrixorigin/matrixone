@@ -28,11 +28,6 @@ import (
 )
 
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
-	if bat.IsEmpty() {
-		bat.Clean(proc.Mp())
-		return false, nil
-	}
-
 	s1, s2 := 0, bat.Size()
 	if ctr.batWaitForSort != nil {
 		s1 = ctr.batWaitForSort.Size()
