@@ -761,7 +761,7 @@ func waitServerReady(addr string) {
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 
-	resetTimout := time.Second
+	var resetTimout time.Duration
 	started := time.Now()
 
 	for {
