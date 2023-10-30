@@ -407,7 +407,7 @@ func (entry *SegmentEntry) CreateBlock(
 	entry.Lock()
 	defer entry.Unlock()
 	var id *objectio.Blockid
-	if entry.IsAppendable() && len(entry.entries) >=1{
+	if entry.IsAppendable() && len(entry.entries) >= 1 {
 		panic("Logic error. Appendable segment has as most one block.")
 	}
 	if opts != nil && opts.Id != nil {

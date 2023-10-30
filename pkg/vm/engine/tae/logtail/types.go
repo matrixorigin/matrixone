@@ -307,10 +307,10 @@ var (
 	}
 	ObjectInfoTypes = []types.Type{
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_int32, 0, 0),
-		types.New(types.T_int32, 0, 0),
+		types.New(types.T_uint32, 0, 0),
+		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_int16, 0, 0),
+		types.New(types.T_uint16, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, 0, 0),

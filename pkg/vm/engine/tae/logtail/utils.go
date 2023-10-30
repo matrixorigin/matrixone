@@ -15,7 +15,6 @@
 package logtail
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -87,12 +86,12 @@ const (
 
 	BLKCNMetaInsertIDX
 
-	ObjectInfoIDX
-
 	TNMetaIDX
+
+	ObjectInfoIDX
 )
 
-const MaxIDX = TNMetaIDX + 1
+const MaxIDX = ObjectInfoIDX + 1
 
 const (
 	Checkpoint_Meta_TID_IDX                 = 2
@@ -2412,83 +2411,83 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	if len(mvccNodes) == 0 {
 		return nil
 	}
-	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
-	segDelBat := collector.data.bats[SEGDeleteIDX]
-	segDelTxn := collector.data.bats[SEGDeleteTxnIDX]
-	segInsBat := collector.data.bats[SEGInsertIDX]
-	segInsTxn := collector.data.bats[SEGInsertTxnIDX]
+	delStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_Name).Length()
+	// segDelBat := collector.data.bats[SEGDeleteIDX]
+	// segDelTxn := collector.data.bats[SEGDeleteTxnIDX]
+	// segInsBat := collector.data.bats[SEGInsertIDX]
+	// segInsTxn := collector.data.bats[SEGInsertTxnIDX]
 
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
 		}
 		visitObject(collector.data.bats[ObjectInfoIDX], node)
-		segNode := node
-		if segNode.HasDropCommitted() {
-			vector.AppendFixed(
-				segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
-				objectio.HackObjid2Rowid(&entry.ID),
-				false,
-				common.DefaultAllocator,
-			)
-			vector.AppendFixed(
-				segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
-				segNode.GetEnd(),
-				false,
-				common.DefaultAllocator,
-			)
-			vector.AppendFixed(
-				segDelTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
-				entry.GetTable().GetDB().GetID(),
-				false,
-				common.DefaultAllocator,
-			)
-			vector.AppendFixed(
-				segDelTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
-				entry.GetTable().GetID(),
-				false,
-				common.DefaultAllocator,
-			)
-			segNode.TxnMVCCNode.AppendTuple(segDelTxn)
-		} else {
-			vector.AppendFixed(
-				segInsBat.GetVectorByName(SegmentAttr_ID).GetDownstreamVector(),
-				entry.ID,
-				false,
-				common.DefaultAllocator,
-			)
-			vector.AppendFixed(
-				segInsBat.GetVectorByName(SegmentAttr_CreateAt).GetDownstreamVector(),
-				segNode.GetEnd(),
-				false,
-				common.DefaultAllocator,
-			)
-			buf := &bytes.Buffer{}
-			if _, err := entry.SegmentNode.WriteTo(buf); err != nil {
-				return err
-			}
-			vector.AppendBytes(
-				segInsBat.GetVectorByName(SegmentAttr_SegNode).GetDownstreamVector(),
-				buf.Bytes(),
-				false,
-				common.DefaultAllocator,
-			)
-			vector.AppendFixed(
-				segInsTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
-				entry.GetTable().GetDB().GetID(),
-				false,
-				common.DefaultAllocator,
-			)
-			vector.AppendFixed(
-				segInsTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
-				entry.GetTable().GetID(),
-				false,
-				common.DefaultAllocator,
-			)
-			segNode.TxnMVCCNode.AppendTuple(segInsTxn)
-		}
+		// segNode := node
+		// if segNode.HasDropCommitted() {
+		// 	vector.AppendFixed(
+		// 		segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
+		// 		objectio.HackObjid2Rowid(&entry.ID),
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	vector.AppendFixed(
+		// 		segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
+		// 		segNode.GetEnd(),
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	vector.AppendFixed(
+		// 		segDelTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
+		// 		entry.GetTable().GetDB().GetID(),
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	vector.AppendFixed(
+		// 		segDelTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+		// 		entry.GetTable().GetID(),
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	segNode.TxnMVCCNode.AppendTuple(segDelTxn)
+		// } else {
+		// 	vector.AppendFixed(
+		// 		segInsBat.GetVectorByName(SegmentAttr_ID).GetDownstreamVector(),
+		// 		entry.ID,
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	vector.AppendFixed(
+		// 		segInsBat.GetVectorByName(SegmentAttr_CreateAt).GetDownstreamVector(),
+		// 		segNode.GetEnd(),
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	buf := &bytes.Buffer{}
+		// 	if _, err := entry.SegmentNode.WriteTo(buf); err != nil {
+		// 		return err
+		// 	}
+		// 	vector.AppendBytes(
+		// 		segInsBat.GetVectorByName(SegmentAttr_SegNode).GetDownstreamVector(),
+		// 		buf.Bytes(),
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	vector.AppendFixed(
+		// 		segInsTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
+		// 		entry.GetTable().GetDB().GetID(),
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	vector.AppendFixed(
+		// 		segInsTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+		// 		entry.GetTable().GetID(),
+		// 		false,
+		// 		common.DefaultAllocator,
+		// 	)
+		// 	segNode.TxnMVCCNode.AppendTuple(segInsTxn)
+		// }
 	}
-	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
+	delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_Name).Length()
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	return nil
 }
@@ -2670,7 +2669,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				)
 				vector.AppendFixed(
 					blkTNMetaInsSegIDVec,
-					entry.GetSegment().ID,
+					*entry.GetSegment().ID.Segment(),
 					false,
 					common.DefaultAllocator,
 				)
@@ -2789,7 +2788,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				)
 				vector.AppendFixed(
 					blkCNMetaInsSegIDVec,
-					entry.GetSegment().ID,
+					*entry.GetSegment().ID.Segment(),
 					false,
 					common.DefaultAllocator,
 				)
@@ -2860,7 +2859,7 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 				)
 				vector.AppendFixed(
 					blkMetaInsSegIDVec,
-					entry.GetSegment().ID,
+					*entry.GetSegment().ID.Segment(),
 					false,
 					common.DefaultAllocator,
 				)

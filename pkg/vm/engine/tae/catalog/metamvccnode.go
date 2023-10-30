@@ -202,10 +202,10 @@ func (e *ObjectMVCCNode) AppendTuple(batch *containers.Batch) {
 		batch.GetVectorByName(ObjectAttr_ZoneMap).Append(nil, true)
 		batch.GetVectorByName(ObjectAttr_BlockNumber).Append(nil, true)
 	}
-	batch.GetVectorByName(ObjectAttr_Name).Append(e.Name, false)
+	batch.GetVectorByName(ObjectAttr_Name).Append([]byte(e.Name), false)
 	batch.GetVectorByName(ObjectAttr_OriginSize).Append(e.OriginSize, false)
 	batch.GetVectorByName(ObjectAttr_CompressedSize).Append(e.CompressedSize, false)
-	batch.GetVectorByName(ObjectAttr_ZoneMap).Append(e.ZoneMap, false)
+	batch.GetVectorByName(ObjectAttr_ZoneMap).Append([]byte(e.ZoneMap), false)
 	batch.GetVectorByName(ObjectAttr_BlockNumber).Append(e.BlockNumber, false)
 }
 
