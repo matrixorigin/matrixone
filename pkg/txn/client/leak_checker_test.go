@@ -35,7 +35,7 @@ func TestLeakCheck(t *testing.T) {
 	c := NewTxnClient(ts,
 		WithEnableLeakCheck(
 			time.Millisecond*200,
-			func(txnID []byte, createAt time.Time, createBy string, counter string) {
+			func(txnID []byte, createAt time.Time, createBy string, counter string, lastSql string) {
 				close(cc)
 			}))
 	c.Resume()
@@ -56,7 +56,7 @@ func TestLeakCheckWithNoLeak(t *testing.T) {
 	c := NewTxnClient(ts,
 		WithEnableLeakCheck(
 			time.Millisecond*200,
-			func(txnID []byte, createAt time.Time, createBy string, counter string) {
+			func(txnID []byte, createAt time.Time, createBy string, counter string, lastSql string) {
 				n++
 			}))
 	c.Resume()
