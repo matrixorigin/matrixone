@@ -353,12 +353,12 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	for _, incremental := range incrementals {
 		if incremental.LessEq(ts) {
 			err := incremental.GCEntry(r.rt.Fs)
-			if err != nil {
+			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Warnf("gc %v failed: %v", incremental.String(), err)
 				panic(err)
 			}
 			err = incremental.GCMetadata(r.rt.Fs)
-			if err != nil {
+			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				panic(err)
 			}
 			r.DeleteIncrementalEntry(incremental)
@@ -368,11 +368,11 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	for _, global := range globals {
 		if global.LessEq(ts) {
 			err := global.GCEntry(r.rt.Fs)
-			if err != nil {
+			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				panic(err)
 			}
 			err = global.GCMetadata(r.rt.Fs)
-			if err != nil {
+			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				panic(err)
 			}
 			r.DeleteGlobalEntry(global)
