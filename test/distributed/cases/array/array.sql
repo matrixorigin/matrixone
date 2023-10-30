@@ -98,7 +98,7 @@ create table t7(a int, b vecf32(3), c vecf32(5));
 insert into t7 values(1, NULL,NULL);
 insert into t7 values(2, "[0.8166459, 0.66616553, 0.4886152]", NULL);
 insert into t7 values(3, "[0.1726299, 3.2908857, 30.433094]","[0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]");
-insert into t7 values(4, "[8.560689, 6.790359, 821.9778]", "[0.46323407, 23.498016, 563.923, 56.076736, 8732.958]");
+insert into t7 values(4, "[8.560689, 6.790359, 821.9778]", "[0.46323407, 23.498016, 563.923, 56.076736, 563.958]");
 select * from t7;
 select a, b + b, c + c from t7;
 select a, b * b, c * c from t7;
