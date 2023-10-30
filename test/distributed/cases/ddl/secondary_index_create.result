@@ -105,3 +105,22 @@ name    type    column_name
 PRIMARY    PRIMARY    name
 name    MULTIPLE    name
 name    MULTIPLE    __mo_alias_id
+drop table if exists t1;
+create table t1(a double primary key, b int);
+insert into t1 values(1.5,100);
+create index idx6 on t1(a); -- sk = pk
+insert into t1 values(2.6,200);
+select * from t1;
+a    b
+1.5    100
+2.6    200
+show index from t1;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+t1    1    idx6    1    a    A    0    NULL    NULL                    YES    NULL
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` DOUBLE NOT NULL,\n`b` INT DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx6` (`a`)\n)
+select name, type, column_name from mo_catalog.mo_indexes mi where name="idx6";
+name    type    column_name
+idx6    MULTIPLE    a
