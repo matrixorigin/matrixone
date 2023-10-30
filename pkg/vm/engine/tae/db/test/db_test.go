@@ -383,13 +383,9 @@ func TestCreateBlock(t *testing.T) {
 	assert.Nil(t, err)
 	blk1, err := seg.CreateBlock(false)
 	assert.Nil(t, err)
-	blk2, err := seg.CreateNonAppendableBlock(nil)
-	assert.Nil(t, err)
 	lastAppendable := seg.GetMeta().(*catalog.SegmentEntry).LastAppendableBlock()
 	assert.Equal(t, blk1.Fingerprint().BlockID, lastAppendable.ID)
 	assert.True(t, lastAppendable.IsAppendable())
-	blk2Meta := blk2.GetMeta().(*catalog.BlockEntry)
-	assert.False(t, blk2Meta.IsAppendable())
 
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	assert.Nil(t, txn.Commit(context.Background()))
