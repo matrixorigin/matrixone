@@ -130,6 +130,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 	}
 
 	if bat != nil {
+		if ctr.bat != nil {
+			proc.PutBatch(ctr.bat)
+			ctr.bat = nil
+		}
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}

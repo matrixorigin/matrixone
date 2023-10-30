@@ -180,6 +180,7 @@ func TestUnnestCall(t *testing.T) {
 			require.Nil(t, err)
 			require.False(t, end)
 			cleanResult(&result, ut.proc)
+			inputBat.Clean(ut.proc.Mp())
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		case "json":
@@ -195,6 +196,7 @@ func TestUnnestCall(t *testing.T) {
 			require.Nil(t, err)
 			require.False(t, end)
 			cleanResult(&result, ut.proc)
+			inputBat.Clean(ut.proc.Mp())
 			afterMem := ut.proc.Mp().CurrNB()
 			require.Equal(t, beforeMem, afterMem)
 		}
