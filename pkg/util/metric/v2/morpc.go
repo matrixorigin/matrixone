@@ -19,6 +19,14 @@ import (
 )
 
 var (
+	RPCClientCreateCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "rpc",
+			Name:      "client_create_total",
+			Help:      "Total number of morpc client created.",
+		}, []string{"name"})
+
 	rpcMessageCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
