@@ -20,9 +20,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/errgroup"
+	"io"
 	"math"
 	"math/bits"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -48,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -965,7 +970,7 @@ var (
 				function_id int auto_increment,
 				name     varchar(100),
 				owner  int unsigned,
-				args     text,
+				args     json,
 				retType  varchar(20),
 				body     text,
 				language varchar(20),
@@ -1100,6 +1105,22 @@ var (
 			character_set_client,
 			collation_connection,
 			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+
+	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
+			set owner = %d, 
+			    args = '%s',
+			    retType = '%s',
+			    body = '%s',
+			    language = '%s',
+			    definer = '%s',
+			    modified_time = '%s',
+			    type = '%s',
+			    security_type = '%s',
+			    comment = '%s',
+			    character_set_client = '%s',
+			    collation_connection = '%s',
+			    database_collation = '%s'
+			where function_id = %d;`
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
@@ -1422,9 +1443,9 @@ const (
 					and mg.user_id = %d 
 					order by role.created_time asc limit 1;`
 
-	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
+	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and args = '%s';`
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s;`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
 
@@ -4479,13 +4500,15 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	return err
 }
 
-func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (err error) {
+type rmPkg func(path string) error
+
+func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm rmPkg) (err error) {
 	var sql string
 	var argstr string
+	var bodyStr string
 	var checkDatabase string
 	var dbName string
 	var funcId int64
-	var fmtctx *tree.FmtCtx
 	var erArray []ExecResult
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -4501,8 +4524,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 		dbName = string(df.Name.Name.SchemaName)
 	}
 
-	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-
 	// validate database name and signature (name + args)
 	bh.ClearExecResultSet()
 	checkDatabase = fmt.Sprintf(checkUdfArgs, string(df.Name.Name.ObjectName), dbName)
@@ -4517,6 +4538,15 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 	}
 
 	if execResultArrayHasData(erArray) {
+		receivedArgsType := make([]string, len(df.Args))
+		for i, arg := range df.Args {
+			typ, err := plan2.GetFunctionArgTypeStrFromAst(arg)
+			if err != nil {
+				return err
+			}
+			receivedArgsType[i] = typ
+		}
+
 		// function with provided name and db exists, now check arguments
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			argstr, err = erArray[0].GetString(ctx, i, 0)
@@ -4527,22 +4557,35 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 			if err != nil {
 				return err
 			}
-			argMap := make(map[string]string)
-			json.Unmarshal([]byte(argstr), &argMap)
-			argCount := 0
-			if len(argMap) == len(df.Args) {
-				for _, v := range argMap {
-					if v != (df.Args[argCount].GetType(fmtctx)) {
-						return moerr.NewInvalidInput(ctx, "invalid parameter")
+			bodyStr, err = erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return err
+			}
+			argList := make([]*function.Arg, 0)
+			json.Unmarshal([]byte(argstr), &argList)
+			if len(argList) == len(df.Args) {
+				match := true
+				for j, arg := range argList {
+					typ := receivedArgsType[j]
+					if arg.Type != typ {
+						match = false
+						break
 					}
-					argCount++
-					fmtctx.Reset()
+				}
+				if !match {
+					continue
 				}
 				handleArgMatch := func() error {
 					//put it into the single transaction
 					err = bh.Exec(ctx, "begin;")
 					defer func() {
 						err = finishTxn(ctx, bh, err)
+						if err == nil {
+							u := &function.NonSqlUdfBody{}
+							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
+								rm(u.Body)
+							}
+						}
 					}()
 					if err != nil {
 						return err
@@ -4559,11 +4602,9 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 				return handleArgMatch()
 			}
 		}
-		return err
-	} else {
-		// no such function
-		return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 	}
+	// no such function
+	return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 }
 
 func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) (err error) {
@@ -8333,14 +8374,62 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, storageDir string) (string, error) {
+	loadLocalReader, loadLocalWriter := io.Pipe()
+
+	// watch and cancel
+	// TODO use context.AfterFunc in go1.21
+	funcCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		defer loadLocalReader.Close()
+
+		<-funcCtx.Done()
+	}()
+
+	// write to pipe
+	loadLocalErrGroup := new(errgroup.Group)
+	loadLocalErrGroup.Go(func() error {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: localPath,
+			},
+		}
+		return mce.processLoadLocal(ctx, param, loadLocalWriter)
+	})
+
+	// read from pipe and upload
+	ioVector := fileservice.IOVector{
+		FilePath: path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:]),
+		Entries: []fileservice.IOEntry{
+			{
+				Size:           -1,
+				ReaderForWrite: loadLocalReader,
+			},
+		},
+	}
+
+	fileService := mce.ses.proc.FileService
+	_ = fileService.Delete(ctx, ioVector.FilePath)
+	err := fileService.Write(ctx, ioVector)
+	err = errors.Join(err, loadLocalErrGroup.Wait())
+	if err != nil {
+		return "", err
+	}
+
+	return ioVector.FilePath, nil
+}
+
+func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
 	var checkExistence string
 	var argsJson []byte
+	var argsCondition string
 	var fmtctx *tree.FmtCtx
-	var argMap map[string]string
+	var argList []*function.Arg
+	var typeList []string
 	var erArray []ExecResult
 
 	// a database must be selected or specified as qualifier when create a function
@@ -8358,26 +8447,42 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 
 	// format return type
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	cf.ReturnType.Format(fmtctx)
-	retTypeStr = fmtctx.String()
-	fmtctx.Reset()
-
-	// build argmap and marshal as json
-	argMap = make(map[string]string)
-	for i := 0; i < len(cf.Args); i++ {
-		curName := cf.Args[i].GetName(fmtctx)
-		fmtctx.Reset()
-		argMap[curName] = cf.Args[i].GetType(fmtctx)
-		fmtctx.Reset()
-	}
-	argsJson, err = json.Marshal(argMap)
+	retTypeStr, err = plan2.GetFunctionTypeStrFromAst(cf.ReturnType.Type)
 	if err != nil {
 		return err
 	}
 
+	// build argmap and marshal as json
+	argList = make([]*function.Arg, len(cf.Args))
+	typeList = make([]string, len(cf.Args))
+	for i := 0; i < len(cf.Args); i++ {
+		argList[i] = &function.Arg{}
+		argList[i].Name = cf.Args[i].GetName(fmtctx)
+		fmtctx.Reset()
+		typ, err := plan2.GetFunctionArgTypeStrFromAst(cf.Args[i])
+		if err != nil {
+			return err
+		}
+		argList[i].Type = typ
+		typeList[i] = typ
+	}
+	argsJson, err = json.Marshal(argList)
+	if err != nil {
+		return err
+	}
+
+	if len(typeList) == 0 {
+		argsCondition = "is null"
+	} else if len(typeList) == 1 {
+		argsCondition = fmt.Sprintf(`= '"%v"'`, typeList[0])
+	} else {
+		typesJson, _ := json.Marshal(typeList)
+		argsCondition = fmt.Sprintf(`= '%v'`, string(typesJson))
+	}
+
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
-	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(argsJson))
+	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, argsCondition)
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
 		return err
@@ -8388,7 +8493,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return err
 	}
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) && !cf.Replace {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
 
@@ -8400,12 +8505,67 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return err
 	}
 
-	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
-		string(cf.Name.Name.ObjectName),
-		ses.GetTenantInfo().GetDefaultRoleID(),
-		string(argsJson),
-		retTypeStr, cf.Body, cf.Language, dbName,
-		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	var body string
+	if cf.Language == string(tree.SQL) {
+		body = cf.Body
+	} else {
+		if cf.Import {
+			// check
+			if cf.Language == string(tree.PYTHON) {
+				if !strings.HasSuffix(cf.Body, ".py") &&
+					!strings.HasSuffix(cf.Body, ".whl") {
+					return moerr.NewInvalidInput(ctx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
+				}
+				if strings.HasSuffix(cf.Body, ".whl") {
+					dotIdx := strings.LastIndex(cf.Handler, ".")
+					if dotIdx < 1 {
+						return moerr.NewInvalidInput(ctx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
+					}
+				}
+			}
+			// upload
+			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
+			cf.Body, err = mce.Upload(ctx, cf.Body, storageDir)
+			if err != nil {
+				return err
+			}
+		}
+
+		nb := function.NonSqlUdfBody{
+			Handler: cf.Handler,
+			Import:  cf.Import,
+			Body:    cf.Body,
+		}
+		var byt []byte
+		byt, err = json.Marshal(nb)
+		if err != nil {
+			return err
+		}
+		body = strconv.Quote(string(byt))
+		body = body[1 : len(body)-1]
+	}
+
+	if execResultArrayHasData(erArray) { // replace
+		var id int64
+		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+		initMoUdf = fmt.Sprintf(updateMoUserDefinedFunctionFormat,
+			ses.GetTenantInfo().GetDefaultRoleID(),
+			string(argsJson),
+			retTypeStr, body, cf.Language,
+			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			int32(id))
+	} else { // create
+		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
+			string(cf.Name.Name.ObjectName),
+			ses.GetTenantInfo().GetDefaultRoleID(),
+			string(argsJson),
+			retTypeStr, body, cf.Language, dbName,
+			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	}
+
 	err = bh.Exec(ctx, initMoUdf)
 	if err != nil {
 		return err
