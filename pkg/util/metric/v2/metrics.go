@@ -36,7 +36,11 @@ func init() {
 }
 
 func initTaskMetrics() {
-	registry.MustRegister(taskDurationHistogram)
+	registry.MustRegister(taskShortDurationHistogram)
+	registry.MustRegister(taskLongDurationHistogram)
+
+	registry.MustRegister(taskScheduledByCounter)
+	registry.MustRegister(taskGeneratedStuffCounter)
 }
 
 func initFileServiceMetrics() {
@@ -64,7 +68,7 @@ func initLogtailMetrics() {
 
 	registry.MustRegister(LogTailCollectDurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
-	registry.MustRegister(TxnPrePrepareDurationHistogram)
+	registry.MustRegister(txnTNSideDurationHistogram)
 }
 
 func initTxnMetrics() {
@@ -83,6 +87,8 @@ func initTxnMetrics() {
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(TxnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+
+	registry.MustRegister(TxnFastLoadObjectMetaTotalCounter)
 }
 
 func initRPCMetrics() {
