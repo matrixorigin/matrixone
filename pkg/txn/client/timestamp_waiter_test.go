@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"testing"
 	"time"
@@ -106,6 +107,55 @@ func TestNotifyWaiters(t *testing.T) {
 	tw.notifyWaiters(newTestTimestamp(7))
 	wg.Wait()
 	assert.Equal(t, 0, len(tw.mu.waiters))
+}
+
+func TestCancelWaiters(t *testing.T) {
+	tw := &timestampWaiter{}
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		w := tw.addToWait(newTestTimestamp(int64(i)))
+		wg.Add(1)
+		go func(w *waiter) {
+			defer wg.Done()
+			// return waiter canceled error
+			assert.Error(t, w.wait(context.Background()))
+		}(w)
+	}
+	tw.cancelWaiters()
+	wg.Wait()
+	assert.Equal(t, 0, len(tw.mu.waiters))
+}
+
+func TestGetTimestampWithCanceled(t *testing.T) {
+	runTimestampWaiterTests(
+		t,
+		func(tw *timestampWaiter) {
+			timeout := time.Second * 5
+			ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+			defer cancel()
+
+			c := make(chan struct{})
+			go func() {
+				// If it is not canceled, it will hang here util context timeout.
+				_, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
+				require.Equal(t, moerr.NewWaiterCanceledNoCtx(), err)
+				c <- struct{}{}
+			}()
+			// we could only cancel the waiters that are already in the queue.
+			// The waiters after cancel, will wait for notify channel.
+			for {
+				tw.mu.Lock()
+				if len(tw.mu.waiters) > 0 {
+					tw.mu.Unlock()
+					break
+				}
+				tw.mu.Unlock()
+				time.Sleep(time.Millisecond * 10)
+			}
+			tw.Cancel()
+			<-c
+		},
+	)
 }
 
 func BenchmarkGetTimestampWithWaitNotify(b *testing.B) {
