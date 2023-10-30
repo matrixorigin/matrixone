@@ -637,11 +637,11 @@ func (catalog *Catalog) replaySegmentByBlock(
 		)
 		if node == nil {
 			node = seg.GetLatestNodeLocked().CloneData()
-			node.DeletedAt = end
 			node.Start = start
 			node.End = end
 			seg.Insert(node)
 		}
+		node.DeletedAt = end
 	}
 	// metalocation
 	if !metaLocation.IsEmpty() {
@@ -652,6 +652,12 @@ func (catalog *Catalog) replaySegmentByBlock(
 				},
 			},
 		)
+		if node == nil {
+			node = seg.GetLatestNodeLocked().CloneData()
+			node.Start = start
+			node.End = end
+			seg.Insert(node)
+		}
 		node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation)
 	}
 	// apply commit
