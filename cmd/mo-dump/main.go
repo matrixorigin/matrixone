@@ -44,15 +44,15 @@ func (t *Tables) Set(value string) error {
 
 func main() {
 	var (
-		username, password, host, database string
-		tables                             Tables
-		port, netBufferLength              int
-		createDb                           string
-		createTable                        []string
-		err                                error
-		toCsv, localInfile, noData         bool
-		csvFieldDelimiterStr               string
-		csvConf                            csvConfig
+		username, password, host, database, tbl string
+		tables                                  Tables
+		port, netBufferLength                   int
+		createDb                                string
+		createTable                             []string
+		err                                     error
+		toCsv, localInfile, noData              bool
+		csvFieldDelimiterStr                    string
+		csvConf                                 csvConfig
 	)
 	dumpStart := time.Now()
 	defer func() {
@@ -80,12 +80,21 @@ func main() {
 	flag.IntVar(&port, "P", defaultPort, "portNumber")
 	flag.IntVar(&netBufferLength, "net-buffer-length", defaultNetBufferLength, "net_buffer_length")
 	flag.StringVar(&database, "db", "", "databaseName, must be specified")
-	flag.Var(&tables, "tbl", "tableNameList, default all")
+	flag.StringVar(&tbl, "tbl", "", "tableNameList, default all")
 	flag.BoolVar(&toCsv, "csv", defaultCsv, "set export format to csv")
 	flag.StringVar(&csvFieldDelimiterStr, "csv-field-delimiter", string(defaultFieldDelimiter), "set csv field delimiter (only one utf8 character). enabled only when the option 'csv' is set.")
 	flag.BoolVar(&localInfile, "local-infile", defaultLocalInfile, "use load data local infile")
 	flag.BoolVar(&noData, "no-data", defaultNoData, "dump database and table definitions only without data")
 	flag.Parse()
+
+	if len(tbl) > 0 {
+		tbls := strings.Split(tbl, ",")
+		for _, t := range tbls {
+			if len(t) != 0 {
+				tables = append(tables, Table{t, ""})
+			}
+		}
+	}
 	if netBufferLength < minNetBufferLength {
 		fmt.Fprintf(os.Stderr, "net_buffer_length must be greater than %d, set to %d\n", minNetBufferLength, minNetBufferLength)
 		netBufferLength = minNetBufferLength
@@ -96,6 +105,16 @@ func main() {
 	}
 	if len(database) == 0 {
 		err = moerr.NewInvalidInput(ctx, "database must be specified")
+		return
+	}
+
+	//replace : in username to #, because : is used as separator in dsn.
+	//password can have ":".
+	username = strings.ReplaceAll(username, ":", "#")
+
+	// if host has ":", reports error
+	if strings.Count(host, ":") > 0 {
+		err = moerr.NewInvalidInput(ctx, "host can not have character ':'")
 		return
 	}
 
@@ -481,6 +500,8 @@ func convertValue(v any, typ string) string {
 		// why empty string in column type?
 		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
 		return string(ret)
+	case "vecf32", "vecf64":
+		return string(ret)
 	default:
 		str := strings.Replace(string(ret), "\\", "\\\\", -1)
 		return "'" + strings.Replace(str, "'", "\\'", -1) + "'"
@@ -500,6 +521,8 @@ func convertValue2(v any, typ string) (sql.RawBytes, string) {
 		return ret, defaultFmt
 	case "json":
 		return ret, jsonFmt
+	case "vecf32", "vecf64":
+		return ret, defaultFmt
 	default:
 		//note: do not use the quoteFmt instead of the standard package csv,
 		//it is error-prone.

@@ -40,7 +40,7 @@ import (
 )
 
 const DefaultCheckpointBlockRows = 10000
-const DefaultCheckpointSize = 1024 * 1024 * 1024
+const DefaultCheckpointSize = 512 * 1024 * 1024
 
 const (
 	CheckpointVersion1 uint32 = 1
@@ -1572,6 +1572,7 @@ func (data *CheckpointData) WriteTo(
 				if err != nil {
 					break
 				}
+				defer bat.Close()
 				if block, size, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 					return
 				}
@@ -2363,6 +2364,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			for _, name := range tblNode.BaseNode.Schema.Extra.DroppedAttrs {
 				tableColDelBat.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBytes2Rowid([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
 				tableColDelBat.GetVectorByName(catalog.AttrCommitTs).Append(tblNode.GetEnd(), false)
+				tableColDelBat.GetVectorByName(pkgcatalog.SystemColAttr_UniqName).Append([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name)), false)
 			}
 			rowidVec := tableColInsBat.GetVectorByName(catalog.AttrRowID)
 			commitVec := tableColInsBat.GetVectorByName(catalog.AttrCommitTs)

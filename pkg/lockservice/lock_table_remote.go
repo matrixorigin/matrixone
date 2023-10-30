@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -66,6 +67,8 @@ func (l *remoteLockTable) lock(
 	rows [][]byte,
 	opts LockOptions,
 	cb func(pb.Result, error)) {
+	v2.TxnRemoteLockTotalCounter.Inc()
+
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock.remote")
 	defer span.End()

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -615,17 +616,17 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 	return
 }
 
-func (r *runner) tryScheduleIncrementalCheckpoint(start types.TS) {
-	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	_, count := r.source.ScanInRange(start, ts)
+func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
+	// ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	_, count := r.source.ScanInRange(start, end)
 	if count < r.options.minCount {
 		return
 	}
-	entry := NewCheckpointEntry(start, ts, ET_Incremental)
+	entry := NewCheckpointEntry(start, end, ET_Incremental)
 	r.tryAddNewIncrementalCheckpointEntry(entry)
 }
 
-func (r *runner) tryScheduleCheckpoint() {
+func (r *runner) tryScheduleCheckpoint(endts types.TS) {
 	if r.disabled.Load() {
 		return
 	}
@@ -636,12 +637,12 @@ func (r *runner) tryScheduleCheckpoint() {
 	// checkpoint
 	if entry == nil {
 		if global == nil {
-			r.tryScheduleIncrementalCheckpoint(types.TS{})
+			r.tryScheduleIncrementalCheckpoint(types.TS{}, endts)
 			return
 		} else {
 			maxTS := global.end.Prev()
 			if r.incrementalPolicy.Check(maxTS) {
-				r.tryScheduleIncrementalCheckpoint(maxTS.Next())
+				r.tryScheduleIncrementalCheckpoint(maxTS.Next(), endts)
 			}
 			return
 		}
@@ -656,7 +657,7 @@ func (r *runner) tryScheduleCheckpoint() {
 			tree.GetTree().Compact()
 			if !tree.IsEmpty() && entry.CheckPrintTime() {
 				logutil.Infof("waiting for dirty tree %s", tree.String())
-				entry.SetPrintTime()
+				entry.IncrWaterLine()
 			}
 			return tree.IsEmpty()
 		}
@@ -666,6 +667,7 @@ func (r *runner) tryScheduleCheckpoint() {
 			return
 		}
 		entry.SetState(ST_Running)
+		v2.TaskCkpEntryPendingDurationHistogram.Observe(time.Since(entry.lastPrint).Seconds())
 		r.incrementalCheckpointQueue.Enqueue(struct{}{})
 		return
 	}
@@ -676,7 +678,7 @@ func (r *runner) tryScheduleCheckpoint() {
 	}
 
 	if r.incrementalPolicy.Check(entry.end) {
-		r.tryScheduleIncrementalCheckpoint(entry.end.Next())
+		r.tryScheduleIncrementalCheckpoint(entry.end.Next(), endts)
 	}
 }
 
@@ -928,6 +930,7 @@ func (r *runner) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
 		r.source.Run()
 		entry := r.source.GetAndRefreshMerged()
+		_, endts := entry.GetTimeRange()
 		if entry.IsEmpty() {
 			logutil.Debugf("[flushtabletail]No dirty block found")
 		} else {
@@ -935,7 +938,7 @@ func (r *runner) crontask(ctx context.Context) {
 			e.tree = entry
 			r.dirtyEntryQueue.Enqueue(e)
 		}
-		r.tryScheduleCheckpoint()
+		r.tryScheduleCheckpoint(endts)
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

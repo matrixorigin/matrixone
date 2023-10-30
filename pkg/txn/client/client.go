@@ -208,6 +208,11 @@ func (client *txnClient) New(
 	ctx context.Context,
 	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// we take a token from the limiter to control the number of transactions created per second.
 	_, task := gotrace.NewTask(context.TODO(), "transaction.New")
 	defer task.End()
@@ -391,7 +396,11 @@ func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 
 func (client *txnClient) openTxn(op *txnOperator) error {
 	client.mu.Lock()
-	defer client.mu.Unlock()
+	defer func() {
+		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		client.mu.Unlock()
+	}()
 
 	if client.mu.state == normal {
 		if !op.isUserTxn() ||
@@ -409,11 +418,15 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 
 func (client *txnClient) closeTxn(txn txn.TxnMeta) {
 	client.mu.Lock()
-	defer client.mu.Unlock()
+	defer func() {
+		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		client.mu.Unlock()
+	}()
 
 	key := cutil.UnsafeBytesToString(txn.ID)
 	if op, ok := client.mu.activeTxns[key]; ok {
-		v2.TxnTotalCostDurationHistogram.Observe(time.Since(op.createAt).Seconds())
+		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.createAt).Seconds())
 
 		delete(client.mu.activeTxns, key)
 		client.removeFromLeakCheck(txn.ID)
@@ -481,6 +494,12 @@ func (client *txnClient) AbortAllRunningTxn() {
 	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
 	client.mu.Unlock()
+
+	if client.timestampWaiter != nil {
+		// Cancel all waiters, means that all waiters do not need to wait for
+		// the newer timestamp from logtail consumer.
+		client.timestampWaiter.Cancel()
+	}
 
 	for _, op := range ops {
 		tempWorkspace := op.workspace

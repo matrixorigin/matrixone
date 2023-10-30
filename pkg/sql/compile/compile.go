@@ -359,7 +359,7 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
 	defer func() {
-		v2.SQlRunDurationHistogram.Observe(time.Since(start).Seconds())
+		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	var span trace.Span
@@ -383,7 +383,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 		c.proc.TxnOperator.ResetRetry(false)
 	}
 
-	v2.TxnStatementCounter.Inc()
+	v2.TxnStatementTotalCounter.Inc()
 	if err = c.runOnce(); err != nil {
 		c.fatalLog(0, err)
 
@@ -937,6 +937,26 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(ss, curr)
 		ss = c.compileWin(n, ss)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
+	case plan.Node_TIME_WINDOW:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		ss = c.compileTimeWin(n, c.compileSort(n, ss))
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+	case plan.Node_Fill:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		ss = c.compileFill(n, ss)
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_JOIN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1063,7 +1083,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Arg: constructOnduplicateKey(n, c.e),
 		}
 		return []*Scope{rs}, nil
-	case plan.Node_PRE_INSERT_UK:
+	case plan.Node_PRE_INSERT_UK, plan.Node_PRE_INSERT_SK:
 		curr := c.anal.curr
 		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
 		if err != nil {
@@ -1071,16 +1091,30 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			preInsertUkArg, err := constructPreInsertUk(n, c.proc)
-			if err != nil {
-				return nil, err
+			if n.NodeType == plan.Node_PRE_INSERT_UK {
+				preInsertUkArg, err := constructPreInsertUk(n, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				ss[i].appendInstruction(vm.Instruction{
+					Op:      vm.PreInsertUnique,
+					Idx:     c.anal.curr,
+					IsFirst: currentFirstFlag,
+					Arg:     preInsertUkArg,
+				})
+			} else {
+				preInsertSkArg, err := constructPreInsertSk(n, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				ss[i].appendInstruction(vm.Instruction{
+					Op:      vm.PreInsertSecondaryIndex,
+					Idx:     c.anal.curr,
+					IsFirst: currentFirstFlag,
+					Arg:     preInsertSkArg,
+				})
 			}
-			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.PreInsertUnique,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     preInsertUkArg,
-			})
+
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
@@ -2326,6 +2360,26 @@ func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
 		Op:  vm.Window,
 		Idx: c.anal.curr,
 		Arg: constructWindow(c.ctx, n, c.proc),
+	}
+	return []*Scope{rs}
+}
+
+func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.TimeWin,
+		Idx: c.anal.curr,
+		Arg: constructTimeWindow(c.ctx, n, c.proc),
+	}
+	return []*Scope{rs}
+}
+
+func (c *Compile) compileFill(n *plan.Node, ss []*Scope) []*Scope {
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Fill,
+		Idx: c.anal.curr,
+		Arg: constructFill(n),
 	}
 	return []*Scope{rs}
 }
