@@ -210,14 +210,16 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 		if err != nil {
 			return err
 		}
-		seg, err := c.tbl.GetSegmentByID(&uid)
+		segments, err := c.tbl.GetSegmentsByID(&uid)
 		if err != nil {
 			return moerr.NewInvalidInputNoCtx("not found object %s", o)
 		}
-		if !seg.IsActive() || !seg.IsSorted() || seg.GetNextObjectIndex() != 1 {
-			return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
+		for _, seg := range segments {
+			if !seg.IsActive() || !seg.IsSorted() || seg.GetNextObjectIndex() != 1 {
+				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
+			}
+			segs = append(segs, seg)
 		}
-		segs = append(segs, seg)
 	}
 
 	c.objects = segs

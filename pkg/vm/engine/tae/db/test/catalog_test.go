@@ -189,7 +189,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 		txn, _ = tae.StartTxn(nil)
 		db, _ = txn.GetDatabase("db")
 		rel, _ = db.GetRelationByName(schema.Name)
-		seg, _ = rel.GetSegment(id.SegmentID())
+		seg, _ = rel.GetSegment(id.ObjectID())
 		err = seg.SoftDeleteBlock(id.BlockID)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))

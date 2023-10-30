@@ -567,7 +567,7 @@ func TestCompactBlock1(t *testing.T) {
 		filter.Val = v
 		id, _, err := rel.GetByFilter(context.Background(), filter)
 		assert.Nil(t, err)
-		seg, _ := rel.GetSegment(id.SegmentID())
+		seg, _ := rel.GetSegment(id.ObjectID())
 		block, err := seg.GetBlock(id.BlockID)
 		assert.Nil(t, err)
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
@@ -603,7 +603,7 @@ func TestCompactBlock1(t *testing.T) {
 		var maxTs types.TS
 		{
 			txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
-			seg, err := rel.GetSegment(id.SegmentID())
+			seg, err := rel.GetSegment(id.ObjectID())
 			assert.Nil(t, err)
 			blk, err := seg.GetBlock(id.BlockID)
 			assert.Nil(t, err)
@@ -694,7 +694,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	{
 		txn, rel := testutil.GetRelation(t, 0, db, "db", schema.Name)
 		assert.True(t, newBlockFp2.SegmentID().Eq(*newBlockFp1.SegmentID()))
-		seg, err := rel.GetSegment(newBlockFp1.SegmentID())
+		seg, err := rel.GetSegment(newBlockFp1.ObjectID())
 		assert.Nil(t, err)
 		blk1, err := seg.GetBlock(newBlockFp1.BlockID)
 		assert.Nil(t, err)
@@ -839,7 +839,7 @@ func TestCompactMemAlter(t *testing.T) {
 	}
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
-		seg, err := rel.GetSegment(newBlockFp.SegmentID())
+		seg, err := rel.GetSegment(newBlockFp.ObjectID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -1269,7 +1269,7 @@ func TestCompactBlock2(t *testing.T) {
 		t.Log(db.Catalog.SimplePPString(common.PPL1))
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
 		t.Log(rel.SimplePPString(common.PPL1))
-		seg, err := rel.GetSegment(newBlockFp.SegmentID())
+		seg, err := rel.GetSegment(newBlockFp.ObjectID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -1292,7 +1292,7 @@ func TestCompactBlock2(t *testing.T) {
 
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
-		seg, err := rel.GetSegment(newBlockFp.SegmentID())
+		seg, err := rel.GetSegment(newBlockFp.ObjectID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -1323,7 +1323,7 @@ func TestCompactBlock2(t *testing.T) {
 	{
 		t.Log(db.Catalog.SimplePPString(common.PPL1))
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
-		seg, err := rel.GetSegment(newBlockFp.SegmentID())
+		seg, err := rel.GetSegment(newBlockFp.ObjectID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -1360,7 +1360,7 @@ func TestCompactBlock2(t *testing.T) {
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		{
 			txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
-			seg, err := rel.GetSegment(newBlockFp.SegmentID())
+			seg, err := rel.GetSegment(newBlockFp.ObjectID())
 			assert.NoError(t, err)
 			blk, err := seg.GetBlock(newBlockFp.BlockID)
 			assert.NoError(t, err)
@@ -1375,7 +1375,7 @@ func TestCompactBlock2(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
 		t.Log(rel.SimplePPString(common.PPL1))
 		t.Log(db.Catalog.SimplePPString(common.PPL1))
-		seg, err := rel.GetSegment(newBlockFp.SegmentID())
+		seg, err := rel.GetSegment(newBlockFp.ObjectID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -1388,7 +1388,7 @@ func TestCompactBlock2(t *testing.T) {
 
 		// this delete will be transfered to nablk-4
 		txn2, rel2 := testutil.GetDefaultRelation(t, db, schema.Name)
-		seg2, err := rel2.GetSegment(newBlockFp.SegmentID())
+		seg2, err := rel2.GetSegment(newBlockFp.ObjectID())
 		assert.NoError(t, err)
 		blk2, err := seg2.GetBlock(newBlockFp.BlockID)
 		assert.NoError(t, err)
@@ -4902,7 +4902,7 @@ func TestBlockRead(t *testing.T) {
 
 	info := &pkgcatalog.BlockInfo{
 		BlockID:    bid,
-		SegmentID:  sid,
+		SegmentID:  *sid.Segment(),
 		EntryState: true,
 	}
 	info.SetMetaLocation(metaloc)
@@ -6656,7 +6656,7 @@ func TestAlterFakePk(t *testing.T) {
 
 	{
 		txn, rel := tae.GetRelation()
-		seg, err := rel.GetSegment(blkFp.SegmentID())
+		seg, err := rel.GetSegment(blkFp.ObjectID())
 		require.NoError(t, err)
 		blk, err := seg.GetBlock(blkFp.BlockID)
 		require.NoError(t, err)
@@ -6669,7 +6669,7 @@ func TestAlterFakePk(t *testing.T) {
 
 	{
 		txn, rel := tae.GetRelation()
-		seg, err := rel.GetSegment(blkFp.SegmentID())
+		seg, err := rel.GetSegment(blkFp.ObjectID())
 		require.NoError(t, err)
 		blk, err := seg.GetBlock(blkFp.BlockID)
 		require.NoError(t, err)
@@ -8015,14 +8015,14 @@ func TestDeduplication(t *testing.T) {
 	bat := catalog.MockBatch(schema, rows)
 	bats := bat.Split(rows)
 
-	segmentIDs := make([]*types.Uuid, 2)
-	segmentIDs[0] = objectio.NewSegmentid()
-	segmentIDs[1] = objectio.NewSegmentid()
+	segmentIDs := make([]*types.Objectid, 2)
+	segmentIDs[0] = objectio.NewObjectid()
+	segmentIDs[1] = objectio.NewObjectid()
 	sort.Slice(segmentIDs, func(i, j int) bool {
 		return segmentIDs[i].Le(*segmentIDs[j])
 	})
 
-	blk1Name := objectio.BuildObjectName(segmentIDs[1], 0)
+	blk1Name := objectio.BuildObjectNameWithObjectID(segmentIDs[1])
 	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
 	assert.NoError(t, err)
 	writer.SetPrimaryKey(3)
@@ -8274,7 +8274,7 @@ func TestReplayDeletes(t *testing.T) {
 	assert.NoError(t, err)
 	tbl, err := db.GetTableEntryByID(blkEntry.AsCommonID().TableID)
 	assert.NoError(t, err)
-	seg, err := tbl.GetSegmentByID(blkEntry.AsCommonID().SegmentID())
+	seg, err := tbl.GetSegmentByID(blkEntry.AsCommonID().ObjectID())
 	segString1 := seg.Repr()
 	assert.NoError(t, err)
 	tae.Restart(context.Background())
@@ -8283,7 +8283,7 @@ func TestReplayDeletes(t *testing.T) {
 	assert.NoError(t, err)
 	tbl, err = db.GetTableEntryByID(blkEntry.AsCommonID().TableID)
 	assert.NoError(t, err)
-	seg, err = tbl.GetSegmentByID(blkEntry.AsCommonID().SegmentID())
+	seg, err = tbl.GetSegmentByID(blkEntry.AsCommonID().ObjectID())
 	assert.NoError(t, err)
 	segString2 := seg.Repr()
 	assert.Equal(t, segString1, segString2)

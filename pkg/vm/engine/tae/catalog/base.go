@@ -98,12 +98,12 @@ func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
 }
 
 // used when replay
-func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start,end types.TS, baseNode T) {
+func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start, end types.TS, baseNode T) {
 	node := &MVCCNode[T]{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: end,
 		},
-		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithStartEnd(start,end),
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithStartEnd(start, end),
 		BaseNode:    baseNode,
 	}
 	be.Insert(node)

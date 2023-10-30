@@ -100,8 +100,12 @@ type ObjectMVCCNode struct {
 	BlockNumber    uint16
 }
 
-	// TODO
-func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode{
+func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
+	return &ObjectMVCCNode{}
+}
+
+// TODO
+func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		Name: metalocation.Name(),
 	}
@@ -199,14 +203,15 @@ func (e *ObjectMVCCNode) AppendTuple(batch *containers.Batch) {
 
 func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
 	e = &ObjectMVCCNode{
-		Name: bat.GetVectorByName(ObjectAttr_Name).Get(row).([]byte),
-		OriginSize: bat.GetVectorByName(ObjectAttr_OriginSize).Get(row).(uint32),
+		Name:           bat.GetVectorByName(ObjectAttr_Name).Get(row).([]byte),
+		OriginSize:     bat.GetVectorByName(ObjectAttr_OriginSize).Get(row).(uint32),
 		CompressedSize: bat.GetVectorByName(ObjectAttr_CompressedSize).Get(row).(uint32),
-		ZoneMap: bat.GetVectorByName(ObjectAttr_ZoneMap).Get(row).([]byte),
-		BlockNumber: bat.GetVectorByName(ObjectAttr_BlockNumber).Get(row).(uint16),
+		ZoneMap:        bat.GetVectorByName(ObjectAttr_ZoneMap).Get(row).([]byte),
+		BlockNumber:    bat.GetVectorByName(ObjectAttr_BlockNumber).Get(row).(uint16),
 	}
 	return
 }
+
 type SegmentNode struct {
 	state    EntryState
 	IsLocal  bool   // this segment is hold by a localsegment

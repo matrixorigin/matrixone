@@ -209,3 +209,16 @@ func (o *Objectid) Offset() uint16 {
 func (o *Objectid) Eq(other Objectid) bool {
 	return bytes.Equal(o[:], other[:])
 }
+
+func (o *Objectid) Le(other Objectid) bool {
+	return bytes.Compare(o[:], other[:])<=0
+}
+func (o *Objectid) Ge(other Objectid) bool {
+	return bytes.Compare(o[:], other[:])>=0
+}
+func (o *Objectid) Lt(other Objectid) bool {
+	return bytes.Compare(o[:], other[:])<0
+}
+func (o *Objectid) Gt(other Objectid) bool {
+	return bytes.Compare(o[:], other[:])>0
+}

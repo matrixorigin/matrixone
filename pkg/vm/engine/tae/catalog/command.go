@@ -31,7 +31,7 @@ const (
 	IOET_WALTxnCommand_Table    uint16 = 3010
 	IOET_WALTxnCommand_Segment  uint16 = 3011
 	IOET_WALTxnCommand_Block    uint16 = 3012
-	IOET_WALTxnCommand_Object   uint16 = 3014
+	IOET_WALTxnCommand_Object   uint16 = 3015
 
 	IOET_WALTxnCommand_Database_V1 uint16 = 1
 	IOET_WALTxnCommand_Table_V1    uint16 = 1
@@ -140,6 +140,20 @@ func init() {
 				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
 				func() *BlockNode { return &BlockNode{} },
 				IOET_WALTxnCommand_Block_V1)
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Object,
+			Version: IOET_WALTxnCommand_Object_V1,
+		}, nil,
+		func(b []byte) (any, error) {
+			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Object,
+				NewEmptyMVCCNodeFactory(NewEmptyObjectMVCCNode),
+				func() *SegmentNode { return &SegmentNode{} },
+				IOET_WALTxnCommand_Object_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},

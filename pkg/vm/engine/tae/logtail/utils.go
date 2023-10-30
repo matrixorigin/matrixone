@@ -591,8 +591,8 @@ func (data *CheckpointData) ApplyReplayTo(
 	c.OnReplayDatabaseBatch(data.GetDBBatchs())
 	ins, colins, tnins, del, tndel := data.GetTblBatchs()
 	c.OnReplayTableBatch(ins, colins, tnins, del, tndel, dataFactory)
-	ins, tnins, del, tndel, objectInfo := data.GetSegBatchs()
-	c.OnReplaySegmentBatch(ins, tnins, del, tndel, objectInfo, dataFactory)
+	objectInfo := data.GetObjectBatchs()
+	c.OnReplaySegmentBatch(objectInfo, dataFactory)
 	ins, tnins, del, tndel = data.GetTNBlkBatchs()
 	c.OnReplayBlockBatch(ins, tnins, del, tndel, dataFactory)
 	ins, tnins, del, tndel = data.GetBlkBatchs()
@@ -2198,6 +2198,9 @@ func (data *CheckpointData) GetSegBatchs() (
 		data.bats[SEGDeleteIDX],
 		data.bats[SEGDeleteTxnIDX],
 		data.bats[ObjectInfoIDX]
+}
+func (data *CheckpointData) GetObjectBatchs() *containers.Batch {
+	return data.bats[ObjectInfoIDX]
 }
 func (data *CheckpointData) GetBlkBatchs() (
 	*containers.Batch,

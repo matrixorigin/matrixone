@@ -175,6 +175,22 @@ func (entry *TableEntry) GetSegmentByID(id *types.Objectid) (seg *SegmentEntry, 
 	}
 	return node.GetPayload(), nil
 }
+func (entry *TableEntry) GetSegmentsByID(id *types.Segmentid) (seg []*SegmentEntry, err error) {
+	entry.RLock()
+	defer entry.RUnlock()
+	for nodeID, node := range entry.entries {
+		if nodeID.Segment().Eq(*id) {
+			if seg == nil {
+				seg = make([]*SegmentEntry, 0)
+			}
+			seg = append(seg, node.GetPayload())
+		}
+	}
+	if seg == nil {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	return seg, nil
+}
 
 func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListIt[*SegmentEntry] {
 	entry.RLock()

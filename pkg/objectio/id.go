@@ -61,7 +61,7 @@ func NewBlockidWithObjectID(segid *ObjectId, blknum uint16) *Blockid {
 	var bid Blockid
 	size := types.ObjectidSize
 	copy(bid[:size], segid[:])
-	copy(bid[size+2:size+4], types.EncodeUint16(&blknum))
+	copy(bid[size:size+2], types.EncodeUint16(&blknum))
 	return &bid
 }
 
