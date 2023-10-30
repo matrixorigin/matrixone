@@ -16,10 +16,10 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -85,53 +85,134 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid
-func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
+//func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
+//	var tableCnt float64
+//	lenCols := len(tableDef.Cols) - 1 /* row-id */
+//	info := plan2.NewInfoFromZoneMap(lenCols)
+//
+//	var objMeta objectio.ObjectMeta
+//	var objectMeta objectio.ObjectDataMeta
+//	lenobjs := 0
+//
+//	var init bool
+//	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+//	if err != nil {
+//		return nil, err
+//	}
+//	for _, blk := range blocks {
+//		location := blk.MetaLocation()
+//		fs, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
+//		if err != nil {
+//			return nil, err
+//		}
+//
+//		if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
+//			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+//				return nil, err
+//			}
+//			objectMeta = objMeta.MustDataMeta()
+//			lenobjs++
+//			tableCnt += float64(objectMeta.BlockHeader().Rows())
+//			if !init {
+//				init = true
+//				for idx, col := range tableDef.Cols[:lenCols] {
+//					objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
+//					info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
+//					info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+//					info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
+//				}
+//			} else {
+//				for idx, col := range tableDef.Cols[:lenCols] {
+//					objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
+//					zm := objColMeta.ZoneMap().Clone()
+//					if !zm.IsInited() {
+//						continue
+//					}
+//					index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
+//					index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
+//					info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
+//				}
+//			}
+//		}
+//	}
+//
+//	//adjust ndv
+//	if lenobjs > 1 {
+//		for idx := range tableDef.Cols[:lenCols] {
+//			rate := info.ColumnNDVs[idx] / tableCnt
+//			if rate > 1 {
+//				rate = 1
+//			}
+//			if rate < 0.1 {
+//				info.ColumnNDVs[idx] /= math.Pow(float64(lenobjs), (1 - rate))
+//			}
+//			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
+//			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {
+//				info.ColumnNDVs[idx] = ndvUsingZonemap
+//			}
+//
+//			if info.ColumnNDVs[idx] > tableCnt {
+//				info.ColumnNDVs[idx] = tableCnt
+//			}
+//		}
+//	}
+//
+//	info.TableCnt = tableCnt
+//	return info, nil
+//}
+
+// get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid
+func getInfoFromZoneMap(
+	ctx context.Context,
+	objects []logtailreplay.ObjectEntry,
+	tableDef *plan.TableDef,
+	proc *process.Process) (*plan2.InfoFromZoneMap, error) {
 	var tableCnt float64
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 
 	var objMeta objectio.ObjectMeta
 	var objectMeta objectio.ObjectDataMeta
-	lenobjs := 0
+	lenobjs := len(objects)
 
 	var init bool
 	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
-	for _, blk := range blocks {
-		location := blk.MetaLocation()
+	for _, obj := range objects {
 		fs, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
 		if err != nil {
 			return nil, err
 		}
-
-		if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
-			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
-				return nil, err
+		location := obj.Location()
+		if objMeta, err = objectio.FastLoadObjectMeta(
+			ctx,
+			&location,
+			false,
+			fs); err != nil {
+			return nil, err
+		}
+		objectMeta = objMeta.MustDataMeta()
+		tableCnt += float64(objectMeta.BlockHeader().Rows())
+		if !init {
+			init = true
+			for idx, col := range tableDef.Cols[:lenCols] {
+				objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
+				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
+				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 			}
-			objectMeta = objMeta.MustDataMeta()
-			lenobjs++
-			tableCnt += float64(objectMeta.BlockHeader().Rows())
-			if !init {
-				init = true
-				for idx, col := range tableDef.Cols[:lenCols] {
-					objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
-					info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-					info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
-					info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
+		} else {
+			for idx, col := range tableDef.Cols[:lenCols] {
+				objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
+				zm := objColMeta.ZoneMap().Clone()
+				if !zm.IsInited() {
+					continue
 				}
-			} else {
-				for idx, col := range tableDef.Cols[:lenCols] {
-					objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
-					zm := objColMeta.ZoneMap().Clone()
-					if !zm.IsInited() {
-						continue
-					}
-					index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
-					index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
-					info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
-				}
+				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
+				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
+				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 			}
 		}
 	}
@@ -165,22 +246,22 @@ func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDe
 // we need to get the zonemap from cn, and eval the filters with zonemap
 func CalcStats(
 	ctx context.Context,
-	blocks []catalog.BlockInfo,
+	objects []logtailreplay.ObjectEntry,
 	tableDef *plan.TableDef,
 	proc *process.Process,
 	s *plan2.StatsInfoMap,
 ) bool {
-	blockNumTotal := len(blocks)
-	if blockNumTotal == 0 {
+	objectNumTotal := len(objects)
+	if objectNumTotal == 0 {
 		return false
 	}
 
-	if s.NeedUpdate(blockNumTotal) {
-		info, err := getInfoFromZoneMap(ctx, blocks, tableDef, proc)
+	if s.NeedUpdate(objectNumTotal) {
+		info, err := getInfoFromZoneMap(ctx, objects, tableDef, proc)
 		if err != nil {
 			return false
 		}
-		plan2.UpdateStatsInfoMap(info, blockNumTotal, tableDef, s)
+		plan2.UpdateStatsInfoMap(info, objectNumTotal, tableDef, s)
 	}
 	return true
 }

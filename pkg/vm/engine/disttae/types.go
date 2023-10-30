@@ -464,7 +464,8 @@ type txnTable struct {
 	// blockInfos stores all the block infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
 	// it is initialized by updateBlockInfos and once it is initialized, it will not be updated
-	blockInfos []catalog.BlockInfo
+	blockInfos  []catalog.BlockInfo
+	objectInfos []logtailreplay.ObjectEntry
 
 	// specify whether the blockInfos is updated. once it is updated, it will not be updated again
 	blockInfosUpdated bool

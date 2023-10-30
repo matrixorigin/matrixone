@@ -56,39 +56,40 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 	}
 
 	if partitionTables != nil {
-		sumBlockInfos := make([]catalog.BlockInfo, 0)
+		//sumBlockInfos := make([]catalog.BlockInfo, 0)
+		sumObjectInfos := make([]logtailreplay.ObjectEntry, 0)
 		for _, partitionTable := range partitionTables {
 			if ptable, ok2 := partitionTable.(*txnTable); ok2 {
-				if len(ptable.blockInfos) == 0 || !ptable.blockInfosUpdated {
+				if len(ptable.objectInfos) == 0 || !ptable.blockInfosUpdated {
 					err := ptable.UpdateBlockInfos(ctx)
 					if err != nil {
 						return false
 					}
 				}
 
-				if len(ptable.blockInfos) > 0 {
-					sumBlockInfos = append(sumBlockInfos, ptable.blockInfos...)
+				if len(ptable.objectInfos) > 0 {
+					sumObjectInfos = append(sumObjectInfos, ptable.objectInfos...)
 				}
 			} else {
 				panic("partition Table type is not txnTable")
 			}
 		}
 
-		if len(sumBlockInfos) > 0 {
-			return CalcStats(ctx, sumBlockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
+		if len(sumObjectInfos) > 0 {
+			return CalcStats(ctx, sumObjectInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
 		} else {
 			// no meta means not flushed yet, very small table
 			return false
 		}
 	} else {
-		if len(tbl.blockInfos) == 0 || !tbl.blockInfosUpdated {
+		if len(tbl.objectInfos) == 0 || !tbl.blockInfosUpdated {
 			err := tbl.UpdateBlockInfos(ctx)
 			if err != nil {
 				return false
 			}
 		}
-		if len(tbl.blockInfos) > 0 {
-			return CalcStats(ctx, tbl.blockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
+		if len(tbl.objectInfos) > 0 {
+			return CalcStats(ctx, tbl.objectInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
 		} else {
 			// no meta means not flushed yet, very small table
 			return false
@@ -1651,10 +1652,15 @@ func (tbl *txnTable) UpdateBlockInfos(ctx context.Context) (err error) {
 			return
 		}
 		var blocks []catalog.BlockInfo
+		var objects []logtailreplay.ObjectEntry
 		if blocks, err = tbl.db.txn.getBlockInfos(ctx, tbl); err != nil {
 			return
 		}
+		if objects, err = tbl.db.txn.getObjInfos(ctx, tbl); err != nil {
+			return
+		}
 		tbl.blockInfos = blocks
+		tbl.objectInfos = objects
 		tbl.blockInfosUpdated = true
 	}
 	return

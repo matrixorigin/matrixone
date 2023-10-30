@@ -219,3 +219,7 @@ func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 	}
 	return false
 }
+
+func (p *PartitionState) ApproxObjectsNum() int {
+	return p.dataObjects.Len()
+}
