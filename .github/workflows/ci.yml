@@ -25,6 +25,7 @@ jobs:
         uses: ./.github/actions/setup_env        
       - name: Set env
         run: |
+          echo "testing"
           echo "endpoint=${{ secrets.S3ENDPOINT }}" >> $GITHUB_ENV
           echo "region=${{ secrets.S3REGION }}" >> $GITHUB_ENV
           echo "apikey=${{ secrets.S3APIKEY }}" >> $GITHUB_ENV
