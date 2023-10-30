@@ -2735,7 +2735,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return err
 			}
 		}
-		logStatementStatus(requestCtx, ses, stmt, success, nil)
+		if ses.GetQueryInProgress() {
+			logStatementStatus(requestCtx, ses, stmt, success, nil)
+		} else {
+			logStatementStatus(requestCtx, ses, stmt, fail, moerr.NewInternalError(requestCtx, "query is killed"))
+		}
 		return err
 	}
 
