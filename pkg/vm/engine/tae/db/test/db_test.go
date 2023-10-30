@@ -4230,7 +4230,6 @@ func TestLogtailBasic(t *testing.T) {
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "test"
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
 	// craete 2 db and 2 tables
 	txn, _ := tae.StartTxn(nil)
 	todropdb, _ := txn.CreateDatabase("todrop", "", "")
@@ -4314,12 +4313,12 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID).Segs))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Segs))
-	// 5 segments, every segment has 2 blocks
+	// 10 segments, every segment has 1 blocks
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 5, len(dirties.Segs))
+	require.Equal(t, 10, len(dirties.Segs))
 	for _, seg := range dirties.Segs {
-		require.Equal(t, 2, len(seg.Blks))
+		require.Equal(t, 1, len(seg.Blks))
 	}
 	tots := func(ts types.TS) *timestamp.Timestamp {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
@@ -6717,9 +6716,10 @@ func TestAlterFakePk(t *testing.T) {
 	}, true)
 
 	defer close()
-	require.Equal(t, 2, len(resp.Commands)) // first blk 4 insert; first blk 2 dels
+	require.Equal(t, 3, len(resp.Commands)) // first blk 4 insert; first blk 2 dels; object info
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
 
 	insBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	require.NoError(t, err)
@@ -6873,7 +6873,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 		Table:  &api.TableID{DbId: did, TbId: tid},
 	}, true)
 
-	require.Equal(t, 3, len(resp.Commands)) // 3 version insert
+	require.Equal(t, 4, len(resp.Commands)) // 3 version insert and 1 object info
 	bat0 := resp.Commands[0].Bat
 	require.Equal(t, 12, len(bat0.Attrs))
 	require.Equal(t, "mock_9", bat0.Attrs[2+schema.GetSeqnum("mock_9")])

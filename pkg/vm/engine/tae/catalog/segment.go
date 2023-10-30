@@ -99,6 +99,7 @@ func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, en
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state:    state,
+			sorted:   table.GetLastestSchema().HasSortKey() && state == ES_NotAppendable,
 			SortHint: table.GetDB().catalog.NextSegment(),
 		},
 	}

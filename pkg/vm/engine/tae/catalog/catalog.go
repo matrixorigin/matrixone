@@ -598,6 +598,7 @@ func (catalog *Catalog) onReplayCheckpointSegment(
 		seg.table = rel
 		seg.SegmentNode = &SegmentNode{
 			state:    state,
+			sorted:   rel.GetLastestSchema().HasSortKey() && state == ES_NotAppendable,
 			SortHint: catalog.NextSegment(),
 		}
 		rel.AddEntryLocked(seg)
