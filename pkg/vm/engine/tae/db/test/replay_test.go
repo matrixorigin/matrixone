@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -133,12 +134,12 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment(false)
+	seg, err := rel.CreateNonAppendableSegment(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateBlock(false)
+	blk1, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = seg.CreateBlock(false)
+	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -174,7 +175,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	seg, err = rel.CreateSegment(false)
 	assert.Nil(t, err)
-	_, err = seg.CreateBlock(false)
+	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(2))
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -213,12 +214,12 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment(false)
+	seg, err := rel.CreateNonAppendableSegment(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateBlock(false)
+	blk1, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = seg.CreateBlock(false)
+	_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
