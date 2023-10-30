@@ -282,8 +282,12 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 		if offsetFlag {
 			continue
 		}
-		arg.ctr.batch_size += 24
 	}
+	var batchSize int
+	for _, bat := range arg.ctr.partitionId_blockId_rowIdBatch[pIdx] {
+		batchSize += bat.Size()
+	}
+	arg.ctr.batch_size = uint32(batchSize)
 }
 
 func getNonNullValue(col *vector.Vector, row uint32) any {
