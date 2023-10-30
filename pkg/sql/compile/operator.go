@@ -994,10 +994,12 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 
 		if len(f.F.Args) > 0 {
 
-			//for group concat, the last arg is separator string
-			if f.F.Func.ObjName == plan2.NameGroupConcat && len(f.F.Args) > 1 {
-				separatorExpr := f.F.Args[len(f.F.Args)-1]
-				executor, err := colexec.NewExpressionExecutor(proc, separatorExpr)
+			//for group_concat, the last arg is separator string
+			//for cluster_centers, the last arg is separator string
+			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
+				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
+				argExpr := f.F.Args[len(f.F.Args)-1]
+				executor, err := colexec.NewExpressionExecutor(proc, argExpr)
 				if err != nil {
 					panic(err)
 				}
@@ -1063,10 +1065,12 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 			if len(f.F.Args) > 0 {
-				//for group concat, the last arg is separator string
-				if f.F.Func.ObjName == plan2.NameGroupConcat && len(f.F.Args) > 1 {
-					separatorExpr := f.F.Args[len(f.F.Args)-1]
-					executor, err := colexec.NewExpressionExecutor(proc, separatorExpr)
+				//for group_concat, the last arg is separator string
+				//for cluster_centers, the last arg is separator string
+				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
+					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
+					argExpr := f.F.Args[len(f.F.Args)-1]
+					executor, err := colexec.NewExpressionExecutor(proc, argExpr)
 					if err != nil {
 						panic(err)
 					}
