@@ -478,11 +478,10 @@ func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailrepl
 	return nil
 }
 
-func (tbl *txnTable) GetDirtyBlksIn(state *logtailreplay.PartitionState) []types.Blockid {
+func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
 	dirtyBlks := make([]types.Blockid, 0)
 	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
-		if !state.BlockVisible(
-			blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
+		if !state.BlockPersisted(blk) {
 			continue
 		}
 		dirtyBlks = append(dirtyBlks, blk)
@@ -529,8 +528,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 
 	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch {
 		//if blk is in partitionState.blks, it means that blk is persisted.
-		if state.BlockVisible(
-			blk, types.TimestampToTS(tbl.db.txn.op.SnapshotTS())) {
+		if state.BlockPersisted(blk) {
 			continue
 		}
 		for _, bat := range bats {
@@ -694,14 +692,14 @@ func (tbl *txnTable) rangesOnePart(
 		for iter.Next() {
 			entry := iter.Entry()
 			//lazy load deletes for block.
-			dirtyBlks[entry.BlockID] = struct{}{}
+			dirtyBlks[entry] = struct{}{}
 		}
 		iter.Close()
 
 	}
 
 	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
-	for _, bid := range tbl.GetDirtyBlksIn(state) {
+	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
 		dirtyBlks[bid] = struct{}{}
 	}
 

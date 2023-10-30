@@ -58,7 +58,7 @@ type PartitionState struct {
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
-	dirtyBlocks *btree.BTreeG[BlockEntry]
+	dirtyBlocks *btree.BTreeG[types.Blockid]
 	//index for blocks by timestamp.
 	//TODO gc entries
 	blockIndexByTS *btree.BTreeG[BlockIndexByTSEntry]
@@ -140,14 +140,20 @@ func (b *BlockEntry) Visible(ts types.TS) bool {
 }
 
 type ObjectEntry struct {
-	location objectio.Location
+	ShortObjName objectio.ObjectNameShort
 
-	CreateTime types.TS
-	DeleteTime types.TS
+	Loc         objectio.Location
+	EntryState  bool
+	Sorted      bool
+	HasDeltaLoc bool
+	SegmentID   types.Uuid
+	CommitTS    types.TS
+	CreateTime  types.TS
+	DeleteTime  types.TS
 }
 
 func (o ObjectEntry) Less(than ObjectEntry) bool {
-	return bytes.Compare(o.location.ShortName()[:], than.location.ShortName()[:]) < 0
+	return bytes.Compare(o.ShortObjName[:], than.ShortObjName[:]) < 0
 }
 
 func (o *ObjectEntry) Visible(ts types.TS) bool {
@@ -156,7 +162,7 @@ func (o *ObjectEntry) Visible(ts types.TS) bool {
 }
 
 func (o ObjectEntry) Location() objectio.Location {
-	return o.location
+	return o.Loc
 }
 
 type PrimaryIndexEntry struct {
@@ -223,7 +229,7 @@ func NewPartitionState(noData bool) *PartitionState {
 		blocks:         btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		dataObjects:    btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		primaryIndex:   btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlocks:    btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		dirtyBlocks:    btree.NewBTreeGOptions((types.Blockid).Less, opts),
 		blockIndexByTS: btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
 		shared:         new(sharedStates),
 	}
@@ -438,12 +444,7 @@ func (p *PartitionState) HandleRowsDelete(
 			p.rows.Set(entry)
 
 			//handle memory deletes for non-appendable block.
-			bPivot := BlockEntry{
-				BlockInfo: catalog.BlockInfo{
-					BlockID: blockID,
-				},
-			}
-			p.dirtyBlocks.Set(bPivot)
+			p.dirtyBlocks.Set(blockID)
 
 			// primary key
 			if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
@@ -534,19 +535,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			p.blocks.Set(blockEntry)
 
-			objPivot := ObjectEntry{
-				location: blockEntry.MetaLocation(),
-			}
-			objEntry, ok := p.dataObjects.Get(objPivot)
-			if !ok {
-				objPivot.CreateTime = blockEntry.CreateTime
-				objEntry = objPivot
-			} else {
-				//FIXME::??
-				objEntry.location = blockEntry.MetaLocation()
-			}
-			p.dataObjects.Set(objEntry)
-
 			{
 				e := BlockIndexByTSEntry{
 					Time:         blockEntry.CreateTime,
@@ -580,7 +568,7 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					// So , if the above scenario happens, we need to set the non-appendable block into
 					// PartitionState.dirtyBlocks.
 					if !isAppendable && isEmptyDelta {
-						p.dirtyBlocks.Set(blockEntry)
+						p.dirtyBlocks.Set(blockID)
 						break
 					}
 
@@ -607,9 +595,43 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 				// if there are no rows for the block, delete the block from the dirty
 				if scanCnt == numDeleted && p.dirtyBlocks.Len() > 0 {
-					p.dirtyBlocks.Delete(blockEntry)
+					p.dirtyBlocks.Delete(blockID)
 				}
 			}
+
+			//create object by block insert
+			{
+				objPivot := ObjectEntry{
+					ShortObjName: *(objectio.Location(metaLocationVector.GetBytesAt(i)).ShortName()),
+				}
+				objEntry, ok := p.dataObjects.Get(objPivot)
+				if ok {
+					// don't need to update objEntry, except for HasDeltaLoc
+					if !isEmptyDelta {
+						objEntry.HasDeltaLoc = true
+					}
+					p.dataObjects.Set(objEntry)
+					return
+				}
+				objEntry = objPivot
+				if metaLocation := objectio.Location(metaLocationVector.GetBytesAt(i)); !metaLocation.IsEmpty() {
+					objEntry.Loc = metaLocation
+				}
+				objEntry.EntryState = entryStateVector[i]
+				objEntry.Sorted = sortedStateVector[i]
+				if !isEmptyDelta {
+					objEntry.HasDeltaLoc = true
+				}
+				objEntry.SegmentID = segmentIDVector[i]
+				objEntry.CommitTS = commitTimeVector[i]
+				objEntry.CreateTime = createTimeVector[i]
+				p.dataObjects.Set(objEntry)
+				//prefetch the object meta
+				//if err := blockio.PrefetchMeta(fs, objEntry.Loc); err != nil {
+				//	logutil.Errorf("prefetch object meta failed. %v", err)
+				//}
+			}
+
 		})
 	}
 
@@ -684,16 +706,62 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 					p.blockIndexByTS.Set(new)
 				}
 			}
+			// delete object by block delete
+			{
+				pivot := ObjectEntry{
+					ShortObjName: *objectio.ShortName(&blockID),
+				}
+				objEntry, ok := p.dataObjects.Get(pivot)
+				if !ok {
+					panic(fmt.Sprintf("invalid object name. %x", rowID))
+				}
+				if objEntry.DeleteTime.IsEmpty() {
+					objEntry.DeleteTime = deleteTimeVector[i]
+					p.dataObjects.Set(objEntry)
+					{
+						e := BlockIndexByTSEntry{
+							Time:         objEntry.DeleteTime,
+							BlockID:      blockID,
+							IsDelete:     true,
+							IsAppendable: objEntry.EntryState,
+						}
+						p.blockIndexByTS.Set(e)
+					}
 
-			objPivot := ObjectEntry{
-				location: entry.MetaLocation(),
+				} else {
+					if objEntry.DeleteTime.Greater(deleteTimeVector[i]) {
+						old := BlockIndexByTSEntry{
+							Time:         objEntry.DeleteTime,
+							BlockID:      blockID,
+							IsDelete:     true,
+							IsAppendable: objEntry.EntryState,
+						}
+						p.blockIndexByTS.Delete(old)
+
+						objEntry.DeleteTime = deleteTimeVector[i]
+						p.dataObjects.Set(objEntry)
+
+						new := BlockIndexByTSEntry{
+							Time:         objEntry.DeleteTime,
+							BlockID:      blockID,
+							IsDelete:     true,
+							IsAppendable: objEntry.EntryState,
+						}
+						p.blockIndexByTS.Set(new)
+
+					} else if objEntry.DeleteTime.Equal(deleteTimeVector[i]) {
+						e := BlockIndexByTSEntry{
+							Time:         objEntry.DeleteTime,
+							BlockID:      blockID,
+							IsDelete:     true,
+							IsAppendable: objEntry.EntryState,
+						}
+						p.blockIndexByTS.Set(e)
+					}
+
+				}
+
 			}
-			objEntry, ok := p.dataObjects.Get(objPivot)
-			if !ok {
-				panic(fmt.Sprintf("object:%s had not been created", entry.MetaLocation().Name().String()))
-			}
-			objEntry.DeleteTime = entry.DeleteTime
-			p.dataObjects.Set(objEntry)
 
 		})
 	}
@@ -702,19 +770,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.MetadataDeleteEntries.Add(1)
 	})
-}
-
-func (p *PartitionState) BlockVisible(blockID types.Blockid, ts types.TS) bool {
-	pivot := BlockEntry{
-		BlockInfo: catalog.BlockInfo{
-			BlockID: blockID,
-		},
-	}
-	entry, ok := p.blocks.Get(pivot)
-	if !ok {
-		return false
-	}
-	return entry.Visible(ts)
 }
 
 func (p *PartitionState) AppendCheckpoint(checkpoint string, partiton *Partition) {

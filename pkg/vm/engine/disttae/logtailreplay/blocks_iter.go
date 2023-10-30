@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/tidwall/btree"
 )
 
@@ -141,7 +142,7 @@ func (b *blocksIter) Close() error {
 }
 
 type dirtyBlocksIter struct {
-	iter        btree.IterG[BlockEntry]
+	iter        btree.IterG[types.Blockid]
 	firstCalled bool
 }
 
@@ -152,8 +153,6 @@ func (p *PartitionState) NewDirtyBlocksIter() *dirtyBlocksIter {
 	}
 	return ret
 }
-
-var _ BlocksIter = new(dirtyBlocksIter)
 
 func (b *dirtyBlocksIter) Next() bool {
 	if !b.firstCalled {
@@ -166,7 +165,7 @@ func (b *dirtyBlocksIter) Next() bool {
 	return b.iter.Next()
 }
 
-func (b *dirtyBlocksIter) Entry() BlockEntry {
+func (b *dirtyBlocksIter) Entry() types.Blockid {
 	return b.iter.Item()
 }
 
@@ -207,4 +206,16 @@ func (p *PartitionState) GetChangedBlocksBetween(
 	}
 
 	return
+}
+
+func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
+	iter := p.dataObjects.Copy().Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(ObjectEntry{
+		ShortObjName: *objectio.ShortName(&blockID),
+	}); ok {
+		return true
+	}
+	return false
 }
