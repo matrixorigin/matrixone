@@ -749,3 +749,8 @@ func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {
 		}
 	}
 }
+
+// For unit test
+func (task *flushTableTailTask) GetCreatedBlocks() []handle.Block {
+	return task.createdBlkHandles
+}
