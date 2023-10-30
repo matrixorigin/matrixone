@@ -202,12 +202,12 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 		end := types.StringToTS(mergeEnd)
 		start := types.StringToTS(mergeStart)
-		logutil.Infof("merge checkpoint from %s to %s", start.ToString(), end.ToString())
 		var checkpointData *logtail.CheckpointData
 		cnLocation, tnLocation, checkpointData, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
 			cnLocation, tnLocation, uint32(version), start)
 		checkpointData.ReplayMetaBatch()
 		for name := range checkpointData.GetLocations() {
+			logutil.Infof("name is %s", name)
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
 				return err
@@ -218,22 +218,13 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			})
 		}
 		if err != nil {
-			logutil.Infof("ReWriteCheckpointAndBlockFromKey failed is %v", err.Error())
 			return err
 		}
-		dentry, err := dstFs.StatFile(ctx, cnLocation.Name().String())
-		if err != nil {
-			return err
-		}
-		taeFileList = append(taeFileList, &taeFile{
-			path: dentry.Name,
-			size: dentry.Size,
-		})
 		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, cnLocation, tnLocation, start, end)
 		if err != nil {
 			return err
 		}
-		dentry, err = dstFs.StatFile(ctx, file)
+		dentry, err := dstFs.StatFile(ctx, file)
 		if err != nil {
 			return err
 		}
