@@ -245,6 +245,8 @@ type Session struct {
 	buf *buffer.Buffer
 
 	stmtProfile process.StmtProfile
+	// queryInExecute indicates whether the query is in execute
+	queryInExecute atomic.Bool
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -303,6 +305,14 @@ func (ses *Session) SetQueryStart(t time.Time) {
 
 func (ses *Session) GetQueryStart() time.Time {
 	return ses.stmtProfile.GetQueryStart()
+}
+
+func (ses *Session) SetQueryInExecute(b bool) {
+	ses.queryInExecute.Store(b)
+}
+
+func (ses *Session) GetQueryInExecute() bool {
+	return ses.queryInExecute.Load()
 }
 
 func (ses *Session) SetSqlOfStmt(sot string) {
