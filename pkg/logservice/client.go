@@ -16,7 +16,6 @@ package logservice
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -538,7 +537,6 @@ func getRPCClient(
 	clientOpts := []morpc.ClientOption{
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(1),
-		morpc.WithClientTag(fmt.Sprintf("hakeeper-client(%s)", tag)),
 		morpc.WithClientLogger(logutil.GetGlobalLogger()),
 	}
 	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
@@ -561,5 +559,5 @@ func getRPCClient(
 	// to be attempted
 	codec := morpc.NewMessageCodec(mf, codecOpts...)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
-	return morpc.NewClient(bf, clientOpts...)
+	return morpc.NewClient("logservice-client", bf, clientOpts...)
 }

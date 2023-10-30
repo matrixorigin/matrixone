@@ -39,7 +39,7 @@ func main() {
 	}
 
 	bf := morpc.NewGoettyBasedBackendFactory(newCodec())
-	cli, err := morpc.NewClient(bf, morpc.WithClientMaxBackendPerHost(1))
+	cli, err := morpc.NewClient("example-rpc", bf, morpc.WithClientMaxBackendPerHost(1))
 	if err != nil {
 		panic(err)
 	}

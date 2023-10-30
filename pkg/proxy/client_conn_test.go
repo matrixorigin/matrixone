@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -94,13 +95,12 @@ func (c *mockNetConn) SetWriteDeadline(t time.Time) error {
 }
 
 type mockClientConn struct {
-	conn         net.Conn
-	tenant       Tenant
-	clientInfo   clientInfo // need to set it explicitly
-	router       Router
-	tun          *tunnel
-	setVarStmts  []string
-	prepareStmts []string
+	conn       net.Conn
+	tenant     Tenant
+	clientInfo clientInfo // need to set it explicitly
+	router     Router
+	tun        *tunnel
+	redoStmts  []string
 }
 
 var _ ClientConn = (*mockClientConn)(nil)
@@ -123,7 +123,7 @@ func (c *mockClientConn) GetSalt() []byte                    { return nil }
 func (c *mockClientConn) GetHandshakePack() *frontend.Packet { return nil }
 func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
-func (c *mockClientConn) SendErrToClient(string)             {}
+func (c *mockClientConn) SendErrToClient(err error)          {}
 func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 	cn, err := c.router.Route(context.TODO(), c.clientInfo, nil)
 	if err != nil {
@@ -135,12 +135,7 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 		return nil, err
 	}
 	// Set the use defined variables, including session variables and user variables.
-	for _, stmt := range c.setVarStmts {
-		if _, err := sc.ExecStmt(stmt, nil); err != nil {
-			return nil, err
-		}
-	}
-	for _, stmt := range c.prepareStmts {
+	for _, stmt := range c.redoStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {
 			return nil, err
 		}
@@ -159,11 +154,15 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		sendResp([]byte(cn.addr), resp)
 		return nil
 	case *setVarEvent:
-		c.setVarStmts = append(c.setVarStmts, ev.stmt)
+		c.redoStmts = append(c.redoStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
 	case *prepareEvent:
-		c.prepareStmts = append(c.prepareStmts, ev.stmt)
+		c.redoStmts = append(c.redoStmts, ev.stmt)
+		sendResp([]byte("ok"), resp)
+		return nil
+	case *useEvent:
+		c.redoStmts = append(c.redoStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
 	default:
@@ -522,14 +521,14 @@ func TestClientConn_SendErrToClient(t *testing.T) {
 
 		n, err = remote.Read(b)
 		require.NoError(t, err)
-		require.Equal(t, 21, n)
-		require.Equal(t, "err msg1", string(b[4+1+2+1+5:n]))
+		require.Equal(t, 33, n)
+		require.True(t, strings.Contains(string(b[4+1+2+1+5:n]), "internal error: msg1"))
 	}()
 
 	_, err := cc.BuildConnWithServer(true)
 	require.Error(t, err) // just test client, no router set
 	require.Equal(t, "tenant1", string(cc.GetTenant()))
 	require.NotNil(t, cc.GetHandshakePack())
-	cc.SendErrToClient("err msg1")
+	cc.SendErrToClient(moerr.NewInternalErrorNoCtx("msg1"))
 	wg.Wait()
 }

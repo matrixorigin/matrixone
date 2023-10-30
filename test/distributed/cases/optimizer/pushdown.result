@@ -1,0 +1,63 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+create table t1(c1 int primary key);
+create table t2(c1 int primary key, c2 int, c3 int);
+create table t3(c1 int, c2 int, c3 int, primary key(c1,c2));
+insert into t1 select * from generate_series(10000) g;
+insert into t2 select c1, c1, c1 from t1;
+insert into t2 select c1+10000, c1+10000, c1+10000 from t1;
+insert into t3 select c1, c1, c1 from t1;
+insert into t3 select c1+10000, c1+10000, c1+10000 from t1;
+insert into t3 select c1+20000, c1+20000, c1+20000 from t1;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t2');
+mo_ctl(dn, flush, d1.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t3');
+mo_ctl(dn, flush, d1.t3)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+explain select * from (select * from t1 where c1%3=0 order by c1 desc limit 10) tmpt where c1 % 2 = 0;
+QUERY PLAN
+Project
+  ->  Filter
+        Filter Cond: ((cast(t1.c1 AS BIGINT) % 2) = 0)
+        ->  Sort
+              Sort Key: t1.c1 DESC
+              Limit: 10
+              ->  Table Scan on d1.t1
+                    Filter Cond: ((cast(t1.c1 AS BIGINT) % 3) = 0)
+explain select * from (select v2.c1 as c1, v2.c2 as c2, v2.c3 as c3 from (select * from t1 where c1!=0 limit 10) v1 join (select * from t2 where c1!=1 limit 10) v2 on v1.c1=v2.c1 where v2.c2>0 limit 10) v3 join (select * from t3 where c1!=2 limit 10) v4 on v3.c3=v4.c3 where v4.c2>0 limit 10;
+QUERY PLAN
+Project
+  Limit: 10
+  ->  Join
+        Join Type: INNER
+        Join Cond: (v3.c3 = v4.c3)
+        ->  Project
+              Limit: 10
+              ->  Join
+                    Join Type: INNER
+                    Join Cond: (v1.c1 = v2.c1)
+                    ->  Project
+                          Limit: 10
+                          ->  Table Scan on d1.t1
+                                Filter Cond: (t1.c1 <> 0)
+                    ->  Filter
+                          Filter Cond: (v2.c2 > 0)
+                          ->  Project
+                                Limit: 10
+                                ->  Table Scan on d1.t2
+                                      Filter Cond: (t2.c1 <> 1)
+        ->  Filter
+              Filter Cond: (v4.c2 > 0)
+              ->  Project
+                    Limit: 10
+                    ->  Table Scan on d1.t3
+                          Filter Cond: (t3.c1 <> 2)
+drop database if exists d1;
