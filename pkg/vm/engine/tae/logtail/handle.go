@@ -954,20 +954,20 @@ func ReWriteCheckpointAndBlockFromKey(
 	fs, dstFs fileservice.FileService,
 	loc, tnLocation objectio.Location,
 	version uint32, ts types.TS,
-) (objectio.Location, objectio.Location, *CheckpointData,[]string, error) {
+) (objectio.Location, objectio.Location, *CheckpointData, []string, error) {
 	objectsData := make(map[string]*fileData, 0)
 	data := NewCheckpointData()
 	reader, err := blockio.NewObjectReader(fs, loc)
 	if err != nil {
-		return nil, nil, nil,nil, err
+		return nil, nil, nil, nil, err
 	}
 	err = data.readMetaBatch(ctx, version, reader, nil)
 	if err != nil {
-		return nil, nil, nil,nil, err
+		return nil, nil, nil, nil, err
 	}
 	err = data.readAll(ctx, version, fs)
 	if err != nil {
-		return nil, nil, nil,nil, err
+		return nil, nil, nil, nil, err
 	}
 	var files []string
 	isCkpChange := false
@@ -989,7 +989,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		} else if isAblk {
 			bat, err = blockio.LoadOneBlock(ctx, fs, metaLoc, objectio.SchemaData)
 			if err != nil {
-				return nil, nil, nil,nil, err
+				return nil, nil, nil, nil, err
 			}
 			if !deltaLoc.IsEmpty() {
 				deltaBat, err = blockio.LoadOneBlock(ctx, fs, deltaLoc, objectio.SchemaTombstone)
@@ -999,7 +999,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			continue
 		}
 		if err != nil {
-			return nil, nil, nil,nil, err
+			return nil, nil, nil, nil, err
 		}
 		isChange := false
 		commitTs := types.TS{}
@@ -1008,7 +1008,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			for v := 0; v < bat.Vecs[0].Length(); v++ {
 				err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
 				if err != nil {
-					return nil, nil, nil,nil, err
+					return nil, nil, nil, nil, err
 				}
 				if !commitTs.LessEq(ts) {
 					windowCNBatch(bat, 0, uint64(v))
@@ -1022,7 +1022,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			for v := 0; v < deltaBat.Vecs[0].Length(); v++ {
 				err = deltaCommitTs.Unmarshal(deltaBat.Vecs[len(deltaBat.Vecs)-3].GetRawBytesAt(v))
 				if err != nil {
-					return nil, nil, nil,nil, err
+					return nil, nil, nil, nil, err
 				}
 				if !deltaCommitTs.LessEq(ts) {
 					windowCNBatch(deltaBat, 0, uint64(v))
@@ -1069,7 +1069,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			if objectData.isChange {
 				writer, err := blockio.NewBlockWriter(fs, fileName)
 				if err != nil {
-					return nil, nil, nil,nil, err
+					return nil, nil, nil, nil, err
 				}
 				sort.Slice(objectData.data, func(i, j int) bool {
 					return objectData.data[i].num < objectData.data[j].num
@@ -1078,12 +1078,12 @@ func ReWriteCheckpointAndBlockFromKey(
 					if block.blockType == objectio.SchemaData {
 						_, err = writer.WriteBatch(block.data)
 						if err != nil {
-							return nil, nil, nil,nil, err
+							return nil, nil, nil, nil, err
 						}
 					} else if block.blockType == objectio.SchemaTombstone {
 						_, err = writer.WriteTombstoneBatch(block.data)
 						if err != nil {
-							return nil, nil, nil,nil, err
+							return nil, nil, nil, nil, err
 						}
 					}
 				}
@@ -1093,14 +1093,14 @@ func ReWriteCheckpointAndBlockFromKey(
 					if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 						err = fs.Delete(ctx, fileName)
 						if err != nil {
-							return nil, nil, nil,nil, err
+							return nil, nil, nil, nil, err
 						}
 						blocks, extent, err = writer.Sync(ctx)
 						if err != nil {
-							return nil, nil, nil,nil, err
+							return nil, nil, nil, nil, err
 						}
 					} else {
-						return nil, nil, nil,nil, err
+						return nil, nil, nil, nil, err
 					}
 				}
 
@@ -1125,12 +1125,12 @@ func ReWriteCheckpointAndBlockFromKey(
 		data.FormatData(common.DefaultAllocator)
 		cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 		if err != nil {
-			return nil, nil, nil,nil, err
+			return nil, nil, nil, nil, err
 		}
 		loc = cnLocation
 		tnLocation = dnLocation
 		files = checkpointFiles
 		files = append(files, cnLocation.Name().String())
 	}
-	return loc, tnLocation, data, files,  nil
+	return loc, tnLocation, data, files, nil
 }
