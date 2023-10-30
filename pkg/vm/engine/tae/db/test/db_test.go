@@ -1036,6 +1036,56 @@ func TestFlushTableNoPk(t *testing.T) {
 	tae.CheckRowsByScan(100, true)
 }
 
+func TestFlushTableErrorHandle(t *testing.T) {
+	ctx := context.WithValue(context.Background(), jobs.TestFlushBailout{}, "bail")
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.Ctx = ctx
+
+	tae := testutil.NewTestEngine(context.Background(), ModuleName, t, opts)
+	defer tae.Close()
+
+	worker := ops.NewOpWorker(ctx, "xx")
+	worker.Start()
+	defer worker.Stop()
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.Name = "table"
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 10
+	bat := catalog.MockBatch(schema, (int(schema.BlockMaxRows)*2 + int(schema.BlockMaxRows/2)))
+
+	txn, _ := tae.StartTxn(nil)
+	txn.CreateDatabase("db", "", "")
+	txn.Commit(ctx)
+
+	createAndInsert := func() {
+		testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schema, bat, false)
+	}
+
+	droptable := func() {
+		txn, _ := tae.StartTxn(nil)
+		d, _ := txn.GetDatabase("db")
+		d.DropRelationByName(schema.Name)
+		txn.Commit(ctx)
+	}
+
+	flushTable := func() {
+		txn, rel := testutil.GetDefaultRelation(t, tae.DB, schema.Name)
+		blkMetas := testutil.GetAllBlockMetas(rel)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, blkMetas, tae.Runtime, types.MaxTs())
+		require.NoError(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone()
+		require.Error(t, err)
+		require.NoError(t, txn.Commit(context.Background()))
+	}
+	for i := 0; i < 20; i++ {
+		createAndInsert()
+		flushTable()
+		droptable()
+	}
+}
+
 func TestFlushTabletail(t *testing.T) {
 	// TODO
 	defer testutils.AfterTest(t)()

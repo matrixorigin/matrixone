@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"math"
 	"sort"
 	"testing"
@@ -762,4 +763,114 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 	})
+}
+
+var _ error = &testError{}
+
+type testError struct {
+	s string
+}
+
+func (t testError) Error() string {
+	return t.s
+}
+
+func TestRewriteError(t *testing.T) {
+	type args struct {
+		err      error
+		username string
+	}
+
+	tests := []struct {
+		name  string
+		args  args
+		want  uint16
+		want1 string
+		want2 string
+	}{
+		{
+			name: "t1",
+			args: args{
+				err: &testError{s: "non moerr"},
+			},
+			want:  moerr.ER_INTERNAL_ERROR,
+			want1: "HY000",
+			want2: "non moerr",
+		},
+		{
+			name:  "t2",
+			args:  args{},
+			want:  moerr.ER_INTERNAL_ERROR,
+			want1: "",
+			want2: "",
+		},
+		{
+			name: "t3",
+			args: args{
+				err:      moerr.NewInternalErrorNoCtx("check password failed"),
+				username: "abc",
+			},
+			want:  moerr.ER_ACCESS_DENIED_ERROR,
+			want1: "28000",
+			want2: "Access denied for user abc. internal error: check password failed",
+		},
+		{
+			name: "t4",
+			args: args{
+				err:      moerr.NewInternalErrorNoCtx("suspended"),
+				username: "abc",
+			},
+			want:  moerr.ER_ACCESS_DENIED_ERROR,
+			want1: "28000",
+			want2: "Access denied for user abc. internal error: suspended",
+		},
+		{
+			name: "t5",
+			args: args{
+				err:      moerr.NewInternalErrorNoCtx("suspended"),
+				username: "abc",
+			},
+			want:  moerr.ER_ACCESS_DENIED_ERROR,
+			want1: "28000",
+			want2: "Access denied for user abc. internal error: suspended",
+		},
+		{
+			name: "t6",
+			args: args{
+				err:      moerr.NewInternalErrorNoCtx("source address     is not authorized"),
+				username: "abc",
+			},
+			want:  moerr.ER_ACCESS_DENIED_ERROR,
+			want1: "28000",
+			want2: "Access denied for user abc. internal error: source address     is not authorized",
+		},
+		{
+			name: "t7",
+			args: args{
+				err:      moerr.NewInternalErrorNoCtx("xxxx"),
+				username: "abc",
+			},
+			want:  moerr.ErrInternal,
+			want1: "HY000",
+			want2: "internal error: xxxx",
+		},
+		{
+			name: "t8",
+			args: args{
+				err:      moerr.NewBadDBNoCtx("yyy"),
+				username: "abc",
+			},
+			want:  moerr.ER_BAD_DB_ERROR,
+			want1: "HY000",
+			want2: "invalid database yyy",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, got1, got2 := RewriteError(tt.args.err, tt.args.username)
+			assert.Equalf(t, tt.want, got, "RewriteError(%v, %v)", tt.args.err, tt.args.username)
+			assert.Equalf(t, tt.want1, got1, "RewriteError(%v, %v)", tt.args.err, tt.args.username)
+			assert.Equalf(t, tt.want2, got2, "RewriteError(%v, %v)", tt.args.err, tt.args.username)
+		})
+	}
 }
