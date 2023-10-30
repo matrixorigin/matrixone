@@ -249,6 +249,8 @@ type Session struct {
 	queryEnd time.Time
 	// queryInProgress indicates whether the query is in progress
 	queryInProgress atomic.Bool
+	// queryInExecute indicates whether the query is in execute
+	queryInExecute atomic.Bool
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -327,6 +329,14 @@ func (ses *Session) SetQueryInProgress(b bool) {
 
 func (ses *Session) GetQueryInProgress() bool {
 	return ses.queryInProgress.Load()
+}
+
+func (ses *Session) SetQueryInExecute(b bool) {
+	ses.queryInExecute.Store(b)
+}
+
+func (ses *Session) GetQueryInExecute() bool {
+	return ses.queryInExecute.Load()
 }
 
 func (ses *Session) SetSqlOfStmt(sot string) {
@@ -2229,7 +2239,7 @@ func uuid2Str(uid uuid.UUID) string {
 	if bytes.Equal(uid[:], dumpUUID[:]) {
 		return ""
 	}
-	return uid.String()
+	return strings.ReplaceAll(uid.String(), "-", "")
 }
 
 func (ses *Session) SetSessionRoutineStatus(status string) error {

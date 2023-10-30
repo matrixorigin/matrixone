@@ -21,7 +21,7 @@ import (
 )
 
 func (c *DashboardCreator) initTaskDashboard() error {
-	folder, err := c.createFolder(taskFolderName)
+	folder, err := c.createFolder(moFolderName)
 	if err != nil {
 		return err
 	}
@@ -31,6 +31,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 		c.withRowOptions(
 			c.initTaskFlushTableTailRow(),
 			c.initTaskCkpEntryPendingRow(),
+			c.initTaskMergeRow(),
 		)...)
 
 	if err != nil {
@@ -44,7 +45,7 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 	return dashboard.Row(
 		"Flush Table Tail Duration",
 		c.getHistogram(
-			`mo_task_duration_seconds_bucket{type="flush_table_tail", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
+			c.getMetricWithFilter(`mo_task_duration_seconds_bucket`, `type="flush_table_tail"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -52,10 +53,31 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 
 func (c *DashboardCreator) initTaskCkpEntryPendingRow() dashboard.Option {
 	return dashboard.Row(
-		"Flush Table Tail Duration",
+		"Checkpoint Entry Pending Time",
 		c.getHistogram(
-			`mo_task_duration_seconds_bucket{type="ckp_entry_pending", matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"}`,
+			c.getMetricWithFilter(`mo_task_duration_seconds_bucket`, `type="ckp_entry_pending"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
+	return dashboard.Row(
+		"Task Merge Related Status",
+		c.withGraph(
+			"Scheduled By Counting",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_task_scheduled_by_total", `type="merge"`)+`[$interval])) by (`+c.by+`, type)`,
+			"{{"+c.by+"-type }}"),
+		c.withGraph(
+			"Merged Blocks Each Schedule",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_block"`)+`[$interval])) by (`+c.by+`, type)`,
+			"{{"+c.by+"-type }}"),
+		c.withGraph(
+			"Merged Size Each Schedule",
+			4,
+			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_size"`)+`[$interval])) by (`+c.by+`, type)`,
+			"{{ "+c.by+"-type }}"),
 	)
 }

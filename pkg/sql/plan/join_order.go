@@ -332,7 +332,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {
-	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER {
+	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER || joinNode.Limit != nil {
 		nodeID := builder.determineJoinOrder(joinNode.NodeId)
 		leaves = append(leaves, builder.qry.Nodes[nodeID])
 		return leaves, conds
