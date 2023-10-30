@@ -46,7 +46,11 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnHoldLockRow(),
 			c.initTxnUnlockRow(),
 			c.initTxnTableRangesRow(),
-			c.initTxnPrePrepareRow(),
+			c.initTxnOnPrepareWALRow(),
+			c.initTxnBeforeCommitRow(),
+			c.initTxnDequeuePreparedRow(),
+			c.initTxnDequeuePreparingRow(),
+			c.initTxnFastLoadObjectMetaRow(),
 		)...)
 	if err != nil {
 		return err
@@ -90,11 +94,41 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initTxnPrePrepareRow() dashboard.Option {
+func (c *DashboardCreator) initTxnOnPrepareWALRow() dashboard.Option {
 	return dashboard.Row(
-		"txn pre-prepare duration",
+		"txn on prepare wal duration",
 		c.getHistogram(
-			c.getMetricWithFilter("mo_txn_pre_prepare_duration_seconds_bucket", ""),
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTxnDequeuePreparingRow() dashboard.Option {
+	return dashboard.Row(
+		"txn dequeue preparing duration",
+		c.getHistogram(
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="dequeue_preparing"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTxnDequeuePreparedRow() dashboard.Option {
+	return dashboard.Row(
+		"txn dequeue prepared duration",
+		c.getHistogram(
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="dequeue_prepared"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTxnBeforeCommitRow() dashboard.Option {
+	return dashboard.Row(
+		"txn handle commit but before txn.commit duration",
+		c.getHistogram(
+			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="before_txn_commit"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
 	)
@@ -269,5 +303,16 @@ func (c *DashboardCreator) initTxnHoldLockRow() dashboard.Option {
 			c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="hold"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTxnFastLoadObjectMetaRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn Fast Load Object Meta",
+		c.withGraph(
+			"Fast Load Object Meta",
+			12,
+			`sum(rate(`+c.getMetricWithFilter("tn_side_fast_load_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
+			"{{ "+c.by+"-type }}"),
 	)
 }
