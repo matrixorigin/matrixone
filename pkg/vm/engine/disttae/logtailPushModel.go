@@ -613,6 +613,8 @@ func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
 
 type logTailSubscriber struct {
 	tnNodeID      int
+	rpcClient     morpc.RPCClient
+	rpcStream     morpc.Stream
 	logTailClient *service.LogtailClient
 
 	ready        bool
@@ -634,30 +636,42 @@ type logTailSubscriberResponse struct {
 
 // XXX generate a rpc client and new a stream.
 // we should hide these code into service's NewClient method next day.
-func newRpcStreamToTnLogTailService(serviceAddr string) (morpc.Stream, error) {
-	logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
-	codec := morpc.NewMessageCodec(func() morpc.Message {
-		return &service.LogtailResponseSegment{}
-	})
-	factory := morpc.NewGoettyBasedBackendFactory(codec,
-		morpc.WithBackendGoettyOptions(
-			goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
-		),
-		morpc.WithBackendLogger(logger),
-	)
+func (s *logTailSubscriber) newRpcStreamToTnLogTailService(serviceAddr string) error {
+	if s.rpcClient == nil {
+		logger := logutil.GetGlobalLogger().Named("cn-log-tail-client")
+		codec := morpc.NewMessageCodec(func() morpc.Message {
+			return &service.LogtailResponseSegment{}
+		})
+		factory := morpc.NewGoettyBasedBackendFactory(codec,
+			morpc.WithBackendGoettyOptions(
+				goetty.WithSessionRWBUfferSize(1<<20, 1<<20),
+			),
+			morpc.WithBackendLogger(logger),
+		)
 
-	c, err1 := morpc.NewClient(
-		"logtail-client",
-		factory,
-		morpc.WithClientMaxBackendPerHost(10000),
-		morpc.WithClientLogger(logger),
-	)
-	if err1 != nil {
-		return nil, err1
+		c, err := morpc.NewClient(
+			"logtail-client",
+			factory,
+			morpc.WithClientLogger(logger),
+		)
+		if err != nil {
+			return err
+		}
+		s.rpcClient = c
 	}
 
-	stream, err2 := c.NewStream(serviceAddr, true)
-	return stream, err2
+	if s.rpcStream != nil {
+		s.rpcStream.Close(true)
+		s.rpcStream = nil
+	}
+
+	stream, err := s.rpcClient.NewStream(serviceAddr, true)
+	if err != nil {
+		return err
+	}
+
+	s.rpcStream = stream
+	return nil
 }
 
 func (s *logTailSubscriber) init(serviceAddr string) (err error) {
@@ -673,13 +687,12 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 		s.logTailClient = nil
 	}
 
-	stream, err := newRpcStreamToTnLogTailService(serviceAddr)
-	if err != nil {
+	if err := s.newRpcStreamToTnLogTailService(serviceAddr); err != nil {
 		return err
 	}
 
 	// new the log tail client.
-	s.logTailClient, err = service.NewLogtailClient(stream, service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
+	s.logTailClient, err = service.NewLogtailClient(s.rpcStream, service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
 	if err != nil {
 		return err
 	}

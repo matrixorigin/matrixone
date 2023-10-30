@@ -75,6 +75,13 @@ func LogTxnPushedTimestampUpdated(
 	}
 }
 
+func LogTimestampWaiterCanceled() {
+	logger := getSkipLogger()
+	if logger.Enabled(zap.InfoLevel) {
+		logger.Debug("timestamp waiter canceled")
+	}
+}
+
 // LogTxnRead log txn read
 func LogTxnRead(txnMeta txn.TxnMeta) {
 	logger := getSkipLogger()
