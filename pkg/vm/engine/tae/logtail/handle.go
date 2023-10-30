@@ -1118,6 +1118,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 			}
 		}
+		data.FormatData(common.DefaultAllocator)
 		cnLocation, dnLocation, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 		if err != nil {
 			return nil, nil, nil, err
