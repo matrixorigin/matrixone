@@ -1993,6 +1993,9 @@ func (data *CheckpointData) ReplayMetaBatch() {
 
 	for _, meta := range data.meta {
 		for _, table := range meta.tables {
+			if table == nil || table.locations == nil {
+				continue
+			}
 			it := table.locations.MakeIterator()
 			for it.HasNext() {
 				block := it.Next()
