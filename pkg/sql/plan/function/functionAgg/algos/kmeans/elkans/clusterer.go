@@ -73,7 +73,7 @@ type vectorMeta struct {
 
 var _ kmeans.Clusterer = new(KMeansClusterer)
 
-func NewElkansKMeans(vectors [][]float64,
+func NewKMeans(vectors [][]float64,
 	clusterCnt, maxIterations int,
 	deltaThreshold float64,
 	distanceType kmeans.DistanceType) (kmeans.Clusterer, error) {

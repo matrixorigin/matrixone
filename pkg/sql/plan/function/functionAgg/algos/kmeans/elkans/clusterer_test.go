@@ -20,7 +20,47 @@ import (
 	"testing"
 )
 
-func TestElkansKMeansClusterer_Cluster(t *testing.T) {
+func Test_NewKMeans(t *testing.T) {
+	type kmeansArg struct {
+		vectorList     [][]float64
+		clusterCnt     int
+		maxIterations  int
+		deltaThreshold float64
+		distType       kmeans.DistanceType
+	}
+	tests := []struct {
+		name    string
+		fields  kmeansArg
+		wantErr bool
+	}{
+		{
+			name: "Test 1 - Dimension mismatch",
+			fields: kmeansArg{
+				vectorList: [][]float64{
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+					{1, 2, 4},
+				},
+				clusterCnt:     2,
+				maxIterations:  500,
+				deltaThreshold: 0.01,
+				distType:       kmeans.L2,
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt, tt.fields.maxIterations, tt.fields.deltaThreshold, tt.fields.distType)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("NewKMeans() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+		})
+	}
+}
+
+func Test_Cluster(t *testing.T) {
 	type kmeansArg struct {
 		vectorList     [][]float64
 		clusterCnt     int
@@ -35,7 +75,7 @@ func TestElkansKMeansClusterer_Cluster(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "Test 1",
+			name: "Test 1 - Skewed data",
 			fields: kmeansArg{
 				vectorList: [][]float64{
 					{1, 2, 3, 4},
@@ -47,9 +87,6 @@ func TestElkansKMeansClusterer_Cluster(t *testing.T) {
 					{10, 2, 4, 5},
 					{10, 3, 4, 5},
 					{10, 5, 4, 5},
-					{10, 2, 4, 5},
-					{10, 3, 4, 5},
-					{10, 5, 4, 5},
 				},
 				clusterCnt:     2,
 				maxIterations:  500,
@@ -57,16 +94,16 @@ func TestElkansKMeansClusterer_Cluster(t *testing.T) {
 				distType:       kmeans.L2,
 			},
 			want: [][]float64{
-				{6.94, 2.88, 4, 5},
-				{1, 2, 3, 4},
+				{1, 2, 3.611111111111111, 4.611111111111112},
+				{10, 3.777777777777778, 4, 5},
 			},
 			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			kmeans, err := NewElkansKMeans(tt.fields.vectorList, tt.fields.clusterCnt, tt.fields.maxIterations, tt.fields.deltaThreshold, tt.fields.distType)
-			got, err := kmeans.Cluster()
+			clusterer, _ := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt, tt.fields.maxIterations, tt.fields.deltaThreshold, tt.fields.distType)
+			got, err := clusterer.Cluster()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Cluster() error = %v, wantErr %v", err, tt.wantErr)
 				return
