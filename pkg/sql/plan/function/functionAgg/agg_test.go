@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/elkans_kmeans"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math"
 	"reflect"
 	"testing"
@@ -731,7 +731,7 @@ func TestClusterCenters(t *testing.T) {
 
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
-		distType:   elkans_kmeans.CosineDistance,
+		distType:   kmeans.L2,
 		arrType:    types.T_array_float64.ToType(),
 	}
 	// input vectors/arrays of 4 rows with 4th row as null
@@ -777,8 +777,8 @@ func TestClusterCenters(t *testing.T) {
 				!isEmpty &&
 				reflect.DeepEqual(vecf64Output,
 					[][]float64{
-						{1, 2, 3.6666666666666665, 4.666666666666666},
-						{10, 3.333333333333333, 4, 5},
+						{10, 5, 4, 5},
+						{3.5200000000000005, 2.2399999999999998, 3.7600000000000002, 4.76},
 					})
 		})
 
