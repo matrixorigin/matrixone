@@ -181,6 +181,9 @@ type TimestampWaiter interface {
 	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and tn is
 	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
 	NotifyLatestCommitTS(appliedTS timestamp.Timestamp)
+	// Cancel cancels all waiters in timestamp waiter. They will not wait for the newer
+	// timestamp anymore.
+	Cancel()
 	// Close close the timestamp waiter
 	Close()
 }
