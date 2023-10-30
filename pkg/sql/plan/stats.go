@@ -69,8 +69,8 @@ func NewStatsInfoMap() *StatsInfoMap {
 	}
 }
 
-func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
-	if sc.ObjectNumber == 0 || sc.ObjectNumber != currentBlockNum {
+func (sc *StatsInfoMap) NeedUpdate(currentObjectNum int) bool {
+	if sc.ObjectNumber == 0 || sc.ObjectNumber != currentObjectNum {
 		return true
 	}
 	return false
