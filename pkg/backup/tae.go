@@ -152,10 +152,8 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 		checksum, err := CopyFile(ctx, srcFs, dstFs, dentry, "")
 		if err != nil {
-			if (moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
-				isGC(gcFileMap, dentry.Name)) ||
-				moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-				logutil.Infof("file %s not found or already exists", dentry.Name)
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+				isGC(gcFileMap, dentry.Name) {
 				continue
 			} else {
 				return err
@@ -207,7 +205,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			cnLocation, tnLocation, uint32(version), start)
 		checkpointData.ReplayMetaBatch()
 		for name := range checkpointData.GetLocations() {
-			logutil.Infof("name is %s", name)
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
 				return err
