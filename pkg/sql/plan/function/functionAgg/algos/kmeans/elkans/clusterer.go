@@ -205,6 +205,7 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 	return nil
 }
 
+// initBounds initializes the lower bounds, upper bound and assignment for each vector.
 func (kmeans *KMeansClusterer) initBounds() {
 	for x := range kmeans.vectorList {
 		minDist := math.MaxFloat64
