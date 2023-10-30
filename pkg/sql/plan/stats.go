@@ -52,6 +52,7 @@ type StatsInfoMap struct {
 	MinValMap    map[string]float64
 	MaxValMap    map[string]float64
 	DataTypeMap  map[string]types.T
+	BlockNumber  uint16
 	ObjectNumber int //detect if block number changes , update stats info map
 	TableCnt     float64
 	tableName    string
@@ -63,6 +64,7 @@ func NewStatsInfoMap() *StatsInfoMap {
 		MinValMap:    make(map[string]float64),
 		MaxValMap:    make(map[string]float64),
 		DataTypeMap:  make(map[string]types.T),
+		BlockNumber:  0,
 		ObjectNumber: 0,
 		TableCnt:     0,
 	}
@@ -114,9 +116,10 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, tableDef *plan.TableDef, s *StatsInfoMap) {
+func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tableDef *plan.TableDef, s *StatsInfoMap) {
 	logutil.Debugf("need to update statsCache for table %v", tableDef.Name)
 	s.ObjectNumber = numObjs
+	s.BlockNumber = numBlks
 	s.TableCnt = info.TableCnt
 	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
@@ -742,7 +745,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Selectivity = estimateExprSelectivity(expr, builder)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
-	stats.BlockNum = int32(float64(s.ObjectNumber)*blockSel) + 1
+	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 	return stats
 }
 

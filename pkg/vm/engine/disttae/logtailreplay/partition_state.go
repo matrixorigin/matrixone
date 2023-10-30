@@ -163,6 +163,7 @@ type ObjectEntry struct {
 	CommitTS    types.TS
 	CreateTime  types.TS
 	DeleteTime  types.TS
+	BlkCnt      uint16
 }
 
 func (o ObjectEntry) Less(than ObjectEntry) bool {
@@ -619,6 +620,12 @@ func (p *PartitionState) HandleMetadataInsert(
 					if !isEmptyDelta {
 						objEntry.HasDeltaLoc = true
 					}
+
+					blkCnt := blockID.Sequence() + 1
+					if blkCnt > objEntry.BlkCnt {
+						objEntry.BlkCnt = blkCnt
+					}
+
 					p.dataObjects.Set(objEntry)
 					return
 				}
@@ -634,6 +641,12 @@ func (p *PartitionState) HandleMetadataInsert(
 				objEntry.SegmentID = segmentIDVector[i]
 				objEntry.CommitTS = commitTimeVector[i]
 				objEntry.CreateTime = createTimeVector[i]
+
+				blkCnt := blockID.Sequence() + 1
+				if blkCnt > objEntry.BlkCnt {
+					objEntry.BlkCnt = blkCnt
+				}
+
 				p.dataObjects.Set(objEntry)
 				//prefetch the object meta
 				if err := blockio.PrefetchMeta(fs, objEntry.Loc); err != nil {

@@ -83,7 +83,7 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
-func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) (int, error) {
+func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) (int, uint16, error) {
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	proc := tbl.db.txn.proc
 	tableDef := tbl.getTableDef()
@@ -98,11 +98,12 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 	)
 	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if part, err = tbl.getPartitionState(ctx); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
+	var blkNum uint16
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
@@ -110,6 +111,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 		}
 		meta = objMeta.MustDataMeta()
 		accurateObjNum++
+		blkNum += obj.BlkCnt
 		tableCnt += float64(meta.BlockHeader().Rows())
 		if !init {
 			init = true
@@ -134,11 +136,11 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 		return nil
 	}
 	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	info.TableCnt += tableCnt
-	return accurateObjNum, nil
+	return accurateObjNum, blkNum, nil
 }
 
 func adjustNDV(accurateObjNum int, info *plan2.InfoFromZoneMap, tbl *txnTable) {
@@ -170,12 +172,12 @@ func adjustNDV(accurateObjNum int, info *plan2.InfoFromZoneMap, tbl *txnTable) {
 func UpdateStats(ctx context.Context, tbl *txnTable, s *plan2.StatsInfoMap) bool {
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
-	accurateNumObjs, err := updateInfoFromZoneMap(info, ctx, tbl)
+	accurateNumObjs, blkNum, err := updateInfoFromZoneMap(info, ctx, tbl)
 	if err != nil || accurateNumObjs == 0 {
 		return false
 	}
 	adjustNDV(accurateNumObjs, info, tbl)
-	plan2.UpdateStatsInfoMap(info, accurateNumObjs, tbl.getTableDef(), s)
+	plan2.UpdateStatsInfoMap(info, accurateNumObjs, blkNum, tbl.getTableDef(), s)
 	return true
 }
 
@@ -187,15 +189,17 @@ func UpdateStatsForPartitionTable(ctx context.Context, baseTable *txnTable, part
 	lenCols := len(baseTable.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 	accurateNumObjs := 0
+	var blkNum uint16
 	for _, partitionTable := range partitionTables {
 		ptable := partitionTable.(*txnTable)
-		partNumObjs, err := updateInfoFromZoneMap(info, ctx, ptable)
+		partNumObjs, blkCnt, err := updateInfoFromZoneMap(info, ctx, ptable)
 		if err != nil {
 			return false
 		}
+		blkNum += blkCnt
 		accurateNumObjs += partNumObjs
 	}
 	adjustNDV(accurateNumObjs, info, baseTable)
-	plan2.UpdateStatsInfoMap(info, accurateNumObjs, baseTable.getTableDef(), s)
+	plan2.UpdateStatsInfoMap(info, accurateNumObjs, blkNum, baseTable.getTableDef(), s)
 	return true
 }
