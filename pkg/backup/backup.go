@@ -116,12 +116,7 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 
 var backupTae = func(ctx context.Context, config *Config) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	err := BackupData(ctx, config.SharedFs, fs, "")
-	if err != nil {
-		logutil.Infof("backup tae failed, err: %v", err.Error())
-		return err
-	}
-	return err
+	return BackupData(ctx, config.SharedFs, fs, "")
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {

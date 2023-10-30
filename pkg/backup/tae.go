@@ -88,13 +88,7 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 	if err != nil {
 		return err
 	}
-	err = execBackup(ctx, srcFs, dstFs, fileName)
-	if err != nil {
-		logutil.Infof("backup failed, err: %v", err)
-		return err
-	}
-	logutil.Infof("backup success")
-	return nil
+	return execBackup(ctx, srcFs, dstFs, fileName)
 }
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
