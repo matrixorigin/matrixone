@@ -2949,15 +2949,15 @@ func TestSegDelLogtail(t *testing.T) {
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[0].TableName, "meta"))
-	require.Equal(t, uint32(12), resp.Commands[0].Bat.Vecs[0].Len) /* 3 old blks(invalidation) + 3 old nblks (create) + 3 old nblks (invalidation) + 3 new merged nblks(create) */
+	require.Equal(t, uint32(6), resp.Commands[0].Bat.Vecs[0].Len) /* 3 old ablks (create) + 3 new merged nblks(create) */
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "meta"))
-	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 3 old ablks(delete) + 3 old nblks */
+	require.Equal(t, uint32(3), resp.Commands[1].Bat.Vecs[0].Len) /* 3 old ablks(delete) */
 
-	require.Equal(t, api.Entry_Delete, resp.Commands[2].EntryType)
-	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "seg"))
-	require.Equal(t, uint32(1), resp.Commands[2].Bat.Vecs[0].Len) /* 1 old segment */
+	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
+	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "obj"))
+	require.Equal(t, uint32(4), resp.Commands[2].Bat.Vecs[0].Len) /* 4 segments (create) */
 
 	close()
 

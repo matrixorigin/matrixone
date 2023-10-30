@@ -471,7 +471,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema)
 	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema)
 	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema)
-	b.objectMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema)
+	b.objectMetaBatch = makeRespBatchFromSchemaWithoutRowidAndCommitTS(ObjectInfoSchema)
 	return b
 }
 
@@ -654,7 +654,7 @@ type TableRespKind int
 const (
 	TableRespKind_Data TableRespKind = iota
 	TableRespKind_Blk
-	TableRespKind_Seg
+	TableRespKind_Obj
 )
 
 func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
@@ -678,10 +678,10 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
 			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
-		case TableRespKind_Seg:
-			tableName = fmt.Sprintf("_%d_seg", b.tid)
+		case TableRespKind_Obj:
+			tableName = fmt.Sprintf("_%d_obj", b.tid)
 			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
-				DebugBatchToString("segmeta", batch, false, zap.InfoLevel))
+				DebugBatchToString("object", batch, false, zap.InfoLevel))
 		}
 
 		entry := &api.Entry{
@@ -703,7 +703,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Blk, b.blkMetaDelBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Seg, b.objectMetaBatch, 0); err != nil {
+	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Obj, b.objectMetaBatch, 0); err != nil {
 		return empty, err
 	}
 	keys := make([]uint32, 0, len(b.dataInsBatches))
