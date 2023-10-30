@@ -201,6 +201,7 @@ func (e *ObjectMVCCNode) AppendTuple(batch *containers.Batch) {
 		batch.GetVectorByName(ObjectAttr_CompressedSize).Append(nil, true)
 		batch.GetVectorByName(ObjectAttr_ZoneMap).Append(nil, true)
 		batch.GetVectorByName(ObjectAttr_BlockNumber).Append(nil, true)
+		return
 	}
 	batch.GetVectorByName(ObjectAttr_Name).Append([]byte(e.Name), false)
 	batch.GetVectorByName(ObjectAttr_OriginSize).Append(e.OriginSize, false)
