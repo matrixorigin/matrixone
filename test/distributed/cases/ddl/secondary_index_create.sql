@@ -59,3 +59,14 @@ select * from t1;
 show index from t1;
 show create table t1;
 select name, type, column_name from mo_catalog.mo_indexes mi where mi.column_name ="name" or mi.column_name="__mo_alias_id";
+
+-- 1.f Create Secondary Index on PK alone. ie SK = PK.
+drop table if exists t1;
+create table t1(a double primary key, b int);
+insert into t1 values(1.5,100);
+create index idx6 on t1(a); -- sk = pk
+insert into t1 values(2.6,200);
+select * from t1;
+show index from t1;
+show create table t1;
+select name, type, column_name from mo_catalog.mo_indexes mi where name="idx6";
