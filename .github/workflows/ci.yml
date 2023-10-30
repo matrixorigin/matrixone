@@ -12,6 +12,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test-linux-x86:
+    runs-on: ubuntu-latest
+    name: Test on Ubuntu/x86      
+    steps:
+       - name: Set env
+         run: |
+          echo "testing"
   ut-linux-x86:
     runs-on: ubuntu-latest
     name: UT Test on Ubuntu/x86      
