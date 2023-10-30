@@ -194,6 +194,14 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 }
 
 func (e *ObjectMVCCNode) AppendTuple(batch *containers.Batch) {
+	// for segment without metalocation, object mvcc node is empty.
+	if e == nil || e.IsEmpty() {
+		batch.GetVectorByName(ObjectAttr_Name).Append(nil, true)
+		batch.GetVectorByName(ObjectAttr_OriginSize).Append(nil, true)
+		batch.GetVectorByName(ObjectAttr_CompressedSize).Append(nil, true)
+		batch.GetVectorByName(ObjectAttr_ZoneMap).Append(nil, true)
+		batch.GetVectorByName(ObjectAttr_BlockNumber).Append(nil, true)
+	}
 	batch.GetVectorByName(ObjectAttr_Name).Append(e.Name, false)
 	batch.GetVectorByName(ObjectAttr_OriginSize).Append(e.OriginSize, false)
 	batch.GetVectorByName(ObjectAttr_CompressedSize).Append(e.CompressedSize, false)

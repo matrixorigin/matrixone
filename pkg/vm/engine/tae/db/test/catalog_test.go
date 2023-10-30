@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -43,8 +44,9 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	seg, _ := rel.CreateSegment(false)
-	blk, err := seg.CreateBlock(false)
+	seg, err := rel.CreateNonAppendableSegment(false)
+	assert.Nil(t, err)
+	blk, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
@@ -57,7 +59,7 @@ func TestCatalog1(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
-	blk2, err := sseg.CreateBlock(false)
+	blk2, err := sseg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	assert.NotNil(t, blk2)
 	assert.Nil(t, txn.Commit(context.Background()))
@@ -70,7 +72,7 @@ func TestCatalog1(t *testing.T) {
 		for it.Valid() {
 			block := it.GetBlock()
 			cnt++
-			t.Log(block.String())
+			t.Log(block.GetMeta().(*catalog.BlockEntry).String())
 			it.Next()
 		}
 		assert.Equal(t, 1, cnt)
@@ -173,11 +175,11 @@ func TestCheckpointCatalog2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		seg, err := rel.CreateSegment(false)
+		seg, err := rel.CreateNonAppendableSegment(false)
 		assert.Nil(t, err)
 		var id *common.ID
 		for i := 0; i < 30; i++ {
-			blk, err := seg.CreateBlock(false)
+			blk, err := seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
 			if i == 2 {
 				id = blk.Fingerprint()
 			}
