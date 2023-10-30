@@ -611,6 +611,7 @@ func (catalog *Catalog) replaySegmentByBlock(
 	metaLocation objectio.Location,
 	needApplyCommit bool,
 	create, delete bool,
+	txn txnif.TxnReader,
 	dataFactory DataFactory) {
 	segmentID := blkID.Object()
 	seg, _ := tbl.GetSegmentByID(segmentID)
@@ -662,6 +663,7 @@ func (catalog *Catalog) replaySegmentByBlock(
 		},
 	)
 	if needApplyCommit {
+		node.Txn = txn
 		err := node.ApplyCommit()
 		if err != nil {
 			panic(err)
@@ -698,6 +700,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 		true,
 		cmd.mvccNode.CreatedAt.Equal(txnif.UncommitTS),
 		cmd.mvccNode.DeletedAt.Equal(txnif.UncommitTS),
+		cmd.mvccNode.Txn,
 		dataFactory)
 	seg, err := tbl.GetSegmentByID(cmd.ID.ObjectID())
 	if err != nil {
@@ -800,6 +803,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		false,
 		true,
 		false,
+		nil,
 		dataFactory)
 	seg, err := rel.GetSegmentByID(segid)
 	if err != nil {
@@ -880,6 +884,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		false,
 		false,
 		true,
+		nil,
 		nil)
 	seg, err := rel.GetSegmentByID(segid)
 	if err != nil {
