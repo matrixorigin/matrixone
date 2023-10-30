@@ -125,7 +125,7 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 	if b.batches[objectInfoBatch] == nil {
 		b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema)
 	}
-	visitObject(b.batches[objectInfoBatch],&seg.ID, node)
+	visitObject(b.batches[objectInfoBatch],seg, node)
 }
 
 func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {

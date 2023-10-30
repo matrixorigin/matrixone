@@ -47,6 +47,7 @@ const (
 	ObjectAttr_CompressedSize                   = catalog.ObjectAttr_CompressedSize
 	ObjectAttr_ZoneMap                          = catalog.ObjectAttr_ZoneMap
 	ObjectAttr_BlockNumber                      = catalog.ObjectAttr_BlockNumber
+	ObjectAttr_State                            = catalog.ObjectAttr_State
 	EntryNode_CreateAt                          = catalog.EntryNode_CreateAt
 	EntryNode_DeleteAt                          = catalog.EntryNode_DeleteAt
 	SnapshotMetaAttr_BlockInsertBatchStart      = "block_insert_batch_start"
@@ -297,6 +298,7 @@ var (
 		ObjectAttr_CompressedSize,
 		ObjectAttr_ZoneMap,
 		ObjectAttr_BlockNumber,
+		ObjectAttr_State, // entry_state, true for appendable
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
 		EntryNode_CreateAt,
@@ -311,6 +313,7 @@ var (
 		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_uint16, 0, 0),
+		types.New(types.T_bool, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, 0, 0),

@@ -57,6 +57,7 @@ const (
 	ObjectAttr_CompressedSize    = "compressed_size"
 	ObjectAttr_ZoneMap           = "zone_map"
 	ObjectAttr_BlockNumber       = "block_number"
+	ObjectAttr_State             = "state"
 	EntryNode_CreateAt           = "create_at"
 	EntryNode_DeleteAt           = "delete_at"
 )
@@ -562,7 +563,12 @@ func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch, dataF
 		sid := objectNode.Name.ObjectId()
 		txnNode := txnbase.ReadTuple(objectInfo, i)
 		entryNode := ReadEntryNodeTuple(objectInfo, i)
-		catalog.onReplayCheckpointSegment(dbid, tid, sid, objectNode, entryNode, txnNode, dataFactory)
+		state := objectInfo.GetVectorByName(ObjectAttr_State).Get(i).(bool)
+		entryState := ES_Appendable
+		if !state {
+			entryState = ES_NotAppendable
+		}
+		catalog.onReplayCheckpointSegment(dbid, tid, sid, objectNode, entryNode, txnNode, entryState, dataFactory)
 	}
 }
 
@@ -572,6 +578,7 @@ func (catalog *Catalog) onReplayCheckpointSegment(
 	segNode *ObjectMVCCNode,
 	entryNode *EntryMVCCNode,
 	txnNode *txnbase.TxnMVCCNode,
+	state EntryState,
 	dataFactory DataFactory,
 ) {
 	db, err := catalog.GetDatabaseByID(dbid)
@@ -585,8 +592,14 @@ func (catalog *Catalog) onReplayCheckpointSegment(
 		panic(err)
 	}
 	seg, _ := rel.GetSegmentByID(segid)
-	if seg != nil {
+	if seg == nil {
 		seg = NewReplaySegmentEntry()
+		seg.ID = *segid
+		seg.table = rel
+		seg.SegmentNode = &SegmentNode{
+			state:    state,
+			SortHint: catalog.NextSegment(),
+		}
 		rel.AddEntryLocked(seg)
 	}
 	un := &MVCCNode[*ObjectMVCCNode]{

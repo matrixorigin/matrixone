@@ -507,15 +507,18 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
 		}
-		visitObject(b.objectMetaBatch,&e.ID, node)
+		visitObject(b.objectMetaBatch, e, node)
 	}
 	return nil
 }
 
-func visitObject(batch *containers.Batch,sid *types.Objectid, node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) {
-	node.BaseNode.AppendTuple(sid,batch)
+func visitObject(batch *containers.Batch, entry *catalog.SegmentEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) {
+	node.BaseNode.AppendTuple(&entry.ID, batch)
 	node.TxnMVCCNode.AppendTuple(batch)
 	node.EntryMVCCNode.AppendTuple(batch)
+	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
+	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
+	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
 }
 
 // visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
