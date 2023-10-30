@@ -183,7 +183,7 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 			return nil
 
 		case <-k.cancelC:
-			return nil
+			return ct.Close()
 
 		case <-k.pauseC:
 			select {
@@ -195,6 +195,9 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 			}
 
 		default:
+			if ct.IsClosed() {
+				return nil
+			}
 			ev := ct.Poll(100)
 			if ev == nil {
 				continue
@@ -254,7 +257,10 @@ func (k *KafkaMoConnector) Pause() error {
 func (k *KafkaMoConnector) Cancel() error {
 	// Cancel the connector go-routine.
 	close(k.cancelC)
+	return nil
+}
 
+func (k *KafkaMoConnector) Close() error {
 	// Close the Kafka consumer.
 	ct, err := k.kafkaAdapter.GetKafkaConsumer()
 	if err != nil {

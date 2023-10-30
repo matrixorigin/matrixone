@@ -691,6 +691,88 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	return nil
 }
 
+func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	fromTzs := vector.GenerateFunctionStrParameter(ivecs[1])
+	toTzs := vector.GenerateFunctionStrParameter(ivecs[2])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		date, null1 := dates.GetValue(i)
+		fromTz, null2 := fromTzs.GetStrValue(i)
+		toTz, null3 := toTzs.GetStrValue(i)
+
+		if fromTz == nil || toTz == nil {
+			return moerr.NewInvalidArg(proc.Ctx, "ConvertTz", "date zone is empty")
+		}
+
+		if null1 || null2 || null3 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			fromLoc, err := time.LoadLocation(string(fromTz))
+			if err != nil && fromTz[0] != '+' && fromTz[0] != '-' {
+				return err
+			}
+			// convert from timezone offset to location
+			if fromTz[0] == '+' || fromTz[0] == '-' {
+				offset, err := parseOffset(string(fromTz))
+				if err != nil {
+					return err
+				}
+				fromLoc = time.FixedZone("GMT", int(offset.Seconds()))
+			}
+
+			str, err := convertTimezone(date.ConvertToGoTime(fromLoc), string(toTz))
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes([]byte(str), false); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func convertTimezone(t time.Time, toTz string) (string, error) {
+	toLoc, err := time.LoadLocation(toTz)
+	if err != nil && toTz[0] != '+' && toTz[0] != '-' {
+		return "", err
+	}
+	// convert from timezone offset to location
+	if toTz[0] == '+' || toTz[0] == '-' {
+		offset, err := parseOffset(toTz)
+		if err != nil {
+			return "", err
+		}
+		toLoc = time.FixedZone("GMT", int(offset.Seconds()))
+	}
+
+	convertedTime := t.In(toLoc)
+	return convertedTime.Format("2006-01-02 15:04:05"), nil
+}
+
+func parseOffset(offsetStr string) (time.Duration, error) {
+	parts := strings.Split(offsetStr, ":")
+	if len(parts) != 2 {
+		return 0, moerr.NewInvalidTzNoCtx(offsetStr)
+	}
+	hours, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, moerr.NewInvalidTzNoCtx(offsetStr)
+	}
+	minutes, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, moerr.NewInvalidTzNoCtx(offsetStr)
+	}
+
+	offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+	return offset, nil
+}
+
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {

@@ -68,6 +68,14 @@ var (
 	TxnLockTotalCounter       = txnLockCounter.WithLabelValues("total")
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
+
+	TxnFastLoadObjectMetaTotalCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_side_fast_load_object_meta_total",
+			Help:      "Total number of fast loaded object meta on tn side.",
+		})
 )
 
 var (
@@ -158,4 +166,18 @@ var (
 			Help:      "Bucketed histogram of txn table ranges duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
+
+	txnTNSideDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_side_duration_seconds",
+			Help:      "Bucketed histogram of txn duration on tn side.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		}, []string{"step"})
+
+	TxnOnPrepareWALDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal")
+	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
+	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
+	TxnBeforeCommitDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
 )
