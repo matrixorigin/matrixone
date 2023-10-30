@@ -31,13 +31,13 @@ type leakChecker struct {
 	logger         *log.MOLogger
 	actives        []activeTxn
 	maxActiveAges  time.Duration
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, counter string)
+	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, counter string, lastSql string)
 	stopper        *stopper.Stopper
 }
 
 func newLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, counter string)) *leakChecker {
+	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, counter string, lastSql string)) *leakChecker {
 	logger := runtime.DefaultRuntime().Logger()
 	return &leakChecker{
 		logger:         logger,
@@ -107,7 +107,11 @@ func (lc *leakChecker) doCheck() {
 	now := time.Now()
 	for _, txn := range lc.actives {
 		if now.Sub(txn.createAt) >= lc.maxActiveAges {
-			lc.leakHandleFunc(txn.id, txn.createAt, txn.createBy, txn.txnOp.counter())
+			lastSql := ""
+			if val, ok := txn.txnOp.lastSql.Load().(string); ok {
+				lastSql = val
+			}
+			lc.leakHandleFunc(txn.id, txn.createAt, txn.createBy, txn.txnOp.counter(), lastSql)
 		}
 	}
 }
