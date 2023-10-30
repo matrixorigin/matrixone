@@ -1060,13 +1060,9 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 	}
 
-	logutil.Infof("rewrite checkpoint %s", loc.String())
-	logutil.Infof("objectsData len(%d)", len(objectsData))
-	defer logutil.Infof("rewrite checkpoint %s done", loc.String())
 	if isCkpChange {
 		for fileName, objectData := range objectsData {
 			if objectData.isChange {
-				logutil.Infof("checkpoint change %s, block length %d", fileName, len(objectData.data))
 				writer, err := blockio.NewBlockWriter(fs, fileName)
 				if err != nil {
 					return nil, nil, nil, err
@@ -1122,16 +1118,12 @@ func ReWriteCheckpointAndBlockFromKey(
 
 			}
 		}
-		logutil.Infof("write to start" )
-		data.FormatData(common.DefaultAllocator)
 		cnLocation, dnLocation, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 		if err != nil {
-			logutil.Infof("write to error: %v", err)
 			return nil, nil, nil, err
 		}
 		loc = cnLocation
 		tnLocation = dnLocation
-		logutil.Infof("cnLocation is %v, dnLocation is %v", cnLocation.String(), dnLocation.String())
 	}
 	return loc, tnLocation, data, nil
 }

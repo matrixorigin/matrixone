@@ -203,9 +203,20 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		end := types.StringToTS(mergeEnd)
 		start := types.StringToTS(mergeStart)
 		logutil.Infof("merge checkpoint from %s to %s", start.ToString(), end.ToString())
-		cnLocation, tnLocation, _, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
+		var checkpointData *logtail.CheckpointData
+		cnLocation, tnLocation, checkpointData, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
 			cnLocation, tnLocation, uint32(version), start)
-		logutil.Infof("ReWriteCheckpointAndBlockFromKey cnLocation %s, tnLocation %s", cnLocation.String(), tnLocation.String())
+		checkpointData.ReplayMetaBatch()
+		for name := range checkpointData.GetLocations() {
+			dentry, err := dstFs.StatFile(ctx, name)
+			if err != nil {
+				return err
+			}
+			taeFileList = append(taeFileList, &taeFile{
+				path: dentry.Name,
+				size: dentry.Size,
+			})
+		}
 		if err != nil {
 			logutil.Infof("ReWriteCheckpointAndBlockFromKey failed is %v", err.Error())
 			return err
