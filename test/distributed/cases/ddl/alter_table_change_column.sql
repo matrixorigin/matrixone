@@ -751,9 +751,7 @@ insert into index02 values (4, 'ab', '2000-10-10', 10000);
 insert into index02 values (5, 'gh', '1999-12-31', 20000);
 delete from index02 where bnewnew = 'ab';
 update index02 set bnewnew = 'database' where bnewnEW = 'ad';
--- @bvt:issue#11270
 desc index02;
--- @bvt:issue
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 select * from index02;
 
