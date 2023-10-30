@@ -225,6 +225,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
 	txnOp := cwft.proc.TxnOperator
 	cwft.ses.SetTxnId(txnOp.Txn().ID)
+	//save current sql
+	txnOp.SetLastSql(cwft.ses.GetSql())
 	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
 		ok, _ := cwft.ses.GetTxnHandler().calledStartStmt()
 		if !ok {
