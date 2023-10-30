@@ -54,7 +54,6 @@ func NewAggClusterCenters(overloadID int64, dist bool, inputTypes []types.Type, 
 	aggPriv := &sAggClusterCenters{}
 
 	var err error
-	//TODO: The config is getting as nil. Need help from @m-schen.
 	aggPriv.clusterCnt, aggPriv.distType, err = decodeConfig(config)
 	if err != nil {
 		return nil, err
