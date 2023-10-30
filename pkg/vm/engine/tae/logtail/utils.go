@@ -620,7 +620,7 @@ func switchCheckpointIdx(i uint16, tableID uint64) uint16 {
 	} else if i == CNBlockInsert {
 		idx = BLKCNMetaInsertIDX
 	} else if i == SegmentDelete {
-		idx = SEGDeleteIDX
+		idx = ObjectInfoIDX
 	}
 	switch tableID {
 	case pkgcatalog.MO_DATABASE_ID:
