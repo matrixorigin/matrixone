@@ -44,3 +44,4 @@
 | 3005 | 2       | TxnCommand_DeleteNode          |
 | 3010 | 3       | TxnCommand_Table               |
 | 3013 | 1       | TxnCommand_PersistedDeleteNode |
+| 3014 | 1       | IOET_WALTxnCommand_Object |

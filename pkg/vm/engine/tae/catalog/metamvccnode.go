@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -183,10 +184,29 @@ func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, 
 	n += int64(sn2)
 	return
 }
+
 func (e *ObjectMVCCNode) IsEmpty() bool {
-	return e.Name == nil
+	return e.OriginSize == 0
 }
 
+func (e *ObjectMVCCNode) AppendTuple(batch *containers.Batch) {
+	batch.GetVectorByName(ObjectAttr_Name).Append(e.Name, false)
+	batch.GetVectorByName(ObjectAttr_OriginSize).Append(e.OriginSize, false)
+	batch.GetVectorByName(ObjectAttr_CompressedSize).Append(e.CompressedSize, false)
+	batch.GetVectorByName(ObjectAttr_ZoneMap).Append(e.ZoneMap, false)
+	batch.GetVectorByName(ObjectAttr_BlockNumber).Append(e.BlockNumber, false)
+}
+
+func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
+	e = &ObjectMVCCNode{
+		Name: bat.GetVectorByName(ObjectAttr_Name).Get(row).([]byte),
+		OriginSize: bat.GetVectorByName(ObjectAttr_OriginSize).Get(row).(uint32),
+		CompressedSize: bat.GetVectorByName(ObjectAttr_CompressedSize).Get(row).(uint32),
+		ZoneMap: bat.GetVectorByName(ObjectAttr_ZoneMap).Get(row).([]byte),
+		BlockNumber: bat.GetVectorByName(ObjectAttr_BlockNumber).Get(row).(uint16),
+	}
+	return
+}
 type SegmentNode struct {
 	state    EntryState
 	IsLocal  bool   // this segment is hold by a localsegment

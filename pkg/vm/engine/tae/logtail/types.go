@@ -47,6 +47,8 @@ const (
 	ObjectAttr_CompressedSize                   = catalog.ObjectAttr_CompressedSize
 	ObjectAttr_ZoneMap                          = catalog.ObjectAttr_ZoneMap
 	ObjectAttr_BlockNumber                      = catalog.ObjectAttr_BlockNumber
+	EntryNode_CreateAt                          = catalog.EntryNode_CreateAt
+	EntryNode_DeleteAt                          = catalog.EntryNode_DeleteAt
 	SnapshotMetaAttr_BlockInsertBatchStart      = "block_insert_batch_start"
 	SnapshotMetaAttr_BlockInsertBatchEnd        = "block_insert_batch_end"
 	SnapshotMetaAttr_BlockInsertBatchLocation   = "block_insert_batch_location"
@@ -295,6 +297,13 @@ var (
 		ObjectAttr_CompressedSize,
 		ObjectAttr_ZoneMap,
 		ObjectAttr_BlockNumber,
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+		EntryNode_CreateAt,
+		EntryNode_DeleteAt,
+		txnbase.SnapshotAttr_StartTS,
+		txnbase.SnapshotAttr_PrepareTS,
+		txnbase.SnapshotAttr_CommitTS,
 	}
 	ObjectInfoTypes = []types.Type{
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
@@ -302,6 +311,13 @@ var (
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_int16, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
+		types.New(types.T_TS, 0, 0),
 	}
 )
 

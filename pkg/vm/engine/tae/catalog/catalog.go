@@ -57,6 +57,8 @@ const (
 	ObjectAttr_CompressedSize    = "compressed_size"
 	ObjectAttr_ZoneMap           = "zone_map"
 	ObjectAttr_BlockNumber       = "block_number"
+	EntryNode_CreateAt           = "create_at"
+	EntryNode_DeleteAt           = "delete_at"
 )
 
 type DataFactory interface {
@@ -199,7 +201,7 @@ func (catalog *Catalog) ReplayCmd(
 	case IOET_WALTxnCommand_Table:
 		cmd := txncmd.(*EntryCommand[*TableMVCCNode, *TableNode])
 		catalog.onReplayUpdateTable(cmd, dataFactory, observer)
-	case IOET_WALTxnCommand_Segment:
+	case IOET_WALTxnCommand_Object:
 		cmd := txncmd.(*EntryCommand[*ObjectMVCCNode, *SegmentNode])
 		catalog.onReplayUpdateSegment(cmd, dataFactory, observer)
 	case IOET_WALTxnCommand_Block:
@@ -549,37 +551,26 @@ func (catalog *Catalog) onReplayUpdateSegment(
 }
 
 func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch, dataFactory DataFactory) {
-	idVec := ins.GetVectorByName(SegmentAttr_ID)
-	for i := 0; i < idVec.Length(); i++ {
-		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		tid := insTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		nodebytes := ins.GetVectorByName(SegmentAttr_SegNode).Get(i).([]byte)
-		node := &SegmentNode{}
-		if _, err := node.ReadFrom(bytes.NewReader(nodebytes)); err != nil {
-			logutil.Errorf("read segment node err %v", err)
-		}
-		sid := ins.GetVectorByName(SegmentAttr_ID).Get(i).(types.Objectid)
-		txnNode := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateSegment(dbid, tid, &sid, node, txnNode, dataFactory)
-	}
-	idVec = delTxn.GetVectorByName(SnapshotAttr_DBID)
-	for i := 0; i < idVec.Length(); i++ {
-		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
-		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		rid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
-		txnNode := txnbase.ReadTuple(delTxn, i)
-		catalog.onReplayDeleteSegment(dbid, tid, rid.BorrowObjectID(), txnNode)
+	dbidVec := objectInfo.GetVectorByName(SnapshotAttr_DBID)
+	for i := 0; i < dbidVec.Length(); i++ {
+		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
+		tid := objectInfo.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+		objectNode := ReadObjectInfoTuple(objectInfo, i)
+		sid := objectNode.Name.ObjectId()
+		txnNode := txnbase.ReadTuple(objectInfo, i)
+		entryNode := ReadEntryNodeTuple(objectInfo, i)
+		catalog.onReplayCheckpointSegment(dbid, tid, sid, objectNode, entryNode, txnNode, dataFactory)
 	}
 }
-func (catalog *Catalog) onReplayCreateSegment(
+
+func (catalog *Catalog) onReplayCheckpointSegment(
 	dbid, tbid uint64,
 	segid *types.Objectid,
-	segNode *SegmentNode,
-
+	segNode *ObjectMVCCNode,
+	entryNode *EntryMVCCNode,
 	txnNode *txnbase.TxnMVCCNode,
 	dataFactory DataFactory,
 ) {
-	catalog.OnReplaySegmentID(segNode.SortHint)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -592,79 +583,36 @@ func (catalog *Catalog) onReplayCreateSegment(
 	}
 	seg, _ := rel.GetSegmentByID(segid)
 	if seg != nil {
-		segCreatedAt := seg.GetCreatedAtLocked()
-		if !segCreatedAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), segCreatedAt.ToString()))
-		}
-		return
+		seg = NewReplaySegmentEntry()
+		rel.AddEntryLocked(seg)
 	}
-	seg = NewReplaySegmentEntry()
-	seg.SegmentNode = segNode
-	seg.table = rel
-	seg.ID = *segid
-	seg.segData = dataFactory.MakeSegmentFactory()(seg)
-	rel.AddEntryLocked(seg)
 	un := &MVCCNode[*ObjectMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: txnNode.End,
-		},
-		TxnMVCCNode: txnNode,
-		BaseNode:    &ObjectMVCCNode{},
+		EntryMVCCNode: entryNode,
+		BaseNode:      segNode,
+		TxnMVCCNode:   txnNode,
 	}
-	seg.Insert(un)
-}
-func (catalog *Catalog) onReplayDeleteSegment(
-	dbid, tbid uint64,
-	segid *types.Objectid,
-	txnNode *txnbase.TxnMVCCNode,
-) {
-	// catalog.OnReplaySegmentID(segid)
-	db, err := catalog.GetDatabaseByID(dbid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
+	node := seg.SearchNode(un)
+	if node == nil {
+		seg.Insert(un)
 	}
-	rel, err := db.GetTableEntryByID(tbid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	seg, err := rel.GetSegmentByID(segid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	segDeleteAt := seg.GetDeleteAt()
-	if !segDeleteAt.IsEmpty() {
-		if !segDeleteAt.Equal(txnNode.End) {
-			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), segDeleteAt.ToString()))
-		}
-		return
-	}
-	prevUn := seg.MVCCChain.GetLatestNodeLocked()
-	un := &MVCCNode[*ObjectMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: prevUn.CreatedAt,
-			DeletedAt: txnNode.End,
-		},
-		TxnMVCCNode: txnNode,
-		BaseNode:    prevUn.BaseNode.CloneAll(),
-	}
-	seg.Insert(un)
 }
 
-func (catalog *Catalog) replaySegmentWithBlock(
+// Before ckp version 10 and IOET_WALTxnCommand_Object, object info doesn't exist.
+// Replay segment by block.
+// Original Size, Compressed Size and Block Number is skipped.
+func (catalog *Catalog) replaySegmentByBlock(
 	tbl *TableEntry,
 	blkID types.Blockid,
 	state EntryState,
-	flushed bool,
-	createAt, deleteAt, start, end types.TS,
+	start, end types.TS,
 	metaLocation objectio.Location,
+	needApplyCommit bool,
+	create, delete bool,
 	dataFactory DataFactory) {
 	segmentID := blkID.Object()
 	seg, _ := tbl.GetSegmentByID(segmentID)
 	// create
-	if createAt.Equal(txnif.UncommitTS) {
+	if create {
 		if seg == nil {
 			seg = NewSegmentEntryOnReplay(
 				tbl,
@@ -675,7 +623,7 @@ func (catalog *Catalog) replaySegmentWithBlock(
 		}
 	}
 	// delete
-	if deleteAt.Equal(txnif.UncommitTS) {
+	if delete {
 		node := seg.SearchNode(
 			&MVCCNode[*ObjectMVCCNode]{
 				TxnMVCCNode: &txnbase.TxnMVCCNode{
@@ -685,7 +633,7 @@ func (catalog *Catalog) replaySegmentWithBlock(
 		)
 		if node == nil {
 			node = seg.GetLatestNodeLocked().CloneData()
-			node.DeletedAt = deleteAt
+			node.DeletedAt = end
 			node.Start = start
 			node.End = end
 			seg.Insert(node)
@@ -710,9 +658,11 @@ func (catalog *Catalog) replaySegmentWithBlock(
 			},
 		},
 	)
-	err := node.ApplyCommit()
-	if err != nil {
-		panic(err)
+	if needApplyCommit {
+		err := node.ApplyCommit()
+		if err != nil {
+			panic(err)
+		}
 	}
 	// update blk count
 	_, offset := blkID.Offsets()
@@ -735,6 +685,17 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	if err != nil {
 		panic(err)
 	}
+	catalog.replaySegmentByBlock(
+		tbl,
+		cmd.ID.BlockID,
+		cmd.node.state,
+		cmd.mvccNode.Start,
+		cmd.mvccNode.End,
+		cmd.mvccNode.BaseNode.MetaLoc,
+		true,
+		cmd.mvccNode.CreatedAt.Equal(txnif.UncommitTS),
+		cmd.mvccNode.DeletedAt.Equal(txnif.UncommitTS),
+		dataFactory)
 	seg, err := tbl.GetSegmentByID(cmd.ID.ObjectID())
 	if err != nil {
 		panic(err)
@@ -826,6 +787,17 @@ func (catalog *Catalog) onReplayCreateBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
+	catalog.replaySegmentByBlock(
+		rel,
+		*blkid,
+		state,
+		txnNode.Start,
+		txnNode.End,
+		metaloc,
+		false,
+		true,
+		false,
+		dataFactory)
 	seg, err := rel.GetSegmentByID(segid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -895,6 +867,17 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
+	catalog.replaySegmentByBlock(
+		rel,
+		*blkid,
+		ES_Appendable, // state is not used when delete
+		txnNode.Start,
+		txnNode.End,
+		metaloc,
+		false,
+		false,
+		true,
+		nil)
 	seg, err := rel.GetSegmentByID(segid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))

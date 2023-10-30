@@ -2419,9 +2419,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		if node.IsAborted() {
 			continue
 		}
-		if !node.BaseNode.IsEmpty() {
-			visitObject(collector.data.bats[ObjectInfoIDX], node)
-		}
+		visitObject(collector.data.bats[ObjectInfoIDX], node)
 		segNode := node
 		if segNode.HasDropCommitted() {
 			vector.AppendFixed(
