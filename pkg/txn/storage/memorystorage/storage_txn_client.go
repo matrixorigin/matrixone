@@ -291,3 +291,4 @@ func (s *StorageTxnOperator) RemoveWaitLock(key uint64) {
 func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
 	panic("should not call")
 }
+func (s *StorageTxnOperator) SetLastSql(string) {}

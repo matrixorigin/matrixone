@@ -147,6 +147,9 @@ type TxnOperator interface {
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
+
+	// SetLastSql sets the last sql using the txn
+	SetLastSql(sql string)
 }
 
 // TxnIDGenerator txn id generator

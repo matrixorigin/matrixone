@@ -104,7 +104,7 @@ func WithEnableRefreshExpression() TxnClientCreateOption {
 // WithEnableLeakCheck enable txn leak check. Used to found any txn is not committed or rolled back.
 func WithEnableLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, counter string)) TxnClientCreateOption {
+	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, counter string, lastSql string)) TxnClientCreateOption {
 	return func(tc *txnClient) {
 		tc.leakChecker = newLeakCheck(maxActiveAges, leakHandleFunc)
 	}

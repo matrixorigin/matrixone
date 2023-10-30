@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -97,6 +98,7 @@ func NewClient(
 	name string,
 	factory BackendFactory,
 	options ...ClientOption) (RPCClient, error) {
+	v2.RPCClientCreateCounter.WithLabelValues(name).Inc()
 	c := &client{
 		name:        name,
 		metrics:     newMetrics(name),
