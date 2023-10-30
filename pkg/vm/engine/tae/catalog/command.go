@@ -53,6 +53,7 @@ var cmdNames = map[uint16]string{
 	IOET_WALTxnCommand_Table:    "UTBL",
 	IOET_WALTxnCommand_Segment:  "USEG",
 	IOET_WALTxnCommand_Block:    "UBLK",
+	IOET_WALTxnCommand_Object:   "UOBJ",
 }
 
 func CmdName(t uint16) string {
@@ -273,6 +274,8 @@ func (cmd *EntryCommand[T, N]) IDString() string {
 		s = fmt.Sprintf("%sCommonID=%s", s, id.TableString())
 	case IOET_WALTxnCommand_Segment:
 		s = fmt.Sprintf("%sCommonID=%s", s, id.SegmentString())
+	case IOET_WALTxnCommand_Object:
+		s = fmt.Sprintf("%sCommonID=%s", s, id.SegmentString())
 	case IOET_WALTxnCommand_Block:
 		s = fmt.Sprintf("%sCommonID=%s", s, id.BlockString())
 	}
@@ -298,6 +301,8 @@ func (cmd *EntryCommand[T, N]) GetCurrVersion() uint16 {
 		return IOET_WALTxnCommand_Database_CurrVer
 	case IOET_WALTxnCommand_Table:
 		return IOET_WALTxnCommand_Table_CurrVer
+	case IOET_WALTxnCommand_Object:
+		return IOET_WALTxnCommand_Object_CurrVer
 	case IOET_WALTxnCommand_Segment:
 		return IOET_WALTxnCommand_Segment_CurrVer
 	case IOET_WALTxnCommand_Block:

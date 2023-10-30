@@ -207,6 +207,9 @@ func (catalog *Catalog) ReplayCmd(
 	case IOET_WALTxnCommand_Block:
 		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
 		catalog.onReplayUpdateBlock(cmd, dataFactory, observer)
+	case IOET_WALTxnCommand_Segment:
+		// segment is deprecated
+		return
 	default:
 		panic("unsupport")
 	}
