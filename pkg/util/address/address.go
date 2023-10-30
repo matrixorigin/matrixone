@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -152,7 +153,7 @@ func (m *addressManager) portAdvanceLocked() int {
 	var port int
 	for {
 		port = m.portBase + m.mu.portAdvanced
-		if portCheck(port) {
+		if localPortCheck(port) {
 			break
 		}
 		m.mu.portAdvanced++
@@ -165,9 +166,9 @@ func (m *addressManager) portAdvanceLocked() int {
 	return port
 }
 
-// portCheck checks if the port is available to use. If the port is not used, return
+// localPortCheck checks if the local port is available to use. If the port is not used, return
 // true; otherwise, return false.
-func portCheck(port int) bool {
+func localPortCheck(port int) bool {
 	cfg := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
 			return c.Control(func(fd uintptr) {
@@ -181,4 +182,19 @@ func portCheck(port int) bool {
 	}
 	defer l.Close()
 	return true
+}
+
+// RemoteAddressAvail checks if remote address can be connected.
+func RemoteAddressAvail(address string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", address, timeout)
+	if err != nil {
+		return false
+	} else {
+		if conn != nil {
+			_ = conn.Close()
+			return true
+		} else {
+			return false
+		}
+	}
 }
