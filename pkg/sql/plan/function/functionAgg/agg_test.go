@@ -734,7 +734,7 @@ func TestClusterCenters(t *testing.T) {
 		distType:   kmeans.L2,
 		arrType:    types.T_array_float64.ToType(),
 	}
-	// input vectors/arrays of 4 rows with 4th row as null
+	// input vectors/arrays of 7 rows with 6th row as null
 	var vecf64Input = [][]byte{
 		types.ArrayToBytes[float64]([]float64{1, 2, 3, 4}),
 		types.ArrayToBytes[float64]([]float64{1, 2, 4, 5}),
