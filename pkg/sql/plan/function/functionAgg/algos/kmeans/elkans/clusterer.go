@@ -57,8 +57,9 @@ type KMeansClusterer struct {
 	clusterCnt int // k in paper
 	vectorCnt  int // n in paper
 
-	distFn kmeans.DistanceFunction
-	rand   *rand.Rand
+	distFn   kmeans.DistanceFunction
+	initType kmeans.InitType
+	rand     *rand.Rand
 }
 
 // vectorMeta holds info required for Elkan's kmeans optimization.
@@ -76,9 +77,11 @@ var _ kmeans.Clusterer = new(KMeansClusterer)
 func NewKMeans(vectors [][]float64,
 	clusterCnt, maxIterations int,
 	deltaThreshold float64,
-	distanceType kmeans.DistanceType) (kmeans.Clusterer, error) {
+	distanceType kmeans.DistanceType,
+	initType kmeans.InitType,
+) (kmeans.Clusterer, error) {
 
-	err := validateArgs(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType)
+	err := validateArgs(vectors, clusterCnt, maxIterations, deltaThreshold, distanceType, initType)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +123,7 @@ func NewKMeans(vectors [][]float64,
 		minHalfInterCentroidDist:    minCentroidDist,
 
 		distFn:     distanceFunction,
+		initType:   initType,
 		clusterCnt: clusterCnt,
 		vectorCnt:  len(vectors),
 
@@ -128,45 +132,53 @@ func NewKMeans(vectors [][]float64,
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like kmeans++ or random.
-func (kmeans *KMeansClusterer) InitCentroids() {
-	// Here we use random initialization, as it is the better suited for large-scale use-case.
-	kmeans.randomInit()
+func (km *KMeansClusterer) InitCentroids() {
+	switch km.initType {
+	case kmeans.KmeansPlusPlus:
+		km.kmeansPlusPlusInit()
+	case kmeans.Random:
+		km.randomInit()
+	default:
+		km.randomInit()
+	}
 }
 
 // Cluster returns the final centroids and the error if any.
-func (kmeans *KMeansClusterer) Cluster() ([][]float64, error) {
+func (km *KMeansClusterer) Cluster() ([][]float64, error) {
 
-	if kmeans.vectorCnt == kmeans.clusterCnt {
-		return kmeans.vectorList, nil
+	if km.vectorCnt == km.clusterCnt {
+		return km.vectorList, nil
 	}
 
-	kmeans.InitCentroids() // step 0.a
-	kmeans.initBounds()    // step 0.b
+	km.InitCentroids() // step 0.a
+	km.initBounds()    // step 0.b
 
-	return kmeans.elkansCluster()
+	return km.elkansCluster()
 }
 
-func (kmeans *KMeansClusterer) elkansCluster() ([][]float64, error) {
+func (km *KMeansClusterer) elkansCluster() ([][]float64, error) {
 
 	for iter := 0; ; iter++ {
-		kmeans.computeCentroidDistances() // step 1
+		km.computeCentroidDistances() // step 1
 
-		changes := kmeans.assignData() // step 2 and 3
+		changes := km.assignData() // step 2 and 3
 
-		newCentroids := kmeans.recalculateCentroids() // step 4
+		newCentroids := km.recalculateCentroids() // step 4
 
-		kmeans.updateBounds(newCentroids) // step 5 and 6
+		km.updateBounds(newCentroids) // step 5 and 6
 
-		kmeans.Centroids = newCentroids // step 7
+		km.Centroids = newCentroids // step 7
 
-		if iter != 0 && kmeans.isConverged(iter, changes) {
+		if iter != 0 && km.isConverged(iter, changes) {
 			break
 		}
 	}
-	return kmeans.Centroids, nil
+	return km.Centroids, nil
 }
 
-func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaThreshold float64, distanceType kmeans.DistanceType) error {
+func validateArgs(vectorList [][]float64, clusterCnt,
+	maxIterations int, deltaThreshold float64,
+	distanceType kmeans.DistanceType, initType kmeans.InitType) error {
 	if vectorList == nil || len(vectorList) == 0 || len(vectorList[0]) == 0 {
 		return errors.New("input vectors is empty")
 	}
@@ -179,8 +191,11 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 	if deltaThreshold <= 0.0 || deltaThreshold >= 1.0 {
 		return errors.New("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
 	}
-	if distanceType < 0 || distanceType > 3 {
+	if distanceType < 0 || distanceType > 2 {
 		return errors.New("distance type is not supported")
+	}
+	if initType < 0 || initType > 1 {
+		return errors.New("init type is not supported")
 	}
 
 	// validate that all vectors have the same dimension
@@ -206,39 +221,39 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 }
 
 // initBounds initializes the lower bounds, upper bound and assignment for each vector.
-func (kmeans *KMeansClusterer) initBounds() {
-	for x := range kmeans.vectorList {
+func (km *KMeansClusterer) initBounds() {
+	for x := range km.vectorList {
 		minDist := math.MaxFloat64
 		closestCenter := 0
-		for c := 0; c < len(kmeans.Centroids); c++ {
-			dist := kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[c])
-			kmeans.vectorMetas[x].lower[c] = dist
+		for c := 0; c < len(km.Centroids); c++ {
+			dist := km.distFn(km.vectorList[x], km.Centroids[c])
+			km.vectorMetas[x].lower[c] = dist
 			if dist < minDist {
 				minDist = dist
 				closestCenter = c
 			}
 		}
 
-		kmeans.vectorMetas[x].upper = minDist
-		kmeans.assignments[x] = closestCenter
+		km.vectorMetas[x].upper = minDist
+		km.assignments[x] = closestCenter
 	}
 }
 
 // computeCentroidDistances computes the centroid distances and the min centroid distances.
 // NOTE: here we are save 0.5 of centroid distance to avoid 0.5 multiplication in step 3(iii) and 3.b.
-func (kmeans *KMeansClusterer) computeCentroidDistances() {
+func (km *KMeansClusterer) computeCentroidDistances() {
 
 	// step 1.a
 	// For all centers c and c', compute 0.5 x d(c, c').
 	var wg sync.WaitGroup
-	for r := 0; r < kmeans.clusterCnt; r++ {
-		for c := r + 1; c < kmeans.clusterCnt; c++ {
+	for r := 0; r < km.clusterCnt; r++ {
+		for c := r + 1; c < km.clusterCnt; c++ {
 			wg.Add(1)
 			go func(i, j int) {
 				defer wg.Done()
-				dist := 0.5 * kmeans.distFn(kmeans.Centroids[i], kmeans.Centroids[j])
-				kmeans.halfInterCentroidDistMatrix[i][j] = dist
-				kmeans.halfInterCentroidDistMatrix[j][i] = dist
+				dist := 0.5 * km.distFn(km.Centroids[i], km.Centroids[j])
+				km.halfInterCentroidDistMatrix[i][j] = dist
+				km.halfInterCentroidDistMatrix[j][i] = dist
 			}(r, c)
 		}
 	}
@@ -246,37 +261,37 @@ func (kmeans *KMeansClusterer) computeCentroidDistances() {
 
 	// step 1.b
 	//  For all centers c, compute s(c)=0.5 x min{d(c, c') | c'!= c}.
-	for i := 0; i < kmeans.clusterCnt; i++ {
+	for i := 0; i < km.clusterCnt; i++ {
 		currMinDist := math.MaxFloat64
-		for j := 0; j < kmeans.clusterCnt; j++ {
+		for j := 0; j < km.clusterCnt; j++ {
 			if i == j {
 				continue
 			}
-			currMinDist = math.Min(currMinDist, kmeans.halfInterCentroidDistMatrix[i][j])
+			currMinDist = math.Min(currMinDist, km.halfInterCentroidDistMatrix[i][j])
 		}
-		kmeans.minHalfInterCentroidDist[i] = currMinDist
+		km.minHalfInterCentroidDist[i] = currMinDist
 	}
 }
 
 // assignData assigns each vector to the nearest centroid.
 // This is the place where most of the pruning happens.
-func (kmeans *KMeansClusterer) assignData() int {
+func (km *KMeansClusterer) assignData() int {
 
 	var ux float64 // currVecUpperBound
 	var cx int     // currVecClusterAssignmentIdx
 	changes := 0
 
-	for x := range kmeans.vectorList { // x is currVectorIdx
+	for x := range km.vectorList { // x is currVectorIdx
 
-		ux = kmeans.vectorMetas[x].upper // u(x) in the paper
-		cx = kmeans.assignments[x]       // c(x) in the paper
+		ux = km.vectorMetas[x].upper // u(x) in the paper
+		cx = km.assignments[x]       // c(x) in the paper
 
 		// step 2 u(x) <= s(c(x))
-		if ux <= kmeans.minHalfInterCentroidDist[cx] {
+		if ux <= km.minHalfInterCentroidDist[cx] {
 			continue
 		}
 
-		for c := range kmeans.Centroids { // c is nextPossibleCentroidIdx
+		for c := range km.Centroids { // c is nextPossibleCentroidIdx
 			// step 3
 			// For all remaining points x and centers c such that
 			// (i) c != c(x) and
@@ -284,35 +299,35 @@ func (kmeans *KMeansClusterer) assignData() int {
 			// (iii) u(x)> 0.5 x d(c(x), c)
 			// NOTE: we proactively use the otherwise case
 			if c == cx || // (i)
-				ux <= kmeans.vectorMetas[x].lower[c] || // ii)
-				ux <= kmeans.halfInterCentroidDistMatrix[cx][c] { // (iii)
+				ux <= km.vectorMetas[x].lower[c] || // ii)
+				ux <= km.halfInterCentroidDistMatrix[cx][c] { // (iii)
 				continue
 			}
 
 			//step 3.a - Bounds update
 			// If r(x) then compute d(x, c(x)) and assign r(x)= false. Otherwise, d(x, c(x))=u(x).
 			dxcx := ux // d(x, c(x)) in the paper ie distToCentroid
-			if kmeans.vectorMetas[x].recompute {
-				dxcx = kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[cx])
-				kmeans.vectorMetas[x].upper = dxcx
-				kmeans.vectorMetas[x].lower[cx] = dxcx
-				kmeans.vectorMetas[x].recompute = false
+			if km.vectorMetas[x].recompute {
+				dxcx = km.distFn(km.vectorList[x], km.Centroids[cx])
+				km.vectorMetas[x].upper = dxcx
+				km.vectorMetas[x].lower[cx] = dxcx
+				km.vectorMetas[x].recompute = false
 			}
 
 			//step 3.b - Update
 			// If d(x, c(x))>l(x, c) or d(x, c(x))> 0.5 d(c(x), c) then
 			// Compute d(x, c)
 			// If d(x, c)<d(x, c(x)) then assign c(x)=c.
-			if dxcx > kmeans.vectorMetas[x].lower[c] ||
-				dxcx > kmeans.halfInterCentroidDistMatrix[cx][c] {
+			if dxcx > km.vectorMetas[x].lower[c] ||
+				dxcx > km.halfInterCentroidDistMatrix[cx][c] {
 
-				dxc := kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[c]) // d(x,c) in the paper
-				kmeans.vectorMetas[x].lower[c] = dxc
+				dxc := km.distFn(km.vectorList[x], km.Centroids[c]) // d(x,c) in the paper
+				km.vectorMetas[x].lower[c] = dxc
 				if dxc < dxcx {
-					kmeans.vectorMetas[x].upper = dxc
+					km.vectorMetas[x].upper = dxc
 
 					cx = c
-					kmeans.assignments[x] = c
+					km.assignments[x] = c
 					changes++
 				}
 			}
@@ -322,30 +337,30 @@ func (kmeans *KMeansClusterer) assignData() int {
 }
 
 // recalculateCentroids calculates the new mean centroids based on the new assignments.
-func (kmeans *KMeansClusterer) recalculateCentroids() [][]float64 {
-	clusterMembersCount := make([]int64, len(kmeans.Centroids))
-	clusterMembersDimWiseSum := make([][]float64, len(kmeans.Centroids))
+func (km *KMeansClusterer) recalculateCentroids() [][]float64 {
+	clusterMembersCount := make([]int64, len(km.Centroids))
+	clusterMembersDimWiseSum := make([][]float64, len(km.Centroids))
 
-	for c := range kmeans.Centroids {
-		clusterMembersDimWiseSum[c] = make([]float64, len(kmeans.vectorList[0]))
+	for c := range km.Centroids {
+		clusterMembersDimWiseSum[c] = make([]float64, len(km.vectorList[0]))
 	}
 
-	for x, vec := range kmeans.vectorList {
-		cx := kmeans.assignments[x]
+	for x, vec := range km.vectorList {
+		cx := km.assignments[x]
 		clusterMembersCount[cx]++
 		for dim := range vec {
 			clusterMembersDimWiseSum[cx][dim] += vec[dim]
 		}
 	}
 
-	newCentroids := append([][]float64{}, kmeans.Centroids...)
+	newCentroids := append([][]float64{}, km.Centroids...)
 	for c, newCentroid := range newCentroids {
 		memberCnt := float64(clusterMembersCount[c])
 
 		if memberCnt == 0 {
 			// if the cluster is empty, reinitialize it to a random vector, since you can't find the mean of an empty set
 			for l := range newCentroid {
-				newCentroid[l] = 10 * (kmeans.rand.Float64() - 0.5)
+				newCentroid[l] = 10 * (km.rand.Float64() - 0.5)
 			}
 		} else {
 			// find the mean of the cluster members
@@ -360,16 +375,16 @@ func (kmeans *KMeansClusterer) recalculateCentroids() [][]float64 {
 }
 
 // updateBounds updates the lower and upper bounds for each vector.
-func (kmeans *KMeansClusterer) updateBounds(newCentroid [][]float64) {
+func (km *KMeansClusterer) updateBounds(newCentroid [][]float64) {
 
 	// compute the centroid shift distance matrix once.
-	centroidShiftDist := make([]float64, kmeans.clusterCnt)
+	centroidShiftDist := make([]float64, km.clusterCnt)
 	var wg sync.WaitGroup
-	for c := 0; c < kmeans.clusterCnt; c++ {
+	for c := 0; c < km.clusterCnt; c++ {
 		wg.Add(1)
 		go func(cIdx int) {
 			defer wg.Done()
-			centroidShiftDist[cIdx] = kmeans.distFn(kmeans.Centroids[cIdx], newCentroid[cIdx])
+			centroidShiftDist[cIdx] = km.distFn(km.Centroids[cIdx], newCentroid[cIdx])
 		}(c)
 	}
 	wg.Wait()
@@ -377,26 +392,26 @@ func (kmeans *KMeansClusterer) updateBounds(newCentroid [][]float64) {
 	// step 5
 	//For each point x and center c, assign
 	// l(x, c)= max{ l(x, c)-d(c, m(c)), 0 }
-	for x := range kmeans.vectorList {
-		for c := range kmeans.Centroids {
-			shift := kmeans.vectorMetas[x].lower[c] - centroidShiftDist[c]
-			kmeans.vectorMetas[x].lower[c] = math.Max(shift, 0)
+	for x := range km.vectorList {
+		for c := range km.Centroids {
+			shift := km.vectorMetas[x].lower[c] - centroidShiftDist[c]
+			km.vectorMetas[x].lower[c] = math.Max(shift, 0)
 		}
 
 		// step 6
 		// For each point x, assign
 		// u(x)=u(x)+d(m(c(x)), c(x))
 		// r(x)= true
-		cx := kmeans.assignments[x] // ie currVecClusterAssignmentIdx
-		kmeans.vectorMetas[x].upper += centroidShiftDist[cx]
-		kmeans.vectorMetas[x].recompute = true
+		cx := km.assignments[x] // ie currVecClusterAssignmentIdx
+		km.vectorMetas[x].upper += centroidShiftDist[cx]
+		km.vectorMetas[x].recompute = true
 	}
 }
 
 // isConverged checks if the algorithm has converged.
-func (kmeans *KMeansClusterer) isConverged(iter int, changes int) bool {
-	if iter == kmeans.maxIterations ||
-		changes < int(float64(kmeans.vectorCnt)*kmeans.deltaThreshold) ||
+func (km *KMeansClusterer) isConverged(iter int, changes int) bool {
+	if iter == km.maxIterations ||
+		changes < int(float64(km.vectorCnt)*km.deltaThreshold) ||
 		changes == 0 {
 		return true
 	}

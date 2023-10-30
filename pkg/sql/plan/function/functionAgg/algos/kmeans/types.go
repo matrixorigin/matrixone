@@ -29,6 +29,13 @@ const (
 	CosineDistance
 )
 
+type InitType uint16
+
+const (
+	Random InitType = iota
+	KmeansPlusPlus
+)
+
 // DistanceFunction is a function that computes the distance between two vectors
 // NOTE: clusterer already ensures that the all the input vectors are of the same length,
 // so we don't need to check for that here again and return error if the lengths are different.

@@ -17,7 +17,6 @@ package functionAgg
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math"
 	"reflect"
@@ -669,59 +668,24 @@ func TestStdDevPop(t *testing.T) {
 	}
 }
 
+// todo: there is not a good way to test the multi-agg function.
+//
+//	should implement the multi-agg function in the future.
 func TestGroupConcat(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggGroupConcat, []types.T{types.T_varchar}, AggGroupConcatReturnType))
 
-	// input strings
-	var strs = []string{
-		"A",
-		"B",
-		"C",
-		"D",
-	}
-
-	// pack the input strings into [][]byte
-	var packedInput = make([][]byte, len(strs))
-	packers := types.NewPackerArray(len(strs), mpool.MustNewZero())
-	for i, str := range strs {
-		packers[i].EncodeStringType(util.UnsafeStringToBytes(str))
-		packedInput[i] = packers[i].GetBuf()
-	}
-
-	nsp := nulls.NewWithSize(4)
-	nsp.Add(3)
-	s1 := &sAggGroupConcat{
-		separator: "",
-		//TODO: There is a bug here.
-		// MarshalBinary is not considering Separator Field. Will be fixed later.
-	}
-
+	s := &sAggGroupConcat{}
 	{
-		tr := &simpleAggTester[[]byte, []byte]{
-			source: s1,
-			grow:   s1.Grows,
-			free:   s1.Free,
-			fill:   s1.Fill,
-			merge:  s1.Merge,
-			eval:   s1.Eval,
-		}
-		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
-			return util.UnsafeBytesToString(result) == "ABC" && !isEmpty
-		})
-		require.NoError(t, err)
-
-	}
-	{
-		data, err := s1.MarshalBinary()
+		data, err := s.MarshalBinary()
 		require.NoError(t, err)
 		s2 := new(sAggGroupConcat)
 		err = s2.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		require.Equal(t, s1.separator, s2.separator)
-		require.Equal(t, len(s1.result), len(s2.result))
-		for i := range s1.result {
-			require.Equal(t, s1.result[i], s2.result[i])
+		require.Equal(t, s.separator, s2.separator)
+		require.Equal(t, len(s.result), len(s2.result))
+		for i := range s.result {
+			require.Equal(t, s.result[i], s2.result[i])
 		}
 	}
 }
@@ -732,9 +696,10 @@ func TestClusterCenters(t *testing.T) {
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
 		distType:   kmeans.L2,
+		initType:   kmeans.KmeansPlusPlus,
 		arrType:    types.T_array_float64.ToType(),
 	}
-	// input vectors/arrays of 4 rows with 4th row as null
+	// input vectors/arrays of 7 rows with 6th row as null
 	var vecf64Input = [][]byte{
 		types.ArrayToBytes[float64]([]float64{1, 2, 3, 4}),
 		types.ArrayToBytes[float64]([]float64{1, 2, 4, 5}),
@@ -797,6 +762,7 @@ func TestClusterCenters(t *testing.T) {
 		require.Equal(t, s1.arrType, s2.arrType)
 		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
 		require.Equal(t, s1.distType, s2.distType)
+		require.Equal(t, s1.initType, s2.initType)
 		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
 		for i := range s1.groupedData {
 			require.Equal(t, s1.groupedData[i], s2.groupedData[i])

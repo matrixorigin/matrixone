@@ -27,6 +27,7 @@ func Test_NewKMeans(t *testing.T) {
 		maxIterations  int
 		deltaThreshold float64
 		distType       kmeans.DistanceType
+		initType       kmeans.InitType
 	}
 	tests := []struct {
 		name    string
@@ -45,13 +46,16 @@ func Test_NewKMeans(t *testing.T) {
 				maxIterations:  500,
 				deltaThreshold: 0.01,
 				distType:       kmeans.L2,
+				initType:       kmeans.Random,
 			},
 			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt, tt.fields.maxIterations, tt.fields.deltaThreshold, tt.fields.distType)
+			_, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+				tt.fields.maxIterations, tt.fields.deltaThreshold,
+				tt.fields.distType, tt.fields.initType)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewKMeans() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -67,6 +71,7 @@ func Test_Cluster(t *testing.T) {
 		maxIterations  int
 		deltaThreshold float64
 		distType       kmeans.DistanceType
+		initType       kmeans.InitType
 	}
 	tests := []struct {
 		name    string
@@ -92,6 +97,7 @@ func Test_Cluster(t *testing.T) {
 				maxIterations:  500,
 				deltaThreshold: 0.01,
 				distType:       kmeans.L2,
+				initType:       kmeans.Random,
 			},
 			want: [][]float64{
 				{1, 2, 3.611111111111111, 4.611111111111112},
@@ -102,7 +108,9 @@ func Test_Cluster(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			clusterer, _ := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt, tt.fields.maxIterations, tt.fields.deltaThreshold, tt.fields.distType)
+			clusterer, _ := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+				tt.fields.maxIterations, tt.fields.deltaThreshold,
+				tt.fields.distType, tt.fields.initType)
 			got, err := clusterer.Cluster()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Cluster() error = %v, wantErr %v", err, tt.wantErr)

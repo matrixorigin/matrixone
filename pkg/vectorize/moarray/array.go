@@ -195,7 +195,7 @@ func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	return math.Sqrt(float64(sum)), nil
 }
 
-func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float32, error) {
+func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	if len(v1) != len(v2) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
@@ -214,7 +214,7 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float32, error) {
 
 	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
 	// casting it to float32, because cosine_similarity is between 1 and -1.
-	return float32(float64(innerProduct) / math.Sqrt(float64(normV1*normV2))), nil
+	return float64(innerProduct) / math.Sqrt(float64(normV1*normV2)), nil
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -234,18 +234,17 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 func AngularDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
-	cosTheta, err := CosineSimilarity[T](v1, v2)
+	similarity, err := CosineSimilarity[T](v1, v2)
 	if err != nil {
 		return 0, err
 	}
 
 	// Clamp the value between -1 and 1 to avoid NaNs due to floating point errors
-	if cosTheta > 1 {
-		cosTheta = 1
-	} else if cosTheta < -1 {
-		cosTheta = -1
+	if similarity > 1 {
+		similarity = 1
+	} else if similarity < -1 {
+		similarity = -1
 	}
 
-	// Compute the angular distance
-	return math.Acos(float64(cosTheta)), nil
+	return 1.0 - similarity, nil
 }
