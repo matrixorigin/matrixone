@@ -8346,7 +8346,7 @@ separator_opt:
 
 kmeans_opt:
     {
-        $$ = "1,L2"
+        $$ = "1,L2,RANDOM"
     }
 |   KMEANS STRING
     {
