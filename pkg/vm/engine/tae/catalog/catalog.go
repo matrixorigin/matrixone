@@ -548,7 +548,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 }
 
-func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn, objectInfo *containers.Batch, dataFactory DataFactory) {
+func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch, dataFactory DataFactory) {
 	idVec := ins.GetVectorByName(SegmentAttr_ID)
 	for i := 0; i < idVec.Length(); i++ {
 		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
@@ -652,13 +652,73 @@ func (catalog *Catalog) onReplayDeleteSegment(
 	}
 	seg.Insert(un)
 }
-func (catalog *Catalog) replaySegmentWithBlock(tbl *TableEntry, blkID types.Blockid, state, flushed bool, createAt, deleteAt, start, end types.TS) {
+
+func (catalog *Catalog) replaySegmentWithBlock(
+	tbl *TableEntry,
+	blkID types.Blockid,
+	state EntryState,
+	flushed bool,
+	createAt, deleteAt, start, end types.TS,
+	metaLocation objectio.Location,
+	dataFactory DataFactory) {
 	segmentID := blkID.Object()
 	seg, _ := tbl.GetSegmentByID(segmentID)
-	if seg == nil {
+	// create
+	if createAt.Equal(txnif.UncommitTS) {
+		if seg == nil {
+			seg = NewSegmentEntryOnReplay(
+				tbl,
+				segmentID,
+				start, end, state,
+				dataFactory.MakeSegmentFactory())
+			tbl.AddEntryLocked(seg)
+		}
+	}
+	// delete
+	if deleteAt.Equal(txnif.UncommitTS) {
+		node := seg.SearchNode(
+			&MVCCNode[*ObjectMVCCNode]{
+				TxnMVCCNode: &txnbase.TxnMVCCNode{
+					Start: start,
+				},
+			},
+		)
+		if node == nil {
+			node = seg.GetLatestNodeLocked().CloneData()
+			node.DeletedAt = deleteAt
+			node.Start = start
+			node.End = end
+			seg.Insert(node)
+		}
+	}
+	// metalocation
+	if !metaLocation.IsEmpty() {
+		node := seg.SearchNode(
+			&MVCCNode[*ObjectMVCCNode]{
+				TxnMVCCNode: &txnbase.TxnMVCCNode{
+					Start: start,
+				},
+			},
+		)
+		node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation)
+	}
+	// apply commit
+	node := seg.SearchNode(
+		&MVCCNode[*ObjectMVCCNode]{
+			TxnMVCCNode: &txnbase.TxnMVCCNode{
+				Start: start,
+			},
+		},
+	)
+	err := node.ApplyCommit()
+	if err != nil {
+		panic(err)
 	}
 	// update blk count
-	// alloc sorthint
+	_, offset := blkID.Offsets()
+	if node.BaseNode.BlockNumber < offset+1 {
+		node.BaseNode.BlockNumber = offset + 1 // TODO
+	}
 	// TODO: Next Object Idx
 }
 func (catalog *Catalog) onReplayUpdateBlock(

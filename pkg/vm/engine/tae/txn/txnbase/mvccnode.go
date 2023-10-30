@@ -59,7 +59,13 @@ func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
 		End:     ts,
 	}
 }
-
+func NewTxnMVCCNodeWithStartEnd(start,end types.TS) *TxnMVCCNode {
+	return &TxnMVCCNode{
+		Start:   start,
+		Prepare: end,
+		End:     end,
+	}
+}
 func (un *TxnMVCCNode) IsAborted() bool {
 	return un.Aborted
 }

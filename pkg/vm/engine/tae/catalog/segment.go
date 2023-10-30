@@ -89,6 +89,26 @@ func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTx
 	return e
 }
 
+func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, end types.TS, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
+	e := &SegmentEntry{
+		ID: *id,
+		BaseEntryImpl: NewBaseEntry(
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
+		table:   table,
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
+		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
+		SegmentNode: &SegmentNode{
+			state:    state,
+			SortHint: table.GetDB().catalog.NextSegment(),
+		},
+	}
+	e.CreateWithStartAndEnd(start, end, &ObjectMVCCNode{})
+	if dataFactory != nil {
+		e.segData = dataFactory(e)
+	}
+	return e
+}
+
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
@@ -213,10 +233,7 @@ func (entry *SegmentEntry) UpdateObjectInfo(txn txnif.TxnReader, metaLoc objecti
 	if err != nil {
 		return
 	}
-	// TODO
-	baseNode := &ObjectMVCCNode{
-		Name: metaLoc.Name(),
-	}
+	baseNode := NewObjectInfoWithMetaLocation(metaLoc)
 	var node *MVCCNode[*ObjectMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
 	node.BaseNode.Update(baseNode)

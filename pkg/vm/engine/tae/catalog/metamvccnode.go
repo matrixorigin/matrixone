@@ -99,6 +99,13 @@ type ObjectMVCCNode struct {
 	BlockNumber    uint16
 }
 
+	// TODO
+func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode{
+	return &ObjectMVCCNode{
+		Name: metalocation.Name(),
+	}
+}
+
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		Name:           e.Name,
