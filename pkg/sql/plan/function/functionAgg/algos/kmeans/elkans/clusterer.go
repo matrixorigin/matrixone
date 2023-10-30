@@ -207,18 +207,18 @@ func validateArgs(vectorList [][]float64, clusterCnt, maxIterations int, deltaTh
 
 func (kmeans *KMeansClusterer) initBounds() {
 	for x := range kmeans.vectorList {
-		minDiff := math.MaxFloat64
+		minDist := math.MaxFloat64
 		closestCenter := 0
 		for c := 0; c < len(kmeans.Centroids); c++ {
-			diff := kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[c])
-			kmeans.vectorMetas[x].lower[c] = diff
-			if diff < minDiff {
-				minDiff = diff
+			dist := kmeans.distFn(kmeans.vectorList[x], kmeans.Centroids[c])
+			kmeans.vectorMetas[x].lower[c] = dist
+			if dist < minDist {
+				minDist = dist
 				closestCenter = c
 			}
 		}
 
-		kmeans.vectorMetas[x].upper = minDiff
+		kmeans.vectorMetas[x].upper = minDist
 		kmeans.assignments[x] = closestCenter
 	}
 }
