@@ -200,11 +200,10 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 		end := types.StringToTS(mergeEnd)
 		start := types.StringToTS(mergeStart)
-		var checkpointData *logtail.CheckpointData
-		cnLocation, tnLocation, checkpointData, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
+		var checkpointFiles []string
+		cnLocation, tnLocation, _, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
 			cnLocation, tnLocation, uint32(version), start)
-		checkpointData.ReplayMetaBatch()
-		for name := range checkpointData.GetLocations() {
+		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
 				return err

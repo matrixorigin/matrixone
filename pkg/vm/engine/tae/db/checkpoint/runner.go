@@ -507,7 +507,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 		return
 	}
 	defer data.Close()
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}
@@ -526,7 +526,7 @@ func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string,
 		return
 	}
 	defer data.Close()
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}
@@ -549,7 +549,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, in
 	}
 	defer data.Close()
 
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}

@@ -1510,7 +1510,7 @@ func (data *CheckpointData) WriteTo(
 	fs fileservice.FileService,
 	blockRows int,
 	checkpointSize int,
-) (CNLocation, TNLocation objectio.Location, err error) {
+) (CNLocation, TNLocation objectio.Location, checkpointFiles []string, err error) {
 	checkpointNames := make([]objectio.ObjectName, 1)
 	segmentid := objectio.NewSegmentid()
 	fileNum := uint16(0)
@@ -1524,6 +1524,7 @@ func (data *CheckpointData) WriteTo(
 	indexes := make([][]blockIndexes, MaxIDX)
 	schemas := make([][]uint16, 0)
 	schemaTypes := make([]uint16, 0)
+	checkpointFiles = make([]string, 0)
 	var objectSize int
 	for i := range checkpointDataSchemas_Curr {
 		if i == int(MetaIDX) || i == int(TNMetaIDX) {
@@ -1541,6 +1542,7 @@ func (data *CheckpointData) WriteTo(
 			if err != nil {
 				return
 			}
+			checkpointFiles = append(checkpointFiles, name.String())
 			name = objectio.BuildObjectName(segmentid, fileNum)
 			writer, err = blockio.NewBlockWriterNew(fs, name, 0, nil)
 			if err != nil {
@@ -1570,7 +1572,6 @@ func (data *CheckpointData) WriteTo(
 				if err != nil {
 					break
 				}
-				logutil.Infof("checkpointDataSchemas_Curr1111[%d] bat length %d", i, bat.Length())
 				if block, size, err = writer.WriteSubBatch(containers.ToCNBatch(bat), objectio.ConvertToSchemaType(uint16(i))); err != nil {
 					return
 				}
@@ -1590,6 +1591,7 @@ func (data *CheckpointData) WriteTo(
 	if err != nil {
 		return
 	}
+	checkpointFiles = append(checkpointFiles, name.String())
 	schemas = append(schemas, schemaTypes)
 	objectBlocks = append(objectBlocks, blks)
 
@@ -1959,7 +1961,7 @@ func (data *CheckpointData) readMetaBatch(
 	return
 }
 
-func (data *CheckpointData) ReplayMetaBatch() {
+func (data *CheckpointData) replayMetaBatch() {
 	bat := data.bats[MetaIDX]
 	data.locations = make(map[string]objectio.Location)
 	tidVec := vector.MustFixedCol[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
@@ -2012,7 +2014,7 @@ func (data *CheckpointData) readAll(
 	version uint32,
 	service fileservice.FileService,
 ) (err error) {
-	data.ReplayMetaBatch()
+	data.replayMetaBatch()
 	for _, val := range data.locations {
 		var reader *blockio.BlockReader
 		reader, err = blockio.NewObjectReader(service, val)
