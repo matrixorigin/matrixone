@@ -687,18 +687,18 @@ func TestGroupConcat(t *testing.T) {
 
 	nsp := nulls.NewWithSize(4)
 	nsp.Add(3)
-	s1 := &sAggGroupConcat{
+	s := &sAggGroupConcat{
 		separator: ",",
 	}
 
 	{
 		tr := &simpleAggTester[[]byte, []byte]{
-			source: s1,
-			grow:   s1.Grows,
-			free:   s1.Free,
-			fill:   s1.Fill,
-			merge:  s1.Merge,
-			eval:   s1.Eval,
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.Eval,
 		}
 		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
 			return util.UnsafeBytesToString(result) == "A,B,C" && !isEmpty
@@ -707,16 +707,16 @@ func TestGroupConcat(t *testing.T) {
 
 	}
 	{
-		data, err := s1.MarshalBinary()
+		data, err := s.MarshalBinary()
 		require.NoError(t, err)
 		s2 := new(sAggGroupConcat)
 		err = s2.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		require.Equal(t, s1.separator, s2.separator)
-		require.Equal(t, len(s1.result), len(s2.result))
-		for i := range s1.result {
-			require.Equal(t, s1.result[i], s2.result[i])
+		require.Equal(t, s.separator, s2.separator)
+		require.Equal(t, len(s.result), len(s2.result))
+		for i := range s.result {
+			require.Equal(t, s.result[i], s2.result[i])
 		}
 	}
 }
