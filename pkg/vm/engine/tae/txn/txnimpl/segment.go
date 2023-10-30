@@ -216,7 +216,7 @@ func (seg *txnSegment) Close() (err error) {
 
 func (seg *txnSegment) GetMeta() any            { return seg.entry }
 func (seg *txnSegment) String() string          { return seg.entry.String() }
-func (seg *txnSegment) GetID() *types.Segmentid { return &seg.entry.ID }
+func (seg *txnSegment) GetID() *types.Objectid { return &seg.entry.ID }
 func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.table, seg.entry)
 }

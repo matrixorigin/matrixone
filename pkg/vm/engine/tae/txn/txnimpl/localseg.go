@@ -102,7 +102,7 @@ func (seg *localSegment) registerANode() {
 	entry := seg.entry
 	meta := catalog.NewStandaloneBlock(
 		entry,
-		objectio.NewBlockid(&entry.ID, 0, uint16(len(seg.nodes))),
+		objectio.NewBlockidWithObjectID(&entry.ID, uint16(len(seg.nodes))),
 		seg.table.store.txn.GetStartTS())
 	entry.AddEntryLocked(meta)
 	n := NewANode(
@@ -181,7 +181,7 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 			blk.Close()
 		} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 			id := appender.GetID()
-			blk, err := seg.table.CreateBlock(id.SegmentID(), true)
+			blk, err := seg.table.CreateBlock(id.ObjectID(), true)
 			if err != nil {
 				return err
 			}
@@ -246,7 +246,7 @@ func (seg *localSegment) prepareApplyPNode(node *pnode) (err error) {
 	//handle persisted insertNode.
 	metaloc, deltaloc := node.GetPersistedLoc()
 	blkn := metaloc.ID()
-	sid := metaloc.Name().SegmentId()
+	sid := metaloc.Name().ObjectId()
 	filen := metaloc.Name().Num()
 
 	shouldCreateNewSeg := func() bool {
@@ -254,11 +254,11 @@ func (seg *localSegment) prepareApplyPNode(node *pnode) (err error) {
 			return true
 		}
 		entry := seg.nseg.GetMeta().(*catalog.SegmentEntry)
-		return entry.ID != sid
+		return !entry.ID.Eq(*sid)
 	}
 
 	if shouldCreateNewSeg() {
-		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(&sid))
+		seg.nseg, err = seg.table.CreateNonAppendableSegment(true, new(objectio.CreateSegOpt).WithId(sid))
 		seg.nseg.GetMeta().(*catalog.SegmentEntry).SetSorted()
 		if err != nil {
 			return

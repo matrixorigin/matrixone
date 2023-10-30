@@ -114,7 +114,7 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 	}
 
 	deleteAt := b.txn.GetPrepareTS()
-	rowid := objectio.HackSegid2Rowid(&seg.ID)
+	rowid := objectio.HackObjid2Rowid(&seg.ID)
 
 	if b.batches[segMetaDelBatch] == nil {
 		b.batches[segMetaDelBatch] = makeRespBatchFromSchema(DelSchema)

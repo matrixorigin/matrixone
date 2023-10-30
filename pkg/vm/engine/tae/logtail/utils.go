@@ -591,8 +591,8 @@ func (data *CheckpointData) ApplyReplayTo(
 	c.OnReplayDatabaseBatch(data.GetDBBatchs())
 	ins, colins, tnins, del, tndel := data.GetTblBatchs()
 	c.OnReplayTableBatch(ins, colins, tnins, del, tndel, dataFactory)
-	ins, tnins, del, tndel = data.GetSegBatchs()
-	c.OnReplaySegmentBatch(ins, tnins, del, tndel, dataFactory)
+	ins, tnins, del, tndel, objectInfo := data.GetSegBatchs()
+	c.OnReplaySegmentBatch(ins, tnins, del, tndel, objectInfo, dataFactory)
 	ins, tnins, del, tndel = data.GetTNBlkBatchs()
 	c.OnReplayBlockBatch(ins, tnins, del, tndel, dataFactory)
 	ins, tnins, del, tndel = data.GetBlkBatchs()
@@ -2191,11 +2191,13 @@ func (data *CheckpointData) GetSegBatchs() (
 	*containers.Batch,
 	*containers.Batch,
 	*containers.Batch,
+	*containers.Batch,
 	*containers.Batch) {
 	return data.bats[SEGInsertIDX],
 		data.bats[SEGInsertTxnIDX],
 		data.bats[SEGDeleteIDX],
-		data.bats[SEGDeleteTxnIDX]
+		data.bats[SEGDeleteTxnIDX],
+		data.bats[ObjectInfoIDX]
 }
 func (data *CheckpointData) GetBlkBatchs() (
 	*containers.Batch,
@@ -2424,7 +2426,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		if segNode.HasDropCommitted() {
 			vector.AppendFixed(
 				segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
-				objectio.HackSegid2Rowid(&entry.ID),
+				objectio.HackObjid2Rowid(&entry.ID),
 				false,
 				common.DefaultAllocator,
 			)

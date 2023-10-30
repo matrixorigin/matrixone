@@ -47,7 +47,7 @@ type TableEntry struct {
 	Stats   common.TableCompactStat
 	ID      uint64
 	db      *DBEntry
-	entries map[types.Uuid]*common.GenericDLNode[*SegmentEntry]
+	entries map[types.Objectid]*common.GenericDLNode[*SegmentEntry]
 	//link.head and link.tail is nil when create tableEntry object.
 	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
@@ -84,7 +84,7 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		db:        db,
 		TableNode: &TableNode{},
 		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		entries:   make(map[types.Objectid]*common.GenericDLNode[*SegmentEntry]),
 	}
 	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
@@ -102,7 +102,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		db:        db,
 		TableNode: &TableNode{},
 		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		entries:   make(map[types.Objectid]*common.GenericDLNode[*SegmentEntry]),
 	}
 	e.TableNode.schema.Store(schema)
 	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
@@ -126,7 +126,7 @@ func NewReplayTableEntry() *TableEntry {
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		link:    common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		entries: make(map[types.Objectid]*common.GenericDLNode[*SegmentEntry]),
 	}
 	return e
 }
@@ -140,7 +140,7 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		TableNode: node,
 		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		entries:   make(map[types.Objectid]*common.GenericDLNode[*SegmentEntry]),
 	}
 }
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
@@ -166,7 +166,7 @@ func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
 	return entry.rows.Add(^(delta - 1))
 }
 
-func (entry *TableEntry) GetSegmentByID(id *types.Segmentid) (seg *SegmentEntry, err error) {
+func (entry *TableEntry) GetSegmentByID(id *types.Objectid) (seg *SegmentEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	node := entry.entries[*id]
@@ -189,11 +189,11 @@ func (entry *TableEntry) CreateSegment(
 	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	var id *objectio.Segmentid
+	var id *objectio.ObjectId
 	if opts != nil && opts.Id != nil {
 		id = opts.Id
 	} else {
-		id = objectio.NewSegmentid()
+		id = objectio.NewObjectid()
 	}
 	created = NewSegmentEntry(entry, id, txn, state, dataFactory)
 	entry.AddEntryLocked(created)
@@ -315,7 +315,7 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')
-			_, _ = w.WriteString(segment.ID.ToString())
+			_, _ = w.WriteString(segment.ID.String())
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString("    ")
 			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
@@ -435,7 +435,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	return
 }
 
-func (entry *TableEntry) DropSegmentEntry(id *types.Segmentid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
+func (entry *TableEntry) DropSegmentEntry(id *types.Objectid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
 	seg, err := entry.GetSegmentByID(id)
 	if err != nil {
 		return

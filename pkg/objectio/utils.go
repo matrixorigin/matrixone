@@ -38,10 +38,10 @@ func init() {
 }
 
 type CreateSegOpt struct {
-	Id *types.Uuid
+	Id *types.Objectid
 }
 
-func (o *CreateSegOpt) WithId(id *types.Uuid) *CreateSegOpt {
+func (o *CreateSegOpt) WithId(id *types.Objectid) *CreateSegOpt {
 	o.Id = id
 	return o
 }

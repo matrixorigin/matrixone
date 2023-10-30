@@ -195,7 +195,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	delTbls := make([]*model.TransDels, len(entry.createdBlks))
 	for i, meta := range entry.createdBlks {
 		id := meta.AsCommonID()
-		seg, err := entry.relation.GetSegment(id.SegmentID())
+		seg, err := entry.relation.GetSegment(id.ObjectID())
 		if err != nil {
 			return err
 		}

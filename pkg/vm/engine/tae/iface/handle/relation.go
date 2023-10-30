@@ -57,8 +57,8 @@ type Relation interface {
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)
 	CreateNonAppendableSegment(is1PC bool) (Segment, error)
-	GetSegment(id *types.Segmentid) (Segment, error)
-	SoftDeleteSegment(id *types.Segmentid) (err error)
+	GetSegment(id *types.Objectid) (Segment, error)
+	SoftDeleteSegment(id *types.Objectid) (err error)
 
 	GetDB() (Database, error)
 }

@@ -326,7 +326,7 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	}
 
 	for id, offsets := range idOffsetsMap {
-		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.SegmentID())
+		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.ObjectID())
 		assert.NoError(e.t, err)
 		blk, err := seg.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(e.t, err)

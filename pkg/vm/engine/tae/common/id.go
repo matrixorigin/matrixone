@@ -52,6 +52,14 @@ func (id *ID) SetSegmentID(sid *types.Segmentid) {
 	copy(id.BlockID[:types.UuidSize], sid[:])
 }
 
+func (id *ID) ObjectID() *types.Objectid {
+	return id.BlockID.Object()
+}
+
+func (id *ID) SetObjectID(oid *types.Objectid) {
+	copy(id.BlockID[:types.ObjectBytesSize], oid[:])
+}
+
 func (id *ID) AsBlockID() *ID {
 	return &ID{
 		DbID:    id.DbID,

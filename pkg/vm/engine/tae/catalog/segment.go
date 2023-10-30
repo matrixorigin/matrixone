@@ -35,7 +35,7 @@ import (
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
 type SegmentEntry struct {
-	ID   objectio.Segmentid
+	ID   types.Objectid
 	Stat SegStat
 	*BaseEntryImpl[*ObjectMVCCNode]
 	table   *TableEntry
@@ -69,7 +69,7 @@ func (s *SegStat) String(composeSortKey bool) string {
 	)
 }
 
-func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
+func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	e := &SegmentEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
@@ -101,7 +101,7 @@ func NewReplaySegmentEntry() *SegmentEntry {
 
 func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		ID: *objectio.NewSegmentid(),
+		ID: *objectio.NewObjectid(),
 		BaseEntryImpl: NewBaseEntry(
 			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
 		table:   table,
@@ -139,7 +139,7 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	} else {
 		panic("not supported")
 	}
-	e.ID = *bid.Segment()
+	e.ID = *bid.Object()
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
 	return e
@@ -289,9 +289,9 @@ func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
 func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
 		return fmt.Sprintf("[%s-%s]SEG[%s][C@%s,D@%s]",
-			entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
+			entry.state.Repr(), entry.SegmentNode.String(), entry.ID.String(), entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s-%s]SEG[%s]%s", entry.state.Repr(), entry.SegmentNode.String(), entry.ID.ToString(), entry.BaseEntryImpl.StringLocked())
+	return fmt.Sprintf("[%s-%s]SEG[%s]%s", entry.state.Repr(), entry.SegmentNode.String(), entry.ID.String(), entry.BaseEntryImpl.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {
@@ -391,12 +391,12 @@ func (entry *SegmentEntry) CreateBlock(
 	defer entry.Unlock()
 	var id *objectio.Blockid
 	if opts != nil && opts.Id != nil {
-		id = objectio.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
+		id = objectio.NewBlockidWithObjectID(&entry.ID, opts.Id.Blkn)
 		if entry.nextObjectIdx <= opts.Id.Filen {
 			entry.nextObjectIdx = opts.Id.Filen + 1
 		}
 	} else {
-		id = objectio.NewBlockid(&entry.ID, entry.nextObjectIdx, 0)
+		id = objectio.NewBlockidWithObjectID(&entry.ID, 0)
 		entry.nextObjectIdx += 1
 	}
 	if entry.nextObjectIdx == math.MaxUint16 {
@@ -464,7 +464,7 @@ func (entry *SegmentEntry) AsCommonID() *common.ID {
 		DbID:    entry.GetTable().GetDB().ID,
 		TableID: entry.GetTable().ID,
 	}
-	id.SetSegmentID(&entry.ID)
+	id.SetObjectID(&entry.ID)
 	return id
 }
 

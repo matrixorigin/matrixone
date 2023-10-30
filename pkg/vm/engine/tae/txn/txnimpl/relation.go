@@ -169,9 +169,9 @@ func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objecti
 	)
 }
 
-func (h *txnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error) {
+func (h *txnRelation) GetSegment(id *types.Objectid) (seg handle.Segment, err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SetSegmentID(id)
+	fp.SetObjectID(id)
 	return h.Txn.GetStore().GetSegment(fp)
 }
 
@@ -183,9 +183,9 @@ func (h *txnRelation) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment
 	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) SoftDeleteSegment(id *types.Segmentid) (err error) {
+func (h *txnRelation) SoftDeleteSegment(id *types.Objectid) (err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SetSegmentID(id)
+	fp.SetObjectID(id)
 	return h.Txn.GetStore().SoftDeleteSegment(fp)
 }
 

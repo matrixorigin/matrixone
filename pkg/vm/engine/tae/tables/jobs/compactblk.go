@@ -208,7 +208,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				// we can't create appendable seg here because compaction can be rollbacked.
 				// so just wait until the new appendable seg is available.
 				// actually this log can barely be printed.
-				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
+				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.String(), curSeg.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
 			if createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID); err != nil {

@@ -232,7 +232,7 @@ func (c *manuallyMergeArg) String() string {
 
 	b := &bytes.Buffer{}
 	for _, o := range c.objects {
-		b.WriteString(fmt.Sprintf("%s_0000,", o.ID.ToString()))
+		b.WriteString(fmt.Sprintf("%s_0000,", o.ID.String()))
 	}
 
 	return fmt.Sprintf("(%s) objects: %s", t, b.String())

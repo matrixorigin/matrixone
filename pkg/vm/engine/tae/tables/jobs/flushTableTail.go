@@ -521,7 +521,7 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	}
 
 	// write!
-	name := objectio.BuildObjectName(&toSegmentEntry.ID, 0)
+	name := objectio.BuildObjectNameWithObjectID(&toSegmentEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.rt.Fs.Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err

@@ -41,7 +41,7 @@ func newHandle(table *dataTable, block *ablock) *tableHandle {
 
 func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	tableMeta := h.table.meta
-	segMeta, _ := tableMeta.GetSegmentByID(id.SegmentID())
+	segMeta, _ := tableMeta.GetSegmentByID(id.ObjectID())
 	blkMeta, _ := segMeta.GetBlockEntryByID(&id.BlockID)
 	h.block = blkMeta.GetBlockData().(*ablock)
 	h.appender, _ = h.block.MakeAppender()
@@ -80,7 +80,7 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 	// it is better to create new appendable early in some busy update workload case
 	if seg := h.block.meta.GetSegment(); seg.GetNextObjectIndex() >= options.DefaultObejctPerSegment {
 		logutil.Infof("%s create new seg due to large object index %d",
-			seg.ID.ToString(), seg.GetNextObjectIndex())
+			seg.ID.String(), seg.GetNextObjectIndex())
 		return nil, data.ErrAppendableSegmentNotFound
 	}
 

@@ -303,7 +303,7 @@ func (db *txnDB) GetSegment(id *common.ID) (seg handle.Segment, err error) {
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.GetSegment(id.SegmentID())
+	return table.GetSegment(id.ObjectID())
 }
 
 func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
@@ -356,7 +356,7 @@ func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBl
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.CreateNonAppendableBlock(id.SegmentID(), opts)
+	return table.CreateNonAppendableBlock(id.ObjectID(), opts)
 }
 
 func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
@@ -372,7 +372,7 @@ func (db *txnDB) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err e
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.CreateBlock(id.SegmentID(), is1PC)
+	return table.CreateBlock(id.ObjectID(), is1PC)
 }
 
 func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
@@ -401,7 +401,7 @@ func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.SoftDeleteSegment(id.SegmentID())
+	return table.SoftDeleteSegment(id.ObjectID())
 }
 func (db *txnDB) NeedRollback() bool {
 	return db.createEntry != nil && db.dropEntry != nil

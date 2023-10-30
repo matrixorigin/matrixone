@@ -166,7 +166,7 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 	// enc.AddString("from-blks", blks)
 	segs := ""
 	for _, seg := range task.mergedSegs {
-		segs = fmt.Sprintf("%s%s,", segs, seg.ID.ToString())
+		segs = fmt.Sprintf("%s%s,", segs, seg.ID.String())
 	}
 	enc.AddString("from-segs", segs)
 
@@ -368,7 +368,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	}
 
 	phaseNumber = 4
-	name := objectio.BuildObjectName(&task.toSegEntry.ID, 0)
+	name := objectio.BuildObjectNameWithObjectID(&task.toSegEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(task.mergedBlks[0].GetBlockData().GetFs().Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err

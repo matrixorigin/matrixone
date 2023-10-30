@@ -712,7 +712,7 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, for
 	if err != nil {
 		panic(err)
 	}
-	sid := objectio.ToSegmentId(id)
+	sid := id.Object()
 	segment, err := table.GetSegmentByID(sid)
 	if err != nil {
 		panic(err)
@@ -764,7 +764,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 			panic(err)
 		}
 		for blk := range seg.Blks {
-			bid := objectio.NewBlockid(seg.ID, blk.Num, blk.Seq)
+			bid := objectio.NewBlockidWithObjectID(seg.ID, blk.Seq)
 			block, err := segment.GetBlockEntryByID(bid)
 			if err != nil {
 				panic(err)
@@ -801,7 +801,7 @@ func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.Tab
 			panic(err)
 		}
 		for blk := range seg.Blks {
-			bid := objectio.NewBlockid(seg.ID, blk.Num, blk.Seq)
+			bid := objectio.NewBlockidWithObjectID(seg.ID, blk.Seq)
 			block, err := segment.GetBlockEntryByID(bid)
 			if err != nil {
 				panic(err)
@@ -875,9 +875,9 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 
 		return moerr.GetOkStopCurrRecur()
 	}
-	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
-		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
-			id := objectio.NewBlockid(segmentID, num, seq)
+	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.ObjectId, uint16, uint16) error {
+		return func(dbID, tableID uint64, segmentID *objectio.ObjectId, num, seq uint16) (err error) {
+			id := objectio.NewBlockidWithObjectID(segmentID, seq)
 			return r.tryCompactBlock(dbID, tableID, id, force)
 		}
 	}(force)
