@@ -16,7 +16,6 @@ package txnimpl
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -677,7 +676,6 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 		if enable && prePrepareDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StorePrePrepare, &common.DurationRecords{Duration: prePrepareDuration}))
 		}
-		v2.TxnPrePrepareDurationHistogram.Observe(prePrepareDuration.Seconds())
 
 	}()
 	for _, db := range store.dbs {
