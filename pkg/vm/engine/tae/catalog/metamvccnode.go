@@ -130,6 +130,9 @@ func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	}
 }
 func (e *ObjectMVCCNode) String() string {
+	if e == nil || e.IsEmpty() {
+		return "empty"
+	}
 	return e.Name.String()
 }
 func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
