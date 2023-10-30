@@ -17,6 +17,7 @@ package functionAgg
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -119,14 +120,37 @@ func (s *sAggGroupConcat) Eval(lastResult [][]byte) ([][]byte, error) {
 	return result, nil
 }
 func (s *sAggGroupConcat) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+
+	// 1. separator length
+	separatorBytes := util.UnsafeStringToBytes(s.separator)
+	var separatorLen = uint64(len(separatorBytes))
+	buf.Write(types.EncodeUint64(&separatorLen)) // 8 bytes
+
+	// 2. separator eg:- "," or "|" etc.
+	buf.Write(separatorBytes)
+
+	// 3. result
 	strList := make([]string, 0, len(s.result))
 	for i := range s.result {
 		strList = append(strList, s.result[i].String())
 	}
-	return types.EncodeStringSlice(strList), nil
+	buf.Write(types.EncodeStringSlice(strList))
+
+	return buf.Bytes(), nil
 }
-func (s *sAggGroupConcat) UnmarshalBinary(originData []byte) error {
-	strList := types.DecodeStringSlice(originData)
+func (s *sAggGroupConcat) UnmarshalBinary(data []byte) error {
+
+	// 1. separator length
+	separatorLen := uint8(types.DecodeUint64(data[:8]))
+	data = data[8:]
+
+	// 2. separator
+	s.separator = util.UnsafeBytesToString(data[:separatorLen])
+	data = data[separatorLen:]
+
+	// 3. result
+	strList := types.DecodeStringSlice(data)
 	s.result = make([]bytes.Buffer, len(strList))
 	for i := range s.result {
 		s.result[i].WriteString(strList[i])
