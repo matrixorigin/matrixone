@@ -1732,3 +1732,27 @@ func databaseIsValid(dbName string, ctx CompilerContext) (string, error) {
 	}
 	return dbName, nil
 }
+
+func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
+	if ef, ok := expr.Expr.(*plan.Expr_F); !ok {
+		return false
+	} else {
+		overloadID := ef.F.Func.GetObj()
+		f, exists := function.GetFunctionByIdWithoutError(overloadID)
+		// current_timestamp()
+		if !exists {
+			return false
+		}
+		if f.IsRealTimeRelated() {
+			return true
+		}
+
+		// current_timestamp() + 1
+		for _, arg := range ef.F.Args {
+			if detectedExprWhetherTimeRelated(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
