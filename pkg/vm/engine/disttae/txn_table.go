@@ -589,16 +589,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 
-	//if len(tbl.objInfos) == 0 {
-	//	cnblks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	if len(cnblks) == 0 {
-	//		return ranges, err
-	//	}
-	//}
-
 	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
 	// temporary solution, will fix it in the future
 	newExprs := make([]*plan.Expr, len(exprs))
@@ -610,20 +600,12 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 			newExprs[i] = foldedExpr
 		}
 	}
-	p := tbl.proc.Load()
-	if p == nil {
-		logutil.Infof("proc is nil, table name : %s, database name : %s",
-			tbl.tableName,
-			tbl.db.databaseName)
-		panic("tbl.proc is nil")
-	}
 
 	err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.getTableDef(),
 		newExprs,
-		//tbl.objInfos,
 		&ranges,
 		tbl.proc.Load(),
 	)
@@ -653,7 +635,6 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	//snapshotObjs []logtailreplay.ObjectEntry, // whole object list on snapshot
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
@@ -1815,11 +1796,6 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 		if err = tbl.updateLogtail(ctx); err != nil {
 			return
 		}
-		//var objs []logtailreplay.ObjectEntry
-		//if objs, err = tbl.db.txn.getObjInfos(ctx, tbl); err != nil {
-		//	return
-		//}
-		//tbl.objInfos = objs
 		tbl.objInfosUpdated = true
 	}
 	return
