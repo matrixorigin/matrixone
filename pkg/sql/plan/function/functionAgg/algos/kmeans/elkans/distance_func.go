@@ -15,7 +15,7 @@
 package elkans
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 )
@@ -44,7 +44,7 @@ func resolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, e
 	case kmeans.InnerProduct, kmeans.CosineDistance:
 		distanceFunction = AngularDistance
 	default:
-		return nil, errors.New("invalid distance type")
+		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
 	return distanceFunction, nil
 }

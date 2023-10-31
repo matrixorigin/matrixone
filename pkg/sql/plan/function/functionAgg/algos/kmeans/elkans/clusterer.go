@@ -15,8 +15,8 @@
 package elkans
 
 import (
-	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"golang.org/x/sync/errgroup"
 	"math"
@@ -179,22 +179,22 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 	maxIterations int, deltaThreshold float64,
 	distanceType kmeans.DistanceType, initType kmeans.InitType) error {
 	if vectorList == nil || len(vectorList) == 0 || len(vectorList[0]) == 0 {
-		return errors.New("input vectors is empty")
+		return moerr.NewInternalErrorNoCtx("input vectors is empty")
 	}
 	if clusterCnt > len(vectorList) {
-		return errors.New("cluster count is larger than vector count")
+		return moerr.NewInternalErrorNoCtx("cluster count is larger than vector count")
 	}
 	if maxIterations < 0 {
-		return errors.New("max iteration is out of bounds (must be >= 0)")
+		return moerr.NewInternalErrorNoCtx("max iteration is out of bounds (must be >= 0)")
 	}
 	if deltaThreshold <= 0.0 || deltaThreshold >= 1.0 {
-		return errors.New("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
+		return moerr.NewInternalErrorNoCtx("delta threshold is out of bounds (must be > 0.0 and < 1.0)")
 	}
 	if distanceType < 0 || distanceType > 2 {
-		return errors.New("distance type is not supported")
+		return moerr.NewInternalErrorNoCtx("distance type is not supported")
 	}
 	if initType < 0 || initType > 1 {
-		return errors.New("init type is not supported")
+		return moerr.NewInternalErrorNoCtx("init type is not supported")
 	}
 
 	// validate that all vectors have the same dimension
@@ -204,7 +204,7 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 		func(idx int) {
 			eg.Go(func() error {
 				if len(vectorList[idx]) != vecDim {
-					return errors.New(fmt.Sprintf("dim mismatch. "+
+					return moerr.NewInternalErrorNoCtx(fmt.Sprintf("dim mismatch. "+
 						"vector[%d] has dimension %d, "+
 						"but vector[0] has dimension %d", idx, len(vectorList[idx]), vecDim))
 				}
