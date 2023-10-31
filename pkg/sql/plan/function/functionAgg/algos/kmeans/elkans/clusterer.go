@@ -17,6 +17,7 @@ package elkans
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"golang.org/x/sync/errgroup"
 	"math"
@@ -168,6 +169,7 @@ func (km *ElkanClusterer) elkansCluster() ([][]float64, error) {
 
 		km.Centroids = newCentroids // step 7
 
+		logutil.Debugf("kmeans iter=%d, changes=%d", iter, changes)
 		if iter != 0 && km.isConverged(iter, changes) {
 			break
 		}
@@ -412,7 +414,7 @@ func (km *ElkanClusterer) updateBounds(newCentroid [][]float64) {
 // isConverged checks if the algorithm has converged.
 func (km *ElkanClusterer) isConverged(iter int, changes int) bool {
 	if iter == km.maxIterations ||
-		changes < int(float64(km.vectorCnt)*km.deltaThreshold) ||
+		//changes < int(float64(km.vectorCnt)*km.deltaThreshold) ||
 		changes == 0 {
 		return true
 	}
