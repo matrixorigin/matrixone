@@ -206,6 +206,11 @@ func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 // Compile is the entrance of the compute-execute-layer.
 // It generates a scope (logic pipeline) for a query plan.
 func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
 	defer task.End()
 	defer func() {
