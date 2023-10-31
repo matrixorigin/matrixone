@@ -521,7 +521,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 }
 
 func checkpointMetaInfoFactory(entries []*CheckpointEntry) []*logtail.CkpLocVers {
-	var ret []*logtail.CkpLocVers
+	ret := make([]*logtail.CkpLocVers, 0)
 	for idx := range entries {
 		ret = append(ret, &logtail.CkpLocVers{
 			Location: entries[idx].GetLocation(),
