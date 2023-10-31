@@ -38,7 +38,13 @@ Project
   Limit: 10
   ->  Join
         Join Type: INNER
-        Join Cond: (v3.c3 = v4.c3)
+        Join Cond: (v4.c3 = v3.c3)
+        ->  Filter
+              Filter Cond: (v4.c2 > 0)
+              ->  Project
+                    Limit: 10
+                    ->  Table Scan on d1.t3
+                          Filter Cond: (t3.c1 <> 2)
         ->  Project
               Limit: 10
               ->  Join
@@ -54,10 +60,4 @@ Project
                                 Limit: 10
                                 ->  Table Scan on d1.t2
                                       Filter Cond: (t2.c1 <> 1)
-        ->  Filter
-              Filter Cond: (v4.c2 > 0)
-              ->  Project
-                    Limit: 10
-                    ->  Table Scan on d1.t3
-                          Filter Cond: (t3.c1 <> 2)
 drop database if exists d1;
