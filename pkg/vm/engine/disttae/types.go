@@ -464,9 +464,10 @@ type txnTable struct {
 	// objInofs stores all the data object infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
 	// it is initialized by updateObjectInfos and once it is initialized, it will not be updated
-	objInfos []logtailreplay.ObjectEntry
+	//objInfos []logtailreplay.ObjectEntry
 
 	// specify whether the objInfos is updated. once it is updated, it will not be updated again
+	//TODO::remove it in next PR.
 	objInfosUpdated bool
 	// specify whether the logtail is updated. once it is updated, it will not be updated again
 	logtailUpdated bool

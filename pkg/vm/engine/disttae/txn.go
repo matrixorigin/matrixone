@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"math"
 	"strings"
 	"time"
@@ -35,34 +34,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-func (txn *Transaction) getObjInfos(
-	ctx context.Context,
-	tbl *txnTable,
-) (objs []logtailreplay.ObjectEntry, err error) {
-	ts := types.TimestampToTS(txn.op.SnapshotTS())
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	iter, err := state.NewObjectsIter(ts)
-	if err != nil {
-		return nil, err
-	}
-	//fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
-	//if err != nil {
-	//	return nil, err
-	//}
-	for iter.Next() {
-		entry := iter.Entry()
-		objs = append(objs, entry)
-		//prefetch the object meta
-		//if err = blockio.PrefetchMeta(fs, entry.Loc); err != nil {
-		//	logutil.Warnf("prefetch meta %s failed: %v", entry.Loc, err)
-		//}
-	}
-	iter.Close()
-	return
-}
+//func (txn *Transaction) getObjInfos(
+//	ctx context.Context,
+//	tbl *txnTable,
+//) (objs []logtailreplay.ObjectEntry, err error) {
+//	ts := types.TimestampToTS(txn.op.SnapshotTS())
+//	state, err := tbl.getPartitionState(ctx)
+//	if err != nil {
+//		return nil, err
+//	}
+//	iter, err := state.NewObjectsIter(ts)
+//	if err != nil {
+//		return nil, err
+//	}
+//	for iter.Next() {
+//		entry := iter.Entry()
+//		objs = append(objs, entry)
+//	}
+//	iter.Close()
+//	return
+//}
 
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
