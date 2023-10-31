@@ -236,7 +236,7 @@ func (c *DashboardCreator) initTxnStatementsCountRow() dashboard.Option {
 		"Txn statements count",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter(`life_statements_total`, ``),
+				c.getMetricWithFilter(`mo_txn_life_statements_total_bucket`, ``),
 			},
 			[]string{
 				"statements/txn",
