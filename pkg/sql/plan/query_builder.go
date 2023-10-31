@@ -142,15 +142,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := &plan.TableDef{
-			Name:          node.TableDef.Name,
-			Defs:          node.TableDef.Defs,
-			Name2ColIndex: node.TableDef.Name2ColIndex,
-			Createsql:     node.TableDef.Createsql,
-			TblFunc:       node.TableDef.TblFunc,
-			TableType:     node.TableDef.TableType,
-			Partition:     node.TableDef.Partition,
-		}
+		newTableDef := DeepCopyTableDef(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
@@ -160,12 +152,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, col)
+			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
 		}
 
 		if len(newTableDef.Cols) == 0 {
 			internalRemapping.addColRef([2]int32{tag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[0])
+			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
 		}
 
 		node.TableDef = newTableDef
@@ -267,30 +259,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := &plan.TableDef{
-			TblId:          node.TableDef.TblId,
-			Name:           node.TableDef.Name,
-			Hidden:         node.TableDef.Hidden,
-			TableType:      node.TableDef.TableType,
-			Createsql:      node.TableDef.Createsql,
-			TblFunc:        node.TableDef.TblFunc,
-			Version:        node.TableDef.Version,
-			Pkey:           node.TableDef.Pkey,
-			Indexes:        node.TableDef.Indexes,
-			Fkeys:          node.TableDef.Fkeys,
-			RefChildTbls:   node.TableDef.RefChildTbls,
-			Checks:         node.TableDef.Checks,
-			Partition:      node.TableDef.Partition,
-			ClusterBy:      node.TableDef.ClusterBy,
-			Props:          node.TableDef.Props,
-			ViewSql:        node.TableDef.ViewSql,
-			Defs:           node.TableDef.Defs,
-			Name2ColIndex:  node.TableDef.Name2ColIndex,
-			IsLocked:       node.TableDef.IsLocked,
-			TableLockType:  node.TableDef.TableLockType,
-			IsTemporary:    node.TableDef.IsTemporary,
-			AutoIncrOffset: node.TableDef.AutoIncrOffset,
-		}
+		newTableDef := DeepCopyTableDef(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
@@ -300,12 +269,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, col)
+			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
 		}
 
 		if len(newTableDef.Cols) == 0 {
 			internalRemapping.addColRef([2]int32{tag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[0])
+			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
 		}
 
 		node.TableDef = newTableDef

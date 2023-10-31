@@ -332,10 +332,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							return err
 						}
 
-						insertUniqueTableDef := DeepCopyTableDef(uniqueTableDef)
-						for j, col := range insertUniqueTableDef.Cols {
-							if col.Name == catalog.Row_ID {
-								insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols[:j], insertUniqueTableDef.Cols[j+1:]...)
+						insertUniqueTableDef := DeepCopyTableDef(uniqueTableDef, false)
+						for _, col := range uniqueTableDef.Cols {
+							if col.Name != catalog.Row_ID {
+								insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols, DeepCopyColDef(col))
 							}
 						}
 						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true, true, nil, false)
@@ -589,7 +589,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
 							ObjRef:      childObjRef,
-							TableDef:    DeepCopyTableDef(childTableDef),
+							TableDef:    DeepCopyTableDef(childTableDef, true),
 							ProjectList: childProjectList,
 						}, bindCtx)
 						lastNodeId = builder.appendNode(&plan.Node{
@@ -666,7 +666,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 							upPlanCtx := getDmlPlanCtx()
 							upPlanCtx.objRef = childObjRef
-							upPlanCtx.tableDef = DeepCopyTableDef(childTableDef)
+							upPlanCtx.tableDef = DeepCopyTableDef(childTableDef, true)
 							upPlanCtx.updateColLength = len(rightConds)
 							upPlanCtx.isMulti = false
 							upPlanCtx.rowIdPos = childRowIdPos
@@ -889,7 +889,7 @@ func makeInsertPlan(
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(beginIdx + i),
-						Name:   catalog.Row_ID,
+						//Name:   catalog.Row_ID,
 					},
 				},
 			}
@@ -985,37 +985,19 @@ func makeInsertPlan(
 
 			if isUpdate && updatePkCol { // update stmt && pk included in update cols
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+				scanTableDef := DeepCopyTableDef(tableDef, false)
+
+				rowIdIdx := len(tableDef.Cols)
 				rowIdDef := MakeRowIdColDef()
 				tableDef.Cols = append(tableDef.Cols, rowIdDef)
-				scanTableDef := DeepCopyTableDef(tableDef)
 
-				colPos := make(map[int32]int32)
-				colPos[int32(pkPos)] = 0
-				// if len(pkFilterExprs) > 0 {
-				// 	for _, e := range pkFilterExprs {
-				// 		getColPos(e, colPos)
-				// 	}
-				// }
-				var newCols []*ColDef
-				rowIdIdx := len(scanTableDef.Cols) - 1
-				for idx, col := range scanTableDef.Cols {
-					if _, ok := colPos[int32(idx)]; ok {
-						colPos[int32(idx)] = int32(len(newCols))
-						newCols = append(newCols, col)
-					}
-					if col.Name == catalog.Row_ID {
-						colPos[int32(idx)] = int32(len(newCols))
-						newCols = append(newCols, col)
-					}
-				}
-				scanTableDef.Cols = newCols
+				scanTableDef.Cols = []*plan.ColDef{DeepCopyColDef(tableDef.Cols[pkPos]), DeepCopyColDef(rowIdDef)}
 
 				scanPkExpr := &Expr{
 					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: colPos[int32(pkPos)],
-							Name:   tableDef.Pkey.PkeyColName,
+							Name: tableDef.Pkey.PkeyColName,
 						},
 					},
 				}
@@ -1023,7 +1005,7 @@ func makeInsertPlan(
 					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: colPos[int32(rowIdIdx)],
+							ColPos: 1,
 							Name:   rowIdDef.Name,
 						},
 					},
@@ -1041,9 +1023,7 @@ func makeInsertPlan(
 								Typ: DeepCopyType(pkTyp),
 								Expr: &plan.Expr_Col{
 									Col: &plan.ColRef{
-										RelPos: 0,
-										ColPos: 0,
-										Name:   tableDef.Pkey.PkeyColName,
+										Name: tableDef.Pkey.PkeyColName,
 									},
 								},
 							},
@@ -1051,17 +1031,6 @@ func makeInsertPlan(
 					},
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
-				// if len(pkFilterExprs) > 0 {
-				// 	for _, e := range pkFilterExprs {
-				// 		resetColPos(e, colPos)
-				// 	}
-				// 	blockFilters := make([]*Expr, len(pkFilterExprs))
-				// 	for i, e := range pkFilterExprs {
-				// 		blockFilters[i] = DeepCopyExpr(e)
-				// 	}
-				// 	scanNode.FilterList = pkFilterExprs
-				// 	scanNode.BlockFilterList = blockFilters
-				// }
 
 				pkColExpr := &Expr{
 					Typ: pkTyp,
@@ -1099,7 +1068,7 @@ func makeInsertPlan(
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							RelPos: 1,
-							ColPos: int32(len(tableDef.Cols) - 1),
+							ColPos: int32(rowIdIdx),
 							Name:   rowIdDef.Name,
 						},
 					},
@@ -1160,7 +1129,7 @@ func makeInsertPlan(
 						Typ: rowIdExpr.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
-								RelPos: 1,
+								RelPos: -1,
 								ColPos: 0,
 								Name:   catalog.Row_ID,
 							},
@@ -1169,7 +1138,7 @@ func makeInsertPlan(
 						Typ: rowIdExpr.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
-								RelPos: 1,
+								RelPos: -1,
 								ColPos: 1,
 								Name:   catalog.Row_ID,
 							},
@@ -1178,7 +1147,7 @@ func makeInsertPlan(
 						Typ: pkColExpr.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
-								RelPos: 1,
+								RelPos: -1,
 								ColPos: 2,
 								Name:   tableDef.Pkey.PkeyColName,
 							},
@@ -1266,27 +1235,24 @@ func makeInsertPlan(
 			// insert stmt but not load stmt, not insert without auto incr pk col
 			if !isUpdate && !builder.qry.LoadTag && !isInsertWithoutAutoPkCol {
 				if len(pkFilterExprs) > 0 {
-					scanTableDef := DeepCopyTableDef(tableDef)
-					// scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
 					pkNameMap := make(map[string]int)
 					for i, n := range tableDef.Pkey.Names {
 						pkNameMap[n] = i
 					}
-					newCols := make([]*ColDef, len(scanTableDef.Pkey.Names))
-					for _, def := range scanTableDef.Cols {
-						if i, ok := pkNameMap[def.Name]; ok {
-							newCols[i] = def
+					pkSize := len(tableDef.Pkey.Names)
+					if pkSize > 1 {
+						pkSize++
+					}
+					scanTableDef := DeepCopyTableDef(tableDef, false)
+					scanTableDef.Cols = make([]*ColDef, pkSize)
+					for _, col := range tableDef.Cols {
+						if i, ok := pkNameMap[col.Name]; ok {
+							scanTableDef.Cols[i] = DeepCopyColDef(col)
+						} else if col.Name == scanTableDef.Pkey.PkeyColName {
+							scanTableDef.Cols[pkSize-1] = DeepCopyColDef(col)
+							break
 						}
 					}
-					if len(newCols) > 1 {
-						for _, col := range scanTableDef.Cols {
-							if col.Name == scanTableDef.Pkey.PkeyColName {
-								newCols = append(newCols, col)
-								break
-							}
-						}
-					}
-					scanTableDef.Cols = newCols
 					scanNode := &plan.Node{
 						NodeType: plan.Node_TABLE_SCAN,
 						Stats:    &plan.Stats{},
@@ -1312,8 +1278,8 @@ func makeInsertPlan(
 					scanNode.BlockFilterList = blockFilterList
 				} else {
 					lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-					scanTableDef := DeepCopyTableDef(tableDef)
-					scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
+					scanTableDef := DeepCopyTableDef(tableDef, false)
+					scanTableDef.Cols = []*ColDef{DeepCopyColDef(tableDef.Cols[pkPos])}
 					scanNode := &plan.Node{
 						NodeType: plan.Node_TABLE_SCAN,
 						Stats:    &plan.Stats{},
@@ -1848,16 +1814,51 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 	lastNodeId := baseNodeId
 	for _, fk := range tableDef.Fkeys {
-		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl)
-		parentPosMap := make(map[string]int32)
-		parentTypMap := make(map[string]*plan.Type)
-		parentId2name := make(map[uint64]string)
-		for idx, col := range parentTableDef.Cols {
-			parentPosMap[col.Name] = int32(idx)
-			parentTypMap[col.Name] = col.Typ
-			parentId2name[col.ColId] = col.Name
+		fkeyId2Idx := make(map[uint64]int)
+		for i, colId := range fk.ForeignCols {
+			fkeyId2Idx[colId] = i
 		}
-		projectList := getProjectionByLastNode(builder, lastNodeId)
+
+		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl)
+		newTableDef := DeepCopyTableDef(parentTableDef, false)
+		joinConds := make([]*plan.Expr, 0)
+		for _, col := range parentTableDef.Cols {
+			if fkIdx, ok := fkeyId2Idx[col.ColId]; ok {
+				rightPos := len(newTableDef.Cols)
+				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+
+				parentColumnName := col.Name
+				childColumnName := id2name[fk.Cols[fkIdx]]
+
+				leftExpr := &Expr{
+					Typ: typMap[childColumnName],
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(name2pos[childColumnName]),
+							Name:   childColumnName,
+						},
+					},
+				}
+				rightExpr := &plan.Expr{
+					Typ: DeepCopyType(col.Typ),
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 1,
+							ColPos: int32(rightPos),
+							Name:   parentColumnName,
+						},
+					},
+				}
+				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+				if err != nil {
+					return -1, err
+				}
+				joinConds = append(joinConds, condExpr)
+			}
+		}
+
+		parentTableDef = newTableDef
 
 		// append table scan node
 		scanNodeProject := make([]*Expr, len(parentTableDef.Cols))
@@ -1880,52 +1881,16 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 			ProjectList: scanNodeProject,
 		}, bindCtx)
 
-		// build join conds
-		joinConds := make([]*Expr, len(fk.Cols))
-		for i, colId := range fk.ForeignCols {
-			for _, col := range parentTableDef.Cols {
-				if col.ColId == colId {
-					parentColumnName := col.Name
-					childColumnName := id2name[fk.Cols[i]]
-
-					leftExpr := &Expr{
-						Typ: typMap[childColumnName],
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: 0,
-								ColPos: int32(name2pos[childColumnName]),
-								Name:   childColumnName,
-							},
-						},
-					}
-					rightExpr := &plan.Expr{
-						Typ: parentTypMap[parentColumnName],
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: 1,
-								ColPos: parentPosMap[parentColumnName],
-								Name:   parentColumnName,
-							},
-						},
-					}
-					condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
-					if err != nil {
-						return -1, err
-					}
-					joinConds[i] = condExpr
-					break
-				}
-			}
-		}
+		projectList := getProjectionByLastNode(builder, lastNodeId)
 
 		// append project
 		projectList = append(projectList, &Expr{
-			Typ: parentTypMap[catalog.Row_ID],
+			Typ: DeepCopyType(parentTableDef.Cols[0].Typ),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 1,
-					ColPos: parentPosMap[catalog.Row_ID],
-					Name:   catalog.Row_ID,
+					ColPos: 0,
+					Name:   parentTableDef.Cols[0].Name,
 				},
 			},
 		})
@@ -1995,7 +1960,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		ProjectList: preInsertProjection,
 		PreInsertCtx: &plan.PreInsertCtx{
 			Ref:        objRef,
-			TableDef:   DeepCopyTableDef(tableDef),
+			TableDef:   DeepCopyTableDef(tableDef, true),
 			HasAutoCol: hashAutoCol,
 			IsUpdate:   isUpdate,
 		},
