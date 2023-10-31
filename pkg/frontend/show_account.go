@@ -28,12 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	ctl2 "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
-	"strconv"
 	"strings"
 )
 
@@ -145,43 +143,43 @@ func requestStorageUsage(ctx context.Context, ses *Session) (resp interface{}, e
 	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
 	result, err := handler(ses.proc, "DN", "", ctl2.MoCtlTNCmdSender)
 	if err != nil {
-		return nil, err
+		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `show accounts`")
 	}
 
 	return result.Data.([]interface{})[0], nil
 }
 
-func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService, usage *db.StorageUsageResp) (map[int32]uint64, error) {
+func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
+	usage *db.StorageUsageResp) (map[int32]uint64, error) {
 	result := make(map[int32]uint64, 0)
-	if usage.CkpLocations != "" {
-		// load checkpoint data and decode
-		strs := strings.Split(usage.CkpLocations, ";")
-		version, err := strconv.ParseUint(strs[1], 10, 32)
-		if err != nil {
-			return nil, err
-		}
+	for idx := range usage.CkpEntries {
+		version := usage.CkpEntries[idx].Version
+		location := usage.CkpEntries[idx].Location
 
-		loc, err := blockio.EncodeLocationFromString(strs[0])
-		if err != nil {
-			return nil, err
-		}
-
-		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, fs, loc, uint32(version))
+		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, fs, location, version)
 		if err != nil {
 			return nil, err
 		}
 
 		storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
 		accIDVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID)
-		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockSize)
+		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
 
+		if accIDVec.Length() == 0 {
+			// exist old version checkpoint which hasn't storage usage data in it,
+			// to avoid inaccurate info leading misunderstand, we chose to return empty result
+			return map[int32]uint64{}, nil
+		}
+
+		size := uint64(0)
 		length := accIDVec.Length()
 		for i := 0; i < length; i++ {
 			result[int32(accIDVec.Get(i).(uint64))] += sizeVec.Get(i).(uint64)
+			size += sizeVec.Get(i).(uint64)
 		}
 	}
 
-	// [account_id, db_id, table_id, table_total_size]
+	// [account_id, db_id, table_id, obj_id, table_total_size]
 	for _, info := range usage.BlockEntries {
 		result[int32(info.Info[0])] += info.Info[3]
 	}
@@ -295,7 +293,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	// step 2
 	// calculating the storage usage size of accounts
 	// the returned value is a map: account_id -> size (in bytes)
-	size, err := getAllAccountsStorageUsage(ctx, ses)
+	usage, err := getAllAccountsStorageUsage(ctx, ses)
 	if err != nil {
 		return err
 	}
@@ -311,7 +309,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 			}
 
 			// step 3.2: put size value into batch
-			embeddingSizeToBatch(tempBatch, size[id], mp)
+			embeddingSizeToBatch(tempBatch, usage[id], mp)
 
 			eachAccountInfo = append(eachAccountInfo, tempBatch)
 		}
@@ -334,7 +332,6 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	//step4: generate mysql result set
 	outputRS := &MysqlResultSet{}
-	// bug here!!!
 	if err = initOutputRs(outputRS, rsOfMoAccount, rsOfEachAccount, ctx); err != nil {
 		return err
 	}
@@ -345,6 +342,13 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 			return err
 		}
 	}
+
+	if len(usage) == 0 && ses.isInternal {
+		// no valid usage info from the checkpoints.
+		// for internal `show accounts`, should leave the result empty
+		return
+	}
+
 	ses.SetMysqlResultSet(outputRS)
 
 	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -151,12 +152,9 @@ func createAndWriteBatchNASegment(t *testing.T, ctx context.Context, segCnts []i
 	}
 }
 
-func createTables(t *testing.T, ctx context.Context, colCnt int, tblCnt int) (*db.DB, []handle.Relation) {
-	tae := testutil.InitTestDB(ctx, "logtail", t, nil)
-	defer tae.Close()
-
+func createTables(t *testing.T, tae *db.DB, dbName string, colCnt int, tblCnt int) []handle.Relation {
 	txn, _ := tae.StartTxn(nil)
-	db, err := txn.CreateDatabase("db", "", "")
+	db, err := txn.CreateDatabase(dbName, "", "")
 	assert.Nil(t, err)
 
 	rels := make([]handle.Relation, tblCnt)
@@ -167,32 +165,42 @@ func createTables(t *testing.T, ctx context.Context, colCnt int, tblCnt int) (*d
 		rels[i] = rel
 	}
 
-	return tae, rels
+	return rels
 }
 
-// test plan:
-//  1. test if the `fillSEGStorageUsageBat` work as expected
-//  2. benchmark the `fillSEGStorageUsageBat`
-func Test_FillSEGStorageUsageBat(t *testing.T) {
-	ctx := context.Background()
+func createTAE(t *testing.T, ctx context.Context) *db.DB {
+	return testutil.InitTestDB(ctx, "logtail", t, nil)
+}
 
+func createTablesAndSegments(t *testing.T, ctx context.Context, tae *db.DB, dbName string, tblCnt int) {
 	// table count
-	relCnt := 10
+	relCnt := tblCnt
 	naSegCnts := make([]int, relCnt)
 	for i := 0; i < relCnt; i++ {
 		// generating the count of non appendable segment for each table
 		naSegCnts[i] = rand.Int()%50 + 1
 	}
 
-	tae, rels := createTables(t, ctx, 10, relCnt)
+	rels := createTables(t, tae, dbName, 10, relCnt)
 	createAndWriteBatchNASegment(t, ctx, naSegCnts, rels, tae.Runtime.Fs)
+}
 
+// test plan:
+//  1. test if the `fillSEGStorageUsageBat` work as expected
+//  2. benchmark the `fillSEGStorageUsageBat`
+func Test_FillSEGStorageUsageBatOfIncrement(t *testing.T) {
+	ctx := context.Background()
+
+	tae := createTAE(t, ctx)
+	defer tae.Close()
+
+	createTablesAndSegments(t, ctx, tae, "testdb", 10)
 	collector := logtail.NewIncrementalCollector(types.TS{}, types.TS{})
 	collector.BlockFn = nil
 	collector.DatabaseFn = nil
 	collector.TableFn = nil
 	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-		logtail.FillSEGStorageUsageBat(collector.BaseCollector, segment)
+		logtail.FillSEGStorageUsageBatOfIncrement(collector.BaseCollector, segment)
 
 		require.NotNil(t, segment.GetFirstBlkEntry())
 		if !segment.IsAppendable() {
@@ -209,25 +217,136 @@ func Test_FillSEGStorageUsageBat(t *testing.T) {
 	tae.Catalog.RecurLoop(collector)
 
 	storageUsageBat := collector.OrphanData().GetBatches()[logtail.SEGStorageUsageIDX]
-	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockSize)
+	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
 
 	logutil.Info(storageUsageBat.String())
 
 	// should generate one size record for each table
-	require.Equal(t, relCnt, sizeVec.Length())
+	require.Equal(t, 10, sizeVec.Length())
 }
 
-// segment: 1
-// Benchmark_FillSEGStorageUsageBat-12  64	18220491 ns/op
-// segment: 10
-// Benchmark_FillSEGStorageUsageBat-12  16	66122781 ns/op
-func Benchmark_FillSEGStorageUsageBat(b *testing.B) {
+// Benchmark_FillSEGStorageUsageBatOfIncrement-12  2  635291604 ns/op
+func Benchmark_FillSEGStorageUsageBatOfIncrement(b *testing.B) {
 	ctx := context.Background()
 
 	t := &testing.T{}
+	tae := createTAE(t, ctx)
+	defer tae.Close()
+	rels := createTables(t, tae, "testdb", 10, 1)
+
+	collector := logtail.NewIncrementalCollector(types.TS{}, types.TS{})
+	collector.BlockFn = nil
+	collector.DatabaseFn = nil
+	collector.TableFn = nil
+	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
+		logtail.FillSEGStorageUsageBatOfIncrement(collector.BaseCollector, segment)
+		return nil
+	}
 
 	for i := 0; i < b.N; i++ {
-		tae, rels := createTables(t, ctx, 10, 1)
-		createAndWriteBatchNASegment(t, ctx, []int{10}, rels, tae.Runtime.Fs)
+		createAndWriteBatchNASegment(t, ctx, []int{100}, rels, tae.Runtime.Fs)
+		tae.Catalog.RecurLoop(collector)
 	}
+}
+
+func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt int, oldVersion bool) (
+	[]*checkpoint.CheckpointEntry, []handle.Relation) {
+	// create 3 tables, and each table has 10 columns
+	rels := createTables(t, tae, "testdb", 10, 3)
+	var entries []*checkpoint.CheckpointEntry
+	for i := 0; i < cnt; i++ {
+		// 3 tables, each table has 10 non-appendable segment
+		createAndWriteBatchNASegment(t, ctx, []int{10, 10, 10}, rels, tae.Runtime.Fs)
+		collector := logtail.NewIncrementalCollector(types.TS{}, types.TS{})
+		collector.BlockFn = nil
+		collector.DatabaseFn = nil
+		collector.TableFn = nil
+		collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
+			logtail.FillSEGStorageUsageBatOfIncrement(collector.BaseCollector, segment)
+			return nil
+		}
+
+		tae.Catalog.RecurLoop(collector)
+		incrCkpData := collector.OrphanData()
+		defer incrCkpData.Close()
+
+		if oldVersion {
+			// remove the storage usage data to mock old version checkpoint
+			incrCkpData.GetBatches()[logtail.SEGStorageUsageIDX].Reset()
+		}
+
+		cnLocation, tnLocation, err := incrCkpData.WriteTo(tae.Runtime.Fs.Service,
+			logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
+		require.Nil(t, err)
+
+		entry := checkpoint.NewCheckpointEntry(types.TS{}, types.TS{}, checkpoint.ET_Incremental)
+		entry.SetLocation(cnLocation, tnLocation)
+
+		entries = append(entries, entry)
+	}
+	return entries, rels
+}
+
+func checkpointMetaInfoFactory(entries []*checkpoint.CheckpointEntry) []*logtail.CkpLocVers {
+	var ret []*logtail.CkpLocVers
+	for idx := range entries {
+		ret = append(ret, &logtail.CkpLocVers{
+			Location: entries[idx].GetLocation(),
+			Version:  entries[idx].GetVersion(),
+		})
+	}
+	return ret
+}
+
+func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("current version", func(t *testing.T) {
+		tae := createTAE(t, ctx)
+		defer tae.Close()
+
+		entries, rels := createCkpAndWriteDown(t, ctx, tae, 10, false)
+		collector := logtail.NewGlobalCollector(types.TS{}, 0)
+
+		// mark the first table as deleted
+		d := collector.GetDeletes()
+		d[logtail.UsageTblID][rels[0].ID()] = struct{}{}
+
+		logtail.FillSEGStorageUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
+
+		data := collector.OrphanData()
+		defer data.Close()
+
+		bat := data.GetBatches()[logtail.SEGStorageUsageIDX]
+		sizeVec := bat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
+
+		require.Equal(t, len(rels)-1, sizeVec.Length())
+	})
+
+	t.Run("old version", func(t *testing.T) {
+		tae := createTAE(t, ctx)
+		defer tae.Close()
+
+		entries, rels := createCkpAndWriteDown(t, ctx, tae, 10, true)
+		collector := logtail.NewGlobalCollector(types.TS{}, 0)
+
+		// mark all tables as deleted
+		d := collector.GetDeletes()
+		for i := 0; i < len(rels); i++ {
+			d[logtail.UsageTblID][rels[i].ID()] = struct{}{}
+		}
+
+		logtail.FillSEGStorageUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
+
+		data := collector.OrphanData()
+		defer data.Close()
+
+		bat := data.GetBatches()[logtail.SEGStorageUsageIDX]
+		sizeVec := bat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
+
+		// when existing old checkpoints, it will traverse the catalog
+		// so the finial number of records should be len(rels)
+		require.Equal(t, len(rels), sizeVec.Length())
+	})
+
 }
