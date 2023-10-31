@@ -15,19 +15,49 @@
 package elkans
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"gonum.org/v1/gonum/mat"
+	"math"
 )
 
-func L2Distance(v1, v2 []float64) float64 {
-	val, _ := moarray.L2Distance[float64](v1, v2)
-	return val
+// L2Distance is used for L2 distance in Euclidean Kmeans.
+func L2Distance(v1, v2 *mat.VecDense) float64 {
+	diff := mat.NewVecDense(v1.Len(), nil)
+	diff.SubVec(v1, v2)
+	return mat.Norm(diff, 2)
 }
 
-func AngularDistance(v1, v2 []float64) float64 {
-	val, _ := moarray.AngularDistance[float64](v1, v2)
-	return val
+// AngularDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
+// NOTE: spherical distance between two points on a sphere is equal to the
+// angular distance between the two points, scaled by pi.
+// Refs:
+// https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
+// https://github.com/pgvector/pgvector/blob/12aecfb4f593796d6038210d43ba483af7750a00/src/vector.c#L694
+func AngularDistance(v1, v2 *mat.VecDense) float64 {
+	// Compute the dot product of the two vectors.
+	// The dot product of two vectors is a measure of their similarity,
+	// and it can be used to calculate the angle between them.
+	dp := mat.Dot(v1, v2)
+
+	// Handle precision issues: Clamp the dot product to the range [-1, 1].
+	if dp > 1.0 {
+		dp = 1.0
+	} else if dp < -1.0 {
+		dp = -1.0
+	}
+
+	// The acos() function is the inverse cosine function.
+	// It returns the angle in radians whose cosine is dp.
+	theta := math.Acos(dp)
+
+	//To scale the result to the range [0, 1], we divide by Pi.
+	return theta / math.Pi
+
+	// NOTE:
+	// Cosine distance is a measure of the similarity between two vectors. [Not satisfy triangle inequality]
+	// Angular distance is a measure of the angular separation between two points. [Satisfy triangle inequality]
+	// Spherical distance is a measure of the spatial separation between two points on a sphere. [Satisfy triangle inequality]
 }
 
 // resolveDistanceFn returns the distance function corresponding to the distance type
@@ -44,7 +74,7 @@ func resolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, e
 	case kmeans.InnerProduct, kmeans.CosineDistance:
 		distanceFunction = AngularDistance
 	default:
-		return nil, errors.New("invalid distance type")
+		return nil, moerr.NewInternalErrorNoCtx("invalid distance type")
 	}
 	return distanceFunction, nil
 }

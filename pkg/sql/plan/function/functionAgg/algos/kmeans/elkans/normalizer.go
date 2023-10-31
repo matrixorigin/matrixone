@@ -12,34 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kmeans
+package elkans
 
 import "gonum.org/v1/gonum/mat"
 
-const DefaultRandSeed = 1
-
-type Clusterer interface {
-	Normalize()
-	InitCentroids()
-	Cluster() ([][]float64, error)
-	SSE() float64
+func NormalizeGonumVectors(vectors []*mat.VecDense) {
+	for i := range vectors {
+		NormalizeGonumVector(vectors[i])
+	}
 }
 
-type DistanceType uint16
+func NormalizeGonumVector(vector *mat.VecDense) {
+	norm := mat.Norm(vector, 2)
+	if norm != 0 {
+		vector.ScaleVec(1/norm, vector)
+	}
+}
 
-const (
-	L2 DistanceType = iota
-	InnerProduct
-	CosineDistance
-)
-
-type InitType uint16
-
-const (
-	Random InitType = iota
-)
-
-// DistanceFunction is a function that computes the distance between two vectors
-// NOTE: clusterer already ensures that the all the input vectors are of the same length,
-// so we don't need to check for that here again and return error if the lengths are different.
-type DistanceFunction func(v1, v2 *mat.VecDense) float64
+// NormalizeMoArray is used only in test functions.
+func NormalizeMoArray(vector []float64) []float64 {
+	res := ToGonumsVector(vector)
+	NormalizeGonumVector(res)
+	return ToMOArray(res)
+}

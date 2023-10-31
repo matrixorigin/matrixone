@@ -12,34 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kmeans
+package elkans
 
 import "gonum.org/v1/gonum/mat"
 
-const DefaultRandSeed = 1
-
-type Clusterer interface {
-	Normalize()
-	InitCentroids()
-	Cluster() ([][]float64, error)
-	SSE() float64
+func ToGonumsVectors(vectors [][]float64) []*mat.VecDense {
+	res := make([]*mat.VecDense, len(vectors))
+	for i, vec := range vectors {
+		res[i] = ToGonumsVector(vec)
+	}
+	return res
 }
 
-type DistanceType uint16
+func ToGonumsVector(vectors []float64) *mat.VecDense {
+	return mat.NewVecDense(len(vectors), vectors)
+}
 
-const (
-	L2 DistanceType = iota
-	InnerProduct
-	CosineDistance
-)
+func ToMOArrays(vectors []*mat.VecDense) [][]float64 {
+	moVectors := make([][]float64, len(vectors))
+	for i, vec := range vectors {
+		moVectors[i] = ToMOArray(vec)
+	}
+	return moVectors
+}
 
-type InitType uint16
-
-const (
-	Random InitType = iota
-)
-
-// DistanceFunction is a function that computes the distance between two vectors
-// NOTE: clusterer already ensures that the all the input vectors are of the same length,
-// so we don't need to check for that here again and return error if the lengths are different.
-type DistanceFunction func(v1, v2 *mat.VecDense) float64
+func ToMOArray(vec *mat.VecDense) []float64 {
+	return vec.RawVector().Data
+}
