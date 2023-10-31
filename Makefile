@@ -107,7 +107,7 @@ cgo:
 .PHONY: build
 build: config cgo
 	$(info [Build binary])
-	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) -o $(BIN_NAME) ./cmd/mo-service
+	$(CGO_OPTS) go build  $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 .PHONY: modump
 modump:

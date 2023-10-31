@@ -146,6 +146,14 @@ func TestT_OidString(t *testing.T) {
 	require.Equal(t, "T_int16", T_int16.OidString())
 	require.Equal(t, "T_int32", T_int32.OidString())
 	require.Equal(t, "T_int64", T_int64.OidString())
+
+	require.Equal(t, "T_uint8", T_uint8.OidString())
+	require.Equal(t, "T_uint16", T_uint16.OidString())
+	require.Equal(t, "T_uint32", T_uint32.OidString())
+	require.Equal(t, "T_uint64", T_uint64.OidString())
+
+	require.Equal(t, "T_float32", T_float32.OidString())
+	require.Equal(t, "T_float64", T_float64.OidString())
 }
 
 func sliceCopy(a, b []float64) {
@@ -212,4 +220,38 @@ func BenchmarkCastB(b *testing.B) {
 			z[i] = math.Log(y[i])
 		}
 	}
+}
+
+func TestType_DescString(t *testing.T) {
+	require.Equal(t, Type{
+		Oid:   T_char,
+		Width: 10,
+	}.DescString(), "CHAR(10)")
+
+	require.Equal(t, Type{
+		Oid:   T_varchar,
+		Width: 20,
+	}.DescString(), "VARCHAR(20)")
+
+	require.Equal(t, Type{
+		Oid:   T_binary,
+		Width: 0,
+	}.DescString(), "BINARY(0)")
+
+	require.Equal(t, Type{
+		Oid:   T_varbinary,
+		Width: 0,
+	}.DescString(), "VARBINARY(0)")
+
+	require.Equal(t, Type{
+		Oid:   T_decimal64,
+		Width: 5,
+		Scale: 2,
+	}.DescString(), "DECIMAL(5,2)")
+
+	require.Equal(t, Type{
+		Oid:   T_decimal128,
+		Width: 20,
+		Scale: 10,
+	}.DescString(), "DECIMAL(20,10)")
 }

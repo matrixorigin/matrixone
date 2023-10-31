@@ -46,6 +46,7 @@ func TestCheck(t *testing.T) {
 		desc        string
 		cluster     pb.ClusterInfo
 		infos       pb.LogState
+		users       pb.TaskTableUser
 		removing    map[uint64][]uint64
 		adding      map[uint64][]uint64
 		currentTick uint64
@@ -329,6 +330,83 @@ func TestCheck(t *testing.T) {
 			currentTick: expiredTick + 1,
 			expected:    []*operator.Operator{},
 		},
+		{
+			desc: "no more stores but need to create task service",
+			cluster: pb.ClusterInfo{
+				TNShards: []metadata.TNShardRecord{{
+					ShardID:    1,
+					LogShardID: 1,
+				}},
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3,
+				}},
+			},
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
+					ShardID: 1,
+					Replicas: map[uint64]string{
+						1: "a",
+						2: "b",
+						3: "c",
+					},
+					Epoch:    1,
+					LeaderID: 1,
+					Term:     1,
+				}},
+				Stores: map[string]pb.LogStoreInfo{
+					"a": {
+						Tick: 0,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 1,
+								Term:     1,
+							},
+							ReplicaID: 1,
+						}},
+						TaskServiceCreated: true,
+					},
+					"b": {
+						Tick: expiredTick + 1,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 1,
+								Term:     1,
+							},
+						}},
+						TaskServiceCreated: true,
+					},
+					"c": {
+						Tick: expiredTick + 1,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 1,
+								Term:     1,
+							},
+						}},
+						TaskServiceCreated: false,
+					},
+				},
+			},
+			users:       pb.TaskTableUser{Username: "abc"},
+			removing:    nil,
+			adding:      nil,
+			currentTick: 0,
+			expected: []*operator.Operator{operator.NewOperator("", 1,
+				1, operator.CreateTaskService{
+					StoreID:  "c",
+					TaskUser: pb.TaskTableUser{Username: "abc"},
+				})},
+		},
 	}
 
 	for i, c := range cases {
@@ -340,7 +418,7 @@ func TestCheck(t *testing.T) {
 			Adding:   c.adding,
 			Removing: c.removing,
 		}
-		operators := Check(alloc, cfg, c.cluster, c.infos, executing, pb.TaskTableUser{}, c.currentTick)
+		operators := Check(alloc, cfg, c.cluster, c.infos, executing, c.users, c.currentTick)
 
 		assert.Equal(t, len(c.expected), len(operators))
 		for j, op := range operators {

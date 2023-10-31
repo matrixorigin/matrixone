@@ -141,6 +141,10 @@ func (v *Vector) SetType(typ types.Type) {
 	v.typ = typ
 }
 
+func (v *Vector) SetTypeScale(scale int32) {
+	v.typ.Scale = scale
+}
+
 func (v *Vector) GetNulls() *nulls.Nulls {
 	return &v.nsp
 }
