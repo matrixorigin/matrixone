@@ -206,7 +206,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		return err
 	}
 
-	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
+	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	oldDefs, err := rel.TableDefs(c.ctx)
 	if err != nil {
 		return err
@@ -974,7 +974,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	tableId := r.GetTableID(c.ctx)
 
-	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
+	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
 	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
 
 	if indexDef.Unique {
