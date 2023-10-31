@@ -15,8 +15,10 @@
 package elkans
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -78,6 +80,7 @@ func Test_Cluster(t *testing.T) {
 		fields  kmeansArg
 		want    [][]float64
 		wantErr bool
+		wantSSE float64
 	}{
 		{
 			name: "Test 1 - Skewed data (Random Init)",
@@ -92,6 +95,9 @@ func Test_Cluster(t *testing.T) {
 					{10, 2, 4, 5},
 					{10, 3, 4, 5},
 					{10, 5, 4, 5},
+					{10, 2, 4, 5},
+					{10, 3, 4, 5},
+					{10, 5, 4, 5},
 				},
 				clusterCnt:     2,
 				maxIterations:  500,
@@ -100,13 +106,14 @@ func Test_Cluster(t *testing.T) {
 				initType:       kmeans.Random,
 			},
 			want: [][]float64{
-				{1, 2, 3.611111111111111, 4.611111111111112},
-				{10, 3.777777777777778, 4, 5},
+				{10, 3.3333333333333335, 4, 5},
+				{1, 2, 3.6666666666666665, 4.666666666666667},
 			},
+			wantSSE: 12,
 			wantErr: false,
 		},
 		{
-			name: "Test 1 - Skewed data (Kmeans++ Init)",
+			name: "Test 2 - Skewed data (Kmeans++ Init)",
 			fields: kmeansArg{
 				vectorList: [][]float64{
 					{1, 2, 3, 4},
@@ -118,6 +125,9 @@ func Test_Cluster(t *testing.T) {
 					{10, 2, 4, 5},
 					{10, 3, 4, 5},
 					{10, 5, 4, 5},
+					{10, 2, 4, 5},
+					{10, 3, 4, 5},
+					{10, 5, 4, 5},
 				},
 				clusterCnt:     2,
 				maxIterations:  500,
@@ -125,11 +135,12 @@ func Test_Cluster(t *testing.T) {
 				distType:       kmeans.L2,
 				initType:       kmeans.KmeansPlusPlus,
 			},
-			// NOTE: With Kmeans++ we have a better set of initial centroids resulting in a better clustering
+			// NOTE: both Kmeans++ and Random initialization converge to same centroids.
 			want: [][]float64{
-				{1, 2, 3.611111111111111, 4.611111111111112},
-				{10, 2.777777777777778, 4, 5},
+				{1, 2, 3.6666666666666665, 4.666666666666667},
+				{10, 3.3333333333333335, 4, 5},
 			},
+			wantSSE: 12,
 			wantErr: false,
 		},
 	}
