@@ -164,7 +164,7 @@ func (r *objectReaderV1) ReadOneBlock(
 		return
 	}
 	meta, _ := metaHeader.DataMeta()
-	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory)
+	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory, r.dataCachePolicy)
 }
 
 func (r *objectReaderV1) ReadSubBlock(
