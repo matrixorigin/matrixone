@@ -621,8 +621,8 @@ type GlobalCollector struct {
 }
 
 // GetDeletes only for test
-func (g *GlobalCollector) GetDeletes() [UsageMAX]map[interface{}]struct{} {
-	return g.deletes
+func (collector *GlobalCollector) GetDeletes() [UsageMAX]map[interface{}]struct{} {
+	return collector.deletes
 }
 
 func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalCollector {
