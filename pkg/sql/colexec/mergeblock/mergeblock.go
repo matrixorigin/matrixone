@@ -40,7 +40,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+	if result.Batch == nil {
+		result.Status = vm.ExecStop
+		return result, nil
+	}
+	if result.Batch.IsEmpty() {
+		result.Batch = batch.EmptyBatch
 		return result, nil
 	}
 	bat := result.Batch
@@ -86,6 +91,5 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
-	// result.Batch = nil
 	return result, nil
 }

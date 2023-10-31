@@ -149,6 +149,10 @@ func TestMergeBlock(t *testing.T) {
 	//	}
 	//}
 	argument1.Free(proc, false, nil)
+	for k := range argument1.container.mp {
+		argument1.container.mp[k].Clean(proc.GetMPool())
+	}
+	argument1.children[0].Free(proc, false, nil)
 	proc.FreeVectors()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
