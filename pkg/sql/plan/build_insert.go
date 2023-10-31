@@ -87,7 +87,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
 		// append on duplicate key node
-		tableDef = DeepCopyTableDef(tableDef)
+		tableDef = DeepCopyTableDef(tableDef, true)
 		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 		}
@@ -176,7 +176,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		updateColPosMap := make(map[string]int)
 		var insertColPos []int
 		var projectProjection []*Expr
-		tableDef = DeepCopyTableDef(tableDef)
+		tableDef = DeepCopyTableDef(tableDef, true)
 		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
 		colLength := len(tableDef.Cols)
 		rowIdPos := colLength - 1

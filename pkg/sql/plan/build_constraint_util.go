@@ -566,7 +566,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			stmt.OnDuplicateUpdate = nil
 		}
 
-		rightTableDef := DeepCopyTableDef(tableDef)
+		rightTableDef := DeepCopyTableDef(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
 		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {

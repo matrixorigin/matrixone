@@ -48,28 +48,36 @@ func NewStatsCache() *StatsCache {
 }
 
 type StatsInfoMap struct {
-	NdvMap      map[string]float64
-	MinValMap   map[string]float64
-	MaxValMap   map[string]float64
-	DataTypeMap map[string]types.T
-	BlockNumber int //detect if block number changes , update stats info map
-	TableCnt    float64
-	tableName   string
+	NdvMap       map[string]float64
+	MinValMap    map[string]float64
+	MaxValMap    map[string]float64
+	DataTypeMap  map[string]types.T
+	BlockNumber  uint16
+	ObjectNumber int //detect if block number changes , update stats info map
+	TableCnt     float64
+	tableName    string
 }
 
 func NewStatsInfoMap() *StatsInfoMap {
 	return &StatsInfoMap{
-		NdvMap:      make(map[string]float64),
-		MinValMap:   make(map[string]float64),
-		MaxValMap:   make(map[string]float64),
-		DataTypeMap: make(map[string]types.T),
-		BlockNumber: 0,
-		TableCnt:    0,
+		NdvMap:       make(map[string]float64),
+		MinValMap:    make(map[string]float64),
+		MaxValMap:    make(map[string]float64),
+		DataTypeMap:  make(map[string]types.T),
+		BlockNumber:  0,
+		ObjectNumber: 0,
+		TableCnt:     0,
 	}
 }
 
-func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
-	if sc.BlockNumber == 0 || sc.BlockNumber != currentBlockNum {
+func (sc *StatsInfoMap) NeedUpdate(currentObjNum int) bool {
+	if sc.ObjectNumber == 0 {
+		return true
+	}
+	if math.Abs(float64(sc.ObjectNumber-currentObjNum)) >= 100 {
+		return true
+	}
+	if float64(currentObjNum)/float64(sc.ObjectNumber) > 1.1 || float64(currentObjNum)/float64(sc.ObjectNumber) < 0.9 {
 		return true
 	}
 	return false
@@ -108,9 +116,10 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan.TableDef, s *StatsInfoMap) {
+func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tableDef *plan.TableDef, s *StatsInfoMap) {
 	logutil.Debugf("need to update statsCache for table %v", tableDef.Name)
-	s.BlockNumber = blockNumTotal
+	s.ObjectNumber = numObjs
+	s.BlockNumber = numBlks
 	s.TableCnt = info.TableCnt
 	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
@@ -669,15 +678,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
-		}
-	}
-
-	// if there is a limit, outcnt is limit number
-	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
-			if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
-				node.Stats.Outcnt = float64(c.I64Val)
-			}
 		}
 	}
 }
