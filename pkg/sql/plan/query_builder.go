@@ -1977,6 +1977,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var resultLen int
 	var havingBinder *HavingBinder
 	var lockNode *plan.Node
+	var notCacheable bool
 
 	if clause == nil {
 		proc := builder.compCtx.GetProcess()
@@ -2238,10 +2239,17 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				newFilterList = append(newFilterList, expr)
 			}
 
+			for _, filter := range newFilterList {
+				if detectedExprWhetherTimeRelated(filter) {
+					notCacheable = true
+				}
+			}
+
 			nodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{nodeID},
-				FilterList: newFilterList,
+				NodeType:     plan.Node_FILTER,
+				Children:     []int32{nodeID},
+				FilterList:   newFilterList,
+				NotCacheable: notCacheable,
 			}, ctx)
 		}
 
@@ -2322,6 +2330,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		exprStr := proj.String()
 		if _, ok := ctx.projectByExpr[exprStr]; !ok {
 			ctx.projectByExpr[exprStr] = int32(i)
+		}
+
+		if !notCacheable {
+			if detectedExprWhetherTimeRelated(proj) {
+				notCacheable = true
+			}
 		}
 	}
 
@@ -2658,10 +2672,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: ctx.projects,
-		Children:    []int32{nodeID},
-		BindingTags: []int32{ctx.projectTag},
+		NodeType:     plan.Node_PROJECT,
+		ProjectList:  ctx.projects,
+		Children:     []int32{nodeID},
+		BindingTags:  []int32{ctx.projectTag},
+		NotCacheable: notCacheable,
 	}, ctx)
 
 	// append DISTINCT node
