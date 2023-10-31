@@ -439,10 +439,16 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	result, err := tc.doWrite(ctx, requests, true)
-	if err == nil {
+	if err != nil {
+		err = tc.Rollback(ctx)
+	} else {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
 		tc.closeLocked()
+	}
+
+	if result != nil {
+		result.Release()
 	}
 	return result, err
 }
@@ -468,7 +474,7 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 
 	result, err := tc.doWrite(ctx, nil, true)
 	if err != nil {
-		return err
+		return tc.Rollback(ctx)
 	} else {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
