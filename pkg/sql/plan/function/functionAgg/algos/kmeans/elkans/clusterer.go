@@ -276,17 +276,17 @@ func (km *ElkanClusterer) computeCentroidDistances() {
 // This is the place where most of the pruning happens.
 func (km *ElkanClusterer) assignData() int {
 
-	var ux float64 // currVecUpperBound
-	var cx int     // currVecClusterAssignmentIdx
+	var distToCurrentCentroid float64 // u(x) in the paper
+	var assignedCentroid int          // c(x) in the paper
 	changes := 0
 
-	for x := range km.vectorList { // x is currVectorIdx
+	for currVector := range km.vectorList { // x is currVectorIdx
 
-		ux = km.vectorMetas[x].upper // u(x) in the paper
-		cx = km.assignments[x]       // c(x) in the paper
+		distToCurrentCentroid = km.vectorMetas[currVector].upper
+		assignedCentroid = km.assignments[currVector]
 
 		// step 2 u(x) <= s(c(x))
-		if ux <= km.minHalfInterCentroidDist[cx] {
+		if distToCurrentCentroid <= km.minHalfInterCentroidDist[assignedCentroid] {
 			continue
 		}
 
@@ -296,38 +296,36 @@ func (km *ElkanClusterer) assignData() int {
 			// (i) c != c(x) and
 			// (ii) u(x)>l(x, c) and
 			// (iii) u(x)> 0.5 x d(c(x), c)
-			// NOTE: we proactively use the otherwise case
-			if c == cx || // (i)
-				ux <= km.vectorMetas[x].lower[c] || // ii)
-				ux <= km.halfInterCentroidDistMatrix[cx][c] { // (iii)
-				continue
-			}
+			if c != assignedCentroid &&
+				distToCurrentCentroid > km.vectorMetas[currVector].lower[c] &&
+				distToCurrentCentroid > km.halfInterCentroidDistMatrix[assignedCentroid][c] {
 
-			//step 3.a - Bounds update
-			// If r(x) then compute d(x, c(x)) and assign r(x)= false. Otherwise, d(x, c(x))=u(x).
-			dxcx := ux // d(x, c(x)) in the paper ie distToCentroid
-			if km.vectorMetas[x].recompute {
-				dxcx = km.distFn(km.vectorList[x], km.Centroids[cx])
-				km.vectorMetas[x].upper = dxcx
-				km.vectorMetas[x].lower[cx] = dxcx
-				km.vectorMetas[x].recompute = false
-			}
+				//step 3.a - Bounds update
+				// If r(x) then compute d(x, c(x)) and assign r(x)= false. Otherwise, d(x, c(x))=u(x).
+				dxcx := distToCurrentCentroid // d(x, c(x)) in the paper ie distToCentroid
+				if km.vectorMetas[currVector].recompute {
+					dxcx = km.distFn(km.vectorList[currVector], km.Centroids[assignedCentroid])
+					km.vectorMetas[currVector].upper = dxcx
+					km.vectorMetas[currVector].lower[assignedCentroid] = dxcx
+					km.vectorMetas[currVector].recompute = false
+				}
 
-			//step 3.b - Update
-			// If d(x, c(x))>l(x, c) or d(x, c(x))> 0.5 d(c(x), c) then
-			// Compute d(x, c)
-			// If d(x, c)<d(x, c(x)) then assign c(x)=c.
-			if dxcx > km.vectorMetas[x].lower[c] ||
-				dxcx > km.halfInterCentroidDistMatrix[cx][c] {
+				//step 3.b - Update
+				// If d(x, c(x))>l(x, c) or d(x, c(x))> 0.5 d(c(x), c) then
+				// Compute d(x, c)
+				// If d(x, c)<d(x, c(x)) then assign c(x)=c.
+				if dxcx > km.vectorMetas[currVector].lower[c] ||
+					dxcx > km.halfInterCentroidDistMatrix[assignedCentroid][c] {
 
-				dxc := km.distFn(km.vectorList[x], km.Centroids[c]) // d(x,c) in the paper
-				km.vectorMetas[x].lower[c] = dxc
-				if dxc < dxcx {
-					km.vectorMetas[x].upper = dxc
+					dxc := km.distFn(km.vectorList[currVector], km.Centroids[c]) // d(x,c) in the paper
+					km.vectorMetas[currVector].lower[c] = dxc
+					if dxc < dxcx {
+						km.vectorMetas[currVector].upper = dxc
 
-					cx = c
-					km.assignments[x] = c
-					changes++
+						assignedCentroid = c
+						km.assignments[currVector] = assignedCentroid
+						changes++
+					}
 				}
 			}
 		}
@@ -352,7 +350,10 @@ func (km *ElkanClusterer) recalculateCentroids() [][]float64 {
 		}
 	}
 
-	newCentroids := append([][]float64{}, km.Centroids...)
+	newCentroids := make([][]float64, len(km.Centroids))
+	for c := range km.Centroids {
+		newCentroids[c] = make([]float64, len(km.vectorList[0]))
+	}
 	for c, newCentroid := range newCentroids {
 		memberCnt := float64(clusterMembersCount[c])
 
@@ -377,6 +378,7 @@ func (km *ElkanClusterer) recalculateCentroids() [][]float64 {
 func (km *ElkanClusterer) updateBounds(newCentroid [][]float64) {
 
 	// compute the centroid shift distance matrix once.
+	// d(c, m(c)) in the paper
 	centroidShiftDist := make([]float64, km.clusterCnt)
 	var wg sync.WaitGroup
 	for c := 0; c < km.clusterCnt; c++ {
