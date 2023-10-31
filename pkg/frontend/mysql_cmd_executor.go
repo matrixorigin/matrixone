@@ -2579,6 +2579,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
 
 	ses.SetQueryStart(time.Now())
+	ses.SetQueryInExecute(true)
+	defer ses.SetQueryInExecute(false)
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
@@ -2730,7 +2732,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return err
 			}
 		}
-		logStatementStatus(requestCtx, ses, stmt, success, nil)
+		if ses.GetQueryInExecute() {
+			logStatementStatus(requestCtx, ses, stmt, success, nil)
+		} else {
+			logStatementStatus(requestCtx, ses, stmt, fail, moerr.NewInternalError(requestCtx, "query is killed"))
+		}
 		return err
 	}
 
