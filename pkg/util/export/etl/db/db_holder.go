@@ -242,20 +242,6 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 	_, execErr := sqlDb.Exec(loadSQL)
 
-	if execErr != nil {
-
-		// Check if the error is one that suggests retrying
-		if strings.Contains(execErr.Error(), "txn need retry in rc mode") {
-			// Retry the transaction
-			_, execErr = sqlDb.Exec(loadSQL)
-			if execErr == nil {
-				return nil
-			}
-		}
-
-		return execErr
-	}
-
-	return nil
+	return execErr
 
 }
