@@ -17,6 +17,7 @@ package address
 import (
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -101,4 +102,16 @@ func TestAddressManager(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:39003", m.ServiceAddress(3))
 	err = l.Close()
 	assert.NoError(t, err)
+}
+
+func TestRemoteAddressAvail(t *testing.T) {
+	remoteAddr := "127.0.0.1:17001"
+	timeout := time.Millisecond * 500
+	assert.False(t, RemoteAddressAvail(remoteAddr, timeout))
+
+	l, err := net.Listen("tcp", remoteAddr)
+	assert.NoError(t, err)
+	assert.NotNil(t, l)
+	defer l.Close()
+	assert.True(t, RemoteAddressAvail(remoteAddr, timeout))
 }

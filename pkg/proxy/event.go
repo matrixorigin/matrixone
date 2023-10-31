@@ -34,6 +34,8 @@ func (t eventType) String() string {
 		return "SetVar"
 	case TypePrepare:
 		return "Prepare"
+	case TypeUse:
+		return "Use"
 	}
 	return "Unknown"
 }
@@ -47,6 +49,8 @@ const (
 	TypeSetVar eventType = 2
 	// TypePrepare indicates the prepare statement.
 	TypePrepare eventType = 5
+	// TypeUse indicates the use database statement.
+	TypeUse eventType = 6
 )
 
 // IEvent is the event interface.
@@ -101,6 +105,8 @@ func makeEvent(msg []byte) (IEvent, bool) {
 			return makeSetVarEvent(sql), false
 		case *tree.PrepareString:
 			return makePrepareEvent(sql), false
+		case *tree.Use:
+			return makeUseEvent(sql), false
 		default:
 			return nil, false
 		}
@@ -175,4 +181,24 @@ func makePrepareEvent(stmt string) IEvent {
 // eventType implements the IEvent interface.
 func (e *prepareEvent) eventType() eventType {
 	return TypePrepare
+}
+
+// useEvent is the event that execute a use statement.
+type useEvent struct {
+	baseEvent
+	stmt string
+}
+
+// makeUseEvent creates an event with TypeUse type.
+func makeUseEvent(stmt string) IEvent {
+	e := &useEvent{
+		stmt: stmt,
+	}
+	e.typ = TypeUse
+	return e
+}
+
+// eventType implements the IEvent interface.
+func (e *useEvent) eventType() eventType {
+	return TypeUse
 }

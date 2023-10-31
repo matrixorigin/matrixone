@@ -74,6 +74,11 @@ func NewInvalidInputNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrInvalidInput, xmsg)
 }
 
+func NewInvalidTzNoCtx(tz string, args ...any) *Error {
+	xmsg := fmt.Sprintf(tz, args...)
+	return newError(Context(), ErrInvalidTz, xmsg)
+}
+
 func NewArrayInvalidOpNoCtx(expected, actual int) *Error {
 	xmsg := fmt.Sprintf("vector ops between different dimensions (%v, %v) is not permitted.", expected, actual)
 	return newError(Context(), ErrInvalidInput, xmsg)
@@ -263,6 +268,10 @@ func NewTAENeedRetryNoCtx() *Error {
 
 func NewTxnStaleNoCtx() *Error {
 	return newError(Context(), ErrTxnStale)
+}
+
+func NewWaiterCanceledNoCtx() *Error {
+	return newError(Context(), ErrWaiterCanceled)
 }
 
 func NewNotFoundNoCtx() *Error {

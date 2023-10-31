@@ -32,6 +32,8 @@ enum ServiceType {
   LOG = 2;
   // Proxy proxy service
   PROXY = 3;
+  // PYTHON_UDF python udf service
+  PYTHON_UDF = 4;
 }
 
 // TNShardRecord is TN shard metadata describing what is a TN shard. It
