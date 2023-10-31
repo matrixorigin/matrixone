@@ -51,9 +51,9 @@ const (
 	CheckpointVersion6 uint32 = 6
 	CheckpointVersion7 uint32 = 7
 	CheckpointVersion8 uint32 = 8
-	CheckpointVersion9 uint32 = 8
+	CheckpointVersion9 uint32 = 9
 
-	CheckpointCurrentVersion = CheckpointVersion8
+	CheckpointCurrentVersion = CheckpointVersion9
 )
 
 const (
@@ -379,7 +379,8 @@ func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catal
 	}
 }
 
-func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) func(c *catalog.Catalog) (*CheckpointData, error) {
+func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration,
+	fs fileservice.FileService, ckpMetas []*CkpLocVers) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
@@ -387,7 +388,13 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
 		}
+
+		// different from the increment checkpoint, we fill global
+		// checkpoint's SEGStorageUsageBat here
+		FillSEGStorageUsageBatOfGlobal(c, collector, fs, ckpMetas)
+
 		data = collector.OrphanData()
+
 		return
 	}
 }
@@ -577,6 +584,8 @@ type BaseCollector struct {
 	start, end types.TS
 
 	data *CheckpointData
+	// to identify increment or global
+	isGlobal bool
 }
 
 type IncrementalCollector struct {
@@ -590,6 +599,7 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 			data:          NewCheckpointData(),
 			start:         start,
 			end:           end,
+			isGlobal:      false,
 		},
 	}
 	collector.DatabaseFn = collector.VisitDB
@@ -602,6 +612,17 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 type GlobalCollector struct {
 	*BaseCollector
 	versionThershold types.TS
+	// [0]. not used
+	// [3]. if a segment has been deleted, should record its id
+	// [2]. if a table has been deleted, should record its id
+	// [1]. if a db has been deleted, should record its id
+	// [0]. account's placeholder
+	deletes [UsageMAX]map[interface{}]struct{}
+}
+
+// GetDeletes only for test
+func (g *GlobalCollector) GetDeletes() [UsageMAX]map[interface{}]struct{} {
+	return g.deletes
 }
 
 func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalCollector {
@@ -611,9 +632,15 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 			LoopProcessor: new(catalog.LoopProcessor),
 			data:          NewCheckpointData(),
 			end:           end,
+			isGlobal:      true,
 		},
 		versionThershold: versionThresholdTS,
 	}
+
+	for i := uint8(0); i < UsageMAX; i++ {
+		collector.deletes[i] = make(map[interface{}]struct{})
+	}
+
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
 	collector.SegmentFn = collector.VisitSeg
@@ -1816,8 +1843,6 @@ func (data *CheckpointData) ReadTNMetaBatch(
 			if err != nil {
 				return
 			}
-			// TODO(ghs), len(bats) == 0 here
-			// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
 			data.bats[TNMetaIDX] = bats[0]
 		}
 	}
@@ -2316,6 +2341,7 @@ func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.Ba
 }
 func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.deletes[UsageDBID][entry.GetID()] = struct{}{}
 		return nil
 	}
 	return collector.BaseCollector.VisitDB(entry)
@@ -2431,6 +2457,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.deletes[UsageTblID][entry.GetID()] = struct{}{}
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetDB().BaseEntryImpl) {
@@ -2439,64 +2466,20 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	return collector.BaseCollector.VisitTable(entry)
 }
 
-// FillSEGStorageUsageBat recording the total object size within a table
-// and the account, db, table info the object belongs to.
-// every checkpoint records the full datasets of the storage usage info.
-// [account_id, db_id, table_id, table_total_size_in_bytes]
-func FillSEGStorageUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
-	if !entry.IsSorted() || entry.IsAppendable() || entry.HasDropCommitted() {
-		return
-	}
-
-	storageUsageBax := collector.data.bats[SEGStorageUsageIDX]
-
-	storageUsageAccIDVec := storageUsageBax.GetVectorByName(pkgcatalog.SystemColAttr_AccID).GetDownstreamVector()
-	storageUsageDBIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector()
-	storageUsageTblIDVec := storageUsageBax.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	storageUsageSizeVec := storageUsageBax.GetVectorByName(CheckpointMetaAttr_BlockSize).GetDownstreamVector()
-
-	appendToStorageUsageBat := func(size uint64) {
-		accId := uint64(entry.GetTable().GetDB().GetTenantID())
-		dbId := entry.GetTable().GetDB().ID
-		tblId := entry.GetTable().ID
-
-		vector.AppendFixed(storageUsageAccIDVec, accId, false, common.DefaultAllocator)
-		vector.AppendFixed(storageUsageDBIDVec, dbId, false, common.DefaultAllocator)
-		vector.AppendFixed(storageUsageTblIDVec, tblId, false, common.DefaultAllocator)
-		vector.AppendFixed(storageUsageSizeVec, size, false, common.DefaultAllocator)
-	}
-
-	if err := entry.LoadObjectInfo(); err != nil {
-		return
-	}
-	size := uint64(entry.Stat.GetCompSize())
-	if storageUsageSizeVec.Length() == 0 { // initial state
-		appendToStorageUsageBat(size)
-	} else {
-		curLen := storageUsageTblIDVec.Length() - 1
-		curTbl := vector.GetFixedAt[uint64](storageUsageTblIDVec, curLen)
-
-		if curTbl != entry.GetTable().ID { // table id changed
-			appendToStorageUsageBat(size)
-		} else {
-			// accumulating table size
-			curSize := vector.GetFixedAt[uint64](storageUsageSizeVec, curLen)
-			vector.SetFixedAt(storageUsageSizeVec, curLen, curSize+size)
-		}
-
-	}
-}
-
 func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
-
-	FillSEGStorageUsageBat(collector, entry)
-
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
 	if len(mvccNodes) == 0 {
 		return nil
 	}
+
+	if collector.isGlobal {
+		// not fill here, do when `GlobalCheckpointDataFactory`
+	} else {
+		FillSEGStorageUsageBatOfIncrement(collector, entry)
+	}
+
 	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	segDelBat := collector.data.bats[SEGDeleteIDX]
 	segDelTxn := collector.data.bats[SEGDeleteTxnIDX]
@@ -2579,6 +2562,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 
 func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.deletes[UsageObjID][entry.ID] = struct{}{}
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {

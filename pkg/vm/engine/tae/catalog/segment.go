@@ -58,7 +58,7 @@ type SegStat struct {
 	remainingRows  int
 }
 
-func (s *SegStat) loadObjectInfo(name string, blk *BlockEntry) error {
+func (s *SegStat) loadObjectInfo(blk *BlockEntry) error {
 	schema := blk.GetSchema()
 	loc := blk.GetMetaLoc()
 
@@ -290,7 +290,12 @@ func (entry *SegmentEntry) LoadObjectInfo() error {
 	if blk == nil {
 		return nil
 	}
+<<<<<<< HEAD
 	return entry.Stat.loadObjectInfo(name, blk)
+=======
+
+	return entry.Stat.loadObjectInfo(blk)
+>>>>>>> 74d428cf1 ([opt]: reduce ckp io; deal with old version ckp data)
 }
 
 func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {

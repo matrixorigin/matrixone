@@ -520,11 +520,23 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	return
 }
 
+func checkpointMetaInfoFactory(entries []*CheckpointEntry) []*logtail.CkpLocVers {
+	var ret []*logtail.CkpLocVers
+	for idx := range entries {
+		ret = append(ret, &logtail.CkpLocVers{
+			Location: entries[idx].GetLocation(),
+			Version:  entries[idx].GetVersion(),
+		})
+	}
+	return ret
+}
+
 func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration) (entry *CheckpointEntry, err error) {
 	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
 	entry.ckpLSN = ckpLSN
 	entry.truncateLSN = truncateLSN
-	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval)
+	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval,
+		r.rt.Fs.Service, checkpointMetaInfoFactory(r.GetAllCheckpoints()))
 	data, err := factory(r.catalog)
 	if err != nil {
 		return

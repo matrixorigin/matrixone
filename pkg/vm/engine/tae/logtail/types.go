@@ -59,8 +59,8 @@ const (
 	AccountIDDbName        = catalog.AccountIDDbName
 
 	// supporting `show accounts` in checkpoint
-	CheckpointMetaAttr_BlockRows = "checkpoint_meta_block_rows"
-	CheckpointMetaAttr_BlockSize = "checkpoint_meta_block_size"
+	CheckpointMetaAttr_ObjectSize = "checkpoint_meta_object_size"
+	CheckpointMetaAttr_ObjectID   = "checkpoint_meta_object_id"
 
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
@@ -294,13 +294,15 @@ var (
 		pkgcatalog.SystemColAttr_AccID,
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
-		CheckpointMetaAttr_BlockSize,
+		CheckpointMetaAttr_ObjectID,
+		CheckpointMetaAttr_ObjectSize,
 	}
 
 	StorageUsageSchemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uuid, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 	}
 )
