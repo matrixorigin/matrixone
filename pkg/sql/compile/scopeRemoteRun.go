@@ -285,7 +285,9 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 
 		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
-		bat.AddCnt(1)
+		if bat != batch.EmptyBatch {
+			bat.AddCnt(1)
+		}
 		dataBuffer = nil
 		if err != nil {
 			return err
