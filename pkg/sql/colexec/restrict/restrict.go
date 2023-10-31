@@ -151,6 +151,6 @@ func tryDupBatch(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) 
 	if err != nil {
 		return nil, err
 	}
-	proc.PutBatch(bat)
+	// proc.PutBatch(bat)
 	return newBat, nil
 }
