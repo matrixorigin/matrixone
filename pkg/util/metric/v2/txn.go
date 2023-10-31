@@ -144,8 +144,9 @@ var (
 			Help:      "Bucketed histogram of txn statement duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
-	TxnStatementBuildPlanDurationHistogram = txnStatementDurationHistogram.WithLabelValues("build-plan")
-	TxnStatementExecuteDurationHistogram   = txnStatementDurationHistogram.WithLabelValues("execute")
+	TxnStatementBuildPlanDurationHistogram      = txnStatementDurationHistogram.WithLabelValues("build-plan")
+	TxnStatementExecuteDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("execute")
+	TxnStatementExecuteLatencyDurationHistogram = txnStatementDurationHistogram.WithLabelValues("execute-latency")
 
 	txnLockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -155,17 +156,21 @@ var (
 			Help:      "Bucketed histogram of acquire lock duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
-	TxnAcquireLockDurationHistogram = txnLockDurationHistogram.WithLabelValues("acquire")
-	TxnHoldLockDurationHistogram    = txnLockDurationHistogram.WithLabelValues("hold")
+	TxnAcquireLockDurationHistogram     = txnLockDurationHistogram.WithLabelValues("acquire")
+	TxnAcquireLockWaitDurationHistogram = txnLockDurationHistogram.WithLabelValues("acquire-wait")
+	TxnHoldLockDurationHistogram        = txnLockDurationHistogram.WithLabelValues("hold")
 
-	TxnUnlockDurationHistogram = prometheus.NewHistogram(
+	txnUnlockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "unlock_duration_seconds",
 			Help:      "Bucketed histogram of release lock duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
-		})
+		}, []string{"type"})
+	TxnUnlockDurationHistogram             = txnUnlockDurationHistogram.WithLabelValues("total")
+	TxnUnlockBtreeGetLockDurationHistogram = txnUnlockDurationHistogram.WithLabelValues("btree-get-lock")
+	TxnUnlockBtreeTotalDurationHistogram   = txnUnlockDurationHistogram.WithLabelValues("btree-total")
 
 	TxnLockWaitersTotalHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

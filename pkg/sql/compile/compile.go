@@ -99,7 +99,12 @@ var pool = sync.Pool{
 func New(
 	addr, db, sql, tenant, uid string,
 	ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
+	e engine.Engine,
+	proc *process.Process,
+	stmt tree.Statement,
+	isInternal bool,
+	cnLabel map[string]string,
+	startAt time.Time) *Compile {
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
@@ -115,6 +120,7 @@ func New(
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
+	c.startAt = startAt
 	return c
 }
 
@@ -154,6 +160,7 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
+	c.startAt = time.Time{}
 
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
@@ -357,6 +364,7 @@ func (c *Compile) run(s *Scope) error {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
+	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 	defer func() {
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
@@ -406,7 +414,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 		// improved to refresh expression in the future.
-		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel)
+		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 			pn, e := c.buildPlanFunc()
 			if e != nil {

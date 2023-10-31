@@ -3516,6 +3516,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
 	beginInstant := time.Now()
+	requestCtx = appendStatementAt(requestCtx, beginInstant)
+
 	ses := mce.GetSession()
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)

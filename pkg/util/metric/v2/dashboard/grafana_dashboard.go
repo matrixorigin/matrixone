@@ -207,6 +207,7 @@ func (c *DashboardCreator) getMultiHistogram(
 func (c *DashboardCreator) withRowOptions(rows ...dashboard.Option) []dashboard.Option {
 	return append(rows,
 		dashboard.AutoRefresh("30s"),
+		dashboard.Time("now-30m", "now"),
 		dashboard.VariableAsInterval(
 			"interval",
 			interval.Default("1m"),
