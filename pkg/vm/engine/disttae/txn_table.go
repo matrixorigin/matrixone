@@ -610,6 +610,14 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 			newExprs[i] = foldedExpr
 		}
 	}
+	p := tbl.proc.Load()
+	if p == nil {
+		logutil.Infof("proc is nil, table name : %s, database name : %s",
+			tbl.tableName,
+			tbl.db.databaseName)
+		panic("tbl.proc is nil")
+	}
+
 	err = tbl.rangesOnePart(
 		ctx,
 		part,
