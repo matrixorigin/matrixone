@@ -38,6 +38,7 @@ var (
 		}, []string{"type"})
 	LogTailSendQueueSizeGauge    = logTailQueueSizeGauge.WithLabelValues("send")
 	LogTailReceiveQueueSizeGauge = logTailQueueSizeGauge.WithLabelValues("receive")
+	LogTailApplyQueueSizeGauge   = logTailQueueSizeGauge.WithLabelValues("apply")
 )
 
 var (

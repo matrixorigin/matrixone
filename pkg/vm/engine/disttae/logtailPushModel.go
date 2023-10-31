@@ -919,6 +919,12 @@ func distributeUpdateResponse(
 	for _, rc := range recRoutines {
 		rc.updateTimeFromT(*response.To)
 	}
+
+	n := 0
+	for _, c := range recRoutines {
+		n += len(c.signalChan)
+	}
+	v2.LogTailApplyQueueSizeGauge.Set(float64(n))
 	return nil
 }
 
