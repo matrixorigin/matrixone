@@ -547,7 +547,6 @@ jobs:
       - name: checkout head
         uses: actions/checkout@v3
         with:
-          fetch-depth: '3'
           path: ./head
           repository: ${{ github.event.pull_request.base.repo.full_name }}
           ref: main
@@ -767,7 +766,7 @@ jobs:
           #delete namespace
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
       - name: NOTICE FAIL RESULT
-        if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' }}
+        if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' || needs.multi-cn-bvt-race-linux-x86.result != 'success' || needs.pessimistic-bvt-darwin-arm64.result != 'success' }}
         run: |
           for i in {1..10}; do
             curl -X POST -H "Content-Type: application/json" \
