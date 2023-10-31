@@ -43,12 +43,16 @@ func TestRandom_InitCentroids(t *testing.T) {
 					{10, 2, 4, 5},
 					{10, 3, 4, 5},
 					{10, 5, 4, 5},
+					{10, 2, 4, 5},
+					{10, 3, 4, 5},
+					{10, 5, 4, 5},
 				},
 				k: 2,
 			},
 			wantCentroids: [][]float64{
+				// NOTE: values of random initialization need not be farther apart.
 				{1, 2, 4, 5},
-				{10, 2, 4, 5},
+				{1, 2, 3, 4},
 			},
 		},
 	}
@@ -82,6 +86,9 @@ func TestKMeansPlusPlus_InitCentroids(t *testing.T) {
 					{1, 2, 3, 4},
 					{1, 2, 4, 5},
 					{1, 2, 4, 5},
+					{10, 2, 4, 5},
+					{10, 3, 4, 5},
+					{10, 5, 4, 5},
 					{10, 2, 4, 5},
 					{10, 3, 4, 5},
 					{10, 5, 4, 5},
