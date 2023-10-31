@@ -17,6 +17,7 @@ jobs:
       in_org: ${{ steps.check_in_org.outputs.in_org }}
     steps:
     - id: check_in_org
+      name: CHECK ORGANIZATION USER
       run: |
         PAGE=1;
         PER_PAGE=100;
