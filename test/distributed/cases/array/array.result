@@ -192,9 +192,9 @@ a    b * b    c * c
 select l2_norm(b), l2_norm(c) from t7;
 l2_norm(b)    l2_norm(c)
 null    null
-1.161650546238906    null
-30.610994086837085    4637.548705943691
-822.0504090382778    8751.35783750156
+1.1616505074810406    null
+30.610993802842447    4637.5486836009195
+822.0504062713129    8751.357703701568
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");
 insert into vec_table values(3, "[1,3,3]", "[4,1,6]");
 select mo_ctl('dn', 'flush', 'vecdb.vec_table');
