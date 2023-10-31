@@ -658,7 +658,7 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 		return false, nil
 
 	case dataFinished:
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		return true, nil
 	default:
 		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)

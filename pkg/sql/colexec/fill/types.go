@@ -54,6 +54,7 @@ type container struct {
 	status    int
 	subStatus int
 	colIdx    int
+	buf       *batch.Batch
 
 	// linear
 	nullIdx int
@@ -96,6 +97,10 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 		if b != nil {
 			b.Clean(mp)
 		}
+	}
+	if ctr.buf != nil {
+		ctr.buf.Clean(mp)
+		ctr.buf = nil
 	}
 }
 

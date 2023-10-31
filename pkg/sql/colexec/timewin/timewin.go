@@ -314,7 +314,7 @@ func calRes[T constraints.Integer](ctr *container, ap *Argument, proc *process.P
 		for t, v := range ctr.wstart {
 			wstart[t] = T(v)
 		}
-		vec := vector.NewVec(*ctr.tsTyp)
+		vec := proc.GetVector(*ctr.tsTyp)
 		err = vector.AppendFixedList(vec, wstart, nil, proc.Mp())
 		if err != nil {
 			return err
@@ -327,7 +327,7 @@ func calRes[T constraints.Integer](ctr *container, ap *Argument, proc *process.P
 		for t, v := range ctr.wend {
 			wend[t] = T(v)
 		}
-		vec := vector.NewVec(*ctr.tsTyp)
+		vec := proc.GetVector(*ctr.tsTyp)
 		err = vector.AppendFixedList(vec, wend, nil, proc.Mp())
 		if err != nil {
 			return err
