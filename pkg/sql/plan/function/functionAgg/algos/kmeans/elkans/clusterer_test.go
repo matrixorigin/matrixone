@@ -18,12 +18,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"reflect"
-	"strconv"
 	"testing"
 )
 
 func Test_NewKMeans(t *testing.T) {
-	type kmeansArg struct {
+	type constructorArgs struct {
 		vectorList     [][]float64
 		clusterCnt     int
 		maxIterations  int
@@ -33,18 +32,50 @@ func Test_NewKMeans(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
-		fields  kmeansArg
+		fields  constructorArgs
 		wantErr bool
 	}{
 		{
 			name: "Test 1 - Dimension mismatch",
-			fields: kmeansArg{
+			fields: constructorArgs{
 				vectorList: [][]float64{
 					{1, 2, 3, 4},
 					{1, 2, 4, 5},
 					{1, 2, 4},
 				},
 				clusterCnt:     2,
+				maxIterations:  500,
+				deltaThreshold: 0.01,
+				distType:       kmeans.L2,
+				initType:       kmeans.Random,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Test 2 - ClusterCnt> len(vectorList)",
+			fields: constructorArgs{
+				vectorList: [][]float64{
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+					{1, 2, 4, 6},
+				},
+				clusterCnt:     4,
+				maxIterations:  500,
+				deltaThreshold: 0.01,
+				distType:       kmeans.L2,
+				initType:       kmeans.Random,
+			},
+			wantErr: true,
+		},
+		{
+			name: "Test 3 - ClusterCnt> len(vectorList)",
+			fields: constructorArgs{
+				vectorList: [][]float64{
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+					{1, 2, 4, 6},
+				},
+				clusterCnt:     4,
 				maxIterations:  500,
 				deltaThreshold: 0.01,
 				distType:       kmeans.L2,
@@ -71,7 +102,7 @@ func Test_Cluster(t *testing.T) {
 		Level:  "debug",
 		Format: "console",
 	})
-	type kmeansArg struct {
+	type constructorArgs struct {
 		vectorList     [][]float64
 		clusterCnt     int
 		maxIterations  int
@@ -81,14 +112,14 @@ func Test_Cluster(t *testing.T) {
 	}
 	tests := []struct {
 		name    string
-		fields  kmeansArg
+		fields  constructorArgs
 		want    [][]float64
 		wantErr bool
 		wantSSE float64
 	}{
 		{
 			name: "Test 1 - Skewed data (Random Init)",
-			fields: kmeansArg{
+			fields: constructorArgs{
 				vectorList: [][]float64{
 					{1, 2, 3, 4},
 					{1, 2, 4, 5},
@@ -118,7 +149,7 @@ func Test_Cluster(t *testing.T) {
 		},
 		{
 			name: "Test 2 - Skewed data (Kmeans++ Init)",
-			fields: kmeansArg{
+			fields: constructorArgs{
 				vectorList: [][]float64{
 					{1, 2, 3, 4},
 					{1, 2, 4, 5},
@@ -168,61 +199,8 @@ func Test_Cluster(t *testing.T) {
 	}
 }
 
-/*
-date : 2023-10-31
-goos: darwin
-goarch: arm64
-cpu: Apple M2 Pro
-rows: 10_000
-dims: 1024
-k: 10
-Benchmark_kmeans/KMEANS_-_Random-10         	       1	  1335777583 ns/op (with gonums)
-Benchmark_kmeans/KMEANS_-_Kmeans++-10       	       1	  3190817000 ns/op (with gonums)
-
-rows: 100_000
-dims: 1024
-k: 100
-Benchmark_kmeans/KMEANS_-_Random-10         	       1	177648962458 ns/op
-*/
-func Benchmark_kmeans(b *testing.B) {
-	rowCnt := 10_000
-	dims := 1024
-	k := 10
-
-	data := make([][]float64, rowCnt)
-	populateRandData(rowCnt, dims, data)
-
-	clusterRand, _ := NewKMeans(data, k,
-		500, 0.01,
-		kmeans.L2, kmeans.Random)
-
-	kmeansPlusPlus, _ := NewKMeans(data, k,
-		500, 0.01,
-		kmeans.L2, kmeans.KmeansPlusPlus)
-
-	b.Run("Elkan_Random", func(b *testing.B) {
-		b.ResetTimer()
-		_, err := clusterRand.Cluster()
-		if err != nil {
-			panic(err)
-		}
-	})
-	b.Log("SSE - clusterRand", strconv.FormatFloat(clusterRand.SSE(), 'f', -1, 32))
-
-	b.Run("Elkan_Kmeans++", func(b *testing.B) {
-		b.ResetTimer()
-		_, err := kmeansPlusPlus.Cluster()
-		if err != nil {
-			panic(err)
-		}
-
-	})
-	b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
-
-}
-
-func TestElkanClusterer_recalculateCentroids(t *testing.T) {
-	type kmeansArg struct {
+func TestElkanClusterer_initBounds(t *testing.T) {
+	type constructorArgs struct {
 		vectorList     [][]float64
 		clusterCnt     int
 		maxIterations  int
@@ -230,20 +208,28 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 		distType       kmeans.DistanceType
 		initType       kmeans.InitType
 	}
+	type internalState struct {
+		centroids [][]float64
+	}
+	type wantState struct {
+		vectorMetas []vectorMeta
+		assignment  []int
+	}
 	tests := []struct {
 		name   string
-		fields kmeansArg
-		want   [][]float64
+		fields constructorArgs
+		state  internalState
+		want   wantState
 	}{
 		{
-			name: "Test 1 - Skewed data (Random Init)",
-			fields: kmeansArg{
+			name: "Test 1",
+			fields: constructorArgs{
 				vectorList: [][]float64{
 					{1, 2, 3, 4},
 					{1, 2, 4, 5},
 					{1, 2, 4, 5},
-					{1, 2, 3, 4},
-					{1, 2, 4, 5},
+					{10, 20, 30, 40},
+					{11, 23, 33, 47},
 				},
 				clusterCnt:     2,
 				maxIterations:  500,
@@ -251,9 +237,41 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				distType:       kmeans.L2,
 				initType:       kmeans.Random,
 			},
-			want: [][]float64{
-				{1, 2, 3, 4},
-				{1, 2, 4, 5},
+			state: internalState{
+				centroids: [][]float64{
+					{1, 2, 3, 4},
+					{10, 20, 30, 40},
+				},
+			},
+			want: wantState{
+				vectorMetas: []vectorMeta{
+					{
+						lower:     []float64{0, 49.29503017546495},
+						upper:     0,
+						recompute: true,
+					},
+					{
+						lower:     []float64{1.4142135623730951, 48.02082881417188},
+						upper:     1.4142135623730951,
+						recompute: true,
+					},
+					{
+						lower:     []float64{1.4142135623730951, 48.02082881417188},
+						upper:     1.4142135623730951,
+						recompute: true,
+					},
+					{
+						lower:     []float64{49.29503017546495, 0},
+						upper:     0,
+						recompute: true,
+					},
+					{
+						lower:     []float64{57.358521598799946, 8.246211251235321},
+						upper:     8.246211251235321,
+						recompute: true,
+					},
+				},
+				assignment: []int{0, 0, 0, 1, 1},
 			},
 		},
 	}
@@ -267,11 +285,303 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
 			if ekm, ok := km.(*ElkanClusterer); ok {
-				ekm.InitCentroids()
+				ekm.centroids = tt.state.centroids
 				ekm.initBounds()
-				if got := ekm.recalculateCentroids(); !reflect.DeepEqual(got, tt.want) {
-					t.Errorf("recalculateCentroids() = %v, want %v", got, tt.want)
+				if !reflect.DeepEqual(ekm.assignments, tt.want.assignment) {
+					t.Errorf("assignments got = %v, want %v", ekm.assignments, tt.want.assignment)
 				}
+
+				if !reflect.DeepEqual(ekm.vectorMetas, tt.want.vectorMetas) {
+					t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+				}
+
+			} else if !ok {
+				t.Errorf("km not of type ElkanClusterer")
+			}
+
+		})
+	}
+}
+
+func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
+	type constructorArgs struct {
+		vectorList     [][]float64
+		clusterCnt     int
+		maxIterations  int
+		deltaThreshold float64
+		distType       kmeans.DistanceType
+		initType       kmeans.InitType
+	}
+	type internalState struct {
+		centroids [][]float64
+	}
+	type wantState struct {
+		halfInterCentroidDistMatrix [][]float64
+		minHalfInterCentroidDist    []float64
+	}
+	tests := []struct {
+		name   string
+		fields constructorArgs
+		state  internalState
+		want   wantState
+	}{
+		{
+			name: "Test 1",
+			fields: constructorArgs{
+				vectorList: [][]float64{
+					// This is dummy data. Won't be used for this test function.
+					{0}, {0}, {0}, {0}, {0}, {0},
+				},
+				clusterCnt:     2,
+				maxIterations:  500,
+				deltaThreshold: 0.01,
+				distType:       kmeans.L2,
+				initType:       kmeans.Random,
+			},
+			state: internalState{
+				centroids: [][]float64{
+					{1, 2, 3, 4},
+					{10, 20, 30, 40},
+				},
+			},
+			want: wantState{
+				halfInterCentroidDistMatrix: [][]float64{
+					{0, 24.647515087732476}, {24.647515087732476, 0},
+				},
+				minHalfInterCentroidDist: []float64{24.647515087732476, 24.647515087732476},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+				tt.fields.maxIterations, tt.fields.deltaThreshold,
+				tt.fields.distType, tt.fields.initType)
+
+			if err != nil {
+				t.Errorf("Error while creating KMeans object %v", err)
+			}
+			if ekm, ok := km.(*ElkanClusterer); ok {
+				ekm.centroids = tt.state.centroids
+				ekm.computeCentroidDistances()
+				if !reflect.DeepEqual(ekm.halfInterCentroidDistMatrix, tt.want.halfInterCentroidDistMatrix) {
+					t.Errorf("halfInterCentroidDistMatrix got = %v, want %v", ekm.halfInterCentroidDistMatrix, tt.want.halfInterCentroidDistMatrix)
+				}
+
+				if !reflect.DeepEqual(ekm.minHalfInterCentroidDist, tt.want.minHalfInterCentroidDist) {
+					t.Errorf("minHalfInterCentroidDist got = %v, want %v", ekm.minHalfInterCentroidDist, tt.want.minHalfInterCentroidDist)
+				}
+
+			} else if !ok {
+				t.Errorf("km not of type ElkanClusterer")
+			}
+
+		})
+	}
+}
+
+func TestElkanClusterer_recalculateCentroids(t *testing.T) {
+	type constructorArgs struct {
+		vectorList     [][]float64
+		clusterCnt     int
+		maxIterations  int
+		deltaThreshold float64
+		distType       kmeans.DistanceType
+		initType       kmeans.InitType
+	}
+	type internalState struct {
+		assignments []int
+	}
+	type wantState struct {
+		centroids [][]float64
+	}
+	tests := []struct {
+		name   string
+		fields constructorArgs
+		state  internalState
+		want   wantState
+	}{
+		{
+			name: "Test 1",
+			fields: constructorArgs{
+				vectorList: [][]float64{
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+					{1, 2, 4, 5},
+					{10, 20, 30, 40},
+					{11, 23, 33, 47},
+				},
+				clusterCnt:     2,
+				maxIterations:  500,
+				deltaThreshold: 0.01,
+				distType:       kmeans.L2,
+				initType:       kmeans.Random,
+			},
+			state: internalState{
+				assignments: []int{0, 0, 0, 1, 1},
+			},
+			want: wantState{
+				centroids: [][]float64{
+					{1, 2, 3.6666666666666665, 4.666666666666667},
+					{10.5, 21.5, 31.5, 43.5},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+				tt.fields.maxIterations, tt.fields.deltaThreshold,
+				tt.fields.distType, tt.fields.initType)
+
+			if err != nil {
+				t.Errorf("Error while creating KMeans object %v", err)
+			}
+			if ekm, ok := km.(*ElkanClusterer); ok {
+				ekm.assignments = tt.state.assignments
+
+				got := ekm.recalculateCentroids()
+				if !reflect.DeepEqual(got, tt.want.centroids) {
+					t.Errorf("centroids got = %v, want %v", got, tt.want.centroids)
+				}
+
+			} else if !ok {
+				t.Errorf("km not of type ElkanClusterer")
+			}
+
+		})
+	}
+}
+
+func TestElkanClusterer_updateBounds(t *testing.T) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
+	type constructorArgs struct {
+		vectorList     [][]float64
+		clusterCnt     int
+		maxIterations  int
+		deltaThreshold float64
+		distType       kmeans.DistanceType
+		initType       kmeans.InitType
+	}
+	type internalState struct {
+		vectorMetas  []vectorMeta
+		centroids    [][]float64
+		newCentroids [][]float64
+	}
+	type wantState struct {
+		vectorMetas []vectorMeta
+	}
+	tests := []struct {
+		name   string
+		fields constructorArgs
+		state  internalState
+		want   wantState
+	}{
+		{
+			name: "Test 1",
+			fields: constructorArgs{
+				vectorList: [][]float64{
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+					{1, 2, 4, 5},
+					{10, 20, 30, 40},
+					{11, 23, 33, 47},
+				},
+				clusterCnt:     2,
+				maxIterations:  500,
+				deltaThreshold: 0.01,
+				distType:       kmeans.L2,
+				initType:       kmeans.Random,
+			},
+			state: internalState{
+				vectorMetas: []vectorMeta{
+					{
+						lower:     []float64{0, 49.29503017546495},
+						upper:     0,
+						recompute: false,
+					},
+					{
+						lower:     []float64{1.4142135623730951, 48.02082881417188},
+						upper:     1.4142135623730951,
+						recompute: false,
+					},
+					{
+						lower:     []float64{1.4142135623730951, 48.02082881417188},
+						upper:     1.4142135623730951,
+						recompute: false,
+					},
+					{
+						lower:     []float64{49.29503017546495, 0},
+						upper:     0,
+						recompute: false,
+					},
+					{
+						lower:     []float64{57.358521598799946, 8.246211251235321},
+						upper:     8.246211251235321,
+						recompute: false,
+					},
+				},
+				centroids: [][]float64{
+					{1, 2, 3, 4},
+					{10, 20, 30, 40},
+				},
+				newCentroids: [][]float64{
+					{1, 2, 3.6666666666666665, 4.666666666666667},
+					{10.5, 21.5, 31.5, 43.5},
+				},
+			},
+			want: wantState{
+				vectorMetas: []vectorMeta{
+					{
+						lower:     []float64{0, 45.17192454984729},
+						upper:     0.9428090415820635,
+						recompute: true,
+					},
+					{
+						lower:     []float64{0.4714045207910317, 43.89772318855422},
+						upper:     2.3570226039551585,
+						recompute: true,
+					},
+					{
+						lower:     []float64{0.4714045207910317, 43.89772318855422},
+						upper:     2.3570226039551585,
+						recompute: true,
+					},
+					{
+						lower:     []float64{48.352221133882885, 0},
+						upper:     0.9428090415820635,
+						recompute: true,
+					},
+					{
+						lower:     []float64{56.41571255721788, 4.123105625617661},
+						upper:     9.189020292817384,
+						recompute: true,
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+				tt.fields.maxIterations, tt.fields.deltaThreshold,
+				tt.fields.distType, tt.fields.initType)
+
+			if err != nil {
+				t.Errorf("Error while creating KMeans object %v", err)
+			}
+			if ekm, ok := km.(*ElkanClusterer); ok {
+				ekm.vectorMetas = tt.state.vectorMetas
+				ekm.centroids = tt.state.centroids
+
+				ekm.updateBounds(tt.state.newCentroids)
+				if !reflect.DeepEqual(ekm.vectorMetas, tt.want.vectorMetas) {
+					t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+				}
+
 			} else if !ok {
 				t.Errorf("km not of type ElkanClusterer")
 			}
