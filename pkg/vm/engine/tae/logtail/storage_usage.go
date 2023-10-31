@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	"fmt"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -126,7 +127,7 @@ func collectUsageDataFromIncrementCkp(ctx context.Context, fs fileservice.FileSe
 
 		_, incrData, err := LoadCheckpointEntriesFromKey(ctx, fs, location, version)
 		if err != nil {
-			logutil.Errorf("[storage usage] load increment checkpoint failed: ", err)
+			logutil.Error(fmt.Sprintf("[storage usage] load increment checkpoint failed: %v", err))
 			return nil
 		}
 

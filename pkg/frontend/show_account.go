@@ -142,8 +142,10 @@ func requestStorageUsage(ctx context.Context, ses *Session) (resp interface{}, e
 
 	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
 	result, err := handler(ses.proc, "DN", "", ctl2.MoCtlTNCmdSender)
-	if err != nil {
+	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `show accounts`")
+	} else if err != nil {
+		return nil, err
 	}
 
 	return result.Data.([]interface{})[0], nil
