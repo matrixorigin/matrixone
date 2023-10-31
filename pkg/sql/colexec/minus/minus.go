@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -161,7 +160,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 
 		ctr.bat = batch.NewWithSize(len(bat.Vecs))
 		for i := range bat.Vecs {
-			ctr.bat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+			ctr.bat.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
 		}
 
 		count := bat.Vecs[0].Length()

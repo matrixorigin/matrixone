@@ -35,7 +35,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	arg.ctr.InitReceiver(proc, false)
 	arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
 	for i, typ := range arg.Typs {
-		arg.ctr.bat.Vecs[i] = vector.NewVec(typ)
+		arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
 	if arg.Cond != nil {
@@ -117,7 +117,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			// rbat.Vecs[i] = bat.Vecs[rp.Pos]
 			// bat.Vecs[rp.Pos] = nil
 			typ := *bat.Vecs[rp.Pos].GetType()
-			ctr.rbat.Vecs[i] = vector.NewVec(typ)
+			ctr.rbat.Vecs[i] = proc.GetVector(typ)
 			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
 				return err
 			}

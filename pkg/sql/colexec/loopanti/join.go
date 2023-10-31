@@ -112,7 +112,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 		// rbat.Vecs[i] = bat.Vecs[pos]
 		// bat.Vecs[pos] = nil
 		typ := *bat.Vecs[pos].GetType()
-		ctr.rbat.Vecs[i] = vector.NewVec(typ)
+		ctr.rbat.Vecs[i] = proc.GetVector(typ)
 		if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[pos]); err != nil {
 			return err
 		}

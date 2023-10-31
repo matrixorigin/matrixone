@@ -86,7 +86,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 				// very bad code.
 				exprTyp := ag.GroupExpr[j].Typ
 				typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
-				ctr.multiVecs[i][j].vec = vector.NewVec(typ)
+				ctr.multiVecs[i][j].vec = proc.GetVector(typ)
 			}
 		}
 	}
@@ -103,7 +103,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			// very bad code.
 			exprTyp := ag.E.Typ
 			typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
-			ctr.aggVecs[i].vec = vector.NewVec(typ)
+			ctr.aggVecs[i].vec = proc.GetVector(typ)
 		}
 	}
 

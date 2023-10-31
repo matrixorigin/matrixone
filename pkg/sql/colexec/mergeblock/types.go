@@ -60,7 +60,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	// }
 }
 
-func (arg *Argument) GetMetaLocBat(name string) {
+func (arg *Argument) GetMetaLocBat(name string, proc *process.Process) {
 	// If the target is a partition table
 	if len(arg.PartitionSources) > 0 {
 		// 'i' aligns with partition number
@@ -68,20 +68,20 @@ func (arg *Argument) GetMetaLocBat(name string) {
 			bat := batch.NewWithSize(1)
 			bat.Attrs = []string{name}
 			bat.Cnt = 1
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_text, 0, 0))
+			bat.Vecs[0] = proc.GetVector(types.New(types.T_text, 0, 0))
 			arg.container.mp[i] = bat
 		}
 	} else {
 		bat := batch.NewWithSize(1)
 		bat.Attrs = []string{name}
 		bat.Cnt = 1
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_text, 0, 0))
+		bat.Vecs[0] = proc.GetVector(types.New(types.T_text, 0, 0))
 		arg.container.mp[0] = bat
 	}
 }
 
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
-	arg.GetMetaLocBat(bat.Attrs[1])
+	arg.GetMetaLocBat(bat.Attrs[1], proc)
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
 	blockInfos := vector.MustBytesCol(bat.GetVector(1))
 	for i := range tblIdx {

@@ -142,7 +142,7 @@ func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, err
 		}
 
 		tp := plan2.MetadataScanColTypes[idx]
-		retBat.Vecs[i] = vector.NewVec(tp)
+		retBat.Vecs[i] = proc.GetVector(tp)
 	}
 
 	return retBat, nil

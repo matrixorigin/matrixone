@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -131,7 +130,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			}
 			ctr.bat = batch.NewWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
-				ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())
+				ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
 			}
 			ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 			for i := range ctr.cmps {

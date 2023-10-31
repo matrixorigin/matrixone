@@ -37,7 +37,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	arg.ctr.InitReceiver(proc, false)
 	arg.ctr.bat = batch.NewWithSize(len(arg.Typs))
 	for i, typ := range arg.Typs {
-		arg.ctr.bat.Vecs[i] = vector.NewVec(typ)
+		arg.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
 	if arg.Cond != nil {
@@ -120,7 +120,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			// rbat.Vecs[i] = bat.Vecs[rp]
 			// bat.Vecs[rp] = nil
 			typ := *bat.Vecs[rp].GetType()
-			ctr.rbat.Vecs[i] = vector.NewVec(typ)
+			ctr.rbat.Vecs[i] = proc.GetVector(typ)
 			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
 				return err
 			}
@@ -145,7 +145,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	markPos := -1
 	for i, pos := range ap.Result {
 		if pos == -1 {
-			ctr.rbat.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+			ctr.rbat.Vecs[i] = proc.GetVector(types.T_bool.ToType())
 			ctr.rbat.Vecs[i].PreExtend(bat.RowCount(), proc.Mp())
 			markPos = i
 			break

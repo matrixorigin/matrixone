@@ -38,7 +38,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.bat = batch.NewWithSize(len(ap.RightTypes))
 	for i, typ := range ap.RightTypes {
-		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
+		ap.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))

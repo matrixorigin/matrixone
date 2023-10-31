@@ -90,7 +90,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument, result *vm.
 	rbat = batch.NewWithSize(len(arg.Attrs))
 	rbat.Attrs = arg.Attrs
 	for i := range arg.Attrs {
-		rbat.Vecs[i] = vector.NewVec(arg.retSchema[i])
+		rbat.Vecs[i] = proc.GetVector(arg.retSchema[i])
 	}
 	if len(arg.Args) == 3 {
 		stepVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat})

@@ -78,7 +78,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
+		ap.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
 	return nil
@@ -298,7 +298,7 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 			if len(ap.ctr.uniqueJoinKeys) == 0 {
 				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.vecs))
 				for j, vec := range ctr.vecs {
-					ap.ctr.uniqueJoinKeys[j] = vector.NewVec(*vec.GetType())
+					ap.ctr.uniqueJoinKeys[j] = proc.GetVector(*vec.GetType())
 				}
 			}
 

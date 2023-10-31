@@ -143,7 +143,7 @@ func makeEndBatch(proc *process.Process) *batch.Batch {
 	b.Attrs = []string{
 		"recursive_col",
 	}
-	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
 	batch.SetLength(b, 1)
 	b.SetEnd()

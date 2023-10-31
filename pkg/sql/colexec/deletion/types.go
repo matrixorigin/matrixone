@@ -203,7 +203,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 			blockId_deltaLoc := ctr.partitionId_blockId_deltaLoc[pidx]
 			if _, ok := blockId_deltaLoc[blkids[i]]; !ok {
 				bat := batch.New(false, []string{catalog.BlockMeta_DeltaLoc})
-				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+				bat.SetVector(0, proc.GetVector(types.T_text.ToType()))
 				blockId_deltaLoc[blkids[i]] = bat
 			}
 			bat := blockId_deltaLoc[blkids[i]]
@@ -261,13 +261,13 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 				tmpBat = arg.ctr.pool.get()
 				if tmpBat == nil {
 					tmpBat = batch.New(false, []string{catalog.Row_ID, "pk"})
-					tmpBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-					tmpBat.SetVector(1, vector.NewVec(*destBatch.GetVector(int32(pkIdx)).GetType()))
+					tmpBat.SetVector(0, proc.GetVector(types.T_Rowid.ToType()))
+					tmpBat.SetVector(1, proc.GetVector(*destBatch.GetVector(int32(pkIdx)).GetType()))
 				}
 				blockIdRowIdBatchMap[str] = tmpBat
 			} else {
 				tmpBat := batch.New(false, []string{catalog.BlockMetaOffset})
-				tmpBat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
+				tmpBat.SetVector(0, proc.GetVector(types.T_int64.ToType()))
 				blockIdRowIdBatchMap[str] = tmpBat
 			}
 			arg.ctr.partitionId_blockId_rowIdBatch[pIdx] = blockIdRowIdBatchMap
@@ -279,13 +279,13 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 					bat = arg.ctr.pool.get()
 					if bat == nil {
 						bat = batch.New(false, []string{catalog.Row_ID, "pk"})
-						bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-						bat.SetVector(1, vector.NewVec(*destBatch.GetVector(int32(pkIdx)).GetType()))
+						bat.SetVector(0, proc.GetVector(types.T_Rowid.ToType()))
+						bat.SetVector(1, proc.GetVector(*destBatch.GetVector(int32(pkIdx)).GetType()))
 					}
 					blockIdRowIdBatchMap[str] = bat
 				} else {
 					bat := batch.New(false, []string{catalog.BlockMetaOffset})
-					bat.SetVector(0, vector.NewVec(types.T_int64.ToType()))
+					bat.SetVector(0, proc.GetVector(types.T_int64.ToType()))
 					blockIdRowIdBatchMap[str] = bat
 				}
 			}

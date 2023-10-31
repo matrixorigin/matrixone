@@ -63,7 +63,7 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 				}
 
 				v := ctr.batWaitForSort.Vecs[i]
-				ctr.batWaitForSort.Vecs[i] = vector.NewVec(typ)
+				ctr.batWaitForSort.Vecs[i] = proc.GetVector(typ)
 				err = ctr.flatFn[i](ctr.batWaitForSort.Vecs[i], v)
 				v.Free(proc.Mp())
 				if err != nil {

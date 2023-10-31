@@ -52,7 +52,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			// very bad code.
 			exprTyp := ag.E.Typ
 			typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
-			ctr.aggVecs[i].vec = vector.NewVec(typ)
+			ctr.aggVecs[i].vec = proc.GetVector(typ)
 		}
 	}
 	return nil
@@ -161,7 +161,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			ctr.os = ctr.ps
 		}
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := proc.GetVector(types.T_int64.ToType())
 		defer vec.Free(proc.Mp())
 		if err = vector.AppendFixedList(vec, ctr.os, nil, proc.Mp()); err != nil {
 			return err

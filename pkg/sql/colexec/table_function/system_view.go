@@ -107,7 +107,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 			}
 
 			tp := plan2.MoLocksColTypes[idx]
-			bat.Vecs[i] = vector.NewVec(tp)
+			bat.Vecs[i] = proc.GetVector(tp)
 		}
 		bat.Attrs = arg.Attrs
 
@@ -288,7 +288,7 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *v
 			}
 
 			tp := plan2.MoConfigColTypes[idx]
-			bat.Vecs[i] = vector.NewVec(tp)
+			bat.Vecs[i] = proc.GetVector(tp)
 		}
 		bat.Attrs = arg.Attrs
 
@@ -441,7 +441,7 @@ func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.
 			}
 
 			tp := plan2.MoTransactionsColTypes[idx]
-			bat.Vecs[i] = vector.NewVec(tp)
+			bat.Vecs[i] = proc.GetVector(tp)
 		}
 		bat.Attrs = arg.Attrs
 		for _, rsp := range rsps {
@@ -633,7 +633,7 @@ func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 			}
 
 			tp := plan2.MoCacheColTypes[idx]
-			bat.Vecs[i] = vector.NewVec(tp)
+			bat.Vecs[i] = proc.GetVector(tp)
 		}
 		bat.Attrs = arg.Attrs
 		for _, rsp := range rsps {

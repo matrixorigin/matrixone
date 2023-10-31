@@ -61,7 +61,7 @@ func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 			}
 
 			tp := plan2.SessionsColTypes[idx]
-			bat.Vecs[i] = vector.NewVec(tp)
+			bat.Vecs[i] = proc.GetVector(tp)
 		}
 		bat.Attrs = arg.Attrs
 

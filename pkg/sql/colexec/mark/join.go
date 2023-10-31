@@ -42,7 +42,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	for i, typ := range ap.Typs {
-		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
+		ap.ctr.bat.Vecs[i] = proc.GetVector(typ)
 	}
 
 	ap.ctr.buildEqVec = make([]*vector.Vector, len(ap.Conditions[1]))
@@ -177,7 +177,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			// rbat.Vecs[i] = bat.Vecs[rp]
 			// bat.Vecs[rp] = nil
 			typ := *bat.Vecs[rp].GetType()
-			ctr.rbat.Vecs[i] = vector.NewVec(typ)
+			ctr.rbat.Vecs[i] = proc.GetVector(typ)
 			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
 				return err
 			}
@@ -451,7 +451,7 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*
 	}
 	bat := batch.NewWithSize(len(originBatch.Vecs))
 	for i, vec := range originBatch.Vecs {
-		bat.Vecs[i] = vector.NewVec(*vec.GetType())
+		bat.Vecs[i] = proc.GetVector(*vec.GetType())
 	}
 	if len(sels) == 0 {
 		return bat, nil
