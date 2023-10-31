@@ -128,3 +128,9 @@ func (bm BlockObject) GetMetaColumnCount() uint16 {
 func (bm BlockObject) GetMaxSeqnum() uint16 {
 	return bm.BlockHeader().MaxSeqnum()
 }
+
+func (bm BlockObject) GetBlockID(name ObjectName) *Blockid {
+	segmentId := name.SegmentId()
+	num := name.Num()
+	return NewBlockid(&segmentId, num, bm.BlockHeader().Sequence())
+}
