@@ -807,7 +807,7 @@ func (m *MockCompilerContext) GetUserName() string {
 
 func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectRef, *TableDef) {
 	name := strings.ToLower(tableName)
-	tableDef := DeepCopyTableDef(m.tables[name])
+	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
@@ -829,7 +829,7 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 
 func (m *MockCompilerContext) ResolveById(tableId uint64) (*ObjectRef, *TableDef) {
 	name := m.id2name[tableId]
-	tableDef := DeepCopyTableDef(m.tables[name])
+	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
 		for i, col := range tableDef.Cols {
 			if col.Typ.Id == int32(types.T_Rowid) {
