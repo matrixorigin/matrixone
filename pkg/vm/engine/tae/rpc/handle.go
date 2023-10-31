@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
@@ -1178,16 +1176,15 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
 
-	// get the newest checkpoint.
-	var ckp *checkpoint.CheckpointEntry
+	// get all checkpoints.
+	//var ckp *checkpoint.CheckpointEntry
+	// [g_ckp, i_ckp, i_ckp, ...] (if g exist)
 	allCkp := h.db.BGCheckpointRunner.GetAllCheckpoints()
-	if len(allCkp) != 0 {
-		ckp = allCkp[len(allCkp)-1]
-	}
-
-	if ckp != nil && len(ckp.GetLocation()) != 0 {
-		resp.CkpLocations = strings.Join(
-			[]string{ckp.GetLocation().String(), strconv.Itoa(int(ckp.GetVersion()))}, ";")
+	for idx := range allCkp {
+		resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
+			Version:  allCkp[idx].GetVersion(),
+			Location: allCkp[idx].GetLocation(),
+		})
 	}
 
 	resp.Succeed = true

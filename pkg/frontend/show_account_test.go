@@ -34,7 +34,6 @@ import (
 	"math"
 	"os"
 	"path"
-	"strings"
 	"testing"
 )
 
@@ -168,7 +167,7 @@ func mockCheckpointData(t *testing.T, accIds []uint64, sizes []uint64) *logtail.
 	storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
 
 	accVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector()
-	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockSize).GetDownstreamVector()
+	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
 
 	for idx := range accIds {
 		vector.AppendFixed(accVec, accIds[idx], false, common.DefaultAllocator)
@@ -206,9 +205,11 @@ func Test_ShowAccounts(t *testing.T) {
 		require.Nil(t, err)
 	}()
 
-	resp := &db.StorageUsageResp{
-		CkpLocations: strings.Join([]string{cnLocation.String(), "8"}, ";"),
-	}
+	resp := &db.StorageUsageResp{}
+	resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
+		Location: cnLocation,
+		Version:  8,
+	})
 
 	usage, err := handleStorageUsageResponse(ctx, objFs.Service, resp)
 	require.Nil(t, err)

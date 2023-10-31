@@ -97,9 +97,15 @@ message BlockMetaInfo {
     repeated uint64 info            = 1;
 }
 
+message CkpMetaInfo {
+    option (gogoproto.typedecl)     = false;
+    uint32 version                  =1;
+    bytes location                 =2;
+}
+
 message StorageUsageResp {
     option (gogoproto.typedecl)     = false;
     bool Succeed                    = 1;
-    string CkpLocations             = 2;
+    repeated CkpMetaInfo CkpEntries = 2;
     repeated BlockMetaInfo BlockEntries   = 3;
 }

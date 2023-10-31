@@ -58,7 +58,7 @@ type SegStat struct {
 	remainingRows  int
 }
 
-func (s *SegStat) loadObjectInfo(name string, blk *BlockEntry) error {
+func (s *SegStat) loadObjectInfo(blk *BlockEntry) error {
 	schema := blk.GetSchema()
 	loc := blk.GetMetaLoc()
 
@@ -292,7 +292,7 @@ func (entry *SegmentEntry) LoadObjectInfo() error {
 		return nil
 	}
 
-	return entry.Stat.loadObjectInfo(name, blk)
+	return entry.Stat.loadObjectInfo(blk)
 }
 
 func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {
