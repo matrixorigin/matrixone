@@ -162,7 +162,7 @@ func (p *PartitionState) GetChangedBlocksBetween(
 	return
 }
 
-func (p *PartitionState) GetBockInfo(bid types.Blockid) (loc catalog.ObjectLocation, commitTs types.TS, ok bool) {
+func (p *PartitionState) GetBockInfo(bid types.Blockid) (catalog.ObjectLocation, types.TS, bool) {
 	iter := p.blockDeltas.Copy().Iter()
 	defer iter.Release()
 
@@ -185,4 +185,16 @@ func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 		return true
 	}
 	return false
+}
+
+func (p *PartitionState) GetObject(blockID types.Blockid) (ObjectEntry, bool) {
+	iter := p.dataObjects.Copy().Iter()
+	defer iter.Release()
+
+	if ok := iter.Seek(ObjectEntry{
+		ShortObjName: *objectio.ShortName(&blockID),
+	}); ok {
+		return iter.Item(), true
+	}
+	return ObjectEntry{}, false
 }

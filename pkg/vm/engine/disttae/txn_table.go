@@ -414,7 +414,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	if err != nil {
 		return nil, err
 	}
-	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.objInfos))
+	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxObjectsNum())
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
 		objName := location.Name().String()
@@ -553,13 +553,13 @@ func (tbl *txnTable) reset(newId uint64) {
 	}
 	tbl.tableId = newId
 	tbl._partState = nil
-	tbl.objInfos = nil
+	//tbl.objInfos = nil
 	tbl.objInfosUpdated = false
 }
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState = nil
-	tbl.objInfos = nil
+	//tbl.objInfos = nil
 	tbl.objInfosUpdated = false
 }
 
@@ -589,16 +589,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 
-	if len(tbl.objInfos) == 0 {
-		cnblks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
-		if err != nil {
-			return nil, err
-		}
-		if len(cnblks) == 0 {
-			return ranges, err
-		}
-	}
-
 	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
 	// temporary solution, will fix it in the future
 	newExprs := make([]*plan.Expr, len(exprs))
@@ -610,12 +600,12 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 			newExprs[i] = foldedExpr
 		}
 	}
+
 	err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.getTableDef(),
 		newExprs,
-		tbl.objInfos,
 		&ranges,
 		tbl.proc.Load(),
 	)
@@ -645,8 +635,6 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	//snapshotBlks []catalog.BlockInfo, // whole block list on snapshot
-	snapshotObjs []logtailreplay.ObjectEntry, // whole object list on snapshot
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
@@ -658,7 +646,7 @@ func (tbl *txnTable) rangesOnePart(
 		deleteBlks, createBlks := state.GetChangedBlocksBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 		if len(deleteBlks) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteBlks, createBlks, snapshotObjs); err != nil {
+			if err := tbl.updateDeleteInfo(ctx, state, deleteBlks, createBlks); err != nil {
 				return err
 			}
 		}
@@ -733,7 +721,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if done, err := tbl.tryFastRanges(
-		state, exprs, insertedS3Blks, snapshotObjs, dirtyBlks, ranges, fs,
+		state, exprs, insertedS3Blks, dirtyBlks, ranges, fs,
 	); err != nil {
 		return err
 	} else if done {
@@ -827,7 +815,16 @@ func (tbl *txnTable) rangesOnePart(
 	zms = zms[:]
 	//FIXME::memory leak?
 	vecs = vecs[:]
-	for _, obj := range snapshotObjs {
+
+	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+	iter, err := state.NewObjectsIter(ts)
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for iter.Next() {
+		obj := iter.Entry()
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		location := obj.Location()
@@ -913,7 +910,7 @@ func (tbl *txnTable) tryFastRanges(
 	state *logtailreplay.PartitionState,
 	exprs []*plan.Expr,
 	insertedS3Blocks []catalog.BlockInfo,
-	snapshotObjs []logtailreplay.ObjectEntry,
+	//snapshotObjs []logtailreplay.ObjectEntry,
 	dirtyBlks map[types.Blockid]struct{},
 	ranges *[][]byte,
 	fs fileservice.FileService,
@@ -1019,7 +1016,15 @@ func (tbl *txnTable) tryFastRanges(
 
 	//filter objects and blocks.
 	var cnt uint32
-	for _, obj := range snapshotObjs {
+	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+	iter, err := state.NewObjectsIter(ts)
+	if err != nil {
+		return false, err
+	}
+	defer iter.Close()
+
+	for iter.Next() {
+		obj := iter.Entry()
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		var bf objectio.BloomFilter
@@ -1791,11 +1796,6 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 		if err = tbl.updateLogtail(ctx); err != nil {
 			return
 		}
-		var objs []logtailreplay.ObjectEntry
-		if objs, err = tbl.db.txn.getObjInfos(ctx, tbl); err != nil {
-			return
-		}
-		tbl.objInfos = objs
 		tbl.objInfosUpdated = true
 	}
 	return
@@ -1878,8 +1878,7 @@ func (tbl *txnTable) updateDeleteInfo(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteBlks,
-	createBlks []types.Blockid,
-	snapshotObjs []logtailreplay.ObjectEntry) error {
+	createBlks []types.Blockid) error {
 	var blks []catalog.BlockInfo
 
 	deleteBlksMap := make(map[types.Blockid]struct{})
@@ -1888,10 +1887,6 @@ func (tbl *txnTable) updateDeleteInfo(
 	}
 
 	{
-		objMap := make(map[objectio.ObjectNameShort]logtailreplay.ObjectEntry)
-		for _, obj := range snapshotObjs {
-			objMap[obj.ShortObjName] = obj
-		}
 		fs, err := fileservice.Get[fileservice.FileService](
 			tbl.proc.Load().FileService,
 			defines.SharedFileServiceName)
@@ -1901,7 +1896,7 @@ func (tbl *txnTable) updateDeleteInfo(
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		for _, id := range createBlks {
-			if obj, ok := objMap[*objectio.ShortName(&id)]; ok {
+			if obj, ok := state.GetObject(id); ok {
 				location := obj.Location()
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,
