@@ -150,8 +150,8 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 		return km.vectorList, nil
 	}
 
-	km.InitCentroids() // step 0.a
-	km.initBounds()    // step 0.b
+	km.InitCentroids() // step 0.1
+	km.initBounds()    // step 0.2
 
 	return km.elkansCluster()
 }
@@ -223,6 +223,11 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 
 // initBounds initializes the lower bounds, upper bound and assignment for each vector.
 func (km *ElkanClusterer) initBounds() {
+	// step 0.2
+	// Set the lower bound l(x, c)=0 for each point x and center c.
+	// Assign each x to its closest initial center c(x)=min{ d(x, c) }, using Lemma 1 to avoid
+	// redundant distance calculations. Each time d(x, c) is computed, set l(x, c)=d(x, c).
+	// Assign upper bounds u(x)=min_c d(x, c).
 	for x := range km.vectorList {
 		minDist := math.MaxFloat64
 		closestCenter := 0
