@@ -24,7 +24,7 @@ import (
 	"sync"
 )
 
-// KMeansClusterer is an improved kmeans algorithm which using the triangle inequality to reduce the number of
+// ElkanClusterer is an improved kmeans algorithm which using the triangle inequality to reduce the number of
 // distance calculations. As quoted from the paper:
 // "The main contribution of this paper is an optimized version of the standard k-means method, with which the number
 // of distance computations is in practice closer to `n` than to `nke`, where n is the number of vectors, k is the number
@@ -37,7 +37,7 @@ import (
 //
 // Ref Paper: https://cdn.aaai.org/ICML/2003/ICML03-022.pdf
 // Ref Material :https://www.cse.iitd.ac.in/~rjaiswal/2015/col870/Project/Nipun.pdf
-type KMeansClusterer struct {
+type ElkanClusterer struct {
 
 	// for each of the n vectors, we keep track of the following data
 	vectorList  [][]float64
@@ -72,7 +72,7 @@ type vectorMeta struct {
 	recompute bool
 }
 
-var _ kmeans.Clusterer = new(KMeansClusterer)
+var _ kmeans.Clusterer = new(ElkanClusterer)
 
 func NewKMeans(vectors [][]float64,
 	clusterCnt, maxIterations int,
@@ -96,12 +96,9 @@ func NewKMeans(vectors [][]float64,
 		}
 	}
 
-	vectorDim := len(vectors[0])
-	centroids := make([][]float64, clusterCnt)
 	centroidDist := make([][]float64, clusterCnt)
 	minCentroidDist := make([]float64, clusterCnt)
-	for i := range centroids {
-		centroids[i] = make([]float64, vectorDim)
+	for i := range centroidDist {
 		centroidDist[i] = make([]float64, clusterCnt)
 	}
 
@@ -110,7 +107,7 @@ func NewKMeans(vectors [][]float64,
 		return nil, err
 	}
 
-	return &KMeansClusterer{
+	return &ElkanClusterer{
 		maxIterations:  maxIterations,
 		deltaThreshold: deltaThreshold,
 
@@ -118,7 +115,7 @@ func NewKMeans(vectors [][]float64,
 		assignments: assignments,
 		vectorMetas: metas,
 
-		Centroids:                   centroids,
+		//Centroids will be initialized by InitCentroids()
 		halfInterCentroidDistMatrix: centroidDist,
 		minHalfInterCentroidDist:    minCentroidDist,
 
@@ -132,19 +129,21 @@ func NewKMeans(vectors [][]float64,
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like kmeans++ or random.
-func (km *KMeansClusterer) InitCentroids() {
+func (km *ElkanClusterer) InitCentroids() {
+	var initializer Initializer
 	switch km.initType {
 	case kmeans.KmeansPlusPlus:
-		km.kmeansPlusPlusInit()
+		initializer = NewKMeansPlusPlusInitializer(km.distFn)
 	case kmeans.Random:
-		km.randomInit()
+		initializer = NewRandomInitializer()
 	default:
-		km.randomInit()
+		initializer = NewRandomInitializer()
 	}
+	km.Centroids = initializer.InitCentroids(km.vectorList, km.clusterCnt)
 }
 
 // Cluster returns the final centroids and the error if any.
-func (km *KMeansClusterer) Cluster() ([][]float64, error) {
+func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 
 	if km.vectorCnt == km.clusterCnt {
 		return km.vectorList, nil
@@ -156,7 +155,7 @@ func (km *KMeansClusterer) Cluster() ([][]float64, error) {
 	return km.elkansCluster()
 }
 
-func (km *KMeansClusterer) elkansCluster() ([][]float64, error) {
+func (km *ElkanClusterer) elkansCluster() ([][]float64, error) {
 
 	for iter := 0; ; iter++ {
 		km.computeCentroidDistances() // step 1
@@ -221,7 +220,7 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 }
 
 // initBounds initializes the lower bounds, upper bound and assignment for each vector.
-func (km *KMeansClusterer) initBounds() {
+func (km *ElkanClusterer) initBounds() {
 	for x := range km.vectorList {
 		minDist := math.MaxFloat64
 		closestCenter := 0
@@ -241,7 +240,7 @@ func (km *KMeansClusterer) initBounds() {
 
 // computeCentroidDistances computes the centroid distances and the min centroid distances.
 // NOTE: here we are save 0.5 of centroid distance to avoid 0.5 multiplication in step 3(iii) and 3.b.
-func (km *KMeansClusterer) computeCentroidDistances() {
+func (km *ElkanClusterer) computeCentroidDistances() {
 
 	// step 1.a
 	// For all centers c and c', compute 0.5 x d(c, c').
@@ -275,7 +274,7 @@ func (km *KMeansClusterer) computeCentroidDistances() {
 
 // assignData assigns each vector to the nearest centroid.
 // This is the place where most of the pruning happens.
-func (km *KMeansClusterer) assignData() int {
+func (km *ElkanClusterer) assignData() int {
 
 	var ux float64 // currVecUpperBound
 	var cx int     // currVecClusterAssignmentIdx
@@ -337,7 +336,7 @@ func (km *KMeansClusterer) assignData() int {
 }
 
 // recalculateCentroids calculates the new mean centroids based on the new assignments.
-func (km *KMeansClusterer) recalculateCentroids() [][]float64 {
+func (km *ElkanClusterer) recalculateCentroids() [][]float64 {
 	clusterMembersCount := make([]int64, len(km.Centroids))
 	clusterMembersDimWiseSum := make([][]float64, len(km.Centroids))
 
@@ -375,7 +374,7 @@ func (km *KMeansClusterer) recalculateCentroids() [][]float64 {
 }
 
 // updateBounds updates the lower and upper bounds for each vector.
-func (km *KMeansClusterer) updateBounds(newCentroid [][]float64) {
+func (km *ElkanClusterer) updateBounds(newCentroid [][]float64) {
 
 	// compute the centroid shift distance matrix once.
 	centroidShiftDist := make([]float64, km.clusterCnt)
@@ -409,7 +408,7 @@ func (km *KMeansClusterer) updateBounds(newCentroid [][]float64) {
 }
 
 // isConverged checks if the algorithm has converged.
-func (km *KMeansClusterer) isConverged(iter int, changes int) bool {
+func (km *ElkanClusterer) isConverged(iter int, changes int) bool {
 	if iter == km.maxIterations ||
 		changes < int(float64(km.vectorCnt)*km.deltaThreshold) ||
 		changes == 0 {

@@ -80,7 +80,7 @@ func Test_Cluster(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "Test 1 - Skewed data",
+			name: "Test 1 - Skewed data (Random Init)",
 			fields: kmeansArg{
 				vectorList: [][]float64{
 					{1, 2, 3, 4},
@@ -102,6 +102,33 @@ func Test_Cluster(t *testing.T) {
 			want: [][]float64{
 				{1, 2, 3.611111111111111, 4.611111111111112},
 				{10, 3.777777777777778, 4, 5},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Test 1 - Skewed data (Kmeans++ Init)",
+			fields: kmeansArg{
+				vectorList: [][]float64{
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+					{1, 2, 4, 5},
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+					{1, 2, 4, 5},
+					{10, 2, 4, 5},
+					{10, 3, 4, 5},
+					{10, 5, 4, 5},
+				},
+				clusterCnt:     2,
+				maxIterations:  500,
+				deltaThreshold: 0.01,
+				distType:       kmeans.L2,
+				initType:       kmeans.KmeansPlusPlus,
+			},
+			// NOTE: With Kmeans++ we have a better set of initial centroids resulting in a better clustering
+			want: [][]float64{
+				{1, 2, 3.611111111111111, 4.611111111111112},
+				{10, 2.777777777777778, 4, 5},
 			},
 			wantErr: false,
 		},
