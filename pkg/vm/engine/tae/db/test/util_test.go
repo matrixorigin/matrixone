@@ -200,7 +200,7 @@ func Test_FillSEGStorageUsageBatOfIncrement(t *testing.T) {
 	collector.DatabaseFn = nil
 	collector.TableFn = nil
 	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-		logtail.FillSEGStorageUsageBatOfIncrement(collector.BaseCollector, segment)
+		logtail.FillUsageBatOfIncremental(collector.BaseCollector, segment)
 
 		require.NotNil(t, segment.GetFirstBlkEntry())
 		if !segment.IsAppendable() {
@@ -239,7 +239,7 @@ func Benchmark_FillSEGStorageUsageBatOfIncrement(b *testing.B) {
 	collector.DatabaseFn = nil
 	collector.TableFn = nil
 	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-		logtail.FillSEGStorageUsageBatOfIncrement(collector.BaseCollector, segment)
+		logtail.FillUsageBatOfIncremental(collector.BaseCollector, segment)
 		return nil
 	}
 
@@ -262,7 +262,7 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 		collector.DatabaseFn = nil
 		collector.TableFn = nil
 		collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-			logtail.FillSEGStorageUsageBatOfIncrement(collector.BaseCollector, segment)
+			logtail.FillUsageBatOfIncremental(collector.BaseCollector, segment)
 			return nil
 		}
 
@@ -288,7 +288,7 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 }
 
 func checkpointMetaInfoFactory(entries []*checkpoint.CheckpointEntry) []*logtail.CkpLocVers {
-	var ret []*logtail.CkpLocVers
+	ret := make([]*logtail.CkpLocVers, 0)
 	for idx := range entries {
 		ret = append(ret, &logtail.CkpLocVers{
 			Location: entries[idx].GetLocation(),
@@ -309,8 +309,8 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 		collector := logtail.NewGlobalCollector(types.TS{}, 0)
 
 		// mark the first table as deleted
-		d := collector.GetDeletes()
-		d[logtail.UsageTblID][rels[0].ID()] = struct{}{}
+		deletes := collector.GetDeletes()
+		deletes[logtail.UsageTblID][rels[0].ID()] = struct{}{}
 
 		logtail.FillSEGStorageUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
 
@@ -331,9 +331,9 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 		collector := logtail.NewGlobalCollector(types.TS{}, 0)
 
 		// mark all tables as deleted
-		d := collector.GetDeletes()
+		deletes := collector.GetDeletes()
 		for i := 0; i < len(rels); i++ {
-			d[logtail.UsageTblID][rels[i].ID()] = struct{}{}
+			deletes[logtail.UsageTblID][rels[i].ID()] = struct{}{}
 		}
 
 		logtail.FillSEGStorageUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))

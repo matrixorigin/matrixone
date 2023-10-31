@@ -45,6 +45,8 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnDequeuePreparingRow(),
 			c.initTxnRangesLoadedObjectMetaRow(),
 			c.initCNCommittedObjectQuantityRow(),
+
+			c.initTxnShowAccountsRow(),
 		)...)
 	if err != nil {
 		return err
@@ -343,6 +345,19 @@ func (c *DashboardCreator) initTxnLockWaitersRow() dashboard.Option {
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTxnShowAccountsRow() dashboard.Option {
+	return dashboard.Row(
+		"Show Accounts Duration",
+		c.getHistogram(
+			"Show Accounts Duration",
+			c.getMetricWithFilter(`mo_txn_show_accounts_duration_seconds_bucket`, ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 
