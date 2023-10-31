@@ -147,6 +147,7 @@ var (
 	TxnStatementBuildPlanDurationHistogram      = txnStatementDurationHistogram.WithLabelValues("build-plan")
 	TxnStatementExecuteDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("execute")
 	TxnStatementExecuteLatencyDurationHistogram = txnStatementDurationHistogram.WithLabelValues("execute-latency")
+	TxnStatementCompileDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("compile")
 
 	txnLockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -190,6 +191,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
+	TxnTableRangeSizeHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "ranges_duration_size",
+			Help:      "Bucketed histogram of txn table ranges size.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 20),
+		})
+
 	txnTNSideDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -203,4 +213,17 @@ var (
 	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
 	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
 	TxnBeforeCommitDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
+
+	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "mpool_duration_seconds",
+			Help:      "Bucketed histogram of txn mpool duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		}, []string{"type"})
+	TxnMpoolNewDurationHistogram    = txnMpoolDurationHistogram.WithLabelValues("new")
+	TxnMpoolAllocDurationHistogram  = txnMpoolDurationHistogram.WithLabelValues("alloc")
+	TxnMpoolFreeDurationHistogram   = txnMpoolDurationHistogram.WithLabelValues("free")
+	TxnMpoolDeleteDurationHistogram = txnMpoolDurationHistogram.WithLabelValues("delete")
 )

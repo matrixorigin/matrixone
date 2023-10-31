@@ -109,7 +109,7 @@ func (c *DashboardCreator) initRPCConnectionRow() dashboard.Option {
 
 func (c *DashboardCreator) initRPCConnectDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"RPC write duration",
+		"RPC connection duration",
 		c.getHistogramWithExtraBy(
 			"Connect duration",
 			c.getMetricWithFilter(`mo_rpc_backend_connect_duration_seconds_bucket`, ``),

@@ -38,6 +38,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnStatementDurationRow(),
 			c.initTxnStatementsCountRow(),
 			c.initTxnTableRangesRow(),
+			c.initTxnMpoolRow(),
 			c.initTxnOnPrepareWALRow(),
 			c.initTxnBeforeCommitRow(),
 			c.initTxnDequeuePreparedRow(),
@@ -220,11 +221,13 @@ func (c *DashboardCreator) initTxnStatementDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="execute"`),
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="execute-latency"`),
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="build-plan"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="compile"`),
 			},
 			[]string{
 				"execute",
 				"execute-latency",
 				"build-plan",
+				"compile",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
@@ -261,14 +264,20 @@ func (c *DashboardCreator) initTxnFastLoadObjectMetaRow() dashboard.Option {
 
 func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn execute table ranges",
+		"Txn table ranges",
 		c.getHistogram(
-			"Txn execute table ranges",
+			"Txn table ranges duration",
 			c.getMetricWithFilter(`mo_txn_ranges_duration_seconds_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
+			6,
 			axis.Unit("s"),
 			axis.Min(0)),
+
+		c.getHistogram(
+			"Txn table ranges count",
+			c.getMetricWithFilter(`mo_txn_ranges_duration_size_bucket`, ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			6),
 	)
 }
 
@@ -289,7 +298,6 @@ func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
 				"lock-wait",
 				"unlock-total",
 				"unlock-btree-get-lock",
-				"unlock-btree-get-lock",
 				"unlock-btree-total",
 				"hold",
 			},
@@ -309,6 +317,27 @@ func (c *DashboardCreator) initTxnLockWaitersRow() dashboard.Option {
 			},
 			[]string{
 				"waiters",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTxnMpoolRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn lock waiters",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="new"`),
+				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="alloc"`),
+				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="free"`),
+				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="delete"`),
+			},
+			[]string{
+				"new",
+				"alloc",
+				"free",
+				"delete",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3})...,
