@@ -26,6 +26,6 @@ func TestCreateCloudDashboard(t *testing.T) {
 		return
 	}
 
-	c := NewCloudDashboardCreator("http://127.0.0.1", "admin", "admin", "Prometheus")
+	c := NewCloudDashboardCreator("http://47.97.80.230", "admin", "Ym5yUjlwaVVxaG9I", "Prometheus")
 	require.NoError(t, c.Create())
 }

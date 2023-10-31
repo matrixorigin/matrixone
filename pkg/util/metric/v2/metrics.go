@@ -82,11 +82,13 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnCommitDurationHistogram)
 	registry.MustRegister(TxnLifeCycleDurationHistogram)
+	registry.MustRegister(TxnLifeCycleStatementsTotalHistogram)
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(TxnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+	registry.MustRegister(TxnLockWaitersTotalHistogram)
 
 	registry.MustRegister(TxnFastLoadObjectMetaTotalCounter)
 }
