@@ -158,6 +158,8 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
+	v2.FSWriteLocalCounter.Add(float64(len(vector.Entries)))
+
 	var err error
 	var bytesWritten int
 	start := time.Now()
@@ -165,8 +167,8 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	defer func() {
 		// cover another func to catch the err when process Write
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, int64(bytesWritten)))
-		v2.GetLocalWriteDurationHistogram().Observe(time.Since(start).Seconds())
-		v2.GetLocalFSWriteBytesHistogram().Observe(float64(bytesWritten))
+		v2.LocalWriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		v2.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
@@ -226,15 +228,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
 	defer put.Put()
 
-	var r io.Reader
-	r = newIOEntriesReader(ctx, vector.Entries)
-	if vector.Hash.Sum != nil && vector.Hash.New != nil {
-		h := vector.Hash.New()
-		r = io.TeeReader(r, h)
-		defer func() {
-			*vector.Hash.Sum = h.Sum(nil)
-		}()
-	}
+	r := newIOEntriesReader(ctx, vector.Entries)
 
 	var buf []byte
 	putBuf := ioBufferPool.Get(&buf)
@@ -290,8 +284,8 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	bytesCounter := new(atomic.Int64)
 	start := time.Now()
 	defer func() {
-		v2.GetLocalReadDurationHistogram().Observe(time.Since(start).Seconds())
-		v2.GetLocalFSReadBytesHistogram().Observe(float64(bytesCounter.Load()))
+		v2.LocalReadIODurationHistogram.Observe(time.Since(start).Seconds())
+		v2.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 	}()
 
 	if len(vector.Entries) == 0 {

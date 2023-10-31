@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -183,7 +184,7 @@ func startService(
 		}
 	}
 
-	fs, err := cfg.createFileService(ctx, defines.LocalFileServiceName, globalCounterSet, st, uuid)
+	fs, err := cfg.createFileService(ctx, st, defines.LocalFileServiceName, globalCounterSet, st, uuid)
 	if err != nil {
 		return err
 	}
@@ -205,6 +206,8 @@ func startService(
 		return startLogService(cfg, stopper, fs, globalCounterSet, shutdownC)
 	case metadata.ServiceType_PROXY:
 		return startProxyService(cfg, stopper)
+	case metadata.ServiceType_PYTHON_UDF:
+		return startPythonUdfService(cfg, stopper)
 	default:
 		panic("unknown service type")
 	}
@@ -282,6 +285,8 @@ func startTNService(
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
+		//notify the tn service it is in the standalone cluster
+		c.InStandalone = cfg.IsStandalone
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
 			perfCounterSet,
@@ -367,6 +372,28 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 	})
 }
 
+// startPythonUdfService starts the python udf service.
+func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
+	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
+		return err
+	}
+	serviceWG.Add(1)
+	return stopper.RunNamedTask("python-udf-service", func(ctx context.Context) {
+		defer serviceWG.Done()
+		s, err := pythonservice.NewService(cfg.PythonUdfServerConfig)
+		if err != nil {
+			panic(err)
+		}
+		if err := s.Start(); err != nil {
+			panic(err)
+		}
+		<-ctx.Done()
+		if err := s.Close(); err != nil {
+			panic(err)
+		}
+	})
+}
+
 func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUID string, err error) {
 	switch st {
 	case metadata.ServiceType_CN:
@@ -384,6 +411,8 @@ func getNodeUUID(ctx context.Context, st metadata.ServiceType, cfg *Config) (UUI
 		UUID = cfg.getTNServiceConfig().UUID
 	case metadata.ServiceType_LOG:
 		UUID = cfg.LogService.UUID
+	case metadata.ServiceType_PYTHON_UDF:
+		UUID = cfg.PythonUdfServerConfig.UUID
 	}
 	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
 	return

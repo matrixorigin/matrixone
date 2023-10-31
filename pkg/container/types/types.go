@@ -291,7 +291,7 @@ func (b *Blockid) Unmarshal(data []byte) error {
 	return nil
 }
 
-// Fixed bytes.   Deciaml64/128 and Varlena are not included because they
+// Fixed bytes.   Decimal64/128 and Varlena are not included because they
 // has special meanings.  In general you cannot compare them as bytes.
 type FixedBytes interface {
 	TS | Rowid
@@ -354,6 +354,7 @@ var Types map[string]T = map[string]T{
 	"bigint unsigned":   T_uint64,
 
 	"decimal64":  T_decimal64,
+	"decimal":    T_decimal128,
 	"decimal128": T_decimal128,
 	"decimal256": T_decimal256,
 
@@ -521,7 +522,7 @@ func (t Type) DescString() string {
 	case T_decimal64:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
-		return fmt.Sprintf("DECIAML(%d,%d)", t.Width, t.Scale)
+		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	}
 	return t.Oid.String()
 }
@@ -608,6 +609,12 @@ func (t T) ToType() Type {
 	return typ
 }
 
+func (t T) ToTypeWithScale(scale int32) Type {
+	typ := t.ToType()
+	typ.Scale = scale
+	return typ
+}
+
 func (t T) String() string {
 	switch t {
 	case T_any:
@@ -675,9 +682,9 @@ func (t T) String() string {
 	case T_interval:
 		return "INTERVAL"
 	case T_array_float32:
-		return "VECTOR FLOAT"
+		return "VECF32"
 	case T_array_float64:
-		return "VECTOR DOUBLE"
+		return "VECF64"
 	case T_enum:
 		return "ENUM"
 	}

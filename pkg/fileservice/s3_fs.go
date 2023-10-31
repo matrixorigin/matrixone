@@ -19,7 +19,6 @@ import (
 	"context"
 	"crypto/tls"
 	"io"
-	"math"
 	"net/http/httptrace"
 	pathpkg "path"
 	"sort"
@@ -41,11 +40,10 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
-	memCache              *MemCache
-	diskCache             *DiskCache
-	remoteCache           *RemoteCache
-	asyncUpdate           bool
-	writeDiskCacheOnWrite bool
+	memCache    *MemCache
+	diskCache   *DiskCache
+	remoteCache *RemoteCache
+	asyncUpdate bool
 
 	perfCounterSets []*perfcounter.CounterSet
 
@@ -249,13 +247,15 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	v2.FSWriteS3Counter.Add(float64(len(vector.Entries)))
+
 	ctx = addGetConnMetric(ctx)
 
 	var bytesWritten int
 	start := time.Now()
 	defer func() {
-		v2.GetS3WriteDurationHistogram().Observe(time.Since(start).Seconds())
-		v2.GetS3FSWriteBytesHistogram().Observe(float64(bytesWritten))
+		v2.S3WriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		v2.S3WriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
 	// check existence
@@ -299,29 +299,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 
 	// content
 	var content []byte
-	if s.writeDiskCacheOnWrite && s.diskCache != nil {
-		// also write to disk cache
-		w, done, closeW, err := s.diskCache.newFileContentWriter(vector.FilePath)
-		if err != nil {
-			return 0, err
-		}
-		defer closeW()
-		defer func() {
-			if err != nil {
-				return
-			}
-			err = done(ctx)
-		}()
-		r := io.TeeReader(
-			newIOEntriesReader(ctx, vector.Entries),
-			w,
-		)
-		content, err = io.ReadAll(r)
-		if err != nil {
-			return 0, err
-		}
-
-	} else if len(vector.Entries) == 1 &&
+	if len(vector.Entries) == 1 &&
 		vector.Entries[0].Size > 0 &&
 		int(vector.Entries[0].Size) == len(vector.Entries[0].Data) {
 		// one piece of data
@@ -335,14 +313,6 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		}
 	}
 
-	if vector.Hash.Sum != nil && vector.Hash.New != nil {
-		h := vector.Hash.New()
-		if _, err := h.Write(content); err != nil {
-			return 0, err
-		}
-		*vector.Hash.Sum = h.Sum(nil)
-	}
-
 	r := bytes.NewReader(content)
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
@@ -351,6 +321,13 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	key := s.pathToKey(path.File)
 	if err := s.storage.Write(ctx, key, r, size, expire); err != nil {
 		return 0, err
+	}
+
+	// write to disk cache
+	if s.diskCache != nil && !vector.CachePolicy.Any(SkipDiskWrites) {
+		if err := s.diskCache.SetFile(ctx, vector.FilePath, content); err != nil {
+			return 0, err
+		}
 	}
 
 	return len(content), nil
@@ -366,8 +343,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	bytesCounter := new(atomic.Int64)
 	start := time.Now()
 	defer func() {
-		v2.GetS3ReadDurationHistogram().Observe(time.Since(start).Seconds())
-		v2.GetS3FSReadBytesHistogram().Observe(float64(bytesCounter.Load()))
+		v2.S3ReadIODurationHistogram.Observe(time.Since(start).Seconds())
+		v2.S3ReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 	}()
 
 	if len(vector.Entries) == 0 {
@@ -399,12 +376,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		if err := s.diskCache.Read(ctx, vector); err != nil {
 			return err
 		}
-		defer func() {
-			if err != nil {
-				return
-			}
-			err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
-		}()
+		// we don't cache IOEntry to disk
+		// disk cache will be set by diskCache.SetFile in S3FS.read and S3FS.write
 	}
 
 	if s.remoteCache != nil {
@@ -455,28 +428,30 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 	}
 
 	// calculate object read range
-	min := ptrTo(int64(math.MaxInt))
-	max := ptrTo(int64(0))
-	readToEnd := false
-	for _, entry := range vector.Entries {
-		entry := entry
-		if entry.done {
-			continue
-		}
-		if entry.Offset < *min {
-			min = &entry.Offset
-		}
-		if entry.Size < 0 {
-			entry.Size = 0
-			readToEnd = true
-		}
-		if end := entry.Offset + entry.Size; end > *max {
-			max = &end
-		}
-	}
-	if readToEnd {
-		max = nil
-	}
+	//min := ptrTo(int64(math.MaxInt))
+	//max := ptrTo(int64(0))
+	//for _, entry := range vector.Entries {
+	//	entry := entry
+	//	if entry.done {
+	//		continue
+	//	}
+	//	if entry.Offset < *min {
+	//		min = &entry.Offset
+	//	}
+	//	if entry.Size < 0 {
+	//		entry.Size = 0
+	//		max = nil
+	//	}
+	//	if max != nil {
+	//		if end := entry.Offset + entry.Size; end > *max {
+	//			max = &end
+	//		}
+	//	}
+	//}
+
+	// just read the whole object
+	min := ptrTo[int64](0)
+	max := (*int64)(nil)
 
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
@@ -525,11 +500,16 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 		return
 	}
 
+	numNotDoneEntries := 0
+	defer func() {
+		v2.FSReadS3Counter.Add(float64(numNotDoneEntries))
+	}()
 	for i, entry := range vector.Entries {
 		if entry.done {
 			continue
 		}
 		entry := entry
+		numNotDoneEntries++
 
 		start := entry.Offset - *min
 
@@ -655,6 +635,16 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 		vector.Entries[i] = entry
 	}
 
+	// write to disk cache
+	if contentErr == nil &&
+		len(contentBytes) > 0 &&
+		s.diskCache != nil &&
+		!vector.CachePolicy.Any(SkipDiskWrites) {
+		if err := s.diskCache.SetFile(ctx, vector.FilePath, contentBytes); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -710,7 +700,7 @@ func addGetConnMetric(ctx context.Context) context.Context {
 		},
 
 		DNSDone: func(di httptrace.DNSDoneInfo) {
-			v2.S3DNSDurationHistogram.Observe(time.Since(dnsStart).Seconds())
+			v2.S3DNSResolveDurationHistogram.Observe(time.Since(dnsStart).Seconds())
 		},
 
 		ConnectStart: func(network, addr string) {

@@ -171,3 +171,157 @@ func TestBuffer(t *testing.T) {
 		}
 	}
 }
+
+func TestComment(t *testing.T) {
+	testcases := []struct {
+		name  string
+		in    string
+		id    int
+		want  string
+		want2 string
+	}{
+		{
+			name: "1",
+			in:   "abc /* abc */ abc",
+			id:   COMMENT,
+			want: "/* abc */",
+		},
+		{
+			name: "1",
+			in:   "abc /** abc **/ abc",
+			id:   COMMENT,
+			want: "/** abc **/",
+		},
+		{
+			name: "*/ after comment",
+			in:   "abc /** abc **/*/ abc",
+			id:   COMMENT,
+			want: "/** abc **/",
+		},
+		{
+			name: "//comment",
+			in:   "abc //** abc **/*/ abc",
+			id:   COMMENT,
+			want: "//** abc **/*/ abc",
+		},
+		{
+			name: "// in block comment",
+			in:   "abc /** //abc **/*/ abc",
+			id:   COMMENT,
+			want: "/** //abc **/",
+		},
+		{
+			name: "embedded block comment",
+			in:   "abc /** /* /abc **/*/ abc",
+			id:   COMMENT,
+			want: "/** /* /abc **/",
+		},
+		{
+			name: "no comment",
+			in:   "abc /a/a abc",
+			id:   eofChar,
+			want: "",
+		},
+		{
+			name: "no comment",
+			in:   "abc /a/a abc/",
+			id:   eofChar,
+			want: "",
+		},
+		{
+			name: "nothing",
+			in:   "",
+			id:   eofChar,
+			want: "",
+		},
+		{
+			name: "newline",
+			in:   "\n",
+			id:   eofChar,
+			want: "",
+		},
+		{
+			name: "newline",
+			in:   "dfa fda \r\n",
+			id:   eofChar,
+			want: "",
+		},
+		{
+			name: "no newline",
+			in:   "dfa fda ",
+			id:   eofChar,
+			want: "",
+		},
+		{
+			name: "incomplete line comment",
+			in:   " / ",
+			id:   eofChar,
+			want: "",
+		},
+		{
+			name: "incomplete block comment",
+			in:   " /* ",
+			id:   LEX_ERROR,
+			want: "",
+		},
+		{
+			name: "incomplete block comment",
+			in:   " /* * ",
+			id:   LEX_ERROR,
+			want: "",
+		},
+		{
+			name: "incomplete block comment",
+			in:   " /* * /",
+			id:   LEX_ERROR,
+			want: "",
+		},
+		{
+			name: "incomplete block comment",
+			in:   " / * * /",
+			id:   eofChar,
+			want: "",
+		},
+		{
+			name: "block comment",
+			in:   " /* * /  /* */ ",
+			id:   COMMENT,
+			want: "/* * /  /* */",
+		},
+		{
+			name: "block comment",
+			in:   " /* * /  /* */ ",
+			id:   COMMENT,
+			want: "/* * /  /* */",
+		},
+		{
+			name:  "two block comment",
+			in:    " /* * /  /* */ /* abc */ ",
+			id:    COMMENT,
+			want:  "/* * /  /* */",
+			want2: "/* abc */",
+		},
+		{
+			name:  "two block comment",
+			in:    " /* * /  /* */ // ",
+			id:    COMMENT,
+			want:  "/* * /  /* */",
+			want2: "// ",
+		},
+	}
+
+	for _, tcase := range testcases {
+		scan := NewScanner(dialect.MYSQL, tcase.in)
+		id, got := scan.ScanComment()
+		if tcase.id != id || id != LEX_ERROR && string(got) != tcase.want {
+			t.Errorf("ScanComment(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want)
+		}
+
+		if tcase.want2 != "" {
+			id, got = scan.ScanComment()
+			if tcase.id != id || id != LEX_ERROR && string(got) != tcase.want2 {
+				t.Errorf("ScanComment(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want2)
+			}
+		}
+	}
+}

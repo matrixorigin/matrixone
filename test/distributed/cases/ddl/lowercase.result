@@ -558,93 +558,81 @@ SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user` WHERE user_n
 user_host    user_name    status
 DROP USER `user_name`;
 DROP DATABASE `test06`;
+drop database if exists `test10`;
+create database `test10`;
+use `test10`;
 DROP TABLE IF EXISTS `t20`;
 DROP TABLE IF EXISTS `t21`;
 DROP VIEW IF EXISTS `view1`;
 CREATE TABLE `t20`(a INTEGER);
-not connect to a database
 INSERT INTO `t20` VALUES (1),(2);
-no such table .t20
 CREATE TABLE `t21`(a INTEGER);
-not connect to a database
 INSERT INTO `t21` VALUES (1);
-no such table .t21
 CREATE VIEW `view1` AS SELECT t20.a, T21.a AS b FROM t20 LEFT JOIN t21 USING(a);
-not connect to a database
 CREATE VIEW `VIEW1` AS SELECT t20.a, t21.a AS b FROM t20 LEFT JOIN t21 USING(a);
-not connect to a database
+table view1 already exists
 SELECT * FROM `view1`;
-SQL parser error: table "view1" does not exist
+a    b
+1    1
+2    null
 DROP VIEW `view1`;
-invalid view '.view1'
 DROP TABLE `t20`;
-no such table .t20
 DROP TABLE `t21`;
-no such table .t21
 DROP TABLE IF EXISTS `TaB`;
 DROP VIEW IF EXISTS `ViE`;
 CREATE TABLE `TaB`(Field int);
-not connect to a database
 INSERT INTO TAB VALUES(10);
-no such table .tab
 CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
-not connect to a database
 show CREATE TABLE `VIe`;
-no such table .vie
+View    Create View
+vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
 DROP view `VIE`;
-invalid view '.vie'
 DROP table `TAB`;
-no such table .tab
 DROP TABLE IF EXISTS `t22`;
 DROP VIEW IF EXISTS `view01`;
 CREATE TABLE `t22` (a int);
-not connect to a database
 INSERT INTO `t22` VALUES(1),(2),(3),(4);
-no such table .t22
 CREATE VIEW `view01` AS SELECT * FROM `t22`;
-not connect to a database
 ALTER VIEW `VIEW01` AS SELECT * FROM `t22` WHERE a=1;
-invalid view '.view01'
 SELECT * FROM `view01`;
-SQL parser error: table "view01" does not exist
+a
+1
 SELECT * FROM `view01` WHERE A = 1;
-SQL parser error: table "view01" does not exist
+a
+1
 DROP view `vieW01`;
-invalid view '.view01'
+drop database if exists `test10`;
 DROP DATABASE IF EXISTS `test07`;
 DROP TABLE IF EXISTS `t1`;
 CREATE DATABASE `test07`;
-USE `test03`;
-invalid database test03
+USE `test07`;
 CREATE TEMPORARY TABLE `t1`(a float);
-not connect to a database
 INSERT INTO `T1` VALUES(213823.12);
-no such table .t1
 INSERT INTO `t1` VALUES(-45412.38920);
-no such table .t1
 SELECT * FROM `t1`;
-SQL parser error: table "t1" does not exist
+a
+213823.12
+-45412.39
 DROP TABLE `t1`;
-no such table .t1
 DROP DATABASE `TEST07`;
+drop database if exists `test11`;
+create database `test11`;
+use `test11`;
 DROP TABLE IF EXISTS `t4`;
 DROP TABLE IF EXISTS `t5`;
 CREATE TABLE `t4`(a int primary key,b varchar(5));
-not connect to a database
 CREATE TABLE `t5`(a int ,b varchar(5), C int, constraint fc foreign key(C) references t4(a));
-not connect to a database
 ALTER table `t5` DROP FOREIGN KEY fC;
-no such table .t5
 ALTER table `t5` ADD constraint fC foreign key(c) REFERENCES t4(a);
-no such table .t5
 show CREATE TABLE `t4`;
-no such table .t4
+Table    Create Table
+t4    CREATE TABLE `t4` (\n`a` INT NOT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
 show CREATE TABLE `T5`;
-no such table .t5
+Table    Create Table
+t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(5) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `fc` FOREIGN KEY (`c`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 DROP table `t5`;
-no such table .t5
 DROP table `t4`;
-no such table .t4
+drop database if exists `test11`;
 DROP DATABASE IF EXISTS `test08`;
 CREATE DATABASE `test08`;
 use  `test08`;

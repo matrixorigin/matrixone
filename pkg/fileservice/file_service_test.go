@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -57,7 +56,6 @@ func testFileService(
 		assert.Nil(t, err)
 		assert.Equal(t, 0, len(entries))
 
-		var hashSum []byte
 		err = fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -77,13 +75,8 @@ func testFileService(
 					ReaderForWrite: bytes.NewReader([]byte("9ab")),
 				},
 			},
-			Hash: Hash{
-				Sum: &hashSum,
-				New: sha256.New,
-			},
 		})
 		assert.Nil(t, err)
-		assert.Equal(t, fmt.Sprintf("%x", hashSum), "211bc8450916fdef6afc03fb91ac2f0d651d3a31f2d587bc3681a57cc159e788")
 
 		entries, err = fs.List(ctx, "")
 		assert.Nil(t, err)

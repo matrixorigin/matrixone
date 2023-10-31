@@ -76,7 +76,7 @@ func Log2(v float64) (float64, error) {
 
 func Lg(v float64) (float64, error) {
 	if v <= 0 {
-		return 0, moerr.NewInvalidArgNoCtx("lg", v)
+		return 0, moerr.NewInvalidArgNoCtx("log10", v)
 	} else {
 		return math.Log10(v), nil
 	}

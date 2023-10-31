@@ -231,9 +231,9 @@ SHOW CREATE TABLE mo_catalog.mo_columns;
 Table    Create Table
 mo_columns    CREATE TABLE `mo_columns` (\n`att_uniq_name` VARCHAR(256) DEFAULT NULL,\n`account_id` INT UNSIGNED DEFAULT NULL,\n`att_database_id` BIGINT UNSIGNED DEFAULT NULL,\n`att_database` VARCHAR(256) DEFAULT NULL,\n`att_relname_id` BIGINT UNSIGNED DEFAULT NULL,\n`att_relname` VARCHAR(256) DEFAULT NULL,\n`attname` VARCHAR(256) DEFAULT NULL,\n`atttyp` VARCHAR(256) DEFAULT NULL,\n`attnum` INT DEFAULT NULL,\n`att_length` INT DEFAULT NULL,\n`attnotnull` TINYINT DEFAULT NULL,\n`atthasdef` TINYINT DEFAULT NULL,\n`att_default` VARCHAR(2048) DEFAULT NULL,\n`attisdropped` TINYINT DEFAULT NULL,\n`att_constraint_type` CHAR(1) DEFAULT NULL,\n`att_is_unsigned` TINYINT DEFAULT NULL,\n`att_is_auto_increment` TINYINT DEFAULT NULL,\n`att_comment` VARCHAR(2048) DEFAULT NULL,\n`att_is_hidden` TINYINT DEFAULT NULL,\n`attr_has_update` TINYINT DEFAULT NULL,\n`attr_update` VARCHAR(2048) DEFAULT NULL,\n`attr_is_clusterby` TINYINT DEFAULT NULL,\n`attr_seqnum` SMALLINT UNSIGNED DEFAULT NULL,\n`attr_enum` VARCHAR(65535) DEFAULT NULL,\nPRIMARY KEY (`att_uniq_name`)\n)
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.lineitem;
-no such table mo_sample_data_tpch_sf1.lineitem
+invalid database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mo_sample_data_tpch_sf1.supplier;
-no such table mo_sample_data_tpch_sf1.supplier
+invalid database mo_sample_data_tpch_sf1
 SHOW CREATE TABLE mysql.columns_priv;
 Table    Create Table
 columns_priv    CREATE TABLE `columns_priv` (\n`host` CHAR(255) DEFAULT '',\n`db` CHAR(64) DEFAULT '',\n`user` CHAR(32) DEFAULT '',\n`table_name` CHAR(64) DEFAULT '',\n`column_name` CHAR(64) DEFAULT '',\n`timestamp` TIMESTAMP DEFAULT current_timestamp() ON UPDATE current_timestamp(),\n`column_priv` VARCHAR(10) DEFAULT '',\nPRIMARY KEY (`host`,`db`,`user`,`table_name`,`column_name`)\n)
@@ -596,8 +596,8 @@ system_metrics    7    accountadmin
 information_schema    16    accountadmin
 mysql    5    accountadmin
 mo_mo    0    accountadmin
-mo_catalog    19    -
-SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id ORDER BY reldatabase, relname;
+mo_catalog    21    -
+SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE (relname NOT LIKE "__mo_index_secondary_%" OR relname IS NULL) ORDER BY reldatabase, relname;
 datname    relname    relkind    owner
 mo_mo    null    null    -
 information_schema    character_sets    r    accountadmin
@@ -616,6 +616,7 @@ information_schema    tables    v    accountadmin
 information_schema    triggers    r    accountadmin
 information_schema    user_privileges    r    accountadmin
 information_schema    views    v    accountadmin
+mo_catalog    mo_cache    v    accountadmin
 mo_catalog    mo_columns    r    -
 mo_catalog    mo_database    r    -
 mo_catalog    mo_increment_columns        accountadmin

@@ -30,6 +30,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		aggregateByAst: make(map[string]int32),
 		projectByExpr:  make(map[string]int32),
 		windowByAst:    make(map[string]int32),
+		timeByAst:      make(map[string]int32),
 		aliasMap:       make(map[string]*aliasItem),
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),

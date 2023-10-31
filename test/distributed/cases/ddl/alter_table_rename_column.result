@@ -149,21 +149,18 @@ alter table rename06 rename column col1 to **&&^^%%^&**;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 44 near " **&&^^%^&**;";
 drop table rename06;
 drop table if exists rename06;
-
 create table rename06(col1 int);
-
 insert into rename06 values(1),(2);
-
 alter table rename06 rename column col1 to `数据库系统`;
-
 alter table rename06 rename column col1 to `数据操作，数据收集7327323467dhhjfkrnfe`;
-
+Unknown column 'col1' in 'rename06'
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'rename06' and COLUMN_NAME not like '__mo%';
-
-drop table rename06;
-
+table_name    column_name    data_type    is_nullable
+rename06    数据库系统    INT    YES
 show columns from rename06;
-
+Field    Type    Null    Key    Default    Extra    Comment
+数据库系统    INT(32)    YES        null
+drop table rename06;
 alter table system.statement_info rename column role_id to role_idNew;
 internal error: do not have privilege to execute the statement
 alter table mo_catalog.mo_database rename column dat_type to newdat_type;
@@ -330,7 +327,7 @@ a    bnew    c    d
 2    ac    2022-12-12    1600.00
 show columns from index01;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO        null        
+a    INT(32)    NO    UNI    null        
 bnew    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        

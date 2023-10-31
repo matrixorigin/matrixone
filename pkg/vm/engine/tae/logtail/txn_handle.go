@@ -17,7 +17,9 @@ package logtail
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sort"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -43,8 +45,10 @@ const (
 	dataDelBatch
 	dbInsBatch
 	dbDelBatch
+	dbSpecialDeleteBatch
 	tblInsBatch
 	tblDelBatch
+	tblSpecialDeleteBatch
 	columnInsBatch
 	columnDelBatch
 	batchTotalNum
@@ -82,6 +86,9 @@ func (b *TxnLogtailRespBuilder) Close() {
 }
 
 func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
+	now := time.Now()
+	defer v2.LogTailCollectDurationHistogram.Observe(time.Since(now).Seconds())
+
 	b.txn = txn
 	txn.GetStore().ObserveTxn(
 		b.visitDatabase,
@@ -245,8 +252,10 @@ func (b *TxnLogtailRespBuilder) visitTable(itbl any) {
 		}
 		if b.batches[tblDelBatch] == nil {
 			b.batches[tblDelBatch] = makeRespBatchFromSchema(TblDelSchema)
+			b.batches[tblSpecialDeleteBatch] = makeRespBatchFromSchema(TBLSpecialDeleteSchema)
 		}
 		catalogEntry2Batch(b.batches[tblDelBatch], tbl, node, TblDelSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(tbl.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[tblSpecialDeleteBatch], tbl, node, TBLSpecialDeleteSchema, txnimpl.FillTableRow, objectio.HackU64ToRowid(tbl.GetID()), b.txn.GetPrepareTS())
 	}
 	// create table
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
@@ -297,8 +306,10 @@ func (b *TxnLogtailRespBuilder) visitDatabase(idb any) {
 	if node.DeletedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbDelBatch] == nil {
 			b.batches[dbDelBatch] = makeRespBatchFromSchema(DBDelSchema)
+			b.batches[dbSpecialDeleteBatch] = makeRespBatchFromSchema(DBSpecialDeleteSchema)
 		}
 		catalogEntry2Batch(b.batches[dbDelBatch], db, node, DBDelSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(db.GetID()), b.txn.GetPrepareTS())
+		catalogEntry2Batch(b.batches[dbSpecialDeleteBatch], db, node, DBSpecialDeleteSchema, txnimpl.FillDBRow, objectio.HackU64ToRowid(db.GetID()), b.txn.GetPrepareTS())
 	}
 	if node.CreatedAt.Equal(txnif.UncommitTS) {
 		if b.batches[dbInsBatch] == nil {
@@ -327,6 +338,9 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	if delete {
 		entryType = api.Entry_Delete
 	}
+	if batchIdx == dbSpecialDeleteBatch || batchIdx == tblSpecialDeleteBatch {
+		entryType = api.Entry_SpecialDelete
+	}
 	entry := &api.Entry{
 		EntryType:    entryType,
 		TableId:      tid,
@@ -344,6 +358,29 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 		Ts:       &ts,
 		Table:    tableID,
 		Commands: []api.Entry{*entry},
+	}
+	// specail delete batch and delete batch should be in the same TableLogtail
+	if batchIdx == dbDelBatch || batchIdx == tblDelBatch {
+		var bat2 *containers.Batch
+		if batchIdx == dbDelBatch {
+			bat2 = b.batches[dbSpecialDeleteBatch]
+		}
+		if batchIdx == tblDelBatch {
+			bat2 = b.batches[tblSpecialDeleteBatch]
+		}
+		apiBat2, err := containersBatchToProtoBatch(bat2)
+		if err != nil {
+			panic(err)
+		}
+		entry2 := &api.Entry{
+			EntryType:    api.Entry_SpecialDelete,
+			TableId:      tid,
+			TableName:    tableName,
+			DatabaseId:   dbid,
+			DatabaseName: dbName,
+			Bat:          apiBat2,
+		}
+		tail.Commands = append(tail.Commands, *entry2)
 	}
 	*b.logtails = append(*b.logtails, tail)
 }
