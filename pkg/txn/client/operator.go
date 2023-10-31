@@ -440,6 +440,8 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 	result, err := tc.doWrite(ctx, requests, true)
 	if err == nil {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
 		tc.closeLocked()
 	}
 	return result, err
@@ -468,6 +470,8 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	if err != nil {
 		return err
 	} else {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
 		tc.closeLocked()
 	}
 
@@ -599,11 +603,11 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			}
 			payload = reqs
 		}
-		tc.mu.Lock()
-		defer func() {
-			tc.closeLocked()
-			tc.mu.Unlock()
-		}()
+		//tc.mu.Lock()
+		//defer func() {
+		//	tc.closeLocked()
+		//	tc.mu.Unlock()
+		//}()
 		if tc.mu.closed {
 			return nil, moerr.NewTxnClosedNoCtx(tc.txnID)
 		}
