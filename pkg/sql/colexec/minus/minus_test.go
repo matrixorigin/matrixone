@@ -88,11 +88,12 @@ func TestMinus(t *testing.T) {
 		if result != nil && !result.IsEmpty() {
 			cnt += result.RowCount()
 			require.Equal(t, 3, len(result.Vecs))
-			result.Clean(c.proc.Mp())
 		}
 	}
-	c.arg.Free(c.proc, false, nil)
 	require.Equal(t, 1, cnt) // 1 row
+	c.proc.Reg.MergeReceivers[0].Ch <- nil
+	c.proc.Reg.MergeReceivers[1].Ch <- nil
+	c.arg.Free(c.proc, false, nil)
 	c.proc.FreeVectors()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }

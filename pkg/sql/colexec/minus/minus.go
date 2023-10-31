@@ -158,6 +158,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		ana.Input(bat, isFirst)
 
+		if ctr.bat != nil {
+			proc.PutBatch(ctr.bat)
+			ctr.bat = nil
+		}
 		ctr.bat = batch.NewWithSize(len(bat.Vecs))
 		for i := range bat.Vecs {
 			ctr.bat.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
@@ -201,7 +205,6 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		ana.Output(ctr.bat, isLast)
 		result.Batch = ctr.bat
-		ctr.bat = nil
 		proc.PutBatch(bat)
 		return false, nil
 	}
