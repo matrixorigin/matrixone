@@ -218,10 +218,12 @@ func (c *DashboardCreator) initTxnStatementDurationRow() dashboard.Option {
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="execute"`),
+				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="execute-latency"`),
 				c.getMetricWithFilter(`mo_txn_statement_duration_seconds_bucket`, `type="build-plan"`),
 			},
 			[]string{
 				"execute",
+				"execute-latency",
 				"build-plan",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
@@ -276,12 +278,19 @@ func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="acquire"`),
-				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, ``),
+				c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="acquire-wait"`),
+				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="total"`),
+				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-get-lock"`),
+				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-total"`),
 				c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="hold"`),
 			},
 			[]string{
-				"lock",
-				"unlock",
+				"lock-total",
+				"lock-wait",
+				"unlock-total",
+				"unlock-btree-get-lock",
+				"unlock-btree-get-lock",
+				"unlock-btree-total",
 				"hold",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
@@ -302,8 +311,6 @@ func (c *DashboardCreator) initTxnLockWaitersRow() dashboard.Option {
 				"waiters",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			axis.Unit("s"),
-			axis.Min(0))...,
+			[]float32{3, 3, 3, 3})...,
 	)
 }
