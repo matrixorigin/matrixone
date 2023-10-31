@@ -119,14 +119,14 @@ func hasSubquery(expr *plan.Expr) bool {
 	}
 }
 
-func HasTag(expr *plan.Expr, tag int32) bool {
+func hasTag(expr *plan.Expr, tag int32) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		return exprImpl.Col.RelPos == tag
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			if HasTag(arg, tag) {
+			if hasTag(arg, tag) {
 				return true
 			}
 		}
@@ -134,7 +134,7 @@ func HasTag(expr *plan.Expr, tag int32) bool {
 
 	case *plan.Expr_List:
 		for _, arg := range exprImpl.List.List {
-			if HasTag(arg, tag) {
+			if hasTag(arg, tag) {
 				return true
 			}
 		}
@@ -1746,4 +1746,28 @@ func getSuitableDBName(dbName1 string, dbName2 string) string {
 		return dbName2
 	}
 	return dbName1
+}
+
+func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
+	if ef, ok := expr.Expr.(*plan.Expr_F); !ok {
+		return false
+	} else {
+		overloadID := ef.F.Func.GetObj()
+		f, exists := function.GetFunctionByIdWithoutError(overloadID)
+		// current_timestamp()
+		if !exists {
+			return false
+		}
+		if f.IsRealTimeRelated() {
+			return true
+		}
+
+		// current_timestamp() + 1
+		for _, arg := range ef.F.Args {
+			if detectedExprWhetherTimeRelated(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }

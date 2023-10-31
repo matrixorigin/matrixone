@@ -680,15 +680,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = childStats.Selectivity
 		}
 	}
-
-	// if there is a limit, outcnt is limit number
-	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
-			if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
-				node.Stats.Outcnt = float64(c.I64Val)
-			}
-		}
-	}
 }
 
 func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error {

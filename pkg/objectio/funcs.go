@@ -126,10 +126,14 @@ func ReadOneBlockWithMeta(
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
+	cachePolicy ...fileservice.CachePolicy,
 ) (ioVec *fileservice.IOVector, err error) {
 	ioVec = &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
+	}
+	if len(cachePolicy) > 0 {
+		ioVec.CachePolicy = cachePolicy[0]
 	}
 	var filledEntries []fileservice.IOEntry
 	blkmeta := meta.GetBlockMeta(uint32(blk))
