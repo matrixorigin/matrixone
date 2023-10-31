@@ -437,7 +437,12 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 	defer task.End()
 	util.LogTxnWrite(tc.getTxnMeta(false))
 	util.LogTxnCommit(tc.getTxnMeta(false))
-	return tc.doWrite(ctx, requests, true)
+
+	result, err := tc.doWrite(ctx, requests, true)
+	if err == nil {
+		tc.closeLocked()
+	}
+	return result, err
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
@@ -462,7 +467,10 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	result, err := tc.doWrite(ctx, nil, true)
 	if err != nil {
 		return err
+	} else {
+		tc.closeLocked()
 	}
+
 	if result != nil {
 		result.Release()
 	}
