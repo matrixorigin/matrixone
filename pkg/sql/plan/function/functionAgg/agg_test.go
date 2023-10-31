@@ -696,6 +696,7 @@ func TestClusterCenters(t *testing.T) {
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
 		distType:   kmeans.L2,
+		initType:   kmeans.KmeansPlusPlus,
 		arrType:    types.T_array_float64.ToType(),
 	}
 	// input vectors/arrays of 7 rows with 6th row as null
@@ -761,6 +762,7 @@ func TestClusterCenters(t *testing.T) {
 		require.Equal(t, s1.arrType, s2.arrType)
 		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
 		require.Equal(t, s1.distType, s2.distType)
+		require.Equal(t, s1.initType, s2.initType)
 		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
 		for i := range s1.groupedData {
 			require.Equal(t, s1.groupedData[i], s2.groupedData[i])
