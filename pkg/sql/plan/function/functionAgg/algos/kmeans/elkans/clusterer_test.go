@@ -15,7 +15,7 @@
 package elkans
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"reflect"
 	"strconv"
@@ -67,6 +67,10 @@ func Test_NewKMeans(t *testing.T) {
 }
 
 func Test_Cluster(t *testing.T) {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
 	type kmeansArg struct {
 		vectorList     [][]float64
 		clusterCnt     int
@@ -135,7 +139,6 @@ func Test_Cluster(t *testing.T) {
 				distType:       kmeans.L2,
 				initType:       kmeans.KmeansPlusPlus,
 			},
-			// NOTE: both Kmeans++ and Random initialization converge to same centroids.
 			want: [][]float64{
 				{1, 2, 3.6666666666666665, 4.666666666666667},
 				{10, 3.3333333333333335, 4, 5},
@@ -157,6 +160,122 @@ func Test_Cluster(t *testing.T) {
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Cluster() got = %v, want %v", got, tt.want)
 			}
+
+			if tt.wantSSE != clusterer.SSE() {
+				t.Errorf("SSE() got = %v, want %v", clusterer.SSE(), tt.wantSSE)
+			}
+		})
+	}
+}
+
+/*
+date : 2023-10-31
+goos: darwin
+goarch: arm64
+cpu: Apple M2 Pro
+rows: 10_000
+dims: 1024
+k: 10
+Benchmark_kmeans/KMEANS_-_Random-10         	       1	  1335777583 ns/op (with gonums)
+Benchmark_kmeans/KMEANS_-_Kmeans++-10       	       1	  3190817000 ns/op (with gonums)
+
+rows: 100_000
+dims: 1024
+k: 100
+Benchmark_kmeans/KMEANS_-_Random-10         	       1	177648962458 ns/op
+*/
+func Benchmark_kmeans(b *testing.B) {
+	rowCnt := 10_000
+	dims := 1024
+	k := 10
+
+	data := make([][]float64, rowCnt)
+	populateRandData(rowCnt, dims, data)
+
+	clusterRand, _ := NewKMeans(data, k,
+		500, 0.01,
+		kmeans.L2, kmeans.Random)
+
+	kmeansPlusPlus, _ := NewKMeans(data, k,
+		500, 0.01,
+		kmeans.L2, kmeans.KmeansPlusPlus)
+
+	b.Run("Elkan_Random", func(b *testing.B) {
+		b.ResetTimer()
+		_, err := clusterRand.Cluster()
+		if err != nil {
+			panic(err)
+		}
+	})
+	b.Log("SSE - clusterRand", strconv.FormatFloat(clusterRand.SSE(), 'f', -1, 32))
+
+	b.Run("Elkan_Kmeans++", func(b *testing.B) {
+		b.ResetTimer()
+		_, err := kmeansPlusPlus.Cluster()
+		if err != nil {
+			panic(err)
+		}
+
+	})
+	b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
+
+}
+
+func TestElkanClusterer_recalculateCentroids(t *testing.T) {
+	type kmeansArg struct {
+		vectorList     [][]float64
+		clusterCnt     int
+		maxIterations  int
+		deltaThreshold float64
+		distType       kmeans.DistanceType
+		initType       kmeans.InitType
+	}
+	tests := []struct {
+		name   string
+		fields kmeansArg
+		want   [][]float64
+	}{
+		{
+			name: "Test 1 - Skewed data (Random Init)",
+			fields: kmeansArg{
+				vectorList: [][]float64{
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+					{1, 2, 4, 5},
+					{1, 2, 3, 4},
+					{1, 2, 4, 5},
+				},
+				clusterCnt:     2,
+				maxIterations:  500,
+				deltaThreshold: 0.01,
+				distType:       kmeans.L2,
+				initType:       kmeans.Random,
+			},
+			want: [][]float64{
+				{1, 2, 3, 4},
+				{1, 2, 4, 5},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+				tt.fields.maxIterations, tt.fields.deltaThreshold,
+				tt.fields.distType, tt.fields.initType)
+
+			if err != nil {
+				t.Errorf("Error while creating KMeans object %v", err)
+			}
+			if ekm, ok := km.(*ElkanClusterer); ok {
+				ekm.InitCentroids()
+				ekm.initBounds()
+				if got := ekm.recalculateCentroids(); !reflect.DeepEqual(got, tt.want) {
+					t.Errorf("recalculateCentroids() = %v, want %v", got, tt.want)
+				}
+			} else if !ok {
+				t.Errorf("km not of type ElkanClusterer")
+			}
+
 		})
 	}
 }

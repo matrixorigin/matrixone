@@ -15,6 +15,7 @@
 package elkans
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math/rand"
 	"reflect"
 	"testing"
@@ -117,23 +118,20 @@ date : 2023-10-30
 goos: darwin
 goarch: arm64
 cpu: Apple M2 Pro
-rows: 1000
+rows: 10_000
 dims: 1024
-
-k:10
-Benchmark_InitCentroids/RANDOM-10         	13396052	        85.93 ns/op
-Benchmark_InitCentroids/KMEANS++-10       	       2	 	948731542 ns/op
-
-k: 100
-Benchmark_InitCentroids/RANDOM-10         	 1778432	       	 627.9 ns/op
-Benchmark_InitCentroids/KMEANS++-10       	       1	104728047959.0 ns/op
+k : 10
+Benchmark_InitCentroids/RANDOM-10         	13193077	        86.51 ns/op  (gonums not applicable)
+Benchmark_InitCentroids/KMEANS++-10       	       1	9501668625.00 ns/op  (without gonums)
+Benchmark_InitCentroids/KMEANS++-10       	       1	1841697833.00 ns/op  (with gonums)
 */
 func Benchmark_InitCentroids(b *testing.B) {
-	rowCnt := 1_000
+	rowCnt := 10_000
 	dims := 1024
 	k := 10
+
 	data := make([][]float64, rowCnt)
-	loadData(rowCnt, dims, data)
+	populateRandData(rowCnt, dims, data)
 
 	random := NewRandomInitializer()
 	kmeanspp := NewKMeansPlusPlusInitializer(L2Distance)
@@ -153,11 +151,12 @@ func Benchmark_InitCentroids(b *testing.B) {
 	})
 }
 
-func loadData(nb int, d int, xb [][]float64) {
-	for r := 0; r < nb; r++ {
-		xb[r] = make([]float64, d)
-		for c := 0; c < d; c++ {
-			xb[r][c] = float64(rand.Float32() * 1000)
+func populateRandData(rowCnt int, dim int, vecs [][]float64) {
+	random := rand.New(rand.NewSource(kmeans.DefaultRandSeed))
+	for r := 0; r < rowCnt; r++ {
+		vecs[r] = make([]float64, dim)
+		for c := 0; c < dim; c++ {
+			vecs[r][c] = float64(random.Float32() * 1000)
 		}
 	}
 }
