@@ -123,6 +123,7 @@ func (s *sAggGroupConcat) MarshalBinary() ([]byte, error) {
 	for i := range s.result {
 		strList = append(strList, s.result[i].String())
 	}
+	//TODO: when you merge the new master fix the uint8 bug
 	return types.EncodeStringSlice(strList), nil
 }
 func (s *sAggGroupConcat) UnmarshalBinary(originData []byte) error {
