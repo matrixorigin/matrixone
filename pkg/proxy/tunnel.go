@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"go.uber.org/zap"
 )
 
@@ -397,7 +398,8 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 			if errors.Is(re, io.EOF) {
 				return false, re
 			}
-			return false, moerr.NewInternalErrorNoCtx("preRecv message: %s, name %s", re.Error(), p.name)
+			return false, moerr.NewInternalError(errutil.ContextWithNoReport(ctx, true),
+				"preRecv message: %s, name %s", re.Error(), p.name)
 		}
 		p.mu.lastCmdTime = time.Now()
 		return false, nil
