@@ -580,12 +580,12 @@ func TestL2Norm(t *testing.T) {
 
 			if tt.args.argF32 != nil {
 				if gotRes, _ := L2Norm[float32](tt.args.argF32); !reflect.DeepEqual(gotRes, tt.want) {
-					t.Errorf("L1Norm() = %v, want %v", gotRes, tt.want)
+					t.Errorf("L2Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argF64 != nil {
 				if gotRes, _ := L2Norm[float64](tt.args.argF64); !reflect.DeepEqual(gotRes, tt.want) {
-					t.Errorf("L1Norm() = %v, want %v", gotRes, tt.want)
+					t.Errorf("L2Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
 
