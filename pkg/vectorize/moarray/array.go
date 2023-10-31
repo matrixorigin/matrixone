@@ -137,11 +137,11 @@ func Sqrt[T types.RealNumbers](v []T) (res []float64, err error) {
 
 func Summation[T types.RealNumbers](v []T) float64 {
 	n := len(v)
-	var sum T = 0
+	var sum float64 = 0
 	for i := 0; i < n; i++ {
-		sum += v[i]
+		sum += float64(v[i])
 	}
-	return float64(sum)
+	return sum
 }
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -152,11 +152,11 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	n := len(v1)
 
-	var sum T = 0
+	var sum float64 = 0
 	for i := 0; i < n; i++ {
-		sum += v1[i] * v2[i]
+		sum += float64(v1[i]) * float64(v2[i])
 	}
-	return float64(sum), nil
+	return sum, nil
 }
 
 // L1Norm returns l1 distance to origin.
@@ -166,7 +166,7 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 
 	var absVal T
 	var err error
-	var sum T = 0
+	var sum float64 = 0
 
 	for i := 0; i < n; i++ {
 		absVal, err = momath.AbsSigned[T](v[i])
@@ -174,25 +174,25 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 			return 0, err
 		}
 
-		sum += absVal
+		sum += float64(absVal)
 	}
-	return float64(sum), nil
+	return sum, nil
 }
 
 // L2Norm returns l2 distance to origin.
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 
-	var sqrVal T
-	var sum T = 0
+	var sqrVal float64
+	var sum float64 = 0
 
 	for i := 0; i < n; i++ {
-		sqrVal = v[i] * v[i]
+		sqrVal = float64(v[i]) * float64(v[i])
 		sum += sqrVal
 	}
 
 	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
-	return math.Sqrt(float64(sum)), nil
+	return math.Sqrt(sum), nil
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -203,16 +203,20 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	n := len(v1)
 
-	var innerProduct T = 0
-	var normV1 T = 0
-	var normV2 T = 0
+	var innerProduct float64 = 0
+	var normV1 float64 = 0
+	var normV2 float64 = 0
+	var _v1 float64
+	var _v2 float64
 	for i := 0; i < n; i++ {
-		innerProduct += v1[i] * v2[i]
-		normV1 += v1[i] * v1[i]
-		normV2 += v2[i] * v2[i]
+		_v1 = float64(v1[i])
+		_v2 = float64(v2[i])
+		innerProduct += _v1 * _v2
+		normV1 += _v1 * _v1
+		normV2 += _v2 * _v2
 	}
 
 	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
 	// casting it to float32, because cosine_similarity is between 1 and -1.
-	return float64(innerProduct) / math.Sqrt(float64(normV1*normV2)), nil
+	return innerProduct / math.Sqrt(normV1*normV2), nil
 }
