@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       in_org: ${{ steps.check_in_org.outputs.in_org }}
+      safe_label: ${{ steps.check_safe_label.outputs.safe_label }}
     steps:
     - id: check_in_org
       name: CHECK ORGANIZATION USER
@@ -40,8 +41,23 @@ jobs:
           fi
         done
         echo "in_org=$USER_IN_ORG" >> $GITHUB_OUTPUT;
+
+    - id: check_safe_label
+      name: CHECK PULL REQUEST LABEL
+      run: |
+        labels=$(curl -L \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.TOKEN_ACTION }}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          '${{ github.event.pull_request.url}}' | jq ".labels");
+        if [ $(echo $labels | jq ".[].name" | grep -c "safe-to-test" ) -ge 1 ]; then
+          echo "safe_label=1" >> $GITHUB_OUTPUT;
+        else
+          echo "safe_label=0" >> $GITHUB_OUTPUT;
+        fi
+
   ut_coverage:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'safe-to-test') || needs.check_organization_user.outputs.in_org == '1' }}
+    if: ${{ needs.check_organization_user.outputs.safe_label == '1' || needs.check_organization_user.outputs.in_org == '1' }}
     name: PR Unit Test Coverage
     needs: [check_organization_user]
     runs-on: ubuntu-latest
@@ -176,7 +192,6 @@ jobs:
   pr-size-label:
     runs-on: ubuntu-latest
     needs: [check_organization_user]
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'safe-to-test') || needs.check_organization_user.outputs.in_org == '1' }}
     steps:
       - name: size-label
         uses: "guguducken/label-size-action@v0.0.2"
@@ -196,7 +211,7 @@ jobs:
   docu_issue_check:
     runs-on: ubuntu-latest
     needs: [check_organization_user]
-    if: ${{ github.event.action == 'opened' && ( contains(github.event.pull_request.labels.*.name, 'safe-to-test') || needs.check_organization_user.outputs.in_org == '1' ) }}
+    if: ${{ github.event.action == 'opened' }}
     steps:
       - uses: guguducken/pull-issue-reviewer@v0.3.0
         with:
@@ -210,7 +225,7 @@ jobs:
     name: ChatGPT Review
     needs: [check_organization_user]
     runs-on: ubuntu-latest
-    if: ${{ github.event.action == 'opened' && ( contains(github.event.pull_request.labels.*.name, 'safe-to-test') || needs.check_organization_user.outputs.in_org == '1' ) }}
+    if: ${{ github.event.action == 'opened' }}
     steps:
     - uses: feiskyer/ChatGPT-Reviewer@v0
       name: ChatGPT Review
