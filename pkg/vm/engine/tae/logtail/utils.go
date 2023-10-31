@@ -2477,7 +2477,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	if collector.isGlobal {
 		// not fill here, do when `GlobalCheckpointDataFactory`
 	} else {
-		FillSEGStorageUsageBatOfIncrement(collector, entry)
+		FillUsageBatOfIncremental(collector, entry)
 	}
 
 	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()

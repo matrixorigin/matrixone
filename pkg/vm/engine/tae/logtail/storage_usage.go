@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -78,15 +79,7 @@ func checkSegment(entry *catalog.SegmentEntry) bool {
 	return true
 }
 
-// FillSEGStorageUsageBatOfIncrement recording the total object size within a table
-// and the account, db, table info the object belongs to into an increment checkpoint.
-// every increment checkpoint only records the updates within collector.time_range.
-// [account_id, db_id, table_id, obj_id, table_total_size_in_bytes]
-func FillSEGStorageUsageBatOfIncrement(collector *BaseCollector, entry *catalog.SegmentEntry) {
-	if !checkSegment(entry) {
-		return
-	}
-
+func fillUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
 	vecs := getStorageUsageBatVectors(collector.data)
 	appendTo := func(size uint64) {
 		accId := uint64(entry.GetTable().GetDB().GetTenantID())
@@ -117,7 +110,29 @@ func FillSEGStorageUsageBatOfIncrement(collector *BaseCollector, entry *catalog.
 	}
 }
 
-func collectUsageDataFromIncrementCkp(ctx context.Context, fs fileservice.FileService,
+// FillUsageBatOfIncremental recording the total object size within a table
+// and the account, db, table info the object belongs to into an increment checkpoint.
+// every increment checkpoint only records the updates within collector.time_range.
+// [account_id, db_id, table_id, obj_id, table_total_size_in_bytes]
+func FillUsageBatOfIncremental(collector *BaseCollector, entry *catalog.SegmentEntry) {
+	start := time.Now()
+	defer v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+
+	if !checkSegment(entry) {
+		return
+	}
+
+	oldState := entry.Stat.GetLoaded()
+
+	fillUsageBat(collector, entry)
+
+	if !oldState && entry.Stat.GetLoaded() {
+		v2.TaskICkpLoadObjectCounter.Inc()
+	}
+
+}
+
+func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 	locVers []*CkpLocVers) map[types.Uuid]*UsageData {
 	tmpRest := make(map[types.Uuid]*UsageData)
 
@@ -130,6 +145,8 @@ func collectUsageDataFromIncrementCkp(ctx context.Context, fs fileservice.FileSe
 			logutil.Error(fmt.Sprintf("[storage usage] load increment checkpoint failed: %v", err))
 			return nil
 		}
+
+		v2.TaskGCkpLoadObjectCounter.Inc()
 
 		srcVecs := getStorageUsageBatVectors(incrData)
 
@@ -180,19 +197,20 @@ func traverseCatalog(ctx context.Context, c *catalog.Catalog, collector *GlobalC
 		// prefetch obj meta
 		blk := segs[idx-1].GetFirstBlkEntry()
 		if blk != nil && len(blk.GetMetaLoc()) != 0 {
+			v2.TaskGCkpLoadObjectCounter.Inc()
 			blockio.PrefetchMeta(fs, blk.GetMetaLoc())
 		}
 
 		// deal with the previously prefetched batch
 		for idx%batchCnt == 0 && i < idx {
-			FillSEGStorageUsageBatOfIncrement(collector.BaseCollector, segs[i])
+			fillUsageBat(collector.BaseCollector, segs[i])
 			i++
 		}
 	}
 
 	// deal with the left segments
 	for ; i < len(segs); i++ {
-		FillSEGStorageUsageBatOfIncrement(collector.BaseCollector, segs[i])
+		fillUsageBat(collector.BaseCollector, segs[i])
 	}
 }
 
@@ -201,12 +219,15 @@ func traverseCatalog(ctx context.Context, c *catalog.Catalog, collector *GlobalC
 // [account_id, db_id, table_id, table_total_size_in_bytes]
 func FillSEGStorageUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
 	fs fileservice.FileService, locVers []*CkpLocVers) {
+	start := time.Now()
+	defer v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+
 	destVecs := getStorageUsageBatVectors(collector.data)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	tmpRest := collectUsageDataFromIncrementCkp(ctx, fs, locVers)
+	tmpRest := collectUsageDataFromICkp(ctx, fs, locVers)
 	if tmpRest != nil {
 		for objId, combine := range tmpRest {
 			_, ok_1 := collector.deletes[UsageDBID][combine[UsageDBID]]
