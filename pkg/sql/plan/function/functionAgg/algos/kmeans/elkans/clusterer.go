@@ -418,3 +418,12 @@ func (km *ElkanClusterer) isConverged(iter int, changes int) bool {
 	}
 	return false
 }
+
+func (km *ElkanClusterer) SSE() float64 {
+	sse := 0.0
+	for i := range km.vectorList {
+		distErr := km.distFn(km.vectorList[i], km.Centroids[km.assignments[i]])
+		sse += math.Pow(distErr, 2)
+	}
+	return sse
+}

@@ -19,6 +19,7 @@ const DefaultRandSeed = 1
 type Clusterer interface {
 	InitCentroids()
 	Cluster() ([][]float64, error)
+	SSE() float64
 }
 
 type DistanceType uint16
