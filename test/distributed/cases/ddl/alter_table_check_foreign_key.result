@@ -53,7 +53,7 @@ mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
 sal    DECIMAL64(7)    YES        null        雇员的基本工资
 comm    DECIMAL64(7)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES        null        
+deptno    INT UNSIGNED(32)    YES    MUL    null        
 alter table emp modify deptno int unsigned default 100;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -64,7 +64,7 @@ mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
 sal    DECIMAL64(7)    YES        null        雇员的基本工资
 comm    DECIMAL64(7)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES        100        
+deptno    INT UNSIGNED(32)    YES    MUL    100        
 alter table emp change deptno deptid varchar(20);
 Cannot change column 'deptno': used in a foreign key constraint ''
 alter table emp change deptno deptid bigint;
@@ -79,7 +79,7 @@ mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
 sal    DECIMAL64(7)    YES        null        雇员的基本工资
 comm    DECIMAL64(7)    YES        null        奖金
-deptid    INT UNSIGNED(32)    YES        null        
+deptid    INT UNSIGNED(32)    YES    MUL    null        
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
 internal error: Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
@@ -150,7 +150,7 @@ mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
 sal    DECIMAL64(7)    YES        null        雇员的基本工资
 comm    DECIMAL64(7)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES        10        所在部门
+deptno    INT UNSIGNED(32)    YES    MUL    10        所在部门
 alter table emp ALTER COLUMN deptno SET INVISIBLE;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -161,7 +161,7 @@ mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
 sal    DECIMAL64(7)    YES        null        雇员的基本工资
 comm    DECIMAL64(7)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES        10        所在部门
+deptno    INT UNSIGNED(32)    YES    MUL    10        所在部门
 alter table emp ALTER COLUMN deptno drop default;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -172,7 +172,7 @@ mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
 sal    DECIMAL64(7)    YES        null        雇员的基本工资
 comm    DECIMAL64(7)    YES        null        奖金
-deptno    INT UNSIGNED(32)    YES        null        所在部门
+deptno    INT UNSIGNED(32)    YES    MUL    null        所在部门
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -199,7 +199,7 @@ mgr    INT UNSIGNED(32)    YES        null        雇员对应的领导的编号
 hiredate    DATE(0)    YES        null        雇员的雇佣日期
 sal    DECIMAL64(7)    YES        null        雇员的基本工资
 comm    DECIMAL64(7)    YES        null        奖金
-deptid    INT UNSIGNED(32)    YES        null        所在部门
+deptid    INT UNSIGNED(32)    YES    MUL    null        所在部门
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptid
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -277,10 +277,10 @@ INSERT INTO product_order VALUES (4, 30, 4, 3, '2016-12-31 15:43:26');
 desc product_order;
 Field    Type    Null    Key    Default    Extra    Comment
 no    INT(32)    NO    PRI    null        
-product_category    INT(32)    NO        null        
+product_category    INT(32)    NO    MUL    null        
 product_id    INT(32)    NO    MUL    null        
-customer_id    INT(32)    NO        null        
-order_date    DATETIME(0)    NO    MUL    null        
+customer_id    INT(32)    NO    MUL    null        
+order_date    DATETIME(0)    NO        null        
 select * from product_order;
 no    product_category    product_id    customer_id    order_date
 1    10    1    1    2016-12-02 15:41:39
@@ -301,10 +301,10 @@ alter table product_order change product_category product_kind int;
 desc product_order;
 Field    Type    Null    Key    Default    Extra    Comment
 no    INT(32)    NO    PRI    null        
-product_kind    INT(32)    YES        null        
+product_kind    INT(32)    YES    MUL    null        
 product_id    INT(32)    NO    MUL    null        
-customer_id    INT(32)    NO        null        
-order_date    DATETIME(0)    NO    MUL    null        
+customer_id    INT(32)    NO    MUL    null        
+order_date    DATETIME(0)    NO        null        
 select * from product_order;
 no    product_kind    product_id    customer_id    order_date
 1    10    1    1    2016-12-02 15:41:39
@@ -312,7 +312,7 @@ no    product_kind    product_id    customer_id    order_date
 3    20    3    3    2016-12-06 15:43:26
 4    30    4    3    2016-12-31 15:43:26
 INSERT INTO product_order VALUES (4, 30, 4, 3, '2016-12-31 15:43:26');
-Duplicate entry '([^']*)' for key '([^']*)'
+Duplicate entry '(30,4,4)' for key '__mo_index_idx_col'
 INSERT INTO product_order VALUES (5, 30, 5, 3, '2016-12-31 15:43:26');
 internal error: Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO product_order VALUES (5, 30, 4, 4, '2016-12-31 15:43:26');
