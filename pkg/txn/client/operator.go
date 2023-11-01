@@ -609,11 +609,10 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			}
 			payload = reqs
 		}
-		//tc.mu.Lock()
-		//defer func() {
-		//	tc.closeLocked()
-		//	tc.mu.Unlock()
-		//}()
+		tc.mu.Lock()
+		defer func() {
+			tc.mu.Unlock()
+		}()
 		if tc.mu.closed {
 			return nil, moerr.NewTxnClosedNoCtx(tc.txnID)
 		}
