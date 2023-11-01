@@ -17,17 +17,38 @@ package elkans
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"gonum.org/v1/gonum/mat"
+	"math"
 )
 
-func L2Distance(v1, v2 []float64) float64 {
-	val, _ := moarray.L2Distance[float64](v1, v2)
-	return val
+func L2Distance(v1, v2 *mat.VecDense) float64 {
+	diff := mat.NewVecDense(v1.Len(), nil)
+	diff.SubVec(v1, v2)
+	return mat.Norm(diff, 2)
 }
 
-func AngularDistance(v1, v2 []float64) float64 {
-	val, _ := moarray.AngularDistance[float64](v1, v2)
-	return val
+func AngularDistance(v1, v2 *mat.VecDense) float64 {
+	// Calculate dot product
+	dotProduct := mat.Dot(v1, v2)
+
+	// Calculate norms
+	normV1 := mat.Norm(v1, 2)
+	normV2 := mat.Norm(v2, 2)
+
+	// Compute cosine similarity
+	cosineSimilarity := dotProduct / (normV1 * normV2)
+
+	// Handle potential floating-point inaccuracies that might push
+	// cosineSimilarity slightly above 1 or below -1
+	if cosineSimilarity > 1.0 {
+		cosineSimilarity = 1.0
+	} else if cosineSimilarity < -1.0 {
+		cosineSimilarity = -1.0
+	}
+
+	// Return angular distance in radians
+	//TODO: verify if this is correct
+	return math.Acos(cosineSimilarity)
 }
 
 // resolveDistanceFn returns the distance function corresponding to the distance type

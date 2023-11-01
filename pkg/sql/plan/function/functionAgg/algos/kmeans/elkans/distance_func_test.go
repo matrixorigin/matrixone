@@ -69,7 +69,7 @@ func Test_L2Distance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := L2Distance(tt.args.v1, tt.args.v2); got != tt.want {
+			if got := L2Distance(ToGonumsVector(tt.args.v1), ToGonumsVector(tt.args.v2)); got != tt.want {
 				t.Errorf("L2Distance() = %v, want %v", got, tt.want)
 			}
 		})
@@ -130,7 +130,7 @@ func Test_AngularDistance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			if got := AngularDistance(tt.args.v1, tt.args.v2); got != tt.want {
+			if got := AngularDistance(ToGonumsVector(tt.args.v1), ToGonumsVector(tt.args.v2)); got != tt.want {
 				t.Errorf("AngularDistance() = %v, want %v", got, tt.want)
 			}
 		})

@@ -16,11 +16,12 @@ package elkans
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
+	"gonum.org/v1/gonum/mat"
 	"math/rand"
 )
 
 type Initializer interface {
-	InitCentroids(vectors [][]float64, k int) (centroids [][]float64)
+	InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat.VecDense)
 }
 
 var _ Initializer = (*Random)(nil)
@@ -41,8 +42,8 @@ func NewRandomInitializer() Initializer {
 	}
 }
 
-func (r *Random) InitCentroids(vectors [][]float64, k int) (centroids [][]float64) {
-	centroids = make([][]float64, k)
+func (r *Random) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat.VecDense) {
+	centroids = make([]*mat.VecDense, k)
 	for i := 0; i < k; i++ {
 		randIdx := r.rand.Intn(len(vectors))
 		centroids[i] = vectors[randIdx]
@@ -65,8 +66,8 @@ func NewKMeansPlusPlusInitializer(distFn kmeans.DistanceFunction) Initializer {
 	}
 }
 
-func (kpp *KMeansPlusPlus) InitCentroids(vectors [][]float64, k int) (centroids [][]float64) {
-	centroids = make([][]float64, k)
+func (kpp *KMeansPlusPlus) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat.VecDense) {
+	centroids = make([]*mat.VecDense, k)
 
 	// 1. start with a random center
 	centroids[0] = vectors[kpp.rand.Intn(len(vectors))]

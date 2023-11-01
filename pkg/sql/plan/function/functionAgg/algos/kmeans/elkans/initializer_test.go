@@ -60,7 +60,7 @@ func TestRandom_InitCentroids(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewRandomInitializer()
-			if gotCentroids := r.InitCentroids(tt.args.vectors, tt.args.k); !reflect.DeepEqual(gotCentroids, tt.wantCentroids) {
+			if gotCentroids := r.InitCentroids(ToGonumsVectors(tt.args.vectors), tt.args.k); !reflect.DeepEqual(gotCentroids, tt.wantCentroids) {
 				t.Errorf("InitCentroids() = %v, want %v", gotCentroids, tt.wantCentroids)
 			}
 		})
@@ -106,7 +106,7 @@ func TestKMeansPlusPlus_InitCentroids(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewKMeansPlusPlusInitializer(L2Distance)
-			if gotCentroids := r.InitCentroids(tt.args.vectors, tt.args.k); !reflect.DeepEqual(gotCentroids, tt.wantCentroids) {
+			if gotCentroids := r.InitCentroids(ToGonumsVectors(tt.args.vectors), tt.args.k); !reflect.DeepEqual(gotCentroids, tt.wantCentroids) {
 				t.Errorf("InitCentroids() = %v, want %v", gotCentroids, tt.wantCentroids)
 			}
 		})
@@ -139,14 +139,14 @@ func Benchmark_InitCentroids(b *testing.B) {
 	b.Run("RANDOM", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_ = random.InitCentroids(data, k)
+			_ = random.InitCentroids(ToGonumsVectors(data), k)
 		}
 	})
 
 	b.Run("KMEANS++", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_ = kmeanspp.InitCentroids(data, k)
+			_ = kmeanspp.InitCentroids(ToGonumsVectors(data), k)
 		}
 	})
 }

@@ -141,8 +141,8 @@ func Test_Cluster(t *testing.T) {
 				initType:       kmeans.Random,
 			},
 			want: [][]float64{
-				{10, 3.3333333333333335, 4, 5},
-				{1, 2, 3.6666666666666665, 4.666666666666667},
+				{10, 3.333333333333333, 4, 5},
+				{1, 2, 3.6666666666666665, 4.666666666666666},
 			},
 			wantSSE: 12,
 			wantErr: false,
@@ -171,8 +171,8 @@ func Test_Cluster(t *testing.T) {
 				initType:       kmeans.KmeansPlusPlus,
 			},
 			want: [][]float64{
-				{1, 2, 3.6666666666666665, 4.666666666666667},
-				{10, 3.3333333333333335, 4, 5},
+				{1, 2, 3.6666666666666665, 4.666666666666666},
+				{10, 3.333333333333333, 4, 5},
 			},
 			wantSSE: 12,
 			wantErr: false,
@@ -266,7 +266,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 						recompute: true,
 					},
 					{
-						lower:     []float64{57.358521598799946, 8.246211251235321},
+						lower:     []float64{57.35852159879994, 8.246211251235321},
 						upper:     8.246211251235321,
 						recompute: true,
 					},
@@ -285,7 +285,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
 			if ekm, ok := km.(*ElkanClusterer); ok {
-				ekm.centroids = tt.state.centroids
+				ekm.centroids = ToGonumsVectors(tt.state.centroids)
 				ekm.initBounds()
 				if !reflect.DeepEqual(ekm.assignments, tt.want.assignment) {
 					t.Errorf("assignments got = %v, want %v", ekm.assignments, tt.want.assignment)
@@ -362,7 +362,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
 			if ekm, ok := km.(*ElkanClusterer); ok {
-				ekm.centroids = tt.state.centroids
+				ekm.centroids = ToGonumsVectors(tt.state.centroids)
 				ekm.computeCentroidDistances()
 				if !reflect.DeepEqual(ekm.halfInterCentroidDistMatrix, tt.want.halfInterCentroidDistMatrix) {
 					t.Errorf("halfInterCentroidDistMatrix got = %v, want %v", ekm.halfInterCentroidDistMatrix, tt.want.halfInterCentroidDistMatrix)
@@ -422,7 +422,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 			},
 			want: wantState{
 				centroids: [][]float64{
-					{1, 2, 3.6666666666666665, 4.666666666666667},
+					{1, 2, 3.6666666666666665, 4.666666666666666},
 					{10.5, 21.5, 31.5, 43.5},
 				},
 			},
@@ -441,8 +441,8 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				ekm.assignments = tt.state.assignments
 
 				got := ekm.recalculateCentroids()
-				if !reflect.DeepEqual(got, tt.want.centroids) {
-					t.Errorf("centroids got = %v, want %v", got, tt.want.centroids)
+				if !reflect.DeepEqual(ToMOArrays(got), tt.want.centroids) {
+					t.Errorf("centroids got = %v, want %v", ToMOArrays(got), tt.want.centroids)
 				}
 
 			} else if !ok {
@@ -537,22 +537,22 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 				vectorMetas: []vectorMeta{
 					{
 						lower:     []float64{0, 45.17192454984729},
-						upper:     0.9428090415820635,
+						upper:     0.9428090415820634,
 						recompute: true,
 					},
 					{
-						lower:     []float64{0.4714045207910317, 43.89772318855422},
+						lower:     []float64{0.4714045207910318, 43.89772318855422},
 						upper:     2.3570226039551585,
 						recompute: true,
 					},
 					{
-						lower:     []float64{0.4714045207910317, 43.89772318855422},
+						lower:     []float64{0.4714045207910318, 43.89772318855422},
 						upper:     2.3570226039551585,
 						recompute: true,
 					},
 					{
 						lower:     []float64{48.352221133882885, 0},
-						upper:     0.9428090415820635,
+						upper:     0.9428090415820634,
 						recompute: true,
 					},
 					{
@@ -575,9 +575,9 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 			}
 			if ekm, ok := km.(*ElkanClusterer); ok {
 				ekm.vectorMetas = tt.state.vectorMetas
-				ekm.centroids = tt.state.centroids
+				ekm.centroids = ToGonumsVectors(tt.state.centroids)
 
-				ekm.updateBounds(tt.state.newCentroids)
+				ekm.updateBounds(ToGonumsVectors(tt.state.newCentroids))
 				if !reflect.DeepEqual(ekm.vectorMetas, tt.want.vectorMetas) {
 					t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
 				}

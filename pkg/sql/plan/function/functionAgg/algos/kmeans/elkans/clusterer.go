@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"golang.org/x/sync/errgroup"
+	"gonum.org/v1/gonum/mat"
 	"math"
 	"math/rand"
 	"sync"
@@ -41,12 +42,12 @@ import (
 type ElkanClusterer struct {
 
 	// for each of the n vectors, we keep track of the following data
-	vectorList  [][]float64
+	vectorList  []*mat.VecDense
 	vectorMetas []vectorMeta
 	assignments []int
 
 	// for each of the k centroids, we keep track of the following data
-	centroids                   [][]float64
+	centroids                   []*mat.VecDense
 	halfInterCentroidDistMatrix [][]float64
 	minHalfInterCentroidDist    []float64
 
@@ -112,7 +113,7 @@ func NewKMeans(vectors [][]float64,
 		maxIterations:  maxIterations,
 		deltaThreshold: deltaThreshold,
 
-		vectorList:  vectors,
+		vectorList:  ToGonumsVectors(vectors),
 		assignments: assignments,
 		vectorMetas: metas,
 
@@ -147,16 +148,21 @@ func (km *ElkanClusterer) InitCentroids() {
 func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 
 	if km.vectorCnt == km.clusterCnt {
-		return km.vectorList, nil
+		return ToMOArrays(km.vectorList), nil
 	}
 
 	km.InitCentroids() // step 0.1
 	km.initBounds()    // step 0.2
 
-	return km.elkansCluster()
+	res, err := km.elkansCluster()
+	if err != nil {
+		return nil, err
+	}
+
+	return ToMOArrays(res), nil
 }
 
-func (km *ElkanClusterer) elkansCluster() ([][]float64, error) {
+func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
 
 	for iter := 0; ; iter++ {
 		km.computeCentroidDistances() // step 1
@@ -341,39 +347,31 @@ func (km *ElkanClusterer) assignData() int {
 }
 
 // recalculateCentroids calculates the new mean centroids based on the new assignments.
-func (km *ElkanClusterer) recalculateCentroids() [][]float64 {
-	clusterMembersCount := make([]int64, km.clusterCnt)
-	clusterMembersDimWiseSum := make([][]float64, km.clusterCnt)
+func (km *ElkanClusterer) recalculateCentroids() []*mat.VecDense {
+	membersCount := make([]int64, km.clusterCnt)
 
-	for c := range clusterMembersDimWiseSum {
-		clusterMembersDimWiseSum[c] = make([]float64, len(km.vectorList[0]))
+	newCentroids := make([]*mat.VecDense, km.clusterCnt)
+	for c := range newCentroids {
+		newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), nil)
 	}
-
 	for x, vec := range km.vectorList {
 		cx := km.assignments[x]
-		clusterMembersCount[cx]++
-		for dim := range vec {
-			clusterMembersDimWiseSum[cx][dim] += vec[dim]
-		}
+		membersCount[cx]++
+		newCentroids[cx].AddVec(newCentroids[cx], vec)
 	}
 
-	newCentroids := make([][]float64, km.clusterCnt)
 	for c := range newCentroids {
-		newCentroids[c] = make([]float64, len(km.vectorList[0]))
-	}
-	for c, newCentroid := range newCentroids {
-		memberCnt := float64(clusterMembersCount[c])
-
-		if memberCnt == 0 {
+		if membersCount[c] == 0 {
 			// if the cluster is empty, reinitialize it to a random vector, since you can't find the mean of an empty set
-			for l := range newCentroid {
-				newCentroid[l] = 10 * (km.rand.Float64() - 0.5)
+			randVector := make([]float64, km.vectorList[0].Len())
+			for l := range randVector {
+				randVector[l] = 10 * (km.rand.Float64() - 0.5)
 			}
+			//TODO: normalize if required
+			newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
 		} else {
 			// find the mean of the cluster members
-			for dim := range newCentroid {
-				newCentroid[dim] = clusterMembersDimWiseSum[c][dim] / memberCnt
-			}
+			newCentroids[c].ScaleVec(1.0/float64(membersCount[c]), newCentroids[c])
 		}
 
 	}
@@ -382,7 +380,7 @@ func (km *ElkanClusterer) recalculateCentroids() [][]float64 {
 }
 
 // updateBounds updates the lower and upper bounds for each vector.
-func (km *ElkanClusterer) updateBounds(newCentroid [][]float64) {
+func (km *ElkanClusterer) updateBounds(newCentroid []*mat.VecDense) {
 
 	// compute the centroid shift distance matrix once.
 	// d(c, m(c)) in the paper
