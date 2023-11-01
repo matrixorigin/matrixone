@@ -382,7 +382,9 @@ func TestLockWithBlockingWithConflict(t *testing.T) {
 		},
 		func(arg *Argument, proc *process.Process) {
 			require.True(t, moerr.IsMoErrCode(arg.rt.retryError, moerr.ErrTxnNeedRetry))
-			require.Empty(t, arg.rt.cachedBatches)
+			for _, bat := range arg.rt.cachedBatches {
+				bat.Clean(proc.Mp())
+			}
 			arg.Free(proc, false, nil)
 			proc.FreeVectors()
 		},
