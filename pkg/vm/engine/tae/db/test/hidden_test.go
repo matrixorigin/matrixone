@@ -118,7 +118,6 @@ func TestHiddenWithPK1(t *testing.T) {
 	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	var segMeta *catalog.SegmentEntry
 	{
 		it := rel.MakeBlockIt()
 		for it.Valid() {
@@ -141,7 +140,6 @@ func TestHiddenWithPK1(t *testing.T) {
 			if meta.IsAppendable() {
 				assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 			} else {
-				segMeta = meta.GetSegment()
 				assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
 			}
 			it.Next()
@@ -150,13 +148,8 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	assert.NoError(t, txn.Commit(context.Background()))
 	{
-		seg := segMeta.GetSegmentData()
-		factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
-		assert.NoError(t, err)
-		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-		assert.NoError(t, err)
-		err = task.WaitDone()
-		assert.NoError(t, err)
+		testutil.CompactBlocks(t, 0, tae, "db", schema, false)
+		testutil.MergeBlocks(t, 0, tae, "db", schema, false)
 	}
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
