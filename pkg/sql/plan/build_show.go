@@ -713,10 +713,19 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 			}
 			if len(tableDef.Fkeys) != 0 {
+				colIdToName := make(map[uint64]string)
+				for _, col := range tableDef.Cols {
+					if col.Hidden {
+						continue
+					}
+					colIdToName[col.ColId] = col.Name
+				}
 				for _, fk := range tableDef.Fkeys {
-					keyStr += " when attname = "
-					keyStr += "'" + tableDef.Cols[fk.Cols[0]].GetName() + "'"
-					keyStr += " then 'MUL'"
+					for _, colId := range fk.Cols {
+						keyStr += " when attname = "
+						keyStr += "'" + colIdToName[colId] + "'"
+						keyStr += " then 'MUL'"
+					}
 				}
 			}
 			if haveUniqueKey(tableDef) {
