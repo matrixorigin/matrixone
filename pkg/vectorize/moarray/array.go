@@ -216,35 +216,3 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	// casting it to float32, because cosine_similarity is between 1 and -1.
 	return float64(innerProduct) / math.Sqrt(float64(normV1*normV2)), nil
 }
-
-func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
-	if len(v1) != len(v2) {
-		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
-	}
-	n := len(v1)
-
-	distance := 0.0
-	for i := 0; i < n; i++ {
-		diff := float64(v1[i] - v2[i])
-		distance += math.Pow(diff, 2)
-	}
-
-	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
-	return math.Sqrt(distance), nil
-}
-
-func AngularDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
-	similarity, err := CosineSimilarity[T](v1, v2)
-	if err != nil {
-		return 0, err
-	}
-
-	// Clamp the value between -1 and 1 to avoid NaNs due to floating point errors
-	if similarity > 1 {
-		similarity = 1
-	} else if similarity < -1 {
-		similarity = -1
-	}
-
-	return 1.0 - similarity, nil
-}
