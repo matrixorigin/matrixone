@@ -19,6 +19,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"math"
-	"strings"
 )
 
 func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
@@ -536,7 +537,7 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 }
 
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
-	replicaTableDef := DeepCopyTableDef(tableDef)
+	replicaTableDef := DeepCopyTableDef(tableDef, true)
 
 	id, err := uuid.NewUUID()
 	if err != nil {

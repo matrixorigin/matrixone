@@ -356,7 +356,7 @@ func (t *GCTable) Prefetch(ctx context.Context, name string, size int64, fs *obj
 
 // ReadTable reads an s3 file and replays a GCTable in memory
 func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
-	reader, err := blockio.NewFileReader(fs.Service, name)
+	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
 	if err != nil {
 		return err
 	}
