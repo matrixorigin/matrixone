@@ -33,8 +33,8 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnOverviewRow(),
 			c.initTxnDurationRow(),
 			c.initTxnCommitDurationRow(),
-			c.initTxnLockDurationRow(),
 			c.initTxnLockWaitersRow(),
+			c.initTxnLockDurationRow(),
 			c.initTxnStatementDurationRow(),
 			c.initTxnStatementsCountRow(),
 			c.initTxnTableRangesRow(),
@@ -291,7 +291,6 @@ func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="total"`),
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-get-lock"`),
 				c.getMetricWithFilter(`mo_txn_unlock_duration_seconds_bucket`, `type="btree-total"`),
-				c.getMetricWithFilter(`mo_txn_lock_duration_seconds_bucket`, `type="hold"`),
 			},
 			[]string{
 				"lock-total",
@@ -299,7 +298,6 @@ func (c *DashboardCreator) initTxnLockDurationRow() dashboard.Option {
 				"unlock-total",
 				"unlock-btree-get-lock",
 				"unlock-btree-total",
-				"hold",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			[]float32{3, 3, 3, 3},
@@ -325,7 +323,7 @@ func (c *DashboardCreator) initTxnLockWaitersRow() dashboard.Option {
 
 func (c *DashboardCreator) initTxnMpoolRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn lock waiters",
+		"Txn MPool",
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="new"`),
@@ -340,6 +338,8 @@ func (c *DashboardCreator) initTxnMpoolRow() dashboard.Option {
 				"delete",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3})...,
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
 	)
 }
