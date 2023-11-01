@@ -17,6 +17,7 @@ package elkans
 import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
+	"math/rand"
 	"strconv"
 	"testing"
 )
@@ -55,4 +56,14 @@ func Benchmark_kmeans(b *testing.B) {
 
 	})
 
+}
+
+func populateRandData(rowCnt int, dim int, vecs [][]float64) {
+	random := rand.New(rand.NewSource(kmeans.DefaultRandSeed))
+	for r := 0; r < rowCnt; r++ {
+		vecs[r] = make([]float64, dim)
+		for c := 0; c < dim; c++ {
+			vecs[r][c] = float64(random.Float32() * 1000)
+		}
+	}
 }
