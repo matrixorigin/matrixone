@@ -16,19 +16,15 @@ package elkans
 
 import "gonum.org/v1/gonum/mat"
 
-func Normalize(vectors [][]float64) []*mat.VecDense {
-	normalizedVectors := make([]*mat.VecDense, len(vectors))
-
-	for i, vec := range vectors {
-		v := mat.NewVecDense(len(vec), vec)
-		//// Do L2 normalization, ie Euclidean norm
-		//norm := mat.Norm(v, 2)
-		//
-		//if norm != 0 {
-		//	v.ScaleVec(1/norm, v)
-		//}
-		normalizedVectors[i] = v
+func NormalizeVectors(vectors []*mat.VecDense) {
+	for i := range vectors {
+		NormalizeVector(vectors[i])
 	}
+}
 
-	return normalizedVectors
+func NormalizeVector(vector *mat.VecDense) {
+	norm := mat.Norm(vector, 2)
+	if norm != 0 {
+		vector.ScaleVec(1/norm, vector)
+	}
 }

@@ -53,7 +53,7 @@ type ElkanClusterer struct {
 
 	// thresholds
 	maxIterations  int     // e in paper
-	deltaThreshold float64 // used for early convergence
+	deltaThreshold float64 // used for early convergence. we are not using it right now.
 
 	// counts
 	clusterCnt int // k in paper
@@ -130,6 +130,10 @@ func NewKMeans(vectors [][]float64,
 	}, nil
 }
 
+func (km *ElkanClusterer) Normalize() {
+	NormalizeVectors(km.vectorList)
+}
+
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
 // Right now, we don't support kmeans++ since it is very slow for higher dimension large scale clustering.
 func (km *ElkanClusterer) InitCentroids() {
@@ -145,6 +149,7 @@ func (km *ElkanClusterer) InitCentroids() {
 
 // Cluster returns the final centroids and the error if any.
 func (km *ElkanClusterer) Cluster() ([][]float64, error) {
+	km.Normalize() // spherical kmeans initialization
 
 	if km.vectorCnt == km.clusterCnt {
 		return ToMOArrays(km.vectorList), nil
@@ -416,11 +421,13 @@ func (km *ElkanClusterer) updateBounds(newCentroid []*mat.VecDense) {
 
 // isConverged checks if the algorithm has converged.
 func (km *ElkanClusterer) isConverged(iter int, changes int) bool {
-	if iter == km.maxIterations ||
-		//changes < int(float64(km.vectorCnt)*km.deltaThreshold) ||
-		changes == 0 {
+	if iter == km.maxIterations || changes == 0 {
 		return true
 	}
+	// NOTE: we are not using deltaThreshold right now.
+	//if changes < int(float64(km.vectorCnt)*km.deltaThreshold) {
+	//	return true
+	//}
 	return false
 }
 

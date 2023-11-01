@@ -26,17 +26,12 @@ date : 2023-10-31
 goos: darwin
 goarch: arm64
 cpu: Apple M2 Pro
-rows: 10_000
-dims: 1024
-k: 10
-Benchmark_kmeans/Elkan_Random-10         	       	   1	  1019202292 ns/op
-Benchmark_kmeans/KMEANS_-_Random-10         	       1	  1335777583 ns/op (with gonums)
+Benchmark_kmeans/Elkan_Random-10         	1000000000	         0.8016 ns/op 	   rows: 10_000,  dims: 1024, k: 10
+Benchmark_kmeans/Elkan_Random-10         	       1		72607141458 ns/op	   rows: 100_000, dims: 1024, k: 100
 
 rows: 100_000
 dims: 1024
 k: 100
-Benchmark_kmeans/Elkan_Random-10         	       	   1     97549453000 ns/op
-Benchmark_kmeans/Elkan_Random         	       		 1		177648962458 ns/op
 */
 func Benchmark_kmeans(b *testing.B) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
