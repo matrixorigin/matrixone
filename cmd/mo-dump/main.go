@@ -167,13 +167,13 @@ func (opt *Options) dumpData(ctx context.Context) error {
 		err         error
 	)
 
-	for _, db := range opt.dbs {
-		conn, err = opt.openDBConnection(ctx, db)
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
+	conn, err = opt.openDBConnection(ctx, opt.dbs[0])
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
 
+	for _, db := range opt.dbs {
 		if opt.emptyTables {
 			opt.tables = nil
 		}
