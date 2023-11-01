@@ -313,7 +313,7 @@ func (c *DashboardCreator) initTxnFastLoadObjectMetaRow() dashboard.Option {
 		c.withGraph(
 			"Fast Load Object Meta",
 			12,
-			`sum(rate(`+c.getMetricWithFilter("tn_side_fast_load_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("tn_side_fast_load_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
 	)
 }

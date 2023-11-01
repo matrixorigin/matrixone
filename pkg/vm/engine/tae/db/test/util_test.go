@@ -188,20 +188,18 @@ func createTablesAndSegments(t *testing.T, ctx context.Context, tae *db.DB, dbNa
 // test plan:
 //  1. test if the `fillSEGStorageUsageBat` work as expected
 //  2. benchmark the `fillSEGStorageUsageBat`
-func Test_FillSEGStorageUsageBatOfIncrement(t *testing.T) {
+func Test_FillUsageBatOfIncrement(t *testing.T) {
 	ctx := context.Background()
 
 	tae := createTAE(t, ctx)
 	defer tae.Close()
 
 	createTablesAndSegments(t, ctx, tae, "testdb", 10)
-	collector := logtail.NewIncrementalCollector(types.TS{}, types.TS{})
+	collector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
 	collector.BlockFn = nil
 	collector.DatabaseFn = nil
 	collector.TableFn = nil
 	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-		logtail.FillUsageBatOfIncremental(collector.BaseCollector, segment)
-
 		require.NotNil(t, segment.GetFirstBlkEntry())
 		if !segment.IsAppendable() {
 			require.Equal(t, true, segment.Stat.GetLoaded())
@@ -214,6 +212,9 @@ func Test_FillSEGStorageUsageBatOfIncrement(t *testing.T) {
 		return nil
 	}
 
+	logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
+
+	// after `FillUsageBatOfIncremental`, all non-appendable segment should be loaded
 	tae.Catalog.RecurLoop(collector)
 
 	storageUsageBat := collector.OrphanData().GetBatches()[logtail.SEGStorageUsageIDX]
@@ -234,18 +235,11 @@ func Benchmark_FillSEGStorageUsageBatOfIncrement(b *testing.B) {
 	defer tae.Close()
 	rels := createTables(t, tae, "testdb", 10, 1)
 
-	collector := logtail.NewIncrementalCollector(types.TS{}, types.TS{})
-	collector.BlockFn = nil
-	collector.DatabaseFn = nil
-	collector.TableFn = nil
-	collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-		logtail.FillUsageBatOfIncremental(collector.BaseCollector, segment)
-		return nil
-	}
+	collector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
 
 	for i := 0; i < b.N; i++ {
 		createAndWriteBatchNASegment(t, ctx, []int{100}, rels, tae.Runtime.Fs)
-		tae.Catalog.RecurLoop(collector)
+		logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
 	}
 }
 
@@ -257,23 +251,20 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 	for i := 0; i < cnt; i++ {
 		// 3 tables, each table has 10 non-appendable segment
 		createAndWriteBatchNASegment(t, ctx, []int{10, 10, 10}, rels, tae.Runtime.Fs)
-		collector := logtail.NewIncrementalCollector(types.TS{}, types.TS{})
-		collector.BlockFn = nil
-		collector.DatabaseFn = nil
-		collector.TableFn = nil
-		collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-			logtail.FillUsageBatOfIncremental(collector.BaseCollector, segment)
-			return nil
-		}
+		collector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
+		//collector.BlockFn = nil
+		//collector.DatabaseFn = nil
+		//collector.TableFn = nil
+		//collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
+		//	logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
+		//	return nil
+		//}
+
+		logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
 
 		tae.Catalog.RecurLoop(collector)
 		incrCkpData := collector.OrphanData()
 		defer incrCkpData.Close()
-
-		if oldVersion {
-			// remove the storage usage data to mock old version checkpoint
-			incrCkpData.GetBatches()[logtail.SEGStorageUsageIDX].Reset()
-		}
 
 		cnLocation, tnLocation, err := incrCkpData.WriteTo(tae.Runtime.Fs.Service,
 			logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
@@ -281,6 +272,12 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 
 		entry := checkpoint.NewCheckpointEntry(types.TS{}, types.TS{}, checkpoint.ET_Incremental)
 		entry.SetLocation(cnLocation, tnLocation)
+
+		if oldVersion {
+			entry.SetVersion(logtail.CheckpointVersion1)
+		} else {
+			entry.SetVersion(logtail.CheckpointVersion9)
+		}
 
 		entries = append(entries, entry)
 	}
@@ -312,7 +309,7 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 		deletes := collector.GetDeletes()
 		deletes[logtail.UsageTblID][rels[0].ID()] = struct{}{}
 
-		logtail.FillSEGStorageUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
+		logtail.FillUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
 
 		data := collector.OrphanData()
 		defer data.Close()
@@ -336,7 +333,7 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 			deletes[logtail.UsageTblID][rels[i].ID()] = struct{}{}
 		}
 
-		logtail.FillSEGStorageUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
+		logtail.FillUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
 
 		data := collector.OrphanData()
 		defer data.Close()

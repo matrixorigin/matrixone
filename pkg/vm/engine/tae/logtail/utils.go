@@ -366,7 +366,8 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 	checkpointDataReferVersions[version] = checkpointDataRefer
 }
 
-func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (*CheckpointData, error) {
+func IncrementalCheckpointDataFactory(start, end types.TS,
+	fs fileservice.FileService) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewIncrementalCollector(start, end)
 		defer collector.Close()
@@ -374,6 +375,9 @@ func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catal
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
 		}
+
+		FillUsageBatOfIncremental(c, collector, fs)
+
 		data = collector.OrphanData()
 		return
 	}
@@ -389,9 +393,7 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration,
 			err = nil
 		}
 
-		// different from the increment checkpoint, we fill global
-		// checkpoint's SEGStorageUsageBat here
-		FillSEGStorageUsageBatOfGlobal(c, collector, fs, ckpMetas)
+		FillUsageBatOfGlobal(c, collector, fs, ckpMetas)
 
 		data = collector.OrphanData()
 
@@ -2472,12 +2474,6 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	entry.RUnlock()
 	if len(mvccNodes) == 0 {
 		return nil
-	}
-
-	if collector.isGlobal {
-		// not fill here, do when `GlobalCheckpointDataFactory`
-	} else {
-		FillUsageBatOfIncremental(collector, entry)
 	}
 
 	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
