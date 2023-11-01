@@ -15,6 +15,7 @@
 package elkans
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"strconv"
 	"testing"
@@ -35,14 +36,14 @@ Benchmark_kmeans/KMEANS_-_Kmeans++-10       	       1	  3190817000 ns/op (with g
 rows: 100_000
 dims: 1024
 k: 100
-Benchmark_kmeans/Elkan_Random-10         	       	   1     95512289459 ns/op
+Benchmark_kmeans/Elkan_Random-10         	       	   1     97549453000 ns/op
 Benchmark_kmeans/Elkan_Random         	       		 1		177648962458 ns/op
 */
 func Benchmark_kmeans(b *testing.B) {
-	//logutil.SetupMOLogger(&logutil.LogConfig{
-	//	Level:  "debug",
-	//	Format: "console",
-	//})
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "debug",
+		Format: "console",
+	})
 
 	rowCnt := 100_000
 	dims := 1024
