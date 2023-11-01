@@ -199,8 +199,6 @@ func TestHiddenWithPK1(t *testing.T) {
 // 1. Mock schema w/o primary key
 // 2. Append data (append rows less than a block)
 func TestHidden2(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -293,25 +291,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	{
-		it := rel.MakeBlockIt()
-		blks := make([]data.Block, 0)
-		for it.Valid() {
-			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
-			blks = append(blks, blk)
-			it.Next()
-		}
-		for _, blk := range blks {
-			factory, taskType, scopes, err := blk.BuildCompactionTaskFactory()
-			assert.NoError(t, err)
-			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-			assert.NoError(t, err)
-			err = task.WaitDone()
-			assert.NoError(t, err)
-		}
-	}
-	assert.NoError(t, txn.Commit(context.Background()))
+	testutil.CompactBlocks(t,0,tae,"db",schema,false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)

@@ -447,3 +447,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	})
 	return err
 }
+
+func (task *mergeBlocksTask) GetCreatedBlocks() []*catalog.BlockEntry{
+	return task.createdBlks
+}

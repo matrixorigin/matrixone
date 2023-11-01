@@ -4988,8 +4988,6 @@ func TestBlockRead(t *testing.T) {
 }
 
 func TestCompactDeltaBlk(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -5025,14 +5023,14 @@ func TestCompactDeltaBlk(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime)
+		task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.BlockEntry{meta}, tae.DB.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
 		assert.True(t, !meta.GetMetaLoc().IsEmpty())
 		assert.True(t, !meta.GetDeltaLoc().IsEmpty())
-		assert.False(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc().IsEmpty())
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc().IsEmpty())
+		assert.False(t, task.GetCreatedBlocks()[0].GetMeta().(*catalog.BlockEntry).GetMetaLoc().IsEmpty())
+		assert.True(t, task.GetCreatedBlocks()[0].GetMeta().(*catalog.BlockEntry).GetDeltaLoc().IsEmpty())
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 		err = meta.GetSegment().RemoveEntry(meta)
@@ -5055,14 +5053,15 @@ func TestCompactDeltaBlk(t *testing.T) {
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 		assert.False(t, meta.IsAppendable())
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime)
+		task, err := jobs.NewMergeBlocksTask(nil, txn, []*catalog.BlockEntry{meta}, []*catalog.SegmentEntry{meta.GetSegment()}, nil, tae.DB.Runtime)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
+		t.Log(tae.Catalog.SimplePPString(3))
 		assert.True(t, !meta.GetMetaLoc().IsEmpty())
 		assert.True(t, !meta.GetDeltaLoc().IsEmpty())
-		assert.False(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetMetaLoc().IsEmpty())
-		assert.True(t, task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetDeltaLoc().IsEmpty())
+		assert.False(t, task.GetCreatedBlocks()[0].GetMetaLoc().IsEmpty())
+		assert.True(t, task.GetCreatedBlocks()[0].GetDeltaLoc().IsEmpty())
 		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
@@ -5324,8 +5323,6 @@ func TestDelete4(t *testing.T) {
 
 // append, delete, apppend, get start ts, compact, get active row
 func TestGetActiveRow(t *testing.T) {
-	// TODO
-	return
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5359,7 +5356,7 @@ func TestGetActiveRow(t *testing.T) {
 		txn2, rel2 := tae.GetRelation()
 		it := rel2.MakeBlockIt()
 		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewCompactBlockTask(nil, txn2, blk, tae.Runtime)
+		task, err := jobs.NewFlushTableTailTask(nil, txn2, []*catalog.BlockEntry{blk}, tae.Runtime, txn2.GetStartTS())
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -5451,8 +5448,6 @@ func TestTransfer2(t *testing.T) {
 }
 
 func TestMergeBlocks3(t *testing.T) {
-	// TODO
-	return
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
