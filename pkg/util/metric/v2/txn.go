@@ -180,4 +180,13 @@ var (
 	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
 	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
 	TxnBeforeCommitDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
+
+	TxnShowAccountsDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "show_accounts_duration_seconds",
+			Help:      "Bucketed histogram of show accounts duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
 )
