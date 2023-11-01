@@ -166,7 +166,7 @@ func callBlocking(
 	if arg.rt.step == stepDownstream {
 		if arg.rt.retryError != nil {
 			arg.rt.step = stepEnd
-			return result, nil
+			return result, arg.rt.retryError
 		}
 
 		if len(arg.rt.cachedBatches) == 0 {
