@@ -48,37 +48,39 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 			oldVec.Free(proc.Mp())
 		}
 	}
-
-	// XXX flat const vector here.
-	if ctr.batWaitForSort != nil {
-		if ctr.flatFn == nil {
-			ctr.flatFn = make([]func(v, w *vector.Vector) error, bat.VectorCount())
+	if ctr.batWaitForSort == nil {
+		ctr.batWaitForSort, err = bat.Dup(proc.Mp())
+		if err != nil {
+			return false, err
 		}
+	} else {
+		// XXX flat const vector here.
+		if ctr.batWaitForSort != nil {
+			if ctr.flatFn == nil {
+				ctr.flatFn = make([]func(v, w *vector.Vector) error, bat.VectorCount())
+			}
 
-		for i := 0; i < ctr.batWaitForSort.VectorCount(); i++ {
-			typ := *ctr.batWaitForSort.Vecs[i].GetType()
-			if ctr.batWaitForSort.Vecs[i].IsConst() {
-				if ctr.flatFn[i] == nil {
-					ctr.flatFn[i] = vector.GetUnionAllFunction(typ, proc.Mp())
-				}
+			for i := 0; i < ctr.batWaitForSort.VectorCount(); i++ {
+				typ := *ctr.batWaitForSort.Vecs[i].GetType()
+				if ctr.batWaitForSort.Vecs[i].IsConst() {
+					if ctr.flatFn[i] == nil {
+						ctr.flatFn[i] = vector.GetUnionAllFunction(typ, proc.Mp())
+					}
 
-				v := ctr.batWaitForSort.Vecs[i]
-				ctr.batWaitForSort.Vecs[i] = proc.GetVector(typ)
-				err = ctr.flatFn[i](ctr.batWaitForSort.Vecs[i], v)
-				v.Free(proc.Mp())
-				if err != nil {
-					return false, err
+					v := ctr.batWaitForSort.Vecs[i]
+					ctr.batWaitForSort.Vecs[i] = proc.GetVector(typ)
+					err = ctr.flatFn[i](ctr.batWaitForSort.Vecs[i], v)
+					v.Free(proc.Mp())
+					if err != nil {
+						return false, err
+					}
 				}
 			}
 		}
-	}
-
-	ctr.batWaitForSort, err = ctr.batWaitForSort.Append(proc.Ctx, proc.Mp(), bat)
-	if err != nil {
-		return false, err
-	}
-	if ctr.batWaitForSort != bat {
-		bat.Clean(proc.Mp())
+		ctr.batWaitForSort, err = ctr.batWaitForSort.Append(proc.Ctx, proc.Mp(), bat)
+		if err != nil {
+			return false, err
+		}
 	}
 	return all >= maxBatchSizeToSort, nil
 }
@@ -226,11 +228,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			bat, err := result.Batch.Dup(proc.Mp())
-			if err != nil {
-				return result, err
-			}
-			enoughToSend, err := ctr.appendBatch(proc, bat)
+			enoughToSend, err := ctr.appendBatch(proc, result.Batch)
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err

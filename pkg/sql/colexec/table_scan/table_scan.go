@@ -43,24 +43,31 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	default:
 	}
 
-	// read data from storage engine
-	bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
-	if err != nil {
-		result.Status = vm.ExecStop
-		return result, err
-	}
+	for {
+		// read data from storage engine
+		bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
+		if err != nil {
+			result.Status = vm.ExecStop
+			return result, err
+		}
 
-	if bat != nil {
-		bat.Cnt = 1
-		anal.S3IOByte(bat)
-		anal.Alloc(int64(bat.Size()))
-	}
+		if bat != nil {
+			if bat.IsEmpty() {
+				continue
+			}
 
-	if arg.buf != nil {
-		proc.PutBatch(arg.buf)
+			bat.Cnt = 1
+			anal.S3IOByte(bat)
+			anal.Alloc(int64(bat.Size()))
+		}
+
+		if arg.buf != nil {
+			proc.PutBatch(arg.buf)
+		}
+		arg.buf = bat
+		bat = nil
+		break
 	}
-	arg.buf = bat
-	bat = nil
 
 	result.Batch = arg.buf
 	return result, nil
