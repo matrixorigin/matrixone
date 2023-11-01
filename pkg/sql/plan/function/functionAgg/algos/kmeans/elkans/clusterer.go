@@ -131,7 +131,7 @@ func NewKMeans(vectors [][]float64,
 }
 
 func (km *ElkanClusterer) Normalize() {
-	NormalizeVectors(km.vectorList)
+	NormalizeGonumVectors(km.vectorList)
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.

@@ -92,7 +92,7 @@ func Test_AngularDistance(t *testing.T) {
 				v1: []float64{1, 2, 3, 4},
 				v2: []float64{1, 2, 4, 5},
 			},
-			want: 0.003993481192393733,
+			want: 0,
 		},
 		{
 			name: "Test 2",
@@ -100,31 +100,59 @@ func Test_AngularDistance(t *testing.T) {
 				v1: []float64{10, 20, 30, 40},
 				v2: []float64{10.5, 21.5, 31.5, 43.5},
 			},
-			want: 0.0001253573895874105,
+			want: 0,
 		},
+		// Test 3:  Triangle Inequality check on **un-normalized** vector
+		// A(1,0),B(2,2), C(0,1) => AB + AC !>= BC => 0 + 0 !>= 0.5
 		{
 			name: "Test 3.a",
 			args: args{
-				v1: []float64{1, 1},
-				v2: []float64{4, 1},
+				v1: []float64{1, 0},
+				v2: []float64{2, 2},
 			},
-			want: 0.1425070742874559,
+			want: 0,
 		},
 		{
 			name: "Test 3.b",
 			args: args{
-				v1: []float64{4, 1},
-				v2: []float64{1, 4},
+				v1: []float64{2, 2},
+				v2: []float64{0, 1},
 			},
-			want: 0.5294117647058824,
+			want: 0,
 		},
 		{
 			name: "Test 3.c",
 			args: args{
-				v1: []float64{1, 4},
-				v2: []float64{1, 1},
+				v1: []float64{0, 1},
+				v2: []float64{1, 0},
 			},
-			want: 0.1425070742874559,
+			want: 0.5,
+		},
+		// Test 4: Triangle Inequality check on **normalized** vector
+		// A(1,0),B(2,2), C(0,1) => AB + AC >= BC => 0.25 + 0.25 >= 0.5
+		{
+			name: "Test 4.a",
+			args: args{
+				v1: NormalizeMoArray([]float64{1, 0}),
+				v2: NormalizeMoArray([]float64{2, 2}),
+			},
+			want: 0.25000000000000006,
+		},
+		{
+			name: "Test 4.b",
+			args: args{
+				v1: NormalizeMoArray([]float64{2, 2}),
+				v2: NormalizeMoArray([]float64{0, 1}),
+			},
+			want: 0.25000000000000006,
+		},
+		{
+			name: "Test 4.c",
+			args: args{
+				v1: NormalizeMoArray([]float64{0, 1}),
+				v2: NormalizeMoArray([]float64{1, 0}),
+			},
+			want: 0.5,
 		},
 	}
 	for _, tt := range tests {

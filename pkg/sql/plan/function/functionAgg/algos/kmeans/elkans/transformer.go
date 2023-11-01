@@ -31,7 +31,11 @@ func ToGonumsVector(vectors []float64) *mat.VecDense {
 func ToMOArrays(vectors []*mat.VecDense) [][]float64 {
 	moVectors := make([][]float64, len(vectors))
 	for i, vec := range vectors {
-		moVectors[i] = vec.RawVector().Data
+		moVectors[i] = ToMOArray(vec)
 	}
 	return moVectors
+}
+
+func ToMOArray(vec *mat.VecDense) []float64 {
+	return vec.RawVector().Data
 }

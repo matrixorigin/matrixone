@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"gonum.org/v1/gonum/mat"
+	"math"
 )
 
 func L2Distance(v1, v2 *mat.VecDense) float64 {
@@ -26,26 +27,24 @@ func L2Distance(v1, v2 *mat.VecDense) float64 {
 	return mat.Norm(diff, 2)
 }
 
+// AngularDistance is used for InnerProduct and CosineDistance in Spherical Kmeans.
+// https://github.com/pgvector/pgvector/blob/12aecfb4f593796d6038210d43ba483af7750a00/src/vector.c#L694
 func AngularDistance(v1, v2 *mat.VecDense) float64 {
-	// Calculate dot product
-	dotProduct := mat.Dot(v1, v2)
+	// Compute the dot product of the two vectors.
+	dp := mat.Dot(v1, v2)
 
-	// Calculate norms
-	normV1 := mat.Norm(v1, 2)
-	normV2 := mat.Norm(v2, 2)
-
-	// Compute cosine similarity
-	cosineSimilarity := dotProduct / (normV1 * normV2)
-
-	// Handle potential floating-point inaccuracies that might push
-	// cosineSimilarity slightly above 1 or below -1
-	if cosineSimilarity > 1.0 {
-		cosineSimilarity = 1.0
-	} else if cosineSimilarity < -1.0 {
-		cosineSimilarity = -1.0
+	// Handle precision issues: Clamp the dot product to the range [-1, 1].
+	if dp > 1.0 {
+		dp = 1.0
+	} else if dp < -1.0 {
+		dp = -1.0
 	}
 
-	return 1 - cosineSimilarity
+	// Compute the angular distance.
+	theta := math.Acos(dp)
+
+	// Scale the result by pi to bring it into the [0, 1] range.
+	return theta / math.Pi
 }
 
 // resolveDistanceFn returns the distance function corresponding to the distance type

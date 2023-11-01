@@ -16,15 +16,22 @@ package elkans
 
 import "gonum.org/v1/gonum/mat"
 
-func NormalizeVectors(vectors []*mat.VecDense) {
+func NormalizeGonumVectors(vectors []*mat.VecDense) {
 	for i := range vectors {
-		NormalizeVector(vectors[i])
+		NormalizeGonumVector(vectors[i])
 	}
 }
 
-func NormalizeVector(vector *mat.VecDense) {
+func NormalizeGonumVector(vector *mat.VecDense) {
 	norm := mat.Norm(vector, 2)
 	if norm != 0 {
 		vector.ScaleVec(1/norm, vector)
 	}
+}
+
+// NormalizeMoArray is used only in test functions.
+func NormalizeMoArray(vector []float64) []float64 {
+	res := ToGonumsVector(vector)
+	NormalizeGonumVector(res)
+	return ToMOArray(res)
 }
