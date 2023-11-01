@@ -180,7 +180,8 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 		accIDVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID)
 		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
 
-		if accIDVec.Length() == 0 {
+		// storage usage was introduced after `CheckpointVersion9`
+		if version < logtail.CheckpointVersion9 {
 			// exist old version checkpoint which hasn't storage usage data in it,
 			// to avoid inaccurate info leading misunderstand, we chose to return empty result
 			return map[int32]uint64{}, nil

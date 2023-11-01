@@ -136,12 +136,12 @@ func (c *DashboardCreator) initTaskCkpCollectUsageRow() dashboard.Option {
 		c.withGraph(
 			"Global Checkpoint Load Object Count",
 			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="gckp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="gckp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{"+c.by+"-type }}"),
 		c.withGraph(
 			"Incremental Checkpoint Load Object Count",
 			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="ickp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="ickp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{"+c.by+"-type }}"),
 	)
 }

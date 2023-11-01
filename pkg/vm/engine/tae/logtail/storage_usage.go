@@ -72,8 +72,14 @@ func appendToStorageUsageVectors(data UsageData, vecs []*vector.Vector) {
 	vector.AppendFixed(vecs[UsageSize], data[UsageSize].(uint64), false, common.DefaultAllocator)
 }
 
-func checkSegment(entry *catalog.SegmentEntry) bool {
+func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
 	if !entry.IsSorted() || entry.IsAppendable() || entry.HasDropCommitted() {
+		return false
+	}
+
+	// the incremental ckp should consider the time range.
+	// we only collect the segments which updates happened in [start, end]
+	if !collector.isGlobal && len(entry.ClonePreparedInRange(collector.start, collector.end)) == 0 {
 		return false
 	}
 	return true
@@ -114,47 +120,48 @@ func fillUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
 // and the account, db, table info the object belongs to into an increment checkpoint.
 // every increment checkpoint only records the updates within collector.time_range.
 // [account_id, db_id, table_id, obj_id, table_total_size_in_bytes]
-func FillUsageBatOfIncremental(collector *BaseCollector, entry *catalog.SegmentEntry) {
+func FillUsageBatOfIncremental(c *catalog.Catalog, collector *IncrementalCollector, fs fileservice.FileService) {
 	start := time.Now()
 	defer v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 
-	if !checkSegment(entry) {
-		return
-	}
-
-	oldState := entry.Stat.GetLoaded()
-
-	fillUsageBat(collector, entry)
-
-	if !oldState && entry.Stat.GetLoaded() {
-		v2.TaskICkpLoadObjectCounter.Inc()
-	}
-
+	loaded := traverseCatalog(c, collector.BaseCollector, fs)
+	v2.TaskICkpLoadObjectCounter.Add(float64(loaded))
 }
 
 func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 	locVers []*CkpLocVers) map[types.Uuid]*UsageData {
 	tmpRest := make(map[types.Uuid]*UsageData)
 
-	for idx := range locVers {
-		version := locVers[idx].Version
-		location := locVers[idx].Location
+	versions := make([]uint32, len(locVers))
+	locations := make([][]byte, len(locVers))
 
-		_, incrData, err := LoadCheckpointEntriesFromKey(ctx, fs, location, version)
+	for idx := range locVers {
+		versions[idx] = locVers[idx].Version
+		locations[idx] = locVers[idx].Location
+
+		// storage usage was introduced after `CheckpointVersion9`
+		if versions[idx] < CheckpointVersion9 {
+			// existing old version checkpoint, so these data are inaccurate.
+			// so we drop them, return nil
+			return nil
+		}
+	}
+
+	// prefetching to accurate load
+	for idx := range locations {
+		blockio.PrefetchMeta(fs, locations[idx])
+	}
+
+	for idx := range locations {
+		_, incrData, err := LoadCheckpointEntriesFromKey(ctx, fs, locations[idx], versions[idx])
 		if err != nil {
-			logutil.Error(fmt.Sprintf("[storage usage] load increment checkpoint failed: %v", err))
+			logutil.Warn(fmt.Sprintf("[storage usage] load increment checkpoint failed: %v", err))
 			return nil
 		}
 
 		v2.TaskGCkpLoadObjectCounter.Inc()
 
 		srcVecs := getStorageUsageBatVectors(incrData)
-
-		if srcVecs[UsageTblID].Length() == 0 {
-			// existing old version checkpoint, so these data are inaccurate.
-			// so we drop them, return nil
-			return nil
-		}
 
 		for i := 0; i < srcVecs[UsageTblID].Length(); i++ {
 			accId := vector.GetFixedAt[uint64](srcVecs[UsageAccID], i)
@@ -174,14 +181,14 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 	return tmpRest
 }
 
-func traverseCatalog(ctx context.Context, c *catalog.Catalog, collector *GlobalCollector, fs fileservice.FileService) {
+func traverseCatalog(c *catalog.Catalog, collector *BaseCollector, fs fileservice.FileService) (loaded int) {
 	processor := new(catalog.LoopProcessor)
 	var segs []*catalog.SegmentEntry
 
 	// need to accelerate the load process through prefetch,
 	// so we collect valid segments first
 	processor.SegmentFn = func(entry *catalog.SegmentEntry) error {
-		if checkSegment(entry) {
+		if checkSegment(entry, collector) {
 			segs = append(segs, entry)
 		}
 		return nil
@@ -197,27 +204,29 @@ func traverseCatalog(ctx context.Context, c *catalog.Catalog, collector *GlobalC
 		// prefetch obj meta
 		blk := segs[idx-1].GetFirstBlkEntry()
 		if blk != nil && len(blk.GetMetaLoc()) != 0 {
-			v2.TaskGCkpLoadObjectCounter.Inc()
+			loaded++
 			blockio.PrefetchMeta(fs, blk.GetMetaLoc())
 		}
 
 		// deal with the previously prefetched batch
 		for idx%batchCnt == 0 && i < idx {
-			fillUsageBat(collector.BaseCollector, segs[i])
+			fillUsageBat(collector, segs[i])
 			i++
 		}
 	}
 
 	// deal with the left segments
 	for ; i < len(segs); i++ {
-		fillUsageBat(collector.BaseCollector, segs[i])
+		fillUsageBat(collector, segs[i])
 	}
+
+	return loaded
 }
 
-// FillSEGStorageUsageBatOfGlobal recording storage usage info into global
+// FillUsageBatOfGlobal recording storage usage info into global
 // checkpoint by reading all increment checkpoints before this moment
 // [account_id, db_id, table_id, table_total_size_in_bytes]
-func FillSEGStorageUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
+func FillUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
 	fs fileservice.FileService, locVers []*CkpLocVers) {
 	start := time.Now()
 	defer v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
@@ -246,6 +255,7 @@ func FillSEGStorageUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollect
 	// cannot collect data from previous checkpoint, so
 	// we traverse the catalog to get the full datasets of storage usage.
 	// this code below should only execute exactly once when upgrade from old TN version
-	traverseCatalog(ctx, c, collector, fs)
+	loaded := traverseCatalog(c, collector.BaseCollector, fs)
+	v2.TaskGCkpLoadObjectCounter.Add(float64(loaded))
 
 }
