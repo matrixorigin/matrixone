@@ -515,8 +515,6 @@ func TestCreateSegment(t *testing.T) {
 }
 
 func TestCompactBlock1(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -620,6 +618,8 @@ func TestCompactBlock1(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 2, changes.DeleteMask.GetCardinality())
 
+		seg, err = rel.CreateNonAppendableSegment(false)
+		assert.NoError(t, err)
 		destBlock, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
 		m := destBlock.GetMeta().(*catalog.BlockEntry)
@@ -1311,8 +1311,8 @@ func TestCompactBlock2(t *testing.T) {
 		require.Equal(t, 18, cnt)
 
 		// new nablk-2 18 rows
-		meta:=blk.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta},[]*catalog.SegmentEntry{meta.GetSegment()},nil, db.Runtime)
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta}, []*catalog.SegmentEntry{meta.GetSegment()}, nil, db.Runtime)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -1352,13 +1352,13 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Equal(t, 1, cnt)
 
 		// this compaction create a nablk-3 having same data with the nablk-2
-		meta:=blk.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta},[]*catalog.SegmentEntry{meta.GetSegment()},nil, db.Runtime)
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta}, []*catalog.SegmentEntry{meta.GetSegment()}, nil, db.Runtime)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
 		assert.Nil(t, err)
-		newBlockFp = task.GetCreatedBlocks()[0].AsCommonID()
+		newBlockFp2 := task.GetCreatedBlocks()[0].AsCommonID()
 		{
 			txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
 			seg, err := rel.GetSegment(newBlockFp.ObjectID())
@@ -1371,6 +1371,7 @@ func TestCompactBlock2(t *testing.T) {
 			assert.NoError(t, txn.Commit(context.Background()))
 		}
 		assert.NoError(t, txn.Commit(context.Background()))
+		newBlockFp = newBlockFp2
 	}
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
@@ -1397,8 +1398,8 @@ func TestCompactBlock2(t *testing.T) {
 		assert.NoError(t, err)
 
 		// new nablk-4 16 rows
-		meta:=blk.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta},[]*catalog.SegmentEntry{meta.GetSegment()},nil, db.Runtime)
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta}, []*catalog.SegmentEntry{meta.GetSegment()}, nil, db.Runtime)
 		assert.NoError(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()

@@ -38,8 +38,6 @@ import (
 // 5. Append data and the total rows is more than a segment. Commit and then merge sort the full segment.
 // 6. Scan hidden column and check.
 func TestHiddenWithPK1(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -291,7 +289,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	testutil.CompactBlocks(t,0,tae,"db",schema,false)
+	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
