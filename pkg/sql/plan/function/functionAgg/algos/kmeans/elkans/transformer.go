@@ -19,7 +19,7 @@ import "gonum.org/v1/gonum/mat"
 func ToGonumsVectors(vectors [][]float64) []*mat.VecDense {
 	res := make([]*mat.VecDense, len(vectors))
 	for i, vec := range vectors {
-		res[i] = mat.NewVecDense(len(vec), vec)
+		res[i] = ToGonumsVector(vec)
 	}
 	return res
 }
