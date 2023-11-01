@@ -1234,8 +1234,6 @@ func TestFlushTabletail(t *testing.T) {
 }
 
 func TestCompactBlock2(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -1258,12 +1256,12 @@ func TestCompactBlock2(t *testing.T) {
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
 		blkMeta := testutil.GetOneBlockMeta(rel)
 		// ablk-0 & nablk-1
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{blkMeta}, db.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
 		assert.NoError(t, err)
-		newBlockFp = task.GetNewBlock().Fingerprint()
+		newBlockFp = task.GetCreatedBlocks()[0].Fingerprint()
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	{
@@ -1313,12 +1311,13 @@ func TestCompactBlock2(t *testing.T) {
 		require.Equal(t, 18, cnt)
 
 		// new nablk-2 18 rows
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime)
+		meta:=blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta},[]*catalog.SegmentEntry{meta.GetSegment()},nil, db.Runtime)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
 		assert.Nil(t, err)
-		newBlockFp = task.GetNewBlock().Fingerprint()
+		newBlockFp = task.GetCreatedBlocks()[0].AsCommonID()
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
@@ -1353,12 +1352,13 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Equal(t, 1, cnt)
 
 		// this compaction create a nablk-3 having same data with the nablk-2
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime)
+		meta:=blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta},[]*catalog.SegmentEntry{meta.GetSegment()},nil, db.Runtime)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
 		assert.Nil(t, err)
-		newBlockFp = task.GetNewBlock().Fingerprint()
+		newBlockFp = task.GetCreatedBlocks()[0].AsCommonID()
 		{
 			txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
 			seg, err := rel.GetSegment(newBlockFp.ObjectID())
@@ -1397,7 +1397,8 @@ func TestCompactBlock2(t *testing.T) {
 		assert.NoError(t, err)
 
 		// new nablk-4 16 rows
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime)
+		meta:=blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewMergeBlocksTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta},[]*catalog.SegmentEntry{meta.GetSegment()},nil, db.Runtime)
 		assert.NoError(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -1493,8 +1494,6 @@ func TestCompactBlock2(t *testing.T) {
 }
 
 func TestAutoCompactABlk1(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -1519,13 +1518,11 @@ func TestAutoCompactABlk1(t *testing.T) {
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		blk := testutil.GetOneBlock(rel)
-		blkData := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
-		assert.Nil(t, err)
-		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-		assert.Nil(t, err)
-		err = task.WaitDone()
-		assert.Nil(t, err)
+		blkMeta := blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.BlockEntry{blkMeta}, tae.Runtime, txn.GetStartTS())
+		assert.NoError(t, err)
+		err = task.OnExec(context.TODO())
+		assert.NoError(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 }
@@ -1605,8 +1602,6 @@ func TestAutoCompactABlk2(t *testing.T) {
 }
 
 func TestCompactABlk(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -1624,12 +1619,10 @@ func TestCompactABlk(t *testing.T) {
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		blk := testutil.GetOneBlock(rel)
-		blkData := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
+		blkMeta := blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.BlockEntry{blkMeta}, tae.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
-		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-		assert.NoError(t, err)
-		err = task.WaitDone()
+		err = task.OnExec(context.TODO())
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -1960,8 +1953,6 @@ func TestUnload2(t *testing.T) {
 }
 
 func TestDelete1(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -2000,12 +1991,9 @@ func TestDelete1(t *testing.T) {
 	{
 		txn, rel := testutil.GetDefaultRelation(t, tae, schema.Name)
 		blkMeta := testutil.GetOneBlockMeta(rel)
-		blkData := blkMeta.GetBlockData()
-		factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
+		task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.BlockEntry{blkMeta}, tae.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
-		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-		assert.NoError(t, err)
-		err = task.WaitDone()
+		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -2048,8 +2036,6 @@ func TestDelete1(t *testing.T) {
 }
 
 func TestLogIndex1(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -2097,7 +2083,7 @@ func TestLogIndex1(t *testing.T) {
 		assert.Nil(t, err)
 		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(uint64(offset)))
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Runtime)
+		task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.BlockEntry{meta}, tae.Runtime, txn.GetStartTS())
 		assert.Nil(t, err)
 		err = task.OnExec(context.Background())
 		assert.Nil(t, err)
@@ -2846,15 +2832,13 @@ func TestSnapshotIsolation2(t *testing.T) {
 // 2. Merge blocks
 // 3. Check rows and col[0]
 func TestMergeBlocks(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, -1)
+	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 3
 	bat := catalog.MockBatch(schema, 30)
@@ -2886,6 +2870,7 @@ func TestMergeBlocks(t *testing.T) {
 	}
 	assert.Nil(t, txn.Commit(context.Background()))
 
+	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 	testutil.MergeBlocks(t, 0, tae, "db", schema, false)
 
 	txn, err = tae.StartTxn(nil)
