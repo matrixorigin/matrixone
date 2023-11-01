@@ -301,12 +301,13 @@ func (s *sAggClusterCenters) arraysToString(arrays [][]byte) string {
 // stringToArrays converts string to a list of array/vector
 // e.g. "1,2,3|4,5,6|" -> []array
 func (s *sAggClusterCenters) stringToArrays(str string) ([][]byte, error) {
-	var res [][]byte
+	arrays := strings.Split(str, arrayGroupSeparator)
+
+	var res = make([][]byte, len(arrays))
 	var vecf []byte
 	var err error
 
-	arrays := strings.Split(str, arrayGroupSeparator)
-	for _, arr := range arrays {
+	for i, arr := range arrays {
 		if len(strings.TrimSpace(arr)) == 0 {
 			continue
 		}
@@ -322,7 +323,7 @@ func (s *sAggClusterCenters) stringToArrays(str string) ([][]byte, error) {
 				return nil, err
 			}
 		}
-		res = append(res, vecf)
+		res[i] = vecf
 	}
 	return res, nil
 
