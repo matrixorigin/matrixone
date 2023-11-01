@@ -233,7 +233,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(); !ok {
 		t.counterSet.connMigrationCannotStart.Add(1)
-		return moerr.NewInternalError(ctx, "not safe to start transfer")
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	defer func() {
 		t.mu.Lock()
