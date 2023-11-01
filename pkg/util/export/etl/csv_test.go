@@ -153,7 +153,7 @@ func TestFSWriter_Write(t *testing.T) {
 		p []byte
 	}
 
-	fs := testutil.NewFS()
+	fs := testutil.NewSharedFS()
 	tests := []struct {
 		name    string
 		fields  fields
