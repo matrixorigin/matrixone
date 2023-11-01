@@ -2951,15 +2951,15 @@ func TestSegDelLogtail(t *testing.T) {
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[0].TableName, "meta"))
-	require.Equal(t, uint32(6), resp.Commands[0].Bat.Vecs[0].Len) /* 3 old ablks (create) + 3 new merged nblks(create) */
+	require.Equal(t, uint32(12), resp.Commands[0].Bat.Vecs[0].Len) /* 3 old ablks (create) + 3 new merged nblks(create) + 3 old ablks(delete) + 3 old nablks(delete)*/
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "meta"))
-	require.Equal(t, uint32(3), resp.Commands[1].Bat.Vecs[0].Len) /* 3 old ablks(delete) */
+	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 3 old ablks(delete) + 3 old nablks(delete) */
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "obj"))
-	require.Equal(t, uint32(7), resp.Commands[2].Bat.Vecs[0].Len) /* 4 segments (create) + 3 (update object info) */
+	require.Equal(t, uint32(9), resp.Commands[2].Bat.Vecs[0].Len) /* 5 segments (create) + 4 (update object info) */
 
 	close()
 
@@ -2982,10 +2982,10 @@ func TestSegDelLogtail(t *testing.T) {
 		entry := ckpEntries[0]
 		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 		require.NoError(t, err)
-		require.Equal(t, uint32(3), ins.Vecs[0].Len)    // 3 nablk
-		require.Equal(t, uint32(3), del.Vecs[0].Len)    // 3 ablk
-		require.Equal(t, uint32(3), cnins.Vecs[0].Len)  // 3 ablk
-		require.Equal(t, uint32(7), segdel.Vecs[0].Len) // 4 create + 3 update
+		require.Equal(t, uint32(6), ins.Vecs[0].Len)    // 6 nablk
+		require.Equal(t, uint32(6), del.Vecs[0].Len)    // 3 ablk + 3 nablk
+		require.Equal(t, uint32(6), cnins.Vecs[0].Len)  // 3 ablk + 3 nablk
+		require.Equal(t, uint32(9), segdel.Vecs[0].Len) // 4 create + 5 update
 		require.Equal(t, 2, len(del.Vecs))
 		require.Equal(t, 15, len(segdel.Vecs))
 	}
@@ -8479,7 +8479,7 @@ func TestApplyDeltalocation3(t *testing.T) {
 
 	// apply deltaloc successfully if txn of new deletes are active
 
-	tae.CompactBlocks(false)
+	tae.MergeBlocks(false)
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
 	ok, err = tae.TryDeleteByDeltalocWithTxn([]any{v3}, txn)

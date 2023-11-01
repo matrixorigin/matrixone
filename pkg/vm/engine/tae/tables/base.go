@@ -563,6 +563,9 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 	if err2 != nil {
 		return
 	}
+	if !blk.meta.GetDeltaLoc().IsEmpty() {
+		return
+	}
 	blk.Lock()
 	defer blk.Unlock()
 	if !blk.mvcc.GetDeleteChain().IsEmpty() {

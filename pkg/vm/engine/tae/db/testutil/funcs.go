@@ -319,7 +319,7 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 	segIt := rel.MakeSegmentIt()
 	for segIt.Valid() {
 		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
-		if seg.GetAppendableBlockCnt() == int(seg.GetTable().GetLastestSchema().SegmentMaxBlocks) {
+		if !seg.IsAppendable() {
 			segs = append(segs, seg)
 		}
 		segIt.Next()
