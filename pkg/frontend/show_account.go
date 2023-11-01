@@ -149,8 +149,7 @@ func requestStorageUsage(ses *Session) (resp interface{}, err error) {
 	proc := process.New(ctx, ses.proc.GetMPool(),
 		ses.proc.TxnClient, txnOperator,
 		ses.proc.FileService, ses.proc.LockService,
-		ses.proc.QueryService, ses.proc.Hakeeper,
-		ses.proc.UdfService, ses.proc.Aicm,
+		ses.proc.QueryService, ses.proc.Aicm,
 	)
 
 	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
