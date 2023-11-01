@@ -155,16 +155,6 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 			continue
 		}
 
-		if len(arrGroup) == 1 {
-			// if there is only one element in the group, then that element is the centroid.
-			jsonData, err := json.Marshal(arrGroup)
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, jsonData)
-			continue
-		}
-
 		// 1. convert [][]byte to [][]float64
 		var vecf64List [][]float64
 		for _, arr := range arrGroup {
