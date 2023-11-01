@@ -16,13 +16,15 @@ package functionAgg
 
 import (
 	"bytes"
-	"encoding/json"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"strconv"
 	"strings"
 )
@@ -191,14 +193,30 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 			return nil, err
 		}
 
-		// 3. convert centroids (ie [][]float64) to `json array` string
-		jsonStr, err := json.Marshal(centers)
-		if err != nil {
-			return nil, err
+		// 3. convert centroids (ie [][]float64) to json string
+		var jsonStr string
+		switch s.arrType.Oid {
+		case types.T_array_float32:
+			// 3.a cast [][]float64 to [][]float32
+			_centers := make([][]float32, len(centers))
+			for i, center := range centers {
+				_centers[i], err = moarray.Cast[float64, float32](center)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			// 3.b create json string for [][]float32
+			jsonStr = fmt.Sprintf("[ %s ]", types.ArraysToString[float32](_centers, ","))
+
+		case types.T_array_float64:
+
+			// 3.c create json string for [][]float64
+			jsonStr = fmt.Sprintf("[ %s ]", types.ArraysToString[float64](centers, ","))
 		}
 
 		// 4. add the json-string byte[] to result
-		result = append(result, jsonStr)
+		result = append(result, util.UnsafeStringToBytes(jsonStr))
 	}
 
 	return result, nil
