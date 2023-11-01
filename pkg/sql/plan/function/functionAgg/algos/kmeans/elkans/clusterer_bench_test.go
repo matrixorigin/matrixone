@@ -15,7 +15,6 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"strconv"
 	"testing"
@@ -29,52 +28,52 @@ cpu: Apple M2 Pro
 rows: 10_000
 dims: 1024
 k: 10
+Benchmark_kmeans/Elkan_Random-10         	       	   1	  1019202292 ns/op
 Benchmark_kmeans/KMEANS_-_Random-10         	       1	  1335777583 ns/op (with gonums)
 Benchmark_kmeans/KMEANS_-_Kmeans++-10       	       1	  3190817000 ns/op (with gonums)
 
 rows: 100_000
 dims: 1024
 k: 100
-Benchmark_kmeans/KMEANS_-_Random-10         	       1	177648962458 ns/op
+Benchmark_kmeans/Elkan_Random-10         	       	   1     95512289459 ns/op
+Benchmark_kmeans/Elkan_Random         	       		 1		177648962458 ns/op
 */
 func Benchmark_kmeans(b *testing.B) {
-	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:  "debug",
-		Format: "console",
-	})
+	//logutil.SetupMOLogger(&logutil.LogConfig{
+	//	Level:  "debug",
+	//	Format: "console",
+	//})
 
-	rowCnt := 10_000
+	rowCnt := 100_000
 	dims := 1024
-	k := 10
+	k := 100
 
 	data := make([][]float64, rowCnt)
 	populateRandData(rowCnt, dims, data)
 
-	clusterRand, _ := NewKMeans(data, k,
-		500, 0.01,
-		kmeans.L2, kmeans.Random)
-
-	kmeansPlusPlus, _ := NewKMeans(data, k,
-		500, 0.01,
-		kmeans.L2, kmeans.KmeansPlusPlus)
-
 	b.Run("Elkan_Random", func(b *testing.B) {
 		b.ResetTimer()
+		clusterRand, _ := NewKMeans(data, k,
+			500, 0.01,
+			kmeans.L2, kmeans.Random)
 		_, err := clusterRand.Cluster()
 		if err != nil {
 			panic(err)
 		}
+		b.Log("SSE - clusterRand", strconv.FormatFloat(clusterRand.SSE(), 'f', -1, 32))
+
 	})
-	b.Log("SSE - clusterRand", strconv.FormatFloat(clusterRand.SSE(), 'f', -1, 32))
 
 	b.Run("Elkan_Kmeans++", func(b *testing.B) {
 		b.ResetTimer()
+		kmeansPlusPlus, _ := NewKMeans(data, k,
+			500, 0.01,
+			kmeans.L2, kmeans.KmeansPlusPlus)
 		_, err := kmeansPlusPlus.Cluster()
 		if err != nil {
 			panic(err)
 		}
-
+		b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
 	})
-	b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
 
 }
