@@ -51,8 +51,7 @@ func init() {
 	}
 
 	initTypeStrToEnum = map[string]kmeans.InitType{
-		"RANDOM":   kmeans.Random,
-		"KMEANS++": kmeans.KmeansPlusPlus,
+		"RANDOM": kmeans.Random,
 	}
 }
 

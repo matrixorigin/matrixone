@@ -67,52 +67,6 @@ func TestRandom_InitCentroids(t *testing.T) {
 	}
 }
 
-func TestKMeansPlusPlus_InitCentroids(t *testing.T) {
-	type args struct {
-		vectors [][]float64
-		k       int
-	}
-	tests := []struct {
-		name          string
-		args          args
-		wantCentroids [][]float64
-	}{
-		{
-			name: "TestKMeansPlusPlus_InitCentroids",
-			args: args{
-				vectors: [][]float64{
-					{1, 2, 3, 4},
-					{1, 2, 4, 5},
-					{1, 2, 4, 5},
-					{1, 2, 3, 4},
-					{1, 2, 4, 5},
-					{1, 2, 4, 5},
-					{10, 2, 4, 5},
-					{10, 3, 4, 5},
-					{10, 5, 4, 5},
-					{10, 2, 4, 5},
-					{10, 3, 4, 5},
-					{10, 5, 4, 5},
-				},
-				k: 2,
-			},
-			// Kmeans++ picked the relatively farthest points as the initial centroids
-			wantCentroids: [][]float64{
-				{1, 2, 4, 5},
-				{10, 5, 4, 5},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := NewKMeansPlusPlusInitializer(L2Distance)
-			if gotCentroids := r.InitCentroids(ToGonumsVectors(tt.args.vectors), tt.args.k); !reflect.DeepEqual(gotCentroids, tt.wantCentroids) {
-				t.Errorf("InitCentroids() = %v, want %v", gotCentroids, tt.wantCentroids)
-			}
-		})
-	}
-}
-
 /*
 date : 2023-10-30
 goos: darwin
@@ -122,8 +76,6 @@ rows: 10_000
 dims: 1024
 k : 10
 Benchmark_InitCentroids/RANDOM-10         	13193077	        86.51 ns/op  (gonums not applicable)
-Benchmark_InitCentroids/KMEANS++-10       	       1	9501668625.00 ns/op  (without gonums)
-Benchmark_InitCentroids/KMEANS++-10       	       1	1841697833.00 ns/op  (with gonums)
 */
 func Benchmark_InitCentroids(b *testing.B) {
 	rowCnt := 10_000
@@ -134,7 +86,6 @@ func Benchmark_InitCentroids(b *testing.B) {
 	populateRandData(rowCnt, dims, data)
 
 	random := NewRandomInitializer()
-	kmeanspp := NewKMeansPlusPlusInitializer(L2Distance)
 
 	b.Run("RANDOM", func(b *testing.B) {
 		b.ResetTimer()
@@ -143,12 +94,6 @@ func Benchmark_InitCentroids(b *testing.B) {
 		}
 	})
 
-	b.Run("KMEANS++", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			_ = kmeanspp.InitCentroids(ToGonumsVectors(data), k)
-		}
-	})
 }
 
 func populateRandData(rowCnt int, dim int, vecs [][]float64) {

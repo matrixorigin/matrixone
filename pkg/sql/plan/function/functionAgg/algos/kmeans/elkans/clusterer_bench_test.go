@@ -31,7 +31,6 @@ dims: 1024
 k: 10
 Benchmark_kmeans/Elkan_Random-10         	       	   1	  1019202292 ns/op
 Benchmark_kmeans/KMEANS_-_Random-10         	       1	  1335777583 ns/op (with gonums)
-Benchmark_kmeans/KMEANS_-_Kmeans++-10       	       1	  3190817000 ns/op (with gonums)
 
 rows: 100_000
 dims: 1024
@@ -63,18 +62,6 @@ func Benchmark_kmeans(b *testing.B) {
 		}
 		b.Log("SSE - clusterRand", strconv.FormatFloat(clusterRand.SSE(), 'f', -1, 32))
 
-	})
-
-	b.Run("Elkan_Kmeans++", func(b *testing.B) {
-		b.ResetTimer()
-		kmeansPlusPlus, _ := NewKMeans(data, k,
-			500, 0.01,
-			kmeans.L2, kmeans.KmeansPlusPlus)
-		_, err := kmeansPlusPlus.Cluster()
-		if err != nil {
-			panic(err)
-		}
-		b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
 	})
 
 }

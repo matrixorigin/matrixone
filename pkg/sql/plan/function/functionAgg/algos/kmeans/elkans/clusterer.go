@@ -130,12 +130,11 @@ func NewKMeans(vectors [][]float64,
 	}, nil
 }
 
-// InitCentroids initializes the centroids using initialization algorithms like kmeans++ or random.
+// InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
+// Right now, we don't support kmeans++ since it is very slow for higher dimension large scale clustering.
 func (km *ElkanClusterer) InitCentroids() {
 	var initializer Initializer
 	switch km.initType {
-	case kmeans.KmeansPlusPlus:
-		initializer = NewKMeansPlusPlusInitializer(km.distFn)
 	case kmeans.Random:
 		initializer = NewRandomInitializer()
 	default:
@@ -201,7 +200,7 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 	if distanceType < 0 || distanceType > 2 {
 		return moerr.NewInternalErrorNoCtx("distance type is not supported")
 	}
-	if initType < 0 || initType > 1 {
+	if initType != 0 {
 		return moerr.NewInternalErrorNoCtx("init type is not supported")
 	}
 

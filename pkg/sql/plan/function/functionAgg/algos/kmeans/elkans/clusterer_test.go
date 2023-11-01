@@ -147,36 +147,6 @@ func Test_Cluster(t *testing.T) {
 			wantSSE: 12,
 			wantErr: false,
 		},
-		{
-			name: "Test 2 - Skewed data (Kmeans++ Init)",
-			fields: constructorArgs{
-				vectorList: [][]float64{
-					{1, 2, 3, 4},
-					{1, 2, 4, 5},
-					{1, 2, 4, 5},
-					{1, 2, 3, 4},
-					{1, 2, 4, 5},
-					{1, 2, 4, 5},
-					{10, 2, 4, 5},
-					{10, 3, 4, 5},
-					{10, 5, 4, 5},
-					{10, 2, 4, 5},
-					{10, 3, 4, 5},
-					{10, 5, 4, 5},
-				},
-				clusterCnt:     2,
-				maxIterations:  500,
-				deltaThreshold: 0.01,
-				distType:       kmeans.L2,
-				initType:       kmeans.KmeansPlusPlus,
-			},
-			want: [][]float64{
-				{1, 2, 3.6666666666666665, 4.666666666666666},
-				{10, 3.333333333333333, 4, 5},
-			},
-			wantSSE: 12,
-			wantErr: false,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

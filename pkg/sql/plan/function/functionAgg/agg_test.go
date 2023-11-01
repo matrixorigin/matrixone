@@ -696,7 +696,7 @@ func TestClusterCenters(t *testing.T) {
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
 		distType:   kmeans.L2,
-		initType:   kmeans.KmeansPlusPlus,
+		initType:   kmeans.Random,
 		arrType:    types.T_array_float64.ToType(),
 	}
 	// input vectors/arrays of 7 rows with 6th row as null
