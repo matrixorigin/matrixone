@@ -28,7 +28,9 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
 
-	TaskFlushTableTailDurationHistogram = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
+	TaskFlushTableTailDurationHistogram   = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
+	TaskGCkpCollectUsageDurationHistogram = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
+	TaskICkpCollectUsageDurationHistogram = taskShortDurationHistogram.WithLabelValues("ickp_collect_uage")
 
 	taskLongDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -61,6 +63,8 @@ var (
 			Help:      "Total number of stuff a task have generated",
 		}, []string{"type"})
 
-	TaskMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block")
-	TasKMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size")
+	TaskMergedBlocksCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_block")
+	TasKMergedSizeCounter     = taskGeneratedStuffCounter.WithLabelValues("merged_size")
+	TaskGCkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("gckp_load_object")
+	TaskICkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("ickp_load_object")
 )
