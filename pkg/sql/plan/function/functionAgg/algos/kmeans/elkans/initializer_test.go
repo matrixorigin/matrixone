@@ -49,7 +49,7 @@ func TestRandom_InitCentroids(t *testing.T) {
 				k: 2,
 			},
 			wantCentroids: [][]float64{
-				// NOTE: values of random initialization need not be farther apart.
+				// NOTE: values of random initialization need not be farther apart, it is random.
 				{1, 2, 4, 5},
 				{1, 2, 3, 4},
 			},

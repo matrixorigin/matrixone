@@ -251,6 +251,8 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
 				tt.fields.distType, tt.fields.initType)
 
+			// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
+			// Here we are only testing the working of initBounds() function.
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
@@ -334,6 +336,10 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 			if ekm, ok := km.(*ElkanClusterer); ok {
 				ekm.centroids = ToGonumsVectors(tt.state.centroids)
 				ekm.computeCentroidDistances()
+
+				// NOTE: here we are not considering the vectors in the vectorList. Hence we don't need to worry about
+				// the normalization impact. Here we are only testing the working of computeCentroidDistances() function.
+
 				if !reflect.DeepEqual(ekm.halfInterCentroidDistMatrix, tt.want.halfInterCentroidDistMatrix) {
 					t.Errorf("halfInterCentroidDistMatrix got = %v, want %v", ekm.halfInterCentroidDistMatrix, tt.want.halfInterCentroidDistMatrix)
 				}
@@ -409,6 +415,9 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 			}
 			if ekm, ok := km.(*ElkanClusterer); ok {
 				ekm.assignments = tt.state.assignments
+
+				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
+				// Here we are only testing the working of recalculateCentroids() function.
 
 				got := ekm.recalculateCentroids()
 				if !reflect.DeepEqual(ToMOArrays(got), tt.want.centroids) {
@@ -547,6 +556,8 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 				ekm.vectorMetas = tt.state.vectorMetas
 				ekm.centroids = ToGonumsVectors(tt.state.centroids)
 
+				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
+				// Here we are only testing the working of updateBounds() function.
 				ekm.updateBounds(ToGonumsVectors(tt.state.newCentroids))
 				if !reflect.DeepEqual(ekm.vectorMetas, tt.want.vectorMetas) {
 					t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
