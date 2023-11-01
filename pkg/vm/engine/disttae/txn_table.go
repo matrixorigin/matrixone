@@ -759,7 +759,7 @@ func (tbl *txnTable) rangesOnePart(
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-				v2.TxnFastLoadObjectMetaTotalCounter.Inc()
+				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 					return
 				}
@@ -946,6 +946,7 @@ func (tbl *txnTable) tryFastRanges(
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
 			var objMeta objectio.ObjectMeta
+			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 			if objMeta, err = objectio.FastLoadObjectMeta(
 				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 			); err != nil {
