@@ -164,36 +164,14 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 		case plan.MetadataScanInfo_COL_NAME:
 			vector.AppendBytes(opBat.Vecs[i], []byte(info.ColName), false, mp)
 
-		case plan.MetadataScanInfo_BLOCK_ID:
-			var bid types.Blockid
-			if err := bid.Unmarshal(info.BlockId); err != nil {
-				return err
-			}
-			vector.AppendFixed(opBat.Vecs[i], bid, false, mp)
 		case plan.MetadataScanInfo_OBJECT_NAME:
 			vector.AppendBytes(opBat.Vecs[i], []byte(info.ObjectName), false, mp)
-
-		case plan.MetadataScanInfo_ENTRY_STATE:
-			vector.AppendFixed(opBat.Vecs[i], info.EntryState, false, mp)
-
-		case plan.MetadataScanInfo_SORTED:
-			vector.AppendFixed(opBat.Vecs[i], info.Sorted, false, mp)
 
 		case plan.MetadataScanInfo_IS_HIDDEN:
 			vector.AppendFixed(opBat.Vecs[i], info.IsHidden, false, mp)
 
-		case plan.MetadataScanInfo_META_LOC:
-			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.MetaLoc).String()), false, mp)
-
-		case plan.MetadataScanInfo_DELTA_LOC:
-			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.DelLoc).String()), false, mp)
-
-		case plan.MetadataScanInfo_COMMIT_TS:
-			var ts types.TS
-			if err := ts.Unmarshal(info.CommitTs); err != nil {
-				return err
-			}
-			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
+		case plan.MetadataScanInfo_OBJ_LOC:
+			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.ObjLoc).String()), false, mp)
 
 		case plan.MetadataScanInfo_CREATE_TS:
 			var ts types.TS
@@ -208,13 +186,6 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 				return err
 			}
 			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
-
-		case plan.MetadataScanInfo_SEG_ID:
-			var sid types.Uuid
-			if err := sid.Unmarshal(info.SegId); err != nil {
-				return err
-			}
-			vector.AppendFixed(opBat.Vecs[i], sid, false, mp)
 
 		case plan.MetadataScanInfo_ROWS_CNT:
 			vector.AppendFixed(opBat.Vecs[i], info.RowCnt, false, mp)
