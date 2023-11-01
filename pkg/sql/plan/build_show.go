@@ -722,13 +722,17 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			if tableDef.Indexes != nil {
 				for _, indexdef := range tableDef.Indexes {
 					if indexdef.Unique {
-						keyStr += " when attname = "
-						keyStr += "'" + indexdef.IndexName + "'"
-						keyStr += " then 'UNI'"
+						for _, name := range indexdef.Parts {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'UNI'"
+						}
 					} else {
-						keyStr += " when attname = "
-						keyStr += "'" + indexdef.IndexName + "'"
-						keyStr += " then 'MUL'"
+						for _, name := range indexdef.Parts {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'MUL'"
+						}
 					}
 				}
 			}
