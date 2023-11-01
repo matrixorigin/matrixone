@@ -100,7 +100,7 @@ func Compare[T types.RealNumbers](v1, v2 []T) int {
 	return 0
 }
 
-func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O) {
+func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error) {
 	n := len(in)
 
 	out = make([]O, n)
@@ -108,7 +108,7 @@ func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O) {
 		out[i] = O(in[i])
 	}
 
-	return out
+	return out, nil
 }
 
 func Abs[T types.RealNumbers](v []T) (res []T, err error) {
@@ -135,13 +135,13 @@ func Sqrt[T types.RealNumbers](v []T) (res []float64, err error) {
 	return res, nil
 }
 
-func Summation[T types.RealNumbers](v []T) float64 {
+func Summation[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 	var sum T = 0
 	for i := 0; i < n; i++ {
 		sum += v[i]
 	}
-	return float64(sum)
+	return float64(sum), nil
 }
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -213,6 +213,5 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
-	// casting it to float32, because cosine_similarity is between 1 and -1.
 	return float64(innerProduct) / math.Sqrt(float64(normV1*normV2)), nil
 }

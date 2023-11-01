@@ -315,12 +315,12 @@ func TestCast(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil && tt.wantF64 != nil {
-				if gotRes := Cast[float32, float64](tt.args.argF32); !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if gotRes, _ := Cast[float32, float64](tt.args.argF32); !reflect.DeepEqual(gotRes, tt.wantF64) {
 					t.Errorf("Cast() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
 			if tt.args.argF64 != nil && tt.wantF32 != nil {
-				if gotRes := Cast[float64, float32](tt.args.argF64); !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if gotRes, _ := Cast[float64, float32](tt.args.argF64); !reflect.DeepEqual(gotRes, tt.wantF32) {
 					t.Errorf("Cast() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
@@ -456,12 +456,12 @@ func TestSummation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes := Summation[float32](tt.args.argF32); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := Summation[float32](tt.args.argF32); !reflect.DeepEqual(gotRes, tt.want) {
 					t.Errorf("Summation() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes := Summation[float64](tt.args.argF64); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := Summation[float64](tt.args.argF64); !reflect.DeepEqual(gotRes, tt.want) {
 					t.Errorf("Summation() = %v, want %v", gotRes, tt.want)
 				}
 			}
