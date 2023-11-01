@@ -243,6 +243,8 @@ func FillUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
 			_, ok_2 := collector.deletes[UsageTblID][combine[UsageTblID]]
 			_, ok_3 := collector.deletes[UsageObjID][combine[UsageObjID]]
 			if ok_1 || ok_2 || ok_3 {
+				logutil.Info(fmt.Sprintf(
+					"[storage usage]: db, tbl or obj has been deleted, skip"))
 				continue
 			}
 
@@ -252,6 +254,8 @@ func FillUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
 		return
 	}
 
+	logutil.Info(fmt.Sprintf(
+		"[storage usage]: existing old version checkpoint, ready to traverse catatlog"))
 	// cannot collect data from previous checkpoint, so
 	// we traverse the catalog to get the full datasets of storage usage.
 	// this code below should only execute exactly once when upgrade from old TN version
