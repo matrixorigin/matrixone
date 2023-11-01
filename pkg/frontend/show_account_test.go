@@ -208,7 +208,7 @@ func Test_ShowAccounts(t *testing.T) {
 	resp := &db.StorageUsageResp{}
 	resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
 		Location: cnLocation,
-		Version:  8,
+		Version:  9,
 	})
 
 	usage, err := handleStorageUsageResponse(ctx, objFs.Service, resp)

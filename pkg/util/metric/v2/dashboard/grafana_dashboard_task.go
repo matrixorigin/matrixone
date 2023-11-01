@@ -90,17 +90,17 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 		c.withGraph(
 			"Scheduled By Counting",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_scheduled_by_total", `type="merge"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_scheduled_by_total", `type="merge"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{"+c.by+"-type }}"),
 		c.withGraph(
 			"Merged Blocks Each Schedule",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_block"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_block"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{"+c.by+"-type }}"),
 		c.withGraph(
 			"Merged Size Each Schedule",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_size"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_size"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
 	)
 }
@@ -111,12 +111,12 @@ func (c *DashboardCreator) initTaskCkpCollectUsageRow() dashboard.Option {
 		c.withGraph(
 			"Global Checkpoint Load Object Count",
 			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="gckp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="gckp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{"+c.by+"-type }}"),
 		c.withGraph(
 			"Incremental Checkpoint Load Object Count",
 			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="ickp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="ickp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{"+c.by+"-type }}"),
 	)
 }
