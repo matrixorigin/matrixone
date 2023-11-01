@@ -20,15 +20,7 @@ select mo_ctl('dn', 'flush', 'd1.t2');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t3');
 -- @separator:table
-explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
+explain select * from (select * from t1 where c1%3=0 order by c1 desc limit 10) tmpt where c1 % 2 = 0;
 -- @separator:table
-explain select t1.c1,t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
--- @separator:table
-explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c2;
--- @separator:table
-explain select t3.c1 from t3 left join t2 on t3.c2=t2.c2;
--- @separator:table
-explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1) v1 on t2.c1 =v1.c1 and t2.c2=v1.c2;
--- @separator:table
-explain select t2.c1 from t2 left join (select t3.c1,t3.c2 from t1 join t3 on t1.c1=t3.c1 limit 5000) v1 on t2.c1 =v1.c1;
+explain select * from (select v2.c1 as c1, v2.c2 as c2, v2.c3 as c3 from (select * from t1 where c1!=0 limit 10) v1 join (select * from t2 where c1!=1 limit 10) v2 on v1.c1=v2.c1 where v2.c2>0 limit 10) v3 join (select * from t3 where c1!=2 limit 10) v4 on v3.c3=v4.c3 where v4.c2>0 limit 10;
 drop database if exists d1;

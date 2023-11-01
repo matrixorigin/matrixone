@@ -17,6 +17,7 @@ package merge
 import (
 	"bytes"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"sync/atomic"
 
@@ -234,10 +235,14 @@ func expandObjectList(segs []*catalog.SegmentEntry) (
 }
 
 func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEntry, blkn, osize, esize int) {
+	v2.TaskMergeScheduledByCounter.Inc()
+	v2.TaskMergedBlocksCounter.Add(float64(blkn))
+	v2.TasKMergedSizeCounter.Add(float64(osize))
+
 	infoBuf := &bytes.Buffer{}
 	infoBuf.WriteString("merged:")
 	for _, seg := range merges {
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.RemainingRows, common.ShortSegId(seg.ID)))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.GetRemainingRows(), common.ShortSegId(seg.ID)))
 	}
 	if len(dels) > 0 {
 		infoBuf.WriteString(" | del:")

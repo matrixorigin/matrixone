@@ -17,6 +17,7 @@ package functionAgg
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math"
 	"reflect"
@@ -668,13 +669,46 @@ func TestStdDevPop(t *testing.T) {
 	}
 }
 
-// todo: there is not a good way to test the multi-agg function.
-//
-//	should implement the multi-agg function in the future.
 func TestGroupConcat(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggGroupConcat, []types.T{types.T_varchar}, AggGroupConcatReturnType))
 
-	s := &sAggGroupConcat{}
+	// input strings
+	var strs = []string{
+		"A",
+		"B",
+		"C",
+		"D",
+	}
+
+	// pack the input strings into [][]byte
+	var packedInput = make([][]byte, len(strs))
+	packers := types.NewPackerArray(len(strs), mpool.MustNewZero())
+	for i, str := range strs {
+		packers[i].EncodeStringType(util.UnsafeStringToBytes(str))
+		packedInput[i] = packers[i].GetBuf()
+	}
+
+	nsp := nulls.NewWithSize(4)
+	nsp.Add(3)
+	s := &sAggGroupConcat{
+		separator: ",",
+	}
+
+	{
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.Eval,
+		}
+		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
+			return util.UnsafeBytesToString(result) == "A,B,C" && !isEmpty
+		})
+		require.NoError(t, err)
+
+	}
 	{
 		data, err := s.MarshalBinary()
 		require.NoError(t, err)

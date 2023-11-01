@@ -18,18 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-
 	"os"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-
 	"github.com/google/shlex"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -42,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -54,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"go.uber.org/zap"
 )
 
 const (
@@ -184,6 +182,9 @@ func (h *Handle) HandleCommit(
 	if txn.Is2PC() {
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
+
+	v2.TxnBeforeCommitDurationHistogram.Observe(time.Since(start).Seconds())
+
 	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
 
@@ -1158,6 +1159,42 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.TraceSpan,
 	resp *api.SyncLogTailResp) (func(), error) {
+
+	return nil, nil
+}
+
+//var visitBlkEntryForStorageUsage = func(h *Handle, resp *db.StorageUsageResp, lastCkpEndTS types.TS) {
+//	processor := new(catalog2.LoopProcessor)
+//	processor.SegmentFn = func(blkEntry *catalog2.SegmentEntry) error {
+//
+//		return nil
+//	}
+//
+//	h.db.Catalog.RecurLoop(processor)
+//}
+
+func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
+	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
+
+	// get all checkpoints.
+	//var ckp *checkpoint.CheckpointEntry
+	// [g_ckp, i_ckp, i_ckp, ...] (if g exist)
+	allCkp := h.db.BGCheckpointRunner.GetAllCheckpoints()
+	for idx := range allCkp {
+		resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
+			Version:  allCkp[idx].GetVersion(),
+			Location: allCkp[idx].GetLocation(),
+		})
+	}
+
+	resp.Succeed = true
+
+	// TODO
+	// exist a gap!
+	// collecting block entries that have been not been checkpoint yet
+	//if lastCkpTS.Less(types.BuildTS(time.Now().UTC().UnixNano(), 0)) {
+	//	visitBlkEntryForStorageUsage(h, resp, lastCkpTS)
+	//}
 
 	return nil, nil
 }

@@ -36,7 +36,7 @@ func consumeEntry(
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()
 
-	state.HandleLogtailEntry(ctx, e, primarySeqnum, packer)
+	state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer)
 
 	if logtailreplay.IsMetaTable(e.TableName) {
 		return nil

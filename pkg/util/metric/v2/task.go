@@ -19,15 +19,52 @@ import (
 )
 
 var (
-	taskDurationHistogram = prometheus.NewHistogramVec(
+	taskShortDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "task",
-			Name:      "duration_seconds",
-			Help:      "Bucketed histogram of tn task execute duration.",
+			Name:      "short_duration_seconds",
+			Help:      "Bucketed histogram of short tn task execute duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
 
-	TaskFlushTableTailDurationHistogram  = taskDurationHistogram.WithLabelValues("flush_table_tail")
-	TaskCkpEntryPendingDurationHistogram = taskDurationHistogram.WithLabelValues("ckp_entry_pending")
+	TaskFlushTableTailDurationHistogram   = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
+	TaskGCkpCollectUsageDurationHistogram = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
+	TaskICkpCollectUsageDurationHistogram = taskShortDurationHistogram.WithLabelValues("ickp_collect_uage")
+
+	taskLongDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "long_duration_seconds",
+			Help:      "Bucketed histogram of long tn task execute duration.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 13),
+		}, []string{"type"})
+
+	TaskCkpEntryPendingDurationHistogram = taskLongDurationHistogram.WithLabelValues("ckp_entry_pending")
+)
+
+var (
+	taskScheduledByCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "scheduled_by_total",
+			Help:      "Total number of task have been scheduled.",
+		}, []string{"type"})
+
+	TaskMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge")
+
+	taskGeneratedStuffCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "execute_results_total",
+			Help:      "Total number of stuff a task have generated",
+		}, []string{"type"})
+
+	TaskMergedBlocksCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_block")
+	TasKMergedSizeCounter     = taskGeneratedStuffCounter.WithLabelValues("merged_size")
+	TaskGCkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("gckp_load_object")
+	TaskICkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("ickp_load_object")
 )

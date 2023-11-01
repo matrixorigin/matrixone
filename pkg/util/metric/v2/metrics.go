@@ -27,6 +27,7 @@ func init() {
 	initLogtailMetrics()
 	initTxnMetrics()
 	initTaskMetrics()
+	initRPCMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -35,7 +36,11 @@ func init() {
 }
 
 func initTaskMetrics() {
-	registry.MustRegister(taskDurationHistogram)
+	registry.MustRegister(taskShortDurationHistogram)
+	registry.MustRegister(taskLongDurationHistogram)
+
+	registry.MustRegister(taskScheduledByCounter)
+	registry.MustRegister(taskGeneratedStuffCounter)
 }
 
 func initFileServiceMetrics() {
@@ -63,13 +68,17 @@ func initLogtailMetrics() {
 
 	registry.MustRegister(LogTailCollectDurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
-	registry.MustRegister(TxnPrePrepareDurationHistogram)
+	registry.MustRegister(txnTNSideDurationHistogram)
+
+	registry.MustRegister(TxnShowAccountsDurationHistogram)
 }
 
 func initTxnMetrics() {
 	registry.MustRegister(txnCounter)
 	registry.MustRegister(txnStatementCounter)
 	registry.MustRegister(txnCommitCounter)
+	registry.MustRegister(TxnRollbackCounter)
+	registry.MustRegister(txnLockCounter)
 
 	registry.MustRegister(txnQueueSizeGauge)
 
@@ -80,4 +89,25 @@ func initTxnMetrics() {
 	registry.MustRegister(txnLockDurationHistogram)
 	registry.MustRegister(TxnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+
+	registry.MustRegister(TxnFastLoadObjectMetaTotalCounter)
+}
+
+func initRPCMetrics() {
+	registry.MustRegister(RPCClientCreateCounter)
+	registry.MustRegister(rpcBackendCreateCounter)
+	registry.MustRegister(rpcBackendClosedCounter)
+	registry.MustRegister(rpcBackendConnectCounter)
+	registry.MustRegister(rpcMessageCounter)
+
+	registry.MustRegister(rpcBackendPoolSizeGauge)
+	registry.MustRegister(rpcSendingQueueSizeGauge)
+	registry.MustRegister(rpcSendingBatchSizeGauge)
+	registry.MustRegister(rpcServerSessionSizeGauge)
+
+	registry.MustRegister(rpcBackendConnectDurationHistogram)
+	registry.MustRegister(rpcWriteDurationHistogram)
+	registry.MustRegister(rpcWriteLatencyDurationHistogram)
+	registry.MustRegister(rpcBackendDoneDurationHistogram)
+
 }
