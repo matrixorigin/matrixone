@@ -44,7 +44,6 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnDequeuePreparedRow(),
 			c.initTxnDequeuePreparingRow(),
 			c.initTxnRangesLoadedObjectMetaRow(),
-			c.initTxnShowAccountsRow(),
 		)...)
 	if err != nil {
 		return err
