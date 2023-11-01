@@ -50,7 +50,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnBeforeCommitRow(),
 			c.initTxnDequeuePreparedRow(),
 			c.initTxnDequeuePreparingRow(),
-			c.initTxnFastLoadObjectMetaRow(),
+			c.initTxnRangesLoadedObjectMetaRow(),
 			c.initTxnShowAccountsRow(),
 		)...)
 	if err != nil {
@@ -307,13 +307,13 @@ func (c *DashboardCreator) initTxnHoldLockRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initTxnFastLoadObjectMetaRow() dashboard.Option {
+func (c *DashboardCreator) initTxnRangesLoadedObjectMetaRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn Fast Load Object Meta",
+		"Txn Ranges Loaded Object Meta",
 		c.withGraph(
-			"Fast Load Object Meta",
+			"Txn Ranges Loaded Object Meta",
 			12,
-			`sum(increase(`+c.getMetricWithFilter("tn_side_fast_load_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_txn_ranges_loaded_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
 	)
 }

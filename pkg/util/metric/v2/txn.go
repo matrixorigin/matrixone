@@ -69,12 +69,12 @@ var (
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
 
-	TxnFastLoadObjectMetaTotalCounter = prometheus.NewCounter(
+	TxnRangesLoadedObjectMetaTotalCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
-			Name:      "tn_side_fast_load_object_meta_total",
-			Help:      "Total number of fast loaded object meta on tn side.",
+			Name:      "ranges_loaded_object_meta_total",
+			Help:      "Total number of ranges loaded object meta.",
 		})
 )
 
