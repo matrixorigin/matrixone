@@ -215,3 +215,22 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
 	return float64(innerProduct) / math.Sqrt(float64(normV1*normV2)), nil
 }
+
+func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
+
+	norm, err := L2Norm[T](v1)
+	if err != nil {
+		return nil, err
+	}
+
+	if norm == 0 {
+		return v1, nil
+	}
+
+	n := len(v1)
+	r := make([]T, n)
+	for i := 0; i < n; i++ {
+		r[i] = v1[i] / T(norm)
+	}
+	return r, nil
+}

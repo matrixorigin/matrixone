@@ -1761,6 +1761,36 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+	// function `normalize_l2`
+	{
+		functionId: NORMALIZE_L2,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NormalizeL2Array[float32]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NormalizeL2Array[float64]
+				},
+			},
+		},
+	},
 }
 
 var supportedMathBuiltIns = []FuncNew{

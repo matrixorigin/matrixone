@@ -369,6 +369,67 @@ func TestAbs(t *testing.T) {
 	}
 }
 
+func TestNormalizeL2(t *testing.T) {
+	type args struct {
+		argF32 []float32
+		argF64 []float64
+	}
+	type testCase struct {
+		name string
+		args args
+
+		wantF32 []float32
+		wantF64 []float64
+	}
+	tests := []testCase{
+		{
+			name:    "Test1 - float32 - zero vector",
+			args:    args{argF32: []float32{0, 0, 0}},
+			wantF32: []float32{0, 0, 0},
+		},
+		{
+			name:    "Test2 - float64 - zero vector",
+			args:    args{argF64: []float64{0, 0, 0}},
+			wantF64: []float64{0, 0, 0},
+		},
+		{
+			name:    "Test3 - float64",
+			args:    args{argF64: []float64{1, 2, 3}},
+			wantF64: []float64{0.2672612419124244, 0.5345224838248488, 0.8017837257372732},
+		},
+		{
+			name:    "Test4 - float64",
+			args:    args{argF64: []float64{-1, 2, 3}},
+			wantF64: []float64{-0.2672612419124244, 0.5345224838248488, 0.8017837257372732},
+		},
+		{
+			name:    "Test5 - float64",
+			args:    args{argF64: []float64{10, 3.333333333333333, 4, 5}},
+			wantF64: []float64{0.8108108108108107, 0.27027027027027023, 0.3243243243243243, 0.4054054054054054},
+		},
+		{
+			name:    "Test6 - float64",
+			args:    args{argF64: []float64{1, 2, 3.6666666666666665, 4.666666666666666}},
+			wantF64: []float64{0.15767649936829103, 0.31535299873658207, 0.5781471643504005, 0.7358236637186913},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			if tt.args.argF32 != nil {
+				if gotRes, err := NormalizeL2[float32](tt.args.argF32); err != nil && !reflect.DeepEqual(gotRes, tt.wantF32) {
+					t.Errorf("NormalizeL2() = %v, want %v", gotRes, tt.wantF32)
+				}
+			}
+			if tt.args.argF64 != nil {
+				if gotRes, err := NormalizeL2[float64](tt.args.argF64); err != nil && !reflect.DeepEqual(gotRes, tt.wantF64) {
+					t.Errorf("NormalizeL2() = %v, want %v", gotRes, tt.wantF64)
+				}
+			}
+		})
+	}
+}
+
 func TestSqrt(t *testing.T) {
 	type args struct {
 		argF32 []float32
