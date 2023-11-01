@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"gonum.org/v1/gonum/mat"
-	"math"
 )
 
 func L2Distance(v1, v2 *mat.VecDense) float64 {
@@ -46,9 +45,7 @@ func AngularDistance(v1, v2 *mat.VecDense) float64 {
 		cosineSimilarity = -1.0
 	}
 
-	// Return angular distance in radians
-	//TODO: verify if this is correct
-	return math.Acos(cosineSimilarity)
+	return 1 - cosineSimilarity
 }
 
 // resolveDistanceFn returns the distance function corresponding to the distance type

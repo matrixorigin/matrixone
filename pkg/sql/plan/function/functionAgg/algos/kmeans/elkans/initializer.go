@@ -28,7 +28,7 @@ var _ Initializer = (*Random)(nil)
 
 // Random initializes the centroids with random centroids from the vector list.
 // As mentioned in the FAISS discussion here https://github.com/facebookresearch/faiss/issues/268#issuecomment-348184505
-// "We have not implemented it in Faiss, because with our former Yael library, which implements both k-means++
+// "We have not implemented Kmeans++ in Faiss, because with our former Yael library, which implements both k-means++
 // and regular random initialization, we observed that the overhead computational cost was not
 // worth the saving (negligible) in all large-scale settings we have considered."
 type Random struct {
