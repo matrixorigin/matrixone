@@ -3419,8 +3419,6 @@ func TestGetColumnData(t *testing.T) {
 }
 
 func TestCompactBlk1(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -3474,7 +3472,7 @@ func TestCompactBlk1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime)
+		task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.BlockEntry{meta}, tae.DB.Runtime, txn.GetStartTS())
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -3491,7 +3489,7 @@ func TestCompactBlk1(t *testing.T) {
 		}
 
 		err = txn.Commit(context.Background())
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+		assert.NoError(t, err)
 	}
 
 	_, rel = tae.GetRelation()
@@ -3598,8 +3596,6 @@ func TestCompactBlk2(t *testing.T) {
 }
 
 func TestCompactblk3(t *testing.T) {
-	// TODO
-	return
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -3630,7 +3626,7 @@ func TestCompactblk3(t *testing.T) {
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
-	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime)
+	task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.BlockEntry{meta}, tae.DB.Runtime, txn.GetStartTS())
 	assert.NoError(t, err)
 	err = task.OnExec(context.Background())
 	assert.NoError(t, err)
