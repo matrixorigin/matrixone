@@ -63,12 +63,12 @@ func (c *DashboardCreator) initLogtailSubscriptionRow() dashboard.Option {
 		c.withGraph(
 			"logtail subscription average increase",
 			6,
-			`sum(rate(`+c.getMetricWithFilter("mo_logtail_subscription_request_total", "")+`[$interval])) by (`+c.by+`)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_logtail_subscription_request_total", "")+`[$interval])) by (`+c.by+`)`,
 			"{{ "+c.by+" }}"),
 		c.withGraph(
 			"logtail subscription average increase, sensitive",
 			6,
-			`sum(irate(`+c.getMetricWithFilter("mo_logtail_subscription_request_total", "")+`[$interval])) by (`+c.by+`)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_logtail_subscription_request_total", "")+`[$interval])) by (`+c.by+`)`,
 			"{{ "+c.by+" }}"),
 	)
 }
