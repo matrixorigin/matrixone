@@ -26,12 +26,8 @@ date : 2023-10-31
 goos: darwin
 goarch: arm64
 cpu: Apple M2 Pro
-Benchmark_kmeans/Elkan_Random-10         	1000000000	         0.8016 ns/op 	   rows: 10_000,  dims: 1024, k: 10
-Benchmark_kmeans/Elkan_Random-10         	       1		72607141458 ns/op	   rows: 100_000, dims: 1024, k: 100
-
-rows: 100_000
-dims: 1024
-k: 100
+- Spherical_Elkan_Random		 0.8016 ns/op 	   rows: 10_000,  dims: 1024, k: 10
+- Spherical_Elkan_Random 	72607141458 ns/op	   rows: 100_000, dims: 1024, k: 100, no sampling
 */
 func Benchmark_kmeans(b *testing.B) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
@@ -39,14 +35,14 @@ func Benchmark_kmeans(b *testing.B) {
 		Format: "console",
 	})
 
-	rowCnt := 100_000
+	rowCnt := 3600
 	dims := 1024
 	k := 100
 
 	data := make([][]float64, rowCnt)
 	populateRandData(rowCnt, dims, data)
 
-	b.Run("Elkan_Random", func(b *testing.B) {
+	b.Run("Spherical_Elkan_Random", func(b *testing.B) {
 		b.ResetTimer()
 		clusterRand, _ := NewKMeans(data, k,
 			500, 0.01,
