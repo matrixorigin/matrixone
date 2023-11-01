@@ -696,7 +696,6 @@ func TestClusterCenters(t *testing.T) {
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
 		distType:   kmeans.L2,
-		initType:   kmeans.Random,
 		arrType:    types.T_array_float64.ToType(),
 	}
 	// input vectors/arrays of 7 rows with 6th row as null
@@ -742,8 +741,8 @@ func TestClusterCenters(t *testing.T) {
 				!isEmpty &&
 				reflect.DeepEqual(vecf64Output,
 					[][]float64{
-						{10, 5, 4, 5},
-						{3.5200000000000005, 2.2399999999999998, 3.7600000000000002, 4.76},
+						{10, 3.333333333333333, 4, 5},
+						{1, 2, 3.6666666666666665, 4.666666666666666},
 					})
 		})
 
@@ -762,7 +761,6 @@ func TestClusterCenters(t *testing.T) {
 		require.Equal(t, s1.arrType, s2.arrType)
 		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
 		require.Equal(t, s1.distType, s2.distType)
-		require.Equal(t, s1.initType, s2.initType)
 		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
 		for i := range s1.groupedData {
 			require.Equal(t, s1.groupedData[i], s2.groupedData[i])

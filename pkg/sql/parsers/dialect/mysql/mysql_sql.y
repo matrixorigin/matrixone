@@ -415,7 +415,7 @@ import (
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
-%token <str> CLUSTER_CENTERS KMEANS
+%token <str> CLUSTER_CENTERS SPHERICAL_KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK BIT_CAST
@@ -684,7 +684,7 @@ import (
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt cycle_opt drop_table_opt
 %type <item> pwd_expire clear_pwd_opt
-%type <str> name_confict distinct_keyword separator_opt kmeans_opt
+%type <str> name_confict distinct_keyword separator_opt spherical_kmeans_opt
 %type <insert> insert_data
 %type <replace> replace_data
 %type <rowsExprs> values_list
@@ -8344,11 +8344,11 @@ separator_opt:
        $$ = $2
     }
 
-kmeans_opt:
+spherical_kmeans_opt:
     {
-        $$ = "1,L2,RANDOM"
+        $$ = "1,L2"
     }
-|   KMEANS STRING
+|   SPHERICAL_KMEANS STRING
     {
        $$ = $2
     }
@@ -8397,7 +8397,7 @@ function_call_aggregate:
             OrderBy:$5,
 	    }
     }
-|  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
+|  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt spherical_kmeans_opt ')' window_spec_opt
       {
   	     name := tree.SetUnresolvedName(strings.ToLower($1))
 		$$ = &tree.FuncExpr{
@@ -10673,7 +10673,7 @@ not_keyword:
 |   EXTRACT
 |   GROUP_CONCAT
 |   CLUSTER_CENTERS
-|   KMEANS
+|   SPHERICAL_KMEANS
 |   MAX
 |   MID
 |   MIN
