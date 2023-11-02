@@ -1741,9 +1741,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					// COSINE similarity value 0 <= x <= 1
-					// TODO: Is float32 ok?
-					return types.T_float32.ToType()
+					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CosineSimilarityArray[float32]
@@ -1753,7 +1751,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_array_float64, types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float32.ToType()
+					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CosineSimilarityArray[float64]
