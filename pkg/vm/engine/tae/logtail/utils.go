@@ -1896,6 +1896,7 @@ func (data *CheckpointData) PrefetchFrom(
 	dataType := vector.MustFixedCol[uint16](data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
 	var pref blockio.PrefetchParams
 	locations := make(map[string][]blockIdx)
+	checkpointSize := uint64(0)
 	for i := 0; i < len(blocks); i++ {
 		location := objectio.Location(blocks[i])
 		if location.IsEmpty() {
@@ -1912,6 +1913,11 @@ func (data *CheckpointData) PrefetchFrom(
 		if err != nil {
 			return
 		}
+		checkpointSize += uint64(blockIdxes[0].location.Extent().End())
+		logutil.Info("prefetch-read-checkpoint", common.OperationField("prefetch read"),
+			common.OperandField("checkpoint"),
+			common.AnyField("location", blockIdxes[0].location.String()),
+			common.AnyField("size", checkpointSize))
 		for _, idx := range blockIdxes {
 			schema := checkpointDataReferVersions[version][idx.dataType]
 			idxes := make([]uint16, len(schema.attrs))
@@ -1925,6 +1931,10 @@ func (data *CheckpointData) PrefetchFrom(
 			logutil.Warnf("PrefetchFrom PrefetchWithMerged error %v", err)
 		}
 	}
+	logutil.Info("open-tae", common.OperationField("prefetch read"),
+		common.OperandField("checkpoint"),
+		common.AnyField("size", checkpointSize),
+		common.AnyField("count", len(locations)))
 	return
 }
 
