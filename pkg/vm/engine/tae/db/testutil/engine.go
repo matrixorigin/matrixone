@@ -607,7 +607,7 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	ins2 := bats[logtail.BLKMetaInsertIDX]
 	del2 := bats[logtail.BLKMetaDeleteIDX]
 	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
-	segDel2 := bats[logtail.SEGDeleteIDX]
+	segDel2 := bats[logtail.ObjectInfoIDX]
 
 	isProtoTNBatchEqual(ctx, t, ins, ins2)
 	isProtoTNBatchEqual(ctx, t, del, del2)

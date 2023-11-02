@@ -68,11 +68,11 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			segCnt := rand.Intn(5) + 1
 			for i := 0; i < segCnt; i++ {
-				seg, err := rel.CreateSegment(false)
+				seg, err := rel.CreateNonAppendableSegment(false)
 				assert.Nil(t, err)
 				blkCnt := rand.Intn(5) + 1
 				for j := 0; j < blkCnt; j++ {
-					_, err = seg.CreateBlock(false)
+					_, err = seg.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(j)))
 					assert.Nil(t, err)
 				}
 			}

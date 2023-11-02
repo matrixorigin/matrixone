@@ -358,6 +358,10 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	seg handle.Segment,
 	preparer *model.PreparedCompactedBlockData,
 ) (newBlk handle.Block, err error) {
+	seg, err = seg.GetRelation().CreateNonAppendableSegment(false)
+	if err != nil {
+		return
+	}
 	newBlk, err = seg.CreateNonAppendableBlock(nil)
 	if err != nil {
 		return
