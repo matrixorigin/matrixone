@@ -17,14 +17,23 @@ package frontend
 import (
 	"context"
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"math"
+	"os"
+	"path"
 	"testing"
 )
 
@@ -107,11 +116,6 @@ func newTableStatsResult(mp *mpool.MPool) (*batch.Batch, error) {
 	if err != nil {
 		return nil, err
 	}
-	ret.Vecs[idxOfRowCount] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	err = vector.AppendAny(ret.Vecs[idxOfRowCount], int64(0), false, mp)
-	if err != nil {
-		return nil, err
-	}
 	ret.Vecs[idxOfSize] = vector.NewVec(types.New(types.T_decimal128, 29, 3))
 	err = vector.AppendAny(ret.Vecs[idxOfSize], types.Decimal128{}, false, mp)
 	if err != nil {
@@ -134,4 +138,86 @@ func Test_mergeResult(t *testing.T) {
 
 	err = mergeOutputResult(ses, outputBatch, accountInfo, []*batch.Batch{tableStatsResult})
 	assert.Nil(t, err)
+}
+
+func Test_embeddingSizeToBatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bat := &batch.Batch{}
+	for i := 0; i <= finalColumnCount; i++ {
+		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_float64.ToType()))
+		vector.AppendFixed(bat.Vecs[i], float64(99), false, ses.mp)
+	}
+
+	size := uint64(1024 * 1024 * 11235)
+	embeddingSizeToBatch(bat, size, ses.mp)
+
+	require.Equal(t, math.Round(float64(size)/1048576.0*1e6)/1e6, vector.GetFixedAt[float64](bat.Vecs[idxOfSize], 0))
+}
+
+func mockCheckpointData(t *testing.T, accIds []uint64, sizes []uint64) *logtail.CheckpointData {
+	var err error
+	common.DefaultAllocator, err = mpool.NewMPool("tae_default", 0, mpool.NoFixed)
+	require.Nil(t, err)
+
+	ckpData := logtail.NewCheckpointData()
+	storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
+
+	accVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector()
+	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
+
+	for idx := range accIds {
+		vector.AppendFixed(accVec, accIds[idx], false, common.DefaultAllocator)
+		vector.AppendFixed(sizeVec, sizes[idx], false, common.DefaultAllocator)
+	}
+
+	return ckpData
+}
+
+func mockObjectFileService(ctx context.Context, dirName string) *objectio.ObjectFS {
+	fs := objectio.TmpNewFileservice(ctx, path.Join(dirName, "data"))
+	serviceDir := path.Join(dirName, "data")
+	return objectio.NewObjectFS(fs, serviceDir)
+}
+
+// test plan
+// 1. mock a checkpoint and write it down
+// 2. mock a storage usage response
+// 3. handle this response
+func Test_ShowAccounts(t *testing.T) {
+	ctx := context.Background()
+	accIds := []uint64{0, 1, 2, 3, 4}
+	sizes := []uint64{0, 1024, 2048, 4096, 8192}
+
+	ckpData := mockCheckpointData(t, accIds, sizes)
+	defer ckpData.Close()
+
+	dirName := "show_account_test"
+	objFs := mockObjectFileService(ctx, dirName)
+	cnLocation, _, err := ckpData.WriteTo(objFs.Service, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
+	require.Nil(t, err)
+
+	defer func() {
+		err = os.RemoveAll(dirName)
+		require.Nil(t, err)
+	}()
+
+	resp := &db.StorageUsageResp{}
+	resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
+		Location: cnLocation,
+		Version:  9,
+	})
+
+	usage, err := handleStorageUsageResponse(ctx, objFs.Service, resp)
+	require.Nil(t, err)
+
+	require.Equal(t, len(usage), len(accIds))
+
+	for idx := range accIds {
+		require.Equal(t, sizes[idx], usage[int32(accIds[idx])])
+	}
+
 }
