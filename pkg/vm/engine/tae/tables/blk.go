@@ -49,7 +49,6 @@ func newBlock(
 	node := NewNode(pnode)
 	node.Ref()
 	blk.node.Store(node)
-	blk.mvcc.UpgradeDeleteChainByTS(blk.meta.GetDeltaPersistedTS())
 	return blk
 }
 
