@@ -264,6 +264,8 @@ func (p *PartitionState) HandleLogtailEntry(
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
+		} else if IsSegTable(entry.TableName) {
+			// TODO p.HandleSegDelete(ctx, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
