@@ -44,6 +44,7 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnDequeuePreparedRow(),
 			c.initTxnDequeuePreparingRow(),
 			c.initTxnFastLoadObjectMetaRow(),
+			c.initTxnShowAccountsRow(),
 		)...)
 	if err != nil {
 		return err
@@ -257,8 +258,21 @@ func (c *DashboardCreator) initTxnFastLoadObjectMetaRow() dashboard.Option {
 		c.withGraph(
 			"Fast Load Object Meta",
 			12,
-			`sum(rate(`+c.getMetricWithFilter("tn_side_fast_load_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("tn_side_fast_load_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
+	)
+}
+
+func (c *DashboardCreator) initTxnShowAccountsRow() dashboard.Option {
+	return dashboard.Row(
+		"Show Accounts Duration",
+		c.getHistogram(
+			"Show Accounts Duration",
+			c.getMetricWithFilter(`mo_txn_show_accounts_duration_seconds_bucket`, ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 

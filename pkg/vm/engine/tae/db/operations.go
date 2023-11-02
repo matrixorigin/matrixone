@@ -302,3 +302,53 @@ func (t *TraceSpan) MarshalBinary() ([]byte, error) {
 func (t *TraceSpan) UnmarshalBinary(data []byte) error {
 	return t.Unmarshal(data)
 }
+
+type StorageUsage struct {
+}
+
+func (s *StorageUsage) MarshalBinary() ([]byte, error) {
+	return s.Marshal()
+}
+
+func (s *StorageUsage) UnmarshalBinary(data []byte) error {
+	return s.Unmarshal(data)
+}
+
+type BlockMetaInfo struct {
+	Info []uint64
+}
+
+func (b *BlockMetaInfo) MarshalBinary() ([]byte, error) {
+	return b.Marshal()
+}
+
+func (b *BlockMetaInfo) UnmarshalBinary(data []byte) error {
+	return b.Unmarshal(data)
+}
+
+type CkpMetaInfo struct {
+	Version  uint32
+	Location []byte
+}
+
+func (c *CkpMetaInfo) MarshalBinary() ([]byte, error) {
+	return c.Marshal()
+}
+
+func (c *CkpMetaInfo) UnmarshalBinary(data []byte) error {
+	return c.Unmarshal(data)
+}
+
+type StorageUsageResp struct {
+	Succeed      bool
+	CkpEntries   []*CkpMetaInfo
+	BlockEntries []*BlockMetaInfo
+}
+
+func (s *StorageUsageResp) MarshalBinary() ([]byte, error) {
+	return s.Marshal()
+}
+
+func (s *StorageUsageResp) UnmarshalBinary(data []byte) error {
+	return s.Unmarshal(data)
+}

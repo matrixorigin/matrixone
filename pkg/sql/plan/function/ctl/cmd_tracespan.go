@@ -203,7 +203,7 @@ func send2TNAndWaitResp(proc *process.Process,
 		return string(b[:]), nil
 	}
 
-	return getTNHandlerFunc(
+	return GetTNHandlerFunc(
 		pb.CmdMethod_TraceSpan, whichTN, payloadFn, repsonseUnmarshaler,
 	)(proc, service, parameter, sender)
 

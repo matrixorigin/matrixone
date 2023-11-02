@@ -373,7 +373,7 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		err = r.UpdateBlockInfos(ses.requestCtx)
+		err = r.UpdateObjectInfos(ses.requestCtx)
 		if err != nil {
 			return err
 		}
