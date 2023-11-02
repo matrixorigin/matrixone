@@ -57,6 +57,9 @@ enum CmdMethod {
     Backup          = 12;
     // Enable or disable specified span
     TraceSpan    = 13;
+    // for CN launches storage usage query to TN,
+    // not used in mo_ctl for now
+    CmdMethod_StorageUsage = 14;
 }
 
 // TNPingRequest ping request

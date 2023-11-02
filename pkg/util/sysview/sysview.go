@@ -163,7 +163,7 @@ var (
 			"REFERENCED_TABLE_NAME varchar(64)," +
 			"REFERENCED_COLUMN_NAME varchar(64)" +
 			");",
-		fmt.Sprintf("CREATE VIEW COLUMNS AS select "+
+		fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
 			"'def' as TABLE_CATALOG,"+
 			"att_database as TABLE_SCHEMA,"+
 			"att_relname AS TABLE_NAME,"+

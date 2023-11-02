@@ -314,7 +314,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			if binding != nil {
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
-				typ = binding.types[colPos]
+				typ = DeepCopyType(binding.types[colPos])
 				table = binding.table
 			} else {
 				return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -329,7 +329,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
 			if colPos != NotFound {
-				typ = binding.types[colPos]
+				typ = DeepCopyType(binding.types[colPos])
 				relPos = binding.tag
 			} else {
 				err = moerr.NewInvalidInput(localErrCtx, "column '%s' does not exist", name)
