@@ -87,7 +87,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
 		// append on duplicate key node
-		tableDef = DeepCopyTableDef(tableDef)
+		tableDef = DeepCopyTableDef(tableDef, true)
 		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 		}
@@ -176,7 +176,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		updateColPosMap := make(map[string]int)
 		var insertColPos []int
 		var projectProjection []*Expr
-		tableDef = DeepCopyTableDef(tableDef)
+		tableDef = DeepCopyTableDef(tableDef, true)
 		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
 		colLength := len(tableDef.Cols)
 		rowIdPos := colLength - 1
@@ -347,9 +347,35 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	if pkColLength == 1 {
-		var orExpr *Expr
-		for i := 0; i < rowsCount; i++ {
-			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+		if rowsCount < 5 {
+			var orExpr *Expr
+			for i := 0; i < rowsCount; i++ {
+				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkColIdx),
+							Name:   tableDef.Pkey.PkeyColName,
+						},
+					},
+				}, colExprs[0][i]})
+				if err != nil {
+					return nil
+				}
+
+				if i == 0 {
+					orExpr = expr
+				} else {
+					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
+					if err != nil {
+						return nil
+					}
+				}
+			}
+			return []*Expr{orExpr}
+		} else {
+			// args in list must be constant
+			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
 				Typ: colTyp,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
@@ -357,44 +383,25 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 						Name:   tableDef.Pkey.PkeyColName,
 					},
 				},
-			}, colExprs[0][i]})
+			}, {
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: colExprs[0],
+					},
+				},
+				Typ: &plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			}})
 			if err != nil {
 				return nil
 			}
-
-			if i == 0 {
-				orExpr = expr
-			} else {
-				orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
-				if err != nil {
-					return nil
-				}
+			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, true)
+			if err != nil {
+				return nil
 			}
+			return []*Expr{expr}
 		}
-		return []*Expr{orExpr}
-		// args in list must be constant
-		// expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
-		// 	Typ: colTyp,
-		// 	Expr: &plan.Expr_Col{
-		// 		Col: &ColRef{
-		// 			ColPos: 0,
-		// 			Name:   tableDef.Pkey.PkeyColName,
-		// 		},
-		// 	},
-		// }, {
-		// 	Expr: &plan.Expr_List{
-		// 		List: &plan.ExprList{
-		// 			List: colExprs[0],
-		// 		},
-		// 	},
-		// 	Typ: &plan.Type{
-		// 		Id: int32(types.T_tuple),
-		// 	},
-		// }})
-		// if err != nil {
-		// 	return nil
-		// }
-		// return []*Expr{expr}
 	} else {
 		// multi cols pk & one row for insert
 		if rowsCount == 1 {

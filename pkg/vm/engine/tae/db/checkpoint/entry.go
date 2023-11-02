@@ -57,6 +57,12 @@ func NewCheckpointEntry(start, end types.TS, typ EntryType) *CheckpointEntry {
 	}
 }
 
+func (e *CheckpointEntry) SetVersion(version uint32) {
+	e.Lock()
+	defer e.Unlock()
+	e.version = version
+}
+
 func (e *CheckpointEntry) IncrWaterLine() {
 	e.Lock()
 	defer e.Unlock()
