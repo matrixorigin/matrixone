@@ -33,17 +33,6 @@ func L2Distance(v1, v2 *mat.VecDense) float64 {
 // angular distance between the two points, scaled by pi.
 // Refs:
 // https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
-// PGVector implementation:
-// - vector_spherical_distance definition
-// https://github.com/pgvector/pgvector/blob/12aecfb4f593796d6038210d43ba483af7750a00/src/vector.c#L694
-// - vector_spherical_distance defined for vector_ip_ops and vector_cosine_ops
-// https://github.com/pgvector/pgvector/commit/6df7fa05b243860ed1a3553730246921dc5cb917#diff-89e3a35184b6d3fb74c532f4ac2d56148ea03b0258fd09150c069880244aa609R209
-// https://github.com/pgvector/pgvector/commit/6df7fa05b243860ed1a3553730246921dc5cb917#diff-89e3a35184b6d3fb74c532f4ac2d56148ea03b0258fd09150c069880244aa609R201
-// - distance_func index is 3 for each of vector_xx_ops
-// https://github.com/pgvector/pgvector/commit/6df7fa05b243860ed1a3553730246921dc5cb917#diff-eb91a572fe32e712db27991468bc8b40de22334c3efbd46b975f7dde4157d920R16
-// - distance_func resolved inside kmeans
-// https://github.com/pgvector/pgvector/commit/6df7fa05b243860ed1a3553730246921dc5cb917#diff-9e86fad100806332720f35abdf3a55232a2b851d3d745703137a899d28f4f9e5R195
-// https://github.com/pgvector/pgvector/commit/6df7fa05b243860ed1a3553730246921dc5cb917#diff-9e86fad100806332720f35abdf3a55232a2b851d3d745703137a899d28f4f9e5R259
 func SphericalDistance(v1, v2 *mat.VecDense) float64 {
 	// Compute the dot product of the two vectors.
 	// The dot product of two vectors is a measure of their similarity,
@@ -75,7 +64,6 @@ func SphericalDistance(v1, v2 *mat.VecDense) float64 {
 // We use
 // - L2Distance distance for L2Distance
 // - SphericalDistance for InnerProduct and CosineDistance
-// Ref: https://github.com/pgvector/pgvector/blob/c599f92b52d20d1555654803f8f9a4955a97bc11/src/ivfkmeans.c#L155
 func resolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, error) {
 	var distanceFunction kmeans.DistanceFunction
 	switch distType {

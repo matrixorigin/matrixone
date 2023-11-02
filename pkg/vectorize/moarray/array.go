@@ -25,7 +25,7 @@ import (
 // 1. Should we return []T or *[]T
 // 2. Should we accept v1 *[]T. v1 is a Slice, so I think, it should be pass by reference.
 // 3. Later on, use gonums to improve the performance.
-// 4. use float64 instead of float32 for all the operations. https://github.com/pgvector/pgvector/pull/180
+// 4. use float64 instead of float32 for all the operations.
 
 func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
