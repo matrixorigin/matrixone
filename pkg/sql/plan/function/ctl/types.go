@@ -55,7 +55,7 @@ var (
 	}
 )
 
-type requestSender = func(context.Context, []txn.CNOpRequest) ([]txn.CNOpResponse, error)
+type requestSender = func(context.Context, *process.Process, []txn.CNOpRequest) ([]txn.CNOpResponse, error)
 
 type handleFunc func(proc *process.Process,
 	service serviceType,

@@ -39,28 +39,16 @@ func init() {
 		switch plan.MetadataScanInfo_MetadataScanInfoType(i) {
 		case plan.MetadataScanInfo_COL_NAME:
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-		case plan.MetadataScanInfo_BLOCK_ID:
-			tp = types.New(types.T_Blockid, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_OBJECT_NAME:
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-		case plan.MetadataScanInfo_ENTRY_STATE:
-			tp = types.New(types.T_bool, 0, 0)
-		case plan.MetadataScanInfo_SORTED:
-			tp = types.New(types.T_bool, 0, 0)
 		case plan.MetadataScanInfo_IS_HIDDEN:
 			tp = types.New(types.T_bool, 0, 0)
-		case plan.MetadataScanInfo_META_LOC:
+		case plan.MetadataScanInfo_OBJ_LOC:
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-		case plan.MetadataScanInfo_DELTA_LOC:
-			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-		case plan.MetadataScanInfo_COMMIT_TS:
-			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_CREATE_TS:
 			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_DELETE_TS:
 			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
-		case plan.MetadataScanInfo_SEG_ID:
-			tp = types.New(types.T_uuid, types.MaxVarcharLen, 0)
 		case plan.MetadataScanInfo_ROWS_CNT:
 			tp = types.New(types.T_int64, 0, 0)
 			Metadata_Rows_Cnt_Pos = i
@@ -77,7 +65,7 @@ func init() {
 		case plan.MetadataScanInfo_SUM: // TODO: find a way to show this info
 			tp = types.New(types.T_varbinary, types.MaxVarcharLen, 0)
 		default:
-			panic("unknow types when gen metadata scan info")
+			panic("unknown types when gen metadata scan info")
 		}
 
 		colname := plan.MetadataScanInfo_MetadataScanInfoType_name[i]

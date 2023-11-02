@@ -29,7 +29,7 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 		var affectRows int64
 		delCtx := arg.DeleteCtx
 
-		err = delCtx.Source.UpdateBlockInfos(c.ctx)
+		err = delCtx.Source.UpdateObjectInfos(c.ctx)
 		if err != nil {
 			return 0, err
 		}
