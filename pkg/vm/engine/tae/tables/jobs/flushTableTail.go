@@ -416,9 +416,18 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 
 	if len(readedBats) == 0 {
 		//just  soft delete all ablks and return
+		segmentsToDelete := make(map[types.Objectid]handle.Segment)
 		for _, blk := range task.ablksHandles {
 			seg := blk.GetSegment()
 			if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
+				return err
+			}
+			segmentsToDelete[*seg.GetID()] = seg
+		}
+		// delete all segments
+		for _, seg := range segmentsToDelete {
+			tbl := seg.GetRelation()
+			if err = tbl.SoftDeleteSegment(seg.GetID()); err != nil {
 				return err
 			}
 		}
@@ -554,10 +563,19 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 		}
 	}
 
+	segmentsToDelete := make(map[types.Objectid]handle.Segment)
 	// soft delete all ablks
 	for _, blk := range task.ablksHandles {
 		seg := blk.GetSegment()
 		if err = seg.SoftDeleteBlock(blk.ID()); err != nil {
+			return err
+		}
+		segmentsToDelete[*seg.GetID()] = seg
+	}
+	// delete all segments
+	for _, seg := range segmentsToDelete {
+		tbl := seg.GetRelation()
+		if err = tbl.SoftDeleteSegment(seg.GetID()); err != nil {
 			return err
 		}
 	}

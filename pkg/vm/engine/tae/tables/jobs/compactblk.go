@@ -194,6 +194,10 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
+	err = seg.GetRelation().SoftDeleteSegment(seg.GetID())
+	if err != nil {
+		return
+	}
 	oldBlkData := oldBMeta.GetBlockData()
 	phaseNumber = 3
 
