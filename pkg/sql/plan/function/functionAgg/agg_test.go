@@ -619,7 +619,7 @@ func TestVarPop(t *testing.T) {
 			eval:   s.Eval,
 		}
 		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, func(result float64, isEmpty bool) bool {
-			return !isEmpty && f64equal(result, 6.666666666666667)
+			return !isEmpty && assertx.InEpsilonF64(result, 6.666666666666667)
 		})
 		require.NoError(t, err)
 
@@ -627,7 +627,7 @@ func TestVarPop(t *testing.T) {
 		nsp := nulls.NewWithSize(10)
 		nsp.Add(9)
 		err = tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 0}, nsp, func(result float64, isEmpty bool) bool {
-			return !isEmpty && f64equal(result, 6.666666666666667)
+			return !isEmpty && assertx.InEpsilonF64(result, 6.666666666666667)
 		})
 		require.NoError(t, err)
 	}
@@ -663,7 +663,7 @@ func TestStdDevPop(t *testing.T) {
 			eval:   s.EvalStdDevPop,
 		}
 		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, func(result float64, isEmpty bool) bool {
-			return !isEmpty && f64equal(result, math.Sqrt(6.666666666666667))
+			return !isEmpty && assertx.InEpsilonF64(result, math.Sqrt(6.666666666666667))
 		})
 		require.NoError(t, err)
 	}

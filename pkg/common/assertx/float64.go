@@ -14,13 +14,16 @@
 
 package assertx
 
-import "math"
+import (
+	"math"
+)
 
 // Float64 values have minor numerical differences between Apple M2 and Linux EC2,
 // so we use an epsilon value to compare them in UT. We could not use reflect.DeepEqual because
 // of these minor differences. We cannot use assert.InEpsilon because it requires the first
-// argument to be non-zero.
-const defaultEpsilon = 1e-5
+// argument to be non-zero. 1e-6 epsilon is based on the `strconv.FormatFloat(float64(value), 'f', -1, 32)`
+// we use for outputting float values.
+const defaultEpsilon = 1e-6
 
 // InEpsilonF64Slices returns true if all the elements in v1 and v2 are within epsilon of each other.
 func InEpsilonF64Slices(want, got [][]float64) bool {
@@ -54,5 +57,5 @@ func InEpsilonF64Slice(want, got []float64) bool {
 // InEpsilonF64 returns true if v1 and v2 are within epsilon of each other.
 // assert.InEpsilon requires v1 to be non-zero.
 func InEpsilonF64(want, got float64) bool {
-	return math.Abs(want-got) <= defaultEpsilon
+	return want == got || math.Abs(want-got) < defaultEpsilon || (math.IsNaN(want) && math.IsNaN(got))
 }
