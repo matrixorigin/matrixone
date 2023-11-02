@@ -22,7 +22,7 @@ import (
 )
 
 var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_(meta|seg)`)
-var segTableMatchRegexp = regexp.MustCompile(`\_\d+\_seg`)
+var segTableMatchRegexp = regexp.MustCompile(`\_\d+\_obj`)
 var blkTableMatchRegexp = regexp.MustCompile(`\_\d+\_meta`)
 
 func IsMetaTable(name string) bool {

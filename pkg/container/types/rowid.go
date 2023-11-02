@@ -211,14 +211,14 @@ func (o *Objectid) Eq(other Objectid) bool {
 }
 
 func (o *Objectid) Le(other Objectid) bool {
-	return bytes.Compare(o[:], other[:])<=0
+	return bytes.Compare(o[:], other[:]) <= 0
 }
 func (o *Objectid) Ge(other Objectid) bool {
-	return bytes.Compare(o[:], other[:])>=0
+	return bytes.Compare(o[:], other[:]) >= 0
 }
 func (o *Objectid) Lt(other Objectid) bool {
-	return bytes.Compare(o[:], other[:])<0
+	return bytes.Compare(o[:], other[:]) < 0
 }
 func (o *Objectid) Gt(other Objectid) bool {
-	return bytes.Compare(o[:], other[:])>0
+	return bytes.Compare(o[:], other[:]) > 0
 }
