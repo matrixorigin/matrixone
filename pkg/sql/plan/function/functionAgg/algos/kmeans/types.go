@@ -28,7 +28,7 @@ type Clusterer interface {
 type DistanceType uint16
 
 const (
-	L2 DistanceType = iota
+	L2Distance DistanceType = iota
 	InnerProduct
 	CosineDistance
 )

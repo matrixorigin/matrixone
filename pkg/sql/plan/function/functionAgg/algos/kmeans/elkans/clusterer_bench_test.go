@@ -47,7 +47,7 @@ func Benchmark_kmeans(b *testing.B) {
 		b.ResetTimer()
 		clusterRand, _ := NewKMeans(data, k,
 			500, 0.01,
-			kmeans.L2, kmeans.Random)
+			kmeans.L2Distance, kmeans.Random)
 		_, err := clusterRand.Cluster()
 		if err != nil {
 			panic(err)

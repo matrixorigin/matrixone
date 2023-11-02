@@ -19202,7 +19202,7 @@ yydefault:
 		yyDollar = yyS[yypt-0 : yypt+1]
 //line mysql_sql.y:8347
 		{
-			yyVAL.str = "1,L2"
+			yyVAL.str = "1,cosine_distance"
 		}
 	case 1376:
 		yyDollar = yyS[yypt-2 : yypt+1]

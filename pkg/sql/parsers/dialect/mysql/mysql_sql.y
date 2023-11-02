@@ -8346,7 +8346,7 @@ separator_opt:
 
 spherical_kmeans_opt:
     {
-        $$ = "1,L2"
+        $$ = "1,cosine_distance"
     }
 |   SPHERICAL_KMEANS STRING
     {

@@ -21,16 +21,16 @@ a    b    normalize_l2(b)
 6    [100, 44, 50]    [0.83229357, 0.36620918, 0.41614679]
 7    [120, 50, 70]    [0.8127426, 0.33864275, 0.47409984]
 8    [130, 40, 90]    [0.7970812, 0.24525574, 0.5518254]
-select cluster_centers(b spherical_kmeans '2,L2') from t1;
-cluster_centers(b, 2,L2)
+select cluster_centers(b spherical_kmeans '2,l2_distance') from t1;
+cluster_centers(b, 2,l2_distance)
 [ [0.8140391, 0.31670254, 0.4806907],[0.19485846, 0.45293573, 0.8673351] ]
-select cluster_centers(b spherical_kmeans '2,IP') from t1;
-cluster_centers(b, 2,IP)
+select cluster_centers(b spherical_kmeans '2,inner_product') from t1;
+cluster_centers(b, 2,inner_product)
 [ [0.8140391, 0.31670254, 0.4806907],[0.19485846, 0.45293573, 0.8673351] ]
-select cluster_centers(b spherical_kmeans '2,COSINE') from t1;
-cluster_centers(b, 2,COSINE)
+select cluster_centers(b spherical_kmeans '2,cosine_distance') from t1;
+cluster_centers(b, 2,cosine_distance)
 [ [0.8140391, 0.31670254, 0.4806907],[0.19485846, 0.45293573, 0.8673351] ]
-SELECT value FROM  (SELECT cluster_centers(b spherical_kmeans '2,L2') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+SELECT value FROM  (SELECT cluster_centers(b spherical_kmeans '2,cosine_distance') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 value
 [0.8140391, 0.31670254, 0.4806907]
 [0.19485846, 0.45293573, 0.8673351]
@@ -43,17 +43,17 @@ a    c    normalize_l2(c)
 6    [100, 44, 50, 60, 70]    [0.6602997913373754, 0.29053190818844515, 0.3301498956686877, 0.3961798748024252, 0.46220985393616276]
 7    [120, 50, 70, 80, 90]    [0.6298366572977736, 0.262431940540739, 0.3674047167570346, 0.4198911048651824, 0.4723774929733302]
 8    [130, 40, 90, 100, 110]    [0.5890862307582768, 0.18125730177177748, 0.40782892898649936, 0.45314325442944375, 0.4984575798723881]
-select cluster_centers(c spherical_kmeans '2,L2') from t1;
-cluster_centers(c, 2,L2)
+select cluster_centers(c spherical_kmeans '2,l2_distance') from t1;
+cluster_centers(c, 2,l2_distance)
 [ [0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627],[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785] ]
-select cluster_centers(c spherical_kmeans '2,IP') from t1;
-cluster_centers(c, 2,IP)
+select cluster_centers(c spherical_kmeans '2,inner_product') from t1;
+cluster_centers(c, 2,inner_product)
 [ [0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627],[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785] ]
-select cluster_centers(c spherical_kmeans '2,COSINE') from t1;
-cluster_centers(c, 2,COSINE)
+select cluster_centers(c spherical_kmeans '2,cosine_distance') from t1;
+cluster_centers(c, 2,cosine_distance)
 [ [0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627],[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785] ]
-SELECT value FROM  (SELECT cluster_centers(c spherical_kmeans '2,L2') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
+SELECT value FROM  (SELECT cluster_centers(c spherical_kmeans '2,cosine_distance') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 value
-[0.6264075597978086, 0.24474038350032057, 0.36846118047074056, 0.42307141136568377, 0.47768164226062704]
-[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015786]
+[0.6264075597978086, 0.24474038350032057, 0.3684611804707405, 0.42307141136568377, 0.477681642260627]
+[0.1214052990003157, 0.28401106835909223, 0.5439677041899293, 0.4856211960012628, 0.6070264950015785]
 drop database vecdb;

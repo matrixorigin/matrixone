@@ -32,7 +32,7 @@ import (
 const (
 	defaultKmeansMaxIteration   = 500
 	defaultKmeansDeltaThreshold = 0.01
-	defaultKmeansDistanceType   = kmeans.L2
+	defaultKmeansDistanceType   = kmeans.CosineDistance
 	defaultInitType             = kmeans.Random
 	defaultKmeansClusterCnt     = 1
 
@@ -46,9 +46,9 @@ var (
 
 func init() {
 	distTypeStrToEnum = map[string]kmeans.DistanceType{
-		"L2":     kmeans.L2,
-		"IP":     kmeans.InnerProduct,
-		"COSINE": kmeans.CosineDistance,
+		"l2_distance":     kmeans.L2Distance,
+		"inner_product":   kmeans.InnerProduct,
+		"cosine_distance": kmeans.CosineDistance,
 	}
 }
 
@@ -343,6 +343,7 @@ func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, err error
 		}
 
 		parseDistType := func(v string) (kmeans.DistanceType, error) {
+			v = strings.ToLower(v)
 			if res, ok := distTypeStrToEnum[v]; !ok {
 				return 0, moerr.NewInternalErrorNoCtx("unsupported distance_type '%s' for cluster_centers", v)
 			} else {

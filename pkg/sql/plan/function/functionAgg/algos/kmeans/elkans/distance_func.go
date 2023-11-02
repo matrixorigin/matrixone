@@ -21,7 +21,7 @@ import (
 	"math"
 )
 
-// L2Distance is used for L2 distance in Euclidean Kmeans.
+// L2Distance is used for L2Distance distance in Euclidean Kmeans.
 func L2Distance(v1, v2 *mat.VecDense) float64 {
 	diff := mat.NewVecDense(v1.Len(), nil)
 	diff.SubVec(v1, v2)
@@ -63,13 +63,13 @@ func AngularDistance(v1, v2 *mat.VecDense) float64 {
 // resolveDistanceFn returns the distance function corresponding to the distance type
 // Distance function should satisfy triangle inequality.
 // We use
-// - L2Distance distance for L2
+// - L2Distance distance for L2Distance
 // - AngularDistance for InnerProduct and CosineDistance
 // Ref: https://github.com/pgvector/pgvector/blob/c599f92b52d20d1555654803f8f9a4955a97bc11/src/ivfkmeans.c#L155
 func resolveDistanceFn(distType kmeans.DistanceType) (kmeans.DistanceFunction, error) {
 	var distanceFunction kmeans.DistanceFunction
 	switch distType {
-	case kmeans.L2:
+	case kmeans.L2Distance:
 		distanceFunction = L2Distance
 	case kmeans.InnerProduct, kmeans.CosineDistance:
 		distanceFunction = AngularDistance

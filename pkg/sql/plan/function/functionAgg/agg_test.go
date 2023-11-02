@@ -725,7 +725,7 @@ func TestClusterCenters(t *testing.T) {
 
 	s1 := &sAggClusterCenters{
 		clusterCnt: 2,
-		distType:   kmeans.L2,
+		distType:   kmeans.CosineDistance,
 		arrType:    types.T_array_float64.ToType(),
 	}
 	// input vectors/arrays of 7 rows with 6th row as null
