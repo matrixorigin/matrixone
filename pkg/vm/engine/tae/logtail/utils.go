@@ -2050,6 +2050,8 @@ func (data *CheckpointData) readAll(
 			return
 		}
 		var bats []*containers.Batch
+		now := time.Now()
+		logutil.Infof("Read checkpoint: %v", val.String())
 		for idx := range checkpointDataReferVersions[version] {
 			if uint16(idx) == MetaIDX || uint16(idx) == TNMetaIDX {
 				continue
@@ -2160,6 +2162,10 @@ func (data *CheckpointData) readAll(
 				data.bats[idx].Append(bats[i])
 			}
 		}
+		logutil.Info("open-tae", common.OperationField("read"),
+			common.OperandField("checkpoint"),
+			common.AnyField("location", val.String()),
+			common.AnyField("read cost", time.Since(now)))
 	}
 	return
 }
