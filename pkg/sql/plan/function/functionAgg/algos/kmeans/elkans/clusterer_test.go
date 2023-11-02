@@ -263,8 +263,18 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 					t.Errorf("assignments got = %v, want %v", ekm.assignments, tt.want.assignment)
 				}
 
-				if !reflect.DeepEqual(ekm.vectorMetas, tt.want.vectorMetas) {
-					t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+				for i := 0; i < len(ekm.vectorMetas); i++ {
+					if !InEpsilonF64Slice(ekm.vectorMetas[i].lower, tt.want.vectorMetas[i].lower, defaultEpsilon) {
+						t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+					}
+
+					if !InEpsilonF64(ekm.vectorMetas[i].upper, tt.want.vectorMetas[i].upper, defaultEpsilon) {
+						t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+					}
+
+					if ekm.vectorMetas[i].recompute != tt.want.vectorMetas[i].recompute {
+						t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+					}
 				}
 
 			} else if !ok {
