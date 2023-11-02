@@ -585,7 +585,7 @@ func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *
 	assert.Nil(t, segDel)
 }
 
-func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
+func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, seg *api.Batch, start, end types.TS, c *catalog.Catalog) {
 	collector := logtail.NewIncrementalCollector(start, end)
 	p := &catalog.LoopProcessor{}
 	p.BlockFn = func(be *catalog.BlockEntry) error {
@@ -607,12 +607,16 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	ins2 := bats[logtail.BLKMetaInsertIDX]
 	del2 := bats[logtail.BLKMetaDeleteIDX]
 	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
-	segDel2 := bats[logtail.ObjectInfoIDX]
+	seg2 := bats[logtail.ObjectInfoIDX]
 
 	isProtoTNBatchEqual(ctx, t, ins, ins2)
 	isProtoTNBatchEqual(ctx, t, del, del2)
 	isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
-	isProtoTNBatchEqual(ctx, t, segDel, segDel2)
+
+	// seg batch doesn't exist before ckp V9
+	if seg != nil {
+		isProtoTNBatchEqual(ctx, t, seg, seg2)
+	}
 }
 
 func CheckCheckpointReadWrite(
