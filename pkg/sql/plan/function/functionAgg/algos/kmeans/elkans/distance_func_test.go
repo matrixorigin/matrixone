@@ -14,7 +14,10 @@
 
 package elkans
 
-import "testing"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"testing"
+)
 
 func Test_L2Distance(t *testing.T) {
 	type args struct {
@@ -158,7 +161,7 @@ func Test_AngularDistance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			if got := AngularDistance(ToGonumsVector(tt.args.v1), ToGonumsVector(tt.args.v2)); !InEpsilonF64(got, tt.want) {
+			if got := AngularDistance(ToGonumsVector(tt.args.v1), ToGonumsVector(tt.args.v2)); !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("AngularDistance() = %v, want %v", got, tt.want)
 			}
 		})

@@ -15,6 +15,7 @@
 package elkans
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"testing"
 )
 
@@ -65,7 +66,7 @@ func TestNormalizeMoArray(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := NormalizeMoArray(tt.args.vector); !InEpsilonF64Slice(tt.want, got) {
+			if got := NormalizeMoArray(tt.args.vector); !assertx.InEpsilonF64Slice(tt.want, got) {
 				t.Errorf("NormalizeMoArray() = %v, want %v", got, tt.want)
 			}
 		})

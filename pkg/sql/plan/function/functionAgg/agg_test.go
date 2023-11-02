@@ -17,10 +17,10 @@ package functionAgg
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math"
-	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -744,16 +744,20 @@ func TestClusterCenters(t *testing.T) {
 	}
 	nsp := nulls.NewWithSize(7)
 	nsp.Add(5)
+	wantVecf64Output := [][]float64{
+		{0.15915269938161652, 0.31830539876323305, 0.5757527355814477, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666},
+		{0.8077006350571528, 0.2663717322796547, 0.3230802540228611, 0.4038503175285764},   // approx {10, 3.333333333333333, 4, 5}
+	}
 
 	{
 		// Test arraysToString
 		actual := s1.arraysToString(vecf64Input)
-		expected := "[1, 2, 3, 4]|[1, 2, 4, 5]|[1, 2, 4, 5]|[10, 2, 4, 5]|[10, 3, 4, 5]|[0, 0, 0, 0]|[10, 5, 4, 5]|"
+		expected := "[1, 2, 3, 4]|[1, 2, 4, 5]|[1, 2, 4, 5]|[10, 2, 4, 5]|[10, 3, 4, 5]|[0, 0, 0, 0]|[10, 5, 4, 5]"
 		require.Equal(t, expected, actual)
 	}
 	{
 		// Test stringToArrays
-		actual, _ := s1.stringToArrays("[1, 2, 3, 4]|[1, 2, 4, 5]|[1, 2, 4, 5]|[10, 2, 4, 5]|[10, 3, 4, 5]|[0, 0, 0, 0]|[10, 5, 4, 5]|")
+		actual, _ := s1.stringToArrays("[1, 2, 3, 4]|[1, 2, 4, 5]|[1, 2, 4, 5]|[10, 2, 4, 5]|[10, 3, 4, 5]|[0, 0, 0, 0]|[10, 5, 4, 5]")
 		expected := vecf64Input
 		require.Equal(t, expected, actual)
 	}
@@ -772,17 +776,10 @@ func TestClusterCenters(t *testing.T) {
 			var vecf64Output [][]float64
 			err := json.Unmarshal(result, &vecf64Output)
 			//t.Log(vecf64Output)
-			return err == nil &&
-				!isEmpty &&
-				reflect.DeepEqual(vecf64Output,
-					[][]float64{
-						{0.15915269938161652, 0.31830539876323305, 0.5757527355814477, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666},
-						{0.8077006350571528, 0.2663717322796547, 0.3230802540228611, 0.4038503175285764},   // approx {10, 3.333333333333333, 4, 5}
-					})
+			return err == nil && !isEmpty && assertx.InEpsilonF64Slices(wantVecf64Output, vecf64Output)
 		})
 
 		require.NoError(t, err)
-
 	}
 
 	{

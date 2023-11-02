@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package elkans
+package assertx
 
 import "math"
 
+// Float64 values have minor numerical differences between Apple M2 and Linux EC2,
+// so we use an epsilon value to compare them in UT. We could not use reflect.DeepEqual because
+// of these minor differences. We cannot use assert.InEpsilon because it requires the first
+// argument to be non-zero.
 const defaultEpsilon = 1e-5
 
 // InEpsilonF64Slices returns true if all the elements in v1 and v2 are within epsilon of each other.

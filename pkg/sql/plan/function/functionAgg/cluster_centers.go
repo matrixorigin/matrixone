@@ -285,14 +285,17 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 func (s *sAggClusterCenters) arraysToString(arrays [][]byte) string {
 	var res string
 	var commaSeperatedArrString string
-	for _, arr := range arrays {
+	for i, arr := range arrays {
+		if i > 0 {
+			res += arrayGroupSeparator
+		}
 		switch s.arrType.Oid {
 		case types.T_array_float32:
 			commaSeperatedArrString = types.BytesToArrayToString[float32](arr)
 		case types.T_array_float64:
 			commaSeperatedArrString = types.BytesToArrayToString[float64](arr)
 		}
-		res += commaSeperatedArrString + arrayGroupSeparator
+		res += commaSeperatedArrString
 	}
 	return res
 
