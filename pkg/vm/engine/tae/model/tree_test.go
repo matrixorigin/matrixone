@@ -43,7 +43,7 @@ func TestTree(t *testing.T) {
 	assert.NoError(t, err)
 
 	tree2 := NewTree()
-	_, err = tree2.ReadFrom(&w)
+	_, err = tree2.ReadFromWithVersion(&w, MemoTreeVersion2)
 	assert.NoError(t, err)
 	t.Log(tree2.String())
 	assert.True(t, tree.Equal(tree2))

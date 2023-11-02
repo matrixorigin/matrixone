@@ -57,6 +57,13 @@ func NewObjectid() *ObjectId {
 	return &oid
 }
 
+func NewObjectidWithSegmentIDAndNum(sid *Segmentid, num uint16) *ObjectId {
+	var oid ObjectId
+	copy(oid[:types.UuidSize], sid[:])
+	copy(oid[types.UuidSize:], types.EncodeUint16(&num))
+	return &oid
+}
+
 func NewBlockidWithObjectID(segid *ObjectId, blknum uint16) *Blockid {
 	var bid Blockid
 	size := types.ObjectidSize

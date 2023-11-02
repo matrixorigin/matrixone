@@ -50,3 +50,4 @@
 
 ### Log Entry
 | 3015 | 1       | IOET_WALTxnCommand_Object |
+| 3000 | 2       | TxnEntry              |

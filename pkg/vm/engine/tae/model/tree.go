@@ -26,6 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
+const (
+	MemoTreeVersion1 uint16 = iota
+	MemoTreeVersion2
+)
+
 type keyT struct {
 	Num, Seq uint16
 }
@@ -37,14 +42,14 @@ func encodeKey(k *keyT) []byte {
 type TreeVisitor interface {
 	VisitTable(dbID, id uint64) error
 	VisitSegment(uint64, uint64, *objectio.ObjectId) error
-	VisitBlock(uint64, uint64, *objectio.ObjectId, uint16, uint16) error
+	VisitBlock(uint64, uint64, *objectio.ObjectId, uint16) error
 	String() string
 }
 
 type BaseTreeVisitor struct {
 	TableFn   func(uint64, uint64) error
 	SegmentFn func(uint64, uint64, *objectio.ObjectId) error
-	BlockFn   func(uint64, uint64, *objectio.ObjectId, uint16, uint16) error
+	BlockFn   func(uint64, uint64, *objectio.ObjectId, uint16) error
 }
 
 func (visitor *BaseTreeVisitor) String() string { return "" }
@@ -64,9 +69,9 @@ func (visitor *BaseTreeVisitor) VisitSegment(dbID, tableID uint64, segmentID *ob
 }
 
 func (visitor *BaseTreeVisitor) VisitBlock(
-	dbID, tableID uint64, segmentID *objectio.ObjectId, Num, Seq uint16) (err error) {
+	dbID, tableID uint64, segmentID *objectio.ObjectId, Seq uint16) (err error) {
 	if visitor.BlockFn != nil {
-		return visitor.BlockFn(dbID, tableID, segmentID, Num, Seq)
+		return visitor.BlockFn(dbID, tableID, segmentID, Seq)
 	}
 	return
 }
@@ -88,8 +93,8 @@ func (visitor *stringVisitor) VisitSegment(dbID, tableID uint64, id *objectio.Ob
 	return
 }
 
-func (visitor *stringVisitor) VisitBlock(dbID, tableID uint64, segmentID *objectio.ObjectId, Num, Seq uint16) (err error) {
-	_, _ = visitor.buf.WriteString(fmt.Sprintf(" BLK[%d-%d]", Num, Seq))
+func (visitor *stringVisitor) VisitBlock(dbID, tableID uint64, segmentID *objectio.ObjectId, Seq uint16) (err error) {
+	_, _ = visitor.buf.WriteString(fmt.Sprintf(" BLK[%d]", Seq))
 	return
 }
 
@@ -112,7 +117,7 @@ type TableTree struct {
 
 type SegmentTree struct {
 	ID   *objectio.ObjectId
-	Blks map[keyT]struct{}
+	Blks map[uint16]struct{}
 }
 
 func NewTree() *Tree {
@@ -132,7 +137,7 @@ func NewTableTree(dbID, id uint64) *TableTree {
 func NewSegmentTree(id *objectio.ObjectId) *SegmentTree {
 	return &SegmentTree{
 		ID:   id,
-		Blks: make(map[keyT]struct{}),
+		Blks: make(map[uint16]struct{}),
 	}
 }
 
@@ -148,7 +153,7 @@ func (tree *Tree) String() string {
 
 func (tree *Tree) visitSegment(visitor TreeVisitor, table *TableTree, segment *SegmentTree) (err error) {
 	for id := range segment.Blks {
-		if err = visitor.VisitBlock(table.DbID, table.ID, segment.ID, id.Num, id.Seq); err != nil {
+		if err = visitor.VisitBlock(table.DbID, table.ID, segment.ID, id); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
 				continue
@@ -299,7 +304,7 @@ func (tree *Tree) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (tree *Tree) ReadFrom(r io.Reader) (n int64, err error) {
+func (tree *Tree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	var cnt uint32
 	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
 		return
@@ -311,7 +316,7 @@ func (tree *Tree) ReadFrom(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	for i := 0; i < int(cnt); i++ {
 		table := NewTableTree(0, 0)
-		if tmpn, err = table.ReadFrom(r); err != nil {
+		if tmpn, err = table.ReadFromWithVersion(r, ver); err != nil {
 			return
 		}
 		tree.Tables[table.ID] = table
@@ -333,7 +338,8 @@ func (ttree *TableTree) AddSegment(sid *objectio.ObjectId) {
 func (ttree *TableTree) AddBlock(id *objectio.Blockid) {
 	sid := id.Object()
 	ttree.AddSegment(sid)
-	ttree.Segs[*sid].AddBlock(id.Offsets())
+	_, seq := id.Offsets()
+	ttree.Segs[*sid].AddBlock(seq)
 }
 
 func (ttree *TableTree) ShortBlocksString() string {
@@ -342,7 +348,7 @@ func (ttree *TableTree) ShortBlocksString() string {
 		var shortuuid [8]byte
 		hex.Encode(shortuuid[:], seg.ID[:4])
 		for id := range seg.Blks {
-			buf.WriteString(fmt.Sprintf(" %s-%d-%d", string(shortuuid[:]), id.Num, id.Seq))
+			buf.WriteString(fmt.Sprintf(" %s-%d-%d", string(shortuuid[:]), id))
 		}
 	}
 	return buf.String()
@@ -407,7 +413,7 @@ func (ttree *TableTree) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (ttree *TableTree) ReadFrom(r io.Reader) (n int64, err error) {
+func (ttree *TableTree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
 	if _, err = r.Read(types.EncodeUint64(&ttree.DbID)); err != nil {
 		return
 	}
@@ -425,12 +431,24 @@ func (ttree *TableTree) ReadFrom(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	for i := 0; i < int(cnt); i++ {
 		id := objectio.NewObjectid()
-		seg := NewSegmentTree(id)
-		if tmpn, err = seg.ReadFrom(r); err != nil {
-			return
+		if ver < MemoTreeVersion2 {
+			segs, tmpn, err := ReadSegmentTreesV1(r)
+			if err != nil {
+				return n, err
+			}
+			for _, seg := range segs {
+				ttree.Segs[*seg.ID] = seg
+			}
+			n += tmpn
+
+		} else {
+			seg := NewSegmentTree(id)
+			if tmpn, err = seg.ReadFromV2(r); err != nil {
+				return
+			}
+			ttree.Segs[*seg.ID] = seg
+			n += tmpn
 		}
-		ttree.Segs[*seg.ID] = seg
-		n += tmpn
 	}
 	return
 }
@@ -459,10 +477,9 @@ func (ttree *TableTree) Equal(o *TableTree) bool {
 	return true
 }
 
-func (stree *SegmentTree) AddBlock(Num, Seq uint16) {
-	k := keyT{Num, Seq}
-	if _, exist := stree.Blks[k]; !exist {
-		stree.Blks[k] = struct{}{}
+func (stree *SegmentTree) AddBlock(Seq uint16) {
+	if _, exist := stree.Blks[Seq]; !exist {
+		stree.Blks[Seq] = struct{}{}
 	}
 }
 
@@ -474,7 +491,7 @@ func (stree *SegmentTree) Merge(ot *SegmentTree) {
 		panic(fmt.Sprintf("Cannot merge 2 different seg tree: %d, %d", stree.ID, ot.ID))
 	}
 	for id := range ot.Blks {
-		stree.AddBlock(id.Num, id.Seq)
+		stree.AddBlock(id)
 	}
 }
 
@@ -512,7 +529,7 @@ func (stree *SegmentTree) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	for id := range stree.Blks {
-		if _, err = w.Write(encodeKey(&id)); err != nil {
+		if _, err = w.Write(types.EncodeUint16(&id)); err != nil {
 			return
 		}
 		n += 4
@@ -521,9 +538,8 @@ func (stree *SegmentTree) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (stree *SegmentTree) Shrink(id *objectio.Blockid) (empty bool) {
-	var k keyT
-	k.Num, k.Seq = id.Offsets()
-	delete(stree.Blks, k)
+	_, seq := id.Offsets()
+	delete(stree.Blks, seq)
 	empty = len(stree.Blks) == 0
 	return
 }
@@ -532,7 +548,48 @@ func (stree *SegmentTree) IsEmpty() bool {
 	return len(stree.Blks) == 0
 }
 
-func (stree *SegmentTree) ReadFrom(r io.Reader) (n int64, err error) {
+func ReadSegmentTreesV1(r io.Reader) (strees []*SegmentTree, n int64, err error) {
+	segmentID := new(types.Segmentid)
+	if _, err = r.Read(segmentID[:]); err != nil {
+		return
+	}
+	n += int64(types.UuidSize)
+	var cnt uint32
+	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
+		return
+	}
+	n += 4
+	if cnt == 0 {
+		return
+	}
+	numSeqMap := make(map[uint16][]uint16)
+	var id keyT
+	for i := 0; i < int(cnt); i++ {
+		if _, err = r.Read(encodeKey(&id)); err != nil {
+			return
+		}
+		seqs, ok := numSeqMap[id.Num]
+		if !ok {
+			seqs = make([]uint16, 0)
+		}
+		seqs = append(seqs, id.Seq)
+		numSeqMap[id.Num] = seqs
+	}
+	n += 4 * int64(cnt)
+
+	strees = make([]*SegmentTree, 0)
+	for num, seqs := range numSeqMap {
+		objID := objectio.NewObjectidWithSegmentIDAndNum(segmentID, num)
+		stree := NewSegmentTree(objID)
+		for _, seq := range seqs {
+			stree.Blks[seq] = struct{}{}
+		}
+		strees = append(strees, stree)
+	}
+	return
+}
+
+func (stree *SegmentTree) ReadFromV2(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(stree.ID[:]); err != nil {
 		return
 	}
@@ -545,9 +602,9 @@ func (stree *SegmentTree) ReadFrom(r io.Reader) (n int64, err error) {
 	if cnt == 0 {
 		return
 	}
-	var id keyT
+	var id uint16
 	for i := 0; i < int(cnt); i++ {
-		if _, err = r.Read(encodeKey(&id)); err != nil {
+		if _, err = r.Read(types.EncodeUint16(&id)); err != nil {
 			return
 		}
 		stree.Blks[id] = struct{}{}
