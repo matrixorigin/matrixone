@@ -46,9 +46,9 @@ var (
 
 func init() {
 	distTypeStrToEnum = map[string]kmeans.DistanceType{
-		"l2_distance":     kmeans.L2Distance,
-		"inner_product":   kmeans.InnerProduct,
-		"cosine_distance": kmeans.CosineDistance,
+		"vector_l2_ops":     kmeans.L2Distance,
+		"vector_ip_ops":     kmeans.InnerProduct,
+		"vector_cosine_ops": kmeans.CosineDistance,
 	}
 }
 
