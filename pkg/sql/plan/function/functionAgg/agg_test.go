@@ -139,10 +139,6 @@ func generateBytesList(str ...string) [][]byte {
 	return list
 }
 
-func f64equal(a, b float64) bool {
-	return a-b < 1e-6 && b-a < 1e-6
-}
-
 var testMoAllTypes = []types.T{
 	types.T_bool,
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
