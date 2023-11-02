@@ -340,8 +340,10 @@ const (
 	L2_NORM // L2 NORMALIZATION
 	INNER_PRODUCT
 	COSINE_SIMILARITY
-	VECTOR_DIMS  //VECTOR DIMENSIONS
-	NORMALIZE_L2 //NORMALIZE L2
+	VECTOR_DIMS     //VECTOR DIMENSIONS
+	NORMALIZE_L2    //NORMALIZE L2
+	L2_DISTANCE     //L2_DISTANCE
+	COSINE_DISTANCE //COSINE_DISTANCE
 
 	PYTHON_UDF
 
@@ -609,6 +611,8 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"l2_distance":       L2_DISTANCE,
+	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,
 }

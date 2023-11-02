@@ -24,7 +24,8 @@ import (
 //TODO: Check on optimization.
 // 1. Should we return []T or *[]T
 // 2. Should we accept v1 *[]T. v1 is a Slice, so I think, it should be pass by reference.
-// 3. Later on, use tensor library to improve the performance (may be via GPU)
+// 3. Later on, use gonums to improve the performance.
+// 4. use float64 instead of float32 for all the operations. https://github.com/pgvector/pgvector/pull/180
 
 func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	if len(v1) != len(v2) {
@@ -193,6 +194,38 @@ func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 
 	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
 	return math.Sqrt(float64(sum)), nil
+}
+
+func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
+
+	n := len(v1)
+
+	var diff T
+	var sum T = 0
+
+	for i := 0; i < n; i++ {
+		diff = v1[i] - v2[i]
+		sum += diff * diff
+	}
+
+	// using math.Sqrt instead of momath.Sqrt() because argument of Sqrt will never be negative for real numbers.
+	return math.Sqrt(float64(sum)), nil
+}
+
+func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
+
+	similarity, err := CosineSimilarity[T](v1, v2)
+	if err != nil {
+		return 0, err
+	}
+
+	return 1 - similarity, nil
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {

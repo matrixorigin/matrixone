@@ -15,6 +15,7 @@
 package moarray
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"reflect"
 	"testing"
 )
@@ -701,6 +702,92 @@ func TestCosineSimilarity(t *testing.T) {
 			if tt.args.argLeftF64 != nil {
 				if gotRes, _ := CosineSimilarity[float64](tt.args.argLeftF64, tt.args.argRightF64); !reflect.DeepEqual(gotRes, tt.want) {
 					t.Errorf("CosineSimilarity() = %v, want %v", gotRes, tt.want)
+				}
+			}
+
+		})
+	}
+}
+
+func TestL2Distance(t *testing.T) {
+	type args struct {
+		argLeftF32  []float32
+		argRightF32 []float32
+
+		argLeftF64  []float64
+		argRightF64 []float64
+	}
+	type testCase struct {
+		name string
+		args args
+		want float64
+	}
+	tests := []testCase{
+		{
+			name: "Test1 - float32",
+			args: args{argLeftF32: []float32{1, 2, 3}, argRightF32: []float32{10, 20, 30}},
+			want: 33.67491648096547,
+		},
+		{
+			name: "Test2 - float64",
+			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{10, 20, 30}},
+			want: 33.67491648096547,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			if tt.args.argLeftF32 != nil {
+				if gotRes, _ := L2Distance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+					t.Errorf("L2Distance() = %v, want %v", gotRes, tt.want)
+				}
+			}
+			if tt.args.argLeftF64 != nil {
+				if gotRes, _ := L2Distance[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+					t.Errorf("L2Distance() = %v, want %v", gotRes, tt.want)
+				}
+			}
+
+		})
+	}
+}
+
+func TestCosineDistance(t *testing.T) {
+	type args struct {
+		argLeftF32  []float32
+		argRightF32 []float32
+
+		argLeftF64  []float64
+		argRightF64 []float64
+	}
+	type testCase struct {
+		name string
+		args args
+		want float64
+	}
+	tests := []testCase{
+		{
+			name: "Test1 - float32",
+			args: args{argLeftF32: []float32{1, 2, 3}, argRightF32: []float32{-1, -2, -3}},
+			want: 2,
+		},
+		{
+			name: "Test2 - float64",
+			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{1, 2, 3}},
+			want: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			if tt.args.argLeftF32 != nil {
+				if gotRes, _ := CosineDistance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+					t.Errorf("L2Distance() = %v, want %v", gotRes, tt.want)
+				}
+			}
+			if tt.args.argLeftF64 != nil {
+				if gotRes, _ := CosineDistance[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+					t.Errorf("L2Distance() = %v, want %v", gotRes, tt.want)
 				}
 			}
 

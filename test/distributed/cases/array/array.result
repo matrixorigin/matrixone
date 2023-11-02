@@ -88,7 +88,22 @@ inner_product(b, [1,2,3])
 select cosine_similarity(b,"[1,2,3]") from vec_table;
 cosine_similarity(b, [1,2,3])
 1.0
+select l2_distance(b,"[1,2,3]") from vec_table;
+l2_distance(b, [1,2,3])
+0.0
+select cosine_distance(b,"[1,2,3]") from vec_table;
+cosine_distance(b, [1,2,3])
+0.0
+select normalize_l2(b) from vec_table;
+normalize_l2(b)
+[0.26726124, 0.5345225, 0.8017837]
 select * FROM vec_table ORDER BY cosine_similarity(b, '[3,1,2]') LIMIT 5;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select * FROM vec_table ORDER BY l2_distance(b, '[3,1,2]') LIMIT 5;
+a    b    c
+1    [1, 2, 3]    [4, 5, 6]
+select * FROM vec_table ORDER BY inner_product(b, '[3,1,2]') LIMIT 5;
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]
 select b + "[1,2,3" from vec_table;
