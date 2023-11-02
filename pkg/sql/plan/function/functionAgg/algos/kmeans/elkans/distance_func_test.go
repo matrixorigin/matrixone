@@ -161,8 +161,8 @@ func Test_AngularDistance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			if got := AngularDistance(ToGonumsVector(tt.args.v1), ToGonumsVector(tt.args.v2)); !assertx.InEpsilonF64(got, tt.want) {
-				t.Errorf("AngularDistance() = %v, want %v", got, tt.want)
+			if got := SphericalDistance(ToGonumsVector(tt.args.v1), ToGonumsVector(tt.args.v2)); !assertx.InEpsilonF64(got, tt.want) {
+				t.Errorf("SphericalDistance() = %v, want %v", got, tt.want)
 			}
 		})
 	}
