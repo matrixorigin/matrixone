@@ -197,3 +197,55 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.Hit.Load())
 
 }
+
+func TestDiskCacheFileCache(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
+	assert.Nil(t, err)
+
+	vector := IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Offset: 0,
+				Size:   3,
+				Data:   []byte("foo"),
+			},
+			{
+				Offset: 3,
+				Size:   3,
+				Data:   []byte("bar"),
+			},
+		},
+	}
+
+	data, err := io.ReadAll(newIOEntriesReader(ctx, vector.Entries))
+	assert.Nil(t, err)
+	err = cache.SetFile(ctx, vector.FilePath, data)
+	assert.Nil(t, err)
+
+	readVector := &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Offset: 0,
+				Size:   2,
+			},
+			{
+				Offset: 2,
+				Size:   2,
+			},
+			{
+				Offset: 4,
+				Size:   2,
+			},
+		},
+	}
+	err = cache.Read(ctx, readVector)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("fo"), readVector.Entries[0].Data)
+	assert.Equal(t, []byte("ob"), readVector.Entries[1].Data)
+	assert.Equal(t, []byte("ar"), readVector.Entries[2].Data)
+
+}
