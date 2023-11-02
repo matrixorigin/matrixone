@@ -114,6 +114,17 @@ func TestArrayToString(t *testing.T) {
 			argsF64: []float64{1, 2, 3},
 			want:    "[1, 2, 3]",
 		},
+		{
+			// Ref issue: https://github.com/matrixorigin/matrixone/issues/12420
+			name:    "Test3 - Float32 with precision issue on Add",
+			argsF64: []float64{0.66616553 + 0.66616553, 2, 3},
+			want:    "[1.3323311, 2, 3]",
+		},
+		{
+			name:    "Test4 - Float32 with precision issue on Multiply",
+			argsF64: []float64{4635.894*4635.894 + 0.66616553, 2, 3},
+			want:    "[21491514, 2, 3]",
+		},
 	}
 
 	for _, tt := range tests {
