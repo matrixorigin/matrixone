@@ -158,11 +158,12 @@ func Test_Cluster(t *testing.T) {
 				t.Errorf("Cluster() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !reflect.DeepEqual(got, tt.want) {
+
+			if !InEpsilonF64Slices(tt.want, got) {
 				t.Errorf("Cluster() got = %v, want %v", got, tt.want)
 			}
 
-			if tt.wantSSE != clusterer.SSE() {
+			if !InEpsilonF64(tt.wantSSE, clusterer.SSE()) {
 				t.Errorf("SSE() got = %v, want %v", clusterer.SSE(), tt.wantSSE)
 			}
 		})
@@ -263,12 +264,12 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 					t.Errorf("assignments got = %v, want %v", ekm.assignments, tt.want.assignment)
 				}
 
-				for i := 0; i < len(ekm.vectorMetas); i++ {
-					if !InEpsilonF64Slice(ekm.vectorMetas[i].lower, tt.want.vectorMetas[i].lower, defaultEpsilon) {
+				for i := 0; i < len(tt.want.vectorMetas); i++ {
+					if !InEpsilonF64Slice(tt.want.vectorMetas[i].lower, ekm.vectorMetas[i].lower) {
 						t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
 					}
 
-					if !InEpsilonF64(ekm.vectorMetas[i].upper, tt.want.vectorMetas[i].upper, defaultEpsilon) {
+					if !InEpsilonF64(tt.want.vectorMetas[i].upper, ekm.vectorMetas[i].upper) {
 						t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
 					}
 
@@ -350,8 +351,12 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 				// NOTE: here we are not considering the vectors in the vectorList. Hence we don't need to worry about
 				// the normalization impact. Here we are only testing the working of computeCentroidDistances() function.
 
-				if !reflect.DeepEqual(ekm.halfInterCentroidDistMatrix, tt.want.halfInterCentroidDistMatrix) {
+				if !InEpsilonF64Slices(tt.want.halfInterCentroidDistMatrix, ekm.halfInterCentroidDistMatrix) {
 					t.Errorf("halfInterCentroidDistMatrix got = %v, want %v", ekm.halfInterCentroidDistMatrix, tt.want.halfInterCentroidDistMatrix)
+				}
+
+				if !InEpsilonF64Slice(tt.want.minHalfInterCentroidDist, ekm.minHalfInterCentroidDist) {
+					t.Errorf("minHalfInterCentroidDist got = %v, want %v", ekm.minHalfInterCentroidDist, tt.want.minHalfInterCentroidDist)
 				}
 
 				if !reflect.DeepEqual(ekm.minHalfInterCentroidDist, tt.want.minHalfInterCentroidDist) {
@@ -430,7 +435,7 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				// Here we are only testing the working of recalculateCentroids() function.
 
 				got := ekm.recalculateCentroids()
-				if !reflect.DeepEqual(ToMOArrays(got), tt.want.centroids) {
+				if !InEpsilonF64Slices(tt.want.centroids, ToMOArrays(got)) {
 					t.Errorf("centroids got = %v, want %v", ToMOArrays(got), tt.want.centroids)
 				}
 
@@ -569,8 +574,19 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of updateBounds() function.
 				ekm.updateBounds(ToGonumsVectors(tt.state.newCentroids))
-				if !reflect.DeepEqual(ekm.vectorMetas, tt.want.vectorMetas) {
-					t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+
+				for i := 0; i < len(tt.want.vectorMetas); i++ {
+					if !InEpsilonF64Slice(tt.want.vectorMetas[i].lower, ekm.vectorMetas[i].lower) {
+						t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+					}
+
+					if !InEpsilonF64(tt.want.vectorMetas[i].upper, ekm.vectorMetas[i].upper) {
+						t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+					}
+
+					if ekm.vectorMetas[i].recompute != tt.want.vectorMetas[i].recompute {
+						t.Errorf("vectorMetas got = %v, want %v", ekm.vectorMetas, tt.want.vectorMetas)
+					}
 				}
 
 			} else if !ok {

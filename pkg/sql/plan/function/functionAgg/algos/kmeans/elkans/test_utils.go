@@ -18,15 +18,29 @@ import "math"
 
 const defaultEpsilon = 1e-5
 
-// InEpsilonF64Slice returns true if all the elements in v1 and v2 are within epsilon of each other.
-// assert.InEpsilonSlice requires v1 to be non-zero.
-func InEpsilonF64Slice(v1, v2 []float64, epsilon float64) bool {
-	if len(v1) != len(v2) {
+// InEpsilonF64Slices returns true if all the elements in v1 and v2 are within epsilon of each other.
+func InEpsilonF64Slices(want, got [][]float64) bool {
+	if len(want) != len(got) {
 		return false
 	}
 
-	for i := 0; i < len(v1); i++ {
-		if !InEpsilonF64(v1[i], v2[i], epsilon) {
+	for i := 0; i < len(want); i++ {
+		if !InEpsilonF64Slice(want[i], got[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// InEpsilonF64Slice returns true if all the elements in v1 and v2 are within epsilon of each other.
+// assert.InEpsilonSlice requires v1 to be non-zero.
+func InEpsilonF64Slice(want, got []float64) bool {
+	if len(want) != len(got) {
+		return false
+	}
+
+	for i := 0; i < len(want); i++ {
+		if !InEpsilonF64(want[i], got[i]) {
 			return false
 		}
 	}
@@ -35,6 +49,6 @@ func InEpsilonF64Slice(v1, v2 []float64, epsilon float64) bool {
 
 // InEpsilonF64 returns true if v1 and v2 are within epsilon of each other.
 // assert.InEpsilon requires v1 to be non-zero.
-func InEpsilonF64(v1, v2 float64, epsilon float64) bool {
-	return math.Abs(v1-v2) <= epsilon
+func InEpsilonF64(want, got float64) bool {
+	return math.Abs(want-got) <= defaultEpsilon
 }
