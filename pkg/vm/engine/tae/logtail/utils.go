@@ -2043,6 +2043,8 @@ func (data *CheckpointData) readAll(
 	service fileservice.FileService,
 ) (err error) {
 	data.replayMetaBatch()
+	checkpointDataSize := uint64(0)
+	readDuration := time.Now()
 	for _, val := range data.locations {
 		var reader *blockio.BlockReader
 		reader, err = blockio.NewObjectReader(service, val)
@@ -2051,7 +2053,6 @@ func (data *CheckpointData) readAll(
 		}
 		var bats []*containers.Batch
 		now := time.Now()
-		logutil.Infof("Read checkpoint: %v", val.String())
 		for idx := range checkpointDataReferVersions[version] {
 			if uint16(idx) == MetaIDX || uint16(idx) == TNMetaIDX {
 				continue
@@ -2162,11 +2163,17 @@ func (data *CheckpointData) readAll(
 				data.bats[idx].Append(bats[i])
 			}
 		}
-		logutil.Info("open-tae", common.OperationField("read"),
+		logutil.Info("read-checkpoint", common.OperationField("read"),
 			common.OperandField("checkpoint"),
 			common.AnyField("location", val.String()),
+			common.AnyField("size", val.Extent().End()),
 			common.AnyField("read cost", time.Since(now)))
+		checkpointDataSize += uint64(val.Extent().End())
 	}
+	logutil.Info("open-tae", common.OperationField("read"),
+		common.OperandField("checkpoint"),
+		common.AnyField("size", checkpointDataSize),
+		common.AnyField("read cost", time.Since(readDuration)))
 	return
 }
 
