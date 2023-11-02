@@ -30,6 +30,7 @@ import (
 const (
 	DefaultNotLoadMoreThan  = 4096
 	DefaultMinRowsQualified = 40960
+	DefaultMaxRowsObj       = 8192 * 240
 	DefaultMaxMergeObjN     = 2
 )
 
@@ -37,6 +38,7 @@ var (
 	RuntimeNotLoadMoreThan  atomic.Int32
 	RuntimeMaxMergeObjN     atomic.Int32
 	RuntimeMinRowsQualified atomic.Int32
+	RuntimeMaxRowsObj       atomic.Int32
 	Epsilon                 float64
 )
 
@@ -44,6 +46,7 @@ func init() {
 	RuntimeNotLoadMoreThan.Store(DefaultNotLoadMoreThan)
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
 	RuntimeMinRowsQualified.Store(DefaultMinRowsQualified)
+	RuntimeMaxRowsObj.Store(DefaultMaxRowsObj)
 	Epsilon = math.Nextafter(1, 2) - 1
 }
 

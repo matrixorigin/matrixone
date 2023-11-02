@@ -27,7 +27,10 @@ import (
 
 var (
 	_                  Policy = (*Basic)(nil)
-	defaultBasicConfig        = &BasicPolicyConfig{MergeMaxOneRun: common.DefaultMaxMergeObjN}
+	defaultBasicConfig        = &BasicPolicyConfig{
+		MergeMaxOneRun: common.DefaultMaxMergeObjN,
+		ObjectMaxRows:  common.DefaultMaxRowsObj,
+	}
 )
 
 type BasicPolicyConfig struct {
@@ -197,6 +200,10 @@ func (o *Basic) optimize(segs []*catalog.SegmentEntry) []*catalog.SegmentEntry {
 	// skip merging objects with big row count gaps, 3x and more
 	for i = len(acc) - 1; i > 1 && isBigGap(acc[i-1], acc[i]); i-- {
 	}
+
+	for ; i > 1 && acc[i] > o.config.ObjectMaxRows; i-- {
+	}
+
 	readyToMergeRows := acc[i]
 
 	// avoid frequent small object merge
@@ -239,30 +246,29 @@ func (o *Basic) ResetForTable(id uint64, entry *catalog.TableEntry) {
 	o.hist = entry.Stats.GetLastMerge()
 	o.objHeap.reset()
 	o.config = o.configProvider.GetConfig(id)
+
+	updateConfig := func(min, max, run int) {
+		if o.config == nil {
+			o.config = &BasicPolicyConfig{
+				name: o.schema.Name,
+			}
+		}
+		o.config.ObjectMinRows = min
+		o.config.ObjectMaxRows = max
+		o.config.MergeMaxOneRun = run
+		o.configProvider.SetConfig(id, o.config)
+	}
 	if o.config == nil || !o.config.FromUser {
 		guessWorkload := entry.Stats.GetWorkloadGuess()
 		switch guessWorkload {
 		case common.WorkApInsert:
-			if o.config == nil {
-				o.config = &BasicPolicyConfig{
-					name: o.schema.Name,
-				}
-			}
-			o.config.ObjectMinRows = 30 * 8192
-			o.config.MergeMaxOneRun = 16
-			o.configProvider.SetConfig(id, o.config)
+			updateConfig(30*8192, common.DefaultMaxRowsObj, 16)
 		case common.WorkApQuiet:
-			if o.config == nil {
-				o.config = &BasicPolicyConfig{
-					name: o.schema.Name,
-				}
-			}
-			o.config.ObjectMinRows = 60 * 8192
-			o.config.MergeMaxOneRun = 10
-			o.configProvider.SetConfig(id, o.config)
+			updateConfig(80*8192, common.DefaultMaxRowsObj, 10)
 		default:
 			o.config = defaultBasicConfig
 			o.config.ObjectMinRows = determineObjectMinRows(o.schema)
+			o.config.ObjectMaxRows = int(common.RuntimeMaxRowsObj.Load())
 			o.config.MergeMaxOneRun = int(common.RuntimeMaxMergeObjN.Load())
 			o.configProvider.DeleteConfig(id)
 		}
