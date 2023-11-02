@@ -799,7 +799,11 @@ func (catalog *Catalog) onReplayCreateBlock(
 	}
 	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
-	blk.blkData = dataFactory.MakeBlockFactory()(blk)
+	if blk.blkData == nil {
+		blk.blkData = dataFactory.MakeBlockFactory()(blk)
+	} else {
+		blk.blkData.TryUpgrade()
+	}
 }
 func (catalog *Catalog) onReplayDeleteBlock(
 	dbid, tid uint64,

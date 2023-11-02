@@ -135,6 +135,7 @@ func (blk *baseBlock) Foreach(ctx context.Context, readSchema any, colIdx int, o
 func (blk *baseBlock) TryUpgrade() (err error) {
 	node := blk.node.Load()
 	if node.IsPersisted() {
+		blk.mvcc.UpgradeDeleteChainByTS(blk.meta.GetDeltaPersistedTS())
 		return
 	}
 	pnode := newPersistedNode(blk)
@@ -146,6 +147,7 @@ func (blk *baseBlock) TryUpgrade() (err error) {
 	} else {
 		node.Unref()
 	}
+	blk.mvcc.UpgradeDeleteChainByTS(blk.meta.GetDeltaPersistedTS())
 	return
 }
 
