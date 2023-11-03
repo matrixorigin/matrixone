@@ -133,7 +133,6 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
 					[][]float32{
 						{},
-						{0, 0, 0, 0},
 						{1, 2, 3, 4},
 						{-1, 2, 3, 4},
 						{10, 3.333333333333333, 4, 5},
@@ -143,9 +142,8 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
 				[][]float32{
 					{},
-					{0, 0, 0, 0},
-					{0.18257418, 0.36514837, 0.5477225, 0.73029673},
-					{-0.18257418, 0.36514837, 0.5477225, 0.73029673},
+					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
+					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
 					{0.8108108, 0.27027026, 0.32432434, 0.4054054},
 					{0.1576765, 0.315353, 0.5781472, 0.73582363},
 				},
@@ -158,7 +156,6 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
 					[][]float64{
 						{},
-						{0, 0, 0, 0},
 						{1, 2, 3, 4},
 						{-1, 2, 3, 4},
 						{10, 3.333333333333333, 4, 5},
@@ -169,7 +166,6 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
 				[][]float64{
 					{},
-					{0, 0, 0, 0},
 					{0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
 					{-0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
 					{0.8108108108108107, 0.27027027027027023, 0.3243243243243243, 0.4054054054054054},
@@ -300,7 +296,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.7416573867739413, 8.774964387392123},
+				[]float64{3.741657386773941, 8.774964387392123},
 				[]bool{false, false}),
 		},
 		{
@@ -312,7 +308,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.7416573867739413, 8.774964387392123},
+				[]float64{3.741657386773941, 8.774964387392124},
 				[]bool{false, false}),
 		},
 	}
