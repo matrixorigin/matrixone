@@ -25,7 +25,7 @@ import (
 // These functions are exposed externally via SQL API.
 
 func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	vec1, vec2, err := ToGonumVectors[T](v1, v2)
+	vec1, vec2, err := ToDualGonumVectors[T](v1, v2)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 }
 
 func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	vec1, vec2, err := ToGonumVectors[T](v1, v2)
+	vec1, vec2, err := ToDualGonumVectors[T](v1, v2)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 }
 
 func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	vec1, vec2, err := ToGonumVectors[T](v1, v2)
+	vec1, vec2, err := ToDualGonumVectors[T](v1, v2)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 }
 
 func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	vec1, vec2, err := ToGonumVectors[T](v1, v2)
+	vec1, vec2, err := ToDualGonumVectors[T](v1, v2)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func Compare[T types.RealNumbers](v1, v2 []T) int {
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
-	vec1, vec2, err := ToGonumVectors[T](v1, v2)
+	vec1, vec2, err := ToDualGonumVectors[T](v1, v2)
 	if err != nil {
 		return 0, err
 	}
@@ -109,7 +109,7 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
-	vec1, vec2, err := ToGonumVectors[T](v1, v2)
+	vec1, vec2, err := ToDualGonumVectors[T](v1, v2)
 	if err != nil {
 		return 0, err
 	}
@@ -131,7 +131,7 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
-	vec1, vec2, err := ToGonumVectors[T](v1, v2)
+	vec1, vec2, err := ToDualGonumVectors[T](v1, v2)
 	if err != nil {
 		return 0, err
 	}
@@ -150,10 +150,7 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
 
-	vec, err := ToGonumVector[T](v1)
-	if err != nil {
-		return nil, err
-	}
+	vec := ToGonumVector[T](v1)
 
 	norm := mat.Norm(vec, 2)
 	if norm == 0 {
@@ -167,20 +164,14 @@ func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
 
 // L1Norm returns l1 distance to origin.
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
-	vec, err := ToGonumVector[T](v)
-	if err != nil {
-		return 0, err
-	}
+	vec := ToGonumVector[T](v)
 
 	return mat.Norm(vec, 1), nil
 }
 
 // L2Norm returns l2 distance to origin.
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
-	vec, err := ToGonumVector[T](v)
-	if err != nil {
-		return 0, err
-	}
+	vec := ToGonumVector[T](v)
 
 	return mat.Norm(vec, 2), nil
 }

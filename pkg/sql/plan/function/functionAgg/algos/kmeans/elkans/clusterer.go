@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"golang.org/x/sync/errgroup"
 	"gonum.org/v1/gonum/mat"
 	"math"
@@ -113,7 +114,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 		maxIterations:  maxIterations,
 		deltaThreshold: deltaThreshold,
 
-		vectorList:  ToGonumsVectors(vectors),
+		vectorList:  moarray.ToGonumVectors[float64](vectors),
 		assignments: assignments,
 		vectorMetas: metas,
 
@@ -132,7 +133,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 
 // Normalize is required for spherical kmeans initialization.
 func (km *ElkanClusterer) Normalize() {
-	NormalizeGonumVectors(km.vectorList)
+	moarray.NormalizeGonumVectors(km.vectorList)
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
@@ -153,7 +154,7 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 	km.Normalize() // spherical kmeans initialization
 
 	if km.vectorCnt == km.clusterCnt {
-		return ToMOArrays(km.vectorList), nil
+		return moarray.ToMoArrays[float64](km.vectorList), nil
 	}
 
 	km.InitCentroids() // step 0.1
@@ -164,7 +165,7 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 		return nil, err
 	}
 
-	return ToMOArrays(res), nil
+	return moarray.ToMoArrays[float64](res), nil
 }
 
 func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
@@ -379,7 +380,7 @@ func (km *ElkanClusterer) recalculateCentroids() []*mat.VecDense {
 			newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
 
 			// normalize the random vector
-			NormalizeGonumVector(newCentroids[c])
+			moarray.NormalizeGonumVector(newCentroids[c])
 		} else {
 			// find the mean of the cluster members
 			// note: we don't need to normalize here, since the vectors are already normalized

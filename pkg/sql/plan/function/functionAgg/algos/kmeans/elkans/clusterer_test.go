@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"reflect"
 	"testing"
 )
@@ -259,7 +260,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
 			if ekm, ok := km.(*ElkanClusterer); ok {
-				ekm.centroids = ToGonumsVectors(tt.state.centroids)
+				ekm.centroids = moarray.ToGonumVectors[float64](tt.state.centroids)
 				ekm.initBounds()
 				if !reflect.DeepEqual(ekm.assignments, tt.want.assignment) {
 					t.Errorf("assignments got = %v, want %v", ekm.assignments, tt.want.assignment)
@@ -346,7 +347,7 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
 			if ekm, ok := km.(*ElkanClusterer); ok {
-				ekm.centroids = ToGonumsVectors(tt.state.centroids)
+				ekm.centroids = moarray.ToGonumVectors[float64](tt.state.centroids)
 				ekm.computeCentroidDistances()
 
 				// NOTE: here we are not considering the vectors in the vectorList. Hence we don't need to worry about
@@ -436,8 +437,8 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				// Here we are only testing the working of recalculateCentroids() function.
 
 				got := ekm.recalculateCentroids()
-				if !assertx.InEpsilonF64Slices(tt.want.centroids, ToMOArrays(got)) {
-					t.Errorf("centroids got = %v, want %v", ToMOArrays(got), tt.want.centroids)
+				if !assertx.InEpsilonF64Slices(tt.want.centroids, moarray.ToMoArrays[float64](got)) {
+					t.Errorf("centroids got = %v, want %v", moarray.ToMoArrays[float64](got), tt.want.centroids)
 				}
 
 			} else if !ok {
@@ -570,11 +571,11 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 			}
 			if ekm, ok := km.(*ElkanClusterer); ok {
 				ekm.vectorMetas = tt.state.vectorMetas
-				ekm.centroids = ToGonumsVectors(tt.state.centroids)
+				ekm.centroids = moarray.ToGonumVectors[float64](tt.state.centroids)
 
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of updateBounds() function.
-				ekm.updateBounds(ToGonumsVectors(tt.state.newCentroids))
+				ekm.updateBounds(moarray.ToGonumVectors[float64](tt.state.newCentroids))
 
 				for i := 0; i < len(tt.want.vectorMetas); i++ {
 					if !assertx.InEpsilonF64Slice(tt.want.vectorMetas[i].lower, ekm.vectorMetas[i].lower) {

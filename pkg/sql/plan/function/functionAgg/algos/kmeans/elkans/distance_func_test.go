@@ -16,6 +16,7 @@ package elkans
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"testing"
 )
 
@@ -72,7 +73,7 @@ func Test_L2Distance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := L2Distance(ToGonumsVector(tt.args.v1), ToGonumsVector(tt.args.v2)); got != tt.want {
+			if got := L2Distance(moarray.ToGonumVector[float64](tt.args.v1), moarray.ToGonumVector[float64](tt.args.v2)); got != tt.want {
 				t.Errorf("L2Distance() = %v, want %v", got, tt.want)
 			}
 		})
@@ -136,24 +137,24 @@ func Test_AngularDistance(t *testing.T) {
 		{
 			name: "Test 4.a",
 			args: args{
-				v1: NormalizeMoArray([]float64{1, 0}),
-				v2: NormalizeMoArray([]float64{2, 2}),
+				v1: moarray.NormalizeMoVecf64([]float64{1, 0}),
+				v2: moarray.NormalizeMoVecf64([]float64{2, 2}),
 			},
 			want: 0.25000000000000006,
 		},
 		{
 			name: "Test 4.b",
 			args: args{
-				v1: NormalizeMoArray([]float64{2, 2}),
-				v2: NormalizeMoArray([]float64{0, 1}),
+				v1: moarray.NormalizeMoVecf64([]float64{2, 2}),
+				v2: moarray.NormalizeMoVecf64([]float64{0, 1}),
 			},
 			want: 0.25000000000000006,
 		},
 		{
 			name: "Test 4.c",
 			args: args{
-				v1: NormalizeMoArray([]float64{0, 1}),
-				v2: NormalizeMoArray([]float64{1, 0}),
+				v1: moarray.NormalizeMoVecf64([]float64{0, 1}),
+				v2: moarray.NormalizeMoVecf64([]float64{1, 0}),
 			},
 			want: 0.5,
 		},
@@ -161,7 +162,7 @@ func Test_AngularDistance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			if got := SphericalDistance(ToGonumsVector(tt.args.v1), ToGonumsVector(tt.args.v2)); !assertx.InEpsilonF64(got, tt.want) {
+			if got := SphericalDistance(moarray.ToGonumVector[float64](tt.args.v1), moarray.ToGonumVector[float64](tt.args.v2)); !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("SphericalDistance() = %v, want %v", got, tt.want)
 			}
 		})

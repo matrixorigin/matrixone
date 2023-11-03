@@ -20,7 +20,9 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
-func ToGonumVectors[T types.RealNumbers](arr1, arr2 []T) (vec1 *mat.VecDense, vec2 *mat.VecDense, err error) {
+// ToDualGonumVectors converts two moarray to two gonum vectors. This is mostly used by
+// binary vector operations in external.go. Since we do 2 cast's in one loop, it is more efficient.
+func ToDualGonumVectors[T types.RealNumbers](arr1, arr2 []T) (vec1 *mat.VecDense, vec2 *mat.VecDense, err error) {
 	if len(arr1) != len(arr2) {
 		return nil, nil, moerr.NewArrayInvalidOpNoCtx(len(arr1), len(arr2))
 	}
@@ -37,7 +39,7 @@ func ToGonumVectors[T types.RealNumbers](arr1, arr2 []T) (vec1 *mat.VecDense, ve
 	return mat.NewVecDense(n, _arr1), mat.NewVecDense(n, _arr2), nil
 }
 
-func ToGonumVector[T types.RealNumbers](arr1 []T) (vec1 *mat.VecDense, err error) {
+func ToGonumVector[T types.RealNumbers](arr1 []T) *mat.VecDense {
 
 	n := len(arr1)
 	_arr1 := make([]float64, n)
@@ -46,7 +48,15 @@ func ToGonumVector[T types.RealNumbers](arr1 []T) (vec1 *mat.VecDense, err error
 		_arr1[i] = float64(arr1[i])
 	}
 
-	return mat.NewVecDense(n, _arr1), nil
+	return mat.NewVecDense(n, _arr1)
+}
+
+func ToGonumVectors[T types.RealNumbers](arrays [][]T) []*mat.VecDense {
+	res := make([]*mat.VecDense, len(arrays))
+	for i, arr := range arrays {
+		res[i] = ToGonumVector[T](arr)
+	}
+	return res
 }
 
 func ToMoArray[T types.RealNumbers](vec *mat.VecDense) (arr []T) {
@@ -56,4 +66,12 @@ func ToMoArray[T types.RealNumbers](vec *mat.VecDense) (arr []T) {
 		arr[i] = T(vec.AtVec(i))
 	}
 	return
+}
+
+func ToMoArrays[T types.RealNumbers](vecs []*mat.VecDense) [][]T {
+	moVectors := make([][]T, len(vecs))
+	for i, vec := range vecs {
+		moVectors[i] = ToMoArray[T](vec)
+	}
+	return moVectors
 }
