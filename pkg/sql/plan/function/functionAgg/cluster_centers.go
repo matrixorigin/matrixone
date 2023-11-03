@@ -113,22 +113,35 @@ func (s *sAggClusterCenters) Fill(groupNumber int64, values []byte, lastResult [
 		return nil, isEmpty, nil
 	}
 
-	getArrays := func(bytes []byte, arrDim int64) [][]byte {
-		var arrays [][]byte
-
-		for i := int64(0); i < int64(len(bytes)); i += arrDim {
-			end := i + arrDim
-			if end > int64(len(bytes)) {
-				end = int64(len(bytes))
-			}
-			arrays = append(arrays, bytes[i:end])
+	splitBytes := func(data []byte, numberOfParts int64) ([][]byte, error) {
+		if numberOfParts < 0 {
+			return nil, moerr.NewInternalErrorNoCtx("the numberOfParts must be positive")
 		}
-		return arrays
+		if numberOfParts == 0 {
+			return nil, moerr.NewInternalErrorNoCtx("the numberOfParts is zero")
+		}
+
+		dataLength := int64(len(data))
+
+		if dataLength%numberOfParts != 0 {
+			return nil, moerr.NewInternalErrorNoCtx("data length not multiple of numberOfParts")
+		}
+
+		partSize := dataLength / numberOfParts
+
+		var partitions [][]byte
+		for start := int64(0); start < dataLength; start += partSize {
+			partitions = append(partitions, data[start:start+partSize])
+		}
+		return partitions, nil
 	}
 
 	// values would be having list of vectors/arrays combined as one []byte
 	//TODO: need to verify with @m-schen
-	arrays := getArrays(values, int64(len(values))/count)
+	arrays, err := splitBytes(values, count)
+	if err != nil {
+		return nil, isEmpty, err
+	}
 	s.groupedData[groupNumber] = append(s.groupedData[groupNumber], arrays...)
 
 	return nil, false, nil
