@@ -234,7 +234,3 @@ func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error)
 }
 
 /* ------------ [END] mat.VecDense not supported functions ------- */
-
-//TODO: Check on optimization.
-// 1. Should we return []T or *[]T
-// 2. Should we accept v1 *[]T. v1 is a Slice, so I think, it should be pass by reference.
