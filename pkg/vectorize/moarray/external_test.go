@@ -381,17 +381,18 @@ func TestNormalizeL2(t *testing.T) {
 
 		wantF32 []float32
 		wantF64 []float64
+		wantErr bool
 	}
 	tests := []testCase{
 		{
 			name:    "Test1 - float32 - zero vector",
 			args:    args{argF32: []float32{0, 0, 0}},
-			wantF32: []float32{0, 0, 0},
+			wantErr: true,
 		},
 		{
 			name:    "Test1.b - float32",
 			args:    args{argF32: []float32{1, 2, 3}},
-			wantF32: []float32{0.26726124, 0.5345225, 0.8017837},
+			wantF32: []float32{0.26726124, 0.5345225, 0.80178374},
 		},
 		{
 			name:    "Test1.c - float32",
@@ -401,7 +402,7 @@ func TestNormalizeL2(t *testing.T) {
 		{
 			name:    "Test2 - float64 - zero vector",
 			args:    args{argF64: []float64{0, 0, 0}},
-			wantF64: []float64{0, 0, 0},
+			wantErr: true,
 		},
 		{
 			name:    "Test3 - float64",
@@ -428,12 +429,20 @@ func TestNormalizeL2(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, err := NormalizeL2[float32](tt.args.argF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if tt.wantErr {
+					if _, err := NormalizeL2[float32](tt.args.argF32); err == nil {
+						t.Errorf("NormalizeL2() should throw error")
+					}
+				} else if gotRes, err := NormalizeL2[float32](tt.args.argF32); err != nil || !reflect.DeepEqual(tt.wantF32, gotRes) {
 					t.Errorf("NormalizeL2() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, err := NormalizeL2[float64](tt.args.argF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if tt.wantErr {
+					if _, err := NormalizeL2[float64](tt.args.argF64); err == nil {
+						t.Errorf("NormalizeL2() should throw error")
+					}
+				} else if gotRes, err := NormalizeL2[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("NormalizeL2() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -529,12 +538,12 @@ func TestSummation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, err := Summation[float32](tt.args.argF32); err != nil || !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, err := Summation[float32](tt.args.argF32); err != nil || !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("Summation() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, err := Summation[float64](tt.args.argF64); err != nil || !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, err := Summation[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("Summation() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -572,12 +581,12 @@ func TestInnerProduct(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := InnerProduct[float32](tt.args.argLeftF32, tt.args.argRightF32); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := InnerProduct[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("InnerProduct() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argLeftF64 != nil {
-				if gotRes, _ := InnerProduct[float64](tt.args.argLeftF64, tt.args.argRightF64); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := InnerProduct[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("InnerProduct() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -612,12 +621,12 @@ func TestL1Norm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, _ := L1Norm[float32](tt.args.argF32); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := L1Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L1Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, _ := L1Norm[float64](tt.args.argF64); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := L1Norm[float64](tt.args.argF64); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L1Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -640,24 +649,24 @@ func TestL2Norm(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argF32: []float32{1, 2, 3}},
-			want: 3.7416573867739413,
+			want: 3.741657386773941,
 		},
 		{
 			name: "Test2 - float64",
 			args: args{argF64: []float64{1, 2, 3}},
-			want: 3.7416573867739413,
+			want: 3.741657386773941,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, _ := L2Norm[float32](tt.args.argF32); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := L2Norm[float32](tt.args.argF32); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L2Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, _ := L2Norm[float64](tt.args.argF64); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := L2Norm[float64](tt.args.argF64); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("L2Norm() = %v, want %v", gotRes, tt.want)
 				}
 			}
@@ -695,12 +704,12 @@ func TestCosineSimilarity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argLeftF32 != nil {
-				if gotRes, _ := CosineSimilarity[float32](tt.args.argLeftF32, tt.args.argRightF32); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := CosineSimilarity[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("CosineSimilarity() = %v, want %v", gotRes, tt.want)
 				}
 			}
 			if tt.args.argLeftF64 != nil {
-				if gotRes, _ := CosineSimilarity[float64](tt.args.argLeftF64, tt.args.argRightF64); !reflect.DeepEqual(gotRes, tt.want) {
+				if gotRes, _ := CosineSimilarity[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
 					t.Errorf("CosineSimilarity() = %v, want %v", gotRes, tt.want)
 				}
 			}

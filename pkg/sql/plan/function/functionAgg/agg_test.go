@@ -741,21 +741,8 @@ func TestClusterCenters(t *testing.T) {
 	nsp := nulls.NewWithSize(7)
 	nsp.Add(5)
 	wantVecf64Output := [][]float64{
-		{0.15915269938161652, 0.31830539876323305, 0.5757527355814477, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666},
-		{0.8077006350571528, 0.2663717322796547, 0.3230802540228611, 0.4038503175285764},   // approx {10, 3.333333333333333, 4, 5}
-	}
-
-	{
-		// Test arraysToString
-		actual := s1.arraysToString(vecf64Input)
-		expected := "[1, 2, 3, 4]|[1, 2, 4, 5]|[1, 2, 4, 5]|[10, 2, 4, 5]|[10, 3, 4, 5]|[0, 0, 0, 0]|[10, 5, 4, 5]"
-		require.Equal(t, expected, actual)
-	}
-	{
-		// Test stringToArrays
-		actual, _ := s1.stringToArrays("[1, 2, 3, 4]|[1, 2, 4, 5]|[1, 2, 4, 5]|[10, 2, 4, 5]|[10, 3, 4, 5]|[0, 0, 0, 0]|[10, 5, 4, 5]")
-		expected := vecf64Input
-		require.Equal(t, expected, actual)
+		{0.1591527, 0.3183054, 0.57575274, 0.7349054},    // approx {1, 2, 3.6666666666666665, 4.666666666666666},
+		{0.80770063, 0.26637173, 0.32308024, 0.40385032}, // approx {10, 3.333333333333333, 4, 5}
 	}
 
 	{
@@ -790,8 +777,6 @@ func TestClusterCenters(t *testing.T) {
 		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
 		require.Equal(t, s1.distType, s2.distType)
 		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
-		for i := range s1.groupedData {
-			require.Equal(t, s1.groupedData[i], s2.groupedData[i])
-		}
+		require.Equal(t, s1.groupedData, s2.groupedData)
 	}
 }

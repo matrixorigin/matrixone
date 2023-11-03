@@ -15,11 +15,10 @@
 package elkans
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
-	"golang.org/x/sync/errgroup"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"gonum.org/v1/gonum/mat"
 	"math"
 	"math/rand"
@@ -88,6 +87,11 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 		return nil, err
 	}
 
+	gonumVectors, err := moarray.ToGonumVectors[float64](vectors...)
+	if err != nil {
+		return nil, err
+	}
+
 	assignments := make([]int, len(vectors))
 	var metas = make([]vectorMeta, len(vectors))
 	for i := range metas {
@@ -113,7 +117,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 		maxIterations:  maxIterations,
 		deltaThreshold: deltaThreshold,
 
-		vectorList:  ToGonumsVectors(vectors),
+		vectorList:  gonumVectors,
 		assignments: assignments,
 		vectorMetas: metas,
 
@@ -132,7 +136,7 @@ func NewKMeans(vectors [][]float64, clusterCnt,
 
 // Normalize is required for spherical kmeans initialization.
 func (km *ElkanClusterer) Normalize() {
-	NormalizeGonumVectors(km.vectorList)
+	moarray.NormalizeGonumVectors(km.vectorList)
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
@@ -153,7 +157,7 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 	km.Normalize() // spherical kmeans initialization
 
 	if km.vectorCnt == km.clusterCnt {
-		return ToMOArrays(km.vectorList), nil
+		return moarray.ToMoArrays[float64](km.vectorList), nil
 	}
 
 	km.InitCentroids() // step 0.1
@@ -164,7 +168,7 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 		return nil, err
 	}
 
-	return ToMOArrays(res), nil
+	return moarray.ToMoArrays[float64](res), nil
 }
 
 func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {
@@ -210,24 +214,8 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 		return moerr.NewInternalErrorNoCtx("init type is not supported")
 	}
 
-	// validate that all vectors have the same dimension
-	vec0Dim := len(vectorList[0])
-	eg := new(errgroup.Group)
-	for i := 1; i < len(vectorList); i++ {
-		func(idx int) {
-			eg.Go(func() error {
-				if len(vectorList[idx]) != vec0Dim {
-					return moerr.NewInternalErrorNoCtx(fmt.Sprintf("dim mismatch. "+
-						"vector[%d] has dimension %d, "+
-						"but vector[0] has dimension %d", idx, len(vectorList[idx]), vec0Dim))
-				}
-				return nil
-			})
-		}(i)
-	}
-	if err := eg.Wait(); err != nil {
-		return err
-	}
+	// We need to validate that all vectors have the same dimension.
+	// This is already done by moarray.ToGonumVectors, so skipping it here.
 
 	return nil
 }
@@ -379,7 +367,7 @@ func (km *ElkanClusterer) recalculateCentroids() []*mat.VecDense {
 			newCentroids[c] = mat.NewVecDense(km.vectorList[0].Len(), randVector)
 
 			// normalize the random vector
-			NormalizeGonumVector(newCentroids[c])
+			moarray.NormalizeGonumVector(newCentroids[c])
 		} else {
 			// find the mean of the cluster members
 			// note: we don't need to normalize here, since the vectors are already normalized

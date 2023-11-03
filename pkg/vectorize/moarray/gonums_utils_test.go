@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package elkans
+package moarray
 
 import (
 	"gonum.org/v1/gonum/mat"
@@ -20,7 +20,7 @@ import (
 	"testing"
 )
 
-func TestToGonumsVectors(t *testing.T) {
+func Test_ToGonumVectors(t *testing.T) {
 	type args struct {
 		vectors [][]float64
 	}
@@ -42,14 +42,14 @@ func TestToGonumsVectors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ToGonumsVectors(tt.args.vectors); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ToGonumsVectors() = %v, want %v", got, tt.want)
+			if got, _ := ToGonumVectors[float64](tt.args.vectors...); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ToGonumVectors() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestToMOArrays(t *testing.T) {
+func Test_ToMoArrays(t *testing.T) {
 	type args struct {
 		vectors []*mat.VecDense
 	}
@@ -71,8 +71,8 @@ func TestToMOArrays(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ToMOArrays(tt.args.vectors); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ToMOArrays() = %v, want %v", got, tt.want)
+			if got := ToMoArrays[float64](tt.args.vectors); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ToMoArrays() = %v, want %v", got, tt.want)
 			}
 		})
 	}

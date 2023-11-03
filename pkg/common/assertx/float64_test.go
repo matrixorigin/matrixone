@@ -68,3 +68,83 @@ func TestInEpsilonF64(t *testing.T) {
 		})
 	}
 }
+
+func TestInEpsilonF64Slice(t *testing.T) {
+	type args struct {
+		want []float64
+		got  []float64
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "Test 1",
+			args: args{
+				want: []float64{2.0, 3.0},
+				got:  []float64{2.0 + defaultEpsilon, 3.0 + defaultEpsilon},
+			},
+			want: false,
+		},
+		{
+			name: "Test 2",
+			args: args{
+				want: []float64{4.0},
+				got:  []float64{4.000000111},
+			},
+			want: true,
+		},
+		{
+			name: "Test 3",
+			args: args{
+				want: []float64{4.0000000},
+				got:  []float64{4.0000010},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := InEpsilonF64Slice(tt.args.want, tt.args.got); got != tt.want {
+				t.Errorf("InEpsilonF64Slice() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInEpsilonF64Slices(t *testing.T) {
+	type args struct {
+		want [][]float64
+		got  [][]float64
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "Test 1",
+			args: args{
+				want: [][]float64{{2.0, 3.0}, {4.0}},
+				got:  [][]float64{{2.0 + defaultEpsilon, 3.0 + defaultEpsilon}, {4.0}},
+			},
+			want: false,
+		},
+		{
+			name: "Test 2",
+			args: args{
+				want: [][]float64{{2.0, 3.0}, {4.0}},
+				got:  [][]float64{{2.0 + 1e-7, 3.0 + defaultEpsilon/2}, {4.0}},
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := InEpsilonF64Slices(tt.args.want, tt.args.got); got != tt.want {
+				t.Errorf("InEpsilonF64Slices() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

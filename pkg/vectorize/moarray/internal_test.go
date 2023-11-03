@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package elkans
+package moarray
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
@@ -66,8 +66,8 @@ func TestNormalizeMoArray(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := NormalizeMoArray(tt.args.vector); !assertx.InEpsilonF64Slice(tt.want, got) {
-				t.Errorf("NormalizeMoArray() = %v, want %v", got, tt.want)
+			if got := NormalizeMoVecf64(tt.args.vector); !assertx.InEpsilonF64Slice(tt.want, got) {
+				t.Errorf("NormalizeMoVecf64() = %v, want %v", got, tt.want)
 			}
 		})
 	}

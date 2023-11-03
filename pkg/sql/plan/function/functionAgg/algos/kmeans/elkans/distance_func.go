@@ -39,15 +39,13 @@ func SphericalDistance(v1, v2 *mat.VecDense) float64 {
 	// and it can be used to calculate the angle between them.
 	dp := mat.Dot(v1, v2)
 
-	// Handle precision issues: Clamp the dot product to the range [-1, 1].
+	// Prevent NaN with acos with loss of precision.
 	if dp > 1.0 {
 		dp = 1.0
 	} else if dp < -1.0 {
 		dp = -1.0
 	}
 
-	// The acos() function is the inverse cosine function.
-	// It returns the angle in radians whose cosine is dp.
 	theta := math.Acos(dp)
 
 	//To scale the result to the range [0, 1], we divide by Pi.

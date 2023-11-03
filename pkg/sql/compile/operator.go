@@ -995,7 +995,7 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 		if len(f.F.Args) > 0 {
 
 			//for group_concat, the last arg is separator string
-			//for cluster_centers, the last arg is separator string
+			//for cluster_centers, the last arg is kmeans_args string
 			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
@@ -1066,7 +1066,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 			if len(f.F.Args) > 0 {
 				//for group_concat, the last arg is separator string
-				//for cluster_centers, the last arg is separator string
+				//for cluster_centers, the last arg is kmeans_args string
 				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]

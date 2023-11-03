@@ -15,6 +15,7 @@
 package elkans
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"reflect"
 	"testing"
 )
@@ -50,6 +51,7 @@ func TestRandom_InitCentroids(t *testing.T) {
 			},
 			wantCentroids: [][]float64{
 				// NOTE: values of random initialization need not be farther apart, it is random.
+				// NOTE: we get the same random values in the test case because we are using a constant seed value.
 				{1, 2, 4, 5},
 				{1, 2, 3, 4},
 			},
@@ -58,8 +60,9 @@ func TestRandom_InitCentroids(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewRandomInitializer()
-			if gotCentroids := r.InitCentroids(ToGonumsVectors(tt.args.vectors), tt.args.k); !reflect.DeepEqual(ToMOArrays(gotCentroids), tt.wantCentroids) {
-				t.Errorf("InitCentroids() = %v, want %v", ToMOArrays(gotCentroids), tt.wantCentroids)
+			gonumVectors, _ := moarray.ToGonumVectors[float64](tt.args.vectors...)
+			if gotCentroids := r.InitCentroids(gonumVectors, tt.args.k); !reflect.DeepEqual(moarray.ToMoArrays[float64](gotCentroids), tt.wantCentroids) {
+				t.Errorf("InitCentroids() = %v, want %v", moarray.ToMoArrays[float64](gotCentroids), tt.wantCentroids)
 			}
 		})
 	}
