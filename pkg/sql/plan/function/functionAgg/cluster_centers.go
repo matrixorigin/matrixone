@@ -16,6 +16,7 @@ package functionAgg
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,8 +37,7 @@ const (
 	defaultInitType             = kmeans.Random
 	defaultKmeansClusterCnt     = 1
 
-	configSeparator     = ","
-	arrayGroupSeparator = "|"
+	configSeparator = ","
 )
 
 var (
@@ -148,78 +148,93 @@ func (s *sAggClusterCenters) Merge(groupNumber1 int64, groupNumber2 int64, resul
 }
 
 func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
-	result := make([][]byte, 0, len(s.groupedData))
+	result := make([][]byte, len(s.groupedData))
 
 	// Run kmeans logic on each group.
-	for _, arrGroup := range s.groupedData {
+	for groupId, arrGroup := range s.groupedData {
 		if len(arrGroup) == 0 {
-			// if there is only no element in the group, then we skip it.
+			// if there is only no element in the group, then we return empty JSON array
+			result[groupId] = util.UnsafeStringToBytes("[]")
 			continue
 		}
 
 		// 1. convert [][]byte to [][]float64
-		var vecf64List [][]float64
-		for _, arr := range arrGroup {
-			switch s.arrType.Oid {
-			case types.T_array_float32:
-				// 1. convert []byte to []float64
-				vecf32 := types.BytesToArray[float32](arr)
-
-				// 1.a cast to []float64
-				_vecf64 := make([]float64, len(vecf32))
-				for j, v := range vecf32 {
-					_vecf64[j] = float64(v)
-				}
-
-				vecf64List = append(vecf64List, _vecf64)
-
-			case types.T_array_float64:
-				vecf64List = append(vecf64List, types.BytesToArray[float64](arr))
-			}
-		}
+		vecf64List := s.bytesListToVecF64List(arrGroup)
 
 		// 2. run kmeans
-		clusterer, err := elkans.NewKMeans(vecf64List,
-			int(s.clusterCnt),
-			defaultKmeansMaxIteration,
-			defaultKmeansDeltaThreshold,
-			s.distType, defaultInitType)
+		clusterer, err := elkans.NewKMeans(vecf64List, int(s.clusterCnt), defaultKmeansMaxIteration, defaultKmeansDeltaThreshold, s.distType, defaultInitType)
 		if err != nil {
 			return nil, err
 		}
-
 		centers, err := clusterer.Cluster()
 		if err != nil {
 			return nil, err
 		}
 
 		// 3. convert centroids (ie [][]float64) to json string
-		var jsonStr string
-		switch s.arrType.Oid {
-		case types.T_array_float32:
-			// 3.a cast [][]float64 to [][]float32
-			_centers := make([][]float32, len(centers))
-			for i, center := range centers {
-				_centers[i], err = moarray.Cast[float64, float32](center)
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			// 3.b create json string for [][]float32
-			jsonStr = fmt.Sprintf("[ %s ]", types.ArraysToString[float32](_centers, ","))
-
-		case types.T_array_float64:
-
-			// 3.c create json string for [][]float64
-			jsonStr = fmt.Sprintf("[ %s ]", types.ArraysToString[float64](centers, ","))
+		arraysJsonStr, err := s.arraysToString(centers)
+		if err != nil {
+			return nil, err
 		}
 
 		// 4. add the json-string byte[] to result
-		result = append(result, util.UnsafeStringToBytes(jsonStr))
+		result[groupId] = util.UnsafeStringToBytes(arraysJsonStr)
 	}
 
 	return result, nil
+}
+
+// bytesListToVecF64List converts [][]byte to [][]float64. If [][]byte represent vecf32, then it will
+// be casting it to vecf64
+func (s *sAggClusterCenters) bytesListToVecF64List(arrGroup [][]byte) (vecf64List [][]float64) {
+
+	for _, arr := range arrGroup {
+		switch s.arrType.Oid {
+		case types.T_array_float32:
+			// 1. convert []byte to []float64
+			vecf32 := types.BytesToArray[float32](arr)
+
+			// 1.a cast to []float64
+			_vecf64 := make([]float64, len(vecf32))
+			for j, v := range vecf32 {
+				_vecf64[j] = float64(v)
+			}
+
+			vecf64List = append(vecf64List, _vecf64)
+
+		case types.T_array_float64:
+			vecf64List = append(vecf64List, types.BytesToArray[float64](arr))
+		}
+	}
+	return vecf64List
+}
+
+// arraysToString converts [][]float64 to json string
+func (s *sAggClusterCenters) arraysToString(centers [][]float64) (res string, err error) {
+
+	switch s.arrType.Oid {
+	case types.T_array_float32:
+
+		// 3.a cast [][]float64 to [][]float32
+		_centers := make([][]float32, len(centers))
+		for i, center := range centers {
+			_centers[i], err = moarray.Cast[float64, float32](center)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		// 3.b create json string for [][]float32
+		// NOTE: here we can't use jsonMarshall as it does not accept precision as done in ArraysToString
+		// We need precision here, as it is the final output that will be printed on SQL console.
+		res = fmt.Sprintf("[ %s ]", types.ArraysToString[float32](_centers, ","))
+
+	case types.T_array_float64:
+
+		// 3.c create json string for [][]float64
+		res = fmt.Sprintf("[ %s ]", types.ArraysToString[float64](centers, ","))
+	}
+	return res, nil
 }
 
 func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
@@ -241,11 +256,11 @@ func (s *sAggClusterCenters) MarshalBinary() ([]byte, error) {
 	buf.Write(types.EncodeUint16(&distType))
 
 	// 4. groupedData
-	strList := make([]string, 0, len(s.groupedData))
-	for i := range s.groupedData {
-		strList = append(strList, s.arraysToString(s.groupedData[i]))
+	encoded, err := json.Marshal(s.groupedData)
+	if err != nil {
+		return nil, err
 	}
-	buf.Write(types.EncodeStringSlice(strList))
+	buf.Write(encoded)
 
 	return buf.Bytes(), nil
 }
@@ -268,73 +283,14 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 	data = data[2:]
 
 	// 4. groupedData
-	var err error
-	strList := types.DecodeStringSlice(data)
-	s.groupedData = make([][][]byte, len(strList))
-	for i := range s.groupedData {
-		s.groupedData[i], err = s.stringToArrays(strList[i])
-		if err != nil {
-			return err
-		}
+	err := json.Unmarshal(data, &s.groupedData)
+	if err != nil {
+		return err
 	}
 	return nil
 }
 
-// arraysToString converts list of array/vector to string
-// e.g. []vector -> "1,2,3|4,5,6|"
-// TODO: Here we loss precision when we convert []float64 to string and then back to []float64
-// as underlying ArrayToString function uses strconv.FormatFloat with precision 1e6. Need to get
-// advise on how to handle this.
-func (s *sAggClusterCenters) arraysToString(arrays [][]byte) string {
-	var res string
-	var commaSeperatedArrString string
-	for i, arr := range arrays {
-		if i > 0 {
-			res += arrayGroupSeparator
-		}
-		switch s.arrType.Oid {
-		case types.T_array_float32:
-			commaSeperatedArrString = types.BytesToArrayToString[float32](arr)
-		case types.T_array_float64:
-			commaSeperatedArrString = types.BytesToArrayToString[float64](arr)
-		}
-		res += commaSeperatedArrString
-	}
-	return res
-
-}
-
-// stringToArrays converts string to a list of array/vector
-// e.g. "1,2,3|4,5,6|" -> []array
-func (s *sAggClusterCenters) stringToArrays(str string) ([][]byte, error) {
-	arrays := strings.Split(str, arrayGroupSeparator)
-
-	var res = make([][]byte, len(arrays))
-	var vecf []byte
-	var err error
-
-	for i, arr := range arrays {
-		if len(strings.TrimSpace(arr)) == 0 {
-			continue
-		}
-		switch s.arrType.Oid {
-		case types.T_array_float32:
-			vecf, err = types.StringToArrayToBytes[float32](arr)
-			if err != nil {
-				return nil, err
-			}
-		case types.T_array_float64:
-			vecf, err = types.StringToArrayToBytes[float64](arr)
-			if err != nil {
-				return nil, err
-			}
-		}
-		res[i] = vecf
-	}
-	return res, nil
-
-}
-
+// decodeConfig will decode the config string (seperated by configSeparator) and return the k and distance_type
 func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, err error) {
 	bts, ok := config.([]byte)
 	if ok && bts != nil {

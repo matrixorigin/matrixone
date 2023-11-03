@@ -746,19 +746,6 @@ func TestClusterCenters(t *testing.T) {
 	}
 
 	{
-		// Test arraysToString
-		actual := s1.arraysToString(vecf64Input)
-		expected := "[1, 2, 3, 4]|[1, 2, 4, 5]|[1, 2, 4, 5]|[10, 2, 4, 5]|[10, 3, 4, 5]|[0, 0, 0, 0]|[10, 5, 4, 5]"
-		require.Equal(t, expected, actual)
-	}
-	{
-		// Test stringToArrays
-		actual, _ := s1.stringToArrays("[1, 2, 3, 4]|[1, 2, 4, 5]|[1, 2, 4, 5]|[10, 2, 4, 5]|[10, 3, 4, 5]|[0, 0, 0, 0]|[10, 5, 4, 5]")
-		expected := vecf64Input
-		require.Equal(t, expected, actual)
-	}
-
-	{
 		// Test aggFn
 		tr := &simpleAggTester[[]byte, []byte]{
 			source: s1,
@@ -790,10 +777,6 @@ func TestClusterCenters(t *testing.T) {
 		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
 		require.Equal(t, s1.distType, s2.distType)
 		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
-		for groupIdx := range s1.groupedData {
-			for vecIdx := range s1.groupedData[groupIdx] {
-				assertx.InEpsilonF64Slice(types.BytesToArray[float64](s1.groupedData[groupIdx][vecIdx]), types.BytesToArray[float64](s2.groupedData[groupIdx][vecIdx]))
-			}
-		}
+		require.Equal(t, s1.groupedData, s2.groupedData)
 	}
 }
