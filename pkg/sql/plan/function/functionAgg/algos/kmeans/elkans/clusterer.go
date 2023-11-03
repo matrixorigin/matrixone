@@ -37,7 +37,6 @@ import (
 // NOTE that, distance calculation is very expensive for higher dimension vectors.
 //
 // Ref Paper: https://cdn.aaai.org/ICML/2003/ICML03-022.pdf
-// Ref Material :https://www.cse.iitd.ac.in/~rjaiswal/2015/col870/Project/Nipun.pdf
 type ElkanClusterer struct {
 
 	// for each of the n vectors, we keep track of the following data
