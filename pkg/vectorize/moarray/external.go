@@ -142,10 +142,19 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	normVec2 := mat.Norm(vec2, 2)
 
 	if normVec1 == 0 || normVec2 == 0 {
-		return 0, moerr.NewInternalErrorNoCtx("one of the vectors is zero")
+		return 0, moerr.NewInternalErrorNoCtx("cosine_similarity: one of the vectors is zero")
 	}
 
-	return dotProduct / (normVec1 * normVec2), nil
+	cosineSimilarity := dotProduct / (normVec1 * normVec2)
+
+	// Handle precision issues. Clamp the cosine_similarity to the range [-1, 1].
+	if cosineSimilarity > 1.0 {
+		cosineSimilarity = 1.0
+	} else if cosineSimilarity < -1.0 {
+		cosineSimilarity = -1.0
+	}
+
+	return cosineSimilarity, nil
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
@@ -154,7 +163,7 @@ func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
 
 	norm := mat.Norm(vec, 2)
 	if norm == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("cannot normalize a zero vector")
+		return nil, moerr.NewInternalErrorNoCtx("normalize_l2: cannot normalize a zero vector")
 	}
 
 	vec.ScaleVec(1/norm, vec)
