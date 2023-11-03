@@ -114,11 +114,9 @@ func (s *sAggClusterCenters) Fill(groupNumber int64, values []byte, lastResult [
 	}
 
 	splitBytes := func(data []byte, numberOfParts int64) ([][]byte, error) {
-		if numberOfParts < 0 {
-			return nil, moerr.NewInternalErrorNoCtx("the numberOfParts must be positive")
-		}
-		if numberOfParts == 0 {
-			return nil, moerr.NewInternalErrorNoCtx("the numberOfParts is zero")
+
+		if numberOfParts <= 0 {
+			return nil, moerr.NewInternalErrorNoCtx("invalid numberOfParts %v", numberOfParts)
 		}
 
 		dataLength := int64(len(data))
