@@ -282,6 +282,9 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 
 // arraysToString converts list of array/vector to string
 // e.g. []vector -> "1,2,3|4,5,6|"
+// TODO: Here we loss precision when we convert []float64 to string and then back to []float64
+// as underlying ArrayToString function uses strconv.FormatFloat with precision 1e6. Need to get
+// advise on how to handle this.
 func (s *sAggClusterCenters) arraysToString(arrays [][]byte) string {
 	var res string
 	var commaSeperatedArrString string
