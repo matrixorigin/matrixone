@@ -20,25 +20,6 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
-// ToDualGonumVectors converts two moarray to two gonum vectors. This is mostly used by
-// binary vector operations in external.go. Since we do 2 cast's in one loop, it is more efficient.
-func ToDualGonumVectors[T types.RealNumbers](arr1, arr2 []T) (vec1 *mat.VecDense, vec2 *mat.VecDense, err error) {
-	if len(arr1) != len(arr2) {
-		return nil, nil, moerr.NewArrayInvalidOpNoCtx(len(arr1), len(arr2))
-	}
-
-	n := len(arr1)
-	_arr1 := make([]float64, n)
-	_arr2 := make([]float64, n)
-
-	for i := 0; i < n; i++ {
-		_arr1[i] = float64(arr1[i])
-		_arr2[i] = float64(arr2[i])
-	}
-
-	return mat.NewVecDense(n, _arr1), mat.NewVecDense(n, _arr2), nil
-}
-
 func ToGonumVector[T types.RealNumbers](arr1 []T) *mat.VecDense {
 
 	n := len(arr1)
