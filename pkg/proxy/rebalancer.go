@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"go.uber.org/zap"
@@ -211,7 +212,9 @@ func (r *rebalancer) handleTransfer(ctx context.Context) {
 		select {
 		case tun := <-r.queue:
 			if err := tun.transfer(ctx); err != nil {
-				r.logger.Error("failed to do transfer", zap.Error(err))
+				if !moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+					r.logger.Error("failed to do transfer", zap.Error(err))
+				}
 			}
 		case <-ctx.Done():
 			r.logger.Info("rebalancer transfer ended.")
