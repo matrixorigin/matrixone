@@ -242,7 +242,7 @@ func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEnt
 	infoBuf := &bytes.Buffer{}
 	infoBuf.WriteString("merged:")
 	for _, seg := range merges {
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.RemainingRows, common.ShortSegId(seg.ID)))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.GetRemainingRows(), common.ShortSegId(seg.ID)))
 	}
 	if len(dels) > 0 {
 		infoBuf.WriteString(" | del:")
