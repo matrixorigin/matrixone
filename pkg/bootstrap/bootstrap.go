@@ -42,6 +42,8 @@ var (
 			database_id bigint unsigned not null,
 			name 		varchar(64) not null,
 			type        varchar(11) not null,
+    		algorithm	varchar(11),
+    		algorithm_table_type varchar(11),
 			is_visible  tinyint not null,
 			hidden      tinyint not null,
 			comment 	varchar(2048) not null,
@@ -143,6 +145,24 @@ var (
 		                      end_at) values ("SystemInit", 1, "", "{}", 0, 0, 0, 0, 0, %d, 0)`,
 			catalog.MOTaskDB, time.Now().UnixNano()),
 	}
+
+	conditionalUpgradeSQLs = []struct {
+		ifEmpty string
+		then    []string
+	}{
+		{
+			ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
+			then: []string{
+				fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after type;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
+			},
+		},
+		{
+			ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType),
+			then: []string{
+				fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName),
+			},
+		},
+	}
 )
 
 type bootstrapper struct {
@@ -165,8 +185,8 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	getLogger().Info("start to check bootstrap state")
 
 	if ok, err := b.checkAlreadyBootstrapped(ctx); ok {
-		getLogger().Info("mo already boostrapped")
-		return nil
+		getLogger().Info("mo already bootstrapped")
+		return b.execConditionalUpgrades(ctx)
 	} else if err != nil {
 		return err
 	}
@@ -188,10 +208,11 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(time.Second):
 		}
-		if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
-			getLogger().Info("waiting bootstrap completed",
-				zap.Bool("result", ok),
-				zap.Error(err))
+		if ok, err = b.checkAlreadyBootstrapped(ctx); ok {
+			getLogger().Info("waiting bootstrap completed", zap.Bool("result", ok), zap.Error(err))
+			return b.execConditionalUpgrades(ctx)
+		} else if err != nil {
+			getLogger().Info("waiting bootstrap completed", zap.Bool("result", ok), zap.Error(err))
 			return err
 		}
 	}
@@ -215,6 +236,30 @@ func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, erro
 		}
 	}
 	return false, nil
+}
+
+func (b *bootstrapper) execConditionalUpgrades(ctx context.Context) error {
+
+	getLogger().Info("starting schema upgrades.")
+
+	for _, conditionalUpgradeSQL := range conditionalUpgradeSQLs {
+		// if the column exists, skip
+		result, err := b.exec.Exec(ctx, conditionalUpgradeSQL.ifEmpty, executor.Options{}) // if
+		if err != nil {
+			return err
+		}
+		if len(result.Batches) != 0 {
+			continue
+		}
+
+		// otherwise, execute the upgrade
+		if err = b.exec.ExecTxn(ctx, execFunc(conditionalUpgradeSQL.then), executor.Options{}); err != nil { // then
+			return err
+		}
+	}
+
+	getLogger().Info("successfully completed upgrade")
+	return nil
 }
 
 func (b *bootstrapper) execBootstrap(ctx context.Context) error {

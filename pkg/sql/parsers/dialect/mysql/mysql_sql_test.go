@@ -2638,6 +2638,10 @@ var (
 			input:  "show index from db.t1 from db",
 			output: "show index from db.t1 from db",
 		},
+		{
+			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
+			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
+		},
 	}
 )
 
