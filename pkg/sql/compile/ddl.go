@@ -879,6 +879,13 @@ func checkIndexInitializable(dbName string, tblName string) bool {
 	if dbName == catalog.MOTaskDB {
 		return false
 	} else if dbName == catalog.MO_CATALOG && strings.HasPrefix(tblName, catalog.MO_INDEXES) {
+		// NOTE: this HasPrefix is very critical.
+		// 1. When we do "alter table mo_index add col1, col2 after type",
+		// 2. we create a new temporary mo_index_temp table. This mo_index_temp is same as mo_index table, with the new columns.
+		// 3. Since the mo_index_temp is same as mo_index, it will have PrimaryKey(id, column_name), and this will result in a recursive behavior on mo_index table.
+		// 4. Technically PrimaryKey(id, column_name) will be populated using genInsertMOIndexesSql which already contains both the 2 new columns that will be soon added by Sql based upgradeLogic.
+		// 5. So, we need to skip the index table insert here.
+		// TODO: verify if this logic is correct.
 		return false
 	}
 	return true
