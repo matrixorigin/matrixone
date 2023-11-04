@@ -878,7 +878,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 func checkIndexInitializable(dbName string, tblName string) bool {
 	if dbName == catalog.MOTaskDB {
 		return false
-	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_INDEXES {
+	} else if dbName == catalog.MO_CATALOG && strings.HasPrefix(tblName, catalog.MO_INDEXES) {
 		return false
 	}
 	return true
