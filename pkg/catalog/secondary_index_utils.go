@@ -19,6 +19,20 @@ import (
 	"strings"
 )
 
+// Index Algorithm names
+const (
+	MoIndexDefaultAlgo = ""        // used by UniqueIndex or default SecondaryIndex
+	MoIndexBTreeAlgo   = "BTREE"   // used for Mocking MySQL behaviour.
+	MoIndexIvfFlatAlgo = "IVFFLAT" // used for IVF flat index on Vector/Array columns
+)
+
+func IsDefaultIndexAlgo(algo string) bool {
+	_algo := strings.ToLower(strings.TrimSpace(algo))
+	return _algo == MoIndexDefaultAlgo || _algo == MoIndexBTreeAlgo
+}
+
+// ------------------------[START] Aliaser------------------------
+
 // This class is used by "secondary index" to resolve the "programmatically generated PK" appended to the
 // end of the index key "__mo_index_idx_col".
 
@@ -37,3 +51,5 @@ func ResolveAlias(alias string) string {
 func IsAlias(column string) bool {
 	return strings.HasPrefix(column, AliasPrefix)
 }
+
+// ------------------------[END] Aliaser------------------------

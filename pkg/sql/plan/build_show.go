@@ -214,7 +214,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			} else {
 				indexStr = "KEY "
 			}
-			indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
+			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+			if indexdef.IndexAlgo != catalog.MoIndexDefaultAlgo {
+				indexStr += fmt.Sprintf("USING `%s` ", formatStr(indexdef.IndexAlgo))
+			}
+			indexStr += "("
 			i := 0
 			for _, part := range indexdef.Parts {
 				if catalog.IsAlias(part) {
@@ -936,7 +940,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"'NULL' as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
-		"'' as 'Index_type', " +
+		"`idx`.`algorithm` as 'Index_type', " +
 		"'' as `Comment`, " +
 		"`idx`.`comment` as `Index_comment`, " +
 		"if(`idx`.`is_visible` = 1, 'YES', 'NO') as `Visible`, " +

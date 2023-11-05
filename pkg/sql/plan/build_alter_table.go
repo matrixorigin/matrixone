@@ -284,7 +284,11 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				} else {
 					indexStr = "KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				if indexdef.IndexAlgo != catalog.MoIndexDefaultAlgo {
+					indexStr += fmt.Sprintf("USING `%s` ", formatStr(indexdef.IndexAlgo))
+				}
+				indexStr += "("
 				i := 0
 				for _, part := range indexdef.Parts {
 					// NOTE: we skip the alias PK column from the secondary keys list here.
