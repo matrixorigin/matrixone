@@ -359,6 +359,16 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 				)
 				return err
 			}
+
+			exists, _ := db_holder.IsRecordExisted(ctx, line, m.table, db_holder.InitOrRefreshDBConn)
+
+			if exists {
+				m.logger.Info("a record in file already exists, skipping the entire file",
+					logutil.TableField(m.table.GetIdentify()),
+					logutil.PathField(fp.FilePath),
+				)
+				return nil // Skip this file if any record already exists
+			}
 			cacheFileData.Put(row)
 		}
 		if err != nil {

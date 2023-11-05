@@ -246,10 +246,10 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 
 }
 
-type DBConnProvider func() (*sql.DB, error)
+type DBConnProvider func(forceNewConn bool, randomCN bool) (*sql.DB, error)
 
 func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, getDBConn DBConnProvider) (bool, error) {
-	dbConn, err := getDBConn()
+	dbConn, err := getDBConn(false, false)
 	if err != nil {
 		return false, err
 	}

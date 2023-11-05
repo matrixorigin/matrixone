@@ -84,7 +84,7 @@ func TestIsRecordExisted(t *testing.T) {
 	)).WithArgs(record[0], record[15]).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 
 	// Define a function that returns the mocked DB connection
-	getDBConn := func() (*sql.DB, error) {
+	getDBConn := func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		return db, nil
 	}
 
