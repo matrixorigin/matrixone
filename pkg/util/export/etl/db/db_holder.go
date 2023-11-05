@@ -255,7 +255,12 @@ func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, get
 	}
 
 	if tbl.Table == "statement_info" {
-		return isStatementExisted(ctx, dbConn, record[0], record[1])
+		const stmtIDIndex = 0           // Replace with actual index for statement ID if different
+		const statusIndex = 15          // Replace with actual index for status
+		if len(record) <= statusIndex { // Use the largest index you will access
+			return false, nil
+		}
+		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex])
 	}
 
 	return false, nil
