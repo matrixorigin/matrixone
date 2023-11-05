@@ -16,6 +16,7 @@ package db_holder
 
 import (
 	"context"
+	"database/sql"
 	"regexp"
 	"testing"
 
@@ -61,6 +62,45 @@ str2,2,2.2,2,2023-05-16T00:00:00Z,"{""key2"":""value2""}"
 
 	err = mock.ExpectationsWereMet()
 	if err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestIsRecordExisted(t *testing.T) {
+	// Mock database connection
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+
+	// Mock DBConnProvider function for the test
+	mockDBConnProvider := func() (*sql.DB, error) {
+		return db, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tbl := &table.Table{Table: "statement_info"}
+	record := []string{"test-statement-id", "success"}
+
+	// Define expectations for the SQL query.
+	mock.ExpectQuery("SELECT EXISTS(.+)").
+		WithArgs(record[0], record[1]).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true)) // Mocking a result that indicates the record exists.
+
+	// Call the function with the mocked database connection provider.
+	exists, err := IsRecordExisted(ctx, record, tbl, mockDBConnProvider)
+	if err != nil {
+		t.Errorf("error was not expected while checking if record exists: %s", err)
+	}
+	if !exists {
+		t.Errorf("expected record to exist, but it does not")
+	}
+
+	// Ensure all expectations are met.
+	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)
 	}
 }

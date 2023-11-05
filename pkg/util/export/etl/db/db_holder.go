@@ -245,3 +245,28 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 	return execErr
 
 }
+
+type DBConnProvider func() (*sql.DB, error)
+
+func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, getDBConn DBConnProvider) (bool, error) {
+	dbConn, err := getDBConn()
+	if err != nil {
+		return false, err
+	}
+
+	if tbl.Table == "statement_info" {
+		return isStatementExisted(ctx, dbConn, record[0], record[1])
+	}
+
+	return false, nil
+}
+
+func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string) (bool, error) {
+	var exists bool
+	query := "SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ?)"
+	err := db.QueryRowContext(ctx, query, stmtId, status).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
