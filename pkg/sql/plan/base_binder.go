@@ -1510,7 +1510,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 			for _, rightVal := range rightList.List.List {
 				if constExpr, ok := rightVal.Expr.(*plan.Expr_C); ok {
-					if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, constExpr) {
+					if !checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, constExpr) {
 						inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 						if err != nil {
 							return nil, err

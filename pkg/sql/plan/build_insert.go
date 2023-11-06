@@ -396,7 +396,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			if err != nil {
 				return nil
 			}
-			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, true)
+			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false)
 			if err != nil {
 				return nil
 			}
