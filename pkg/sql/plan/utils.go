@@ -119,14 +119,14 @@ func hasSubquery(expr *plan.Expr) bool {
 	}
 }
 
-func hasTag(expr *plan.Expr, tag int32) bool {
+func HasTag(expr *plan.Expr, tag int32) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		return exprImpl.Col.RelPos == tag
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			if hasTag(arg, tag) {
+			if HasTag(arg, tag) {
 				return true
 			}
 		}
@@ -134,7 +134,7 @@ func hasTag(expr *plan.Expr, tag int32) bool {
 
 	case *plan.Expr_List:
 		for _, arg := range exprImpl.List.List {
-			if hasTag(arg, tag) {
+			if HasTag(arg, tag) {
 				return true
 			}
 		}

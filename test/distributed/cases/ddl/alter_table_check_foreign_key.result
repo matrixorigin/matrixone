@@ -277,9 +277,9 @@ INSERT INTO product_order VALUES (4, 30, 4, 3, '2016-12-31 15:43:26');
 desc product_order;
 Field    Type    Null    Key    Default    Extra    Comment
 no    INT(32)    NO    PRI    null        
-product_category    INT(32)    NO        null        
+product_category    INT(32)    NO    MUL    null        
 product_id    INT(32)    NO    MUL    null        
-customer_id    INT(32)    NO        null        
+customer_id    INT(32)    NO    MUL    null        
 order_date    DATETIME(0)    NO    MUL    null        
 select * from product_order;
 no    product_category    product_id    customer_id    order_date
@@ -301,9 +301,9 @@ alter table product_order change product_category product_kind int;
 desc product_order;
 Field    Type    Null    Key    Default    Extra    Comment
 no    INT(32)    NO    PRI    null        
-product_kind    INT(32)    YES        null        
+product_kind    INT(32)    YES    MUL    null        
 product_id    INT(32)    NO    MUL    null        
-customer_id    INT(32)    NO        null        
+customer_id    INT(32)    NO    MUL    null        
 order_date    DATETIME(0)    NO    MUL    null        
 select * from product_order;
 no    product_kind    product_id    customer_id    order_date
