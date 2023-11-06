@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
 	"math"
@@ -82,6 +83,33 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	}
 }
 
+func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, error) {
+	switch typ.Oid {
+	case types.T_int8:
+		return float64(types.DecodeInt8(buf)), nil
+	case types.T_int16:
+		return float64(types.DecodeInt16(buf)), nil
+	case types.T_int32:
+		return float64(types.DecodeInt32(buf)), nil
+	case types.T_int64:
+		return float64(types.DecodeInt64(buf)), nil
+	case types.T_uint8:
+		return float64(types.DecodeUint8(buf)), nil
+	case types.T_uint16:
+		return float64(types.DecodeUint16(buf)), nil
+	case types.T_uint32:
+		return float64(types.DecodeUint32(buf)), nil
+	case types.T_uint64:
+		return float64(types.DecodeUint64(buf)), nil
+	case types.T_date:
+		return float64(types.DecodeDate(buf)), nil
+	case types.T_char, types.T_varchar, types.T_text:
+		return float64(plan2.ByteSliceToUint64(buf)), nil
+	default:
+		return 0, errors.New("unsupported type")
+	}
+}
+
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
 func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) (int, uint16, error) {
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
@@ -120,6 +148,9 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
+				if info.ColumnNDVs[idx] > 1000 {
+					info.ShuffleRanges[idx] = plan2.NewShuffleRange()
+				}
 			}
 		} else {
 			for idx, col := range tableDef.Cols[:lenCols] {
@@ -131,6 +162,15 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
+				if info.ShuffleRanges[idx] != nil {
+					minvalue, e := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+					if e != nil {
+						info.ShuffleRanges[idx] = nil
+					} else {
+						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+						info.ShuffleRanges[idx].Update(minvalue, maxvalue)
+					}
+				}
 			}
 		}
 		return nil

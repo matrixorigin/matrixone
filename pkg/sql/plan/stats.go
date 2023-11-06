@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
 	"strings"
@@ -48,25 +49,27 @@ func NewStatsCache() *StatsCache {
 }
 
 type StatsInfoMap struct {
-	NdvMap       map[string]float64
-	MinValMap    map[string]float64
-	MaxValMap    map[string]float64
-	DataTypeMap  map[string]types.T
-	BlockNumber  uint16
-	ObjectNumber int //detect if block number changes , update stats info map
-	TableCnt     float64
-	tableName    string
+	NdvMap          map[string]float64
+	MinValMap       map[string]float64
+	MaxValMap       map[string]float64
+	DataTypeMap     map[string]types.T
+	ShuffleRangeMap map[string]*ShuffleRange
+	BlockNumber     uint16
+	ObjectNumber    int //detect if block number changes , update stats info map
+	TableCnt        float64
+	tableName       string
 }
 
 func NewStatsInfoMap() *StatsInfoMap {
 	return &StatsInfoMap{
-		NdvMap:       make(map[string]float64),
-		MinValMap:    make(map[string]float64),
-		MaxValMap:    make(map[string]float64),
-		DataTypeMap:  make(map[string]types.T),
-		BlockNumber:  0,
-		ObjectNumber: 0,
-		TableCnt:     0,
+		NdvMap:          make(map[string]float64),
+		MinValMap:       make(map[string]float64),
+		MaxValMap:       make(map[string]float64),
+		DataTypeMap:     make(map[string]types.T),
+		ShuffleRangeMap: make(map[string]*ShuffleRange),
+		BlockNumber:     0,
+		ObjectNumber:    0,
+		TableCnt:        0,
 	}
 }
 
@@ -101,17 +104,19 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
 }
 
 type InfoFromZoneMap struct {
-	ColumnZMs  []objectio.ZoneMap
-	DataTypes  []types.Type
-	ColumnNDVs []float64
-	TableCnt   float64
+	ColumnZMs     []objectio.ZoneMap
+	DataTypes     []types.Type
+	ColumnNDVs    []float64
+	ShuffleRanges []*ShuffleRange
+	TableCnt      float64
 }
 
 func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	info := &InfoFromZoneMap{
-		ColumnZMs:  make([]objectio.ZoneMap, lenCols),
-		DataTypes:  make([]types.Type, lenCols),
-		ColumnNDVs: make([]float64, lenCols),
+		ColumnZMs:     make([]objectio.ZoneMap, lenCols),
+		DataTypes:     make([]types.Type, lenCols),
+		ColumnNDVs:    make([]float64, lenCols),
+		ShuffleRanges: make([]*ShuffleRange, lenCols),
 	}
 	return info
 }
@@ -128,6 +133,14 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tabl
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
+		if info.ShuffleRanges[i] != nil {
+			if info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
+				info.ShuffleRanges[i].Eval(1024)
+				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
+			}
+			info.ShuffleRanges[i] = nil
+		}
+
 		if !info.ColumnZMs[i].IsInited() {
 			s.MinValMap[colName] = 0
 			s.MaxValMap[colName] = 0
