@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -74,6 +75,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 
 	dbname, tablename, colname, err := handleDatasource(vector.MustStrCol(source), vector.MustStrCol(col))
+	logutil.Infof("db: %s, table: %s, col: %s in metadataScan", dbname, tablename, colname)
 	if err != nil {
 		return false, err
 	}
