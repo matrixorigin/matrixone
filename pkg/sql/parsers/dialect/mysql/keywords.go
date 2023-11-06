@@ -255,6 +255,7 @@ func init() {
 		"like":                       LIKE,
 		"ilike":                      ILIKE,
 		"list":                       LIST,
+		"lists":                      LISTS,
 		"limit":                      LIMIT,
 		"linear":                     LINEAR,
 		"lines":                      LINES,

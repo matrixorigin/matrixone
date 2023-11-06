@@ -781,12 +781,13 @@ type IndexOption struct {
 	Visible                  VisibleType
 	EngineAttribute          string
 	SecondaryEngineAttribute string
+	AlgoParamList            int64
 }
 
 // Must follow the following sequence when test
 func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.KeyBlockSize != 0 || node.ParserName != "" ||
-		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID {
+		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID || node.AlgoParamList != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -802,6 +803,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.Comment != "" {
 		ctx.WriteString("comment ")
 		ctx.WriteString(node.Comment)
+		ctx.WriteByte(' ')
+	}
+	if node.AlgoParamList != 0 {
+		ctx.WriteString("LISTS ")
+		ctx.WriteString(strconv.FormatInt(node.AlgoParamList, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {
