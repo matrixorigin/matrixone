@@ -2878,6 +2878,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
+			if ses.pu.SV.DisableSelectInto {
+				err = moerr.NewSyntaxError(requestCtx, "Unsupport select statement")
+				return
+			}
 			ses.InitExportConfig(st.Ep)
 			defer func() {
 				ses.ClearExportParam()
