@@ -1931,8 +1931,7 @@ func (data *CheckpointData) PrefetchFrom(
 			logutil.Warnf("PrefetchFrom PrefetchWithMerged error %v", err)
 		}
 	}
-	logutil.Info("open-tae", common.OperationField("prefetch read"),
-		common.OperandField("checkpoint"),
+	logutil.Info("prefetch-checkpoint",
 		common.AnyField("size", checkpointSize),
 		common.AnyField("count", len(locations)))
 	return
@@ -2226,10 +2225,10 @@ func (data *CheckpointData) readAll(
 			common.AnyField("read cost", time.Since(now)))
 		checkpointDataSize += uint64(val.Extent().End())
 	}
-	logutil.Info("open-tae", common.OperationField("read"),
+	logutil.Info("read-all", common.OperationField("read"),
 		common.OperandField("checkpoint"),
 		common.AnyField("size", checkpointDataSize),
-		common.AnyField("read cost", time.Since(readDuration)))
+		common.AnyField("duration", time.Since(readDuration)))
 	return
 }
 
