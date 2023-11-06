@@ -212,25 +212,29 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					var algorithm_table_type = indexdef.IndexAlgoTableType
 					fmt.Fprintf(buffer, "'%s', ", algorithm_table_type)
 
-					// 8. index visible
+					//8. algorithm_params
+					var algorithm_params = indexdef.IndexAlgoParams
+					fmt.Fprintf(buffer, "'%s', ", algorithm_params)
+
+					// 9. index visible
 					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
 
-					// 9. index vec_hidden
+					// 10. index vec_hidden
 					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
 
-					// 10. index vec_comment
+					// 11. index vec_comment
 					fmt.Fprintf(buffer, "'%s', ", indexdef.Comment)
 
-					// 11. index vec_column_name
+					// 12. index vec_column_name
 					fmt.Fprintf(buffer, "'%s', ", part)
 
-					// 12. index vec_ordinal_position
+					// 13. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
-					// 13. index vec_options
+					// 14. index vec_options
 					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
-					// 14. index vec_index_table
+					// 15. index vec_index_table
 					if indexdef.TableExist {
 						fmt.Fprintf(buffer, "'%s')", indexdef.IndexTableName)
 					} else {
@@ -273,33 +277,35 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					//7. algorithm_table_type
 					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
 
-					// 8. index visible
-					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
-
-					// 9. index vec_hidden
-					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
-
-					// 10. index vec_comment
+					//8. algorithm_params
 					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
 
-					// 11. index vec_column_name
+					//9. index visible
+					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
+
+					// 10. index vec_hidden
+					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
+
+					// 11. index vec_comment
+					fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+
+					// 12. index vec_column_name
 					fmt.Fprintf(buffer, "'%s', ", colName)
 
-					// 12. index vec_ordinal_position
+					// 13. index vec_ordinal_position
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
-					// 13. index vec_options
+					// 14. index vec_options
 					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
-					// 14. index vec_index_table
+					// 15. index vec_index_table
 					fmt.Fprintf(buffer, "%s)", NULL_VALUE)
 				}
 			}
 		}
 	}
 	buffer.WriteString(";")
-	sql := buffer.String()
-	return sql, nil
+	return buffer.String(), nil
 }
 
 // makeInsertSingleIndexSQL: make index metadata information sql for a single index object

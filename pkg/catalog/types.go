@@ -149,8 +149,9 @@ const (
 	SystemRelAttr_CatalogVersion = "catalog_version"
 
 	// 'mo_indexes' table
-	IndexAlgoName      = "algorithm"
-	IndexAlgoTableType = "algorithm_table_type"
+	IndexAlgoName      = "algo"
+	IndexAlgoTableType = "algo_table_type"
+	IndexAlgoParams    = "algo_params"
 
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"

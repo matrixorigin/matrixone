@@ -304,6 +304,7 @@ message IndexDef {
 	IndexOption option		  = 9;
 	string index_algo = 10;
 	string index_algo_table_type = 11;
+	string index_algo_params=12;
 }
 
 

@@ -46,8 +46,9 @@ const (
 	// The INDEX_TYPE in MYSQL has values BTREE, FULLTEXT, HASH, RTREE
 	// Ref: https://dev.mysql.com/doc/mysql-infoschema-excerpt/5.7/en/information-schema-statistics-table.html
 	MO_INDEX_TYPE                 = "type"
-	MO_INDEX_ALGORITHM            = "algorithm"
-	MO_INDEX_ALGORITHM_TABLE_TYPE = "algorithm_table_type"
+	MO_INDEX_ALGORITHM            = "algo"
+	MO_INDEX_ALGORITHM_TABLE_TYPE = "algo_table_type"
+	MO_INDEX_ALGORITHM_PARAMS     = "algo_params"
 	MO_INDEX_IS_VISIBLE           = "is_visible"
 	MO_INDEX_HIDDEN               = "hidden"
 	MO_INDEX_COMMENT              = "comment"
@@ -67,6 +68,7 @@ var MO_INDEX_COLTYPE = map[string]types.T{
 	MO_INDEX_TYPE:                 types.T_varchar,
 	MO_INDEX_ALGORITHM:            types.T_varchar,
 	MO_INDEX_ALGORITHM_TABLE_TYPE: types.T_varchar,
+	MO_INDEX_ALGORITHM_PARAMS:     types.T_varchar,
 	MO_INDEX_IS_VISIBLE:           types.T_int8,
 	MO_INDEX_HIDDEN:               types.T_int8,
 	MO_INDEX_COMMENT:              types.T_varchar,
@@ -182,8 +184,8 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 
 func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.ConstraintDef, eg engine.Engine, proc *process.Process) (*batch.Batch, error) {
 	bat := &batch.Batch{
-		Attrs: make([]string, 15),
-		Vecs:  make([]*vector.Vector, 15),
+		Attrs: make([]string, 16),
+		Vecs:  make([]*vector.Vector, 16),
 		Cnt:   1,
 	}
 	bat.Attrs[0] = MO_INDEX_ID
@@ -193,14 +195,15 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	bat.Attrs[4] = MO_INDEX_TYPE
 	bat.Attrs[5] = MO_INDEX_ALGORITHM
 	bat.Attrs[6] = MO_INDEX_ALGORITHM_TABLE_TYPE
-	bat.Attrs[7] = MO_INDEX_IS_VISIBLE
-	bat.Attrs[8] = MO_INDEX_HIDDEN
-	bat.Attrs[9] = MO_INDEX_COMMENT
-	bat.Attrs[10] = MO_INDEX_COLUMN_NAME
-	bat.Attrs[11] = MO_INDEX_ORDINAL_POSITION
-	bat.Attrs[12] = MO_INDEX_OPTIONS
-	bat.Attrs[13] = MO_INDEX_TABLE_NAME
-	bat.Attrs[14] = MO_INDEX_PRIKEY
+	bat.Attrs[7] = MO_INDEX_ALGORITHM_PARAMS
+	bat.Attrs[8] = MO_INDEX_IS_VISIBLE
+	bat.Attrs[9] = MO_INDEX_HIDDEN
+	bat.Attrs[10] = MO_INDEX_COMMENT
+	bat.Attrs[11] = MO_INDEX_COLUMN_NAME
+	bat.Attrs[12] = MO_INDEX_ORDINAL_POSITION
+	bat.Attrs[13] = MO_INDEX_OPTIONS
+	bat.Attrs[14] = MO_INDEX_TABLE_NAME
+	bat.Attrs[15] = MO_INDEX_PRIKEY
 
 	vec_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
 	bat.Vecs[0] = vec_id
@@ -223,26 +226,29 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	vec_algo_table_type := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM_TABLE_TYPE].ToType())
 	bat.Vecs[6] = vec_algo_table_type
 
+	vec_algo_params := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ALGORITHM_PARAMS].ToType())
+	bat.Vecs[7] = vec_algo_params
+
 	vec_visible := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_IS_VISIBLE].ToType())
-	bat.Vecs[7] = vec_visible
+	bat.Vecs[8] = vec_visible
 
 	vec_hidden := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_HIDDEN].ToType())
-	bat.Vecs[8] = vec_hidden
+	bat.Vecs[9] = vec_hidden
 
 	vec_comment := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COMMENT].ToType())
-	bat.Vecs[9] = vec_comment
+	bat.Vecs[10] = vec_comment
 
 	vec_column_name := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_COLUMN_NAME].ToType())
-	bat.Vecs[10] = vec_column_name
+	bat.Vecs[11] = vec_column_name
 
 	vec_ordinal_position := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ORDINAL_POSITION].ToType())
-	bat.Vecs[11] = vec_ordinal_position
+	bat.Vecs[12] = vec_ordinal_position
 
 	vec_options := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_OPTIONS].ToType())
-	bat.Vecs[12] = vec_options
+	bat.Vecs[13] = vec_options
 
 	vec_index_table := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
-	bat.Vecs[13] = vec_index_table
+	bat.Vecs[14] = vec_index_table
 
 	for _, constraint := range ct.Cts {
 		switch def := constraint.(type) {
@@ -296,6 +302,15 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 						err = vector.AppendBytes(vec_algo_table_type, []byte(""), true, proc.Mp())
 					} else {
 						err = vector.AppendBytes(vec_algo_table_type, []byte(index.IndexAlgoTableType), false, proc.Mp())
+					}
+					if err != nil {
+						return nil, err
+					}
+
+					if len(index.IndexAlgoParams) == 0 {
+						err = vector.AppendBytes(vec_algo_params, []byte(""), true, proc.Mp())
+					} else {
+						err = vector.AppendBytes(vec_algo_params, []byte(index.IndexAlgoParams), false, proc.Mp())
 					}
 					if err != nil {
 						return nil, err
@@ -371,6 +386,10 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 						return nil, err
 					}
 					err = vector.AppendBytes(vec_algo_table_type, []byte(""), true, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendBytes(vec_algo_params, []byte(""), true, proc.Mp())
 					if err != nil {
 						return nil, err
 					}
