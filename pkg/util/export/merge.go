@@ -436,7 +436,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 			)
 		}
 	}
-	logutil.Debug("upload files success", logutil.TableField(m.table.GetIdentify()), zap.Int("file count", len(files)))
+	logutil.Info("upload files success", logutil.TableField(m.table.GetIdentify()), zap.Int("file count", len(files)))
 
 	return err
 }
