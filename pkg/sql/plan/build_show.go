@@ -703,7 +703,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
 		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
 	} else {
-		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || haveUniqueKey(tableDef) {
+		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || tableDef.Indexes != nil {
 			keyStr += "case"
 			if tableDef.Pkey != nil {
 				for _, name := range tableDef.Pkey.Names {
@@ -719,12 +719,20 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 					keyStr += " then 'MUL'"
 				}
 			}
-			if haveUniqueKey(tableDef) {
+			if tableDef.Indexes != nil {
 				for _, indexdef := range tableDef.Indexes {
 					if indexdef.Unique {
-						keyStr += " when attname = "
-						keyStr += "'" + indexdef.IndexName + "'"
-						keyStr += " then 'UNI'"
+						for _, name := range indexdef.Parts {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'UNI'"
+						}
+					} else {
+						for _, name := range indexdef.Parts {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'MUL'"
+						}
 					}
 				}
 			}

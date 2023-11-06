@@ -38,7 +38,7 @@ alter table t1 drop column id2;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 id    VARCHAR(20)    NO    PRI    null        
-name    VARCHAR(255)    YES        null        
+name    VARCHAR(255)    YES    MUL    null        
 age    INT(32)    YES        null        
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
