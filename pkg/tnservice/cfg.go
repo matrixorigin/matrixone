@@ -49,7 +49,7 @@ var (
 	defaultFlushInterval         = time.Second * 60
 	defaultScanInterval          = time.Second * 5
 	defaultIncrementalInterval   = time.Minute
-	defaultGlobalMinCount        = int64(60)
+	defaultGlobalMinCount        = int64(40)
 	defaultMinCount              = int64(100)
 	defaultReservedWALEntryCount = uint64(5000)
 

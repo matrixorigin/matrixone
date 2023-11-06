@@ -110,4 +110,11 @@ type Handler interface {
 		req *db.TraceSpan,
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
+
+	HandleStorageUsage(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.StorageUsage,
+		resp *db.StorageUsageResp,
+	) (func(), error)
 }
