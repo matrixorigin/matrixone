@@ -257,19 +257,20 @@ func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, get
 	if tbl.Table == "statement_info" {
 		const stmtIDIndex = 0           // Replace with actual index for statement ID if different
 		const statusIndex = 15          // Replace with actual index for status
+		const requestAtIndex = 12       // Replace with actual index for request_at
 		if len(record) <= statusIndex { // Use the largest index you will access
 			return false, nil
 		}
-		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex])
+		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex])
 	}
 
 	return false, nil
 }
 
-func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string) (bool, error) {
+func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string, request_at string) (bool, error) {
 	var exists bool
-	query := "SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ?)"
-	err := db.QueryRowContext(ctx, query, stmtId, status).Scan(&exists)
+	query := "SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ?)"
+	err := db.QueryRowContext(ctx, query, stmtId, status, request_at).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
