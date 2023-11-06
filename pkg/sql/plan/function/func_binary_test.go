@@ -2625,8 +2625,8 @@ func initCosineSimilarityArrayTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
 				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_float32.ToType(), false,
-				[]float32{1, 1},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 1},
 				[]bool{false, false}),
 		},
 		{
@@ -2636,8 +2636,8 @@ func initCosineSimilarityArrayTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
 				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_float32.ToType(), false,
-				[]float32{1, 1},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{1, 1},
 				[]bool{false, false}),
 		},
 	}

@@ -91,13 +91,13 @@ func NewBasicPolicy() *Basic {
 
 // impl Policy for Basic
 func (o *Basic) OnObject(obj *catalog.SegmentEntry) {
-	rowsLeftOnSeg := obj.Stat.RemainingRows
+	rowsLeftOnSeg := obj.Stat.GetRemainingRows()
 	// it has too few rows, merge it
 	iscandidate := func() bool {
 		if rowsLeftOnSeg < o.config.ObjectMinRows {
 			return true
 		}
-		if rowsLeftOnSeg < obj.Stat.Rows/2 {
+		if rowsLeftOnSeg < obj.Stat.GetRows()/2 {
 			return true
 		}
 		return false
@@ -134,7 +134,7 @@ func (o *Basic) GetConfig(id uint64) any {
 func (o *Basic) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 	segs := o.objHeap.finish()
 	sort.Slice(segs, func(i, j int) bool {
-		return segs[i].Stat.RemainingRows < segs[j].Stat.RemainingRows
+		return segs[i].Stat.GetRemainingRows() < segs[j].Stat.GetRemainingRows()
 	})
 	segs = o.controlMem(segs, mem)
 	segs = o.optimize(segs)
@@ -145,7 +145,7 @@ func (o *Basic) optimize(segs []*catalog.SegmentEntry) []*catalog.SegmentEntry {
 	// segs are sorted by remaining rows
 	o.accBuf = o.accBuf[:1]
 	for i, seg := range segs {
-		o.accBuf = append(o.accBuf, o.accBuf[i]+seg.Stat.RemainingRows)
+		o.accBuf = append(o.accBuf, o.accBuf[i]+seg.Stat.GetRemainingRows())
 	}
 	acc := o.accBuf
 
