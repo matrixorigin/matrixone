@@ -342,7 +342,7 @@ import (
 // MO table option
 %token <str> PROPERTIES
 
-// Index
+// Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS
 
