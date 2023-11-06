@@ -134,7 +134,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tabl
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
 		if info.ShuffleRanges[i] != nil {
-			if info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
+			if s.TableCnt > HashMapSizeForShuffle && info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
 				info.ShuffleRanges[i].Eval(1024)
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
 			}
