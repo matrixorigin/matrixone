@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
 	"math"
@@ -83,30 +82,30 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	}
 }
 
-func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, error) {
+func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
 	switch typ.Oid {
 	case types.T_int8:
-		return float64(types.DecodeInt8(buf)), nil
+		return float64(types.DecodeInt8(buf)), true
 	case types.T_int16:
-		return float64(types.DecodeInt16(buf)), nil
+		return float64(types.DecodeInt16(buf)), true
 	case types.T_int32:
-		return float64(types.DecodeInt32(buf)), nil
+		return float64(types.DecodeInt32(buf)), true
 	case types.T_int64:
-		return float64(types.DecodeInt64(buf)), nil
+		return float64(types.DecodeInt64(buf)), true
 	case types.T_uint8:
-		return float64(types.DecodeUint8(buf)), nil
+		return float64(types.DecodeUint8(buf)), true
 	case types.T_uint16:
-		return float64(types.DecodeUint16(buf)), nil
+		return float64(types.DecodeUint16(buf)), true
 	case types.T_uint32:
-		return float64(types.DecodeUint32(buf)), nil
+		return float64(types.DecodeUint32(buf)), true
 	case types.T_uint64:
-		return float64(types.DecodeUint64(buf)), nil
+		return float64(types.DecodeUint64(buf)), true
 	case types.T_date:
-		return float64(types.DecodeDate(buf)), nil
+		return float64(types.DecodeDate(buf)), true
 	case types.T_char, types.T_varchar, types.T_text:
-		return float64(plan2.ByteSliceToUint64(buf)), nil
+		return float64(plan2.ByteSliceToUint64(buf)), true
 	default:
-		return 0, errors.New("unsupported type")
+		return 0, false
 	}
 }
 
@@ -163,8 +162,8 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 				if info.ShuffleRanges[idx] != nil {
-					minvalue, e := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
-					if e != nil {
+					minvalue, succ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+					if !succ {
 						info.ShuffleRanges[idx] = nil
 					} else {
 						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
