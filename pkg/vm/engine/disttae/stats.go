@@ -147,8 +147,15 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
-				if info.ColumnNDVs[idx] > 1000 {
+				if info.ColumnNDVs[idx] > 100 {
 					info.ShuffleRanges[idx] = plan2.NewShuffleRange()
+					minvalue, succ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+					if !succ {
+						info.ShuffleRanges[idx] = nil
+					} else {
+						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+						info.ShuffleRanges[idx].Update(minvalue, maxvalue)
+					}
 				}
 			}
 		} else {
@@ -162,11 +169,11 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 				if info.ShuffleRanges[idx] != nil {
-					minvalue, succ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
+					minvalue, succ := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
 					if !succ {
 						info.ShuffleRanges[idx] = nil
 					} else {
-						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
+						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue)
 					}
 				}
