@@ -466,9 +466,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	switch node.NodeType {
 	case plan.Node_JOIN:
-		if node.Stats.HashmapStats == nil {
-			node.Stats.HashmapStats = &plan.HashMapStats{}
-		}
+		resetHashMapStats(node.Stats)
 
 		ndv := math.Min(leftStats.Outcnt, rightStats.Outcnt)
 		if ndv < 1 {
@@ -539,9 +537,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_AGG:
-		if node.Stats.HashmapStats == nil {
-			node.Stats.HashmapStats = &plan.HashMapStats{}
-		}
+		resetHashMapStats(node.Stats)
 		if len(node.GroupBy) > 0 {
 			incnt := childStats.Outcnt
 			outcnt := 1.0
@@ -571,9 +567,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 
 	case plan.Node_UNION:
-		if node.Stats.HashmapStats == nil {
-			node.Stats.HashmapStats = &plan.HashMapStats{}
-		}
+		resetHashMapStats(node.Stats)
 		node.Stats.Outcnt = (leftStats.Outcnt + rightStats.Outcnt) * 0.7
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
@@ -585,27 +579,21 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.Selectivity = 1
 
 	case plan.Node_INTERSECT:
-		if node.Stats.HashmapStats == nil {
-			node.Stats.HashmapStats = &plan.HashMapStats{}
-		}
+		resetHashMapStats(node.Stats)
 		node.Stats.Outcnt = math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.5
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_INTERSECT_ALL:
-		if node.Stats.HashmapStats == nil {
-			node.Stats.HashmapStats = &plan.HashMapStats{}
-		}
+		resetHashMapStats(node.Stats)
 		node.Stats.Outcnt = math.Min(leftStats.Outcnt, rightStats.Outcnt) * 0.7
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
 		node.Stats.Selectivity = 1
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_MINUS:
-		if node.Stats.HashmapStats == nil {
-			node.Stats.HashmapStats = &plan.HashMapStats{}
-		}
+		resetHashMapStats(node.Stats)
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
 		node.Stats.Outcnt = minus * 0.5
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
@@ -613,9 +601,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_MINUS_ALL:
-		if node.Stats.HashmapStats == nil {
-			node.Stats.HashmapStats = &plan.HashMapStats{}
-		}
+		resetHashMapStats(node.Stats)
 		minus := math.Max(leftStats.Outcnt, rightStats.Outcnt) - math.Min(leftStats.Outcnt, rightStats.Outcnt)
 		node.Stats.Outcnt = minus * 0.7
 		node.Stats.Cost = leftStats.Outcnt + rightStats.Outcnt
@@ -659,11 +645,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				builder.tag2Table[node.BindingTags[0]] = node.TableDef
 			}
 			newStats := calcScanStats(node, builder)
-			if node.Stats != nil && node.Stats.HashmapStats != nil {
-				newStats.HashmapStats = node.Stats.HashmapStats
-			} else {
-				newStats.HashmapStats = &plan.HashMapStats{}
-			}
+			resetHashMapStats(newStats)
 			node.Stats = newStats
 		}
 
@@ -678,6 +660,15 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Outcnt = childStats.Outcnt
 			node.Stats.Cost = childStats.Outcnt
 			node.Stats.Selectivity = childStats.Selectivity
+		}
+	}
+
+	// if there is a limit, outcnt is limit number
+	if node.Limit != nil {
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_C); ok {
+			if c, ok := cExpr.C.Value.(*plan.Const_I64Val); ok {
+				node.Stats.Outcnt = float64(c.I64Val)
+			}
 		}
 	}
 }
@@ -773,6 +764,16 @@ func DefaultStats() *plan.Stats {
 	stats.Selectivity = 1
 	stats.BlockNum = 1
 	return stats
+}
+
+func resetHashMapStats(stats *plan.Stats) {
+	if stats.HashmapStats == nil {
+		stats.HashmapStats = &plan.HashMapStats{}
+	} else {
+		stats.HashmapStats.HashmapSize = 0
+		stats.HashmapStats.HashOnPK = false
+		stats.HashmapStats.Shuffle = false
+	}
 }
 
 func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
