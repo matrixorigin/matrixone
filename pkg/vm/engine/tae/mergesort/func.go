@@ -150,7 +150,7 @@ func multiplexVarlen(
 		mp := ret[i].GetAllocator()
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
-			if cols[s].IsNull(cursors[s]) {
+			if cols[s].IsNull(uint64(cursors[s])) {
 				vector.AppendBytes(vec, nil, true, mp)
 			} else {
 				vector.AppendBytes(vec, cols[s].GetBytesAt(cursors[s]), false, mp)
@@ -178,7 +178,7 @@ func multiplexFixed[T any](
 		mp := ret[i].GetAllocator()
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
-			if cols[s].IsNull(cursors[s]) {
+			if cols[s].IsNull(uint64(cursors[s])) {
 				vector.AppendFixed(vec, nullVal, true, mp)
 			} else {
 				vector.AppendFixed(vec, vector.GetFixedAt[T](cols[s], cursors[s]), false, mp)
@@ -196,6 +196,7 @@ func Multiplex(
 	if len(col) == 0 {
 		return
 	}
+	columns := make([]containers.Vector, len(col))
 	for i := range col {
 		colums[i] = col[i].GetDownstreamVector()
 	}
