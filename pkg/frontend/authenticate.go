@@ -1176,7 +1176,7 @@ const (
 
 	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s";`
 
-	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = "%s" where account_name = "%s";`
+	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = default where account_name = "%s";`
 
 	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
 
@@ -1607,12 +1607,12 @@ func getSqlForUpdateStatusOfAccount(ctx context.Context, status, timestamp, acco
 	return fmt.Sprintf(updateStatusOfAccountFormat, status, timestamp, account), nil
 }
 
-func getSqlForUpdateStatusAndVersionOfAccount(ctx context.Context, status, timestamp, account string, version uint64) (string, error) {
+func getSqlForUpdateStatusAndVersionOfAccount(ctx context.Context, status, account string, version uint64) (string, error) {
 	err := inputNameIsInvalid(ctx, status, account)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(updateStatusAndVersionOfAccountFormat, status, version, timestamp, account), nil
+	return fmt.Sprintf(updateStatusAndVersionOfAccountFormat, status, version, account), nil
 }
 
 func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (string, error) {
@@ -2984,7 +2984,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 						return err
 					}
 				} else if aa.StatusOption.Option == tree.AccountStatusOpen {
-					sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name, (version+1)%math.MaxUint64)
+					sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), aa.Name, (version+1)%math.MaxUint64)
 					if err != nil {
 						return err
 					}
