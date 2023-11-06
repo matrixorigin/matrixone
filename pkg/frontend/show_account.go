@@ -242,7 +242,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	var MoAccountColumns, EachAccountColumns *plan.ResultColDef
 	var outputBatches []*batch.Batch
 	start := time.Now()
-	defer v2.TxnShowAccountsDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() { v2.TxnShowAccountsDurationHistogram.Observe(time.Since(start).Seconds()) }()
 
 	mp := ses.GetMemPool()
 
