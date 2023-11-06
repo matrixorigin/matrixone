@@ -158,6 +158,7 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 	for idx := range locations {
 		incrData, err := LoadSpecifiedCkpBatch(ctx, locations[idx], fs, versions[idx], SEGStorageUsageIDX)
 		if err != nil {
+			incrData.Close()
 			logutil.Warn(fmt.Sprintf("[storage usage]: load increment checkpoint failed: %v", err))
 			return nil
 		}
@@ -179,6 +180,8 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 				tmpRest[objId] = &UsageData{accId, dbId, tblId, [16]byte{0}, size}
 			}
 		}
+
+		incrData.Close()
 	}
 
 	return tmpRest
