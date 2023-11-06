@@ -522,7 +522,7 @@ mgr    INT UNSIGNED(32)    YES        null
 hiredate    DATE(0)    YES        null        
 sal    DECIMAL64(7)    YES        null        
 comm    DECIMAL64(7)    YES        null        
-deptno    VARCHAR(25)    YES        null        
+deptno    VARCHAR(25)    YES    MUL    null        
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
