@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"strings"
 	"time"
@@ -172,7 +173,7 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 		version := usage.CkpEntries[idx].Version
 		location := usage.CkpEntries[idx].Location
 
-		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, fs, location, version)
+		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, fs, version, logtail.SEGStorageUsageIDX)
 		if err != nil {
 			return nil, err
 		}
@@ -185,6 +186,7 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 		if version < logtail.CheckpointVersion9 {
 			// exist old version checkpoint which hasn't storage usage data in it,
 			// to avoid inaccurate info leading misunderstand, we chose to return empty result
+			logutil.Info("[storage usage]: found older ckp when handle storage usage response")
 			return map[int32]uint64{}, nil
 		}
 

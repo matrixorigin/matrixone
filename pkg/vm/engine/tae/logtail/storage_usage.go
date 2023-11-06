@@ -125,6 +125,8 @@ func FillUsageBatOfIncremental(c *catalog.Catalog, collector *IncrementalCollect
 	defer v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 
 	loaded := traverseCatalog(c, collector.BaseCollector, fs)
+	logutil.Info(fmt.Sprintf("[storage usage]: incremental checkpoint loaded %d object meta", loaded))
+
 	v2.TaskICkpLoadObjectCounter.Add(float64(loaded))
 }
 
@@ -143,6 +145,7 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 		if versions[idx] < CheckpointVersion9 {
 			// existing old version checkpoint, so these data are inaccurate.
 			// so we drop them, return nil
+			logutil.Info("[storage usage]: found older ckp when collect usage data")
 			return nil
 		}
 	}
@@ -153,9 +156,9 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 	}
 
 	for idx := range locations {
-		_, incrData, err := LoadCheckpointEntriesFromKey(ctx, fs, locations[idx], versions[idx])
+		incrData, err := LoadSpecifiedCkpBatch(ctx, locations[idx], fs, versions[idx], SEGStorageUsageIDX)
 		if err != nil {
-			logutil.Warn(fmt.Sprintf("[storage usage] load increment checkpoint failed: %v", err))
+			logutil.Warn(fmt.Sprintf("[storage usage]: load increment checkpoint failed: %v", err))
 			return nil
 		}
 
@@ -256,6 +259,8 @@ func FillUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
 	// we traverse the catalog to get the full datasets of storage usage.
 	// this code below should only execute exactly once when upgrade from old TN version
 	loaded := traverseCatalog(c, collector.BaseCollector, fs)
+	logutil.Info(fmt.Sprintf("[storage usage]: global checkpoint loaded %d object meta", loaded))
+
 	v2.TaskGCkpLoadObjectCounter.Add(float64(loaded))
 
 }
