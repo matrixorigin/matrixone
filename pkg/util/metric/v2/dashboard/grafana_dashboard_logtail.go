@@ -122,7 +122,7 @@ func (c *DashboardCreator) initLogtailOverviewRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_logtail_apply_duration_seconds_bucket`, `step="apply"`),
 				c.getMetricWithFilter(`mo_logtail_apply_duration_seconds_bucket`, `step="apply-latency"`),
 				c.getMetricWithFilter(`mo_logtail_apply_duration_seconds_bucket`, `step="apply-notify"`),
-				c.getMetricWithFilter(`mo_logtail_apply_duration_seconds_bucket`, `step="apply-notify-latency`),
+				c.getMetricWithFilter(`mo_logtail_apply_duration_seconds_bucket`, `step="apply-notify-latency"`),
 				c.getMetricWithFilter(`mo_txn_commit_duration_seconds_bucket`, `type="cn-wait-logtail"`),
 			},
 			[]string{
