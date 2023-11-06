@@ -1977,39 +1977,42 @@ func (data *CheckpointData) ReadFrom(
 // LoadSpecifiedCkpBatch loads a specified checkpoint data batch
 func LoadSpecifiedCkpBatch(
 	ctx context.Context, location objectio.Location,
-	fs fileservice.FileService, version uint32, batchIdx uint16) (*CheckpointData, error) {
+	fs fileservice.FileService, version uint32, batchIdx uint16) (data *CheckpointData, err error) {
+	data = NewCheckpointData()
+	defer func() {
+		if err != nil {
+			data.Close()
+			data = nil
+		}
+	}()
 
 	if batchIdx >= MaxIDX {
-		return nil, moerr.NewInvalidArgNoCtx("out of bound batchIdx", batchIdx)
+		err = moerr.NewInvalidArgNoCtx("out of bound batchIdx", batchIdx)
+		return
+	}
+	var reader *blockio.BlockReader
+	if reader, err = blockio.NewObjectReader(fs, location); err != nil {
+		return
 	}
 
-	data := NewCheckpointData()
-	reader, err := blockio.NewObjectReader(fs, location)
-	if err != nil {
-		return nil, err
-	}
-	err = data.readMetaBatch(ctx, version, reader, nil)
-	if err != nil {
-		return nil, err
+	if err = data.readMetaBatch(ctx, version, reader, nil); err != nil {
+		return
 	}
 
 	data.replayMetaBatch()
 	for _, val := range data.locations {
-		var reader *blockio.BlockReader
-		reader, err = blockio.NewObjectReader(fs, val)
-		if err != nil {
-			return nil, err
+		if reader, err = blockio.NewObjectReader(fs, val); err != nil {
+			return
 		}
 		var bats []*containers.Batch
 		item := checkpointDataReferVersions[version][batchIdx]
-		bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, batchIdx, reader)
-		if err != nil {
-			return nil, err
+		if bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, batchIdx, reader); err != nil {
+			return
 		}
 
 		for i := range bats {
-			if err := data.bats[batchIdx].Append(bats[i]); err != nil {
-				return nil, err
+			if err = data.bats[batchIdx].Append(bats[i]); err != nil {
+				return
 			}
 		}
 	}
