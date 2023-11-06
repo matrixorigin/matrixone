@@ -107,6 +107,7 @@ const (
 	COUNT_IF          // COUNT_IF
 	COVAR_POP         // COVAR_POP
 	COVAR_SAMPLE      // COVAR_SAMPLE
+	CONVERT_TZ        // CONVERT_TZ
 	CUME_DIST         // CUME_DIST
 	CURRENT_DATE      // CURRENT_DATE
 	CURRENT_TIMESTAMP // CURRENT_TIMESTAMP
@@ -491,6 +492,7 @@ var functionIdRegister = map[string]int32{
 	"connection_id":                  CONNECTION_ID,
 	"charset":                        CHARSET,
 	"convert":                        CONVERT,
+	"convert_tz":                     CONVERT_TZ,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
