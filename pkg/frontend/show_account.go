@@ -17,6 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,9 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"strings"
-	"time"
 )
 
 const (
@@ -234,7 +235,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	var MoAccountColumns, EachAccountColumns *plan.ResultColDef
 	var outputBatches []*batch.Batch
 	start := time.Now()
-	defer v2.TxnShowAccountsDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() { v2.TxnShowAccountsDurationHistogram.Observe(time.Since(start).Seconds()) }()
 
 	mp := ses.GetMemPool()
 
