@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"strings"
 	"time"
@@ -172,7 +173,15 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 		version := usage.CkpEntries[idx].Version
 		location := usage.CkpEntries[idx].Location
 
-		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, fs, location, version)
+		// storage usage was introduced after `CheckpointVersion9`
+		if version < logtail.CheckpointVersion9 {
+			// exist old version checkpoint which hasn't storage usage data in it,
+			// to avoid inaccurate info leading misunderstand, we chose to return empty result
+			logutil.Info("[storage usage]: found older ckp when handle storage usage response")
+			return map[int32]uint64{}, nil
+		}
+
+		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, fs, version, logtail.SEGStorageUsageIDX)
 		if err != nil {
 			return nil, err
 		}
@@ -181,19 +190,14 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 		accIDVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID)
 		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
 
-		// storage usage was introduced after `CheckpointVersion9`
-		if version < logtail.CheckpointVersion9 {
-			// exist old version checkpoint which hasn't storage usage data in it,
-			// to avoid inaccurate info leading misunderstand, we chose to return empty result
-			return map[int32]uint64{}, nil
-		}
-
 		size := uint64(0)
 		length := accIDVec.Length()
 		for i := 0; i < length; i++ {
 			result[int32(accIDVec.Get(i).(uint64))] += sizeVec.Get(i).(uint64)
 			size += sizeVec.Get(i).(uint64)
 		}
+
+		ckpData.Close()
 	}
 
 	// [account_id, db_id, table_id, obj_id, table_total_size]
