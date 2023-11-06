@@ -347,34 +347,63 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 		cacheFileData := &SliceCache{}
 		defer cacheFileData.Reset()
 
-		// read all content
-		var line []string
-		line, err = reader.ReadLine()
-		for ; line != nil && err == nil; line, err = reader.ReadLine() {
-			if err = row.ParseRow(line); err != nil {
-				m.logger.Error("parse ETL rows failed",
+		// Read the first line to check if the record already exists
+		var existed bool
+		firstLine, err := reader.ReadLine()
+		if err != nil {
+			m.logger.Error("failed to read the first line of the file",
+				logutil.PathField(fp.FilePath), zap.Error(err))
+			return err
+		}
+
+		if firstLine != nil {
+			if err = row.ParseRow(firstLine); err != nil {
+				m.logger.Error("parse first ETL row failed",
 					logutil.TableField(m.table.GetIdentify()),
 					logutil.PathField(fp.FilePath),
-					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
+					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", firstLine), 102400)),
 				)
 				return err
 			}
 
-			exists, _ := db_holder.IsRecordExisted(ctx, line, m.table, db_holder.InitOrRefreshDBConn)
-
-			if exists {
-				m.logger.Info("a record in file already exists, skipping the entire file",
+			// Check if the first record already exists in the database
+			existed, err = db_holder.IsRecordExisted(ctx, firstLine, m.table, db_holder.InitOrRefreshDBConn)
+			if err != nil {
+				m.logger.Error("error checking if the first record exists",
 					logutil.TableField(m.table.GetIdentify()),
 					logutil.PathField(fp.FilePath),
+					logutil.ErrorField(err),
 				)
-				return nil // Skip this file if any record already exists
+				return err
 			}
-			cacheFileData.Put(row)
+
+			// Process the first line since it doesn't exist in the database
+			if !existed {
+				cacheFileData.Put(row)
+			}
 		}
-		if err != nil {
-			m.logger.Warn("failed to read file",
-				logutil.PathField(fp.FilePath), zap.Error(err))
-			return err
+
+		// read all content if not existed
+		if !existed {
+			var line []string
+			line, err = reader.ReadLine()
+			for ; line != nil && err == nil; line, err = reader.ReadLine() {
+				if err = row.ParseRow(line); err != nil {
+					m.logger.Error("parse ETL rows failed",
+						logutil.TableField(m.table.GetIdentify()),
+						logutil.PathField(fp.FilePath),
+						logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
+					)
+					return err
+				}
+
+				cacheFileData.Put(row)
+			}
+			if err != nil {
+				m.logger.Warn("failed to read file",
+					logutil.PathField(fp.FilePath), zap.Error(err))
+				return err
+			}
 		}
 
 		// sql insert
