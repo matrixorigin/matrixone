@@ -1707,6 +1707,14 @@ func checkColModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool 
 				if colCnt1 != colCnt2 {
 					return true
 				}
+				for j := 0; j < len(p.Query.Nodes[i].TableDef.Cols); j++ {
+					if p.Query.Nodes[i].TableDef.Cols[j].Hidden {
+						continue
+					}
+					if p.Query.Nodes[i].TableDef.Cols[j].Name != tableDef.Cols[j].Name {
+						return true
+					}
+				}
 			}
 		}
 	default:
