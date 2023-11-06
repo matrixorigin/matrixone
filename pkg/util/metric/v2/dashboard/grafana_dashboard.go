@@ -26,6 +26,8 @@ import (
 	"github.com/K-Phoen/grabana/graph"
 	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/target/prometheus"
+	"github.com/K-Phoen/grabana/timeseries"
+	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 	"github.com/K-Phoen/grabana/variable/interval"
 	"github.com/K-Phoen/grabana/variable/query"
 )
@@ -144,6 +146,55 @@ func (c *DashboardCreator) getHistogram(
 	column float32,
 	axisOptions ...axis.Option) row.Option {
 	return c.getHistogramWithExtraBy(title, metric, percents, column, "", axisOptions...)
+}
+
+func SpanNulls(always bool) timeseries.Option {
+	return func(ts *timeseries.TimeSeries) error {
+		ts.Builder.TimeseriesPanel.FieldConfig.Defaults.Custom.SpanNulls = always
+		return nil
+	}
+}
+
+func (c *DashboardCreator) getPercentHist(
+	title string,
+	metric string,
+	percents []float64,
+	opts ...timeseries.Option) row.Option {
+	options := []timeseries.Option{
+		timeseries.DataSource(c.dataSource),
+		timeseries.FillOpacity(0),
+		timeseries.Height("300px"),
+		timeseries.Axis(tsaxis.Unit("s")),
+	}
+	options = append(options, opts...)
+	for i := 0; i < len(percents); i++ {
+		percent := percents[i]
+		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+"))", percent, metric)
+		legend := fmt.Sprintf("P%.0f", percent*100)
+		options = append(options, timeseries.WithPrometheusTarget(
+			query,
+			prometheus.Legend(legend),
+		))
+	}
+	return row.WithTimeSeries(title, options...)
+}
+
+func (c *DashboardCreator) getTimeSeries(
+	title string, pql []string, legend []string,
+	opts ...timeseries.Option) row.Option {
+	options := []timeseries.Option{
+		timeseries.DataSource(c.dataSource),
+		timeseries.FillOpacity(0),
+		timeseries.Height("300px"),
+	}
+	options = append(options, opts...)
+	for i := range pql {
+		options = append(options, timeseries.WithPrometheusTarget(
+			pql[i],
+			prometheus.Legend(legend[i]),
+		))
+	}
+	return row.WithTimeSeries(title, options...)
 }
 
 func (c *DashboardCreator) getHistogramWithExtraBy(
