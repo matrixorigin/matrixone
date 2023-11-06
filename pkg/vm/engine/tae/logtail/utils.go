@@ -1983,8 +1983,6 @@ func LoadSpecifiedCkpBatch(
 		return nil, moerr.NewInvalidArgNoCtx("out of bound batchIdx", batchIdx)
 	}
 
-	locations := make([]objectio.Location, 0)
-	locations = append(locations, location)
 	data := NewCheckpointData()
 	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
