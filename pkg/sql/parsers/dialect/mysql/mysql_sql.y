@@ -342,9 +342,9 @@ import (
 // MO table option
 %token <str> PROPERTIES
 
-// Index
+// Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
@@ -2980,6 +2980,7 @@ alter_table_alter:
             Enforce: $3,
         }
     }
+    //TODO: add kmeans params later @arjun
 
 visibility:
     VISIBLE
@@ -6142,7 +6143,9 @@ index_option_list:
                 opt1.ParserName = opt2.ParserName
             } else if opt2.Visible != tree.VISIBLE_TYPE_INVALID {
                 opt1.Visible = opt2.Visible
-            }
+            } else if opt2.AlgoParamList > 0 {
+	      opt1.AlgoParamList = opt2.AlgoParamList
+	    }
             $$ = opt1
         }
     }
@@ -6151,6 +6154,10 @@ index_option:
     KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
         $$ = &tree.IndexOption{KeyBlockSize: uint64($3.(int64))}
+    }
+|   LISTS equal_opt INTEGRAL
+    {
+	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
     }
 |   COMMENT_KEYWORD STRING
     {
@@ -10479,6 +10486,7 @@ non_reserved_keyword:
 |   VECF32
 |   VECF64
 |   KEY_BLOCK_SIZE
+|   LISTS
 |   KEYS
 |   LANGUAGE
 |   LESS
