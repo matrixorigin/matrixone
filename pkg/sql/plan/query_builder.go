@@ -1384,14 +1384,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
-		determineHashOnPK(rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, false)
 
 		builder.partitionPrune(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
+		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
+		// after determine shuffle, never call recalc stats again.
+		// new optimize rule should be put before
 
 		builder.pushdownRuntimeFilters(rootID)
 
