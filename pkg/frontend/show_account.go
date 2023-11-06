@@ -183,7 +183,6 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 
 		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, fs, version, logtail.SEGStorageUsageIDX)
 		if err != nil {
-			ckpData.Close()
 			return nil, err
 		}
 
