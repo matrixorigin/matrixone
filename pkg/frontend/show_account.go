@@ -17,6 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -33,9 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"strings"
-	"time"
 )
 
 const (
@@ -170,7 +172,7 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 		version := usage.CkpEntries[idx].Version
 		location := usage.CkpEntries[idx].Location
 
-		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, fs, location, version)
+		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, fs, version, logtail.SEGStorageUsageIDX)
 		if err != nil {
 			return nil, err
 		}
@@ -183,6 +185,7 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 		if version < logtail.CheckpointVersion9 {
 			// exist old version checkpoint which hasn't storage usage data in it,
 			// to avoid inaccurate info leading misunderstand, we chose to return empty result
+			logutil.Info("[storage usage]: found older ckp when handle storage usage response")
 			return map[int32]uint64{}, nil
 		}
 
