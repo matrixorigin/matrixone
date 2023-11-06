@@ -196,9 +196,9 @@ func Multiplex(
 	if len(col) == 0 {
 		return
 	}
-	columns := make([]containers.Vector, len(col))
+	columns := make([]*vector.Vector, len(col))
 	for i := range col {
-		colums[i] = col[i].GetDownstreamVector()
+		columns[i] = col[i].GetDownstreamVector()
 	}
 
 	typ := col[0].GetType()
@@ -243,7 +243,7 @@ func Multiplex(
 		case types.T_decimal128:
 			ret = multiplexFixed[types.Decimal128](columns, src, fromLayout, toLayout, pool)
 		case types.T_uuid:
-			ret = multiplexFixed[types.UUID](columns, src, fromLayout, toLayout, pool)
+			ret = multiplexFixed[types.Uuid](columns, src, fromLayout, toLayout, pool)
 		case types.T_TS:
 			ret = multiplexFixed[types.TS](columns, src, fromLayout, toLayout, pool)
 		case types.T_Rowid:
