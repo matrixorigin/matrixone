@@ -175,7 +175,7 @@ func (s *ShuffleRange) Eval(k int) {
 				if key == value {
 					last -= 1
 					size -= 1
-					for last < 0 {
+					for last <= 0 {
 						s.Result[k] = key
 						last += step
 						k--
