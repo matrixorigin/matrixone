@@ -133,13 +133,6 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tabl
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
-		if info.ShuffleRanges[i] != nil {
-			if s.TableCnt > HashMapSizeForShuffle && info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
-				info.ShuffleRanges[i].Eval(1024)
-				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
-			}
-			info.ShuffleRanges[i] = nil
-		}
 
 		if !info.ColumnZMs[i].IsInited() {
 			s.MinValMap[colName] = 0
@@ -177,6 +170,14 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tabl
 		case types.T_char, types.T_varchar, types.T_text:
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
+		}
+
+		if info.ShuffleRanges[i] != nil {
+			if s.MinValMap[colName] != s.MaxValMap[colName] && s.TableCnt > HashMapSizeForShuffle && info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
+				info.ShuffleRanges[i].Eval(1024)
+				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
+			}
+			info.ShuffleRanges[i] = nil
 		}
 	}
 }

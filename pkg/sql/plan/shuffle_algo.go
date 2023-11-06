@@ -100,7 +100,7 @@ func (s *ShuffleRange) Update(zmmin float64, zmmax float64) {
 }
 
 func (s *ShuffleRange) Eval(k int) {
-	if k <= 1 {
+	if k <= 1 || s.size == 0 {
 		return
 	}
 	var Head *shuffleList
