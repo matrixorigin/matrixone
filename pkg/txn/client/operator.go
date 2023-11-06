@@ -52,12 +52,13 @@ var (
 		moerr.ErrTxnNotActive: {},
 	}
 	commitTxnErrors = map[uint16]struct{}{
-		moerr.ErrTAECommit:    {},
-		moerr.ErrTAERollback:  {},
-		moerr.ErrTAEPrepare:   {},
-		moerr.ErrRpcError:     {},
-		moerr.ErrTxnNotFound:  {},
-		moerr.ErrTxnNotActive: {},
+		moerr.ErrTAECommit:            {},
+		moerr.ErrTAERollback:          {},
+		moerr.ErrTAEPrepare:           {},
+		moerr.ErrRpcError:             {},
+		moerr.ErrTxnNotFound:          {},
+		moerr.ErrTxnNotActive:         {},
+		moerr.ErrLockTableBindChanged: {},
 	}
 	rollbackTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERollback:  {},
