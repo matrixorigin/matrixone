@@ -347,33 +347,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	if pkColLength == 1 {
-		if rowsCount < 5 {
-			var orExpr *Expr
-			for i := 0; i < rowsCount; i++ {
-				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-					Typ: colTyp,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							ColPos: int32(pkColIdx),
-							Name:   tableDef.Pkey.PkeyColName,
-						},
-					},
-				}, colExprs[0][i]})
-				if err != nil {
-					return nil
-				}
-
-				if i == 0 {
-					orExpr = expr
-				} else {
-					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
-					if err != nil {
-						return nil
-					}
-				}
-			}
-			return []*Expr{orExpr}
-		} else {
+		if rowsCount > USE_IN_EXPR_COUNT {
 			// args in list must be constant
 			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
 				Typ: colTyp,
@@ -401,6 +375,32 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				return nil
 			}
 			return []*Expr{expr}
+		} else {
+			var orExpr *Expr
+			for i := 0; i < rowsCount; i++ {
+				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+					Typ: colTyp,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkColIdx),
+							Name:   tableDef.Pkey.PkeyColName,
+						},
+					},
+				}, colExprs[0][i]})
+				if err != nil {
+					return nil
+				}
+
+				if i == 0 {
+					orExpr = expr
+				} else {
+					orExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
+					if err != nil {
+						return nil
+					}
+				}
+			}
+			return []*Expr{orExpr}
 		}
 	} else {
 		// multi cols pk & one row for insert
