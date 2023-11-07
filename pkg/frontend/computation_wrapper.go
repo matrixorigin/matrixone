@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -365,6 +366,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.stmt,
 		cwft.ses.isInternal,
 		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
+		getStatementStartAt(requestCtx),
 	)
 	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
 		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
@@ -445,4 +447,16 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {
 	return cwft.plan.GetQuery().GetLoadTag()
+}
+
+func appendStatementAt(ctx context.Context, value time.Time) context.Context {
+	return context.WithValue(ctx, defines.StartTS{}, value)
+}
+
+func getStatementStartAt(ctx context.Context) time.Time {
+	v := ctx.Value(defines.StartTS{})
+	if v == nil {
+		return time.Now()
+	}
+	return v.(time.Time)
 }
