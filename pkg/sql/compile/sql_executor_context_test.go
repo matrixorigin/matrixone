@@ -61,16 +61,6 @@ func Test_panic(t *testing.T) {
 		defer r()
 		_, _, _ = c.GetQueryResultMeta("")
 	}()
-
-	//func() {
-	//	defer r()
-	//	c.SetBuildingAlterView(false, "", "")
-	//}()
-
-	//func() {
-	//	defer r()
-	//	_, _, _ = c.GetBuildingAlterView()
-	//}()
 }
 
 func TestCompilerContext_Database(t *testing.T) {
