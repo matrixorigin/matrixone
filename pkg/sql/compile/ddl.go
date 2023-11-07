@@ -341,7 +341,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				return err
 			}
 			//---------------------------------------------------------
-			if act.AddIndex.IndexTableExist {
+			if act.AddIndex.IndexTableExist && catalog.IsDefaultIndexAlgo(indexDef.IndexAlgo) {
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
 				// 2. create index table from unique index object
 				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
