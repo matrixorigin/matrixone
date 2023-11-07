@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -613,8 +612,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	)
 	v2.TxnRangesLoadedObjectHistogram.Observe(float64(loaded))
 	v2.TxnRangesLoadedObjectMetaTotalCounter.Add(float64(loaded))
-
-	fmt.Println("---------------------- loaded: ", loaded)
 
 	return
 }
