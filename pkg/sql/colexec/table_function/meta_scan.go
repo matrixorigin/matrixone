@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,17 +32,17 @@ func metaScanPrepare(proc *process.Process, arg *Argument) (err error) {
 	return err
 }
 
-func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	var (
 		err  error
 		rbat *batch.Batch
 	)
+	bat := result.Batch
 	defer func() {
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
 		}
 	}()
-	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
@@ -87,6 +88,6 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 	rbat.SetAttributes(catalog.MetaColNames)
 	rbat.SetRowCount(1)
-	proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return false, nil
 }

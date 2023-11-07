@@ -104,6 +104,9 @@ func newGenericAnyValue[T any](overloadID int64, typ, otyp types.Type, dist bool
 
 type sAggAnyValue[T any] struct{}
 
+func (s *sAggAnyValue[T]) Dup() agg.AggStruct {
+	return &sAggAnyValue[T]{}
+}
 func (s *sAggAnyValue[T]) Grows(cnt int)       {}
 func (s *sAggAnyValue[T]) Free(_ *mpool.MPool) {}
 func (s *sAggAnyValue[T]) Fill(groupNumber int64, value T, lastResult T, count int64, isEmpty bool, isNull bool) (T, bool, error) {

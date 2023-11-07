@@ -306,7 +306,9 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
-		return s.RemoteRun(c)
+		err := s.RemoteRun(c)
+		c.addAffectedRows(s.affectedRows())
+		return err
 	case CreateDatabase:
 		err := s.CreateDatabase(c)
 		if err != nil {
