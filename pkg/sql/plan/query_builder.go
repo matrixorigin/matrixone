@@ -1356,12 +1356,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, make(map[[2]int32]int))
-		tagCnt := make(map[int32]int)
-		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
 
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, true)
 		builder.applySwapRuleByStats(rootID, true)
+
+		determineHashOnPK(rootID, builder)
+		tagCnt := make(map[int32]int)
+		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
+		ReCalcNodeStats(rootID, builder, true, false)
+
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
@@ -1380,14 +1384,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
-		determineHashOnPK(rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, false)
 
 		builder.partitionPrune(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
+		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
+		// after determine shuffle, never call recalc stats again.
+		// new optimize rule should be put before
 
 		builder.pushdownRuntimeFilters(rootID)
 

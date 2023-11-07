@@ -269,8 +269,11 @@ type FrontendParameters struct {
 	// SkipCheckPrivilege denotes the privilege check should be passed.
 	SkipCheckPrivilege bool `toml:"skipCheckPrivilege"`
 
-	//skip checking the password of the user
+	// skip checking the password of the user
 	SkipCheckUser bool `toml:"skipCheckUser"`
+
+	// disable select into
+	DisableSelectInto bool `toml:"disable-select-into"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
