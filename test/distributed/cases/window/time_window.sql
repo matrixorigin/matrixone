@@ -28,8 +28,8 @@ drop table if exists time_window03;
 create table time_window03 (ts datetime primary key , col2 int);
 insert into time_window03 values ('2021-01-12 00:00:00', 12);
 insert into time_window03 values ('2020-01-12 12:00:12', 24);
-insert into time_window03 values ('2021-01-12 00:00:00', 34);
-insert into time_window03 values ('2020-01-12 12:00:12', 20);
+insert into time_window03 values ('2021-01-14 00:00:00', 34);
+insert into time_window03 values ('2020-01-16 12:00:12', 20);
 select * from time_window03;
 select _wstart, _wend, max(col2), min(col2) from time_window03 where ts > '2020-01-11 12:00:12.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 100, day) fill(prev);
 drop table time_window03;
@@ -273,7 +273,7 @@ drop table temporary02;
 
 -- external table
 drop table if exists external01;
-create external table external01(ts timestamp primary key,col1 tinyint default null,col2 smallint default null,col3 int default null,col4 bigint default null,col5 tinyint unsigned default null,col6 smallint unsigned default null,col7 int unsigned default null,col8 bigint unsigned default null,col9 float default null,col10 double default null)infile{"filepath"='/Users/ariznawl/time_window.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+create external table external01(ts timestamp primary key,col1 tinyint default null,col2 smallint default null,col3 int default null,col4 bigint default null,col5 tinyint unsigned default null,col6 smallint unsigned default null,col7 int unsigned default null,col8 bigint unsigned default null,col9 float default null,col10 double default null)infile{"filepath"='$resources/external_table_file/time_window.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select _wstart, _wend, max(col2), min(col3), avg(col4) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 3, minute);
 select _wstart, _wend, count(col2), sum(col6), avg(col7) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 10, minute) sliding(5,minute);
 select _wstart, _wend, count(col2), sum(col10) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 15, minute) sliding(10,minute);
