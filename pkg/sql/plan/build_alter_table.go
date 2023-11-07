@@ -316,7 +316,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 					if err != nil {
 						return "", err
 					}
-					indexStr += fmt.Sprintf("%s", paramList)
+					indexStr += paramList
 				}
 				if rowCount != 0 {
 					createStr += ",\n"
