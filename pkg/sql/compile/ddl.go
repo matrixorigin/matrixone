@@ -992,8 +992,8 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 	}
 
-	// build and create index table for unique index
-	if qry.TableExist {
+	// build and create index table for unique/secondary index with index algorithm = "" or "BTREE"
+	if qry.TableExist && catalog.IsDefaultIndexAlgo(indexDef.IndexAlgo) {
 		def := qry.GetIndex().GetIndexTables()[0]
 		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
 		err = c.runSql(createSQL)
