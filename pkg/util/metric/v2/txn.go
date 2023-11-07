@@ -226,4 +226,13 @@ var (
 	TxnMpoolAllocDurationHistogram  = txnMpoolDurationHistogram.WithLabelValues("alloc")
 	TxnMpoolFreeDurationHistogram   = txnMpoolDurationHistogram.WithLabelValues("free")
 	TxnMpoolDeleteDurationHistogram = txnMpoolDurationHistogram.WithLabelValues("delete")
+
+	TxnRangesLoadedObjectHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "ranges_loaded_object_quantity_distribution",
+			Help:      "Bucketed histogram of the quantity distribution of ranges loaded object.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 16),
+		})
 )

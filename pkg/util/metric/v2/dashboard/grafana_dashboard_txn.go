@@ -253,13 +253,20 @@ func (c *DashboardCreator) initTxnStatementsCountRow() dashboard.Option {
 
 func (c *DashboardCreator) initTxnRangesLoadedObjectMetaRow() dashboard.Option {
 	return dashboard.Row(
-		"Txn Ranges Loaded Object Meta",
+		"Txn Ranges Loaded Object Metrics",
+		c.getHistogram(
+			"Txn Ranges Loaded Object Quantity Distribution",
+			c.getMetricWithFilter(`mo_txn_ranges_loaded_object_quantity_distribution_bucket`, ``),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			6),
+
 		c.withGraph(
-			"Txn Ranges Loaded Object Meta",
-			12,
-			`sum(increase(`+c.getMetricWithFilter("mo_txn_ranges_loaded_object_meta_total", "")+`[$interval])) by (`+c.by+`, type)`,
-			"{{ "+c.by+"-type }}"),
+			"Txn Ranges Loaded Object Increment",
+			6,
+			`sum(increase(`+c.getMetricWithFilter("mo_txn_ranges_loaded_object_meta_total", ``)+`[$interval])) by (`+c.by+`)`,
+			"{{ "+c.by+" }}"),
 	)
+
 }
 
 func (c *DashboardCreator) initTxnTableRangesRow() dashboard.Option {
