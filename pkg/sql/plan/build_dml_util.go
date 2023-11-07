@@ -338,8 +338,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols, DeepCopyColDef(col))
 							}
 						}
-						checkInsertPKDedup := indexdef.Unique // only check PK dedup for UK. SK will not check PK dedup.
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, checkInsertPKDedup, true, nil, false)
+						checkInsertPKDedupForHiddenTable := indexdef.Unique // only check PK dedup for UK. SK will not check PK dedup.
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, checkInsertPKDedupForHiddenTable, true, nil, false)
 						if err != nil {
 							return err
 						}
@@ -860,8 +860,8 @@ func makeInsertPlan(
 					return err
 				}
 
-				checkInsertPkDup = indexdef.Unique // only check PK dedup for UK. SK will not check PK dedup.
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil, false)
+				checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK dedup for UK. SK will not check PK dedup.
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenTable, true, nil, false)
 				if err != nil {
 					return err
 				}
