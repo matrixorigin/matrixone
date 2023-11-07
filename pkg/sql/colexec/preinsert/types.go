@@ -17,9 +17,13 @@ package preinsert
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 type proc = process.Process
 
@@ -31,6 +35,22 @@ type Argument struct {
 	TableDef   *pb.TableDef
 	Attrs      []string
 	IsUpdate   bool
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
+	buf      *batch.Batch
 }
 
-func (arg *Argument) Free(*process.Process, bool, error) {}
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+	}
+}

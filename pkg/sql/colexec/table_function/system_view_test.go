@@ -17,6 +17,10 @@ package table_function
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,12 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
-	"reflect"
-	"testing"
-	"time"
 )
 
 var _ queryservice.QueryService = &mockQueryService{}
@@ -321,7 +323,8 @@ func Test_gettingInfo(t *testing.T) {
 	}
 	for _, tt := range tests4 {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := moCacheCall(tt.args.in0, tt.args.proc, tt.args.arg)
+			result := vm.NewCallResult()
+			got, err := moCacheCall(tt.args.in0, tt.args.proc, tt.args.arg, &result)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("moCacheCall() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -329,14 +332,15 @@ func Test_gettingInfo(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("moCacheCall() got = %v, want %v", got, tt.want)
 			}
+			bat := result.Batch
 
-			assert.Equal(t, len(testProc.Reg.InputBatch.Attrs), 3)
-			assert.Equal(t, testProc.Reg.InputBatch.Attrs[0], "type")
-			assert.Equal(t, testProc.Reg.InputBatch.Attrs[1], "used")
-			assert.Equal(t, testProc.Reg.InputBatch.Attrs[2], "hit_ratio")
+			assert.Equal(t, len(bat.Attrs), 3)
+			assert.Equal(t, bat.Attrs[0], "type")
+			assert.Equal(t, bat.Attrs[1], "used")
+			assert.Equal(t, bat.Attrs[2], "hit_ratio")
 
-			assert.Equal(t, vector.MustStrCol(tt.args.proc.Reg.InputBatch.GetVector(0))[0], "mock_cache")
-			assert.Equal(t, vector.MustFixedCol[uint64](tt.args.proc.Reg.InputBatch.GetVector(1))[0], uint64(0))
+			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "mock_cache")
+			assert.Equal(t, vector.MustFixedCol[uint64](bat.GetVector(1))[0], uint64(0))
 
 		})
 	}
@@ -377,16 +381,18 @@ func Test_gettingInfo(t *testing.T) {
 	}
 	for _, tt := range tests5 {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := moTransactionsCall(tt.args.in0, tt.args.proc, tt.args.arg)
+			result := vm.NewCallResult()
+			got, err := moTransactionsCall(tt.args.in0, tt.args.proc, tt.args.arg, &result)
 			if !tt.wantErr(t, err, fmt.Sprintf("moTransactionsCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}
 			assert.Equalf(t, tt.want, got, "moTransactionsCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)
+			bat := result.Batch
 
-			assert.Equal(t, len(testProc.Reg.InputBatch.Attrs), 1)
-			assert.Equal(t, testProc.Reg.InputBatch.Attrs[0], "user_txn")
+			assert.Equal(t, len(bat.Attrs), 1)
+			assert.Equal(t, bat.Attrs[0], "user_txn")
 
-			assert.Equal(t, vector.MustStrCol(tt.args.proc.Reg.InputBatch.GetVector(0))[0], "true")
+			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "true")
 		})
 	}
 
@@ -428,20 +434,21 @@ func Test_gettingInfo(t *testing.T) {
 	}
 	for _, tt := range tests6 {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := moLocksCall(tt.args.in0, tt.args.proc, tt.args.arg)
+			result := vm.NewCallResult()
+			got, err := moLocksCall(tt.args.in0, tt.args.proc, tt.args.arg, &result)
 			if !tt.wantErr(t, err, fmt.Sprintf("moLocksCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}
 			assert.Equalf(t, tt.want, got, "moLocksCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)
+			bat := result.Batch
+			assert.Equal(t, len(bat.Attrs), 3)
+			assert.Equal(t, bat.Attrs[0], "table_id")
+			assert.Equal(t, bat.Attrs[1], "lock_key")
+			assert.Equal(t, bat.Attrs[2], "lock_mode")
 
-			assert.Equal(t, len(testProc.Reg.InputBatch.Attrs), 3)
-			assert.Equal(t, tt.args.proc.Reg.InputBatch.Attrs[0], "table_id")
-			assert.Equal(t, tt.args.proc.Reg.InputBatch.Attrs[1], "lock_key")
-			assert.Equal(t, tt.args.proc.Reg.InputBatch.Attrs[2], "lock_mode")
-
-			assert.Equal(t, vector.MustStrCol(tt.args.proc.Reg.InputBatch.GetVector(0))[0], "1000")
-			assert.Equal(t, vector.MustStrCol(tt.args.proc.Reg.InputBatch.GetVector(1))[0], "range")
-			assert.Equal(t, vector.MustStrCol(tt.args.proc.Reg.InputBatch.GetVector(2))[0], "Exclusive")
+			assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[0], "1000")
+			assert.Equal(t, vector.MustStrCol(bat.GetVector(1))[0], "range")
+			assert.Equal(t, vector.MustStrCol(bat.GetVector(2))[0], "Exclusive")
 		})
 	}
 }
@@ -586,21 +593,22 @@ func Test_moConfigurationsCall(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := moConfigurationsCall(tt.args.in0, tt.args.proc, tt.args.arg)
+			result := vm.NewCallResult()
+			got, err := moConfigurationsCall(tt.args.in0, tt.args.proc, tt.args.arg, &result)
 			if !tt.wantErr(t, err, fmt.Sprintf("moConfigurationsCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)) {
 				return
 			}
 			assert.Equalf(t, tt.want, got, "moConfigurationsCall(%v, %v, %v)", tt.args.in0, tt.args.proc, tt.args.arg)
-
-			assert.Equal(t, len(testProc.Reg.InputBatch.Attrs), 3)
-			assert.Equal(t, tt.args.proc.Reg.InputBatch.Attrs[0], "name")
-			assert.Equal(t, tt.args.proc.Reg.InputBatch.Attrs[1], "current_value")
-			assert.Equal(t, tt.args.proc.Reg.InputBatch.Attrs[2], "default_value")
+			bat := result.Batch
+			assert.Equal(t, len(bat.Attrs), 3)
+			assert.Equal(t, bat.Attrs[0], "name")
+			assert.Equal(t, bat.Attrs[1], "current_value")
+			assert.Equal(t, bat.Attrs[2], "default_value")
 
 			for i := 0; i < 4; i++ {
-				assert.Equal(t, vector.MustStrCol(tt.args.proc.Reg.InputBatch.GetVector(0))[i], "xxxx")
-				assert.Equal(t, vector.MustStrCol(tt.args.proc.Reg.InputBatch.GetVector(1))[i], "123")
-				assert.Equal(t, vector.MustStrCol(tt.args.proc.Reg.InputBatch.GetVector(2))[i], "0")
+				assert.Equal(t, vector.MustStrCol(bat.GetVector(0))[i], "xxxx")
+				assert.Equal(t, vector.MustStrCol(bat.GetVector(1))[i], "123")
+				assert.Equal(t, vector.MustStrCol(bat.GetVector(2))[i], "0")
 			}
 		})
 	}
