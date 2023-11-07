@@ -19,11 +19,14 @@ import (
 	"time"
 
 	"github.com/lni/dragonboat/v4"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"go.uber.org/zap"
 )
+
+const restoredTagFile = "./RESTORED"
 
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	replicaID, bootstrapping := cfg.Bootstrapping()
@@ -53,9 +56,29 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if backup != nil {
-		nextID = backup.NextID
-		nextIDByKey = backup.NextIDByKey
+	if backup != nil { // We are trying to restore from a backup.
+		// If a backup has already been issued, ignore this time.
+		_, err := s.fileService.StatFile(ctx, restoredTagFile)
+		if s.cfg.BootstrapConfig.Restore.Force || // force is true, we do restore whatever.
+			(err != nil && moerr.IsMoErrCode(err, moerr.ErrFileNotFound)) {
+			// Restored tag file does not exist, we can do backup.
+			nextID = backup.NextID
+			nextIDByKey = backup.NextIDByKey
+
+			// After backup, create a restore file.
+			if err := s.fileService.Write(ctx, fileservice.IOVector{
+				FilePath: restoredTagFile,
+				Entries: []fileservice.IOEntry{
+					{
+						Offset: 0,
+						Size:   1,
+						Data:   []byte{1},
+					},
+				},
+			}); err != nil {
+				return err
+			}
+		}
 	}
 	for i := 0; i < checkBootstrapCycles; i++ {
 		select {
@@ -87,6 +110,9 @@ func (s *Service) getBackupData(ctx context.Context) (*pb.BackupData, error) {
 
 	st, err := fs.StatFile(ctx, filePath)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, nil
+		}
 		return nil, err
 	}
 

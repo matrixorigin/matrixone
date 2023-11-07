@@ -488,8 +488,8 @@ CREATE TABLE c1 (ca INT, cb INT);
 ALTER TABLE c1 ADD CONSTRAINT ffa FOREIGN KEY (ca) REFERENCES f1(fa);
 desc c1;
 Field    Type    Null    Key    Default    Extra    Comment
-ca    INT(32)    YES        null        
-cb    INT(32)    YES    MUL    null        
+ca    INT(32)    YES    MUL    null        
+cb    INT(32)    YES        null        
 drop table if exists c1;
 drop table if exists f1;
 create table f1 (a int, b int, c int, d int, e int, primary key(a,b), unique key(c,d));
