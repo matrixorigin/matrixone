@@ -1345,6 +1345,52 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	}
 }
 
+func (builder *QueryBuilder) optimizeJoin(nodeID int32, colMap map[[2]int32]int, colGroup []int) {
+	node := builder.qry.Nodes[nodeID]
+	for i := range node.Children {
+		builder.optimizeJoin(node.Children[i], colMap, colGroup)
+	}
+	if len(node.OnList) == 0 {
+		return
+	}
+
+	newOnList := make([]*plan.Expr, 0)
+	for _, expr := range node.OnList {
+		if exprf, ok := expr.Expr.(*plan.Expr_F); ok {
+			if SupportedJoinCondition(exprf.F.Func.GetObj()) {
+				leftcol, leftok := exprf.F.Args[0].Expr.(*plan.Expr_Col)
+				rightcol, rightok := exprf.F.Args[1].Expr.(*plan.Expr_Col)
+				if leftok && rightok {
+					left, leftok := colMap[[2]int32{leftcol.Col.RelPos, leftcol.Col.ColPos}]
+					if !leftok {
+						left = len(colGroup)
+						colGroup = append(colGroup, left)
+						colMap[[2]int32{leftcol.Col.RelPos, leftcol.Col.ColPos}] = left
+					}
+					right, rightok := colMap[[2]int32{rightcol.Col.RelPos, rightcol.Col.ColPos}]
+					if !rightok {
+						right = len(colGroup)
+						colGroup = append(colGroup, right)
+						colMap[[2]int32{rightcol.Col.RelPos, rightcol.Col.ColPos}] = right
+					}
+					for colGroup[left] != colGroup[colGroup[left]] {
+						colGroup[left] = colGroup[colGroup[left]]
+					}
+					for colGroup[right] != colGroup[colGroup[right]] {
+						colGroup[right] = colGroup[colGroup[right]]
+					}
+					if colGroup[left] == colGroup[right] {
+						continue
+					}
+					newOnList = append(newOnList, expr)
+					colGroup[colGroup[left]] = colGroup[right]
+				}
+			}
+		}
+	}
+	node.OnList = newOnList
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
@@ -1417,6 +1463,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		for j := range rootNode.ProjectList {
 			colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 		}
+		colMap := make(map[[2]int32]int)
+		colGroup := make([]int, 0)
+		builder.optimizeJoin(rootID, colMap, colGroup)
 		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
