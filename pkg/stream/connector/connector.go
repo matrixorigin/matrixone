@@ -275,6 +275,7 @@ func (k *KafkaMoConnector) Close() error {
 func (k *KafkaMoConnector) insertRow(sql string) {
 	opts := ie.SessionOverrideOptions{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	//todo: Add tag to the context to specify this is the in-memory stream scan
 	defer cancel()
 	err := k.ie.Exec(ctx, sql, opts)
 	if err != nil {
