@@ -17,6 +17,7 @@ package dashboard
 import (
 	"context"
 
+	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 )
 
@@ -45,9 +46,12 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 	return dashboard.Row(
 		"Flush Table Tail Duration",
 		c.getHistogram(
+			"Flush Table Tail Duration",
 			c.getMetricWithFilter(`mo_task_duration_seconds_bucket`, `type="flush_table_tail"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3})...,
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 
@@ -55,9 +59,12 @@ func (c *DashboardCreator) initTaskCkpEntryPendingRow() dashboard.Option {
 	return dashboard.Row(
 		"Checkpoint Entry Pending Time",
 		c.getHistogram(
+			"Checkpoint Entry Pending Time",
 			c.getMetricWithFilter(`mo_task_duration_seconds_bucket`, `type="ckp_entry_pending"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3})...,
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 

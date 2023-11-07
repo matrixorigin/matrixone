@@ -99,7 +99,7 @@ func (c *CNClient) Close() error {
 }
 
 const (
-	dfMaxSenderNumber       = 100000
+	dfMaxSenderNumber       = 100
 	dfConnectTimeout        = 5 * time.Second
 	dfClientReadBufferSize  = 1 << 10
 	dfClientWriteBufferSize = 1 << 10

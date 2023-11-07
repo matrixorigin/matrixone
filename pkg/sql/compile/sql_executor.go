@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -179,6 +180,8 @@ func newTxnExecutor(
 }
 
 func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
+	receiveAt := time.Now()
+
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
 	if err != nil {
 		return executor.Result{}, err
@@ -224,7 +227,7 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 		return executor.Result{}, err
 	}
 
-	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil)
+	c := New(exec.s.addr, exec.opts.Database(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
 
 	result := executor.NewResult(exec.s.mp)
 	var batches []*batch.Batch
