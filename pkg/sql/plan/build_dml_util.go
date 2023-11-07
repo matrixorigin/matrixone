@@ -860,6 +860,7 @@ func makeInsertPlan(
 					return err
 				}
 
+				checkInsertPkDup = indexdef.Unique // only check PK dedup for UK. SK will not check PK dedup.
 				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil, false)
 				if err != nil {
 					return err
