@@ -252,13 +252,6 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 		// 3 tables, each table has 10 non-appendable segment
 		createAndWriteBatchNASegment(t, ctx, []int{10, 10, 10}, rels, tae.Runtime.Fs)
 		collector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
-		//collector.BlockFn = nil
-		//collector.DatabaseFn = nil
-		//collector.TableFn = nil
-		//collector.SegmentFn = func(segment *catalog.SegmentEntry) error {
-		//	logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
-		//	return nil
-		//}
 
 		logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
 
@@ -346,4 +339,38 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 		require.Equal(t, len(rels), sizeVec.Length())
 	})
 
+}
+
+func Test_LoadSpecifiedCkpData(t *testing.T) {
+	ctx := context.Background()
+	tae := createTAE(t, ctx)
+	defer tae.Close()
+
+	entries, _ := createCkpAndWriteDown(t, ctx, tae, 1, true)
+	require.Equal(t, 1, len(entries))
+
+	// out of bound
+	data, err := logtail.LoadSpecifiedCkpBatch(ctx, entries[0].GetLocation(),
+		tae.Runtime.Fs.Service, logtail.CheckpointVersion9, logtail.MaxIDX)
+	require.NotNil(t, err)
+	require.Nil(t, data)
+
+	// invalid version
+	data, err = logtail.LoadSpecifiedCkpBatch(ctx, entries[0].GetLocation(),
+		tae.Runtime.Fs.Service, logtail.CheckpointVersion9, logtail.MaxIDX)
+	require.NotNil(t, err)
+	require.Nil(t, data)
+
+	// invalid location
+	data, err = logtail.LoadSpecifiedCkpBatch(ctx, objectio.BuildLocation([]byte("test"), objectio.Extent{}, 0, 0),
+		tae.Runtime.Fs.Service, logtail.CheckpointVersion9, logtail.MaxIDX)
+	require.NotNil(t, err)
+	require.Nil(t, data)
+
+	data, err = logtail.LoadSpecifiedCkpBatch(ctx, entries[0].GetLocation(),
+		tae.Runtime.Fs.Service, logtail.CheckpointVersion9, logtail.SEGStorageUsageIDX)
+	require.Nil(t, err)
+	require.NotNil(t, data)
+
+	data.Close()
 }
