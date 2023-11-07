@@ -16,58 +16,60 @@ package mergerecursive
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" merge recursive ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
-	ctr := ap.ctr
-	var sb *batch.Batch
 
-	for !ctr.last {
-		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+	result := vm.NewCallResult()
+	for !arg.ctr.last {
+		bat, _, err := arg.ctr.ReceiveFromSingleReg(0, anal)
 		if err != nil {
-			return process.ExecStop, err
+			result.Status = vm.ExecStop
+			return result, err
 		}
 		if bat == nil || bat.End() {
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 		if bat.Last() {
-			ctr.last = true
+			arg.ctr.last = true
 		}
-		ctr.bats = append(ctr.bats, bat)
+		arg.ctr.bats = append(arg.ctr.bats, bat)
 	}
-	sb = ctr.bats[0]
-	ctr.bats = ctr.bats[1:]
+	arg.buf = arg.ctr.bats[0]
+	arg.ctr.bats = arg.ctr.bats[1:]
 
-	if sb.Last() {
-		ctr.last = false
-	}
-
-	if sb.End() {
-		sb.Clean(proc.Mp())
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+	if arg.buf.Last() {
+		arg.ctr.last = false
 	}
 
-	anal.Input(sb, isFirst)
-	anal.Output(sb, isLast)
-	proc.SetInputBatch(sb)
-	return process.ExecNext, nil
+	if arg.buf.End() {
+		arg.buf.Clean(proc.Mp())
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
+	}
+
+	anal.Input(arg.buf, arg.info.IsFirst)
+	anal.Output(arg.buf, arg.info.IsLast)
+	result.Batch = arg.buf
+	return result, nil
 }

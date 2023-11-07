@@ -171,7 +171,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			executor.SetParameter(0, subExecutor)
 
 			if vecData, ok := rightArg.Expr.(*plan.Expr_Bin); ok {
-				vec := vector.NewVec(types.T_any.ToType())
+				vec := proc.GetVector(types.T_any.ToType())
 				err := vec.UnmarshalBinary(vecData.Bin.Data)
 				if err != nil {
 					executor.parameterExecutor[0].Free()
@@ -1056,7 +1056,7 @@ func GetExprZoneMap(
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if data, ok := args[1].Expr.(*plan.Expr_Bin); ok {
-						vec := vector.NewVec(types.T_any.ToType())
+						vec := proc.GetVector(types.T_any.ToType())
 						vec.UnmarshalBinary(data.Bin.Data)
 						vecs[rid] = vec
 					} else {
