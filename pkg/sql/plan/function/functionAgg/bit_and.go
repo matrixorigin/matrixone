@@ -82,6 +82,9 @@ func newGenericBitAnd[T numeric](overloadID int64, inputType types.Type, outputT
 type sAggBitAnd[T numeric] struct{}
 type sAggBinaryBitAnd struct{}
 
+func (s *sAggBitAnd[T]) Dup() agg.AggStruct {
+	return &sAggBitAnd[T]{}
+}
 func (s *sAggBitAnd[T]) Grows(_ int)         {}
 func (s *sAggBitAnd[T]) Free(_ *mpool.MPool) {}
 func (s *sAggBitAnd[T]) Fill(groupNumber int64, value T, lastResult uint64, count int64, isEmpty bool, isNull bool) (uint64, bool, error) {
@@ -120,6 +123,9 @@ func (s *sAggBitAnd[T]) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 
+func (s *sAggBinaryBitAnd) Dup() agg.AggStruct {
+	return &sAggBinaryBitAnd{}
+}
 func (s *sAggBinaryBitAnd) Grows(_ int)         {}
 func (s *sAggBinaryBitAnd) Free(_ *mpool.MPool) {}
 func (s *sAggBinaryBitAnd) Fill(groupNumber int64, value []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {

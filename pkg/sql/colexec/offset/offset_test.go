@@ -21,7 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +54,11 @@ func init() {
 			arg: &Argument{
 				Seen:   0,
 				Offset: 8,
+				info: &vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		{
@@ -62,6 +69,11 @@ func init() {
 			arg: &Argument{
 				Seen:   0,
 				Offset: 10,
+				info: &vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		{
@@ -72,6 +84,11 @@ func init() {
 			arg: &Argument{
 				Seen:   0,
 				Offset: 12,
+				info: &vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 	}
@@ -80,36 +97,33 @@ func init() {
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestOffset(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+
+		bats := []*batch.Batch{
+			newBatch(t, tc.types, tc.proc, Rows),
+			newBatch(t, tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
 		}
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-		}
-		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
+		resetChildren(tc.arg, bats)
+		_, _ = tc.arg.Call(tc.proc)
+
 		tc.proc.FreeVectors()
+		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.children[0].Free(tc.proc, false, nil)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -125,23 +139,25 @@ func BenchmarkOffset(b *testing.B) {
 				arg: &Argument{
 					Seen:   0,
 					Offset: 8,
+					info: &vm.OperatorInfo{
+						Idx:     1,
+						IsFirst: false,
+						IsLast:  false,
+					},
 				},
 			},
 		}
 
 		t := new(testing.T)
 		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
+			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
-			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+			bats := []*batch.Batch{
+				newBatch(t, tc.types, tc.proc, BenchmarkRows),
+				batch.EmptyBatch,
 			}
-			tc.proc.Reg.InputBatch = batch.EmptyBatch
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
-			tc.proc.Reg.InputBatch = nil
-			_, _ = Call(0, tc.proc, tc.arg, false, false)
+			resetChildren(tc.arg, bats)
+			_, _ = tc.arg.Call(tc.proc)
 		}
 	}
 }
@@ -149,4 +165,18 @@ func BenchmarkOffset(b *testing.B) {
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func resetChildren(arg *Argument, bats []*batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: bats,
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: bats,
+		})
+	}
 }
