@@ -31,10 +31,11 @@ import (
 var _ plan.CompilerContext = new(compilerContext)
 
 type compilerContext struct {
-	ctx       context.Context
-	defaultDB string
-	engine    engine.Engine
-	proc      *process.Process
+	ctx        context.Context
+	defaultDB  string
+	engine     engine.Engine
+	proc       *process.Process
+	statsCache *plan.StatsCache
 }
 
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
@@ -75,11 +76,18 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 }
 
 func (c *compilerContext) Stats(obj *plan.ObjectRef) bool {
-	return false
+	t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName())
+	if err != nil {
+		return false
+	}
+	return t.Stats(c.ctx, nil, c.GetStatsCache().GetStatsInfoMap(t.GetTableID(c.ctx)))
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
-	return nil
+	if c.statsCache == nil {
+		c.statsCache = plan.NewStatsCache()
+	}
+	return c.statsCache
 }
 
 func (c *compilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
