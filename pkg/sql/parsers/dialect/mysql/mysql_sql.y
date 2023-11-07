@@ -2982,7 +2982,6 @@ alter_table_alter:
             Enforce: $3,
         }
     }
-    //TODO: add kmeans params later @arjun
 
 visibility:
     VISIBLE
