@@ -456,6 +456,15 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 
+	var logStr string
+	for i, col := range needCols {
+		if i > 0 {
+			logStr += ", "
+		}
+		logStr += col.GetName()
+	}
+	logutil.Infof("cols in GetColumMetadataScanInfo: %s, result len: %d", logStr, len(infoList))
+
 	return infoList, nil
 }
 
