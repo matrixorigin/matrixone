@@ -774,20 +774,22 @@ func (vt VisibleType) ToString() string {
 
 type IndexOption struct {
 	NodeFormatter
-	KeyBlockSize             uint64
-	IType                    IndexType
-	ParserName               string
-	Comment                  string
-	Visible                  VisibleType
-	EngineAttribute          string
-	SecondaryEngineAttribute string
-	AlgoParamList            int64
+	KeyBlockSize                uint64
+	IType                       IndexType
+	ParserName                  string
+	Comment                     string
+	Visible                     VisibleType
+	EngineAttribute             string
+	SecondaryEngineAttribute    string
+	AlgoParamList               int64
+	AlgoParamVectorSimilarityFn string
 }
 
 // Must follow the following sequence when test
 func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.KeyBlockSize != 0 || node.ParserName != "" ||
-		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID || node.AlgoParamList != 0 {
+		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
+		node.AlgoParamList != 0 || node.AlgoParamVectorSimilarityFn != "" {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -808,6 +810,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.AlgoParamList != 0 {
 		ctx.WriteString("LISTS ")
 		ctx.WriteString(strconv.FormatInt(node.AlgoParamList, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.AlgoParamVectorSimilarityFn != "" {
+		ctx.WriteString("SIMILARITY_FUNCTION ")
+		ctx.WriteString(node.AlgoParamVectorSimilarityFn)
 		ctx.WriteByte(' ')
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {

@@ -256,6 +256,7 @@ func init() {
 		"ilike":                      ILIKE,
 		"list":                       LIST,
 		"lists":                      LISTS,
+		"similarity_function":        SIMILARITY_FUNCTION,
 		"limit":                      LIMIT,
 		"linear":                     LINEAR,
 		"lines":                      LINES,

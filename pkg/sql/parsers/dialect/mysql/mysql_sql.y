@@ -345,6 +345,8 @@ import (
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS
+%token <str> SIMILARITY_FUNCTION
+
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
@@ -6145,6 +6147,8 @@ index_option_list:
                 opt1.Visible = opt2.Visible
             } else if opt2.AlgoParamList > 0 {
 	      opt1.AlgoParamList = opt2.AlgoParamList
+	    } else if len(opt2.AlgoParamVectorSimilarityFn) > 0 {
+	      opt1.AlgoParamVectorSimilarityFn = opt2.AlgoParamVectorSimilarityFn
 	    }
             $$ = opt1
         }
@@ -6158,6 +6162,10 @@ index_option:
 |   LISTS equal_opt INTEGRAL
     {
 	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
+    }
+|   SIMILARITY_FUNCTION STRING
+    {
+	$$ = &tree.IndexOption{AlgoParamVectorSimilarityFn: $2}
     }
 |   COMMENT_KEYWORD STRING
     {
@@ -10487,6 +10495,7 @@ non_reserved_keyword:
 |   VECF64
 |   KEY_BLOCK_SIZE
 |   LISTS
+|   SIMILARITY_FUNCTION
 |   KEYS
 |   LANGUAGE
 |   LESS

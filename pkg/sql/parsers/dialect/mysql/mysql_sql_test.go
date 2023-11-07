@@ -1393,6 +1393,9 @@ var (
 			input:  "create index idx using btree on A (a) LISTS 10",
 			output: "create index idx using btree on a (a) LISTS 10 ",
 		}, {
+			input:  "create index idx using btree on A (a) LISTS 10 similarity_function 'IP'",
+			output: "create index idx using btree on a (a) LISTS 10 SIMILARITY_FUNCTION IP ",
+		}, {
 			input: "create index idx1 on a (a)",
 		}, {
 			input: "create unique index idx1 using btree on a (a, b(10), (a + b), (a - b)) visible",
