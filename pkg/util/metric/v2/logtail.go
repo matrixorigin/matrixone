@@ -38,6 +38,7 @@ var (
 		}, []string{"type"})
 	LogTailSendQueueSizeGauge    = logTailQueueSizeGauge.WithLabelValues("send")
 	LogTailReceiveQueueSizeGauge = logTailQueueSizeGauge.WithLabelValues("receive")
+	LogTailApplyQueueSizeGauge   = logTailQueueSizeGauge.WithLabelValues("apply")
 )
 
 var (
@@ -50,14 +51,18 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
 		})
 
-	LogTailApplyDurationHistogram = prometheus.NewHistogram(
+	logTailApplyDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "logtail",
 			Name:      "apply_duration_seconds",
 			Help:      "Bucketed histogram of apply log tail into mem-table duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
-		})
+		}, []string{"step"})
+	LogTailApplyDurationHistogram              = logTailApplyDurationHistogram.WithLabelValues("apply")
+	LogTailApplyLatencyDurationHistogram       = logTailApplyDurationHistogram.WithLabelValues("apply-latency")
+	LogTailApplyNotifyDurationHistogram        = logTailApplyDurationHistogram.WithLabelValues("apply-notify")
+	LogTailApplyNotifyLatencyDurationHistogram = logTailApplyDurationHistogram.WithLabelValues("apply-notify-latency")
 
 	LogTailAppendDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
