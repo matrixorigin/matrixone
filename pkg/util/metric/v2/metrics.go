@@ -92,7 +92,8 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
 
-	registry.MustRegister(TxnFastLoadObjectMetaTotalCounter)
+	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
+	registry.MustRegister(TxnRangesLoadedObjectHistogram)
 }
 
 func initRPCMetrics() {
