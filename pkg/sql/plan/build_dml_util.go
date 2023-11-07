@@ -109,7 +109,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, isInsertWithoutAutoPkCol)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, isInsertWithoutAutoPkCol, true)
 	return err
 }
 
@@ -188,7 +188,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
 	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, false)
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, false, true)
 
 	return err
 }
@@ -339,7 +339,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}
 						}
 						checkInsertPKDedupForHiddenTable := indexdef.Unique // only check PK dedup for UK. SK will not check PK dedup.
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, checkInsertPKDedupForHiddenTable, true, nil, false)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, checkInsertPKDedupForHiddenTable, true, nil, false, checkInsertPKDedupForHiddenTable)
 						if err != nil {
 							return err
 						}
@@ -785,6 +785,7 @@ func makeInsertPlan(
 	updatePkCol bool,
 	pkFilterExprs []*Expr,
 	isInsertWithoutAutoPkCol bool,
+	checkInsertPkDupForHiddenIndexTable bool,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -861,7 +862,7 @@ func makeInsertPlan(
 				}
 
 				checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK dedup for UK. SK will not check PK dedup.
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenTable, true, nil, false)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, false, checkInsertPkDupForHiddenTable)
 				if err != nil {
 					return err
 				}
@@ -921,7 +922,7 @@ func makeInsertPlan(
 	isUpdate := updateColLength > 0
 
 	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
-	if checkInsertPkDup {
+	if checkInsertPkDup && checkInsertPkDupForHiddenIndexTable {
 		// insert stmt or update pk col, we need check insert pk dup
 		if !isUpdate || (isUpdate && updatePkCol) {
 			if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
@@ -981,7 +982,7 @@ func makeInsertPlan(
 	}
 
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if CNPrimaryCheck && checkInsertPkDup {
+	if CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewTag()
 
