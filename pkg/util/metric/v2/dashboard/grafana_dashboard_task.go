@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/timeseries"
 	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 )
@@ -35,6 +36,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskFlushTableTailRow(),
 			c.initTaskMergeRow(),
 			c.initTaskCheckpointRow(),
+			c.initTaskSelectivityRow(),
 		)...)
 
 	if err != nil {
@@ -135,5 +137,43 @@ func (c *DashboardCreator) initTaskCheckpointRow() dashboard.Option {
 			SpanNulls(true),
 			timeseries.Span(3),
 		),
+	)
+}
+
+func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
+
+	hitRateFunc := func(title, metricType string) row.Option {
+		return c.getTimeSeries(
+			title,
+			[]string{
+				fmt.Sprintf(
+					"sum(%s) by (%s) / on(%s) sum(%s) by (%s)",
+					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_hit"`), c.by, c.by,
+					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
+			},
+			[]string{fmt.Sprintf("filterout-{{ %s }}", c.by)},
+			timeseries.Span(4),
+		)
+	}
+	counterRateFunc := func(title, metricType string) row.Option {
+		return c.getTimeSeries(
+			title,
+			[]string{
+				fmt.Sprintf(
+					"sum(rate(%s[$interval])) by (%s)",
+					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
+			},
+			[]string{fmt.Sprintf("req-{{ %s }}", c.by)},
+			timeseries.Span(4),
+		)
+	}
+	return dashboard.Row(
+		"Read Selectivity",
+		hitRateFunc("Read filter rate", "readfilter"),
+		hitRateFunc("Block range filter rate", "block"),
+		hitRateFunc("Column update filter rate", "column"),
+		counterRateFunc("Read filter request", "readfilter"),
+		counterRateFunc("Block range request", "block"),
+		counterRateFunc("Column update request", "column"),
 	)
 }

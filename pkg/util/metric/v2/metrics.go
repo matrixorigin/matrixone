@@ -41,6 +41,7 @@ func initTaskMetrics() {
 
 	registry.MustRegister(taskScheduledByCounter)
 	registry.MustRegister(taskGeneratedStuffCounter)
+	registry.MustRegister(taskSelectivityCounter)
 }
 
 func initFileServiceMetrics() {
