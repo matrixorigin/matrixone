@@ -265,7 +265,7 @@ func (p *PartitionState) HandleLogtailEntry(
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else if IsSegTable(entry.TableName) {
-			// TODO p.HandleSegDelete(ctx, entry.Bat)
+			p.HandleObject(ctx, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
@@ -279,6 +279,31 @@ func (p *PartitionState) HandleLogtailEntry(
 		}
 	default:
 		panic("unknown entry type")
+	}
+}
+
+func (p *PartitionState) HandleObject(
+	ctx context.Context,
+	input *api.Batch) {
+	nameVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[0]))
+	sizeVector := vector.MustFixedCol[uint32](mustVectorFromProto(input.Vecs[1]))
+	compressedSizeVector := vector.MustFixedCol[uint32](mustVectorFromProto(input.Vecs[2]))
+	zoneMapVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[3]))
+	blkNumberVector := vector.MustFixedCol[uint16](mustVectorFromProto(input.Vecs[4]))
+	stateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[5]))
+	dbIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[6]))
+	tIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[7]))
+	createAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[8]))
+	deleteAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
+	startVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[10]))
+	prepareVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[11]))
+	commitVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[12]))
+	for i, name := range nameVector {
+		logutil.Infof("lalala blk %v, [%d %d %v %d], state %v, db-%d, t-%d, c@%v, d@%v, %v-%v-%v",
+			name, sizeVector[i], compressedSizeVector[i], zoneMapVector[i], blkNumberVector[i],
+			stateVector[i], dbIDVector[i], tIDVector[i],
+			createAtVector[i].ToString(), deleteAtVector[i].ToString(),
+			startVector[i].ToString(), prepareVector[i].ToString(), commitVector[i].ToString())
 	}
 }
 
