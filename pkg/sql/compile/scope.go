@@ -67,6 +67,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
+			getLogger().Error("panic in scope run",
+				zap.String("error", err.Error()))
 		}
 		p.Cleanup(s.Proc, err != nil, err)
 	}()
@@ -113,6 +115,14 @@ func (s *Scope) MergeRun(c *Compile) error {
 		scope := s.PreScopes[i]
 		wg.Add(1)
 		ants.Submit(func() {
+			defer func() {
+				if e := recover(); e != nil {
+					err := moerr.ConvertPanicError(c.ctx, e)
+					getLogger().Error("panic in merge run run",
+						zap.String("error", err.Error()))
+				}
+				wg.Done()
+			}()
 			switch scope.Magic {
 			case Normal:
 				errChan <- scope.Run(c)
@@ -125,7 +135,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 			case Pushdown:
 				errChan <- scope.PushdownRun()
 			}
-			wg.Done()
 		})
 	}
 	defer wg.Wait()

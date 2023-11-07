@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -478,12 +479,13 @@ func (c *Compile) runOnce() error {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
+					getLogger().Error("panic in run",
+						zap.String("error", err.Error()))
 					errC <- err
-					wg.Done()
 				}
+				wg.Done()
 			}()
 			errC <- c.run(scope)
-			wg.Done()
 		})
 	}
 	wg.Wait()
