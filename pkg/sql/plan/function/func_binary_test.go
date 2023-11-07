@@ -442,16 +442,20 @@ func TestDateAdd(t *testing.T) {
 }
 
 func initConvertTzTestCase() []tcTemp {
-	d1, _ := types.ParseDatetime("2022-01-01 00:00:00", 6)
-	r1 := "2022-01-01 08:00:00"
-	d2, _ := types.ParseDatetime("9999-12-31 23:00:00", 6)
-	r2 := "9999-12-31 23:59:59"
-	d3, _ := types.ParseDatetime("9999-12-31 22:00:00", 6)
-	r3 := "9999-12-31 22:00:00"
-	d4, _ := types.ParseDatetime("9999-12-31 10:00:00", 6)
-	r4 := "9999-12-31 18:00:00"
+	d1, _ := types.ParseDatetime("2023-01-01 00:00:00", 6)
+	r1 := "2022-12-31 13:07:00"
+	d2, _ := types.ParseDatetime("2022-01-01 00:00:00", 6)
+	r2 := "2021-12-31 16:00:00"
+	d3, _ := types.ParseDatetime("9999-12-31 23:00:00", 6)
+	r3 := "9999-12-31 23:00:00"
+	d4, _ := types.ParseDatetime("9999-12-31 22:00:00", 6)
+	r4 := "9999-12-31 22:00:00"
+	d5, _ := types.ParseDatetime("9999-12-31 10:00:00", 6)
+	r5 := "9999-12-31 18:00:00"
+	d6, _ := types.ParseDatetime("2007-03-11 02:00:00", 6)
+	r6 := "2007-03-11 09:00:00"
 	return []tcTemp{
-		{
+		{ // select convert_tz('2022-01-01 00:00:00', '+08:21', '-02:32');
 			info: "test ConvertTz correct1",
 			typ:  types.T_datetime,
 			inputs: []testutil.FunctionTestInput{
@@ -459,58 +463,58 @@ func initConvertTzTestCase() []tcTemp {
 					[]types.Datetime{d1},
 					[]bool{false}),
 				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+00:00"},
+					[]string{"+08:21"},
 					[]bool{false}),
 				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+08:00"},
+					[]string{"-02:32"},
 					[]bool{false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{r1},
 				[]bool{false}),
 		},
-		{
+		{ // select convert_tz('2022-01-01 00:00:00', 'Asia/Shanghai', '+00:00');
 			info: "test ConvertTz correct2",
 			typ:  types.T_datetime,
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
+					[]types.Datetime{d2},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Asia/Shanghai"},
 					[]bool{false}),
 				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"+00:00"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Asia/Shanghai"},
-					[]bool{false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r1},
+				[]string{r2},
 				[]bool{false}),
 		},
-		{
+		{ // select convert_tz('2022-01-01 00:00:00', 'Europe/London', 'Asia/Shanghai');
 			info: "test ConvertTz correct3",
 			typ:  types.T_datetime,
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Europe/London"},
+					[]types.Datetime{d2},
 					[]bool{false}),
 				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"Asia/Shanghai"},
 					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Europe/London"},
+					[]bool{false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r1},
+				[]string{r2},
 				[]bool{false}),
 		},
-		{
+		{ // select convert_tz('9999-12-31 23:00:00', '-02:00', '+11:00');
 			info: "test ConvertTz out of range1",
 			typ:  types.T_datetime,
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d2},
+					[]types.Datetime{d3},
 					[]bool{false}),
 				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"-02:00"},
@@ -520,29 +524,11 @@ func initConvertTzTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r2},
-				[]bool{false}),
-		},
-		{
-			info: "test ConvertTz out of range2",
-			typ:  types.T_datetime,
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d3},
-					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Europe/London"},
-					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Asia/Shanghai"},
-					[]bool{false}),
-			},
-			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{r3},
 				[]bool{false}),
 		},
-		{
-			info: "test ConvertTz not out of range",
+		{ // select convert_tz('9999-12-31 22:00:00', 'Europe/London', 'Asia/Shanghai');
+			info: "test ConvertTz out of range2",
 			typ:  types.T_datetime,
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
@@ -557,6 +543,42 @@ func initConvertTzTestCase() []tcTemp {
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{r4},
+				[]bool{false}),
+		},
+		{ // select convert_tz('9999-12-31 10:00:00', 'Europe/London', 'Asia/Shanghai');
+			info: "test ConvertTz not out of range",
+			typ:  types.T_datetime,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d5},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Europe/London"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Asia/Shanghai"},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{r5},
+				[]bool{false}),
+		},
+		{ // select convert_tz('2007-03-11 02:00:00', 'America/Cambridge_Bay', 'GMT-0');
+			info: "test ConvertTz with daylight saving time",
+			typ:  types.T_datetime,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_datetime.ToType(),
+					[]types.Datetime{d6},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"America/Cambridge_Bay"},
+					[]bool{false}),
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"GMT-0"},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{r6},
 				[]bool{false}),
 		},
 		{

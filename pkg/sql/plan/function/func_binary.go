@@ -728,15 +728,16 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				return nil
 			}
 			maxTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
-			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
-			startTime := date.ConvertToGoTime(fromLoc)
-			if startTime.After(maxTime) { // if startTime > maxTime, return maxTime
+			startTime := date.ConvertToGoTime(time.UTC)
+			if !startTime.Before(maxTime) { // if startTime >= maxTime, return maxTime
 				if err = rs.AppendBytes([]byte(maxTime.Format(time.DateTime)), false); err != nil {
 					return err
 				}
 			} else {
-				endTime := startTime.In(toLoc)
-				if endTime.After(maxEndTime) { // if endTime > maxTime, return startTime
+				startTz, endTz := types.Now(fromLoc).ConvertToGoTime(time.UTC), types.Now(toLoc).ConvertToGoTime(time.UTC)
+				diff := endTz.Sub(startTz)
+				endTime := startTime.Add(diff)
+				if !endTime.Before(maxTime) { // if endTime >= maxTime, return startTime
 					if err = rs.AppendBytes([]byte(startTime.Format(time.DateTime)), false); err != nil {
 						return err
 					}
@@ -772,6 +773,9 @@ func convertTimezone(tz string) *time.Location {
 		minutes, err := strconv.Atoi(parts[1])
 		if err != nil {
 			return nil
+		}
+		if tz[0] == '-' {
+			minutes = -minutes
 		}
 
 		offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
