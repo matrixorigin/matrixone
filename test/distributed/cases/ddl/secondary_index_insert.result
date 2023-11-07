@@ -19,9 +19,9 @@ id    name    age
 1    Abby    24
 3    Abby    26
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    PRIMARY    1    id    A    0    NULL    NULL                    YES    NULL
-t1    1    idx1    1    name    A    0    NULL    NULL    YES                YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+t1    1    idx1    1    name    A    0    NULL    NULL    YES                {}    YES    NULL
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` (`name`)\n)
