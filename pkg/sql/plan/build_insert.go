@@ -347,7 +347,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	if pkColLength == 1 {
-		if rowsCount > USE_IN_EXPR_COUNT {
+		if rowsCount > useInExprCount {
 			// args in list must be constant
 			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
 				Typ: colTyp,

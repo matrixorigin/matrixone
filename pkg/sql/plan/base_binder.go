@@ -35,7 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const USE_IN_EXPR_COUNT int = 4
+const useInExprCount int = 4
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
 	switch exprImpl := astExpr.(type) {
@@ -1526,7 +1526,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 			var newExpr *plan.Expr
 
-			if len(inExprList) > USE_IN_EXPR_COUNT {
+			if len(inExprList) > useInExprCount {
 				rightList.List.List = inExprList
 				typ := makePlan2Type(&returnType)
 				typ.NotNullable = function.DeduceNotNullable(funcID, args)
