@@ -715,7 +715,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
 		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
 	} else {
-		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || haveUniqueKey(tableDef) {
+		if tableDef.Pkey != nil || len(tableDef.Fkeys) != 0 || tableDef.Indexes != nil {
 			keyStr += "case"
 			if tableDef.Pkey != nil {
 				for _, name := range tableDef.Pkey.Names {
@@ -725,18 +725,35 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 			}
 			if len(tableDef.Fkeys) != 0 {
+				colIdToName := make(map[uint64]string)
+				for _, col := range tableDef.Cols {
+					if col.Hidden {
+						continue
+					}
+					colIdToName[col.ColId] = col.Name
+				}
 				for _, fk := range tableDef.Fkeys {
-					keyStr += " when attname = "
-					keyStr += "'" + tableDef.Cols[fk.Cols[0]].GetName() + "'"
-					keyStr += " then 'MUL'"
+					for _, colId := range fk.Cols {
+						keyStr += " when attname = "
+						keyStr += "'" + colIdToName[colId] + "'"
+						keyStr += " then 'MUL'"
+					}
 				}
 			}
-			if haveUniqueKey(tableDef) {
+			if tableDef.Indexes != nil {
 				for _, indexdef := range tableDef.Indexes {
 					if indexdef.Unique {
-						keyStr += " when attname = "
-						keyStr += "'" + indexdef.IndexName + "'"
-						keyStr += " then 'UNI'"
+						for _, name := range indexdef.Parts {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'UNI'"
+						}
+					} else {
+						for _, name := range indexdef.Parts {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'MUL'"
+						}
 					}
 				}
 			}

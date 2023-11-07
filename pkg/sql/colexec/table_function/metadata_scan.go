@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,7 +43,7 @@ func metadataScanPrepare(proc *process.Process, arg *Argument) (err error) {
 	return err
 }
 
-func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	var (
 		err         error
 		source, col *vector.Vector
@@ -59,7 +61,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 	}()
 
-	bat := proc.InputBatch()
+	bat := result.Batch
 	if bat == nil {
 		return true, nil
 	}
@@ -74,6 +76,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 
 	dbname, tablename, colname, err := handleDatasource(vector.MustStrCol(source), vector.MustStrCol(col))
+	logutil.Infof("db: %s, table: %s, col: %s in metadataScan", dbname, tablename, colname)
 	if err != nil {
 		return false, err
 	}
@@ -99,7 +102,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, err
 	}
 
-	proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return false, nil
 }
 
@@ -141,7 +144,7 @@ func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, err
 		}
 
 		tp := plan2.MetadataScanColTypes[idx]
-		retBat.Vecs[i] = vector.NewVec(tp)
+		retBat.Vecs[i] = proc.GetVector(tp)
 	}
 
 	return retBat, nil

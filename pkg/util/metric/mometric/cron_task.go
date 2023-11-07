@@ -194,7 +194,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	ctx, span := trace.Start(ctx, "checkNewAccountSize")
 	defer span.End()
 	logger = logger.WithContext(ctx)
-	logger.Info("started")
+	logger.Info("checkNewAccountSize started")
 	defer func() {
 		logger.Info("checkNewAccountSize exit", zap.Error(err))
 	}()
@@ -209,6 +209,7 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	var interval = GetStorageUsageCheckNewInterval()
 	var next = time.NewTicker(interval)
 	var lastCheckTime = time.Now().Add(-time.Second)
+	var newAccountCnt uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -242,15 +243,15 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		err = result.Error()
 		if err != nil {
 			logger.Error("failed to fetch new created account", zap.Error(err), zap.String("sql", sql))
-			continue
+			goto nextL
 		}
 
-		cnt := result.RowCount()
-		if cnt == 0 {
+		newAccountCnt = result.RowCount()
+		if newAccountCnt == 0 {
 			logger.Debug("got empty new account info, wait next round")
-			continue
+			goto nextL
 		}
-		logger.Debug("collect new account cnt", zap.Uint64("cnt", cnt))
+		logger.Debug("collect new account cnt", zap.Uint64("cnt", newAccountCnt))
 		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
 
 			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
@@ -292,12 +293,13 @@ func checkNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			// done query.
 
 			// update new accounts metric
-			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+			logger.Info("new account storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
 				zap.String("created_time", createdTime))
 
 			metric.StorageUsage(account).Set(sizeMB)
 		}
 
+	nextL:
 		// reset next Round
 		next.Reset(GetStorageUsageCheckNewInterval())
 		logger.Debug("wait next round, check new account")

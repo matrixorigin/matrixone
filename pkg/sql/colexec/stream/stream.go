@@ -16,22 +16,24 @@ package stream
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("stream scan")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "StreamPrepare")
 	defer span.End()
 
-	p := arg.(*Argument)
+	p := arg
 	p.attrs = make([]string, len(p.TblDef.Cols))
 	p.types = make([]types.Type, len(p.TblDef.Cols))
 	p.Configs = make(map[string]interface{})
@@ -55,16 +57,24 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	_, span := trace.Start(proc.Ctx, "StreamCall")
 	defer span.End()
-	p := arg.(*Argument)
-	b, err := mokafka.RetrieveData(proc.Ctx, p.Configs, p.attrs, p.types, p.Offset, p.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+	result := vm.NewCallResult()
+	var err error
+	arg.buf, err = mokafka.RetrieveData(proc.Ctx, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
 	if err != nil {
-		return process.ExecStop, err
+		result.Status = vm.ExecStop
+		return result, err
 	}
 
-	proc.SetInputBatch(b)
+	result.Batch = arg.buf
 	//todo: change to process.ExecNext
-	return process.ExecStop, nil
+	result.Status = vm.ExecStop
+	return result, nil
 }

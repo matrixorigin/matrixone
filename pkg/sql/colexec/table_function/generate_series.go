@@ -26,10 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func generateSeriesString(arg any, buf *bytes.Buffer) {
+func generateSeriesString(buf *bytes.Buffer) {
 	buf.WriteString("generate_series")
 }
 
@@ -39,12 +40,13 @@ func generateSeriesPrepare(proc *process.Process, arg *Argument) (err error) {
 	return err
 }
 
-func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func generateSeriesCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	var (
 		err                                               error
 		startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector
 		rbat                                              *batch.Batch
 	)
+	bat := result.Batch
 	defer func() {
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
@@ -65,7 +67,6 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 			endVecTmp.Free(proc.Mp())
 		}
 	}()
-	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
@@ -89,7 +90,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	rbat = batch.NewWithSize(len(arg.Attrs))
 	rbat.Attrs = arg.Attrs
 	for i := range arg.Attrs {
-		rbat.Vecs[i] = vector.NewVec(arg.retSchema[i])
+		rbat.Vecs[i] = proc.GetVector(arg.retSchema[i])
 	}
 	if len(arg.Args) == 3 {
 		stepVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat})
@@ -153,7 +154,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", startVec.GetType().Oid.String())
 
 	}
-	proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return false, nil
 }
 

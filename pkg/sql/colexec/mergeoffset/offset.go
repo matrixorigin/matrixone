@@ -18,60 +18,68 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", ap.Offset))
+func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", arg.Offset))
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
 	ap.ctr.seen = 0
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ctr := ap.ctr
+
+	result := vm.NewCallResult()
+	var end bool
+	var err error
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
 
 	for {
-		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		arg.buf, end, err = arg.ctr.ReceiveFromAllRegs(anal)
 		if err != nil {
 			// WTF, nil?
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 
 		if end {
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 
-		anal.Input(bat, isFirst)
-		if ap.ctr.seen > ap.Offset {
-			anal.Output(bat, isLast)
-			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+		anal.Input(arg.buf, arg.info.IsFirst)
+		if arg.ctr.seen > arg.Offset {
+			anal.Output(arg.buf, arg.info.IsLast)
+			result.Batch = arg.buf
+			return result, nil
 		}
-		length := bat.RowCount()
+		length := arg.buf.RowCount()
 		// bat = PartOne + PartTwo, and PartTwo is required.
-		if ap.ctr.seen+uint64(length) > ap.Offset {
-			sels := newSels(int64(ap.Offset-ap.ctr.seen), int64(length)-int64(ap.Offset-ap.ctr.seen), proc)
-			ap.ctr.seen += uint64(length)
-			bat.Shrink(sels)
+		if arg.ctr.seen+uint64(length) > arg.Offset {
+			sels := newSels(int64(arg.Offset-arg.ctr.seen), int64(length)-int64(arg.Offset-arg.ctr.seen), proc)
+			arg.ctr.seen += uint64(length)
+			arg.buf.Shrink(sels)
 			proc.Mp().PutSels(sels)
-			anal.Output(bat, isLast)
-			proc.SetInputBatch(bat)
-			return process.ExecNext, nil
+			anal.Output(arg.buf, arg.info.IsLast)
+			result.Batch = arg.buf
+			return result, nil
 		}
-		ap.ctr.seen += uint64(length)
-		proc.PutBatch(bat)
+		arg.ctr.seen += uint64(length)
+		proc.PutBatch(arg.buf)
 	}
 }
 
