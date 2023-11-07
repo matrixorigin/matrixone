@@ -50,6 +50,7 @@ type lockContext struct {
 		sync.RWMutex
 		completed bool
 	}
+	createAt time.Time
 }
 
 func (l *localLockTable) newLockContext(
@@ -67,6 +68,7 @@ func (l *localLockTable) newLockContext(
 	c.opts = opts
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
+	c.createAt = time.Now()
 	return c
 }
 
