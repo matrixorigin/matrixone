@@ -64,7 +64,7 @@ select * from time_window06;
 select _wstart, _wend, max(col2) from time_window05 where ts > '2020-01-11 12:00:12.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 100, day) fill(prev);
 drop table time_window06;
 
--- abnormal test：滑动窗口的时间小于1s
+-- abnormal test：interval is less than 1s
 drop table if exists time_window07;
 create table time_window07 (ts timestamp primary key, col2 smallint unsigned);
 insert into time_window07 values ('2020-01-01 10:00:00.000', 127);
@@ -134,7 +134,7 @@ select _wstart, _wend, avg(col2), avg(col3), avg(col4) from int02 where ts > '20
 select _wstart, _wend, count(col2), count(col3), count(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 30, minute) fill(prev);
 drop table int02;
 
--- sliding window:窗口值固定，但是滑动的值不固定
+-- interval and sliding window with fill
 drop table if exists sliding_window01;
 create table sliding_window01 (ts timestamp(3) primary key , col2 double);
 insert into sliding_window01 values ('2023-08-01 00:00:00', 25.0);
@@ -156,7 +156,6 @@ select _wstart, _wend, count(col2), avg(col2) from sliding_window01 where ts > "
 select _wstart, _wend, sum(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 1, hour) sliding(10, minute) fill(none);
 drop table sliding_window01;
 
--- sliding window:窗口值固定，但是滑动的值不固定，窗口为second级
 drop table if exists sliding_window02;
 create table sliding_window02 (ts timestamp primary key , col2 double);
 insert into sliding_window02 values ('2023-08-01 00:01:01.000',37281932.32143214);
