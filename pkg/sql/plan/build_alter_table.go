@@ -285,7 +285,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 					indexStr = "KEY "
 				}
 				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
-				if indexdef.IndexAlgo != catalog.MoIndexDefaultAlgo.ToString() {
+				if !catalog.IsDefaultIndexAlgo(indexdef.IndexAlgo) {
 					indexStr += fmt.Sprintf("USING `%s` ", formatStr(indexdef.IndexAlgo))
 				}
 				indexStr += "("

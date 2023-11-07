@@ -367,7 +367,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 		} else if !indexInfo.Unique {
 			// 1. Secondary Index Algorithm is DEFAULT or BTREE (normal secondary index)
-			if catalog.IsDefaultIndexAlgo(indexInfo.IndexAlgo) {
+			if catalog.IsRegularIndexAlgo(indexInfo.IndexAlgo) {
 				if len(indexInfo.Parts) == 1 &&
 					(catalog.IsAlias(indexInfo.Parts[0]) ||
 						indexInfo.Parts[0] == catalog.FakePrimaryKeyColName ||
@@ -380,9 +380,11 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
-			} else if indexInfo.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
-				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 			}
+			//else if indexInfo.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
+			//	tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+			// TODO: later we will support IVF index
+			//}
 
 		}
 	}

@@ -27,9 +27,18 @@ const (
 	MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
 )
 
+// IsDefaultIndexAlgo is used to skip printing the default "" index algo in the restoreDDL and buildShowCreateTable
 func IsDefaultIndexAlgo(algo string) bool {
 	_algo := strings.ToLower(strings.TrimSpace(algo))
-	return _algo == MoIndexDefaultAlgo.ToString() || _algo == MoIndexBTreeAlgo.ToString()
+	return _algo == MoIndexDefaultAlgo.ToString()
+}
+
+// IsRegularIndexAlgo are indexes which will be handled by regular index flow, ie the one where
+// we have one hidden table.
+func IsRegularIndexAlgo(algo string) bool {
+	_algo := strings.ToLower(strings.TrimSpace(algo))
+	return _algo == MoIndexDefaultAlgo.ToString() || _algo == MoIndexBTreeAlgo.ToString() ||
+		_algo == MoIndexIvfFlatAlgo.ToString() //TODO: IVF will be handled separately later.
 }
 
 // ------------------------[START] Aliaser------------------------

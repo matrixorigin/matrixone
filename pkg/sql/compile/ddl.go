@@ -341,7 +341,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				return err
 			}
 			//---------------------------------------------------------
-			if act.AddIndex.IndexTableExist && catalog.IsDefaultIndexAlgo(indexDef.IndexAlgo) {
+			if act.AddIndex.IndexTableExist && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
 				// 2. create index table from unique index object
 				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
@@ -993,7 +993,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 
 	// build and create index table for unique/secondary index with index algorithm = "" or "BTREE"
-	if qry.TableExist && catalog.IsDefaultIndexAlgo(indexDef.IndexAlgo) {
+	if qry.TableExist && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
 		def := qry.GetIndex().GetIndexTables()[0]
 		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
 		err = c.runSql(createSQL)
