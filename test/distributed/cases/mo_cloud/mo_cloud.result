@@ -578,8 +578,6 @@ SELECT `statement_id`,`stats`,`duration`,`sql_source_type`,`account`,`response_a
 statement_id    stats    duration    sql_source_type    account    response_at
 SELECT `value` FROM `system_metrics`.`server_storage_usage` WHERE account = '863f0767_0361_4a8c_a3e8_73b2be140a74' and collecttime > '2023-07-28 06:07:53' and collecttime <= '2023-07-28 06:10:53' ORDER BY collecttime DESC LIMIT 1;
 value
-SELECT collecttime FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' ORDER BY collecttime asc LIMIT 1;
-collecttime
 SELECT count(*) FROM `mo_mo`.`moins` WHERE id = '2ef38bf3-b821-4cab-879e-3b788f1e922f';
 SQL parser error: table "moins" does not exist
 SELECT count(*) FROM `mo_mo`.`wb_version` WHERE wb_id = 'd457fd59-a865-4a5b-80b0-6e19a6059f1f';
