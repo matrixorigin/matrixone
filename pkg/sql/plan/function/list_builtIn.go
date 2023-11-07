@@ -2463,6 +2463,27 @@ var supportedMathBuiltIns = []FuncNew{
 }
 
 var supportedDateAndTimeBuiltIns = []FuncNew{
+	// function `convert_tz`
+	{
+		functionId: CONVERT_TZ,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_datetime, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ConvertTz
+				},
+			},
+		},
+	},
+
 	// function `current_date`, `curdate`
 	{
 		functionId: CURRENT_DATE,

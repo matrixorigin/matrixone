@@ -1,4 +1,4 @@
-name:  MO Checkin Regression On EKS
+name:  MO Checkin Regression On TKE
 
 on:
   pull_request_target:
@@ -9,19 +9,20 @@ on:
       - '**.go'
       - '**.c'
       - '**.h'
-      - '.github/workflows/merge-trigger.yaml'
+      - '.github/workflows/merge-trigger-tke.yaml'
 
 jobs:
   docker_image_build:
+    runs-on: amd64-tke-dind
     if: ${{ github.event.pull_request.merged == true }}
-    runs-on: aws-arm64-runner
     timeout-minutes: 60
     name: BUILD MO DOCKER IMAGE
     outputs:
        version: ${{ steps.prep.outputs.version }}
        commit_id: ${{ steps.prep.outputs.commit_id }}
     steps:
-      - name: Checkout Matrixorigin/Matrixone
+      - name: Clone Repo Matrixorigin/Matrixone
+        if: ${{ always() && !cancelled() }}
         uses: actions/checkout@v3
         with:
           path: ./matrixone
@@ -29,24 +30,32 @@ jobs:
         id: prep
         run: |
           cd $GITHUB_WORKSPACE/matrixone
+
           LAST_COMMIT_ID=$(git rev-parse --short HEAD)
-          DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/matrixone-dev
+          DOCKER_IMAGE=ccr.ccs.tencentyun.com/matrixone-dev/matrixone
           VERSION=commit-$LAST_COMMIT_ID
           TAGS="${DOCKER_IMAGE}:${VERSION}"
+          
           # Set output parameters.
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
           echo "docker_image=${DOCKER_IMAGE}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "commit_id=${LAST_COMMIT_ID}" >> $GITHUB_OUTPUT
           echo ${TAGS}
-          echo ${{ secrets.DOCKERHUB_TOKEN }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
-          docker build -t $TAGS -f optools/images/Dockerfile .
+          echo ${{ secrets.TCR_TOKEN }} | docker login ccr.ccs.tencentyun.com -u ${{ secrets.TCR_USERNAME }} --password-stdin
+
+          # add tencentyun docker image mirror and tencentyun apt mirror
+          sed -i 's#^RUN apt-get update#RUN sed -i "s?http.*ubuntu\.com?http://mirrors\.tencentyun\.com?g" /etc/apt/sources.list  \&\& apt-get clean all \&\& apt-get update#g' optools/images/Dockerfile
+          sed -i 's#FROM golang:1.20.7-bookworm as builder#FROM ccr.ccs.tencentyun.com/cicd-runner/golang:1.20.7-bookworm as builder#g' optools/images/Dockerfile
+          sed -i 's#FROM ubuntu:latest#FROM ccr.ccs.tencentyun.com/cicd-runner/ubuntu:latest#g' optools/images/Dockerfile
+
+          docker build -t $TAGS -f optools/images/Dockerfile . --build-arg GOPROXY='https://goproxy.cn,direct'
           docker push $TAGS
 
   setup_mo_test_env:
     if: ${{ always() && !cancelled() && needs.docker_image_build.result == 'success' }}
     needs: docker_image_build
-    runs-on: aws-arm64-runner
+    runs-on: amd64-tke-mo
     timeout-minutes: 90
     name: SETUP MO TEST ENV
     outputs:
@@ -55,100 +64,98 @@ jobs:
       cn_1: ${{ steps.get_mo_addr.outputs.cn_1 }}
       cn_ips: ${{ steps.get_mo_addr.outputs.cn_ips }}
     steps:
-      - name: Checkout Matrixorigin/Matrixone
+      - name: Clone Repo Matrixorigin/Matrixone
+        if: ${{ always() && !cancelled() }}
         uses: actions/checkout@v3
         with:
-          path: ./matrixone          
-      - name: Prepare AWS Tools
+          path: ./matrixone
+      - name: Prepare Registry Token
         run: |
-          sudo apt-get update && sudo apt-get install awscli -y
-          sudo apt-get install -y ca-certificates curl
-      - name: Prepare AWS Config
-        run: |
-           aws configure<<EOF
-           ${{ secrets.AWS_ACCESSKEY_ID }}
-           ${{ secrets.AWS_SECRETACCESS_KEY }}
-           us-west-2
-           json
-           exit
-           EOF
-      - name: Prepare Kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.23.6'
-        id: install           
-      - name: Prepare Kubeconfig
-        run: |
-           # set docker login info
-           DOCKER_REGISTRY_SERVER=docker.io
-           DOCKER_USER=${{ secrets.DOCKERHUB_USERNAME }}
-           DOCKER_PASSWORD=${{ secrets.DOCKERHUB_TOKEN }}
-           aws eks --region us-west-2 update-kubeconfig --name eks-ci-new --kubeconfig eks-ci
-           export KUBECONFIG=$(pwd)/eks-ci
-           if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }} ;kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret generic aws-secret --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESSKEY_ID }} --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRETACCESS_KEY }};kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret docker-registry dockerhub --docker-server=$DOCKER_REGISTRY_SERVER --docker-username=$DOCKER_USER --docker-password=$DOCKER_PASSWORD;fi       
+          # set docker login info
+          DOCKER_REGISTRY_SERVER=ccr.ccs.tencentyun.com
+          DOCKER_USER=${{ secrets.TCR_USERNAME }}
+          DOCKER_PASSWORD=${{ secrets.TCR_TOKEN }}
+          if [ "$(kubectl get namespaces| grep -c mo-checkin-regression-${{ github.event.pull_request.number }})" -eq 0 ];then
+            kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};
+            kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret generic tencent-token --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.TENCENT_AK }} --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.TENCENT_SK }};
+            kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret docker-registry tke-registry --docker-server=$DOCKER_REGISTRY_SERVER --docker-username=$DOCKER_USER --docker-password=$DOCKER_PASSWORD;
+          fi       
       - name: ECHO mo-checkin-regression.yaml
         run: |
           echo '${{ needs.docker_image_build.outputs.version }}'
           cd $GITHUB_WORKSPACE/matrixone
-          sed -i 's/nsformocheckin/mo-checkin-regression-${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
-          sed -i 's/s3pathformocheckin/merge-run-test\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
-          sed -i "s/imagetag/${{ needs.docker_image_build.outputs.version }}/g" $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
-          cat $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
-      - name: Clean EKS ENV
+          sed -i 's/nsformocheckin/mo-checkin-regression-${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+          sed -i 's/s3pathformocheckin/mo-checkin-regression-1308875761\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+          sed -i 's/regionformocheckin/ap-chengdu/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+          sed -i 's@endpointformocheckin@https://cos.ap-chengdu.myqcloud.com@g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+          sed -i "s/imagetag/${{ needs.docker_image_build.outputs.version }}/g" $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+         
+          cat $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
+      - name: Clean TKE ENV
         run: |
-          export KUBECONFIG=$(pwd)/eks-ci
-          if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod|grep "mo-checkin-regression-*"|wc -l)" -ne 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} delete -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml;sleep 60s;fi
-          kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
-          aws s3 rm s3://merge-run-test/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1                 
+          if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod|grep -c "mo-checkin-regression-*")" -ne 0 ];then 
+            kubectl get matrixonecluster -n mo-checkin-regression-${{ github.event.pull_request.number }} | awk 'NR>1{system("kubectl delete matrixonecluster/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
+            sleep 60s;
+          fi
+          kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'                
       - name: Create MO Cluster
         run: |
-          export KUBECONFIG=$(pwd)/eks-ci
-          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} apply -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} apply -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
           sleep 100s
-          while true; do if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods --field-selector status.phase=Running|grep "mo-checkin-regression-*"|wc -l)" -eq 6 ]; then break; else sleep 15s; continue; fi; done
-          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -o wide
-          if [ ! -d $GITHUB_WORKSPACE/mo-server-log ]; then mkdir $GITHUB_WORKSPACE/mo-server-log;fi;
+          while true; do
+            if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods --field-selector status.phase=Running|grep -c "mo-checkin-regression-*")" -eq 6 ]; then
+              break;
+            else
+              echo "wait mo cluster init finish..."
+              sleep 15s;
+              continue;
+            fi
+          done
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
+          if [ ! -d $GITHUB_WORKSPACE/mo-server-log ]; then
+            mkdir $GITHUB_WORKSPACE/mo-server-log;
+          fi
       - name: Get MO Cluster Addr
         id: get_mo_addr
         run: |
-          export KUBECONFIG=$(pwd)/eks-ci
           mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
           echo mo_svc_ip=$mo_svc_ip
           echo "mo_svc_ip=${mo_svc_ip}" >> $GITHUB_OUTPUT
           kubectl get pod -n mo-checkin-regression-${{ github.event.pull_request.number }} -l matrixorigin.io/component=CNSet | awk 'NR>1{arr[a++]=$1} END {for(i in arr){system("echo cn_"i"="arr[i]" >> $GITHUB_OUTPUT")}}'
           cn_ips=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{.items[*].status.podIP}' | sed 's/ /,/g')
+          echo "cn_ips is $cn_ips"
           echo "cn_ips=$cn_ips"  >>  $GITHUB_OUTPUT
       - name: Prepare Data in cn-0
         run: |
-          export KUBECONFIG=$(pwd)/eks-ci
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_0 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
-          apt-get update
-          apt-get install git -y
-          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git
+          apt update && apt install git -y
+          export https_proxy='http://proxy-service.proxy.svc.cluster.local:8001'
+          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git -v --progress
           cd matrixone
           git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
+          unset https_proxy
           exit
           EOF
           exit
       - name: Prepare Data in cn-1
         run: |
-          export KUBECONFIG=$(pwd)/eks-ci
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_1 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
-          apt-get update
-          apt-get install git -y
-          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git
+          apt update && apt install git -y
+          export https_proxy='http://proxy-service.proxy.svc.cluster.local:8001'
+          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git -v --progress
           cd matrixone
           git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
+          unset https_proxy
           exit
           EOF
           exit
   bvt_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN BVT TEST
-    runs-on: aws-arm64-runner
+    runs-on: amd64-tke-mo
     needs: [setup_mo_test_env,docker_image_build]
     steps:
-      - name: Clone mo-tester Repo
+      - name: Clone MO-Tester
         if: ${{ always() && !cancelled() }}
         uses: actions/checkout@v3
         with:
@@ -158,16 +165,12 @@ jobs:
           ref: main
       - name: Clone matrixone Repo
         if: ${{ always() && !cancelled() }}
-        run: |
-          cd $GITHUB_WORKSPACE
-          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git
-          cd $GITHUB_WORKSPACE/matrixone
-          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
-      - name: Set up JDK 8 for x64
-        uses: actions/setup-java@v3
+        uses: actions/checkout@v3
         with:
-          java-version: '8'
-          distribution: 'adopt'
+          path: ./matrixone
+      - name: Set JAVA PATH
+        run: |
+          echo "$JAVA_HOME/bin" >> $GITHUB_PATH
       - name: Generate MO-Tester Config and Start BVT Test
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 20
@@ -182,9 +185,9 @@ jobs:
           echo "=========================="
           cat ./mo-tester/run.yml
           echo "=========================="
-          
+
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e optimistic 2>&1
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources -e optimistic  2>&1
           rm -rf .git lib
       - name: Collect Upload files
         if: ${{ always() || cancelled() }}
@@ -201,7 +204,7 @@ jobs:
   ssb_and_tpch_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN SSB AND TPCH TEST
-    runs-on: aws-arm64-runner
+    runs-on: amd64-tke-large
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -237,15 +240,7 @@ jobs:
           repository: matrixorigin/mo-nightly-regression
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-nightly-regression
-          ref: main      
-
-      - name: Prepare Test EVN
-        run: |
-          sudo apt-get update
-          sudo apt-get install git vim net-tools mysql-client openjdk-8-jdk sysbench bc pip -y
-          sudo pip3 install PyYAML==6.0
-          sudo pip3 install shyaml==0.6.2
-          sudo pip3 install PyMySQL==1.0.2
+          ref: main
       
       - name: Create Account for Test
         id: account_for_ssb_and_tpch
@@ -253,6 +248,14 @@ jobs:
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account ssb_tpch_test admin_name = 'admin' identified by '111' comment 'for ssb and tpch test';"
           echo "ssb_tpch_account=ssb_tpch_test:admin" >> $GITHUB_OUTPUT
           echo "ssb_tpch_password=111" >> $GITHUB_OUTPUT
+
+      - name: Modify Tool's Setting And Set PATH
+        run: |
+          cd $GITHUB_WORKSPACE/mo-load-data
+          sed -i '/.*ENDPOINT: ""*/c\ENDPOINT: "cos.ap-chengdu.myqcloud.com"' access.yml
+          sed -i '/.*ACCESS_KEY_ID: ""*/c\ACCESS_KEY_ID: "${{secrets.TENCENT_AK}}"' access.yml
+          sed -i '/.*SECRET_ACCESS_KEY: ""*/c\SECRET_ACCESS_KEY: "${{secrets.TENCENT_SK}}"' access.yml
+          echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
       - name: Start Load SSB 10G Data And Test
         if: ${{ always() && !cancelled() }}
@@ -264,8 +267,7 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
-          sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/ssb_10`
-          ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/ssb_10 -r -m -g | tee report/mo-load-data-ssb.log
+          ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/02_from_cos/ssb_10 -r -m -g | tee report/mo-load-data-ssb.log
           # start test
           cd $GITHUB_WORKSPACE/mo-ssb
           mkdir -p report
@@ -283,8 +285,7 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
-          sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpch_10`
-          ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
+          ./load.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/02_from_cos/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
 
       - name: Start TPCH 10G Test
         if: ${{ always() && !cancelled() && steps.load_tpch_data.conclusion == 'success' }}
@@ -299,7 +300,7 @@ jobs:
           ./run.sh -u ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_account }} -p ${{ steps.account_for_ssb_and_tpch.outputs.ssb_tpch_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/tpch.log
 
       - name: Collect Upload files
-        if: ${{ always() && !cancelled() }}
+        if: ${{ failure() || cancelled() }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/reports
           mkdir -p $GITHUB_WORKSPACE/reports/mo-ssb
@@ -308,36 +309,7 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/mo-ssb/report && cp -r $GITHUB_WORKSPACE/mo-ssb/report $GITHUB_WORKSPACE/reports/mo-ssb
           mkdir -p $GITHUB_WORKSPACE/mo-load-data/report && cp -r $GITHUB_WORKSPACE/mo-load-data/report $GITHUB_WORKSPACE/reports/mo-load-data
           mkdir -p $GITHUB_WORKSPACE/mo-tpch/report && cp -r $GITHUB_WORKSPACE/mo-tpch/report $GITHUB_WORKSPACE/reports/mo-tpch
-      - name: Modify Report Database Config
-        if: ${{ always() && !cancelled() }}
-        run: |
-          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
-          sed -i '/  host:*/c\  host: "${{secrets.REPORT_DB_ADDR}}"' config.yml
-          sed -i '/  port:*/c\  port: ${{secrets.REPORT_DB_PORT}}' config.yml
-          sed -i '/  user:*/c\  user: "${{secrets.REPORT_DB_USER}}"' config.yml
-          sed -i '/  password:*/c\  password: "${{secrets.REPORT_DB_PASSWORD}}"' config.yml
-          sed -i '/  database:*/c\  database: "${{secrets.REPORT_DB_NAME}}"' config.yml          
-          sed -i '/  SSB:*/c\  SSB: "${{ github.workspace }}\/mo-ssb\/report"' config.yml
-          sed -i '/  TPCH:*/c\  TPCH: "${{ github.workspace }}\/mo-tpch\/report"' config.yml
-          grep host config.yml
-          grep port config.yml
-          grep user config.yml
-      - name: Collect and Check SSB Test Result
-        if: ${{ always() && !cancelled() }}
-        continue-on-error: true
-        run: |
-          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
-          grep SSB config.yml
-          python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} SSB
-          python Checker.py SSB      
-      - name: Collect and Check TPCH Test Result
-        if: ${{ always() && !cancelled() }}
-        continue-on-error: true
-        run: |
-          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
-          grep TPCH config.yml
-          python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} TPCH
-          python Checker.py TPCH
+
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
@@ -349,11 +321,10 @@ jobs:
 
   sysbench_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
-    name: MO CHECKIN SYSBENCH TEST
-    runs-on: aws-arm64-runner
+    name: SYSBENCH TEST
+    runs-on: amd64-tke-large
     needs: [setup_mo_test_env,bvt_test]
     steps:
-
       - name: Clone mo-load Repo
         if: ${{ always() && !cancelled() }}
         uses: actions/checkout@v3
@@ -371,26 +342,19 @@ jobs:
           path: ./mo-nightly-regression
           ref: main
           
-      - name: Prepare Test EVN
-        run: |
-          sudo apt-get update
-          sudo apt-get install git vim net-tools mysql-client openjdk-8-jdk sysbench bc pip -y
-          sudo pip3 install PyYAML==6.0
-          sudo pip3 install shyaml==0.6.2
-          sudo pip3 install PyMySQL==1.0.2
-          
-      - name: Create Account for Test
+      - name: Create Account for Test And Set PATH
         id: account_for_sysbench
         run: |
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account sysbench_test admin_name = 'admin' identified by '111' comment 'for sysbench test';"
           echo "sysbench_account=sysbench_test:admin" >> $GITHUB_OUTPUT
           echo "sysbench_password=111" >> $GITHUB_OUTPUT
+          echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
  
       # start sysbench test
-      - name: Start OLTP Insert Test With 100 Threads
+      - name: Start OLTP Mixed Test With 100 Threads
         if: ${{ always() && !cancelled() }}
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -400,79 +364,23 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-load
           mkdir -p report
           sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' mo.yml
-          sed -i 's/name: "dump"$/name: "${{ steps.account_for_sysbench.outputs.sysbench_account }}"/g' mo.yml
-          sed -i 's/password: "111"$/password: "${{ steps.account_for_sysbench.outputs.sysbench_password }}"/g' mo.yml
+          sed -i 's/name:.*$/name: "${{ steps.account_for_sysbench.outputs.sysbench_account }}"/g' mo.yml
+          sed -i 's/password:.*$/password: "${{ steps.account_for_sysbench.outputs.sysbench_password }}"/g' mo.yml
           
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-insert.log
+          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-mix.log
           sleep 10
           
           echo ''
           echo 'Start OLTP Insert Test With 100 threads'
-          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-insert.log
-
-      - name: Start OLTP Delete Test With 100 Threads
-        if: ${{ always() && !cancelled() }}
-        timeout-minutes: 15
-        run: |
-          set -uo pipefail
-          export LC_ALL="C.UTF-8"
-          locale
-          sleep 60s
-          
-          cd $GITHUB_WORKSPACE/mo-load
-          mkdir -p report
-          echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-delete.log
-          sleep 10
-          
-          echo ''
-          echo 'Start OLTP Delete Test With 100 threads'
-          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-delete.log
-          
-      - name: Start OLTP Update Test With 100 Threads
-        if: ${{ always() && !cancelled()  }}
-        timeout-minutes: 15
-        run: |
-          set -uo pipefail
-          export LC_ALL="C.UTF-8"
-          locale
-          sleep 60s
-          
-          cd $GITHUB_WORKSPACE/mo-load
-          mkdir -p report
-          echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-update.log
-          sleep 10
-          
-          echo ''
-          echo 'Start OLTP UPDATE Test With 100 threads'
-          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-update.log
-
-      - name: Start OLTP Point Select Test With 100 Threads
-        if: ${{ always() && !cancelled()  }}
-        timeout-minutes: 15
-        run: |
-          set -uo pipefail
-          export LC_ALL="C.UTF-8"
-          locale
-          sleep 60s
-          
-          cd $GITHUB_WORKSPACE/mo-load
-          mkdir -p report
-          echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-select.log
-          sleep 10
-          
-          echo ''
-          echo 'Start OLTP Point Select Test With 100 threads'
-          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g -b sbtest | tee report/oltp-select.log
+          ./start.sh -c cases/sysbench/mixed_10_100000 -t 100 -d 20 -g -b sbtest | tee report/oltp-mix.log
      
       - name: Result Summary
         if: ${{ always() && !cancelled()  }}
         run: |
           cd $GITHUB_WORKSPACE/mo-load
-          files=("report/oltp-insert.log" "report/oltp-delete.log" "report/oltp-update.log" "report/oltp-select.log")
+
+          files=("report/oltp-mix.log")
           for filename in "${files[@]}"
           do
               if [ ! -f $filename ]; then
@@ -481,7 +389,7 @@ jobs:
               echo -e "\n[$filename]"
               grep "tps=" $filename > tmp
               N=$(wc -l < tmp)
-              head -n 4 tmp
+              head -n 3 tmp
               echo "..."
               middle_start=$((N / 2 - 1))
               middle_end=$((N / 2 + 1))
@@ -489,33 +397,12 @@ jobs:
               echo "..."
               tail -n 3 tmp 
           done
-       
+
       - name: Collect Upload files
         if: ${{ always() || cancelled() }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/reports/mo-load
           mkdir -p $GITHUB_WORKSPACE/mo-load/report && cp -r $GITHUB_WORKSPACE/mo-load/report $GITHUB_WORKSPACE/reports/mo-load
-      - name: Modify Report Database Config
-        if: ${{ always() && !cancelled() }}
-        run: |
-          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
-          sed -i '/  host:*/c\  host: "${{secrets.REPORT_DB_ADDR}}"' config.yml
-          sed -i '/  port:*/c\  port: ${{secrets.REPORT_DB_PORT}}' config.yml
-          sed -i '/  user:*/c\  user: "${{secrets.REPORT_DB_USER}}"' config.yml
-          sed -i '/  password:*/c\  password: "${{secrets.REPORT_DB_PASSWORD}}"' config.yml
-          sed -i '/  database:*/c\  database: "${{secrets.REPORT_DB_NAME}}"' config.yml          
-          sed -i '/  SYSBENCH:*/c\  SYSBENCH: "${{ github.workspace }}\/mo-load\/report"' config.yml
-          grep host config.yml
-          grep port config.yml
-          grep user config.yml
-      - name: Collect and Check SYSBENCH Test Result
-        continue-on-error: true
-        if: ${{ always() && !cancelled() }}
-        run: |
-          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
-          grep SYSBENCH config.yml
-          python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} SYSBENCH
-          python Checker.py SYSBENCH
           
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
@@ -527,9 +414,9 @@ jobs:
           retention-days: 7
 
   tpcc_test:
-    if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
-    name: MO CHECKIN TPCC TEST
-    runs-on: aws-arm64-runner
+    if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success'}}
+    name: TPCC TEST
+    runs-on: amd64-tke-large
     needs: [setup_mo_test_env,bvt_test]
     steps:
       - name: Clone mo-load-data Repo
@@ -558,21 +445,22 @@ jobs:
           path: ./mo-nightly-regression
           ref: main
           
-      - name: Prepare Test EVN
-        run: |
-          sudo apt-get update
-          sudo apt-get install git vim net-tools mysql-client openjdk-8-jdk sysbench bc pip -y
-          sudo pip3 install PyYAML==6.0
-          sudo pip3 install shyaml==0.6.2
-          sudo pip3 install PyMySQL==1.0.2
-          
       - name: Create Account for Test
         id: account_for_tpcc
         run: |
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account tpcc_test admin_name = 'admin' identified by '111' comment 'for tpcc test';"
           echo "tpcc_account=tpcc_test:admin" >> $GITHUB_OUTPUT
           echo "tpcc_password=111" >> $GITHUB_OUTPUT
+          
 
+      - name: Modify Tool's Setting And Set PATH
+        run: |
+          cd $GITHUB_WORKSPACE/mo-load-data
+          sed -i '/.*ENDPOINT: ""*/c\ENDPOINT: "cos.ap-chengdu.myqcloud.com"' access.yml
+          sed -i '/.*ACCESS_KEY_ID: ""*/c\ACCESS_KEY_ID: "${{secrets.TENCENT_AK}}"' access.yml
+          sed -i '/.*SECRET_ACCESS_KEY: ""*/c\SECRET_ACCESS_KEY: "${{secrets.TENCENT_SK}}"' access.yml
+
+          echo "$JAVA_HOME/bin" >> $GITHUB_PATH
     
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
@@ -586,16 +474,16 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
-          sed -i  "s/s3_bucket: \"mo-load-data\"/s3_bucket: \"prepared-load-data\"/g" `grep s3_bucket -rl cases/00_from_s3/tpcc_10`
-          ./load.sh -u ${{ steps.account_for_tpcc.outputs.tpcc_account }} -p ${{ steps.account_for_tpcc.outputs.tpcc_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
-          
+          ./load.sh -u ${{ steps.account_for_tpcc.outputs.tpcc_account }} -p ${{ steps.account_for_tpcc.outputs.tpcc_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/02_from_cos/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
+
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
-          locale          
+          locale
+          
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
@@ -604,17 +492,17 @@ jobs:
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=15' props_10.mo
-          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062,9999' props_10.mo
+          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
           sed -i 's/user=.*/user=${{ steps.account_for_tpcc.outputs.tpcc_account }}/g' props_10.mo
           sed -i 's/password=.*/password=${{ steps.account_for_tpcc.outputs.tpcc_password }}/g' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
-      
+          
       - name: Result Summary
         if: ${{ always() && !cancelled()  }}
         run: |
           cd $GITHUB_WORKSPACE/mo-tpcc
-          files=("report/tpcc-benchmark-10-10.log" "report/tpcc-benchmark-10-50.log" "report/tpcc-benchmark-10-100.log")
+          files=("report/tpcc-benchmark-10-100.log")
           for filename in "${files[@]}"
           do
               if [ ! -f $filename ]; then
@@ -623,44 +511,22 @@ jobs:
               echo -e "\n[$filename]"
               grep "Running" $filename > tmp
               N=$(wc -l < tmp)
-              head -n 4 tmp
+              head -n 3 tmp
               echo "..."
               middle_start=$((N / 2 - 1))
               middle_end=$((N / 2 + 1))
               head -n $middle_end tmp | tail -n +$middle_start
               echo "..."
               tail -n 3 tmp 
-          done    
+          done
       
       - name: Collect Upload files
-        if: ${{ always() && !cancelled() }}
+        if: ${{ always() || cancelled() }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/reports/mo-load-data
           mkdir -p $GITHUB_WORKSPACE/reports/mo-tpcc
           mkdir -p $GITHUB_WORKSPACE/mo-load-data/report && cp -r $GITHUB_WORKSPACE/mo-load-data/report $GITHUB_WORKSPACE/reports/mo-load-data
-          mkdir -p $GITHUB_WORKSPACE/mo-tpcc/report && cp -r $GITHUB_WORKSPACE/mo-tpcc/report $GITHUB_WORKSPACE/reports/mo-tpcc
-
-      - name: Modify Report Database Config
-        if: ${{ always() && !cancelled() }}
-        run: |
-          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
-          sed -i '/  host:*/c\  host: "${{secrets.REPORT_DB_ADDR}}"' config.yml
-          sed -i '/  port:*/c\  port: ${{secrets.REPORT_DB_PORT}}' config.yml
-          sed -i '/  user:*/c\  user: "${{secrets.REPORT_DB_USER}}"' config.yml
-          sed -i '/  password:*/c\  password: "${{secrets.REPORT_DB_PASSWORD}}"' config.yml
-          sed -i '/  database:*/c\  database: "${{secrets.REPORT_DB_NAME}}"' config.yml
-          sed -i '/  TPCC:*/c\  TPCC: "${{ github.workspace }}\/mo-tpcc\/report"' config.yml
-          grep host config.yml
-          grep port config.yml
-          grep user config.yml
-      - name: Collect and Check TPCC Test Result
-        if: ${{ always() && !cancelled() }}
-        continue-on-error: true
-        run: |
-          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
-          grep TPCC config.yml
-          python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} TPCC
-          python Checker.py TPCC      
+          mkdir -p $GITHUB_WORKSPACE/mo-tpcc/report && cp -r $GITHUB_WORKSPACE/mo-tpcc/report $GITHUB_WORKSPACE/reports/mo-tpcc     
       
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
@@ -669,6 +535,81 @@ jobs:
           name: mo-checkin-regression-${{ github.event.pull_request.number }}-tpcc
           path: |
              ${{ github.workspace }}/reports
+          retention-days: 7
+
+  multi-cn-bvt-race-linux-x86:
+    if: github.event.pull_request.merged == true
+    runs-on: amd64-tke-mo
+    name: Multi-CN e2e BVT(Race) Test on Linux/x64
+    timeout-minutes: 120
+
+    steps:
+      - name: checkout head
+        uses: actions/checkout@v3
+        with:
+          path: ./head
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: main
+      - name: Set up Go
+        uses: ./head/.github/actions/setup_env
+      - name: Build MatrixOne
+        run: |
+          export GOPROXY='https://goproxy.cn,direct'
+          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          git rev-parse --short HEAD         
+      - name: Start MO
+        run: |
+          cd $GITHUB_WORKSPACE/head
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch    
+      - name: Clone test-tool repository
+        uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./mo-tester
+          ref: main
+      - name: Set up JDK 8 for x64
+        run: echo "$JAVA_HOME/bin" >> $GITHUB_PATH
+        
+      - name: Start BVT Test
+        id: bvt_on_pr_version
+        run: |
+          export LC_ALL="C.UTF-8"
+          locale
+          cd $GITHUB_WORKSPACE/mo-tester
+          sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' mo.yml
+          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
+          cat mo.yml
+          echo "======================================"
+          
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1          
+      - name: Dump mo-service goroutines
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
+      - name: Check mo-service Status
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
+      - name: generate upload files
+        if: ${{ always() || cancelled() }}
+        run: |
+          mkdir -p ${{ github.workspace }}/upload
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
+          mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/head/dump-stacks.log ${{ github.workspace }}/upload/          
+      - name: check data race
+        if: ${{ always() || cancelled() }}
+        run: |
+          cat ${{ github.workspace }}/upload/mo-service.log | grep -C2 'DATA RACE' || true
+          if [ "$(cat ${{ github.workspace }}/upload/mo-service.log |grep 'DATA RACE' | grep -v "grep" | wc -l)" -gt 0 ]; then exit 1; fi        
+      - uses: actions/upload-artifact@v3
+        if: ${{ always() || cancelled() }}
+        with:
+          name: multi-cn-e2e-with-race-linux-x86-reports
+          path: |
+            ${{ github.workspace }}/upload
           retention-days: 7
 
   pessimistic-bvt-darwin-arm64:
@@ -767,60 +708,39 @@ jobs:
             ${{ github.workspace }}/upload
           retention-days: 7
 
-
-
   clean_up_env:
     if: ${{ always() && github.event.pull_request.merged == true }}
     name: CLEAN ENV AND NOTICE
-    runs-on: aws-arm64-runner
+    runs-on: amd64-tke-mo
     needs: [docker_image_build,setup_mo_test_env,bvt_test,ssb_and_tpch_test,sysbench_test,tpcc_test,pessimistic-bvt-darwin-arm64,multi-cn-bvt-race-linux-x86]
     steps:
-      - name: Prepare AWS Tools
+      - name: Check and Recreate Namespace
         if: ${{ needs.docker_image_build.result == 'success' }}
         run: |
-          sudo apt-get update && sudo apt-get install awscli -y
-          sudo apt-get install -y ca-certificates curl
-      - name: Prepare AWS Kubectl
-        if: ${{ needs.docker_image_build.result == 'success' }}
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.23.6'
-        id: install
-      - name: Prepare AWS Config
-        if: ${{ needs.docker_image_build.result == 'success' }}
-        run: |
-           aws configure<<EOF
-           ${{ secrets.AWS_ACCESSKEY_ID }}
-           ${{ secrets.AWS_SECRETACCESS_KEY }}
-           us-west-2
-           json
-           exit
-           EOF
-      - name: Prepare Kubeconfig
-        if: ${{ needs.docker_image_build.result == 'success' }}
-        run: |
-          aws eks --region us-west-2 update-kubeconfig --name eks-ci-new --kubeconfig eks-ci
-          export KUBECONFIG=$(pwd)/eks-ci
-          if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};fi
-     
+          if [ "$(kubectl get namespaces| grep -c mo-checkin-regression-${{ github.event.pull_request.number }})" -eq 0 ];then
+            kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};
+          fi
       - name: Check MO Status and Collect Trace
         if: ${{ needs.docker_image_build.result == 'success' }}
         continue-on-error: true
         run: |
           set -x
+          unset https_proxy
+          unset http_proxy
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
           mkdir -p $GITHUB_WORKSPACE/upload && cd $GITHUB_WORKSPACE/upload
           dn_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=DNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}')
           curl "http://$dn_ip:6060/debug/pprof/trace?seconds=30" -o dn_trace.out
           curl "http://$dn_ip:6060/debug/pprof/goroutine?debug=2" -o dn_groutine.out
-          
+
           cn_0_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | head -n 1)
           curl "http://$cn_0_ip:6060/debug/pprof/trace?seconds=30" -o cn_0_trace.out
           curl "http://$cn_0_ip:6060/debug/pprof/goroutine?debug=2" -o cn_0_groutine.out
-          
+
           cn_1_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}' | grep -v $cn_0_ip)
           curl "http://$cn_1_ip:6060/debug/pprof/trace?seconds=30" -o cn_1_trace.out
           curl "http://$cn_1_ip:6060/debug/pprof/goroutine?debug=2" -o cn_1_groutine.out
+
       - uses: actions/upload-artifact@v3
         if: ${{ needs.docker_image_build.result == 'success' }}
         continue-on-error: true
@@ -829,110 +749,32 @@ jobs:
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
-     
+        
       - name: Check MO Status and Clean ENV
         if: ${{ needs.docker_image_build.result == 'success' }}
         run: |
           cd $GITHUB_WORKSPACE
-          export KUBECONFIG=$(pwd)/eks-ci
-          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -o wide
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get matrixonecluster        
           #delete matrixone cluster
           kubectl get matrixonecluster -n mo-checkin-regression-${{ github.event.pull_request.number }} | awk 'NR>1{system("kubectl delete matrixonecluster/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
           sleep 60      
-          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
-
-          # move etl/pprof to result
-          if [ "$(aws s3 ls s3://merge-run-test/${{ github.event.pull_request.number }}/etl/ | grep pprof | wc -l)" -eq 1 ]; then
-            aws s3 rm s3://merge-run-test/result/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1;
-            aws s3 mv s3://merge-run-test/${{ github.event.pull_request.number }}/etl/pprof s3://merge-run-test/result/${{ github.event.pull_request.number }}/etl/pprof --recursive > /dev/null 2>&1;
-          fi
-
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
+          
           #delete bucket
           kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
           #delete namespace
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
       - name: NOTICE FAIL RESULT
-        if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' || needs.multi-cn-bvt-race-linux-x86.result != 'success' || needs.pessimistic-bvt-darwin-arm64.result != 'success' }} 
-        uses: chf007/action-wechat-work@master
-        env:
-          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}
-        with:
-          msgtype: markdown
-          content: "MO Checkin Regression On EKS failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  <@shuqi.qin><@JiejieJia><@SuDong>"
-
-  multi-cn-bvt-race-linux-x86:
-    if: github.event.pull_request.merged == true
-    runs-on: amd64-tke-mo
-    name: Multi-CN e2e BVT(Race) Test on Linux/x64
-    timeout-minutes: 120
-
-    steps:
-      - name: checkout head
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: '3'
-          path: ./head
-          repository: ${{ github.event.pull_request.base.repo.full_name }}
-          ref: main
-      - name: Set up Go
-        uses: ./head/.github/actions/setup_env
-      - name: Build MatrixOne
+        if: ${{ failure() || cancelled() || needs.docker_image_build.result != 'success'|| needs.setup_mo_test_env.result != 'success' || needs.bvt_test.result != 'success' || needs.ssb_and_tpch_test.result != 'success' || needs.sysbench_test.result != 'success' || needs.tpcc_test.result != 'success' || needs.multi-cn-bvt-race-linux-x86.result != 'success' || needs.pessimistic-bvt-darwin-arm64.result != 'success' }}
         run: |
-          export GOPROXY='https://goproxy.cn,direct'
-          cd $GITHUB_WORKSPACE/head && make clean && make debug
-          git rev-parse --short HEAD         
-      - name: Start MO
-        run: |
-          cd $GITHUB_WORKSPACE/head
-          ./optools/run_bvt.sh $GITHUB_WORKSPACE/head launch    
-      - name: Clone test-tool repository
-        uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/mo-tester
-          path: ./mo-tester
-          ref: main
-      - name: Set up JDK 8 for x64
-        run: echo "$JAVA_HOME/bin" >> $GITHUB_PATH
-        
-      - name: Start BVT Test
-        id: bvt_on_pr_version
-        run: |
-          export LC_ALL="C.UTF-8"
-          locale
-          cd $GITHUB_WORKSPACE/mo-tester
-          sed -i 's/socketTimeout:.*/socketTimeout: 300000/g' mo.yml
-          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
-          cat mo.yml
-          echo "======================================"
-          
-          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/head/test/distributed/cases -e optimistic 2>&1          
-      - name: Dump mo-service goroutines
-        if: ${{ always() && !cancelled() }}
-        run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/head/dump-stacks.log; else echo 'current mo-service has already crashed'; exit 1; fi
-      - name: Check mo-service Status
-        if: ${{ always() && !cancelled() }}
-        run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi      
-      - name: generate upload files
-        if: ${{ always() || cancelled() }}
-        run: |
-          mkdir -p ${{ github.workspace }}/upload
-          rm -rf ./mo-tester/.git
-          rm -rf ./mo-tester/lib
-          mv ${{ github.workspace }}/head/mo-service.log ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/head/dump-stacks.log ${{ github.workspace }}/upload/          
-      - name: check data race
-        if: ${{ always() || cancelled() }}
-        run: |
-          cat ${{ github.workspace }}/upload/mo-service.log | grep -C2 'DATA RACE' || true
-          if [ "$(cat ${{ github.workspace }}/upload/mo-service.log |grep 'DATA RACE' | grep -v "grep" | wc -l)" -gt 0 ]; then exit 1; fi        
-      - uses: actions/upload-artifact@v3
-        if: ${{ always() || cancelled() }}
-        with:
-          name: multi-cn-e2e-with-race-linux-x86-reports
-          path: |
-            ${{ github.workspace }}/upload
-          retention-days: 7
+          for i in {1..10}; do
+            curl -X POST -H "Content-Type: application/json" \
+            -d '{"msgtype":"markdown","markdown":{"content":"MO Checkin Regression On TKE failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin><@JiejieJia><@SuDong>"}}' \
+            '${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}';
+            if [ "$?" -eq 0 ]; then
+              echo "send wecom notice succeeded";
+              break;
+            fi
+            sleep 5;
+          done
