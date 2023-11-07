@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	defaultMaxConnections        = 1
+	defaultMaxConnections        = 400
 	defaultMaxIdleDuration       = time.Minute
 	defaultSendQueueSize         = 10240
 	defaultBufferSize            = 1024

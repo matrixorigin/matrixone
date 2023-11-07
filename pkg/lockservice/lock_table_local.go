@@ -114,7 +114,6 @@ func (l *localLockTable) doLock(
 			}
 			// no waiter, all locks are added
 			if c.w == nil {
-				v2.TxnAcquireLockWaitDurationHistogram.Observe(time.Since(c.createAt).Seconds())
 				c.txn.clearBlocked(old)
 				logLocalLockAdded(c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
@@ -173,11 +172,6 @@ func (l *localLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
 	commitTS timestamp.Timestamp) {
-	start := time.Now()
-	defer func() {
-		v2.TxnUnlockBtreeTotalDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
 	logUnlockTableOnLocal(
 		l.bind.ServiceID,
 		txn,
@@ -187,8 +181,6 @@ func (l *localLockTable) unlock(
 	defer locks.unref()
 
 	l.mu.Lock()
-	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
-
 	defer l.mu.Unlock()
 	if l.mu.closed {
 		return

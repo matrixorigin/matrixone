@@ -61,7 +61,7 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailQueueSizeGauge)
 
 	registry.MustRegister(LogTailBytesHistogram)
-	registry.MustRegister(logTailApplyDurationHistogram)
+	registry.MustRegister(LogTailApplyDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
 	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
@@ -82,15 +82,11 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnCommitDurationHistogram)
 	registry.MustRegister(TxnLifeCycleDurationHistogram)
-	registry.MustRegister(TxnLifeCycleStatementsTotalHistogram)
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
-	registry.MustRegister(txnUnlockDurationHistogram)
+	registry.MustRegister(TxnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
-	registry.MustRegister(TxnLockWaitersTotalHistogram)
-	registry.MustRegister(TxnTableRangeSizeHistogram)
-	registry.MustRegister(txnMpoolDurationHistogram)
 
 	registry.MustRegister(TxnFastLoadObjectMetaTotalCounter)
 }

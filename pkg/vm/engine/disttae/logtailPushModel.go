@@ -297,12 +297,11 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 						goto cleanAndReconnect
 					}
 
-					receiveAt := time.Now()
 					response := resp.response
 					// consume subscribe response
 					if sResponse := response.GetSubscribeResponse(); sResponse != nil {
 						if err := distributeSubscribeResponse(
-							ctx, e, sResponse, receiver, receiveAt); err != nil {
+							ctx, e, sResponse, receiver); err != nil {
 							logutil.Errorf("%s distribute subscribe response failed, err: %s", logTag, err)
 							goto cleanAndReconnect
 						}
@@ -312,7 +311,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					// consume update response
 					if upResponse := response.GetUpdateResponse(); upResponse != nil {
 						if err := distributeUpdateResponse(
-							ctx, e, upResponse, receiver, receiveAt); err != nil {
+							ctx, e, upResponse, receiver); err != nil {
 							logutil.Errorf("%s distribute update response failed, err: %s", logTag, err)
 							goto cleanAndReconnect
 						}
@@ -322,7 +321,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					// consume unsubscribe response
 					if unResponse := response.GetUnsubscribeResponse(); unResponse != nil {
 						if err := distributeUnSubscribeResponse(
-							ctx, e, unResponse, receiver, receiveAt); err != nil {
+							ctx, e, unResponse, receiver); err != nil {
 							logutil.Errorf("%s distribute unsubscribe response failed, err: %s", logTag, err)
 							goto cleanAndReconnect
 						}
@@ -596,15 +595,7 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 	return minT
 }
 
-func (r *syncLogTailTimestamp) updateTimestamp(
-	index int,
-	newTimestamp timestamp.Timestamp,
-	receiveAt time.Time) {
-	start := time.Now()
-	v2.LogTailApplyNotifyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
-	defer func() {
-		v2.LogTailApplyNotifyDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
+func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.tList[index].Store(&newTimestamp)
 	if r.ready.Load() {
 		ts := r.getTimestamp()
@@ -851,8 +842,7 @@ func distributeSubscribeResponse(
 	ctx context.Context,
 	e *Engine,
 	response *logtail.SubscribeResponse,
-	recRoutines []routineController,
-	receiveAt time.Time) error {
+	recRoutines []routineController) error {
 	lt := response.Logtail
 	tbl := lt.GetTable()
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
@@ -867,18 +857,18 @@ func distributeSubscribeResponse(
 			}
 		}()
 
-		if err := e.consumeSubscribeResponse(ctx, response, false, receiveAt); err != nil {
+		if err := e.consumeSubscribeResponse(ctx, response, false); err != nil {
 			return err
 		}
 		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
-		recRoutines[routineIndex].sendSubscribeResponse(ctx, response, receiveAt)
+		recRoutines[routineIndex].sendSubscribeResponse(ctx, response)
 	}
 	// no matter how we consume the response, should update all timestamp.
-	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts, receiveAt)
+	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts)
 	for _, rc := range recRoutines {
-		rc.updateTimeFromT(*lt.Ts, receiveAt)
+		rc.updateTimeFromT(*lt.Ts)
 	}
 	return nil
 }
@@ -887,15 +877,14 @@ func distributeUpdateResponse(
 	ctx context.Context,
 	e *Engine,
 	response *logtail.UpdateResponse,
-	recRoutines []routineController,
-	receiveAt time.Time) error {
+	recRoutines []routineController) error {
 	list := response.GetLogtailList()
 
 	// loops for mo_database, mo_tables, mo_columns.
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_DATABASE_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
 				return err
 			}
 		}
@@ -903,7 +892,7 @@ func distributeUpdateResponse(
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_TABLES_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
 				return err
 			}
 		}
@@ -911,7 +900,7 @@ func distributeUpdateResponse(
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_COLUMNS_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false); err != nil {
 				return err
 			}
 		}
@@ -923,19 +912,13 @@ func distributeUpdateResponse(
 			continue
 		}
 		recIndex := table.TbId % consumerNumber
-		recRoutines[recIndex].sendTableLogTail(list[index], receiveAt)
+		recRoutines[recIndex].sendTableLogTail(list[index])
 	}
 	// should update all the timestamp.
-	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
+	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To)
 	for _, rc := range recRoutines {
-		rc.updateTimeFromT(*response.To, receiveAt)
+		rc.updateTimeFromT(*response.To)
 	}
-
-	n := 0
-	for _, c := range recRoutines {
-		n += len(c.signalChan)
-	}
-	v2.LogTailApplyQueueSizeGauge.Set(float64(n))
 	return nil
 }
 
@@ -943,8 +926,7 @@ func distributeUnSubscribeResponse(
 	_ context.Context,
 	_ *Engine,
 	response *logtail.UnSubscribeResponse,
-	recRoutines []routineController,
-	receiveAt time.Time) error {
+	recRoutines []routineController) error {
 	tbl := response.Table
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
 	if notDistribute {
@@ -953,7 +935,7 @@ func distributeUnSubscribeResponse(
 		return nil
 	}
 	routineIndex := tbl.TbId % consumerNumber
-	recRoutines[routineIndex].sendUnSubscribeResponse(response, receiveAt)
+	recRoutines[routineIndex].sendUnSubscribeResponse(response)
 
 	return nil
 }
@@ -967,46 +949,41 @@ type routineController struct {
 	warningBufferLen int
 }
 
-func (rc *routineController) sendSubscribeResponse(
-	ctx context.Context,
-	r *logtail.SubscribeResponse,
-	receiveAt time.Time) {
+func (rc *routineController) sendSubscribeResponse(ctx context.Context, r *logtail.SubscribeResponse) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
 	}
 
-	rc.signalChan <- cmdToConsumeSub{log: r, receiveAt: receiveAt}
+	rc.signalChan <- cmdToConsumeSub{log: r}
 }
 
-func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt time.Time) {
+func (rc *routineController) sendTableLogTail(r logtail.TableLogtail) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
 	}
 
-	rc.signalChan <- cmdToConsumeLog{log: r, receiveAt: receiveAt}
+	rc.signalChan <- cmdToConsumeLog{log: r}
 }
 
-func (rc *routineController) updateTimeFromT(
-	t timestamp.Timestamp,
-	receiveAt time.Time) {
+func (rc *routineController) updateTimeFromT(t timestamp.Timestamp) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
 	}
 
-	rc.signalChan <- cmdToUpdateTime{time: t, receiveAt: receiveAt}
+	rc.signalChan <- cmdToUpdateTime{time: t}
 }
 
-func (rc *routineController) sendUnSubscribeResponse(r *logtail.UnSubscribeResponse, receiveAt time.Time) {
+func (rc *routineController) sendUnSubscribeResponse(r *logtail.UnSubscribeResponse) {
 	// debug for issue #10138.
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
 	}
 
-	rc.signalChan <- cmdToConsumeUnSub{log: r, receiveAt: receiveAt}
+	rc.signalChan <- cmdToConsumeUnSub{log: r}
 }
 
 func (rc *routineController) close() {
@@ -1058,26 +1035,14 @@ type routineControlCmd interface {
 	action(ctx context.Context, e *Engine, ctrl *routineController) error
 }
 
-type cmdToConsumeSub struct {
-	log       *logtail.SubscribeResponse
-	receiveAt time.Time
-}
-type cmdToConsumeLog struct {
-	log       logtail.TableLogtail
-	receiveAt time.Time
-}
-type cmdToUpdateTime struct {
-	time      timestamp.Timestamp
-	receiveAt time.Time
-}
-type cmdToConsumeUnSub struct {
-	log       *logtail.UnSubscribeResponse
-	receiveAt time.Time
-}
+type cmdToConsumeSub struct{ log *logtail.SubscribeResponse }
+type cmdToConsumeLog struct{ log logtail.TableLogtail }
+type cmdToUpdateTime struct{ time timestamp.Timestamp }
+type cmdToConsumeUnSub struct{ log *logtail.UnSubscribeResponse }
 
 func (cmd cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeSubscribeResponse(ctx, response, true, cmd.receiveAt); err != nil {
+	if err := e.consumeSubscribeResponse(ctx, response, true); err != nil {
 		return err
 	}
 	lt := response.GetLogtail()
@@ -1088,14 +1053,14 @@ func (cmd cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineC
 
 func (cmd cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeUpdateLogTail(ctx, response, true, cmd.receiveAt); err != nil {
+	if err := e.consumeUpdateLogTail(ctx, response, true); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (cmd cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routineController) error {
-	e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time, cmd.receiveAt)
+	e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time)
 	return nil
 }
 
@@ -1106,33 +1071,23 @@ func (cmd cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineCo
 	return nil
 }
 
-func (e *Engine) consumeSubscribeResponse(
-	ctx context.Context,
-	rp *logtail.SubscribeResponse,
-	lazyLoad bool,
-	receiveAt time.Time) error {
+func (e *Engine) consumeSubscribeResponse(ctx context.Context, rp *logtail.SubscribeResponse,
+	lazyLoad bool) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &lt, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &lt, lazyLoad)
 }
 
-func (e *Engine) consumeUpdateLogTail(
-	ctx context.Context,
-	rp logtail.TableLogtail,
-	lazyLoad bool,
-	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &rp, lazyLoad, receiveAt)
+func (e *Engine) consumeUpdateLogTail(ctx context.Context, rp logtail.TableLogtail,
+	lazyLoad bool) error {
+	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &rp, lazyLoad)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
 	tnId int,
-	e *Engine,
-	tl *logtail.TableLogtail,
-	lazyLoad bool,
-	receiveAt time.Time) (err error) {
+	e *Engine, tl *logtail.TableLogtail, lazyLoad bool) (err error) {
 	start := time.Now()
-	v2.LogTailApplyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
 	defer func() {
 		v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
 	}()

@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -361,8 +360,7 @@ func (txn *Transaction) resetSnapshot() error {
 }
 
 func (txn *Transaction) IncrSQLCount() {
-	n := txn.sqlCount.Add(1)
-	v2.TxnLifeCycleStatementsTotalHistogram.Observe(float64(n))
+	txn.sqlCount.Add(1)
 }
 
 func (txn *Transaction) GetSQLCount() uint64 {
