@@ -1469,6 +1469,12 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
+
+			params, err := indexParamsToJsonString(indexInfo)
+			if err != nil {
+				return err
+			}
+			indexDef.IndexAlgoParams = params
 		} else {
 			indexDef.Comment = ""
 		}

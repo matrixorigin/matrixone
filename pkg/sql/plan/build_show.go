@@ -233,6 +233,15 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			}
 
 			indexStr += ")"
+			if indexdef.IndexAlgoParams != "" {
+				var paramList string
+				paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+				if err != nil {
+					return nil, err
+				}
+				paramList = strings.Replace(paramList, "'", "\\'", -1)
+				indexStr += fmt.Sprintf("%s", formatStr(paramList))
+			}
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
@@ -943,6 +952,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`algo` as 'Index_type', " +
 		"'' as `Comment`, " +
 		"`idx`.`comment` as `Index_comment`, " +
+		"`idx`.`algo_params` as `Index_params`, " +
 		"if(`idx`.`is_visible` = 1, 'YES', 'NO') as `Visible`, " +
 		"'NULL' as `Expression` " +
 		"from `%s`.`mo_indexes` `idx` left join `%s`.`mo_columns` `tcl` " +

@@ -309,6 +309,16 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 					indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
 					indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
 				}
+				if indexdef.IndexAlgoParams != "" {
+					var paramList string
+					var err error
+					paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+					if err != nil {
+						return "", err
+					}
+					paramList = strings.Replace(paramList, "'", "\\'", -1)
+					indexStr += fmt.Sprintf(" '%s'", formatStr(paramList))
+				}
 				if rowCount != 0 {
 					createStr += ",\n"
 				}
