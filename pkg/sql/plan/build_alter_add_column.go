@@ -380,7 +380,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 				}
-			} else if indexInfo.IndexAlgo == catalog.MoIndexIvfFlatAlgo {
+			} else if indexInfo.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 			}
 

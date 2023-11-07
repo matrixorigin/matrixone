@@ -16,19 +16,20 @@ package catalog
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
 
 // Index Algorithm names
 const (
-	MoIndexDefaultAlgo = ""        // used by UniqueIndex or default SecondaryIndex
-	MoIndexBTreeAlgo   = "btree"   // used for Mocking MySQL behaviour.
-	MoIndexIvfFlatAlgo = "ivfflat" // used for IVF flat index on Vector/Array columns
+	MoIndexDefaultAlgo = tree.INDEX_TYPE_INVALID // used by UniqueIndex or default SecondaryIndex
+	MoIndexBTreeAlgo   = tree.INDEX_TYPE_BTREE   // used for Mocking MySQL behaviour.
+	MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
 )
 
 func IsDefaultIndexAlgo(algo string) bool {
 	_algo := strings.ToLower(strings.TrimSpace(algo))
-	return _algo == MoIndexDefaultAlgo || _algo == MoIndexBTreeAlgo
+	return _algo == MoIndexDefaultAlgo.ToString() || _algo == MoIndexBTreeAlgo.ToString()
 }
 
 // ------------------------[START] Aliaser------------------------
