@@ -364,7 +364,7 @@ CREATE INDEX b ON show_04(b);
 show INDEX FROM show_04;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 show_04    0    a    1    a    A    0    NULL    NULL    YES                    YES    NULL
-show_04    1    b    1    b    A    0    NULL    NULL    YES                {}    YES    NULL
+show_04    1    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
 DROP TABLE show_04;
 DROP DATABASE test;
 create database test;

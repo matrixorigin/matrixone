@@ -164,11 +164,11 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 alter table Index01 add index key1(col1) comment 'test';
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    1    key1    1    col1    A    0    NULL    NULL    YES            test    {}    YES    NULL
+index01    1    key1    1    col1    A    0    NULL    NULL    YES            test        YES    NULL
 alter table index01 alter index key1 invisible;
 show index from index01;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    1    key1    1    col1    A    0    NULL    NULL    YES            test    {}    NO    NULL
+index01    1    key1    1    col1    A    0    NULL    NULL    YES            test        NO    NULL
 drop table index01;
 drop table if exists index02;
 create table index02(col1 int,key key1(col1) comment 'test');
@@ -198,7 +198,7 @@ drop table if exists index03;
 create table index03(fld1 int, key key1(fld1) comment 'test');
 show index from index03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index03    1    key1    1    fld1    A    0    NULL    NULL    YES            test    {}    YES    NULL
+index03    1    key1    1    fld1    A    0    NULL    NULL    YES            test        YES    NULL
 alter table index03 drop index key1;
 show index from index03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression

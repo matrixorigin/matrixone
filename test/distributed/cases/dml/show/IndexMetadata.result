@@ -53,7 +53,7 @@ show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t3    0    a    1    a    A    0    NULL    NULL    YES            a        YES    NULL
 t3    0    x    1    a    A    0    NULL    NULL    YES            x        YES    NULL
-t3    1    xx    1    a    A    0    NULL    NULL    YES            xx    {}    YES    NULL
+t3    1    xx    1    a    A    0    NULL    NULL    YES            xx        YES    NULL
 alter table t3 drop index xx;
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
@@ -96,7 +96,7 @@ create index b on t6(b);
 show index from t6;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t6    0    a    1    a    A    0    NULL    NULL    YES                    YES    NULL
-t6    1    b    1    b    A    0    NULL    NULL    YES                {}    YES    NULL
+t6    1    b    1    b    A    0    NULL    NULL    YES                    YES    NULL
 drop index b on t6;
 show index from t6;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
@@ -107,13 +107,13 @@ create table t7(a int, b int);
 create index x ON t7(a) comment 'x';
 show index from t7;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t7    1    x    1    a    A    0    NULL    NULL    YES            x    {}    YES    NULL
+t7    1    x    1    a    A    0    NULL    NULL    YES            x        YES    NULL
 drop table t7;
 drop table if exists t8;
 create table t8(a int, b int, key(a) comment 'a');
 show index from t8;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t8    1    a    1    a    A    0    NULL    NULL    YES            a    {}    YES    NULL
+t8    1    a    1    a    A    0    NULL    NULL    YES            a        YES    NULL
 drop table t8;
 drop table if exists t9;
 create table t9(
@@ -157,16 +157,16 @@ create table t10(a int,b binary,c char,d varchar(20));
 create index index01 on t10(a,b,C);
 show index from t10;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t10    1    index01    3    c    A    0    NULL    NULL    YES                {}    YES    NULL
-t10    1    index01    1    a    A    0    NULL    NULL    YES                {}    YES    NULL
-t10    1    index01    2    b    A    0    NULL    NULL    YES                {}    YES    NULL
+t10    1    index01    1    a    A    0    NULL    NULL    YES                    YES    NULL
+t10    1    index01    2    b    A    0    NULL    NULL    YES                    YES    NULL
+t10    1    index01    3    c    A    0    NULL    NULL    YES                    YES    NULL
 drop table t10;
 drop table if exists t11;
 create table t11(col1 int not null, col2 varchar(100), col3 bigint);
 create index ABc on t11(COL1);
 show index from t11;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t11    1    abc    1    col1    A    0    NULL    NULL                    {}    YES    NULL
+t11    1    abc    1    col1    A    0    NULL    NULL                        YES    NULL
 alter table t11 drop index ABc;
 show index from t11;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
