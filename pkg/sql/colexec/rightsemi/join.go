@@ -146,7 +146,8 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 			return true, nil
 		} else {
 			cnt := 1
-			for {
+			// The original code didn't handle the context correctly and would cause the system to HUNG!
+			for completed := true; completed; {
 				select {
 				case <-proc.Ctx.Done():
 					return true, moerr.NewInternalError(proc.Ctx, "query has been closed early")
@@ -155,7 +156,7 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 					cnt++
 					if cnt == int(ap.NumCPU) {
 						close(ap.Channel)
-						break
+						completed = false
 					}
 				}
 			}
