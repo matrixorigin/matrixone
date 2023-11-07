@@ -220,6 +220,7 @@ select _wstart, _wend, sum(col2) from sliding_window05 where ts >= '1998-01-29 0
 drop table sliding_window05;
 
 -- temporary table
+-- @bvt:issue#12556
 drop table if exists temporary01;
 create temporary table temporary01 (ts timestamp primary key, col2 bigint);
 insert into temporary01 values ('2022-07-17 00:04:12.000', -2147483647);
@@ -244,6 +245,7 @@ select _wstart, _wend, max(col2) from temporary01 where ts >= '2020-10-10 09:09:
 select _wstart, _wend, min(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 365, day) sliding(200, day) fill (linear);
 -- @bvt:issue
 drop table temporary01;
+-- @bvt:issue
 
 drop table if exists temporary02;
 create table temporary02 (ts timestamp primary key , col2 double, col3 double, col4 float);
