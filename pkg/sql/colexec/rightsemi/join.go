@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -145,12 +146,17 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 			return true, nil
 		} else {
 			cnt := 1
-			for v := range ap.Channel {
-				ctr.matched.Or(v)
-				cnt++
-				if cnt == int(ap.NumCPU) {
-					close(ap.Channel)
-					break
+			for {
+				select {
+				case <-proc.Ctx.Done():
+					return true, moerr.NewInternalError(proc.Ctx, "query has been closed early")
+				case v := <-ap.Channel:
+					ctr.matched.Or(v)
+					cnt++
+					if cnt == int(ap.NumCPU) {
+						close(ap.Channel)
+						break
+					}
 				}
 			}
 		}
