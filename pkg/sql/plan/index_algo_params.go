@@ -58,6 +58,7 @@ func indexParamsToStringList(indexParams string) (string, error) {
 }
 
 func indexParamsToJsonString(def *tree.Index) (string, error) {
+
 	res := make(map[string]string)
 
 	if def.IndexOption.AlgoParamList != 0 {
@@ -74,6 +75,11 @@ func indexParamsToJsonString(def *tree.Index) (string, error) {
 			return "", moerr.NewInternalErrorNoCtx("invalid similarity function. not of type '%s', '%s', '%s'",
 				IndexAlgoParamSimilarityFn_ip, IndexAlgoParamSimilarityFn_l2, IndexAlgoParamSimilarityFn_cos)
 		}
+	}
+
+	if len(res) == 0 {
+		// don't return empty json string
+		return "", nil
 	}
 
 	str, err := json.Marshal(res)
