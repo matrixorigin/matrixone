@@ -16,8 +16,19 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strconv"
+	"strings"
+)
+
+const (
+	IndexAlgoParamLists            = "lists"
+	IndexAlgoParamSimilarityFn     = "similarity_function"
+	IndexAlgoParamSimilarityFn_ip  = "ip"
+	IndexAlgoParamSimilarityFn_l2  = "l2"
+	IndexAlgoParamSimilarityFn_cos = "cos"
 )
 
 func indexParamsToStringList(indexParams string) (string, error) {
@@ -28,8 +39,19 @@ func indexParamsToStringList(indexParams string) (string, error) {
 	}
 
 	res := ""
-	if val, ok := result["lists"]; ok {
-		res += " lists " + val
+	if val, ok := result[IndexAlgoParamLists]; ok {
+		res += fmt.Sprintf(" %s %s", IndexAlgoParamLists, val)
+	}
+
+	if similarityFn, ok := result[IndexAlgoParamSimilarityFn]; ok {
+		if similarityFn == IndexAlgoParamSimilarityFn_ip ||
+			similarityFn == IndexAlgoParamSimilarityFn_l2 ||
+			similarityFn == IndexAlgoParamSimilarityFn_cos {
+			res += fmt.Sprintf(" %s '%s'", IndexAlgoParamSimilarityFn, similarityFn)
+		} else {
+			return "", moerr.NewInternalErrorNoCtx("invalid similarity function. not of type '%s', '%s', '%s'",
+				IndexAlgoParamSimilarityFn_ip, IndexAlgoParamSimilarityFn_l2, IndexAlgoParamSimilarityFn_cos)
+		}
 	}
 
 	return res, nil
@@ -39,7 +61,19 @@ func indexParamsToJsonString(def *tree.Index) (string, error) {
 	res := make(map[string]string)
 
 	if def.IndexOption.AlgoParamList != 0 {
-		res["lists"] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
+		res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
+	}
+
+	if len(def.IndexOption.AlgoParamVectorSimilarityFn) > 0 {
+		similarityFn := strings.ToLower(strings.TrimSpace(def.IndexOption.AlgoParamVectorSimilarityFn))
+		if similarityFn == IndexAlgoParamSimilarityFn_ip ||
+			similarityFn == IndexAlgoParamSimilarityFn_l2 ||
+			similarityFn == IndexAlgoParamSimilarityFn_cos {
+			res[IndexAlgoParamSimilarityFn] = def.IndexOption.AlgoParamVectorSimilarityFn
+		} else {
+			return "", moerr.NewInternalErrorNoCtx("invalid similarity function. not of type '%s', '%s', '%s'",
+				IndexAlgoParamSimilarityFn_ip, IndexAlgoParamSimilarityFn_l2, IndexAlgoParamSimilarityFn_cos)
+		}
 	}
 
 	str, err := json.Marshal(res)

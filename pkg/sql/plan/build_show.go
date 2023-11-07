@@ -239,8 +239,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 				if err != nil {
 					return nil, err
 				}
-				paramList = strings.Replace(paramList, "'", "\\'", -1)
-				indexStr += fmt.Sprintf("%s", formatStr(paramList))
+				indexStr += fmt.Sprintf("%s", paramList)
 			}
 			if indexdef.Comment != "" {
 				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
