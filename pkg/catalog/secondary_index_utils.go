@@ -22,8 +22,8 @@ import (
 // Index Algorithm names
 const (
 	MoIndexDefaultAlgo = ""        // used by UniqueIndex or default SecondaryIndex
-	MoIndexBTreeAlgo   = "BTREE"   // used for Mocking MySQL behaviour.
-	MoIndexIvfFlatAlgo = "IVFFLAT" // used for IVF flat index on Vector/Array columns
+	MoIndexBTreeAlgo   = "btree"   // used for Mocking MySQL behaviour.
+	MoIndexIvfFlatAlgo = "ivfflat" // used for IVF flat index on Vector/Array columns
 )
 
 func IsDefaultIndexAlgo(algo string) bool {
