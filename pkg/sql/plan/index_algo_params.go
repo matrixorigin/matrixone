@@ -31,6 +31,7 @@ const (
 	IndexAlgoParamSimilarityFn_cos = "cos"
 )
 
+// indexParamsToStringList used by buildShowCreateTable and restoreDDL
 func indexParamsToStringList(indexParams string) (string, error) {
 	var result map[string]string
 	err := json.Unmarshal([]byte(indexParams), &result)
@@ -57,29 +58,33 @@ func indexParamsToStringList(indexParams string) (string, error) {
 	return res, nil
 }
 
+// indexParamsToJsonString used by buildSecondaryIndexDef
 func indexParamsToJsonString(def *tree.Index) (string, error) {
 
 	res := make(map[string]string)
 
-	if def.IndexOption.AlgoParamList != 0 {
-		res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
-	}
-
-	if len(def.IndexOption.AlgoParamVectorSimilarityFn) > 0 {
-		similarityFn := strings.ToLower(strings.TrimSpace(def.IndexOption.AlgoParamVectorSimilarityFn))
-		if similarityFn == IndexAlgoParamSimilarityFn_ip ||
-			similarityFn == IndexAlgoParamSimilarityFn_l2 ||
-			similarityFn == IndexAlgoParamSimilarityFn_cos {
-			res[IndexAlgoParamSimilarityFn] = def.IndexOption.AlgoParamVectorSimilarityFn
-		} else {
-			return "", moerr.NewInternalErrorNoCtx("invalid similarity function. not of type '%s', '%s', '%s'",
-				IndexAlgoParamSimilarityFn_ip, IndexAlgoParamSimilarityFn_l2, IndexAlgoParamSimilarityFn_cos)
+	switch def.KeyType {
+	case tree.INDEX_TYPE_IVFFLAT:
+		if def.IndexOption.AlgoParamList != 0 {
+			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
 		}
-	}
 
-	if len(res) == 0 {
-		// don't return empty json string
-		return "", nil
+		if len(def.IndexOption.AlgoParamVectorSimilarityFn) > 0 {
+			similarityFn := strings.ToLower(strings.TrimSpace(def.IndexOption.AlgoParamVectorSimilarityFn))
+			if similarityFn == IndexAlgoParamSimilarityFn_ip ||
+				similarityFn == IndexAlgoParamSimilarityFn_l2 ||
+				similarityFn == IndexAlgoParamSimilarityFn_cos {
+				res[IndexAlgoParamSimilarityFn] = def.IndexOption.AlgoParamVectorSimilarityFn
+			} else {
+				return "", moerr.NewInternalErrorNoCtx("invalid similarity function. not of type '%s', '%s', '%s'",
+					IndexAlgoParamSimilarityFn_ip, IndexAlgoParamSimilarityFn_l2, IndexAlgoParamSimilarityFn_cos)
+			}
+		}
+	default:
+		if len(res) == 0 {
+			// don't return empty json string
+			return "", nil
+		}
 	}
 
 	str, err := json.Marshal(res)

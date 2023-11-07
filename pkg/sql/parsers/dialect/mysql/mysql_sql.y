@@ -343,7 +343,7 @@ import (
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS
 %token <str> SIMILARITY_FUNCTION
 
@@ -6212,6 +6212,10 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_BTREE
     }
+|   USING IVFFLAT
+    {
+	$$ = tree.INDEX_TYPE_IVFFLAT
+    }
 |   USING HASH
     {
         $$ = tree.INDEX_TYPE_HASH
@@ -7520,6 +7524,7 @@ index_type:
 |   HASH
 |   RTREE
 |   ZONEMAP
+|   IVFFLAT
 |   BSI
 
 insert_method_options:

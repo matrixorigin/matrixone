@@ -56,6 +56,7 @@ func init() {
 		"both":                       BOTH,
 		"by":                         BY,
 		"btree":                      BTREE,
+		"ivfflat":                    IVFFLAT,
 		"bit_or":                     BIT_OR,
 		"bit_and":                    BIT_AND,
 		"call":                       CALL,

@@ -1390,11 +1390,11 @@ var (
 			input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
-			input:  "create index idx using btree on A (a) LISTS 10",
-			output: "create index idx using btree on a (a) LISTS 10 ",
+			input:  "create index idx using ivfflat on A (a) LISTS 10",
+			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
-			input:  "create index idx using btree on A (a) LISTS 10 similarity_function 'IP'",
-			output: "create index idx using btree on a (a) LISTS 10 SIMILARITY_FUNCTION IP ",
+			input:  "create index idx using ivfflat on A (a) LISTS 10 similarity_function 'IP'",
+			output: "create index idx using ivfflat on a (a) LISTS 10 SIMILARITY_FUNCTION IP ",
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {
