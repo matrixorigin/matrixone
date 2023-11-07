@@ -708,47 +708,51 @@ func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
 }
 
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
-func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32) int32 {
+func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) {
 	node := builder.qry.Nodes[nodeID]
-	if len(node.Children) > 0 {
-		for i, child := range node.Children {
-			node.Children[i] = builder.removeRedundantJoinCond(child)
-		}
-	} else {
-		return nodeID
+	for i := range node.Children {
+		builder.removeRedundantJoinCond(node.Children[i], colMap, colGroup)
 	}
-	if !builder.IsEquiJoin(node) {
-		return nodeID
+	if len(node.OnList) == 0 {
+		return
 	}
 
-	leftTags := make(map[int32]any)
-	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = nil
-	}
-
-	rightTags := make(map[int32]any)
-	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = nil
-	}
-
-	newOnList := make([]*Expr, 0, len(node.OnList))
-	colMap := make(map[[2]int32]int32)
+	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
-		if equi := isEquiCond(expr, leftTags, rightTags); equi {
-			col := getJoinCondLeftCol(expr, leftTags)
-			if col != nil {
-				if _, ok := colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}]; ok {
-					continue
-				} else {
-					colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}] = 0
+		if exprf, ok := expr.Expr.(*plan.Expr_F); ok {
+			if SupportedJoinCondition(exprf.F.Func.GetObj()) {
+				leftcol, leftok := exprf.F.Args[0].Expr.(*plan.Expr_Col)
+				rightcol, rightok := exprf.F.Args[1].Expr.(*plan.Expr_Col)
+				if leftok && rightok {
+					left, leftok := colMap[[2]int32{leftcol.Col.RelPos, leftcol.Col.ColPos}]
+					if !leftok {
+						left = len(colGroup)
+						colGroup = append(colGroup, left)
+						colMap[[2]int32{leftcol.Col.RelPos, leftcol.Col.ColPos}] = left
+					}
+					right, rightok := colMap[[2]int32{rightcol.Col.RelPos, rightcol.Col.ColPos}]
+					if !rightok {
+						right = len(colGroup)
+						colGroup = append(colGroup, right)
+						colMap[[2]int32{rightcol.Col.RelPos, rightcol.Col.ColPos}] = right
+					}
+					for colGroup[left] != colGroup[colGroup[left]] {
+						colGroup[left] = colGroup[colGroup[left]]
+					}
+					for colGroup[right] != colGroup[colGroup[right]] {
+						colGroup[right] = colGroup[colGroup[right]]
+					}
+					if colGroup[left] == colGroup[right] {
+						continue
+					}
+					newOnList = append(newOnList, expr)
+					colGroup[colGroup[left]] = colGroup[right]
 				}
 			}
 		}
-		newOnList = append(newOnList, expr)
 	}
-
 	node.OnList = newOnList
-	return nodeID
+
 }
 
 func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[int32]int) int32 {
