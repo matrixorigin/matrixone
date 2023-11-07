@@ -1931,8 +1931,7 @@ func (data *CheckpointData) PrefetchFrom(
 			logutil.Warnf("PrefetchFrom PrefetchWithMerged error %v", err)
 		}
 	}
-	logutil.Info("open-tae", common.OperationField("prefetch read"),
-		common.OperandField("checkpoint"),
+	logutil.Info("prefetch-checkpoint",
 		common.AnyField("size", checkpointSize),
 		common.AnyField("count", len(locations)))
 	return
@@ -1982,6 +1981,52 @@ func (data *CheckpointData) ReadFrom(
 	}
 
 	return
+}
+
+// LoadSpecifiedCkpBatch loads a specified checkpoint data batch
+func LoadSpecifiedCkpBatch(
+	ctx context.Context, location objectio.Location,
+	fs fileservice.FileService, version uint32, batchIdx uint16) (data *CheckpointData, err error) {
+	data = NewCheckpointData()
+	defer func() {
+		if err != nil {
+			data.Close()
+			data = nil
+		}
+	}()
+
+	if batchIdx >= MaxIDX {
+		err = moerr.NewInvalidArgNoCtx("out of bound batchIdx", batchIdx)
+		return
+	}
+	var reader *blockio.BlockReader
+	if reader, err = blockio.NewObjectReader(fs, location); err != nil {
+		return
+	}
+
+	if err = data.readMetaBatch(ctx, version, reader, nil); err != nil {
+		return
+	}
+
+	data.replayMetaBatch()
+	for _, val := range data.locations {
+		if reader, err = blockio.NewObjectReader(fs, val); err != nil {
+			return
+		}
+		var bats []*containers.Batch
+		item := checkpointDataReferVersions[version][batchIdx]
+		if bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, batchIdx, reader); err != nil {
+			return
+		}
+
+		for i := range bats {
+			if err = data.bats[batchIdx].Append(bats[i]); err != nil {
+				return
+			}
+		}
+	}
+
+	return data, nil
 }
 
 func (data *CheckpointData) readMetaBatch(
@@ -2180,10 +2225,10 @@ func (data *CheckpointData) readAll(
 			common.AnyField("read cost", time.Since(now)))
 		checkpointDataSize += uint64(val.Extent().End())
 	}
-	logutil.Info("open-tae", common.OperationField("read"),
+	logutil.Info("read-all", common.OperationField("read"),
 		common.OperandField("checkpoint"),
 		common.AnyField("size", checkpointDataSize),
-		common.AnyField("read cost", time.Since(readDuration)))
+		common.AnyField("duration", time.Since(readDuration)))
 	return
 }
 

@@ -45,6 +45,14 @@ func TestGetBackupData(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, fs)
 
+	s := &Service{
+		fileService: fs,
+	}
+	// If the file do not exist, do not return error.
+	restore, err := s.getBackupData(ctx)
+	assert.NoError(t, err)
+	assert.Nil(t, restore)
+
 	ioVec := fileservice.IOVector{
 		FilePath: path.Join(dir, name),
 		Entries:  make([]fileservice.IOEntry, 1),
@@ -57,10 +65,7 @@ func TestGetBackupData(t *testing.T) {
 	err = fs.Write(ctx, ioVec)
 	assert.NoError(t, err)
 
-	s := &Service{
-		fileService: fs,
-	}
-	restore, err := s.getBackupData(ctx)
+	restore, err = s.getBackupData(ctx)
 	assert.NoError(t, err)
 	assert.Nil(t, restore)
 
