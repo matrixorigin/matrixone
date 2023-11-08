@@ -602,7 +602,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		pkd := tcc.GetPrimaryKeyDef("abc", "t1")
 		convey.So(len(pkd), convey.ShouldBeZeroValue)
 
-		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"})
+		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, nil)
 		convey.So(stats, convey.ShouldBeFalse)
 	})
 }

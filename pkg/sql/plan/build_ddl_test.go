@@ -108,7 +108,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetAccountId().Return(catalog.System_Account).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
-	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(false).AnyTimes()
 	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any()).Return(true).AnyTimes()
 
@@ -193,7 +193,7 @@ func TestBuildLockTables(t *testing.T) {
 	ctx.EXPECT().GetAccountId().Return(catalog.System_Account).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
-	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(false).AnyTimes()
 
 	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
 	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1)

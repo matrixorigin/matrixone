@@ -385,7 +385,7 @@ func (mr *MockCompilerContext2MockRecorder) SetQueryingSubscription(meta interfa
 // Stats mocks base method.
 func (m *MockCompilerContext2) Stats(obj *ObjectRef, prune *plan.PartitionPrune) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", obj)
+	ret := m.ctrl.Call(m, "Stats", obj, prune)
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
