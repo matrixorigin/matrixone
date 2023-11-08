@@ -101,6 +101,20 @@ type sAggClusterCenters struct {
 	arrType types.Type
 }
 
+func (s *sAggClusterCenters) Dup() agg.AggStruct {
+	val := &sAggClusterCenters{
+		groupedData: make([][][]byte, len(s.groupedData)),
+		clusterCnt:  s.clusterCnt,
+		distType:    s.distType,
+		arrType:     s.arrType,
+	}
+
+	//TODO: verify with @ouyuanning
+	val.groupedData = deepCopy3DSlice(s.groupedData)
+
+	return val
+}
+
 func (s *sAggClusterCenters) Grows(cnt int) {
 	// grow the groupedData slice based on the number of groups
 	s.groupedData = append(s.groupedData, make([][][]byte, cnt)...)
@@ -337,4 +351,16 @@ func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, err error
 
 	}
 	return defaultKmeansClusterCnt, defaultKmeansDistanceType, nil
+}
+
+func deepCopy3DSlice(src [][][]byte) [][][]byte {
+	dst := make([][][]byte, len(src))
+	for i := range src {
+		dst[i] = make([][]byte, len(src[i]))
+		for j := range src[i] {
+			dst[i][j] = make([]byte, len(src[i][j]))
+			copy(dst[i][j], src[i][j])
+		}
+	}
+	return dst
 }
