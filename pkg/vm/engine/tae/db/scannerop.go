@@ -112,6 +112,8 @@ type MergeTaskBuilder struct {
 	name string
 	tbl  *catalog.TableEntry
 
+	tableRowCnt   int
+	tableRowDel   int
 	segmentHelper *segHelper
 	objPolicy     merge.Policy
 	executor      *merge.MergeExecutor
@@ -176,6 +178,8 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 		s.tid = entry.ID
 		s.tbl = entry
 		s.name = entry.GetLastestSchema().Name
+		s.tableRowCnt = 0
+		s.tableRowDel = 0
 	}
 	s.segmentHelper.reset()
 	s.objPolicy.ResetForTable(entry.ID, entry)
@@ -206,6 +210,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 
 func (s *MergeTaskBuilder) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 	// base on the info of tableEntry, we can decide whether to merge or not
+	tableEntry.Stats.AddRowStat(s.tableRowCnt, s.tableRowDel)
 	s.trySchedMergeTask()
 	return
 }
@@ -238,6 +243,8 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 	seg.Stat.SetRows(s.segmentHelper.segRowCnt)
 	seg.Stat.SetRemainingRows(s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel)
 
+	s.tableRowCnt += s.segmentHelper.segRowCnt
+	s.tableRowDel += s.segmentHelper.segRowDel
 	seg.LoadObjectInfo()
 
 	s.objPolicy.OnObject(seg)
