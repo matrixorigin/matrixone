@@ -25,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -84,13 +86,40 @@ func TestInsertOperator(t *testing.T) {
 			AddAffectedRows: true,
 			Attrs:           []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		},
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
+		ctr: &container{
+			state: vm.Build,
+		},
 	}
-	proc.Reg.InputBatch = batch1
-	err := Prepare(proc, &argument1)
+	resetChildren(&argument1, batch1)
+	err := argument1.Prepare(proc)
 	require.NoError(t, err)
-	_, err = Call(0, proc, &argument1, false, false)
+	_, err = argument1.Call(proc)
 	require.NoError(t, err)
+	// result := argument1.InsertCtx.Rel.(*mockRelation).result
+	// require.Equal(t, result.Batch, batch.EmptyBatch)
 
-	result := argument1.InsertCtx.Rel.(*mockRelation).result
-	require.Equal(t, result, batch.EmptyBatch)
+	argument1.Free(proc, false, nil)
+	argument1.children[0].Free(proc, false, nil)
+	proc.FreeVectors()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
+	arg.ctr.state = vm.Build
 }

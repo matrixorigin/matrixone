@@ -67,4 +67,19 @@ var (
 	TasKMergedSizeCounter     = taskGeneratedStuffCounter.WithLabelValues("merged_size")
 	TaskGCkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("gckp_load_object")
 	TaskICkpLoadObjectCounter = taskGeneratedStuffCounter.WithLabelValues("ickp_load_object")
+
+	taskSelectivityCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "selectivity",
+			Help:      "Selectivity counter for read filter, block etc.",
+		}, []string{"type"})
+
+	TaskSelReadFilterTotal = taskSelectivityCounter.WithLabelValues("readfilter_total")
+	TaskSelReadFilterHit   = taskSelectivityCounter.WithLabelValues("readfilter_hit")
+	TaskSelBlockTotal      = taskSelectivityCounter.WithLabelValues("block_total")
+	TaskSelBlockHit        = taskSelectivityCounter.WithLabelValues("block_hit")
+	TaskSelColumnTotal     = taskSelectivityCounter.WithLabelValues("column_total")
+	TaskSelColumnHit       = taskSelectivityCounter.WithLabelValues("column_hit")
 )

@@ -128,27 +128,39 @@ jobs:
       - name: Prepare Data in cn-0
         run: |
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_0 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
-          apt update && apt install git -y
-          export https_proxy='http://proxy-service.proxy.svc.cluster.local:8001'
-          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git -v --progress
-          cd matrixone
-          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
-          unset https_proxy
-          exit
+          set +e;
+          set -x;
+          export https_proxy='http://proxy-service.proxy.svc.cluster.local:8001';
+          for i in {1..10}; do
+            rm -rf matrixone;
+            git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git -v --progress;
+            if [ ! -d matrixone ]; then
+              continue;
+            fi
+            cd matrixone;
+            git reset --hard ${{ needs.docker_image_build.outputs.commit_id }};
+            unset https_proxy;
+            break;
+          done
           EOF
-          exit
       - name: Prepare Data in cn-1
         run: |
           kubectl exec -it ${{ steps.get_mo_addr.outputs.cn_1 }} -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
-          apt update && apt install git -y
-          export https_proxy='http://proxy-service.proxy.svc.cluster.local:8001'
-          git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git -v --progress
-          cd matrixone
-          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }}
-          unset https_proxy
-          exit
+          set +e;
+          set -x;
+          export https_proxy='http://proxy-service.proxy.svc.cluster.local:8001';
+          for i in {1..10}; do
+            rm -rf matrixone;
+            git clone -b ${{ github.ref_name }} https://github.com/matrixorigin/matrixone.git -v --progress;
+            if [ ! -d matrixone ]; then
+              continue;
+            fi
+            cd matrixone;
+            git reset --hard ${{ needs.docker_image_build.outputs.commit_id }};
+            unset https_proxy;
+            break;
+          done
           EOF
-          exit
   bvt_test:
     if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' }}
     name: MO CHECKIN BVT TEST

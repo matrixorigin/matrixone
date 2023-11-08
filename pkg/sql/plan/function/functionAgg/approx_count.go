@@ -90,6 +90,15 @@ type sAggApproxCountDistinct[T any] struct {
 	sk []*hll.Sketch
 }
 
+func (s *sAggApproxCountDistinct[T]) Dup() agg.AggStruct {
+	val := &sAggApproxCountDistinct[T]{
+		sk: make([]*hll.Sketch, len(s.sk)),
+	}
+	for i, sk := range s.sk {
+		val.sk[i] = sk.Clone()
+	}
+	return val
+}
 func (s *sAggApproxCountDistinct[T]) Grows(cnt int) {
 	oldLength := len(s.sk)
 	if len(s.sk) < cnt {
