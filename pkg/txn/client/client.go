@@ -487,9 +487,8 @@ func (client *txnClient) Resume() {
 func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
 	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
-	for key, op := range client.mu.activeTxns {
+	for _, op := range client.mu.activeTxns {
 		ops = append(ops, op)
-		delete(client.mu.activeTxns, key)
 	}
 	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
