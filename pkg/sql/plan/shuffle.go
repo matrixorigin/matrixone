@@ -27,7 +27,7 @@ const (
 	HashMapSizeForShuffle           = 160000
 	threshHoldForHybirdShuffle      = 4000000
 	MAXShuffleDOP                   = 64
-	ShuffleThreshHold               = 50000
+	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
 )
@@ -253,7 +253,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 
 	//find the highest ndv
 	highestNDV := n.OnList[idx].Ndv
-	if highestNDV < ShuffleThreshHold {
+	if highestNDV < ShuffleThreshHoldOfNDV {
 		return
 	}
 
@@ -314,7 +314,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 			idx = i
 		}
 	}
-	if highestNDV < ShuffleThreshHold {
+	if highestNDV < ShuffleThreshHoldOfNDV {
 		return
 	}
 
@@ -372,7 +372,7 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 			return
 		}
 		s := sc.GetStatsInfoMap(n.TableDef.TblId)
-		if s.NdvMap[firstColName] < ShuffleThreshHold {
+		if s.NdvMap[firstColName] < ShuffleThreshHoldOfNDV {
 			return
 		}
 		switch types.T(n.TableDef.Cols[firstColID].Typ.Id) {
