@@ -407,25 +407,26 @@ show create table atomic_table_12_5;
 Table    Create Table
 atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` DOUBLE DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`clnew`)\n)
 drop table if exists alter01;
-[unknown result because it is related to issue#11774]
 create table alter01(col1 int primary key,col2 varchar(25));
-[unknown result because it is related to issue#11774]
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11774]
 begin;
-[unknown result because it is related to issue#11774]
 alter table alter01 change col1 col1New float;
-[unknown result because it is related to issue#11774]
 use transaction_enhance;
-[unknown result because it is related to issue#11774]
 insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11774]
 select * from alter01;
-[unknown result because it is related to issue#11774]
+col1new    col2
+3.0    a
+4.0    b
+5.0    c
+8.0    h
 insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11774]
 select * from alter01;
-[unknown result because it is related to issue#11774]
+col1new    col2
+3.0    a
+4.0    b
+5.0    c
+8.0    h
+6.0    h
 drop table if exists atomic_table_12_5;
 create table atomic_table_12_5(c1 int,c2 varchar(25));
 insert into atomic_table_12_5 values (3,"a"),(4,"b"),(5,"c");
@@ -447,25 +448,26 @@ show create table atomic_table_12_5;
 Table    Create Table
 atomic_table_12_5    CREATE TABLE `atomic_table_12_5` (\n`clnew` INT DEFAULT NULL,\n`c2` VARCHAR(25) DEFAULT NULL,\nKEY `key1` (`clnew`)\n)
 drop table if exists alter01;
-[unknown result because it is related to issue#11774]
 create table alter01(col1 int primary key,col2 varchar(25));
-[unknown result because it is related to issue#11774]
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
-[unknown result because it is related to issue#11774]
 begin;
-[unknown result because it is related to issue#11774]
 alter table alter01 rename column col1 to col1New;
-[unknown result because it is related to issue#11774]
 use transaction_enhance;
-[unknown result because it is related to issue#11774]
 insert into alter01 values (8,"h");
-[unknown result because it is related to issue#11774]
 select * from alter01;
-[unknown result because it is related to issue#11774]
+col1new    col2
+3    a
+4    b
+5    c
+8    h
 insert into alter01 values (6,"h");
-[unknown result because it is related to issue#11774]
 select * from alter01;
-[unknown result because it is related to issue#11774]
+col1new    col2
+3    a
+4    b
+5    c
+8    h
+6    h
 drop table if exists alter01;
 create table alter01(col1 int,col2 varchar(25));
 insert into alter01 values (3,"a"),(4,"b"),(5,"c");
