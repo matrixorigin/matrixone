@@ -347,7 +347,35 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	}
 
 	if pkColLength == 1 {
-		if rowsCount < 5 {
+		if rowsCount > useInExprCount {
+			// args in list must be constant
+			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
+				Typ: colTyp,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						ColPos: int32(pkColIdx),
+						Name:   tableDef.Pkey.PkeyColName,
+					},
+				},
+			}, {
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: colExprs[0],
+					},
+				},
+				Typ: &plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			}})
+			if err != nil {
+				return nil
+			}
+			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false)
+			if err != nil {
+				return nil
+			}
+			return []*Expr{expr}
+		} else {
 			var orExpr *Expr
 			for i := 0; i < rowsCount; i++ {
 				expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
@@ -373,34 +401,6 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				}
 			}
 			return []*Expr{orExpr}
-		} else {
-			// args in list must be constant
-			expr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
-				Typ: colTyp,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						ColPos: int32(pkColIdx),
-						Name:   tableDef.Pkey.PkeyColName,
-					},
-				},
-			}, {
-				Expr: &plan.Expr_List{
-					List: &plan.ExprList{
-						List: colExprs[0],
-					},
-				},
-				Typ: &plan.Type{
-					Id: int32(types.T_tuple),
-				},
-			}})
-			if err != nil {
-				return nil
-			}
-			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, true)
-			if err != nil {
-				return nil
-			}
-			return []*Expr{expr}
 		}
 	} else {
 		// multi cols pk & one row for insert

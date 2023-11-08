@@ -35,6 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const useInExprCount int = 4
+
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
@@ -314,7 +316,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			if binding != nil {
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
-				typ = binding.types[colPos]
+				typ = DeepCopyType(binding.types[colPos])
 				table = binding.table
 			} else {
 				return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -329,7 +331,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				return nil, moerr.NewInvalidInput(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
 			if colPos != NotFound {
-				typ = binding.types[colPos]
+				typ = DeepCopyType(binding.types[colPos])
 				relPos = binding.tag
 			} else {
 				err = moerr.NewInvalidInput(localErrCtx, "column '%s' does not exist", name)
@@ -1515,10 +1517,6 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 						if err != nil {
 							return nil, err
 						}
-						inExpr, err = appendCastBeforeExpr(ctx, inExpr, args[0].Typ)
-						if err != nil {
-							return nil, err
-						}
 						inExprList = append(inExprList, inExpr)
 						continue
 					}
@@ -1528,7 +1526,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 			var newExpr *plan.Expr
 
-			if len(inExprList) > 4 {
+			if len(inExprList) > useInExprCount {
 				rightList.List.List = inExprList
 				typ := makePlan2Type(&returnType)
 				typ.NotNullable = function.DeduceNotNullable(funcID, args)

@@ -40,6 +40,10 @@ const (
 
 	OkExpectedPossibleDup uint16 = 5 // Expected Possible Duplicate
 
+	// OkExpectedNotSafeToStartTransfer is not an error, but is expected
+	// phenomenon that the connection is not safe to transfer to other nodes.
+	OkExpectedNotSafeToStartTransfer uint16 = 6
+
 	OkMax uint16 = 99
 
 	// 100 - 200 is Info
@@ -301,7 +305,6 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
-	ErrInvalidTz:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid time zone: %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -607,6 +610,7 @@ var errOkExpectedEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
 var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
 var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
 var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
+var errOkExpectedNotSafeToStartTransfer = Error{OkExpectedNotSafeToStartTransfer, 0, "OkExpectedNotSafeToStartTransfer", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -635,6 +639,10 @@ func GetOkExpectedDup() *Error {
 
 func GetOkExpectedPossibleDup() *Error {
 	return &errOkExpectedPossibleDup
+}
+
+func GetOkExpectedNotSafeToStartTransfer() *Error {
+	return &errOkExpectedNotSafeToStartTransfer
 }
 
 func NewInfo(ctx context.Context, msg string) *Error {
