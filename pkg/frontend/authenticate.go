@@ -7709,50 +7709,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			if !ca.IfNotExists { //do nothing
 				return moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
 			}
-			{ // when the database is already initialized, run the conditional upgrades
-				executeConditionalUpgrades := func() error {
-
-					conditionalUpgradeSQLs := []struct {
-						ifEmpty string
-						then    string
-					}{
-						{
-							ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
-							then:    fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after type;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
-						},
-						{
-							ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType),
-							then:    fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName),
-						},
-						{
-							ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams),
-							then:    fmt.Sprintf(`alter table %s.%s add column %s varchar(2048) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams, catalog.IndexAlgoTableType),
-						},
-					}
-
-					for _, conditionalUpgradeSQL := range conditionalUpgradeSQLs {
-						// if the column exists, skip the upgrade
-						err = bh.Exec(newTenantCtx, conditionalUpgradeSQL.ifEmpty)
-						if err != nil {
-							return err
-						}
-
-						//TODO: check if we can use GetExecResultSet() instead of GetExecResultBatches()
-						if len(bh.GetExecResultSet()) != 0 {
-							continue
-						}
-
-						// if the column does not exist, execute the upgrade
-						if err = bh.Exec(newTenantCtx, conditionalUpgradeSQL.then); err != nil {
-							return err
-						}
-					}
-					// TODO: check if we need err = finishTxn(ctx, bh, err)
-					return nil
-				}
-
-				return executeConditionalUpgrades()
-			}
+			return err
 		} else {
 			newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 			if err != nil {

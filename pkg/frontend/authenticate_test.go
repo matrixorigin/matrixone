@@ -252,12 +252,6 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		mrs2 := mock_frontend.NewMockExecResult(ctrl)
-		mrs2.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs2}).AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-
 		exists, err := checkTenantExistsOrNot(ctx, bh, "test")
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
