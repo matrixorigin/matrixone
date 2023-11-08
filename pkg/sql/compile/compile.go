@@ -306,7 +306,9 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
-		return s.RemoteRun(c)
+		err := s.RemoteRun(c)
+		c.addAffectedRows(s.affectedRows())
+		return err
 	case CreateDatabase:
 		err := s.CreateDatabase(c)
 		if err != nil {
@@ -3259,7 +3261,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				}
 				var objMeta objectio.ObjectMeta
 				location := blk.MetaLocation()
-				fs := c.proc.FileService
+				var fs fileservice.FileService
+				fs, err = fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
+				if err != nil {
+					return nil, nil, err
+				}
 				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 				if err != nil {
 					partialresults = nil

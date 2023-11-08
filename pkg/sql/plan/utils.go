@@ -1196,6 +1196,9 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 	//TODO: Check if T_array is required here?
+	if constT.Eq(columnT) {
+		return true
+	}
 	switch constT.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {

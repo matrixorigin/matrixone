@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -67,7 +68,10 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	}
 
 	// record the column selectivity
-	blockio.RecordColumnSelectivity(len(cols), len(mixin.tableDef.Cols))
+	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
+	v2.TaskSelColumnTotal.Add(float64(ctotal))
+	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+	blockio.RecordColumnSelectivity(chit, ctotal)
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))

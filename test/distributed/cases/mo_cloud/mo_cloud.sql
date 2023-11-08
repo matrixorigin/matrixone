@@ -152,7 +152,6 @@ SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE 'mo_m
 SELECT `collecttime`,`value`,`account` FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' and collectTime >= '2023-07-28 03:23:00' and collectTime < '2023-07-28 03:30:00';
 SELECT `statement_id`,`stats`,`duration`,`sql_source_type`,`account`,`response_at` FROM `system`.`statement_info` WHERE status != 'Running' and account != 'sys' and account != 'ob' and response_at >= '2023-07-28 04:49:00' and response_at < '2023-07-28 04:50:00';
 SELECT `value` FROM `system_metrics`.`server_storage_usage` WHERE account = '863f0767_0361_4a8c_a3e8_73b2be140a74' and collecttime > '2023-07-28 06:07:53' and collecttime <= '2023-07-28 06:10:53' ORDER BY collecttime DESC LIMIT 1;
-SELECT collecttime FROM `system_metrics`.`server_storage_usage` WHERE account != 'sys' and account != 'ob' ORDER BY collecttime asc LIMIT 1;
 SELECT count(*) FROM `mo_mo`.`moins` WHERE id = '2ef38bf3-b821-4cab-879e-3b788f1e922f';
 SELECT count(*) FROM `mo_mo`.`wb_version` WHERE wb_id = 'd457fd59-a865-4a5b-80b0-6e19a6059f1f';
 SELECT count(*) FROM `mo_mo`.`wb` WHERE account_id = '91731e77_49ea_4a8a_b1c7_d5512c7ae96e' AND sql_user = 'admin' AND id = '30415473-5276-42c5-8302-4e9a7e605900';
