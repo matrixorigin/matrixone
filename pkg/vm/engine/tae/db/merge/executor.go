@@ -17,9 +17,10 @@ package merge
 import (
 	"bytes"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"sync/atomic"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -109,7 +110,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catal
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	osize, esize := estimateMergeConsume(segs)
+	mergedRows, osize, esize := estimateMergeConsume(segs)
 	if esize > 2*mem/3 {
 		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
 	}
@@ -131,7 +132,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catal
 	} else if err != nil {
 		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
 	}
-	logMergeTask(entry.GetLastestSchema().Name, task.ID(), nil, msegs, len(mergedBlks), osize, esize)
+	logMergeTask(entry.GetLastestSchema().Name, task.ID(), nil, msegs, len(mergedBlks), mergedRows, osize, esize)
 	if err = task.WaitDone(); err != nil {
 		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
 	}
@@ -192,11 +193,11 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 		return
 	}
 
-	osize, esize := estimateMergeConsume(msegs)
+	rows, osize, esize := estimateMergeConsume(msegs)
 	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
 	entry.Stats.AddMerge(osize, len(msegs), blkCnt)
-	logMergeTask(e.tableName, task.ID(), delSegs, msegs, blkCnt, osize, esize)
+	logMergeTask(e.tableName, task.ID(), delSegs, msegs, blkCnt, rows, osize, esize)
 }
 
 func (e *MergeExecutor) memAvailBytes() int {
@@ -234,13 +235,13 @@ func expandObjectList(segs []*catalog.SegmentEntry) (
 	return
 }
 
-func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEntry, blkn, osize, esize int) {
+func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEntry, blkn, mergedRows, osize, esize int) {
 	v2.TaskMergeScheduledByCounter.Inc()
 	v2.TaskMergedBlocksCounter.Add(float64(blkn))
 	v2.TasKMergedSizeCounter.Add(float64(osize))
 
 	infoBuf := &bytes.Buffer{}
-	infoBuf.WriteString("merged:")
+	infoBuf.WriteString(fmt.Sprintf("merged(%d):", mergedRows))
 	for _, seg := range merges {
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.GetRemainingRows(), common.ShortSegId(seg.ID)))
 	}
