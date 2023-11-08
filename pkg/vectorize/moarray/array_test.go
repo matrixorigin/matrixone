@@ -130,6 +130,11 @@ func TestMultiply(t *testing.T) {
 			args:    args{leftArgF64: []float64{1, 4, 3}, rightArgF64: []float64{1, 3, 4}},
 			wantF64: []float64{1, 12, 12},
 		},
+		{
+			name:    "Test3 - float64",
+			args:    args{leftArgF64: []float64{0.66616553}, rightArgF64: []float64{0.66616553}},
+			wantF64: []float64{0.4437765133601809},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
