@@ -74,11 +74,6 @@ func NewInvalidInputNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrInvalidInput, xmsg)
 }
 
-func NewInvalidTzNoCtx(tz string, args ...any) *Error {
-	xmsg := fmt.Sprintf(tz, args...)
-	return newError(Context(), ErrInvalidTz, xmsg)
-}
-
 func NewSyntaxErrorNoCtx(msg string, args ...any) *Error {
 	xmsg := fmt.Sprintf(msg, args...)
 	return newError(Context(), ErrSyntaxError, xmsg)
