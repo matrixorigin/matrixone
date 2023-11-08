@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -53,7 +54,7 @@ func TestString(t *testing.T) {
 	}
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
@@ -66,7 +67,7 @@ func TestPrepare(t *testing.T) {
 		newTestCase([]types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}, {Expr: newExpression(1, types.T_int64), Flag: 0}}),
 	}
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
@@ -81,7 +82,7 @@ func TestOrder(t *testing.T) {
 	}
 
 	for tci, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
@@ -90,13 +91,13 @@ func TestOrder(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok == process.ExecStop || err != nil {
+			if ok, err := tc.arg.Call(tc.proc); ok.Status == vm.ExecStop || err != nil {
 				require.NoError(t, err)
 				// do the result check
 				if len(tc.arg.OrderBySpecs) > 0 {
 					desc := tc.arg.OrderBySpecs[0].Flag&plan.OrderBySpec_DESC != 0
 					index := tc.arg.OrderBySpecs[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
-					bat := tc.proc.Reg.InputBatch
+					bat := ok.Batch
 					vec := bat.Vecs[index]
 					if vec.GetType().Oid == types.T_int8 {
 						i8c := vector.MustFixedCol[int8](vec)
@@ -131,9 +132,6 @@ func TestOrder(t *testing.T) {
 					}
 				}
 
-				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-				}
 				break
 			}
 		}
@@ -146,7 +144,8 @@ func TestOrder(t *testing.T) {
 			}
 		}
 		tc.proc.FreeVectors()
-		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
+		tc.arg.Free(tc.proc, false, nil)
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
@@ -158,7 +157,7 @@ func BenchmarkOrder(b *testing.B) {
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			err := Prepare(tc.proc, tc.arg)
+			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newRandomBatch(tc.types, tc.proc, BenchmarkRows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
@@ -167,10 +166,8 @@ func BenchmarkOrder(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- batch.EmptyBatch
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
-				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok == process.ExecStop || err != nil {
-					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-					}
+				ok, err := tc.arg.Call(tc.proc)
+				if ok.Status == vm.ExecStop || err != nil {
 					break
 				}
 			}
@@ -203,6 +200,11 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 		proc:  proc,
 		arg: &Argument{
 			OrderBySpecs: fs,
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 		cancel: cancel,
 	}

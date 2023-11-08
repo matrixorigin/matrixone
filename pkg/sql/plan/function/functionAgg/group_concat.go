@@ -72,6 +72,16 @@ type sAggGroupConcat struct {
 	separator string
 }
 
+func (s *sAggGroupConcat) Dup() agg.AggStruct {
+	val := &sAggGroupConcat{
+		result:    make([]bytes.Buffer, len(s.result)),
+		separator: s.separator,
+	}
+	for i, buf := range s.result {
+		val.result[i] = *bytes.NewBuffer(buf.Bytes())
+	}
+	return val
+}
 func (s *sAggGroupConcat) Grows(cnt int) {
 	oldLen := len(s.result)
 	s.result = append(s.result, make([]bytes.Buffer, cnt)...)
