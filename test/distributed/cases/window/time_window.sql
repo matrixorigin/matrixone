@@ -241,9 +241,11 @@ select _wstart, _wend, max(col2) from temporary01 where ts >= '2020-10-10 09:09:
 select _wstart, _wend, max(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 100, day) sliding(28800, minute) fill(prev);
 select _wstart, _wend, max(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 100, day) sliding(20, day) fill(next);
 select _wstart, _wend, max(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 100, day) sliding(48800, minute) fill (VALUE,10000);
+-- @bvt:issue
 -- @bvt:issue#12469
 select _wstart, _wend, min(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 365, day) sliding(200, day) fill (linear);
 -- @bvt:issue
+-- @bvt:issue#12556
 drop table temporary01;
 -- @bvt:issue
 
