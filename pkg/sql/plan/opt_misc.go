@@ -14,7 +14,9 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
 func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
@@ -708,13 +710,13 @@ func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
 }
 
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
-func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) {
+func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) []int {
 	node := builder.qry.Nodes[nodeID]
 	for i := range node.Children {
-		builder.removeRedundantJoinCond(node.Children[i], colMap, colGroup)
+		colGroup = builder.removeRedundantJoinCond(node.Children[i], colMap, colGroup)
 	}
 	if len(node.OnList) == 0 {
-		return
+		return colGroup
 	}
 
 	newOnList := make([]*plan.Expr, 0)
@@ -753,6 +755,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 	}
 	node.OnList = newOnList
 
+	return colGroup
 }
 
 func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[int32]int) int32 {
