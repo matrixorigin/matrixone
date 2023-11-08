@@ -21,9 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 // FetchLockRowsFunc fetch lock rows from vector.
 type FetchLockRowsFunc func(
@@ -63,6 +66,17 @@ type Argument struct {
 
 	// state used for save lock op temp state.
 	rt *state
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 type lockTarget struct {

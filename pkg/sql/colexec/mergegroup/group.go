@@ -19,15 +19,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("mergeroup()")
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
@@ -35,29 +36,30 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	ap := arg
 	ctr := ap.ctr
-	anal := proc.GetAnalyze(idx)
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-
+	result := vm.NewCallResult()
 	for {
 		switch ctr.state {
 		case Build:
 			for {
 				bat, end, err := ctr.ReceiveFromAllRegs(anal)
 				if err != nil {
-					return process.ExecStop, nil
+					result.Status = vm.ExecStop
+					return result, nil
 				}
 
 				if end {
 					break
 				}
-				anal.Input(bat, isFirst)
+				anal.Input(bat, arg.info.IsFirst)
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
-					return process.ExecNext, err
+					return result, err
 				}
 			}
 			ctr.state = Eval
@@ -69,7 +71,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
-							return process.ExecNext, err
+							return result, err
 						}
 						ctr.bat.Aggs[i] = nil
 						ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
@@ -81,17 +83,16 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 					}
 					ctr.bat.Aggs = nil
 				}
-				anal.Output(ctr.bat, isLast)
-				proc.SetInputBatch(ctr.bat)
-				ctr.bat = nil
-				ctr.state = End
-				return process.ExecNext, nil
+				anal.Output(ctr.bat, arg.info.IsLast)
+				result.Batch = ctr.bat
 			}
 			ctr.state = End
+			return result, nil
 
 		case End:
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }

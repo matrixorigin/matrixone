@@ -19,55 +19,51 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	n := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("limit(%v)", n.Limit))
+func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(fmt.Sprintf("limit(%v)", arg.Limit))
 }
 
-func Prepare(_ *process.Process, _ any) error {
+func (arg *Argument) Prepare(_ *process.Process) error {
 	return nil
 }
 
 // Call returning only the first n tuples from its input
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	bat := proc.InputBatch()
-
-	if bat == nil {
-		return process.ExecStop, nil
-	}
-	if bat.Last() {
-		proc.SetInputBatch(bat)
-		return process.ExecNext, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
-	}
-	ap := arg.(*Argument)
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	ap := arg
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat, isFirst)
+
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+		return result, nil
+	}
+	bat := result.Batch
+	anal.Input(bat, arg.info.IsFirst)
+
 	if ap.Seen >= ap.Limit {
-		proc.SetInputBatch(nil)
-		proc.PutBatch(bat)
-		return process.ExecStop, nil
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	length := bat.RowCount()
 	newSeen := ap.Seen + uint64(length)
 	if newSeen >= ap.Limit { // limit - seen
 		batch.SetLength(bat, int(ap.Limit-ap.Seen))
 		ap.Seen = newSeen
-		anal.Output(bat, isLast)
+		anal.Output(bat, arg.info.IsLast)
 
-		proc.SetInputBatch(bat)
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
-	anal.Output(bat, isLast)
+	anal.Output(bat, arg.info.IsLast)
 	ap.Seen = newSeen
-	return process.ExecNext, nil
+	return result, nil
 }

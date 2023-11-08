@@ -604,7 +604,7 @@ func TestCosineSimilarity(t *testing.T) {
 	type testCase struct {
 		name string
 		args args
-		want float32
+		want float64
 	}
 	tests := []testCase{
 		{

@@ -26,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -82,13 +84,18 @@ func TestPreInsertNormal(t *testing.T) {
 		Attrs:      []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		IsUpdate:   false,
 		HasAutoCol: false,
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
 	checkResultBat, _ := batch1.Dup(proc.Mp())
-	proc.SetInputBatch(batch1)
-	_, err := Call(0, proc, &argument1, false, false)
+	resetChildren(&argument1, batch1)
+	callResult, err := argument1.Call(proc)
 	require.NoError(t, err)
 	{
-		result := proc.InputBatch()
+		result := callResult.Batch
 		// check attr names
 		require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
 		// check vector
@@ -96,7 +103,12 @@ func TestPreInsertNormal(t *testing.T) {
 		for i, vec := range result.Vecs {
 			require.Equal(t, checkResultBat.RowCount(), vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
+		checkResultBat.Clean(proc.Mp())
 	}
+
+	argument1.Free(proc, false, nil)
+	proc.FreeVectors()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func TestPreInsertNullCheck(t *testing.T) {
@@ -144,8 +156,27 @@ func TestPreInsertNullCheck(t *testing.T) {
 				PkeyColName: "int64_column_primary",
 			},
 		},
+		info: &vm.OperatorInfo{
+			Idx:     1,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
-	proc.Reg.InputBatch = batch2
-	_, err2 := Call(0, proc, &argument2, false, false)
+	resetChildren(&argument2, batch2)
+	_, err2 := argument2.Call(proc)
 	require.Error(t, err2, "should return error when insert null into primary key column")
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
 }

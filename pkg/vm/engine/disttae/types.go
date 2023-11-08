@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -365,7 +366,8 @@ func (txn *Transaction) resetSnapshot() error {
 }
 
 func (txn *Transaction) IncrSQLCount() {
-	txn.sqlCount.Add(1)
+	n := txn.sqlCount.Add(1)
+	v2.TxnLifeCycleStatementsTotalHistogram.Observe(float64(n))
 }
 
 func (txn *Transaction) GetSQLCount() uint64 {

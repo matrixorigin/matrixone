@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 )
@@ -193,7 +192,6 @@ func (s *MergeTaskBuilder) PreExecute() error {
 
 func (s *MergeTaskBuilder) PostExecute() error {
 	s.executor.PrintStats()
-	logutil.Infof("mergeblocks ------------------------------------")
 	return nil
 }
 
