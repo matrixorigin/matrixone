@@ -16,6 +16,10 @@ package disttae
 
 import (
 	"context"
+	"strconv"
+	"time"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,9 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
-	"time"
-	"unsafe"
 )
 
 const (
@@ -455,6 +456,15 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 
+	var logStr string
+	for i, col := range needCols {
+		if i > 0 {
+			logStr += ", "
+		}
+		logStr += col.GetName()
+	}
+	logutil.Infof("cols in GetColumMetadataScanInfo: %s, result len: %d", logStr, len(infoList))
+
 	return infoList, nil
 }
 
@@ -567,6 +577,7 @@ func (tbl *txnTable) resetSnapshot() {
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	start := time.Now()
 	defer func() {
+		v2.TxnTableRangeSizeHistogram.Observe(float64(len(ranges)))
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
@@ -758,7 +769,7 @@ func (tbl *txnTable) rangesOnePart(
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-				v2.TxnFastLoadObjectMetaTotalCounter.Inc()
+				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 					return
 				}
@@ -828,6 +839,7 @@ func (tbl *txnTable) rangesOnePart(
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		location := obj.Location()
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 		if objMeta, err = objectio.FastLoadObjectMeta(
 			tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 		); err != nil {
@@ -902,7 +914,10 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}
 
-	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blks)+int(cnt))
+	bhit, btotal := len(*ranges)-1, len(insertedS3Blks)+int(cnt)
+	v2.TaskSelBlockTotal.Add(float64(btotal))
+	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
+	blockio.RecordBlockSelectivity(bhit, btotal)
 	return
 }
 
@@ -945,6 +960,7 @@ func (tbl *txnTable) tryFastRanges(
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
 			var objMeta objectio.ObjectMeta
+			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 			if objMeta, err = objectio.FastLoadObjectMeta(
 				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 			); err != nil {
@@ -1029,6 +1045,7 @@ func (tbl *txnTable) tryFastRanges(
 		var objMeta objectio.ObjectMeta
 		var bf objectio.BloomFilter
 		location := obj.Location()
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 		if objMeta, err = objectio.FastLoadObjectMeta(
 			tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 		); err != nil {
@@ -1103,7 +1120,10 @@ func (tbl *txnTable) tryFastRanges(
 	}
 
 	done = true
-	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blocks)+int(cnt))
+	bhit, btotal := len(*ranges)-1, len(insertedS3Blocks)+int(cnt)
+	v2.TaskSelBlockTotal.Add(float64(btotal))
+	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
+	blockio.RecordBlockSelectivity(bhit, btotal)
 	return
 }
 

@@ -16,9 +16,13 @@ package intersectall
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 type container struct {
 	colexec.ReceiverOperator
@@ -37,6 +41,8 @@ type container struct {
 
 	inserted      []uint8
 	resetInserted []uint8
+
+	buf *batch.Batch
 }
 
 type Argument struct {
@@ -46,12 +52,27 @@ type Argument struct {
 	IBucket uint64
 	// buckets count
 	NBucket uint64
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanHashMap()
+		if ctr.buf != nil {
+			ctr.buf.Clean(proc.Mp())
+			ctr.buf = nil
+		}
 	}
 }
 

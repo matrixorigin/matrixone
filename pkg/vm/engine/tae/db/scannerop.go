@@ -20,9 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 )
@@ -191,7 +188,6 @@ func (s *MergeTaskBuilder) PreExecute() error {
 
 func (s *MergeTaskBuilder) PostExecute() error {
 	s.executor.PrintStats()
-	logutil.Infof("mergeblocks ------------------------------------")
 	return nil
 }
 
@@ -239,15 +235,11 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 		return nil
 	}
 	// for sorted segments, we have to feed it to policy to see if it is qualified to be merged
-	seg.Stat.Rows = s.segmentHelper.segRowCnt
-	seg.Stat.RemainingRows = s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel
-	seg.LoadObjectInfo()
-	if s.name == motrace.RawLogTbl && seg.Stat.OriginSize == 0 {
-		// after loading object info, original size is still 0, we have to estimate it by experience
-		factor := 1 + seg.Stat.Rows/1600
-		seg.Stat.OriginSize = (1 << 20) * factor
+	seg.Stat.SetRows(s.segmentHelper.segRowCnt)
+	seg.Stat.SetRemainingRows(s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel)
 
-	}
+	seg.LoadObjectInfo()
+
 	s.objPolicy.OnObject(seg)
 	return nil
 }

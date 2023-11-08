@@ -97,7 +97,7 @@ desc mo_catalog.mo_instance;
 Field    Type    Null    Key    Default    Extra    Comment
 id    VARCHAR(128)    NO    PRI    null        
 name    VARCHAR(255)    NO        null        
-account_name    VARCHAR(128)    NO        null        
+account_name    VARCHAR(128)    NO    UNI    null        
 provider    TEXT(0)    NO        null        
 provider_id    TEXT(0)    YES        null        
 region    TEXT(0)    NO        null        
@@ -114,7 +114,7 @@ desc mo_catalog.mo_instance;
 Field    Type    Null    Key    Default    Extra    Comment
 id    VARCHAR(128)    NO    PRI    null        
 name    VARCHAR(255)    NO        null        
-account_name    VARCHAR(128)    NO        null        
+account_name    VARCHAR(128)    NO    UNI    null        
 provider    TEXT(0)    NO        null        
 provider_id    TEXT(0)    YES        null        
 region    TEXT(0)    NO        null        
