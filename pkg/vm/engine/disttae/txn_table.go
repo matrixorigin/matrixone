@@ -914,7 +914,10 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}
 
-	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blks)+int(cnt))
+	bhit, btotal := len(*ranges)-1, len(insertedS3Blks)+int(cnt)
+	v2.TaskSelBlockTotal.Add(float64(btotal))
+	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
+	blockio.RecordBlockSelectivity(bhit, btotal)
 	return
 }
 
@@ -1117,7 +1120,10 @@ func (tbl *txnTable) tryFastRanges(
 	}
 
 	done = true
-	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blocks)+int(cnt))
+	bhit, btotal := len(*ranges)-1, len(insertedS3Blocks)+int(cnt)
+	v2.TaskSelBlockTotal.Add(float64(btotal))
+	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
+	blockio.RecordBlockSelectivity(bhit, btotal)
 	return
 }
 
