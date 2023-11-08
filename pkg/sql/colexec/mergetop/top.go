@@ -21,14 +21,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	ap := arg
 	buf.WriteString("mergetop([")
 	for i, f := range ap.Fs {
 		if i > 0 {
@@ -39,8 +39,8 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
 	if ap.Limit > 1024 {
@@ -61,34 +61,37 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
+	ap := arg
 	ctr := ap.ctr
-
+	result := vm.NewCallResult()
 	if ap.Limit == 0 {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
-	if end, err := ctr.build(ap, proc, anal, isFirst); err != nil {
-		return process.ExecNext, err
+	if end, err := ctr.build(ap, proc, anal, arg.info.IsFirst); err != nil {
+		return result, err
 	} else if end {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
 	if ctr.bat == nil {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
-	err := ctr.eval(ap.Limit, proc, anal, isLast)
-	ap.Free(proc, err != nil, nil)
+	err := ctr.eval(ap.Limit, proc, anal, arg.info.IsLast, &result)
 	if err == nil {
-		return process.ExecStop, nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
-	return process.ExecNext, err
+	return result, err
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
@@ -127,7 +130,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			}
 			ctr.bat = batch.NewWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
-				ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())
+				ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
 			}
 			ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 			for i := range ctr.cmps {
@@ -198,7 +201,7 @@ func (ctr *container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	return nil
 }
 
-func (ctr *container) eval(limit int64, proc *process.Process, anal process.Analyze, isLast bool) error {
+func (ctr *container) eval(limit int64, proc *process.Process, anal process.Analyze, isLast bool, result *vm.CallResult) error {
 	if int64(len(ctr.sels)) < limit {
 		ctr.sort()
 	}
@@ -217,8 +220,7 @@ func (ctr *container) eval(limit int64, proc *process.Process, anal process.Anal
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	anal.Output(ctr.bat, isLast)
-	proc.SetInputBatch(ctr.bat)
-	ctr.bat = nil
+	result.Batch = ctr.bat
 	return nil
 }
 

@@ -34,6 +34,16 @@ func NewWinDenseRank(overloadID int64, dist bool, inputTypes []types.Type, outpu
 
 type sWindowBase struct{ ps [][]int64 }
 
+func (s *sWindowBase) Dup() agg.AggStruct {
+	val := &sWindowBase{
+		ps: make([][]int64, len(s.ps)),
+	}
+	for i, s := range s.ps {
+		val.ps[i] = make([]int64, len(s))
+		copy(val.ps[i], s)
+	}
+	return val
+}
 func (s *sWindowBase) Grows(_ int)         {}
 func (s *sWindowBase) Free(_ *mpool.MPool) {}
 func (s *sWindowBase) Fill(groupNumber int64, value int64, lastResult int64, count int64, isEmpty bool, isNull bool) (int64, bool, error) {

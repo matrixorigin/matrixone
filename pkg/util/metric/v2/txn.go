@@ -69,12 +69,12 @@ var (
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
 
-	TxnFastLoadObjectMetaTotalCounter = prometheus.NewCounter(
+	TxnRangesLoadedObjectMetaTotalCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
-			Name:      "tn_side_fast_load_object_meta_total",
-			Help:      "Total number of fast loaded object meta on tn side.",
+			Name:      "ranges_loaded_object_meta_total",
+			Help:      "Total number of ranges loaded object meta.",
 		})
 )
 
@@ -115,6 +115,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
 
+	TxnLifeCycleStatementsTotalHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "life_statements_total",
+			Help:      "Bucketed histogram of statement total in a txn.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		})
+
 	txnCreateDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
@@ -135,8 +144,10 @@ var (
 			Help:      "Bucketed histogram of txn statement duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
-	TxnStatementBuildPlanDurationHistogram = txnStatementDurationHistogram.WithLabelValues("build-plan")
-	TxnStatementExecuteDurationHistogram   = txnStatementDurationHistogram.WithLabelValues("execute")
+	TxnStatementBuildPlanDurationHistogram      = txnStatementDurationHistogram.WithLabelValues("build-plan")
+	TxnStatementExecuteDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("execute")
+	TxnStatementExecuteLatencyDurationHistogram = txnStatementDurationHistogram.WithLabelValues("execute-latency")
+	TxnStatementCompileDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("compile")
 
 	txnLockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -146,16 +157,29 @@ var (
 			Help:      "Bucketed histogram of acquire lock duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		}, []string{"type"})
-	TxnAcquireLockDurationHistogram = txnLockDurationHistogram.WithLabelValues("acquire")
-	TxnHoldLockDurationHistogram    = txnLockDurationHistogram.WithLabelValues("hold")
+	TxnAcquireLockDurationHistogram     = txnLockDurationHistogram.WithLabelValues("acquire")
+	TxnAcquireLockWaitDurationHistogram = txnLockDurationHistogram.WithLabelValues("acquire-wait")
+	TxnHoldLockDurationHistogram        = txnLockDurationHistogram.WithLabelValues("hold")
 
-	TxnUnlockDurationHistogram = prometheus.NewHistogram(
+	txnUnlockDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "unlock_duration_seconds",
 			Help:      "Bucketed histogram of release lock duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		}, []string{"type"})
+	TxnUnlockDurationHistogram             = txnUnlockDurationHistogram.WithLabelValues("total")
+	TxnUnlockBtreeGetLockDurationHistogram = txnUnlockDurationHistogram.WithLabelValues("btree-get-lock")
+	TxnUnlockBtreeTotalDurationHistogram   = txnUnlockDurationHistogram.WithLabelValues("btree-total")
+
+	TxnLockWaitersTotalHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "lock_waiters_total",
+			Help:      "Bucketed histogram of waiters count in one lock.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
 		})
 
 	TxnTableRangeDurationHistogram = prometheus.NewHistogram(
@@ -165,6 +189,15 @@ var (
 			Name:      "ranges_duration_seconds",
 			Help:      "Bucketed histogram of txn table ranges duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
+
+	TxnTableRangeSizeHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "ranges_duration_size",
+			Help:      "Bucketed histogram of txn table ranges size.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 20),
 		})
 
 	txnTNSideDurationHistogram = prometheus.NewHistogramVec(
@@ -189,4 +222,17 @@ var (
 			Help:      "Bucketed histogram of show accounts duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
 		})
+
+	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "mpool_duration_seconds",
+			Help:      "Bucketed histogram of txn mpool duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		}, []string{"type"})
+	TxnMpoolNewDurationHistogram    = txnMpoolDurationHistogram.WithLabelValues("new")
+	TxnMpoolAllocDurationHistogram  = txnMpoolDurationHistogram.WithLabelValues("alloc")
+	TxnMpoolFreeDurationHistogram   = txnMpoolDurationHistogram.WithLabelValues("free")
+	TxnMpoolDeleteDurationHistogram = txnMpoolDurationHistogram.WithLabelValues("delete")
 )

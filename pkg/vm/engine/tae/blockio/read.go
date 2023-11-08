@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -135,8 +136,10 @@ func BlockRead(
 		); err != nil {
 			return nil, err
 		}
+		v2.TaskSelReadFilterTotal.Inc()
 		if len(sels) == 0 {
 			RecordReadFilterSelectivity(1, 1)
+			v2.TaskSelReadFilterHit.Inc()
 		} else {
 			RecordReadFilterSelectivity(0, 1)
 		}

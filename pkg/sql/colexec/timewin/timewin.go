@@ -17,23 +17,25 @@ package timewin
 import (
 	"bytes"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"time"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("time window")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	ctr := ap.ctr
 	ctr.InitReceiver(proc, true)
@@ -84,34 +86,35 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
+	ap := arg
 	ctr := ap.ctr
 	var err error
 	var bat *batch.Batch
 
+	result := vm.NewCallResult()
 	for {
 
 		switch ctr.status {
 		case dataTag:
 			bat, _, err = ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if bat == nil {
 				if ctr.cur == hasGrow {
 					ctr.status = evalLastCur
 					continue
 				}
-				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
 			ctr.pushBatch(bat)
 			if err = ctr.evalVecs(proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 			ctr.curIdx = ctr.curIdx - ctr.preIdx
@@ -124,47 +127,48 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 		case initTag:
 			bat, _, err = ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if bat == nil {
-				proc.SetInputBatch(nil)
-				return process.ExecStop, nil
+				result.Batch = nil
+				result.Status = vm.ExecStop
+				return result, nil
 			}
 			ctr.pushBatch(bat)
 			if err = ctr.evalVecs(proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if err = ctr.firstWindow(ap, proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
 			for i, ag := range ap.Aggs {
 				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
 			}
 			ctr.status = evalTag
 		case nextTag:
 			if err = ctr.nextWindow(ap, proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			ctr.status = evalTag
 		case evalTag:
 
 			if err = ctr.eval(ctr, ap, proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 		case resultTag:
 
 			ctr.status = nextTag
-			proc.SetInputBatch(ctr.rbat)
-			return process.ExecNext, nil
+			result.Batch = ctr.rbat
+			return result, nil
 
 		case evalLastCur:
 
 			if err = ctr.calRes(ctr, ap, proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if ctr.pre == hasPre {
 				ctr.wstart = nil
@@ -174,25 +178,25 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				ctr.status = endTag
 			}
 
-			proc.SetInputBatch(ctr.rbat)
-			return process.ExecNext, nil
+			result.Batch = ctr.rbat
+			return result, nil
 
 		case evalLastPre:
 
 			if err = ctr.nextWindow(ap, proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			ctr.aggs = make([]agg.Agg[any], len(ap.Aggs))
 			for i, ag := range ap.Aggs {
 				if ctr.aggs[i], err = agg.NewAggWithConfig(ag.Op, ag.Dist, []types.Type{ap.Types[i]}, ag.Config, nil); err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
 			}
 			ctr.wstart = append(ctr.wstart, ctr.start)
 			ctr.wend = append(ctr.wend, ctr.end)
 			for _, ag := range ctr.aggs {
 				if err = ag.Grows(1, proc.Mp()); err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
 			}
 
@@ -200,7 +204,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 				for k := ctr.preRow; k < ctr.bats[i].RowCount(); k++ {
 					for j, agg := range ctr.aggs {
 						if err = agg.Fill(0, int64(k), []*vector.Vector{ctr.aggVec[i][j]}); err != nil {
-							return process.ExecNext, err
+							return result, err
 						}
 					}
 				}
@@ -208,16 +212,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			}
 
 			if err = ctr.calRes(ctr, ap, proc); err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 
 			ctr.status = endTag
-			proc.SetInputBatch(ctr.rbat)
-			return process.ExecNext, nil
+			result.Batch = ctr.rbat
+			return result, nil
 
 		case endTag:
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 
 	}
@@ -309,7 +314,7 @@ func calRes[T constraints.Integer](ctr *container, ap *Argument, proc *process.P
 		for t, v := range ctr.wstart {
 			wstart[t] = T(v)
 		}
-		vec := vector.NewVec(*ctr.tsTyp)
+		vec := proc.GetVector(*ctr.tsTyp)
 		err = vector.AppendFixedList(vec, wstart, nil, proc.Mp())
 		if err != nil {
 			return err
@@ -322,7 +327,7 @@ func calRes[T constraints.Integer](ctr *container, ap *Argument, proc *process.P
 		for t, v := range ctr.wend {
 			wend[t] = T(v)
 		}
-		vec := vector.NewVec(*ctr.tsTyp)
+		vec := proc.GetVector(*ctr.tsTyp)
 		err = vector.AppendFixedList(vec, wend, nil, proc.Mp())
 		if err != nil {
 			return err
