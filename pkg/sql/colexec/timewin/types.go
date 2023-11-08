@@ -22,8 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	initTag     = 0
@@ -103,11 +106,22 @@ type Argument struct {
 
 	WStart bool
 	WEnd   bool
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
 }
 
 type Interval struct {
 	Typ types.IntervalType
 	Val int64
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

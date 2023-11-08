@@ -15,11 +15,15 @@
 package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	dataProducing = iota
@@ -35,6 +39,18 @@ type Argument struct {
 	Params    []byte
 	Name      string
 	retSchema []types.Type
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
+	buf      *batch.Batch
+}
+
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
 }
 
 type container struct {
@@ -46,6 +62,10 @@ type container struct {
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		arg.ctr.cleanExecutors()
+	}
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
 	}
 }
 

@@ -41,6 +41,7 @@ func initTaskMetrics() {
 
 	registry.MustRegister(taskScheduledByCounter)
 	registry.MustRegister(taskGeneratedStuffCounter)
+	registry.MustRegister(taskSelectivityCounter)
 }
 
 func initFileServiceMetrics() {
@@ -94,7 +95,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
 
-	registry.MustRegister(TxnFastLoadObjectMetaTotalCounter)
+	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 }
 
 func initRPCMetrics() {

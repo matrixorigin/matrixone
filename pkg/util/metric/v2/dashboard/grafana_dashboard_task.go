@@ -16,9 +16,12 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/row"
+	"github.com/K-Phoen/grabana/timeseries"
+	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 )
 
 func (c *DashboardCreator) initTaskDashboard() error {
@@ -31,11 +34,9 @@ func (c *DashboardCreator) initTaskDashboard() error {
 		"Task Metrics",
 		c.withRowOptions(
 			c.initTaskFlushTableTailRow(),
-			c.initTaskCkpEntryPendingRow(),
 			c.initTaskMergeRow(),
-			c.initTaskGCkpCollectUsageRow(),
-			c.initTaskICkpCollectUsageRow(),
-			c.initTaskCkpCollectUsageRow(),
+			c.initTaskCheckpointRow(),
+			c.initTaskSelectivityRow(),
 		)...)
 
 	if err != nil {
@@ -47,89 +48,132 @@ func (c *DashboardCreator) initTaskDashboard() error {
 
 func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 	return dashboard.Row(
-		"Flush Table Tail Duration",
-		c.getHistogram(
-			"Flush Table Tail Duration",
+		"Flush Table Tail",
+		c.getTimeSeries(
+			"Flush table tail Count",
+			[]string{fmt.Sprintf(
+				"increase(%s[$interval])",
+				c.getMetricWithFilter(`mo_task_short_duration_seconds_count`, `type="flush_table_tail"`),
+			)},
+			[]string{"Count"},
+		),
+		c.getPercentHist(
+			"Flush table tail Duration",
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="flush_table_tail"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
-			axis.Unit("s"),
-			axis.Min(0)),
-	)
-}
-
-func (c *DashboardCreator) initTaskGCkpCollectUsageRow() dashboard.Option {
-	return dashboard.Row(
-		"Global Checkpoint Collects Storage Usage Duration",
-		c.getHistogram(
-			"Global Checkpoint Collects Storage Usage Duration",
-			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="gckp_collect_usage"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
-			axis.Unit("s"),
-			axis.Min(0)),
-	)
-}
-
-func (c *DashboardCreator) initTaskICkpCollectUsageRow() dashboard.Option {
-	return dashboard.Row(
-		"Incremental Checkpoint Collects Storage Usage Duration",
-		c.getHistogram(
-			"Incremental Checkpoint Collects Storage Usage Duration",
-			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="ickp_collect_uage"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
-			axis.Unit("s"),
-			axis.Min(0)),
-	)
-}
-
-func (c *DashboardCreator) initTaskCkpEntryPendingRow() dashboard.Option {
-	return dashboard.Row(
-		"Checkpoint Entry Pending Time",
-		c.getHistogram(
-			"Checkpoint Entry Pending Time",
-			c.getMetricWithFilter(`mo_task_long_duration_seconds_bucket`, `type="ckp_entry_pending"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
-			axis.Unit("s"),
-			axis.Min(0)),
+			SpanNulls(true),
+		),
 	)
 }
 
 func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 	return dashboard.Row(
-		"Task Merge Related Status",
-		c.withGraph(
-			"Scheduled By Counting",
-			4,
-			`sum(increase(`+c.getMetricWithFilter("mo_task_scheduled_by_total", `type="merge"`)+`[$interval])) by (`+c.by+`, type)`,
-			"{{"+c.by+"-type }}"),
-		c.withGraph(
-			"Merged Blocks Each Schedule",
-			4,
-			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_block"`)+`[$interval])) by (`+c.by+`, type)`,
-			"{{"+c.by+"-type }}"),
-		c.withGraph(
-			"Merged Size Each Schedule",
-			4,
-			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_size"`)+`[$interval])) by (`+c.by+`, type)`,
-			"{{ "+c.by+"-type }}"),
+		"Merge",
+		c.getTimeSeries(
+			"Merge Count",
+			[]string{
+				fmt.Sprintf(
+					"increase(%s[$interval])",
+					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_block"`)),
+
+				fmt.Sprintf(
+					"increase(%s[$interval])",
+					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge"`)),
+			},
+			[]string{
+				"Block Count",
+				"Schedule Count",
+			},
+		),
+		c.getTimeSeries(
+			"Merge Batch Size",
+			[]string{fmt.Sprintf(
+				"increase(%s[$interval])",
+				c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_size"`))},
+			[]string{"Size"},
+			timeseries.Axis(tsaxis.Unit("decbytes")),
+		),
 	)
 }
 
-func (c *DashboardCreator) initTaskCkpCollectUsageRow() dashboard.Option {
+func (c *DashboardCreator) initTaskCheckpointRow() dashboard.Option {
 	return dashboard.Row(
-		"Task Checkpoint Collects Usage Row",
-		c.withGraph(
-			"Global Checkpoint Load Object Count",
-			6,
-			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="gckp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
-			"{{"+c.by+"-type }}"),
-		c.withGraph(
-			"Incremental Checkpoint Load Object Count",
-			6,
-			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="ickp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
-			"{{"+c.by+"-type }}"),
+		"Checkpoint",
+		c.getPercentHist(
+			"Checkpoint Entry Pending",
+			c.getMetricWithFilter(`mo_task_long_duration_seconds_bucket`, `type="ckp_entry_pending"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+		c.getPercentHist(
+			"ICheckpoint Collecting Duration",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="ickp_collect_uage"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+		c.getTimeSeries(
+			"Checkpoint Load Object Count",
+			[]string{
+				fmt.Sprintf(
+					"increase(%s[$interval])",
+					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="gckp_load_object"`)),
+
+				fmt.Sprintf(
+					"increase(%s[$interval])",
+					c.getMetricWithFilter(`mo_task_execute_results_total`, `type="ickp_load_object"`)),
+			},
+			[]string{
+				"GCheckpoint",
+				"ICheckpoint",
+			},
+			timeseries.Span(3),
+		),
+		c.getPercentHist(
+			"GCheckpoint Collecting Duration",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="gckp_collect_uage"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(3),
+		),
+	)
+}
+
+func (c *DashboardCreator) initTaskSelectivityRow() dashboard.Option {
+
+	hitRateFunc := func(title, metricType string) row.Option {
+		return c.getTimeSeries(
+			title,
+			[]string{
+				fmt.Sprintf(
+					"sum(%s) by (%s) / on(%s) sum(%s) by (%s)",
+					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_hit"`), c.by, c.by,
+					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
+			},
+			[]string{fmt.Sprintf("filterout-{{ %s }}", c.by)},
+			timeseries.Span(4),
+		)
+	}
+	counterRateFunc := func(title, metricType string) row.Option {
+		return c.getTimeSeries(
+			title,
+			[]string{
+				fmt.Sprintf(
+					"sum(rate(%s[$interval])) by (%s)",
+					c.getMetricWithFilter(`mo_task_selectivity`, `type="`+metricType+`_total"`), c.by),
+			},
+			[]string{fmt.Sprintf("req-{{ %s }}", c.by)},
+			timeseries.Span(4),
+		)
+	}
+	return dashboard.Row(
+		"Read Selectivity",
+		hitRateFunc("Read filter rate", "readfilter"),
+		hitRateFunc("Block range filter rate", "block"),
+		hitRateFunc("Column update filter rate", "column"),
+		counterRateFunc("Read filter request", "readfilter"),
+		counterRateFunc("Block range request", "block"),
+		counterRateFunc("Column update request", "column"),
 	)
 }
