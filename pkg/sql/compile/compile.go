@@ -79,10 +79,9 @@ import (
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold              uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate            uint64 = 300 * mpool.B
-	shuffleJoinMergeChannelBufferSize        = 4
-	shuffleJoinProbeChannelBufferSize        = 16
+	DistributedThreshold     uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate   uint64 = 300 * mpool.B
+	shuffleChannelBufferSize        = 16
 )
 
 var (
@@ -2744,7 +2743,7 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]
 		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, 16)
+				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, scopes...)
@@ -2900,7 +2899,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleJoinMergeChannelBufferSize)
+				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, ss...)
