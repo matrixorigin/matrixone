@@ -151,7 +151,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		rows += int64(meta.BlockHeader().Rows())
 		return nil
 	}
-	if err = tbl.ForeachDataObject(partition, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(partition, onObjFn); err != nil {
 		return 0, err
 	}
 	return rows, nil
@@ -176,7 +176,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 //	return
 //}
 
-func (tbl *txnTable) ForeachDataObject(
+func (tbl *txnTable) ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	fn func(obj logtailreplay.ObjectEntry) error,
 ) (err error) {
@@ -254,7 +254,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return nil, nil, err
 	}
 
@@ -377,7 +377,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		}
 		return nil
 	}
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return 0, err
 	}
 	return ret, nil
@@ -452,7 +452,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil
 	}
 
-	if err = tbl.ForeachDataObject(state, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(state, onObjFn); err != nil {
 		return nil, err
 	}
 

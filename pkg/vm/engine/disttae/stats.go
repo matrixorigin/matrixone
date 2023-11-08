@@ -135,7 +135,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 		}
 		return nil
 	}
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return 0, 0, err
 	}
 

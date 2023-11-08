@@ -52,6 +52,8 @@ type PartitionState struct {
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	//table data objects
 	dataObjects *btree.BTreeG[ObjectEntry]
+	//TODO::gc
+	dataObjectsByCreateTS *btree.BTreeG[ObjectIndexByCreateTSEntry]
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
 	checkpoints []string
@@ -193,9 +195,35 @@ func (o ObjectEntry) Location() objectio.Location {
 }
 
 type ObjectIndexByCreateTSEntry struct {
-	CreateTime types.TS
+	CreateTime   types.TS
+	ShortObjName objectio.ObjectNameShort
 
 	*ObjectInfo
+}
+
+func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
+	//asc
+	if o.CreateTime.Less(than.CreateTime) {
+
+		return true
+	}
+	if than.CreateTime.Less(o.CreateTime) {
+		return false
+	}
+
+	cmp := bytes.Compare(o.ShortObjName[:], than.ShortObjName[:])
+	if cmp < 0 {
+		return true
+	}
+	if cmp > 0 {
+		return false
+	}
+	return false
+}
+
+func (o *ObjectIndexByCreateTSEntry) Visible(ts types.TS) bool {
+	return o.CreateTime.LessEq(ts) &&
+		(o.DeleteTime.IsEmpty() || ts.Less(o.DeleteTime))
 }
 
 type PrimaryIndexEntry struct {
@@ -257,29 +285,29 @@ func NewPartitionState(noData bool) *PartitionState {
 		Degree: 4,
 	}
 	return &PartitionState{
-		noData: noData,
-		rows:   btree.NewBTreeGOptions((RowEntry).Less, opts),
-		//blocks:         btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		dataObjects:    btree.NewBTreeGOptions((ObjectEntry).Less, opts),
-		blockDeltas:    btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
-		primaryIndex:   btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlocks:    btree.NewBTreeGOptions((types.Blockid).Less, opts),
-		blockIndexByTS: btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
-		shared:         new(sharedStates),
+		noData:                noData,
+		rows:                  btree.NewBTreeGOptions((RowEntry).Less, opts),
+		dataObjects:           btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
+		blockDeltas:           btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
+		primaryIndex:          btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		dirtyBlocks:           btree.NewBTreeGOptions((types.Blockid).Less, opts),
+		blockIndexByTS:        btree.NewBTreeGOptions((BlockIndexByTSEntry).Less, opts),
+		shared:                new(sharedStates),
 	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		rows: p.rows.Copy(),
-		//blocks:         p.blocks.Copy(),
-		dataObjects:    p.dataObjects.Copy(),
-		blockDeltas:    p.blockDeltas.Copy(),
-		primaryIndex:   p.primaryIndex.Copy(),
-		noData:         p.noData,
-		dirtyBlocks:    p.dirtyBlocks.Copy(),
-		blockIndexByTS: p.blockIndexByTS.Copy(),
-		shared:         p.shared,
+		rows:                  p.rows.Copy(),
+		dataObjects:           p.dataObjects.Copy(),
+		dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
+		blockDeltas:           p.blockDeltas.Copy(),
+		primaryIndex:          p.primaryIndex.Copy(),
+		noData:                p.noData,
+		dirtyBlocks:           p.dirtyBlocks.Copy(),
+		blockIndexByTS:        p.blockIndexByTS.Copy(),
+		shared:                p.shared,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -672,6 +700,12 @@ func (p *PartitionState) HandleMetadataInsert(
 				if err := blockio.PrefetchMeta(fs, objEntry.Loc); err != nil {
 					logutil.Errorf("prefetch object meta failed. %v", err)
 				}
+				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry{
+					CreateTime:   objEntry.CreateTime,
+					ShortObjName: objEntry.ShortObjName,
+
+					ObjectInfo: objEntry.ObjectInfo,
+				})
 			}
 
 		})
