@@ -57,7 +57,7 @@ b + [1,2,3]
 [2, 4, 6]
 select b + sqrt(b) from vec_table;
 b + sqrt(b)
-[2, 3.4142137, 4.732051]
+[2, 3.414213562373095, 4.732050807568877]
 select b + c from vec_table;
 b + c
 [5, 7, 9]
@@ -69,7 +69,7 @@ abs(cast([-1,-2,3] as vecf32(3)))
 [1, 2, 3]
 select sqrt(b) from vec_table;
 sqrt(b)
-[1, 1.4142135, 1.7320508]
+[1, 1.4142135623730951, 1.7320508075688772]
 select summation(b) from vec_table;
 summation(b)
 6.0
