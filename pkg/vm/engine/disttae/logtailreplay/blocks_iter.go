@@ -162,7 +162,7 @@ func (p *PartitionState) GetChangedBlocksBetween(
 	return
 }
 
-func (p *PartitionState) GetBockInfo(bid types.Blockid) (catalog.ObjectLocation, types.TS, bool) {
+func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (catalog.ObjectLocation, types.TS, bool) {
 	iter := p.blockDeltas.Copy().Iter()
 	defer iter.Release()
 

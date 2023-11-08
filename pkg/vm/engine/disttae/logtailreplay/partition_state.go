@@ -50,7 +50,6 @@ type PartitionState struct {
 
 	// data
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
-	//blocks *btree.BTreeG[BlockEntry]
 	//table data objects
 	dataObjects *btree.BTreeG[ObjectEntry]
 	//TODO:: It's transient, should be removed in future PR.
@@ -61,9 +60,10 @@ type PartitionState struct {
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
+	//TODO::remove it
 	dirtyBlocks *btree.BTreeG[types.Blockid]
 	//index for blocks by timestamp.
-	//TODO gc entries
+	//TODO::replace it with objectIndexByTS
 	blockIndexByTS *btree.BTreeG[BlockIndexByTSEntry]
 
 	// noData indicates whether to retain data batch
@@ -152,9 +152,7 @@ func (b BlockDeltaEntry) DeltaLocation() objectio.Location {
 	return b.DeltaLoc[:]
 }
 
-type ObjectEntry struct {
-	ShortObjName objectio.ObjectNameShort
-
+type ObjectInfo struct {
 	Loc         objectio.Location
 	EntryState  bool
 	Sorted      bool
@@ -164,6 +162,21 @@ type ObjectEntry struct {
 	CreateTime  types.TS
 	DeleteTime  types.TS
 	BlkCnt      uint16
+}
+
+type ObjectEntry struct {
+	ShortObjName objectio.ObjectNameShort
+
+	//Loc         objectio.Location
+	//EntryState  bool
+	//Sorted      bool
+	//HasDeltaLoc bool
+	//SegmentID   types.Uuid
+	//CommitTS    types.TS
+	//CreateTime  types.TS
+	//DeleteTime  types.TS
+	//BlkCnt      uint16
+	*ObjectInfo
 }
 
 func (o ObjectEntry) Less(than ObjectEntry) bool {
@@ -177,6 +190,12 @@ func (o *ObjectEntry) Visible(ts types.TS) bool {
 
 func (o ObjectEntry) Location() objectio.Location {
 	return o.Loc
+}
+
+type ObjectIndexByCreateTSEntry struct {
+	CreateTime types.TS
+
+	*ObjectInfo
 }
 
 type PrimaryIndexEntry struct {
@@ -616,7 +635,7 @@ func (p *PartitionState) HandleMetadataInsert(
 				}
 				objEntry, ok := p.dataObjects.Get(objPivot)
 				if ok {
-					// don't need to update objEntry, except for HasDeltaLoc
+					// don't need to update objEntry, except for HasDeltaLoc and blkCnt
 					if !isEmptyDelta {
 						objEntry.HasDeltaLoc = true
 					}
@@ -630,6 +649,7 @@ func (p *PartitionState) HandleMetadataInsert(
 					return
 				}
 				objEntry = objPivot
+				objEntry.ObjectInfo = &ObjectInfo{}
 				if metaLocation := objectio.Location(metaLocationVector.GetBytesAt(i)); !metaLocation.IsEmpty() {
 					objEntry.Loc = metaLocation
 				}

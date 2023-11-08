@@ -893,7 +893,7 @@ func (tbl *txnTable) rangesOnePart(
 				SegmentID:  obj.SegmentID,
 			}
 			if obj.HasDeltaLoc {
-				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 				if ok {
 					blkInfo.DeltaLoc = deltaLoc
 					blkInfo.CommitTs = commitTs
@@ -1098,7 +1098,7 @@ func (tbl *txnTable) tryFastRanges(
 				SegmentID:  obj.SegmentID,
 			}
 			if obj.HasDeltaLoc {
-				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 				if ok {
 					blkInfo.DeltaLoc = deltaLoc
 					blkInfo.CommitTs = commitTs
@@ -1946,7 +1946,7 @@ func (tbl *txnTable) updateDeleteInfo(
 							SegmentID:  obj.SegmentID,
 						}
 						if obj.HasDeltaLoc {
-							deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+							deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 							if ok {
 								blkInfo.DeltaLoc = deltaLoc
 								blkInfo.CommitTs = commitTs
