@@ -69,12 +69,12 @@ var (
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
 
-	TxnFastLoadObjectMetaTotalCounter = prometheus.NewCounter(
+	TxnRangesLoadedObjectMetaTotalCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
-			Name:      "tn_side_fast_load_object_meta_total",
-			Help:      "Total number of fast loaded object meta on tn side.",
+			Name:      "ranges_loaded_object_meta_total",
+			Help:      "Total number of ranges loaded object meta.",
 		})
 )
 
@@ -226,4 +226,13 @@ var (
 	TxnMpoolAllocDurationHistogram  = txnMpoolDurationHistogram.WithLabelValues("alloc")
 	TxnMpoolFreeDurationHistogram   = txnMpoolDurationHistogram.WithLabelValues("free")
 	TxnMpoolDeleteDurationHistogram = txnMpoolDurationHistogram.WithLabelValues("delete")
+
+	TxnRangesLoadedObjectHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "ranges_loaded_object_quantity_distribution",
+			Help:      "Bucketed histogram of the quantity distribution of ranges loaded object.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 16),
+		})
 )

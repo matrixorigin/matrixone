@@ -601,8 +601,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 			newExprs[i] = foldedExpr
 		}
 	}
-
-	err = tbl.rangesOnePart(
+	var loaded int
+	loaded, err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.getTableDef(),
@@ -610,6 +610,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		&ranges,
 		tbl.proc.Load(),
 	)
+	v2.TxnRangesLoadedObjectHistogram.Observe(float64(loaded))
+	v2.TxnRangesLoadedObjectMetaTotalCounter.Add(float64(loaded))
+
 	return
 }
 
@@ -638,17 +641,17 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
-) (err error) {
+) (loaded int, err error) {
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
 		if err != nil {
-			return err
+			return loaded, err
 		}
 		deleteBlks, createBlks := state.GetChangedBlocksBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 		if len(deleteBlks) > 0 {
 			if err := tbl.updateDeleteInfo(ctx, state, deleteBlks, createBlks); err != nil {
-				return err
+				return loaded, err
 			}
 		}
 		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
@@ -674,7 +677,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	insertedS3Blks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
 	if err != nil {
-		return err
+		return loaded, err
 	}
 	for _, blk := range insertedS3Blks {
 		if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
@@ -718,15 +721,17 @@ func (tbl *txnTable) rangesOnePart(
 
 	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
-		return err
+		return loaded, err
 	}
 
-	if done, err := tbl.tryFastRanges(
+	if done, fLoaded, err := tbl.tryFastRanges(
 		state, exprs, insertedS3Blks, dirtyBlks, ranges, fs,
 	); err != nil {
-		return err
+		return fLoaded, err
 	} else if done {
-		return nil
+		return fLoaded, nil
+	} else {
+		loaded += fLoaded
 	}
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
@@ -759,7 +764,7 @@ func (tbl *txnTable) rangesOnePart(
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-				v2.TxnFastLoadObjectMetaTotalCounter.Inc()
+				loaded++
 				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 					return
 				}
@@ -820,7 +825,7 @@ func (tbl *txnTable) rangesOnePart(
 	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	iter, err := state.NewObjectsIter(ts)
 	if err != nil {
-		return err
+		return loaded, err
 	}
 	defer iter.Close()
 
@@ -915,7 +920,7 @@ func (tbl *txnTable) tryFastRanges(
 	dirtyBlks map[types.Blockid]struct{},
 	ranges *[][]byte,
 	fs fileservice.FileService,
-) (done bool, err error) {
+) (done bool, loaded int, err error) {
 	if tbl.primaryIdx == -1 {
 		done = false
 		return
@@ -946,6 +951,7 @@ func (tbl *txnTable) tryFastRanges(
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
 			var objMeta objectio.ObjectMeta
+			loaded++
 			if objMeta, err = objectio.FastLoadObjectMeta(
 				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 			); err != nil {
@@ -1020,7 +1026,7 @@ func (tbl *txnTable) tryFastRanges(
 	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	iter, err := state.NewObjectsIter(ts)
 	if err != nil {
-		return false, err
+		return false, loaded, err
 	}
 	defer iter.Close()
 
