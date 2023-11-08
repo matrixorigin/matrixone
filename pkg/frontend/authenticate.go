@@ -911,7 +911,7 @@ var (
 		`create table mo_user(
 				user_id int signed auto_increment primary key,
 				user_host varchar(100),
-				user_name varchar(300),
+				user_name varchar(300) unique key,
 				authentication_string varchar(100),
 				status   varchar(8),
 				created_time  timestamp,
@@ -932,7 +932,7 @@ var (
 			);`,
 		`create table mo_role(
 				role_id int signed auto_increment primary key,
-				role_name varchar(300),
+				role_name varchar(300) unique key,
 				creator int signed,
 				owner int signed,
 				created_time timestamp,
@@ -969,7 +969,7 @@ var (
 			);`,
 		`create table mo_user_defined_function(
 				function_id int auto_increment,
-				name     varchar(100),
+				name     varchar(100) unique key,
 				owner  int unsigned,
 				args     json,
 				retType  varchar(20),
@@ -1011,7 +1011,7 @@ var (
     		);`,
 		`create table mo_stored_procedure(
 				proc_id int auto_increment,
-				name     varchar(100),
+				name     varchar(100) unique key,
 				creator  int unsigned,
 				args     text,
 				body     text,
@@ -1029,7 +1029,7 @@ var (
 			);`,
 		`create table mo_stages(
 				stage_id int unsigned auto_increment,
-				stage_name varchar(64),
+				stage_name varchar(64) unique key,
 				url text,
 				stage_credentials text,
 				stage_status varchar(64),
@@ -1211,27 +1211,27 @@ var (
 
 const (
 	//privilege verification
-	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s";`
+	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s" order by account_id;`
 
 	getTenantNameForMat = `select account_name from mo_catalog.mo_account where account_id = %d;`
 
-	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s";`
+	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s" order by account_id;;`
 
-	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s";`
+	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s" order by account_id;;`
 
 	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = default where account_name = "%s";`
 
-	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
+	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;;`
 
-	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s";`
+	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s";`
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s" order by user_id;;`
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
 
-	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s";`
+	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s" order by role_id;`
 
 	//operations on the mo_user_grant
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
@@ -1444,16 +1444,16 @@ const (
 					and mg.user_id = %d 
 					order by role.created_time asc limit 1;`
 
-	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
+	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s;`
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s order by function_id;`
 
-	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
+	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
-	checkProcedureExistence = `select proc_id from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
+	checkProcedureExistence = `select proc_id from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
 	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
-	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d;`
+	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d order by role_id;`
 
 	deleteRoleFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where role_id = %d;`
 
@@ -1508,21 +1508,21 @@ const (
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
-	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s";`
+	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
 
-	checkStageStatusFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_status = "%s";`
+	checkStageStatusFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_status = "%s" order by stage_id;`
 
-	checkStageStatusWithStageNameFormat = `select url, stage_status from mo_catalog.mo_stages where stage_name = "%s";`
+	checkStageStatusWithStageNameFormat = `select url, stage_status from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
 
-	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s';`
+	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
 
-	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s';`
+	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s';`
+	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageStatusFotmat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s';`
+	updateStageStatusFotmat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageCommentFotmat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s';`
+	updateStageCommentFotmat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -1533,7 +1533,7 @@ const (
 	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
-	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s';`
+	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 )
 
 var (
