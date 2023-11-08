@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
@@ -852,7 +853,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 
 		size := r.EstimateTableMemSize(table, dirtyTree)
 
-		stats := &table.Stats
+		stats := table.Stats
 		stats.Lock()
 		defer stats.Unlock()
 
