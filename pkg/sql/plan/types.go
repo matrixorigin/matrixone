@@ -70,6 +70,7 @@ type ClusterTable = plan.ClusterTable
 type PrimaryKeyDef = plan.PrimaryKeyDef
 type IndexDef = plan.IndexDef
 type SubscriptionMeta = plan.SubscriptionMeta
+type PartitionPrune = plan.PartitionPrune
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -89,7 +90,7 @@ type CompilerContext interface {
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get needed info for stats by table
-	Stats(obj *ObjectRef) bool
+	Stats(obj *ObjectRef, prune *plan.PartitionPrune) bool
 	// get origin sql string of the root
 	GetRootSql() string
 	// get username of current session

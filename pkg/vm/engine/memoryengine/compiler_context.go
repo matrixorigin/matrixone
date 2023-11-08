@@ -78,7 +78,7 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	return []uint32{catalog.System_Account}, nil
 }
 
-func (*CompilerContext) Stats(obj *plan.ObjectRef) bool {
+func (*CompilerContext) Stats(obj *plan.ObjectRef, prune *plan.PartitionPrune) bool {
 	return false
 }
 

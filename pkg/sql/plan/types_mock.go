@@ -383,7 +383,7 @@ func (mr *MockCompilerContext2MockRecorder) SetQueryingSubscription(meta interfa
 }
 
 // Stats mocks base method.
-func (m *MockCompilerContext2) Stats(obj *ObjectRef) bool {
+func (m *MockCompilerContext2) Stats(obj *ObjectRef, prune *plan.PartitionPrune) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", obj)
 	ret0, _ := ret[0].(bool)
@@ -391,9 +391,9 @@ func (m *MockCompilerContext2) Stats(obj *ObjectRef) bool {
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockCompilerContext2MockRecorder) Stats(obj interface{}) *gomock.Call {
+func (mr *MockCompilerContext2MockRecorder) Stats(obj interface{}, prune interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockCompilerContext2)(nil).Stats), obj)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockCompilerContext2)(nil).Stats), obj, prune)
 }
 
 // MockOptimizer2 is a mock of Optimizer interface.

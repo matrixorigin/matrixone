@@ -75,7 +75,7 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) Stats(obj *plan.ObjectRef) bool {
+func (c *compilerContext) Stats(obj *plan.ObjectRef, prune *plan.PartitionPrune) bool {
 	t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName())
 	if err != nil {
 		return false

@@ -849,7 +849,7 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 	return defs
 }
 
-func (m *MockCompilerContext) Stats(obj *ObjectRef) bool {
+func (m *MockCompilerContext) Stats(obj *ObjectRef, prune *plan.PartitionPrune) bool {
 	return false
 }
 

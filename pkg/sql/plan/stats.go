@@ -711,7 +711,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if !needStats(node.TableDef) {
 		return DefaultStats()
 	}
-	if !builder.compCtx.Stats(node.ObjRef) {
+	if !builder.compCtx.Stats(node.ObjRef, node.PartitionPrune) {
 		return DefaultStats()
 	}
 	//get statsInfoMap from statscache

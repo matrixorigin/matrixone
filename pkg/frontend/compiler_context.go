@@ -556,7 +556,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 	return priDefs
 }
 
-func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, prune *plan.PartitionPrune) bool {
 
 	dbName := obj.GetSchemaName()
 	checkSub := true
@@ -598,10 +598,18 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	var ptables []any
 	if partitionInfo != nil {
-		ptables = make([]any, len(partitionInfo.PartitionTableNames))
-		for i, PartitionTableName := range partitionInfo.PartitionTableNames {
-			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
-			ptables[i] = ptable
+		if prune != nil && prune.IsPruned {
+			ptables = make([]any, len(prune.SelectedPartitions))
+			for i, partition := range prune.SelectedPartitions {
+				_, ptable, _ := tcc.getRelation(dbName, partition.PartitionTableName, nil)
+				ptables[i] = ptable
+			}
+		} else {
+			ptables = make([]any, len(partitionInfo.PartitionTableNames))
+			for i, PartitionTableName := range partitionInfo.PartitionTableNames {
+				_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
+				ptables[i] = ptable
+			}
 		}
 	}
 	return table.Stats(ctx, ptables, tcc.GetStatsCache().GetStatsInfoMap(table.GetTableID(ctx)))
