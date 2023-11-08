@@ -15,7 +15,8 @@ insert into t1 values (10,"1999-09-30", "1999-09-30 10:11:12", "1999-09-30", "19
 insert into t1 values (11,"2005-10-30", "2005-10-30 18:18:59", "2005-10-30", "2005-10-30");
 insert into t1 values (12,"2008-11-30", "2008-11-30 22:59:59", "2008-11-30", "2008-11-30");
 insert into t1 values (13,"2013-12-01", "2013-12-01 22:59:59", "2013-12-01", "2013-12-01");
-insert into t1 values (14,null, null, null, null);
+insert into t1 values (14,"2016-11-01", "2016-11-01 10:59", "2016-11-01", "2016-11-01");
+insert into t1 values (15,null, null, null, null);
 select month(d),month(dt) from t1;
 month(d)	month(dt)
 1	1
@@ -33,6 +34,7 @@ month(d)	month(dt)
 10	10
 11	11
 12	12
+11  11
 null	null
 select month(c),month(vc) from t1;
 month(c)	month(vc)
@@ -51,6 +53,7 @@ month(c)	month(vc)
 10	10
 11	11
 12	12
+11  11
 null	null
 select weekday(d),weekday(dt) from t1;
 weekday(d)	weekday(dt)
@@ -69,6 +72,7 @@ weekday(d)	weekday(dt)
 6	6
 6	6
 6	6
+1   1
 null	null
 select weekday(c),weekday(vc) from t1;
 weekday(c)	weekday(vc)
@@ -87,6 +91,7 @@ weekday(c)	weekday(vc)
 6	6
 6	6
 6	6
+1   1
 null	null
 select max(month(d)),max(month(dt)) from t1;
 max(month(d))	max(month(dt))
@@ -96,10 +101,10 @@ min(month(d))	min(month(d))
 1	1
 select avg(month(d)),avg(month(d)) from t1;
 avg(month(d))	avg(month(d))
-5.5333	5.5333
+5.875	5.875
 select sum(month(d)),sum(month(d)) from t1;
 sum(month(d))	sum(month(d))
-83	83
+94	94
 select max(weekday(d)),max(weekday(dt)) from t1;
 max(weekday(d))	max(weekday(dt))
 6	6
@@ -108,12 +113,12 @@ min(weekday(d))	min(weekday(d))
 0	0
 select avg(weekday(d)),avg(weekday(d)) from t1;
 avg(weekday(d))	avg(weekday(d))
-3.6667	3.6667
+3.5	3.5
 select sum(weekday(d)),sum(weekday(d)) from t1;
 sum(weekday(d))	sum(weekday(d))
-55	55
+56	56
 select distinct(month(d)) from t1;
-(month(d))
+month(d)
 1
 2
 3
@@ -139,6 +144,7 @@ id	c	vc
 11	2005-10-30	2005-10-30
 12	2008-11-30	2008-11-30
 13	2013-12-01	2013-12-01
+14  2016-11-01  2016-11-01
 select id,c,vc from t1 where month(d) < 3;
 id	c	vc
 1	2021-12-15	2021-12-16
@@ -162,4 +168,5 @@ id	c	vc
 11	2005-10-30	2005-10-30
 12	2008-11-30	2008-11-30
 13	2013-12-01	2013-12-01
+14  2016-11-01  2016-11-01
 drop table t1;
