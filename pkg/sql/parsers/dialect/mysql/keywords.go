@@ -240,6 +240,7 @@ func init() {
 		"iterate":                    ITERATE,
 		"join":                       JOIN,
 		"json":                       JSON,
+		"jsontype":                   JSONTYPE,
 		"uuid":                       UUID,
 		"key":                        KEY,
 		"keys":                       KEYS,
