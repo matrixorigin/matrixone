@@ -57,6 +57,9 @@ DATE_FORMAT(2023-11-08 12:00, %Y-%m-%d %H:%i:%s)
 SELECT DATE_FORMAT('2023-11-08 15:00:00', '%Y-%m-%d %H:%i:%s');
 DATE_FORMAT(2023-11-08 15:00:00, %Y-%m-%d %H:%i:%s)
 2023-11-08 15:00:00
+SELECT DATE_FORMAT('2023-11-08 15:00:', '%Y-%m-%d %H:%i:%s');
+DATE_FORMAT(2023-11-08 15:00:, %Y-%m-%d %H:%i:%s)
+2023-11-08 15:00:00
 select date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
 invalid input: invalid datatime value 19980021000000
 select date_format('19980131131415', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');

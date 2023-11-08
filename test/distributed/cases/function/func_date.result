@@ -16,6 +16,7 @@ insert into t1 values (11,"2005-10-30", "2005-10-30 18:18:59", "2005-10-30", "20
 insert into t1 values (12,"2008-11-30", "2008-11-30 22:59:59", "2008-11-30", "2008-11-30");
 insert into t1 values (13,"2013-12-01", "2013-12-01 22:59:59", "2013-12-01", "2013-12-01");
 insert into t1 values (14,"2016-11-01", "2016-11-01 10:59", "2016-11-01", "2016-11-01");
+insert into t1 values (14,"2023-11-08", "2023-11-08 10:59:", "2023-11-08", "2023-11-08");
 insert into t1 values (15,null, null, null, null);
 select month(d),month(dt) from t1;
 month(d)    month(dt)
@@ -34,6 +35,7 @@ month(d)    month(dt)
 10    10
 11    11
 12    12
+11    11
 11    11
 null    null
 select month(c),month(vc) from t1;
@@ -54,45 +56,48 @@ month(c)    month(vc)
 11    11
 12    12
 11    11
+11    11
 null    null
 select weekday(d),weekday(dt) from t1;
-weekday(d)	weekday(dt)
-2	2
-6	6
-1	1
-0	0
-1	1
-4	2
-3	3
-2	2
-3	3
-6	5
-6	3
-3	3
-6	6
-6	6
-6	6
-1   1
-null	null
+weekday(d)    weekday(dt)
+2    2
+6    6
+1    1
+0    0
+1    1
+4    2
+3    3
+2    2
+3    3
+6    5
+6    3
+3    3
+6    6
+6    6
+6    6
+1    1
+2    2
+null    null
 select weekday(c),weekday(vc) from t1;
-weekday(c)	weekday(vc)
-2	3
-2	3
-0	0
-0	0
-0	0
-2	2
-3	3
-2	2
-3	3
-6	6
-6	6
-3	3
-6	6
-6	6
-6	6
-1   1
-null	null
+weekday(c)    weekday(vc)
+2    3
+2    3
+0    0
+0    0
+0    0
+2    2
+3    3
+2    2
+3    3
+6    6
+6    6
+3    3
+6    6
+6    6
+6    6
+1    1
+2    2
+null    null
 select max(month(d)),max(month(dt)) from t1;
 max(month(d))	max(month(dt))
 12	12
@@ -101,10 +106,10 @@ min(month(d))	min(month(d))
 1	1
 select avg(month(d)),avg(month(d)) from t1;
 avg(month(d))	avg(month(d))
-5.875	5.875
+6.176470588235294    6.176470588235294
 select sum(month(d)),sum(month(d)) from t1;
 sum(month(d))	sum(month(d))
-94	94
+105    105
 select max(weekday(d)),max(weekday(dt)) from t1;
 max(weekday(d))	max(weekday(dt))
 6	6
@@ -113,10 +118,10 @@ min(weekday(d))	min(weekday(d))
 0	0
 select avg(weekday(d)),avg(weekday(d)) from t1;
 avg(weekday(d))	avg(weekday(d))
-3.5	3.5
+3.411764705882353    3.411764705882353
 select sum(weekday(d)),sum(weekday(d)) from t1;
 sum(weekday(d))	sum(weekday(d))
-56	56
+58	58
 select distinct(month(d)) from t1;
 month(d)
 1
@@ -133,18 +138,19 @@ month(d)
 12
 null
 select id,c,vc from t1 where month(d) > 2;
-id	c	vc
-4	2021-03-17	2021-03-17
-5	1985-04-18	1985-04-18
-6	1987-05-20	1987-05-20
-7	1989-06-22	1989-06-22
-8	1993-07-25	1993-07-25
-9	1995-08-27	1995-08-27
-10	1999-09-30	1999-09-30
-11	2005-10-30	2005-10-30
-12	2008-11-30	2008-11-30
-13	2013-12-01	2013-12-01
-14  2016-11-01  2016-11-01
+id    c    vc
+4    2021-03-17    2021-03-17
+5    1985-04-18    1985-04-18
+6    1987-05-20    1987-05-20
+7    1989-06-22    1989-06-22
+8    1993-07-25    1993-07-25
+9    1995-08-27    1995-08-27
+10    1999-09-30    1999-09-30
+11    2005-10-30    2005-10-30
+12    2008-11-30    2008-11-30
+13    2013-12-01    2013-12-01
+14    2016-11-01    2016-11-01
+14    2023-11-08    2023-11-08
 select id,c,vc from t1 where month(d) < 3;
 id	c	vc
 1	2021-12-15	2021-12-16
