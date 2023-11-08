@@ -749,7 +749,11 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 					}
 					newOnList = append(newOnList, expr)
 					colGroup[colGroup[left]] = colGroup[right]
+				} else {
+					newOnList = append(newOnList, expr)
 				}
+			} else {
+				newOnList = append(newOnList, expr)
 			}
 		}
 	}
