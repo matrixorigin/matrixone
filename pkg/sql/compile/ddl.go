@@ -992,7 +992,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 	}
 
-	// build and create index table for unique/secondary index with index algorithm = "" or "BTREE"
+	// build and create index table for unique/secondary index
 	if qry.TableExist {
 		def := qry.GetIndex().GetIndexTables()[0]
 		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)

@@ -379,7 +379,6 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
 			}
 		}
-
 	}
 	return nil
 }

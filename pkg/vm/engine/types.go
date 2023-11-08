@@ -109,6 +109,7 @@ func (node IndexT) ToString() string {
 		return "INVAILD"
 	}
 	//TODO: @arjun fix this later
+	// Should this be same as secondary index algo type?
 }
 
 const (

@@ -380,7 +380,6 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 						return nil, err
 					}
 
-					//TODO: need to verify
 					err = vector.AppendBytes(vec_algo, []byte(""), true, proc.Mp())
 					if err != nil {
 						return nil, err
