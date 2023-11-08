@@ -5747,10 +5747,20 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 		canExecInRestricted = true
-	case *tree.CreateIndex, *tree.DropIndex:
+	case *tree.CreateIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		if st.Table != nil {
+			dbName = string(st.Table.SchemaName)
+		}
+	case *tree.DropIndex:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.TableName != nil {
+			dbName = string(st.TableName.SchemaName)
+		}
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
@@ -5984,6 +5994,22 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				tableName:             dropTable.GetTable(),
 				isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
 				clusterTableOperation: clusterTableDrop,
+			})
+		} else if p.GetDdl().GetCreateIndex() != nil {
+			createIndex := p.GetDdl().GetCreateIndex()
+			appendPt(privilegeTips{
+				typ:                   PrivilegeTypeDropTable,
+				databaseName:          createIndex.GetDatabase(),
+				tableName:             createIndex.GetTable(),
+				clusterTableOperation: clusterTableModify,
+			})
+		} else if p.GetDdl().GetDropIndex() != nil {
+			dropIndex := p.GetDdl().GetDropIndex()
+			appendPt(privilegeTips{
+				typ:                   PrivilegeTypeDropTable,
+				databaseName:          dropIndex.GetDatabase(),
+				tableName:             dropIndex.GetTable(),
+				clusterTableOperation: clusterTableModify,
 			})
 		}
 	}
