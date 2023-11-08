@@ -687,6 +687,7 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 	}
 }
 
+/*
 func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
 	fun, ok := cond.Expr.(*plan.Expr_F)
 	if !ok || fun.F.Func.ObjName != "=" {
@@ -707,7 +708,7 @@ func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
 		return rightCol
 	}
 	return nil
-}
+}*/
 
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
 func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) []int {
