@@ -98,7 +98,7 @@ func NewDropView(i bool, n TableNames) *DropView {
 type DropIndex struct {
 	statementImpl
 	Name       Identifier
-	TableName  TableName
+	TableName  *TableName
 	IfExists   bool
 	MiscOption []MiscOption
 }
@@ -118,7 +118,7 @@ func (node *DropIndex) Format(ctx *FmtCtx) {
 func (node *DropIndex) GetStatementType() string { return "Drop Index" }
 func (node *DropIndex) GetQueryType() string     { return QueryTypeDDL }
 
-func NewDropIndex(i Identifier, t TableName, ife bool, m []MiscOption) *DropIndex {
+func NewDropIndex(i Identifier, t *TableName, ife bool, m []MiscOption) *DropIndex {
 	return &DropIndex{
 		Name:       i,
 		TableName:  t,

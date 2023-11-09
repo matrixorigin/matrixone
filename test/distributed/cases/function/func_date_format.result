@@ -51,6 +51,15 @@ date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s')    date_format(cast
 drop table t_dates;
 SELECT DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s');
 invalid input: invalid datatime value 123456
+SELECT DATE_FORMAT('2023-11-08 12:00', '%Y-%m-%d %H:%i:%s');
+DATE_FORMAT(2023-11-08 12:00, %Y-%m-%d %H:%i:%s)
+2023-11-08 12:00:00
+SELECT DATE_FORMAT('2023-11-08 15:00:00', '%Y-%m-%d %H:%i:%s');
+DATE_FORMAT(2023-11-08 15:00:00, %Y-%m-%d %H:%i:%s)
+2023-11-08 15:00:00
+SELECT DATE_FORMAT('2023-11-08 15:00:', '%Y-%m-%d %H:%i:%s');
+DATE_FORMAT(2023-11-08 15:00:, %Y-%m-%d %H:%i:%s)
+2023-11-08 15:00:00
 select date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
 invalid input: invalid datatime value 19980021000000
 select date_format('19980131131415', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
