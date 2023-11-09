@@ -171,15 +171,6 @@ func (o ObjectInfo) Location() objectio.Location {
 type ObjectEntry struct {
 	ShortObjName objectio.ObjectNameShort
 
-	//Loc         objectio.Location
-	//EntryState  bool
-	//Sorted      bool
-	//HasDeltaLoc bool
-	//SegmentID   types.Uuid
-	//CommitTS    types.TS
-	//CreateTime  types.TS
-	//DeleteTime  types.TS
-	//BlkCnt      uint16
 	*ObjectInfo
 }
 
@@ -253,6 +244,7 @@ type ObjectIndexByTSEntry struct {
 	IsDelete     bool
 
 	IsAppendable bool
+	*ObjectInfo
 }
 
 func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
@@ -706,6 +698,7 @@ func (p *PartitionState) HandleMetadataInsert(
 						IsDelete:     false,
 
 						IsAppendable: objEntry.EntryState,
+						ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(e)
 				}
@@ -760,6 +753,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
+						ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(e)
 				}
@@ -772,6 +766,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
+						ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Delete(old)
 					objEntry.DeleteTime = deleteTimeVector[i]
@@ -782,6 +777,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
+						ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(new)
 				} else if objEntry.DeleteTime.Equal(deleteTimeVector[i]) {
@@ -792,6 +788,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
+						ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(e)
 				}
