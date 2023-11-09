@@ -165,3 +165,24 @@ select * from (select city,libname1,count(libname1) as a from t3 join t1 on libn
 create view v1 as select * from (select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1) sub ;
 select * from v1;
 drop view v1;
+
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+drop view if exists v1;
+drop view if exists v2;
+create table t1 (col1 varchar(20), col2 char(20));
+create table t2 (col1 varchar(64), col2 char(64));
+create table t3 (col1 varchar(20), col2 char(20));
+create table t4 (col1 varchar(20), col2 char(20));
+create view v1 as select t1.col1 as col1, t1.col2 as col2 from t1 union select t2.col1 as col1, t2.col2 as col2 from t2;
+desc v1;
+create view v2 as select t3.col1 as col1, t3.col2 as col2 from t3 union select t4.col1 as col1, t4.col2 as col2 from t4;
+desc v2;
+drop view v1;
+drop view v2;
+drop table t1;
+drop table t2;
+drop table t3;
+drop table t4;
