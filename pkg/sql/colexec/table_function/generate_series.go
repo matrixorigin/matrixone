@@ -287,7 +287,7 @@ func computeNewStartAndEnd[T generateSeriesNumber](arg *Argument) {
 	last := arg.generateSeries.last.(T)
 	newEnd := newStart + step*T(addBatchSize)
 	if step > 0 {
-		if newEnd < 0 {
+		if newEnd < newStart {
 			newEnd = last
 		} else {
 			if newEnd > last {
@@ -295,7 +295,7 @@ func computeNewStartAndEnd[T generateSeriesNumber](arg *Argument) {
 			}
 		}
 	} else {
-		if newEnd > 0 {
+		if newEnd > newStart {
 			newEnd = last
 		} else {
 			if newEnd < last {
