@@ -83,13 +83,17 @@ func (b *objectsIter) Next() bool {
 
 		if !b.firstCalled {
 			if !b.iter.Seek(ObjectIndexByCreateTSEntry{
-				CreateTime: b.ts,
+				CreateTime: b.ts.Next(),
 			}) {
 				return false
 			}
+			//if !b.iter.First() {
+			//	return false
+			//}
 			b.firstCalled = true
 		} else {
 			if !b.iter.Prev() {
+				//if !b.iter.Next() {
 				return false
 			}
 		}
