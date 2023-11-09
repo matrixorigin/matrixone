@@ -1980,7 +1980,7 @@ const (
 type CreateIndex struct {
 	statementImpl
 	Name        Identifier
-	Table       TableName
+	Table       *TableName
 	IndexCat    IndexCategory
 	IfNotExists bool
 	KeyParts    []*KeyPart
@@ -2027,7 +2027,7 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 func (node *CreateIndex) GetStatementType() string { return "Create Index" }
 func (node *CreateIndex) GetQueryType() string     { return QueryTypeDDL }
 
-func NewCreateIndex(n Identifier, t TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
+func NewCreateIndex(n Identifier, t *TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
 	return &CreateIndex{
 		Name:        n,
 		Table:       t,
