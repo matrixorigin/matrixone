@@ -247,8 +247,8 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 // -----------------------------------------------------------------
 // ------------------------ emptyReader ----------------------------
 // -----------------------------------------------------------------
-func (r *emptyReader) Count(context.Context) (engine.ReaderCount, error) {
-	return engine.ReaderCount{}, nil
+func (r *emptyReader) Count() engine.ReaderCount {
+	return engine.ReaderCount{}
 }
 
 func (r *emptyReader) Close() error {
@@ -283,12 +283,15 @@ func newBlockReader(
 		},
 		blks: blks,
 	}
+	r.readerCount.ReplaceTableName("", tableDef.Name, tableDef.TblId)
 	r.filterState.expr = filterExpr
 	return r
 }
 
-func (r *blockReader) Count(context.Context) (engine.ReaderCount, error) {
-	return engine.ReaderCount{}, nil
+func (r *blockReader) Count() engine.ReaderCount {
+	ret := engine.ReaderCount{}
+	ret.CopyFrom(&r.readerCount)
+	return ret
 }
 
 func (r *blockReader) Close() error {
@@ -368,6 +371,8 @@ func (r *blockReader) Read(
 	}
 
 	bat.SetAttributes(cols)
+	r.readerCount.RowsRead.Add(uint64(bat.RowCount()))
+	r.readerCount.BytesRead.Add(uint64(bat.Size()))
 
 	if blockInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
 		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
@@ -554,25 +559,17 @@ func (r *blockMergeReader) Read(
 // -----------------------------------------------------------------
 
 func NewMergeReader(readers []engine.Reader) *mergeReader {
-	return &mergeReader{
+	ret := &mergeReader{
 		rds: readers,
 	}
+	ret.readerCount.Init()
+	return ret
 }
 
-func (r *mergeReader) Count(ctx context.Context) (engine.ReaderCount, error) {
+func (r *mergeReader) Count() engine.ReaderCount {
 	ret := engine.ReaderCount{}
-	for _, rd := range r.rds {
-		rc, err := rd.Count(ctx)
-		if err != nil {
-			return engine.ReaderCount{}, err
-		}
-		ret.DbName = rc.DbName
-		ret.TableId = rc.TableId
-		ret.TableName = rc.TableName
-		ret.RowsRead.Add(rc.RowsRead.Load())
-		ret.BytesRead.Add(rc.BytesRead.Load())
-	}
-	return ret, nil
+	ret.CopyFrom(&r.readerCount)
+	return ret
 }
 
 func (r *mergeReader) Close() error {
@@ -591,6 +588,7 @@ func (r *mergeReader) Read(
 	}
 	for len(r.rds) > 0 {
 		bat, err := r.rds[0].Read(ctx, cols, expr, mp, vp)
+		rc := r.rds[0].Count()
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
@@ -604,6 +602,8 @@ func (r *mergeReader) Read(
 			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 				logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
 			}
+			r.readerCount.ReplaceTableName(rc.Database(), rc.Table(), rc.TableID())
+			r.readerCount.AddRows(uint64(bat.RowCount()), uint64(bat.Size()))
 			return bat, nil
 		}
 	}

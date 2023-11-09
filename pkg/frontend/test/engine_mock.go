@@ -593,18 +593,17 @@ func (mr *MockReaderMockRecorder) Close() *gomock.Call {
 }
 
 // Count mocks base method.
-func (m *MockReader) Count(arg0 context.Context) (engine.ReaderCount, error) {
+func (m *MockReader) Count() engine.ReaderCount {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Count", arg0)
+	ret := m.ctrl.Call(m, "Count")
 	ret0, _ := ret[0].(engine.ReaderCount)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	return ret0
 }
 
 // Count indicates an expected call of Count.
-func (mr *MockReaderMockRecorder) Count(arg0 interface{}) *gomock.Call {
+func (mr *MockReaderMockRecorder) Count() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Count", reflect.TypeOf((*MockReader)(nil).Count), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Count", reflect.TypeOf((*MockReader)(nil).Count))
 }
 
 // Read mocks base method.

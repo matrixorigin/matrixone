@@ -46,8 +46,10 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
-func (p *PartitionReader) Count(ctx context.Context) (engine.ReaderCount, error) {
-	return engine.ReaderCount{}, nil
+func (p *PartitionReader) Count() engine.ReaderCount {
+	ret := engine.ReaderCount{}
+	ret.CopyFrom(&p.readerCount)
+	return ret
 }
 
 func (p *PartitionReader) Close() error {
@@ -232,6 +234,7 @@ func (p *PartitionReader) Read(
 		}
 		b.SetRowCount(rows)
 		p.readerCount.RowsRead.Add(uint64(rows))
+		p.readerCount.BytesRead.Add(uint64(b.Size()))
 
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
