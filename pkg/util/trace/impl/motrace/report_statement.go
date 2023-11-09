@@ -544,6 +544,12 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		}
 	}
 
+	if s.reported {
+		return nil
+	}
+
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	s.reported = true
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 DiscardAndFreeL:
