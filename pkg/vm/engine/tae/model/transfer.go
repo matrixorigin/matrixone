@@ -15,6 +15,8 @@
 package model
 
 import (
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
 	"sync"
 	"time"
 
@@ -27,6 +29,7 @@ type PageT[T common.IRef] interface {
 	Pin() *common.PinnedItem[T]
 	TTL(time.Time, time.Duration) bool
 	ID() *common.ID
+	Length() int
 }
 
 type TransferTable[T PageT[T]] struct {
@@ -73,14 +76,21 @@ func (table *TransferTable[T]) executeTTL(items []*common.PinnedItem[T]) {
 	if len(items) == 0 {
 		return
 	}
+
+	cnt := 0
+
 	table.Lock()
 	for _, pinned := range items {
+		cnt += pinned.Val.Length()
 		delete(table.pages, *pinned.Item().ID())
 	}
 	table.Unlock()
 	for _, pinned := range items {
 		pinned.Close()
 	}
+
+	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
+	utils.TransferPageCounter.Add(-int64(cnt))
 }
 
 func (table *TransferTable[T]) RunTTL(now time.Time) {
@@ -103,6 +113,10 @@ func (table *TransferTable[T]) AddPage(page T) (dup bool) {
 		return
 	}
 	table.pages[id] = pinned
+
+	cnt := page.Length()
+	utils.TransferPageCounter.Add(int64(cnt))
+	v2.TaskMergeTransferPageLengthGauge.Add(float64(cnt))
 	return
 }
 
@@ -113,6 +127,10 @@ func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
 		return
 	}
 	delete(table.pages, *id)
+
+	cnt := table.pages[*id].Val.Length()
+	utils.TransferPageCounter.Add(-int64(cnt))
+	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
 	return
 }
 

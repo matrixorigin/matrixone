@@ -16,6 +16,8 @@ package db
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
 	"path"
 	"sync/atomic"
 	"time"
@@ -246,7 +248,26 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	db.GCManager.Start()
 
+	go debugPrintTransferPageLength(ctx)
+
 	// For debug or test
 	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
 	return
+}
+
+func debugPrintTransferPageLength(ctx context.Context) {
+	logutil.Info("transfer task started")
+	defer logutil.Info("transfer task exit")
+
+	timer := time.NewTicker(time.Second * 5)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			length := utils.TransferPageCounter.Load()
+			mb_size := length * (4 + 24) * 3 / 2 / (1024 * 1024)
+			logutil.Info(fmt.Sprintf("current transfer page length = %d, mb_size = %d", length, mb_size))
+		}
+	}
 }
