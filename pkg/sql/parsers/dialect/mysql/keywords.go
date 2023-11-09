@@ -580,6 +580,8 @@ func init() {
 		"table_number":               TABLE_NUMBER,
 		"table_values":               TABLE_VALUES,
 		"table_size":                 TABLE_SIZE,
+		"cluster_centers":            CLUSTER_CENTERS,
+		"spherical_kmeans":           SPHERICAL_KMEANS,
 		"column_number":              COLUMN_NUMBER,
 		"returns":                    RETURNS,
 		"extension":                  EXTENSION,
