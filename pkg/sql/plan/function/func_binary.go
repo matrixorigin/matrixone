@@ -729,14 +729,20 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 			maxStartTime := time.Date(9999, 12, 31, 23, 59, 59, 0, fromLoc)
 			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
+			minStartTime := time.Date(0001, 1, 1, 0, 0, 0, 0, fromLoc)
+			minEndTime := time.Date(0001, 1, 1, 0, 0, 0, 0, toLoc)
 			startTime := date.ConvertToGoTime(fromLoc)
 			if startTime.After(maxStartTime) { // if startTime > maxTime, return maxTime
 				if err = rs.AppendBytes([]byte(maxStartTime.Format(time.DateTime)), false); err != nil {
 					return err
 				}
-			} else {
+			} else if startTime.Before(minStartTime) { // if startTime < minTime, return minTime
+				if err = rs.AppendBytes([]byte(minStartTime.Format(time.DateTime)), false); err != nil {
+					return err
+				}
+			} else { // if minTime <= startTime <= maxTime
 				endTime := startTime.In(toLoc)
-				if endTime.After(maxEndTime) { // if endTime > maxTime, return startTime
+				if endTime.After(maxEndTime) || endTime.Before(minEndTime) { // if endTime > maxTime or endTime < maxTime, return startTime
 					if err = rs.AppendBytes([]byte(startTime.Format(time.DateTime)), false); err != nil {
 						return err
 					}
