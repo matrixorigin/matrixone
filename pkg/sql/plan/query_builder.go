@@ -1780,6 +1780,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 }
 
 const NameGroupConcat = "group_concat"
+const NameClusterCenters = "cluster_centers"
 
 func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 	windowsSpecList := make([]*plan.Expr, 0, len(bc.aggregates))
@@ -1802,6 +1803,7 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 			if j < len(bc.windows)-1 {
 				j++
 			}
+			// NOTE: no need to include NameClusterCenters
 		} else {
 			windowSpec.OrderBy = nil
 		}
