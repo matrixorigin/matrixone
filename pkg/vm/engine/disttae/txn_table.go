@@ -1711,6 +1711,7 @@ func (tbl *txnTable) newReader(
 		seqnumMp: seqnumMp,
 		typsMap:  mp,
 	}
+	partReader.readerCount.ReplaceTableName(tbl.db.databaseName, tbl.tableName, tbl.tableId)
 
 	//tbl.Lock()
 	proc := tbl.proc.Load()
@@ -1733,7 +1734,9 @@ func (tbl *txnTable) newReader(
 				),
 			)
 		}
-		return []engine.Reader{&mergeReader{readers}}, nil
+		mReader := &mergeReader{rds: readers}
+		mReader.readerCount.Init()
+		return []engine.Reader{mReader}, nil
 	}
 
 	if len(dirtyBlks) < readerNumber-1 {

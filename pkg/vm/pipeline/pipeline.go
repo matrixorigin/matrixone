@@ -16,6 +16,9 @@ package pipeline
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -52,6 +55,17 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 	proc.Ctx = perfcounter.WithCounterSet(proc.Ctx, perfCounterSet)
 	defer func() {
 		_ = perfCounterSet //TODO
+		readCount := r.Count()
+		accountId := defines.GetAccountId(proc.Ctx)
+		//only record rows and bytes
+		tableName := readCount.Table()
+		if accountId == catalog.System_Account &&
+			(tableName == catalog.MO_STATEMENT ||
+				tableName == catalog.MO_TABLES ||
+				tableName == catalog.MO_DATABASE) {
+			v2.GetRowsReadHistogram(readCount.Database(), tableName).Observe(float64(readCount.Rows()))
+			v2.GetBytesReadHistogram(readCount.Database(), tableName).Observe(float64(readCount.Bytes()))
+		}
 	}()
 
 	var bat *batch.Batch
