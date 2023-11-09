@@ -91,8 +91,8 @@ func StatementInfoUpdate(existing, new Item) {
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
 
-	e.mux.Lock()         // Lock before accessing / modifying the structure
-	defer e.mux.Unlock() // Unlock when the function exits
+	e.updateMux.Lock()         // Lock before accessing / modifying the structure
+	defer e.updateMux.Unlock() // Unlock when the function exits
 
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
@@ -199,7 +199,10 @@ type StatementInfo struct {
 	mux sync.Mutex
 	// reported mark reported
 	// set by ReportStatement
-	reported bool
+	reported  bool
+	reportMux sync.Mutex
+
+	updateMux sync.Mutex
 	// exported mark exported
 	// set by FillRow or StatementInfoUpdate
 	exported bool
@@ -552,8 +555,8 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		return nil
 	}
 
-	s.mux.Lock()
-	defer s.mux.Unlock()
+	s.reportMux.Lock()
+	defer s.reportMux.Unlock()
 	s.reported = true
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 DiscardAndFreeL:
