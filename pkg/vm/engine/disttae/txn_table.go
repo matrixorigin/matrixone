@@ -157,25 +157,6 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	return rows, nil
 }
 
-//func (tbl *txnTable) ForeachBlock(
-//	state *logtailreplay.PartitionState,
-//	fn func(block logtailreplay.BlockEntry) error,
-//) (err error) {
-//	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
-//	iter, err := state.NewBlocksIter(ts)
-//	if err != nil {
-//		return err
-//	}
-//	for iter.Next() {
-//		entry := iter.Entry()
-//		if err = fn(entry); err != nil {
-//			break
-//		}
-//	}
-//	iter.Close()
-//	return
-//}
-
 func (tbl *txnTable) ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	fn func(obj logtailreplay.ObjectEntry) error,

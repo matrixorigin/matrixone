@@ -53,31 +53,6 @@ func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 
 var _ ObjectsIter = new(objectsIter)
 
-//func (b *objectsIter) Next() bool {
-//	for {
-//
-//		if !b.firstCalled {
-//			if !b.iter.First() {
-//				return false
-//			}
-//			b.firstCalled = true
-//		} else {
-//			if !b.iter.Next() {
-//				return false
-//			}
-//		}
-//
-//		entry := b.iter.Item()
-//
-//		if !entry.Visible(b.ts) {
-//			// not visible
-//			continue
-//		}
-//
-//		return true
-//	}
-//}
-
 func (b *objectsIter) Next() bool {
 	for {
 

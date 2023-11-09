@@ -51,8 +51,7 @@ type PartitionState struct {
 	// data
 	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	//table data objects
-	dataObjects *btree.BTreeG[ObjectEntry]
-	//TODO::gc
+	dataObjects           *btree.BTreeG[ObjectEntry]
 	dataObjectsByCreateTS *btree.BTreeG[ObjectIndexByCreateTSEntry]
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
@@ -595,16 +594,6 @@ func (p *PartitionState) HandleMetadataInsert(
 				p.blockDeltas.Set(blockEntry)
 			}
 
-			//{
-			//	e := BlockIndexByTSEntry{
-			//		Time:         createTimeVector[i],
-			//		BlockID:      blockID,
-			//		IsDelete:     false,
-			//		IsAppendable: isAppendable,
-			//	}
-			//	p.blockIndexByTS.Set(e)
-			//}
-
 			{
 				scanCnt := int64(0)
 				trunctPoint := memTruncTSVector[i]
@@ -907,6 +896,10 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 
 		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(ts) {
 			p.dataObjects.Delete(objEntry)
+			p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
+				CreateTime:   objEntry.CreateTime,
+				ShortObjName: objEntry.ShortObjName,
+			})
 			if objGced {
 				objsToDelete = fmt.Sprintf("%s, %s", objsToDelete, objEntry.Location().Name().String())
 			} else {
