@@ -18,6 +18,9 @@ extract(SECOND FROM "1999-01-02 10:11:12")
 12
 select extract(MONTH FROM "2001-02-00");
 internal error: invalid input
+select extract(HOUR FROM "2023-11-08 15:00");
+extract(HOUR FROM "2023-11-08 15:00")
+15
 SELECT EXTRACT(QUARTER FROM '2004-01-15') AS quarter;
 quarter
 1

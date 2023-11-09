@@ -8,7 +8,7 @@ require (
 	github.com/FastFilter/xorfilter v0.1.4
 	github.com/K-Phoen/grabana v0.21.19
 	github.com/RoaringBitmap/roaring v1.2.3
-	github.com/aliyun/aliyun-oss-go-sdk v2.2.9+incompatible
+	github.com/aliyun/aliyun-oss-go-sdk v3.0.1+incompatible
 	github.com/aliyun/credentials-go v1.3.1
 	github.com/aws/aws-sdk-go-v2 v1.18.0
 	github.com/aws/aws-sdk-go-v2/config v1.18.25
