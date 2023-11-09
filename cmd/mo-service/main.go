@@ -27,6 +27,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
