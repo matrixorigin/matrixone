@@ -120,6 +120,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 					err := moerr.ConvertPanicError(c.ctx, e)
 					getLogger().Error("panic in merge run run",
 						zap.String("error", err.Error()))
+					errChan <- err
 				}
 				wg.Done()
 			}()
@@ -512,8 +513,6 @@ func (s *Scope) JoinRun(c *Compile) error {
 			probeScope := c.newJoinProbeScope(s, nil)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
-		// this is for shuffle join probe scope
-		s.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, shuffleJoinProbeChannelBufferSize)
 		return s.MergeRun(c)
 	}
 

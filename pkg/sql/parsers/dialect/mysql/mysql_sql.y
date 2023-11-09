@@ -3697,7 +3697,7 @@ drop_index_stmt:
     {
         $$ = &tree.DropIndex{
             Name: tree.Identifier($4.Compare()),
-            TableName: *$6,
+            TableName: $6,
             IfExists: $3,
         }
     }
@@ -5949,7 +5949,7 @@ create_index_stmt:
         }
         $$ = &tree.CreateIndex{
             Name: tree.Identifier($4.Compare()),
-            Table: *$7,
+            Table: $7,
             IndexCat: $2,
             KeyParts: $9,
             IndexOption: io,
