@@ -142,18 +142,20 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 	delTbls []*model.TransDels,
 	blkidx int) (err error) {
 
-	id := dropped.AsCommonID()
-	page := model.NewTransferHashPage(id, time.Now())
-
 	mapping := entry.transMappings.Mappings[blkidx]
 	if len(mapping) == 0 {
 		panic("cannot tranfer empty block")
 	}
-	for srcRow, dst := range mapping {
-		blkid := blks[dst.Idx].ID()
-		page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
+	tblEntry := dropped.GetSegment().GetTable()
+	if tblEntry.GetLastestSchema().HasPK() {
+		id := dropped.AsCommonID()
+		page := model.NewTransferHashPage(id, time.Now())
+		for srcRow, dst := range mapping {
+			blkid := blks[dst.Idx].ID()
+			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
+		}
+		_ = entry.rt.TransferTable.AddPage(page)
 	}
-	_ = entry.rt.TransferTable.AddPage(page)
 
 	dataBlock := dropped.GetBlockData()
 
@@ -165,7 +167,6 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		return nil
 	}
 
-	tblEntry := dropped.GetSegment().GetTable()
 	tblEntry.Stats.Lock()
 	tblEntry.DeletedDirties = append(tblEntry.DeletedDirties, dropped)
 	tblEntry.Stats.Unlock()

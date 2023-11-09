@@ -95,6 +95,9 @@ func NewFlushTableTailEntry(
 
 // add transfer pages for dropped ablocks
 func (entry *flushTableTailEntry) addTransferPages() {
+	if !entry.tableEntry.GetLastestSchema().HasPK() {
+		return
+	}
 	for i, m := range entry.transMappings.Mappings {
 		if len(m) == 0 {
 			continue
