@@ -485,8 +485,8 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	if err := tc.checkStatus(true); err != nil {
-		return err
+	if tc.mu.closed {
+		return nil
 	}
 
 	defer func() {

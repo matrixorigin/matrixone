@@ -43,9 +43,15 @@ select l2_norm(b) from vec_table;
 select vector_dims(b) from vec_table;
 select inner_product(b,"[1,2,3]") from vec_table;
 select cosine_similarity(b,"[1,2,3]") from vec_table;
+select l2_distance(b,"[1,2,3]") from vec_table;
+select cosine_distance(b,"[1,2,3]") from vec_table;
+select normalize_l2(b) from vec_table;
 
 -- top K
 select * FROM vec_table ORDER BY cosine_similarity(b, '[3,1,2]') LIMIT 5;
+select * FROM vec_table ORDER BY l2_distance(b, '[3,1,2]') LIMIT 5;
+select * FROM vec_table ORDER BY inner_product(b, '[3,1,2]') LIMIT 5;
+
 
 -- throw error cases
 select b + "[1,2,3" from vec_table;
