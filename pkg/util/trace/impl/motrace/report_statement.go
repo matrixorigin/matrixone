@@ -90,6 +90,10 @@ func StatementInfoUpdate(existing, new Item) {
 
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
+
+	e.mux.Lock()         // Lock before accessing / modifying the structure
+	defer e.mux.Unlock() // Unlock when the function exits
+
 	// update the stats
 	if GetTracerProvider().enableStmtMerge {
 		e.StmtBuilder.WriteString(";\n")
