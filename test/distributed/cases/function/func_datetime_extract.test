@@ -7,6 +7,7 @@ select extract(DAY_HOUR FROM "1999-01-02 10:11:12");
 select extract(HOUR FROM "1999-01-02 10:11:12");
 select extract(SECOND FROM "1999-01-02 10:11:12");
 select extract(MONTH FROM "2001-02-00");
+select extract(HOUR FROM "2023-11-08 15:00");
 
 
 #SELECT 数据格式
