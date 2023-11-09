@@ -23,11 +23,13 @@ FROM ubuntu:latest
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
+
 # Install some utilities used for debugging or by startup script
 RUN apt-get update && apt-get install -y \
     dnsutils \
     curl \
-&& apt-get clean && rm -rf /var/lib/apt/lists/*
+    git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
 
