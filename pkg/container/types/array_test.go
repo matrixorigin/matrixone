@@ -132,8 +132,8 @@ func TestArrayToString(t *testing.T) {
 		},
 		{
 			name:    "Test4.2 - Float64 with precision issue on Multiply",
-			argsF64: []float64{4635.894*4635.894 + 0.66616553, 2, 3},
-			want:    "[21491513.84540153, 2, 3]",
+			argsF64: []float64{4635.894 * 4635.894, 0.66616553 * 0.66616553, 2, 3},
+			want:    "[21491513.179236, 0.4437765133601809, 2, 3]",
 		},
 	}
 

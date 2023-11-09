@@ -47,7 +47,7 @@ func TestInEpsilonF64(t *testing.T) {
 			name: "Test 3",
 			args: args{
 				want: 2.0,
-				got:  2.00000012,
+				got:  2.00000000000000_9,
 			},
 			want: true,
 		},
@@ -56,6 +56,22 @@ func TestInEpsilonF64(t *testing.T) {
 			args: args{
 				want: 2.0,
 				got:  2.0000011,
+			},
+			want: false,
+		},
+		{
+			name: "Test 4",
+			args: args{
+				want: 1.73205080756887_0,
+				got:  1.73205080756887_9,
+			},
+			want: true,
+		},
+		{
+			name: "Test 5",
+			args: args{
+				want: 1.73205080756880_0,
+				got:  1.73205080756887_0,
 			},
 			want: false,
 		},
@@ -91,7 +107,7 @@ func TestInEpsilonF64Slice(t *testing.T) {
 			name: "Test 2",
 			args: args{
 				want: []float64{4.0},
-				got:  []float64{4.000000111},
+				got:  []float64{4.00000000000000_9},
 			},
 			want: true,
 		},
@@ -135,7 +151,7 @@ func TestInEpsilonF64Slices(t *testing.T) {
 			name: "Test 2",
 			args: args{
 				want: [][]float64{{2.0, 3.0}, {4.0}},
-				got:  [][]float64{{2.0 + 1e-7, 3.0 + defaultEpsilon/2}, {4.0}},
+				got:  [][]float64{{2.0 + 1e-15, 3.0 + defaultEpsilon/2}, {4.0}},
 			},
 			want: true,
 		},

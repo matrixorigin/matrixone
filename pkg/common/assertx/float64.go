@@ -21,9 +21,9 @@ import (
 // Float64 values have minor numerical differences between Apple M2 and Linux EC2,
 // so we use an epsilon value to compare them in UT. We could not use reflect.DeepEqual because
 // of these minor differences. We cannot use assert.InEpsilon because it requires the first
-// argument to be non-zero. 1e-6 epsilon is based on the `strconv.FormatFloat(float64(value), 'f', -1, 32)`
-// we use for outputting float values.
-const defaultEpsilon = 1e-6
+// argument to be non-zero. 1e-14 epsilon is based on the `strconv.FormatFloat(float64(value), 'f', -1, 64)`
+// we use for outputting float64 values.
+const defaultEpsilon = 1e-14
 
 // InEpsilonF64Slices returns true if all the elements in v1 and v2 are within epsilon of each other.
 func InEpsilonF64Slices(want, got [][]float64) bool {
