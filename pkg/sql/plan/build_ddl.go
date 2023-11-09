@@ -1477,6 +1477,7 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef.IndexAlgoParams = params
 		} else {
 			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
