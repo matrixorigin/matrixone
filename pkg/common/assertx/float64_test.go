@@ -28,50 +28,34 @@ func TestInEpsilonF64(t *testing.T) {
 	}{
 
 		{
-			name: "Test 1",
+			name: "Test 1 - difference is epsilon",
 			args: args{
 				want: 2.0,
-				got:  2.0 + defaultEpsilon,
+				got:  2.0 + float64EqualityThreshold,
 			},
 			want: false,
 		},
 		{
-			name: "Test 2",
+			name: "Test 2 - difference is less than epsilon",
 			args: args{
 				want: 2.0,
-				got:  2.0 + defaultEpsilon/2,
+				got:  2.0 + float64EqualityThreshold/2,
 			},
 			want: true,
 		},
 		{
-			name: "Test 3",
+			name: "Test 3 - till 9th digit is same, 10th digit is different",
 			args: args{
-				want: 2.0,
-				got:  2.00000000000000_9,
+				want: 1.732050800_0,
+				got:  1.732050800_9,
 			},
 			want: true,
 		},
 		{
-			name: "Test 4",
+			name: "Test 4 - 9th digit is different",
 			args: args{
-				want: 2.0,
-				got:  2.0000011,
-			},
-			want: false,
-		},
-		{
-			name: "Test 4",
-			args: args{
-				want: 1.7320508075681_0,
-				got:  1.7320508075681_9,
-			},
-			want: true,
-		},
-		{
-			name: "Test 5",
-			args: args{
-				want: 1.732050807568_0,
-				got:  1.732050807568_9,
+				want: 1.73205080_0,
+				got:  1.73205080_9,
 			},
 			want: false,
 		},
@@ -99,23 +83,23 @@ func TestInEpsilonF64Slice(t *testing.T) {
 			name: "Test 1",
 			args: args{
 				want: []float64{2.0, 3.0},
-				got:  []float64{2.0 + defaultEpsilon, 3.0 + defaultEpsilon},
+				got:  []float64{2.0 + float64EqualityThreshold, 3.0 + float64EqualityThreshold},
 			},
 			want: false,
 		},
 		{
 			name: "Test 2",
 			args: args{
-				want: []float64{4.0},
-				got:  []float64{4.00000000000000_9},
+				want: []float64{1.732050800_0},
+				got:  []float64{1.732050800_9},
 			},
 			want: true,
 		},
 		{
 			name: "Test 3",
 			args: args{
-				want: []float64{4.0000000},
-				got:  []float64{4.0000010},
+				want: []float64{1.73205080_0},
+				got:  []float64{1.73205080_9},
 			},
 			want: false,
 		},
@@ -143,7 +127,7 @@ func TestInEpsilonF64Slices(t *testing.T) {
 			name: "Test 1",
 			args: args{
 				want: [][]float64{{2.0, 3.0}, {4.0}},
-				got:  [][]float64{{2.0 + defaultEpsilon, 3.0 + defaultEpsilon}, {4.0}},
+				got:  [][]float64{{2.0 + float64EqualityThreshold, 3.0 + float64EqualityThreshold}, {4.0}},
 			},
 			want: false,
 		},
@@ -151,7 +135,7 @@ func TestInEpsilonF64Slices(t *testing.T) {
 			name: "Test 2",
 			args: args{
 				want: [][]float64{{2.0, 3.0}, {4.0}},
-				got:  [][]float64{{2.0 + 1e-15, 3.0 + defaultEpsilon/2}, {4.0}},
+				got:  [][]float64{{2.0 + 1e-1*float64EqualityThreshold, 3.0 + float64EqualityThreshold/2}, {4.0}},
 			},
 			want: true,
 		},
