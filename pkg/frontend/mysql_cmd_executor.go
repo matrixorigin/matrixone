@@ -2588,7 +2588,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	ses.SetQueryStart(time.Now())
 	ses.SetQueryInExecute(true)
-	defer ses.SetQueryInExecute(false)
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
