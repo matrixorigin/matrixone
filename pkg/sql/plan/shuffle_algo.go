@@ -144,6 +144,13 @@ func (s *ShuffleRange) Eval(k int) {
 	last := step
 	k -= 2
 	for {
+		if Head == nil {
+			for k >= 0 {
+				s.Result[k] = 0
+				k--
+			}
+			break
+		}
 		size := float64(Head.size)
 		if last > size {
 			last -= size
@@ -154,8 +161,8 @@ func (s *ShuffleRange) Eval(k int) {
 		var speed float64
 		now := Head.tree.key
 		for last <= size {
-			if valuetree == nil || (Head != nil && valuetree.key < Head.tree.key) {
-				if Head == nil {
+			if valuetree == nil || (Head.tree != nil && valuetree.key < Head.tree.key) {
+				if Head.tree == nil {
 					s.Result[k] = now
 					k--
 					last = step
