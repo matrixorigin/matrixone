@@ -58,12 +58,13 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		readCount := r.Count()
 		accountId := defines.GetAccountId(proc.Ctx)
 		//only record rows and bytes
+		tableName := readCount.Table()
 		if accountId == catalog.System_Account &&
-			(readCount.Table() == catalog.MO_STATEMENT ||
-				readCount.Table() == catalog.MO_TABLES ||
-				readCount.Table() == catalog.MO_DATABASE) {
-			v2.GetRowsReadHistogram(readCount.Database(), readCount.Table()).Observe(float64(readCount.Rows()))
-			v2.GetBytesReadHistogram(readCount.Database(), readCount.Table()).Observe(float64(readCount.Bytes()))
+			(tableName == catalog.MO_STATEMENT ||
+				tableName == catalog.MO_TABLES ||
+				tableName == catalog.MO_DATABASE) {
+			v2.GetRowsReadHistogram(readCount.Database(), tableName).Observe(float64(readCount.Rows()))
+			v2.GetBytesReadHistogram(readCount.Database(), tableName).Observe(float64(readCount.Bytes()))
 		}
 	}()
 
