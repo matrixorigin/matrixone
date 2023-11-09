@@ -184,6 +184,10 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 
 }
 
+func (t *TableReader) Count(context.Context) (engine.ReaderCount, error) {
+	return engine.ReaderCount{}, nil
+}
+
 func (t *TableReader) Close() error {
 	if t == nil {
 		return nil

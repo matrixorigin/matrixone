@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -618,9 +619,18 @@ type Relation interface {
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
 }
 
+type ReaderCount struct {
+	DbName    string
+	TableName string
+	TableId   uint64
+	RowsRead  atomic.Uint64
+	BytesRead atomic.Uint64
+}
+
 type Reader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)
+	Count(context.Context) (ReaderCount, error)
 }
 
 type Database interface {

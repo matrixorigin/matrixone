@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -248,6 +247,9 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 // -----------------------------------------------------------------
 // ------------------------ emptyReader ----------------------------
 // -----------------------------------------------------------------
+func (r *emptyReader) Count(context.Context) (engine.ReaderCount, error) {
+	return engine.ReaderCount{}, nil
+}
 
 func (r *emptyReader) Close() error {
 	return nil
@@ -283,6 +285,10 @@ func newBlockReader(
 	}
 	r.filterState.expr = filterExpr
 	return r
+}
+
+func (r *blockReader) Count(context.Context) (engine.ReaderCount, error) {
+	return engine.ReaderCount{}, nil
 }
 
 func (r *blockReader) Close() error {
@@ -551,6 +557,22 @@ func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return &mergeReader{
 		rds: readers,
 	}
+}
+
+func (r *mergeReader) Count(ctx context.Context) (engine.ReaderCount, error) {
+	ret := engine.ReaderCount{}
+	for _, rd := range r.rds {
+		rc, err := rd.Count(ctx)
+		if err != nil {
+			return engine.ReaderCount{}, err
+		}
+		ret.DbName = rc.DbName
+		ret.TableId = rc.TableId
+		ret.TableName = rc.TableName
+		ret.RowsRead.Add(rc.RowsRead.Load())
+		ret.BytesRead.Add(rc.BytesRead.Load())
+	}
+	return ret, nil
 }
 
 func (r *mergeReader) Close() error {

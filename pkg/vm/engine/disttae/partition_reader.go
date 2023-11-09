@@ -41,9 +41,14 @@ type PartitionReader struct {
 	iter     logtailreplay.RowsIter
 	seqnumMp map[string]int
 	typsMap  map[string]types.Type
+	readerCount engine.ReaderCount
 }
 
 var _ engine.Reader = new(PartitionReader)
+
+func (p *PartitionReader) Count(ctx context.Context) (engine.ReaderCount, error) {
+	return engine.ReaderCount{}, nil
+}
 
 func (p *PartitionReader) Close() error {
 	//p.withFilterMixin.reset()
@@ -226,6 +231,7 @@ func (p *PartitionReader) Read(
 			return nil, nil
 		}
 		b.SetRowCount(rows)
+		p.readerCount.RowsRead.Add(uint64(rows))
 
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
