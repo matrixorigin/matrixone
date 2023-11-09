@@ -44,7 +44,7 @@ type Argument struct {
 	children []vm.Operator
 	buf      *batch.Batch
 
-	generateSeries generateSeriesArg
+	generateSeries *generateSeriesArg
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
