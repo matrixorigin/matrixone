@@ -62,16 +62,16 @@ func TestInEpsilonF64(t *testing.T) {
 		{
 			name: "Test 4",
 			args: args{
-				want: 1.73205080756887_0,
-				got:  1.73205080756887_9,
+				want: 1.7320508075681_0,
+				got:  1.7320508075681_9,
 			},
 			want: true,
 		},
 		{
 			name: "Test 5",
 			args: args{
-				want: 1.73205080756880_0,
-				got:  1.73205080756887_0,
+				want: 1.732050807568_0,
+				got:  1.732050807568_9,
 			},
 			want: false,
 		},

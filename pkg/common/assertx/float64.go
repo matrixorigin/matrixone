@@ -15,15 +15,20 @@
 package assertx
 
 import (
+	"fmt"
 	"math"
 )
 
 // Float64 values have minor numerical differences between Apple M2 and Linux EC2,
 // so we use an epsilon value to compare them in UT. We could not use reflect.DeepEqual because
 // of these minor differences. We cannot use assert.InEpsilon because it requires the first
-// argument to be non-zero. 1e-14 epsilon is based on the `strconv.FormatFloat(float64(value), 'f', -1, 64)`
-// we use for outputting float64 values.
-const defaultEpsilon = 1e-14
+// argument to be non-zero.
+//
+// The epsilon 1e-13 epsilon is based on the following observation:
+//   - `strconv.FormatFloat(float64(value), 'f', -1, 64)` we use for outputting float64 values.
+//   - precision difference between Apple M2 and Linux EC2 float64 results (approx 1e-13)
+//   - gonums tolerance : https://github.com/gonum/gonum/blob/db43f45c2b4c4da9b72fac77c6921c62c0fb0b77/lapack/testlapack/dgetri.go#L22
+const defaultEpsilon = 1e-13
 
 // InEpsilonF64Slices returns true if all the elements in v1 and v2 are within epsilon of each other.
 func InEpsilonF64Slices(want, got [][]float64) bool {
@@ -57,5 +62,6 @@ func InEpsilonF64Slice(want, got []float64) bool {
 // InEpsilonF64 returns true if v1 and v2 are within epsilon of each other.
 // assert.InEpsilon requires v1 to be non-zero.
 func InEpsilonF64(want, got float64) bool {
+	fmt.Printf("%v\n", math.Abs(want-got))
 	return want == got || math.Abs(want-got) < defaultEpsilon || (math.IsNaN(want) && math.IsNaN(got))
 }
