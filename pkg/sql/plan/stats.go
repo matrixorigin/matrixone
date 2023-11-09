@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -122,7 +121,6 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tableDef *plan.TableDef, s *StatsInfoMap) {
-	logutil.Debugf("need to update statsCache for table %v", tableDef.Name)
 	s.ObjectNumber = numObjs
 	s.BlockNumber = numBlks
 	s.TableCnt = info.TableCnt

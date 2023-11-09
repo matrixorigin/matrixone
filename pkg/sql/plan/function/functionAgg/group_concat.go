@@ -152,7 +152,7 @@ func (s *sAggGroupConcat) MarshalBinary() ([]byte, error) {
 func (s *sAggGroupConcat) UnmarshalBinary(data []byte) error {
 
 	// 1. separator length
-	separatorLen := uint8(types.DecodeUint64(data[:8]))
+	separatorLen := types.DecodeUint64(data[:8])
 	data = data[8:]
 
 	// 2. separator
