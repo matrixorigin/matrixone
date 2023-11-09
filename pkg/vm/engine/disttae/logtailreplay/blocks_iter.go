@@ -82,18 +82,18 @@ func (b *objectsIter) Next() bool {
 	for {
 
 		if !b.firstCalled {
-			if !b.iter.Seek(ObjectIndexByCreateTSEntry{
-				CreateTime: b.ts.Next(),
-			}) {
-				return false
-			}
-			//if !b.iter.First() {
+			//if !b.iter.Seek(ObjectIndexByCreateTSEntry{
+			//	CreateTime: b.ts.Next(),
+			//}) {
 			//	return false
 			//}
+			if !b.iter.First() {
+				return false
+			}
 			b.firstCalled = true
 		} else {
-			if !b.iter.Prev() {
-				//if !b.iter.Next() {
+			//if !b.iter.Prev() {
+			if !b.iter.Next() {
 				return false
 			}
 		}
@@ -162,19 +162,19 @@ func (b *dirtyBlocksIter) Close() error {
 	return nil
 }
 
-// GetChangedBlocksBetween get changed blocks between two timestamps
-func (p *PartitionState) GetChangedBlocksBetween(
+// GetChangedObjsBetween get changed objects between [begin, end]
+func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,
 ) (
-	deleted []types.Blockid,
-	inserted []types.Blockid,
+	deleted []objectio.ObjectNameShort,
+	inserted []objectio.ObjectNameShort,
 ) {
 
-	iter := p.blockIndexByTS.Copy().Iter()
+	iter := p.objectIndexByTS.Copy().Iter()
 	defer iter.Release()
 
-	for ok := iter.Seek(BlockIndexByTSEntry{
+	for ok := iter.Seek(ObjectIndexByTSEntry{
 		Time: begin,
 	}); ok; ok = iter.Next() {
 		entry := iter.Item()
@@ -184,10 +184,10 @@ func (p *PartitionState) GetChangedBlocksBetween(
 		}
 
 		if entry.IsDelete {
-			deleted = append(deleted, entry.BlockID)
+			deleted = append(deleted, entry.ShortObjName)
 		} else {
 			if !entry.IsAppendable {
-				inserted = append(inserted, entry.BlockID)
+				inserted = append(inserted, entry.ShortObjName)
 			}
 		}
 
@@ -221,14 +221,14 @@ func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 	return false
 }
 
-func (p *PartitionState) GetObject(blockID types.Blockid) (ObjectEntry, bool) {
+func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
 	iter := p.dataObjects.Copy().Iter()
 	defer iter.Release()
 
 	if ok := iter.Seek(ObjectEntry{
-		ShortObjName: *objectio.ShortName(&blockID),
+		ShortObjName: name,
 	}); ok {
-		return iter.Item(), true
+		return *iter.Item().ObjectInfo, true
 	}
-	return ObjectEntry{}, false
+	return ObjectInfo{}, false
 }
