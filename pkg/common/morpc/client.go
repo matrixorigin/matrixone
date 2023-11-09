@@ -271,7 +271,7 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 	}
 	defer func() {
 		n := 0
-		for backends := range c.mu.backends {
+		for _, backends := range c.mu.backends {
 			n += len(backends)
 		}
 		c.metrics.poolSizeGauge.Set(float64(n))

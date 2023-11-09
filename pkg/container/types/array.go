@@ -16,9 +16,9 @@ package types
 
 import (
 	"bytes"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -45,7 +45,9 @@ func ArrayToString[T RealNumbers](input []T) string {
 		if i > 0 {
 			_, _ = io.WriteString(&buffer, ", ")
 		}
-		_, _ = io.WriteString(&buffer, fmt.Sprintf("%v", value))
+
+		// following the same logic of float32 and float64 from result_set.go
+		_, _ = io.WriteString(&buffer, strconv.FormatFloat(float64(value), 'f', -1, 32))
 	}
 	_, _ = io.WriteString(&buffer, "]")
 	return buffer.String()

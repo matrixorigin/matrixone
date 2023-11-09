@@ -265,7 +265,7 @@ col3    INT(32)    YES        null
 col4    BIGINT(64)    YES        null        
 show columns from foreign02;
 Field    Type    Null    Key    Default    Extra    Comment
-colnewcolumn    INT(32)    YES        null        
+colnewcolumn    INT(32)    YES    MUL    null        
 col3    INT(32)    NO    PRI    null        
 col2new    DOUBLE(0)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
@@ -328,7 +328,7 @@ a    bnew    c    d
 show columns from index01;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    UNI    null        
-bnew    CHAR(10)    YES        null        
+bnew    CHAR(10)    YES    UNI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
@@ -370,8 +370,8 @@ index02    0    PRIMARY    1    a    A    0    NULL    NULL                    Y
 show columns from index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-bnewnew    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+bnewnew    CHAR(10)    YES    MUL    null        
+c    DATE(0)    YES    MUL    null        
 d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable

@@ -1896,6 +1896,7 @@ func (data *CheckpointData) PrefetchFrom(
 	dataType := vector.MustFixedCol[uint16](data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
 	var pref blockio.PrefetchParams
 	locations := make(map[string][]blockIdx)
+	checkpointSize := uint64(0)
 	for i := 0; i < len(blocks); i++ {
 		location := objectio.Location(blocks[i])
 		if location.IsEmpty() {
@@ -1912,6 +1913,11 @@ func (data *CheckpointData) PrefetchFrom(
 		if err != nil {
 			return
 		}
+		checkpointSize += uint64(blockIdxes[0].location.Extent().End())
+		logutil.Info("prefetch-read-checkpoint", common.OperationField("prefetch read"),
+			common.OperandField("checkpoint"),
+			common.AnyField("location", blockIdxes[0].location.String()),
+			common.AnyField("size", checkpointSize))
 		for _, idx := range blockIdxes {
 			schema := checkpointDataReferVersions[version][idx.dataType]
 			idxes := make([]uint16, len(schema.attrs))
@@ -1925,6 +1931,9 @@ func (data *CheckpointData) PrefetchFrom(
 			logutil.Warnf("PrefetchFrom PrefetchWithMerged error %v", err)
 		}
 	}
+	logutil.Info("prefetch-checkpoint",
+		common.AnyField("size", checkpointSize),
+		common.AnyField("count", len(locations)))
 	return
 }
 
@@ -1972,6 +1981,52 @@ func (data *CheckpointData) ReadFrom(
 	}
 
 	return
+}
+
+// LoadSpecifiedCkpBatch loads a specified checkpoint data batch
+func LoadSpecifiedCkpBatch(
+	ctx context.Context, location objectio.Location,
+	fs fileservice.FileService, version uint32, batchIdx uint16) (data *CheckpointData, err error) {
+	data = NewCheckpointData()
+	defer func() {
+		if err != nil {
+			data.Close()
+			data = nil
+		}
+	}()
+
+	if batchIdx >= MaxIDX {
+		err = moerr.NewInvalidArgNoCtx("out of bound batchIdx", batchIdx)
+		return
+	}
+	var reader *blockio.BlockReader
+	if reader, err = blockio.NewObjectReader(fs, location); err != nil {
+		return
+	}
+
+	if err = data.readMetaBatch(ctx, version, reader, nil); err != nil {
+		return
+	}
+
+	data.replayMetaBatch()
+	for _, val := range data.locations {
+		if reader, err = blockio.NewObjectReader(fs, val); err != nil {
+			return
+		}
+		var bats []*containers.Batch
+		item := checkpointDataReferVersions[version][batchIdx]
+		if bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, batchIdx, reader); err != nil {
+			return
+		}
+
+		for i := range bats {
+			if err = data.bats[batchIdx].Append(bats[i]); err != nil {
+				return
+			}
+		}
+	}
+
+	return data, nil
 }
 
 func (data *CheckpointData) readMetaBatch(
@@ -2043,6 +2098,8 @@ func (data *CheckpointData) readAll(
 	service fileservice.FileService,
 ) (err error) {
 	data.replayMetaBatch()
+	checkpointDataSize := uint64(0)
+	readDuration := time.Now()
 	for _, val := range data.locations {
 		var reader *blockio.BlockReader
 		reader, err = blockio.NewObjectReader(service, val)
@@ -2050,6 +2107,7 @@ func (data *CheckpointData) readAll(
 			return
 		}
 		var bats []*containers.Batch
+		now := time.Now()
 		for idx := range checkpointDataReferVersions[version] {
 			if uint16(idx) == MetaIDX || uint16(idx) == TNMetaIDX {
 				continue
@@ -2160,7 +2218,17 @@ func (data *CheckpointData) readAll(
 				data.bats[idx].Append(bats[i])
 			}
 		}
+		logutil.Info("read-checkpoint", common.OperationField("read"),
+			common.OperandField("checkpoint"),
+			common.AnyField("location", val.String()),
+			common.AnyField("size", val.Extent().End()),
+			common.AnyField("read cost", time.Since(now)))
+		checkpointDataSize += uint64(val.Extent().End())
 	}
+	logutil.Info("read-all", common.OperationField("read"),
+		common.OperandField("checkpoint"),
+		common.AnyField("size", checkpointDataSize),
+		common.AnyField("duration", time.Since(readDuration)))
 	return
 }
 
