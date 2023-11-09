@@ -90,6 +90,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // CnServerMessageHandler is responsible for processing the cn-client message received at cn-server.
@@ -309,7 +310,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	s.Instructions = append(s.Instructions, lastInstruction)
 
 	// encode the process related information
-	pData, errEncodeProc := encodeProcessInfo(s.Proc)
+	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
 	if errEncodeProc != nil {
 		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
@@ -368,10 +369,14 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 }
 
 // encodeProcessInfo get needed information from proc, and do serialization work.
-func encodeProcessInfo(proc *process.Process) ([]byte, error) {
+func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 	procInfo := &pipeline.ProcessInfo{}
+	if len(proc.AnalInfos) == 0 {
+		getLogger().Fatal("empty plan", zap.String("sql", sql))
+	}
 	{
 		procInfo.Id = proc.Id
+		procInfo.Sql = sql
 		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
 		procInfo.UnixTime = proc.UnixTime
 		procInfo.AccountId = defines.GetAccountId(proc.Ctx)

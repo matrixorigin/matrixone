@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -403,6 +404,9 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	err := procInfo.Unmarshal(data)
 	if err != nil {
 		return processHelper{}, err
+	}
+	if len(procInfo.GetAnalysisNodeList()) == 0 {
+		getLogger().Fatal("empty plan", zap.String("sql", procInfo.Sql))
 	}
 
 	result := processHelper{

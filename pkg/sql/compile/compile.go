@@ -3008,6 +3008,9 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
+	if len(qry.Nodes) == 0 {
+		getLogger().Fatal("empty plan", zap.String("sql", c.sql))
+	}
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
 		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)
