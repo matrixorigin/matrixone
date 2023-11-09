@@ -83,7 +83,7 @@ func (h *heapBuilder[T]) finish() []T {
 	return ret
 }
 
-func estimateMergeConsume(msegs []*catalog.SegmentEntry) (merged, origSize, estSize int) {
+func estimateMergeConsume(msegs []*catalog.SegmentEntry) (origSize, estSize int) {
 	if len(msegs) == 0 {
 		return
 	}
