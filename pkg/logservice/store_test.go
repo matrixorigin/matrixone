@@ -378,13 +378,25 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		_, err = store.addCNStoreHeartbeat(ctx, cmd)
 		assert.NoError(t, err)
 
-		// waiting the background taskSchedule operation
-		// schedule task we created to CN node
-		time.Sleep(time.Millisecond * 200)
+		ticker := time.NewTicker(time.Millisecond * 100)
+		defer ticker.Stop()
+		timeout := time.NewTimer(time.Second * 10)
+		defer timeout.Stop()
 
-		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
-		assert.NoError(t, err)
-		assert.Equal(t, 1, len(tasks))
+		for {
+			select {
+			case <-ticker.C:
+				tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
+				assert.NoError(t, err)
+				if len(tasks) == 1 {
+					return
+				}
+
+			case <-timeout.C:
+				panic("task schedule timeout")
+			}
+		}
+
 	}
 
 	runHakeeperTaskServiceTest(t, fn)

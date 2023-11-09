@@ -339,7 +339,11 @@ const (
 	L2_NORM // L2 NORMALIZATION
 	INNER_PRODUCT
 	COSINE_SIMILARITY
-	VECTOR_DIMS //VECTOR DIMENSIONS
+	VECTOR_DIMS     //VECTOR DIMENSIONS
+	NORMALIZE_L2    //NORMALIZE L2
+	L2_DISTANCE     //L2_DISTANCE
+	COSINE_DISTANCE //COSINE_DISTANCE
+	CLUSTER_CENTERS // CLUSTER_CENTERS
 
 	PYTHON_UDF
 
@@ -413,6 +417,7 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"cluster_centers":       CLUSTER_CENTERS,
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
@@ -605,6 +610,9 @@ var functionIdRegister = map[string]int32{
 	"inner_product":     INNER_PRODUCT,
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
+	"normalize_l2":      NORMALIZE_L2,
+	"l2_distance":       L2_DISTANCE,
+	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,
 }
