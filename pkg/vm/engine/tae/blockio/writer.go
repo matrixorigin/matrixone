@@ -157,6 +157,9 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 			common.OperandField("[Size=0]"), common.OperandField(w.writer.GetSeqnums()))
 		return blocks, objectio.Extent{}, err
 	}
+
+	//w.writer.ConstructObjDescription()
+
 	logutil.Debug("[WriteEnd]",
 		common.OperationField(w.String(blocks)),
 		common.OperandField(w.writer.GetSeqnums()),

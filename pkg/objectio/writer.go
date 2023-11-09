@@ -45,6 +45,8 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
+
+	objDescription *ObjectDescription
 }
 
 type blockData struct {
@@ -52,6 +54,38 @@ type blockData struct {
 	seqnums     *Seqnums
 	data        [][]byte
 	bloomFilter []byte
+}
+
+type ObjectDescription struct {
+	zoneMaps map[uint16]ZoneMap
+	blkCnt   int
+	location Location
+}
+
+func newObjectDescription() *ObjectDescription {
+	description := new(ObjectDescription)
+	description.zoneMaps = make(map[uint16]ZoneMap)
+	return description
+}
+
+func (des *ObjectDescription) GetOriginSize() uint32 {
+	return des.location.Extent().OriginSize()
+}
+
+func (des *ObjectDescription) GetCompSize() uint32 {
+	return des.location.Extent().Length()
+}
+
+func (des *ObjectDescription) GetObjLoc() Location {
+	return des.location
+}
+
+func (des *ObjectDescription) GetBlkCnt() int {
+	return des.blkCnt
+}
+
+func (des *ObjectDescription) GetZoneMaps() map[uint16]ZoneMap {
+	return des.zoneMaps
 }
 
 type WriterType int8
@@ -97,18 +131,27 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	fileName := name.String()
 	object := NewObject(fileName, fs)
 	writer := &objectWriterV1{
-		schemaVer: schemaVersion,
-		seqnums:   NewSeqnums(seqnums),
-		fileName:  fileName,
-		name:      name,
-		object:    object,
-		buffer:    NewObjectBuffer(fileName),
-		blocks:    make([][]blockData, 2),
-		lastId:    0,
+		schemaVer:      schemaVersion,
+		seqnums:        NewSeqnums(seqnums),
+		fileName:       fileName,
+		name:           name,
+		object:         object,
+		buffer:         NewObjectBuffer(fileName),
+		blocks:         make([][]blockData, 2),
+		lastId:         0,
+		objDescription: newObjectDescription(),
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
 	return writer, nil
+}
+
+func (w *objectWriterV1) ConstructObjDescription(typ DataMetaType) {
+	w.objDescription.blkCnt = len(w.blocks[typ])
+	w.objDescription.location = BuildLocation(w.name, w.blocks[typ][0].meta.GetExtent(), 0, 0)
+	for i := uint16(0); i <= w.GetMaxSeqnum(); i++ {
+		w.objDescription.zoneMaps[i] = w.colmeta[i].ZoneMap()
+	}
 }
 
 func (w *objectWriterV1) GetSeqnums() []uint16 {
