@@ -153,13 +153,19 @@ func (s *ShuffleRange) Eval(k int) {
 		var valuetree *shuffleHeap
 		var speed float64
 		now := Head.tree.key
-		for last <= size-1e-12 {
-			if valuetree == nil || (Head.tree != nil && valuetree.key < Head.tree.key) {
+		for last <= size {
+			if valuetree == nil || (Head != nil && valuetree.key < Head.tree.key) {
+				if Head == nil {
+					s.Result[k] = now
+					k--
+					last = step
+					break
+				}
 				Head.tree, key, value = Head.tree.Pop()
 				delta := speed * (now - key)
 				last -= delta
 				size -= delta
-				for last < 0 {
+				for last <= 0 {
 					s.Result[k] = key - (last/delta)*(now-key)
 					last += step
 					k--
