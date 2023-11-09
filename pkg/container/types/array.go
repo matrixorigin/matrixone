@@ -26,7 +26,8 @@ import (
 // array is used to avoid potential conflicts with the already existing vector class from vectorized execution engine.
 
 const (
-	MaxArrayDimension = 65536
+	MaxArrayDimension        = 65536
+	DefaultArraysToStringSep = " "
 )
 
 // BytesToArray bytes should be of little-endian format
@@ -61,12 +62,12 @@ func ArrayToString[T RealNumbers](input []T) string {
 	return buffer.String()
 }
 
-func ArraysToString[T RealNumbers](input [][]T) string {
+func ArraysToString[T RealNumbers](input [][]T, sep string) string {
 	strValues := make([]string, len(input))
 	for i, row := range input {
 		strValues[i] = ArrayToString[T](row)
 	}
-	return strings.Join(strValues, " ")
+	return strings.Join(strValues, sep)
 }
 
 func StringToArray[T RealNumbers](str string) ([]T, error) {

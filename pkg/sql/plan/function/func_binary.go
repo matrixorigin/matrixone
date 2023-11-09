@@ -702,34 +702,49 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		fromTz, null2 := fromTzs.GetStrValue(i)
 		toTz, null3 := toTzs.GetStrValue(i)
 
-		if fromTz == nil || toTz == nil {
-			return moerr.NewInvalidArg(proc.Ctx, "ConvertTz", "date zone is empty")
-		}
-
 		if null1 || null2 || null3 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			fromLoc, err := time.LoadLocation(string(fromTz))
-			if err != nil && fromTz[0] != '+' && fromTz[0] != '-' {
+			return nil
+		} else if len(fromTz) == 0 || len(toTz) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			// convert from timezone offset to location
-			if fromTz[0] == '+' || fromTz[0] == '-' {
-				offset, err := parseOffset(string(fromTz))
-				if err != nil {
+			return nil
+		} else {
+			fromLoc := convertTimezone(string(fromTz))
+			if fromLoc == nil {
+				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-				fromLoc = time.FixedZone("GMT", int(offset.Seconds()))
+				return nil
 			}
-
-			str, err := convertTimezone(date.ConvertToGoTime(fromLoc), string(toTz))
-			if err != nil {
-				return err
+			toLoc := convertTimezone(string(toTz))
+			if toLoc == nil {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				return nil
 			}
-			if err = rs.AppendBytes([]byte(str), false); err != nil {
-				return err
+			maxTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
+			startTime := date.ConvertToGoTime(fromLoc)
+			if startTime.After(maxTime) { // if startTime > maxTime, return maxTime
+				if err = rs.AppendBytes([]byte(maxTime.Format(time.DateTime)), false); err != nil {
+					return err
+				}
+			} else {
+				endTime := startTime.In(toLoc)
+				if endTime.After(maxEndTime) { // if endTime > maxTime, return startTime
+					if err = rs.AppendBytes([]byte(startTime.Format(time.DateTime)), false); err != nil {
+						return err
+					}
+				} else {
+					if err = rs.AppendBytes([]byte(endTime.Format(time.DateTime)), false); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
@@ -737,40 +752,33 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return nil
 }
 
-func convertTimezone(t time.Time, toTz string) (string, error) {
-	toLoc, err := time.LoadLocation(toTz)
-	if err != nil && toTz[0] != '+' && toTz[0] != '-' {
-		return "", err
+func convertTimezone(tz string) *time.Location {
+	loc, err := time.LoadLocation(tz)
+	if err != nil && tz[0] != '+' && tz[0] != '-' {
+		return nil
 	}
 	// convert from timezone offset to location
-	if toTz[0] == '+' || toTz[0] == '-' {
-		offset, err := parseOffset(toTz)
-		if err != nil {
-			return "", err
+	if tz[0] == '+' || tz[0] == '-' {
+		parts := strings.Split(tz, ":")
+		if len(parts) != 2 {
+			return nil
 		}
-		toLoc = time.FixedZone("GMT", int(offset.Seconds()))
+		hours, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return nil
+		} else if hours < -13 || hours > 14 { // timezone should be in [-13, 14]
+			return nil
+		}
+		minutes, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return nil
+		}
+
+		offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+		loc = time.FixedZone("GMT", int(offset.Seconds()))
 	}
 
-	convertedTime := t.In(toLoc)
-	return convertedTime.Format("2006-01-02 15:04:05"), nil
-}
-
-func parseOffset(offsetStr string) (time.Duration, error) {
-	parts := strings.Split(offsetStr, ":")
-	if len(parts) != 2 {
-		return 0, moerr.NewInvalidTzNoCtx(offsetStr)
-	}
-	hours, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, moerr.NewInvalidTzNoCtx(offsetStr)
-	}
-	minutes, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, moerr.NewInvalidTzNoCtx(offsetStr)
-	}
-
-	offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
-	return offset, nil
+	return loc
 }
 
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
@@ -2648,5 +2656,21 @@ func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result v
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
 		return moarray.CosineSimilarity[T](_v1, _v2)
+	})
+}
+
+func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.L2Distance[T](_v1, _v2)
+	})
+}
+
+func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.CosineDistance[T](_v1, _v2)
 	})
 }

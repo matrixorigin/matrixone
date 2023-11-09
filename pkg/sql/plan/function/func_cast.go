@@ -4071,7 +4071,10 @@ func ArrayToArray[I types.RealNumbers, O types.RealNumbers](
 		} else {
 			// Eg:- VECF32(3) --> VECF64(3)
 			_v := types.BytesToArray[I](v)
-			cast := moarray.Cast[I, O](_v)
+			cast, err := moarray.Cast[I, O](_v)
+			if err != nil {
+				return err
+			}
 			bytes := types.ArrayToBytes[O](cast)
 			if err := to.AppendBytes(bytes, false); err != nil {
 				return err
