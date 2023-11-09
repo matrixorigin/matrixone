@@ -550,13 +550,16 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 			goto DiscardAndFreeL
 		}
 	}
-
+	if s.reported {
+		return nil
+	}
+	s.reportMux.Lock()
+	defer s.reportMux.Unlock()
+	// check twice in case it has been reported already
 	if s.reported {
 		return nil
 	}
 
-	s.reportMux.Lock()
-	defer s.reportMux.Unlock()
 	s.reported = true
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 DiscardAndFreeL:
