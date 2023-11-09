@@ -233,8 +233,7 @@ func (p *PartitionReader) Read(
 			return nil, nil
 		}
 		b.SetRowCount(rows)
-		p.readerCount.RowsRead.Add(uint64(rows))
-		p.readerCount.BytesRead.Add(uint64(b.Size()))
+		p.readerCount.AddRows(uint64(rows), uint64(b.Size()))
 
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(

@@ -371,8 +371,7 @@ func (r *blockReader) Read(
 	}
 
 	bat.SetAttributes(cols)
-	r.readerCount.RowsRead.Add(uint64(bat.RowCount()))
-	r.readerCount.BytesRead.Add(uint64(bat.Size()))
+	r.readerCount.AddRows(uint64(bat.RowCount()), uint64(bat.Size()))
 
 	if blockInfo.Sorted && r.columns.indexOfFirstSortedColumn != -1 {
 		bat.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
