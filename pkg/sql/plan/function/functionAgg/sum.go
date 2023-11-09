@@ -96,6 +96,9 @@ type sAggSum[Input numeric, Output numeric] struct{}
 type sAggDecimal64Sum struct{}
 type sAggDecimal128Sum struct{}
 
+func (s *sAggSum[Input, Output]) Dup() agg.AggStruct {
+	return &sAggSum[Input, Output]{}
+}
 func (s *sAggSum[Input, Output]) Grows(_ int)         {}
 func (s *sAggSum[Input, Output]) Free(_ *mpool.MPool) {}
 func (s *sAggSum[Input, Output]) Fill(groupNumber int64, value Input, lastResult Output, count int64, isEmpty bool, isNull bool) (Output, bool, error) {
@@ -119,6 +122,9 @@ func (s *sAggSum[Input, Output]) Eval(lastResult []Output) ([]Output, error) {
 func (s *sAggSum[Input, Output]) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggSum[Input, Output]) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggDecimal64Sum) Dup() agg.AggStruct {
+	return &sAggDecimal64Sum{}
+}
 func (s *sAggDecimal64Sum) Grows(_ int)         {}
 func (s *sAggDecimal64Sum) Free(_ *mpool.MPool) {}
 func (s *sAggDecimal64Sum) Fill(groupNumber int64, value types.Decimal64, lastResult types.Decimal64, count int64, isEmpty bool, isNull bool) (types.Decimal64, bool, error) {
@@ -181,6 +187,9 @@ func (s *sAggDecimal64Sum) Eval(lastResult []types.Decimal64) ([]types.Decimal64
 func (s *sAggDecimal64Sum) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggDecimal64Sum) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggDecimal128Sum) Dup() agg.AggStruct {
+	return &sAggDecimal128Sum{}
+}
 func (s *sAggDecimal128Sum) Grows(_ int)         {}
 func (s *sAggDecimal128Sum) Free(_ *mpool.MPool) {}
 func (s *sAggDecimal128Sum) Fill(groupNumber int64, value types.Decimal128, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {

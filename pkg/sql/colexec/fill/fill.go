@@ -17,21 +17,23 @@ package fill
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("fill")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	ctr := ap.ctr
 	ctr.InitReceiver(proc, true)
@@ -51,7 +53,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	switch ap.FillType {
 	case plan.Node_VALUE:
 		b := batch.NewWithSize(1)
-		b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+		b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 		batch.SetLength(b, 1)
 		ctr.valVecs = make([]*vector.Vector, len(ap.FillVal))
 		for i, val := range ap.FillVal {
@@ -91,14 +93,13 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
-	ctr := ap.ctr
+	ctr := arg.ctr
 
-	return ctr.process(ctr, ap, proc, anal)
+	return ctr.process(ctr, arg, proc, anal)
 }
 
 func resetColRef(expr *plan.Expr, idx int) {
@@ -114,39 +115,44 @@ func resetColRef(expr *plan.Expr, idx int) {
 	}
 }
 
-func processValue(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (process.ExecStatus, error) {
+func processValue(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	var bat *batch.Batch
-	bat, _, err = ctr.ReceiveFromAllRegs(anal)
-	if err != nil {
-		return process.ExecNext, err
+	result := vm.NewCallResult()
+	if ctr.buf != nil {
+		proc.PutBatch(ctr.buf)
+		ctr.buf = nil
 	}
-	if bat == nil {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
+	if err != nil {
+		return result, err
+	}
+	if ctr.buf == nil {
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	for i := 0; i < ap.ColLen; i++ {
-		for j := 0; j < bat.Vecs[i].Length(); j++ {
-			if bat.Vecs[i].IsNull(uint64(j)) {
-				if err = setValue(bat.Vecs[i], ctr.valVecs[i], j, 0, proc); err != nil {
-					return process.ExecNext, err
+		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
+			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
+				if err = setValue(ctr.buf.Vecs[i], ctr.valVecs[i], j, 0, proc); err != nil {
+					return result, err
 				}
 			}
 		}
 	}
-	proc.SetInputBatch(bat)
-	return process.ExecNext, nil
+	result.Batch = ctr.buf
+	return result, nil
 }
 
-func processNext(ctr *container, _ *Argument, proc *process.Process, anal process.Analyze) (process.ExecStatus, error) {
+func processNext(ctr *container, _ *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	var bat *batch.Batch
+	result := vm.NewCallResult()
 	for {
 		switch ctr.status {
 		case receiveBat:
-			bat, _, err = ctr.ReceiveFromAllRegs(anal)
+			bat, _, err := ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if bat == nil {
 				ctr.status = withoutNewBat
@@ -162,10 +168,14 @@ func processNext(ctr *container, _ *Argument, proc *process.Process, anal proces
 		case findNull:
 			if ctr.preIdx > 0 {
 				ctr.preIdx--
-				b := ctr.bats[0]
+				if ctr.buf != nil {
+					proc.PutBatch(ctr.buf)
+					ctr.buf = nil
+				}
+				ctr.buf = ctr.bats[0]
 				ctr.bats = ctr.bats[1:]
-				proc.SetInputBatch(b)
-				return process.ExecNext, nil
+				result.Batch = ctr.buf
+				return result, nil
 			}
 			b := ctr.bats[ctr.preIdx]
 			hasNull := false
@@ -210,7 +220,7 @@ func processNext(ctr *container, _ *Argument, proc *process.Process, anal proces
 						}
 						err = setValue(vec, ctr.bats[ctr.curIdx].Vecs[i], ctr.preRow, ctr.curRow, proc)
 						if err != nil {
-							return process.ExecNext, err
+							return result, err
 						}
 					}
 
@@ -227,7 +237,7 @@ func processNext(ctr *container, _ *Argument, proc *process.Process, anal proces
 					}
 					err = setValue(vec, ctr.bats[ctr.curIdx].Vecs[i], ctr.preRow, ctr.curRow, proc)
 					if err != nil {
-						return process.ExecNext, err
+						return result, err
 					}
 				}
 			}
@@ -236,65 +246,75 @@ func processNext(ctr *container, _ *Argument, proc *process.Process, anal proces
 
 		case withoutNewBat:
 			if len(ctr.bats) > 0 {
-				b := ctr.bats[0]
+				if ctr.buf != nil {
+					proc.PutBatch(ctr.buf)
+					ctr.buf = nil
+				}
+				ctr.buf = ctr.bats[0]
 				ctr.bats = ctr.bats[1:]
-				proc.SetInputBatch(b)
-				return process.ExecNext, nil
+				result.Batch = ctr.buf
+				return result, nil
 			}
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }
 
-func processPrev(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (process.ExecStatus, error) {
+func processPrev(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	var bat *batch.Batch
-	bat, _, err = ctr.ReceiveFromAllRegs(anal)
-	if err != nil {
-		return process.ExecNext, err
+	result := vm.NewCallResult()
+	if ctr.buf != nil {
+		proc.PutBatch(ctr.buf)
+		ctr.buf = nil
 	}
-	if bat == nil {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
+	if err != nil {
+		return result, err
+	}
+	if ctr.buf == nil {
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 	for i := 0; i < ap.ColLen; i++ {
-		for j := 0; j < bat.Vecs[i].Length(); j++ {
-			if bat.Vecs[i].IsNull(uint64(j)) {
+		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
+			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
 				if ctr.prevVecs[i] != nil {
-					if err = setValue(bat.Vecs[i], ctr.prevVecs[i], j, 0, proc); err != nil {
-						return process.ExecNext, err
+					if err = setValue(ctr.buf.Vecs[i], ctr.prevVecs[i], j, 0, proc); err != nil {
+						return result, err
 					}
 				}
 			} else {
 				if ctr.prevVecs[i] == nil {
-					ctr.prevVecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
-					err = appendValue(ctr.prevVecs[i], bat.Vecs[i], j, proc)
+					ctr.prevVecs[i] = proc.GetVector(*ctr.buf.Vecs[i].GetType())
+					err = appendValue(ctr.prevVecs[i], ctr.buf.Vecs[i], j, proc)
 					if err != nil {
-						return process.ExecNext, err
+						return result, err
 					}
 				} else {
-					if err = setValue(ctr.prevVecs[i], bat.Vecs[i], 0, j, proc); err != nil {
-						return process.ExecNext, err
+					if err = setValue(ctr.prevVecs[i], ctr.buf.Vecs[i], 0, j, proc); err != nil {
+						return result, err
 					}
 				}
 
 			}
 		}
 	}
-	proc.SetInputBatch(bat)
-	return process.ExecNext, nil
+	result.Batch = ctr.buf
+	return result, nil
 }
 
-func processLinear(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (process.ExecStatus, error) {
+func processLinear(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	var bat *batch.Batch
+	result := vm.NewCallResult()
 	for {
 		switch ctr.status {
 		case receiveBat:
-			bat, _, err = ctr.ReceiveFromAllRegs(anal)
+			bat, _, err := ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
-				return process.ExecNext, err
+				return result, err
 			}
 			if bat == nil {
 				ctr.status = withoutNewBat
@@ -310,10 +330,14 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 			if ctr.preIdx > 0 {
 				ctr.preIdx--
 				ctr.nullIdx--
-				b := ctr.bats[0]
+				if ctr.buf != nil {
+					proc.PutBatch(ctr.buf)
+					ctr.buf = nil
+				}
+				ctr.buf = ctr.bats[0]
 				ctr.bats = ctr.bats[1:]
-				proc.SetInputBatch(b)
-				return process.ExecNext, nil
+				result.Batch = ctr.buf
+				return result, nil
 			}
 			b := ctr.bats[ctr.nullIdx]
 
@@ -366,20 +390,20 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 		case fillValue:
 			for i, exe := range ctr.exes {
 				b := batch.NewWithSize(2)
-				b.Vecs[0] = vector.NewVec(*ctr.bats[ctr.preIdx].Vecs[i].GetType())
+				b.Vecs[0] = proc.GetVector(*ctr.bats[ctr.preIdx].Vecs[i].GetType())
 				err = appendValue(b.Vecs[0], ctr.bats[ctr.preIdx].Vecs[i], ctr.preRow, proc)
 				if err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
-				b.Vecs[1] = vector.NewVec(*ctr.bats[ctr.curIdx].Vecs[i].GetType())
+				b.Vecs[1] = proc.GetVector(*ctr.bats[ctr.curIdx].Vecs[i].GetType())
 				err = appendValue(b.Vecs[1], ctr.bats[ctr.curIdx].Vecs[i], ctr.curRow, proc)
 				if err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
 				b.SetRowCount(1)
 				ctr.valVecs[i], err = exe.EvalWithoutResultReusing(proc, []*batch.Batch{b})
 				if err != nil {
-					return process.ExecNext, err
+					return result, err
 				}
 			}
 			ctr.preRow++
@@ -392,7 +416,7 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 						}
 						err = setValue(vec, ctr.valVecs[i], ctr.preRow, 0, proc)
 						if err != nil {
-							return process.ExecNext, err
+							return result, err
 						}
 					}
 
@@ -409,7 +433,7 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 					}
 					err = setValue(vec, ctr.valVecs[i], ctr.preRow, 0, proc)
 					if err != nil {
-						return process.ExecNext, err
+						return result, err
 					}
 				}
 			}
@@ -419,30 +443,40 @@ func processLinear(ctr *container, ap *Argument, proc *process.Process, anal pro
 			ctr.status = findNullPre
 		case withoutNewBat:
 			if len(ctr.bats) > 0 {
-				b := ctr.bats[0]
+				if ctr.buf != nil {
+					proc.PutBatch(ctr.buf)
+					ctr.buf = nil
+				}
+				ctr.buf = ctr.bats[0]
 				ctr.bats = ctr.bats[1:]
-				proc.SetInputBatch(b)
-				return process.ExecNext, nil
+				result.Batch = ctr.buf
+				return result, nil
 			}
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Batch = nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 	}
 }
 
-func processDefault(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (process.ExecStatus, error) {
+func processDefault(ctr *container, ap *Argument, proc *process.Process, anal process.Analyze) (vm.CallResult, error) {
 	var err error
-	var bat *batch.Batch
-	bat, _, err = ctr.ReceiveFromAllRegs(anal)
+	result := vm.NewCallResult()
+	if ctr.buf != nil {
+		proc.PutBatch(ctr.buf)
+		ctr.buf = nil
+	}
+	ctr.buf, _, err = ctr.ReceiveFromAllRegs(anal)
 	if err != nil {
-		return process.ExecNext, err
+		return result, err
 	}
-	if bat == nil {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
+	if ctr.buf == nil {
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
 	}
-	proc.SetInputBatch(bat)
-	return process.ExecNext, nil
+	result.Batch = ctr.buf
+	return result, nil
 }
 
 func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {

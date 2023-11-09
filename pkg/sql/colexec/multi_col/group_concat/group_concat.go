@@ -17,10 +17,12 @@ package group_concat
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 	"strings"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -71,6 +73,34 @@ func NewGroupConcat(arg *Argument, typs []types.Type) agg.Agg[any] {
 		arg:  arg,
 		ityp: typs,
 	}
+}
+
+// todo need improve performance
+func (gc *GroupConcat) Dup(_ *mpool.MPool) agg.Agg[any] {
+	val := &GroupConcat{
+		arg: &Argument{
+			Dist:        gc.arg.Dist,
+			GroupExpr:   make([]*plan.Expr, len(gc.arg.GroupExpr)),
+			OrderByExpr: make([]*plan.Expr, len(gc.arg.GroupExpr)),
+			Separator:   gc.arg.Separator,
+			OrderId:     gc.arg.OrderId,
+		},
+		res:     make([]string, len(gc.res)),
+		inserts: make([]string, len(gc.inserts)),
+		ityp:    make([]types.Type, len(gc.ityp)),
+		groups:  gc.groups,
+	}
+	for i, expr := range gc.arg.GroupExpr {
+		gc.arg.GroupExpr[i] = plan.DeepCopyExpr(expr)
+	}
+	for i, expr := range gc.arg.OrderByExpr {
+		gc.arg.OrderByExpr[i] = plan.DeepCopyExpr(expr)
+	}
+	copy(val.res, gc.res)
+	copy(val.inserts, gc.inserts)
+	copy(val.ityp, gc.ityp)
+
+	return val
 }
 
 // We need to implements the interface of Agg

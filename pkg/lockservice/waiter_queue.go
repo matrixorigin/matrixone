@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type waiterQueue interface {
@@ -67,6 +68,7 @@ func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 		w.ref()
 	}
 	q.waiters = append(q.waiters, ws...)
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {
@@ -93,6 +95,7 @@ func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {
 		w.close()
 	}
 	q.resetWaitersLocked()
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
@@ -125,6 +128,7 @@ func (q *sliceBasedWaiterQueue) notify(value notifyValue) {
 		q.waiters[i] = nil
 	}
 	q.waiters = append(q.waiters[:0], q.waiters[skipAt+1:]...)
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) resetCommittedAt(ts timestamp.Timestamp) {
@@ -151,6 +155,7 @@ func (q *sliceBasedWaiterQueue) removeByTxnID(txnID []byte) {
 		newWaiters = append(newWaiters, w)
 	}
 	q.waiters = newWaiters
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) first() *waiter {
@@ -200,6 +205,7 @@ func (q *sliceBasedWaiterQueue) rollbackChange() {
 	}
 	q.waiters = q.waiters[:q.beginChangeIdx]
 	q.beginChangeIdx = -1
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
 func (q *sliceBasedWaiterQueue) getCommittedIdx() int {

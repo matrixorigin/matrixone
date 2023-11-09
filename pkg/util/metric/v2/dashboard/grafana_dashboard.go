@@ -26,6 +26,8 @@ import (
 	"github.com/K-Phoen/grabana/graph"
 	"github.com/K-Phoen/grabana/row"
 	"github.com/K-Phoen/grabana/target/prometheus"
+	"github.com/K-Phoen/grabana/timeseries"
+	tsaxis "github.com/K-Phoen/grabana/timeseries/axis"
 	"github.com/K-Phoen/grabana/variable/interval"
 	"github.com/K-Phoen/grabana/variable/query"
 )
@@ -103,68 +105,152 @@ func (c *DashboardCreator) withGraph(
 	pql string,
 	legend string,
 	opts ...axis.Option) row.Option {
+	return c.withMultiGraph(
+		title,
+		span,
+		[]string{pql},
+		[]string{legend},
+		opts...,
+	)
+}
+
+func (c *DashboardCreator) withMultiGraph(
+	title string,
+	span float32,
+	queries []string,
+	legends []string,
+	axisOpts ...axis.Option) row.Option {
+	opts := []graph.Option{
+		graph.Span(span),
+		graph.DataSource(c.dataSource),
+		graph.LeftYAxis(axisOpts...)}
+
+	for i, query := range queries {
+		opts = append(opts,
+			graph.WithPrometheusTarget(
+				query,
+				prometheus.Legend(legends[i]),
+			))
+	}
+
 	return row.WithGraph(
 		title,
-		graph.Span(span),
-		graph.Height("400px"),
-		graph.DataSource(c.dataSource),
-		graph.WithPrometheusTarget(
-			pql,
-			prometheus.Legend(legend),
-		),
-		graph.LeftYAxis(opts...),
+		opts...,
 	)
 }
 
 func (c *DashboardCreator) getHistogram(
+	title string,
 	metric string,
 	percents []float64,
-	columns []float32) []row.Option {
-	return c.getHistogramWithExtraBy(metric, percents, columns, "")
+	column float32,
+	axisOptions ...axis.Option) row.Option {
+	return c.getHistogramWithExtraBy(title, metric, percents, column, "", axisOptions...)
+}
+
+func SpanNulls(always bool) timeseries.Option {
+	return func(ts *timeseries.TimeSeries) error {
+		ts.Builder.TimeseriesPanel.FieldConfig.Defaults.Custom.SpanNulls = always
+		return nil
+	}
+}
+
+func (c *DashboardCreator) getPercentHist(
+	title string,
+	metric string,
+	percents []float64,
+	opts ...timeseries.Option) row.Option {
+	options := []timeseries.Option{
+		timeseries.DataSource(c.dataSource),
+		timeseries.FillOpacity(0),
+		timeseries.Height("300px"),
+		timeseries.Axis(tsaxis.Unit("s")),
+	}
+	options = append(options, opts...)
+	for i := 0; i < len(percents); i++ {
+		percent := percents[i]
+		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+"))", percent, metric)
+		legend := fmt.Sprintf("P%.0f", percent*100)
+		options = append(options, timeseries.WithPrometheusTarget(
+			query,
+			prometheus.Legend(legend),
+		))
+	}
+	return row.WithTimeSeries(title, options...)
+}
+
+func (c *DashboardCreator) getTimeSeries(
+	title string, pql []string, legend []string,
+	opts ...timeseries.Option) row.Option {
+	options := []timeseries.Option{
+		timeseries.DataSource(c.dataSource),
+		timeseries.FillOpacity(0),
+		timeseries.Height("300px"),
+	}
+	options = append(options, opts...)
+	for i := range pql {
+		options = append(options, timeseries.WithPrometheusTarget(
+			pql[i],
+			prometheus.Legend(legend[i]),
+		))
+	}
+	return row.WithTimeSeries(title, options...)
 }
 
 func (c *DashboardCreator) getHistogramWithExtraBy(
+	title string,
 	metric string,
 	percents []float64,
-	columns []float32,
-	extraBy string) []row.Option {
-	var options []row.Option
+	column float32,
+	extraBy string,
+	axisOptions ...axis.Option) row.Option {
+
+	var queries []string
+	var legends []string
 	for i := 0; i < len(percents); i++ {
 		percent := percents[i]
 
-		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+"))", percent, metric)
-		legend := "{{ " + c.by + " }}"
+		query := fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le))", percent, metric)
+		legend := fmt.Sprintf("P%.2f%%", percent*100)
 		if len(extraBy) > 0 {
-			query = fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+", %s))", percent, metric, extraBy)
-			legend = "{{ " + c.by + "-" + extraBy + " }}"
+			query = fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, %s))", percent, metric, extraBy)
+			legend = fmt.Sprintf("{{ name }}(P%.2f%%)", percent*100)
 		}
-
-		options = append(options, c.withGraph(
-			fmt.Sprintf("P%f time", percent*100),
-			columns[i],
-			query,
-			legend,
-			axis.Unit("s"),
-			axis.Min(0)))
+		queries = append(queries, query)
+		legends = append(legends, legend)
 	}
-	return options
+	return c.withMultiGraph(
+		title,
+		column,
+		queries,
+		legends,
+		axisOptions...,
+	)
 }
 
-func (c *DashboardCreator) getBytesHistogram(
-	metric string,
+func (c *DashboardCreator) getMultiHistogram(
+	metrics []string,
+	legends []string,
 	percents []float64,
-	columns []float32) []row.Option {
+	columns []float32,
+	axisOptions ...axis.Option) []row.Option {
 	var options []row.Option
-
 	for i := 0; i < len(percents); i++ {
 		percent := percents[i]
-		options = append(options, c.withGraph(
-			fmt.Sprintf("P%f time", percent*100),
-			columns[i],
-			fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, "+c.by+"))", percent, metric),
-			"{{ "+c.by+" }}",
-			axis.Unit("bytes"),
-			axis.Min(0)))
+
+		var queries []string
+		for _, metric := range metrics {
+			queries = append(queries,
+				fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval]))  by (le))", percent, metric))
+		}
+
+		options = append(options,
+			c.withMultiGraph(
+				fmt.Sprintf("P%f time", percent*100),
+				columns[i],
+				queries,
+				legends,
+				axisOptions...))
 	}
 	return options
 }
@@ -172,6 +258,7 @@ func (c *DashboardCreator) getBytesHistogram(
 func (c *DashboardCreator) withRowOptions(rows ...dashboard.Option) []dashboard.Option {
 	return append(rows,
 		dashboard.AutoRefresh("30s"),
+		dashboard.Time("now-30m", "now"),
 		dashboard.VariableAsInterval(
 			"interval",
 			interval.Default("1m"),
