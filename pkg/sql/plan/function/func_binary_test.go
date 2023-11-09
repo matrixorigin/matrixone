@@ -2756,6 +2756,96 @@ func TestCosineSimilarityArray(t *testing.T) {
 	}
 }
 
+// L2 Distance
+func initL2DistanceArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test L2Distance float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{33.67491648096547, 78.9746794865291},
+				[]bool{false, false}),
+		},
+		{
+			info: "test L2Distance float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{33.67491648096547, 78.9746794865291},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestL2DistanceArray(t *testing.T) {
+	testCases := initL2DistanceArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L2DistanceArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, L2DistanceArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// Cosine Distance
+func initCosineDistanceArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test CosineDistance float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {5, 6, 7}}, []bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0.0003542540112345671},
+				[]bool{false, false}),
+		},
+		{
+			info: "test CosineDistance float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{10, 20, 30}, {5, 6, 7}}, []bool{false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0, 0.0003542540112345671},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestCosineDistanceArray(t *testing.T) {
+	testCases := initCosineDistanceArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, CosineDistanceArray[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, CosineDistanceArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 // Extract
 func initExtractTestCase() []tcTemp {
 	MakeDates := func(values ...string) []types.Date {
