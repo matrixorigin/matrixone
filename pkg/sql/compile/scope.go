@@ -120,6 +120,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 					err := moerr.ConvertPanicError(c.ctx, e)
 					getLogger().Error("panic in merge run run",
 						zap.String("error", err.Error()))
+					errChan <- err
 				}
 				wg.Done()
 			}()
