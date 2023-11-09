@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -84,7 +83,6 @@ func NewDiskCache(
 		perfCounterSets: perfCounterSets,
 	}
 	ret.triggerEvict(ctx, 0)
-	ret.triggerEvict(ctx, capacity) // trigger an immediately eviction
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]bool)
 	return ret, nil
@@ -383,27 +381,13 @@ func (d *DiskCache) evict(ctx context.Context) {
 		if err != nil {
 			return nil // ignore
 		}
-
-		var size int64
-		if sys, ok := info.Sys().(*syscall.Stat_t); ok {
-			size = sys.Blocks * sys.Blksize
-		} else {
-			size = info.Size()
-		}
-
+		size := info.Size()
 		if _, ok := paths[path]; !ok {
 			paths[path] = size
 			sumSize += size
 		}
 		return nil
 	})
-
-	target := int64(float64(d.capacity) * d.evictTarget)
-
-	logutil.Info("disk cache eviction",
-		zap.Any("bytes", sumSize),
-		zap.Any("target", target),
-	)
 
 	var numDeleted int64
 	var bytesDeleted int64
@@ -418,6 +402,7 @@ func (d *DiskCache) evict(ctx context.Context) {
 			)
 		}
 	}()
+	target := int64(float64(d.capacity) * d.evictTarget)
 
 	var onEvict []OnDiskCacheEvictFunc
 	if v := ctx.Value(CtxKeyDiskCacheCallbacks); v != nil {
