@@ -57,7 +57,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		_ = perfCounterSet //TODO
 		readCount := r.Count()
 		accountId := defines.GetAccountId(proc.Ctx)
-		//only record rows of reading statement and mo_tables under sys account
+		//only record rows and bytes
 		if accountId == catalog.System_Account &&
 			(readCount.Table() == catalog.MO_STATEMENT ||
 				readCount.Table() == catalog.MO_TABLES ||
