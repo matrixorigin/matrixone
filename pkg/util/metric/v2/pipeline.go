@@ -17,32 +17,32 @@ package v2
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
-    rowReadHistogram = prometheus.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Namespace: "pipeline",
-            Subsystem: "reader",
-            Name:      "rows_read",
-            Help:      "the count of the rows read by the reader",
-            Buckets:   prometheus.ExponentialBuckets(10, 2.0, 20),
-        },
-        []string{"database", "table"},
-    )
-    bytesReadHistogram = prometheus.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Namespace: "pipeline",
-            Subsystem: "reader",
-            Name:      "bytes_read",
-            Help:      "the count of the bytes read by the reader",
-            Buckets:   prometheus.ExponentialBuckets(10, 2.0, 20),
-        },
-        []string{"database", "table"},
-    )
+	rowReadHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "pipeline",
+			Subsystem: "reader",
+			Name:      "rows_read",
+			Help:      "the count of the rows read by the reader",
+			Buckets:   prometheus.ExponentialBuckets(10, 2.0, 20),
+		},
+		[]string{"database", "table"},
+	)
+	bytesReadHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "pipeline",
+			Subsystem: "reader",
+			Name:      "bytes_read",
+			Help:      "the count of the bytes read by the reader",
+			Buckets:   prometheus.ExponentialBuckets(10, 2.0, 20),
+		},
+		[]string{"database", "table"},
+	)
 )
 
 func GetRowsReadHistogram(db, table string) prometheus.Observer {
-    return rowReadHistogram.WithLabelValues(db, table)
+	return rowReadHistogram.WithLabelValues(db, table)
 }
 
 func GetBytesReadHistogram(db, table string) prometheus.Observer {
-    return bytesReadHistogram.WithLabelValues(db, table)
+	return bytesReadHistogram.WithLabelValues(db, table)
 }

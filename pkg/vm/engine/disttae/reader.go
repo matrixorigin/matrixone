@@ -247,8 +247,8 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 // -----------------------------------------------------------------
 // ------------------------ emptyReader ----------------------------
 // -----------------------------------------------------------------
-func (r *emptyReader) Count() engine.ReaderCount {
-	return engine.ReaderCount{}
+func (r *emptyReader) Count() *engine.ReaderCount {
+	return &engine.ReaderCount{}
 }
 
 func (r *emptyReader) Close() error {
@@ -288,8 +288,8 @@ func newBlockReader(
 	return r
 }
 
-func (r *blockReader) Count() engine.ReaderCount {
-	ret := engine.ReaderCount{}
+func (r *blockReader) Count() *engine.ReaderCount {
+	ret := &engine.ReaderCount{}
 	ret.CopyFrom(&r.readerCount)
 	return ret
 }
@@ -566,8 +566,8 @@ func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return ret
 }
 
-func (r *mergeReader) Count() engine.ReaderCount {
-	ret := engine.ReaderCount{}
+func (r *mergeReader) Count() *engine.ReaderCount {
+	ret := &engine.ReaderCount{}
 	ret.CopyFrom(&r.readerCount)
 	return ret
 }

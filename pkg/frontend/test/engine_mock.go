@@ -593,10 +593,10 @@ func (mr *MockReaderMockRecorder) Close() *gomock.Call {
 }
 
 // Count mocks base method.
-func (m *MockReader) Count() engine.ReaderCount {
+func (m *MockReader) Count() *engine.ReaderCount {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Count")
-	ret0, _ := ret[0].(engine.ReaderCount)
+	ret0, _ := ret[0].(*engine.ReaderCount)
 	return ret0
 }
 

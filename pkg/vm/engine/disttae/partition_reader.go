@@ -46,8 +46,8 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
-func (p *PartitionReader) Count() engine.ReaderCount {
-	ret := engine.ReaderCount{}
+func (p *PartitionReader) Count() *engine.ReaderCount {
+	ret := &engine.ReaderCount{}
 	ret.CopyFrom(&p.readerCount)
 	return ret
 }
