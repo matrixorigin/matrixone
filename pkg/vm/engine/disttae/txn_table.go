@@ -151,32 +151,13 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		rows += int64(meta.BlockHeader().Rows())
 		return nil
 	}
-	if err = tbl.ForeachDataObject(partition, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(partition, onObjFn); err != nil {
 		return 0, err
 	}
 	return rows, nil
 }
 
-//func (tbl *txnTable) ForeachBlock(
-//	state *logtailreplay.PartitionState,
-//	fn func(block logtailreplay.BlockEntry) error,
-//) (err error) {
-//	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
-//	iter, err := state.NewBlocksIter(ts)
-//	if err != nil {
-//		return err
-//	}
-//	for iter.Next() {
-//		entry := iter.Entry()
-//		if err = fn(entry); err != nil {
-//			break
-//		}
-//	}
-//	iter.Close()
-//	return
-//}
-
-func (tbl *txnTable) ForeachDataObject(
+func (tbl *txnTable) ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	fn func(obj logtailreplay.ObjectEntry) error,
 ) (err error) {
@@ -254,7 +235,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return nil, nil, err
 	}
 
@@ -377,7 +358,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		}
 		return nil
 	}
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return 0, err
 	}
 	return ret, nil
@@ -452,7 +433,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil
 	}
 
-	if err = tbl.ForeachDataObject(state, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(state, onObjFn); err != nil {
 		return nil, err
 	}
 
@@ -654,10 +635,10 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
-		deleteBlks, createBlks := state.GetChangedBlocksBetween(types.TimestampToTS(tbl.lastTS),
+		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
-		if len(deleteBlks) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteBlks, createBlks); err != nil {
+		if len(deleteObjs) > 0 {
+			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
 				return err
 			}
 		}
@@ -893,7 +874,7 @@ func (tbl *txnTable) rangesOnePart(
 				SegmentID:  obj.SegmentID,
 			}
 			if obj.HasDeltaLoc {
-				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 				if ok {
 					blkInfo.DeltaLoc = deltaLoc
 					blkInfo.CommitTs = commitTs
@@ -1098,7 +1079,7 @@ func (tbl *txnTable) tryFastRanges(
 				SegmentID:  obj.SegmentID,
 			}
 			if obj.HasDeltaLoc {
-				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 				if ok {
 					blkInfo.DeltaLoc = deltaLoc
 					blkInfo.CommitTs = commitTs
@@ -1897,13 +1878,13 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 func (tbl *txnTable) updateDeleteInfo(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
-	deleteBlks,
-	createBlks []types.Blockid) error {
+	deleteObjs,
+	createObjs []logtailreplay.ObjectInfo) error {
 	var blks []catalog.BlockInfo
 
-	deleteBlksMap := make(map[types.Blockid]struct{})
-	for _, id := range deleteBlks {
-		deleteBlksMap[id] = struct{}{}
+	deleteObjsMap := make(map[objectio.ObjectNameShort]struct{})
+	for _, obj := range deleteObjs {
+		deleteObjsMap[*obj.Loc.ShortName()] = struct{}{}
 	}
 
 	{
@@ -1915,47 +1896,42 @@ func (tbl *txnTable) updateDeleteInfo(
 		}
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
-		for _, id := range createBlks {
-			if obj, ok := state.GetObject(id); ok {
-				location := obj.Location()
-				if objMeta, err = objectio.FastLoadObjectMeta(
-					ctx,
-					&location,
-					false,
-					fs); err != nil {
-					return err
+		for _, obj := range createObjs {
+			location := obj.Location()
+			if objMeta, err = objectio.FastLoadObjectMeta(
+				ctx,
+				&location,
+				false,
+				fs); err != nil {
+				return err
+			}
+			objDataMeta = objMeta.MustDataMeta()
+			blkCnt := objDataMeta.BlockCount()
+			for i := 0; i < int(blkCnt); i++ {
+				blkMeta := objDataMeta.GetBlockMeta(uint32(i))
+				bid := *blkMeta.GetBlockID(obj.Loc.Name())
+				metaLoc := blockio.EncodeLocation(
+					obj.Loc.Name(),
+					obj.Loc.Extent(),
+					blkMeta.GetRows(),
+					blkMeta.GetID(),
+				)
+				blkInfo := catalog.BlockInfo{
+					BlockID:    bid,
+					EntryState: obj.EntryState,
+					Sorted:     obj.Sorted,
+					MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+					CommitTs:   obj.CommitTS,
+					SegmentID:  obj.SegmentID,
 				}
-				objDataMeta = objMeta.MustDataMeta()
-				blkCnt := objDataMeta.BlockCount()
-				for i := 0; i < int(blkCnt); i++ {
-					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-					bid := *blkMeta.GetBlockID(obj.Loc.Name())
-					if bid == id {
-						metaLoc := blockio.EncodeLocation(
-							obj.Loc.Name(),
-							obj.Loc.Extent(),
-							blkMeta.GetRows(),
-							blkMeta.GetID(),
-						)
-						blkInfo := catalog.BlockInfo{
-							BlockID:    bid,
-							EntryState: obj.EntryState,
-							Sorted:     obj.Sorted,
-							MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
-							CommitTs:   obj.CommitTS,
-							SegmentID:  obj.SegmentID,
-						}
-						if obj.HasDeltaLoc {
-							deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-							if ok {
-								blkInfo.DeltaLoc = deltaLoc
-								blkInfo.CommitTs = commitTs
-							}
-						}
-						blks = append(blks, blkInfo)
-						break
+				if obj.HasDeltaLoc {
+					deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+					if ok {
+						blkInfo.DeltaLoc = deltaLoc
+						blkInfo.CommitTs = commitTs
 					}
 				}
+				blks = append(blks, blkInfo)
 			}
 		}
 	}
@@ -1968,7 +1944,7 @@ func (tbl *txnTable) updateDeleteInfo(
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
-				if _, ok := deleteBlksMap[blkid]; ok {
+				if _, ok := deleteObjsMap[*objectio.ShortName(&blkid)]; ok {
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err
