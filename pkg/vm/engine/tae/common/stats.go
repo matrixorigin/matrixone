@@ -17,20 +17,17 @@ package common
 import (
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"golang.org/x/exp/constraints"
 )
 
 const (
 	DefaultNotLoadMoreThan  = 4096
 	DefaultMinRowsQualified = 40960
-	DefaultMaxRowsObj       = 8192 * 240
 	DefaultMaxMergeObjN     = 2
 )
 
@@ -38,196 +35,12 @@ var (
 	RuntimeNotLoadMoreThan  atomic.Int32
 	RuntimeMaxMergeObjN     atomic.Int32
 	RuntimeMinRowsQualified atomic.Int32
-	RuntimeMaxRowsObj       atomic.Int32
-	Epsilon                 float64
 )
 
 func init() {
 	RuntimeNotLoadMoreThan.Store(DefaultNotLoadMoreThan)
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
 	RuntimeMinRowsQualified.Store(DefaultMinRowsQualified)
-	RuntimeMaxRowsObj.Store(DefaultMaxRowsObj)
-	Epsilon = math.Nextafter(1, 2) - 1
-}
-
-type Number interface {
-	constraints.Integer | constraints.Float
-}
-
-///////
-/// statistics component
-///////
-
-type TrendKind int
-type WorkloadKind int
-
-const (
-	TrendUnknown TrendKind = iota
-	TrendDecII
-	TrendDecI
-	TrendStable
-	TrendIncI
-	TrendIncII
-)
-
-const (
-	WorkUnknown WorkloadKind = iota
-	WorkQuiet
-	WorkApInsert
-	WorkApQuiet
-	WorkTpUpdate
-	WorkMixed
-)
-
-func (t TrendKind) String() string {
-	switch t {
-	case TrendDecII:
-		return "DecII"
-	case TrendDecI:
-		return "DecI"
-	case TrendStable:
-		return "Stable"
-	case TrendIncI:
-		return "IncI"
-	case TrendIncII:
-		return "IncII"
-	default:
-		return "UnknownTrend"
-	}
-}
-
-type HistorySampler[T Number] interface {
-	Append(x T)
-	V() T
-	QueryTrend() (TrendKind, TrendKind, TrendKind)
-	String() string
-}
-
-type SampleIII[T Number] struct {
-	new, sample, v1, v2, v3 T
-
-	lastSampleT time.Time
-
-	// f1 = 1.0
-	f2, f3 float64
-
-	// config
-	d1, d2, d3 time.Duration
-}
-
-func NewSmapler35m[T Number]() HistorySampler[T] {
-	return NewSampleIII[T](30*time.Second, 2*time.Minute, 5*time.Minute)
-}
-
-func selectFactor(cnt int) float64 {
-	list := []int{2, 3, 4, 6, 7, 10, 13, 21, 44}
-	for i, v := range list {
-		if cnt <= v {
-			return float64(9-i) / 10.0
-		}
-	}
-	return 0.05
-}
-
-func NewSampleIII[T Number](sp, d2, d3 time.Duration) *SampleIII[T] {
-	return &SampleIII[T]{
-		d1: sp,
-		d2: d2,
-		d3: d3,
-		f2: selectFactor(int(d2 / sp)),
-		f3: selectFactor(int(d3 / sp)),
-	}
-}
-
-func (s *SampleIII[T]) tick(x T) {
-	s.new = x
-	// init
-	if s.lastSampleT.IsZero() {
-		s.lastSampleT = time.Now()
-		s.sample = x
-		s.v1 = x
-		s.v2 = x
-		s.v3 = x
-		return
-	}
-	now := time.Now()
-	span := now.Sub(s.lastSampleT)
-	if span < s.d1 {
-		return
-	}
-	// rotate and sample this point
-
-	// cnt history values need to be pushed back
-	// cnt := int(span / s.samplePeriod)
-	if span > s.d3 {
-		s.v3 = s.sample
-		s.v2 = s.sample
-		s.v1 = s.sample
-	} else if span > s.d2 {
-		s.v3 = moveAvg(s.v3, s.v2, s.f2)
-		s.v2 = s.sample
-		s.v1 = s.sample
-	} else {
-		s.v3 = moveAvg(s.v3, s.v2, s.f3)
-		s.v2 = moveAvg(s.v2, s.v1, s.f2)
-		s.v1 = s.sample
-	}
-
-	s.lastSampleT = now
-	s.sample = x
-}
-
-func (s *SampleIII[T]) Append(x T) {
-	s.tick(x)
-}
-
-func (s *SampleIII[T]) V() T {
-	return s.new
-}
-
-func (s *SampleIII[T]) QueryTrend() (TrendKind, TrendKind, TrendKind) {
-	judgeTrend := func(vprev, vnow T) TrendKind {
-		if roundZero(vprev) {
-			if vnow > 0 {
-				return TrendIncI
-			} else if vnow < 0 {
-				return TrendDecI
-			} else {
-				return TrendStable
-			}
-		}
-		delta := float64(vnow - vprev)
-		deltaPercent := math.Abs(delta / float64(vprev))
-		if math.Signbit(delta) {
-			deltaPercent = -deltaPercent
-		}
-
-		if deltaPercent < -0.4 {
-			return TrendDecII
-		} else if deltaPercent < -0.01 {
-			return TrendDecI
-		} else if deltaPercent < 0.01 {
-			return TrendStable
-		} else if deltaPercent < 0.4 {
-			return TrendIncI
-		} else {
-			return TrendIncII
-		}
-	}
-	s.tick(s.new)
-	return judgeTrend(s.v1, s.new), judgeTrend(s.v2, s.new), judgeTrend(s.v3, s.new)
-}
-
-func (s *SampleIII[T]) String() string {
-	x, m, l := s.QueryTrend()
-	return fmt.Sprintf(
-		"Sample(%v/%v/{%v@-%v,%v@-%v(%.2f),%v@-%v(%.2f)}/%v,%v,%v)",
-		s.new, s.lastSampleT.Format("2006-01-02_15:04:05"),
-		s.v1, s.d1,
-		s.v2, s.d2, s.f2,
-		s.v3, s.d3, s.f3,
-		x, m, l,
-	)
 }
 
 type MergeHistory struct {
@@ -247,10 +60,6 @@ func (h *MergeHistory) Add(osize, nobj, nblk int) {
 func (h *MergeHistory) IsLastBefore(d time.Duration) bool {
 	return h.LastTime.Before(time.Now().Add(-d))
 }
-
-///
-/// Table statistics
-///
 
 type TableCompactStat struct {
 	sync.RWMutex
@@ -273,18 +82,7 @@ type TableCompactStat struct {
 	// FlushDeadline is the deadline to flush table tail
 	FlushDeadline time.Time
 
-	WorkloadGuess  WorkloadKind
-	WorkloadStreak int
-	RowCnt         HistorySampler[int]
-	RowDel         HistorySampler[int]
-	MergeHist      MergeHistory
-}
-
-func NewTableCompactStat() *TableCompactStat {
-	return &TableCompactStat{
-		RowCnt: NewSmapler35m[int](),
-		RowDel: NewSmapler35m[int](),
-	}
+	MergeHist MergeHistory
 }
 
 func (s *TableCompactStat) ResetDeadlineWithLock() {
@@ -305,60 +103,11 @@ func (s *TableCompactStat) AddMerge(osize, nobj, nblk int) {
 	s.MergeHist.Add(osize, nobj, nblk)
 }
 
-func (s *TableCompactStat) GetLastMerge() MergeHistory {
+func (s *TableCompactStat) GetLastMerge() *MergeHistory {
 	s.RLock()
 	defer s.RUnlock()
-	return s.MergeHist
+	return &s.MergeHist
 }
-
-func (s *TableCompactStat) AddRowStat(rows, dels int) {
-	s.Lock()
-	defer s.Unlock()
-	s.RowCnt.Append(rows)
-	s.RowDel.Append(dels)
-
-	rs, rm, rl := s.RowCnt.QueryTrend()
-	ds, dm, dl := s.RowDel.QueryTrend()
-
-	guess := WorkUnknown
-	if IsApLikeDel(ds, dm, dl, dels) {
-		if IsLongStable(rs, rm, rl) {
-			guess = WorkApQuiet
-		} else {
-			guess = WorkApInsert
-		}
-	}
-
-	// force a bigger merge
-	if s.WorkloadGuess == WorkApInsert && s.WorkloadStreak > 20 {
-		guess = WorkApQuiet
-	}
-
-	if s.WorkloadGuess == guess {
-		s.WorkloadStreak++
-	} else {
-		s.WorkloadGuess = guess
-		s.WorkloadStreak = 0
-	}
-}
-
-func (s *TableCompactStat) GetWorkloadGuess() WorkloadKind {
-	s.RLock()
-	defer s.RUnlock()
-	return s.WorkloadGuess
-}
-
-func IsApLikeDel(s, m, l TrendKind, val int) bool {
-	return s == TrendStable && m == TrendStable && l == TrendStable && val == 0
-}
-
-func IsLongStable(s, m, l TrendKind) bool {
-	return s == TrendStable && m == TrendStable && l <= TrendIncI && l >= TrendDecI
-}
-
-////
-// Other utils
-////
 
 func HumanReadableBytes(bytes int) string {
 	if bytes < 1024 {
@@ -377,12 +126,4 @@ func ShortSegId(x types.Uuid) string {
 	var shortuuid [8]byte
 	hex.Encode(shortuuid[:], x[:4])
 	return string(shortuuid[:])
-}
-
-func moveAvg[T Number](prev, now T, f float64) T {
-	return T((1-f)*float64(prev) + f*float64(now))
-}
-
-func roundZero[T Number](v T) bool {
-	return math.Abs(float64(v)) < Epsilon
 }
