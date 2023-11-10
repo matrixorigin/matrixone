@@ -96,7 +96,7 @@ pk <> CONCAT_WS( ':','%I','%m' )+CONCAT_WS('-','%y','%H','%V','%k','%k' )
 OR
 year(col_datetime_5) < year(utc_timestamp())
 ORDER BY 1;
-invalid input: invalid datatime value %I:%m%y-%H-%V-%k-%k
+invalid input: invalid datetime value %I:%m%y-%H-%V-%k-%k
 DROP TABLE t1;
 SELECT CONCAT_WS(1471290948102948112341241204312904-23412412-4141, "a", "b");
 CONCAT_WS(1471290948102948112341241204312904-23412412-4141, "a", "b")
