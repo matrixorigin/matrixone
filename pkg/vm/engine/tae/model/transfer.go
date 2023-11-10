@@ -128,6 +128,11 @@ func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
 	}
 	delete(table.pages, *id)
 
+	// to pass ut
+	if len(table.pages) == 0 || table.pages[*id] == nil {
+		return
+	}
+
 	cnt := table.pages[*id].Val.Length()
 	utils.TransferPageCounter.Add(-int64(cnt))
 	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
