@@ -721,6 +721,9 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if !needStats(node.TableDef) {
 		return DefaultStats()
 	}
+	if shouldReturnMinimalStats(node.TableDef) {
+		return DefaultMinimalStats()
+	}
 	if !builder.compCtx.Stats(node.ObjRef) {
 		return DefaultStats()
 	}
@@ -752,6 +755,10 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 	return stats
+}
+
+func shouldReturnMinimalStats(tableDef *TableDef) bool {
+	return false
 }
 
 func needStats(tableDef *TableDef) bool {
