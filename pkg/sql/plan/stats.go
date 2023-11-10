@@ -87,20 +87,18 @@ func (sc *StatsInfoMap) NeedUpdate(currentObjNum int) bool {
 	return false
 }
 
-func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
+func (sc *StatsCache) GetStatsInfoMap(tableID uint64, create bool) *StatsInfoMap {
 	if sc == nil {
-		return NewStatsInfoMap()
-	}
-	switch tableID {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return NewStatsInfoMap()
+		return nil
 	}
 	if s, ok := (sc.cachePool)[tableID]; ok {
 		return s
-	} else {
+	} else if create {
 		s = NewStatsInfoMap()
 		(sc.cachePool)[tableID] = s
 		return s
+	} else {
+		return nil
 	}
 }
 
@@ -195,11 +193,10 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 		return true
 	}
 
-	sc := builder.compCtx.GetStatsCache()
-	if sc == nil {
+	s := getStatsInfoByTableID(tableDef.TblId, builder)
+	if s == nil {
 		return false
 	}
-	s := sc.GetStatsInfoMap(tableDef.TblId)
 	var totalNDV float64 = 1
 	for i := range cols {
 		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
@@ -207,7 +204,18 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
 }
 
-func getColStatsInfo(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
+func getStatsInfoByTableID(tableID uint64, builder *QueryBuilder) *StatsInfoMap {
+	if builder == nil {
+		return nil
+	}
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
+		return nil
+	}
+	return sc.GetStatsInfoMap(tableID, false)
+}
+
+func getStatsInfoByCol(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if builder == nil {
 		return nil
 	}
@@ -223,12 +231,11 @@ func getColStatsInfo(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if len(col.Name) == 0 {
 		col.Name = tableDef.Cols[col.ColPos].Name
 	}
-
-	return sc.GetStatsInfoMap(tableDef.TblId)
+	return sc.GetStatsInfoMap(tableDef.TblId, false)
 }
 
 func getColNdv(col *plan.ColRef, builder *QueryBuilder) float64 {
-	s := getColStatsInfo(col, builder)
+	s := getStatsInfoByCol(col, builder)
 	if s == nil {
 		return -1
 	}
@@ -289,7 +296,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if !ret {
 		return 0.1
 	}
-	s := getColStatsInfo(col, builder)
+	s := getStatsInfoByCol(col, builder)
 	if s == nil {
 		return 0.1
 	}
@@ -718,11 +725,10 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		return DefaultStats()
 	}
 	//get statsInfoMap from statscache
-	sc := builder.compCtx.GetStatsCache()
-	if sc == nil {
+	s := getStatsInfoByTableID(node.TableDef.TblId, builder)
+	if s == nil {
 		return DefaultStats()
 	}
-	s := sc.GetStatsInfoMap(node.TableDef.TblId)
 
 	stats := new(plan.Stats)
 	stats.TableCnt = s.TableCnt
@@ -779,6 +785,16 @@ func DefaultStats() *plan.Stats {
 	stats.Cost = 1000
 	stats.Outcnt = 1000
 	stats.Selectivity = 1
+	stats.BlockNum = 1
+	return stats
+}
+
+func DefaultMinimalStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 100000
+	stats.Cost = 10
+	stats.Outcnt = 10
+	stats.Selectivity = 0.0001
 	stats.BlockNum = 1
 	return stats
 }
