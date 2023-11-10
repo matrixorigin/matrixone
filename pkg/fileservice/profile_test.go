@@ -26,7 +26,7 @@ func TestProfile(t *testing.T) {
 	write, stop := FSProfileHandler.StartProfile()
 	defer stop()
 	defer write(io.Discard)
-	testFileService(t, func(name string) FileService {
+	testFileService(t, 0, func(name string) FileService {
 		ctx := context.Background()
 		dir := t.TempDir()
 		fs, err := NewLocalFS(ctx, name, dir, DisabledCacheConfig, nil)
