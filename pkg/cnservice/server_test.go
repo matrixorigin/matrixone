@@ -107,7 +107,7 @@ func Test_InitServer(t *testing.T) {
 	)
 	require.Nil(t, err)
 
-	msg.Sid = pipeline.Status_WaitingNext
+	msg.Sid = pipeline.Status_Last
 	err = srv.handleRequest(
 		ctx,
 		morpc.RPCMessage{
