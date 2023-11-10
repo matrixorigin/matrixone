@@ -79,6 +79,6 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 	if ctr.inBat != nil {
 		ctr.inBat.Clean(mp)
-		ctr.rbat = nil
+		ctr.inBat = nil
 	}
 }
