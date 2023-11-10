@@ -84,7 +84,7 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 	require.Nil(t, err)
 
 	msg := &pipeline.Message{
-		Cmd:          pipeline.PipelineMessage,
+		Cmd:          pipeline.Method_PipelineMessage,
 		Uuid:         id[:],
 		ProcInfoData: procInfoData,
 		Data:         pipeData,

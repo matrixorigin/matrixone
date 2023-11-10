@@ -26,9 +26,21 @@ import "plan.proto";
 import "timestamp.proto";
 import "lock.proto";
 
+enum Method {
+    PipelineMessage = 0;
+    BatchMessage = 1;
+    PrepareDoneNotifyMessage = 2;// for dispatch
+}
+
+enum Status {
+    WaitingNext = 0;
+    Last = 1;
+    MessageEnd = 2;
+}
+
 message Message {
-  uint64  sid = 1;
-  uint64  cmd = 2;
+  Status  sid = 1;
+  Method  cmd = 2;
   bytes   err = 3;
   bytes   data = 4;
   bytes   proc_info_data = 5;

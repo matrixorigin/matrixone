@@ -360,9 +360,9 @@ func (s *service) handleRequest(
 		panic("cn server receive a message with unexpected type")
 	}
 	switch msg.GetSid() {
-	case pipeline.WaitingNext:
+	case pipeline.Status_WaitingNext:
 		return handleWaitingNextMsg(ctx, req, cs)
-	case pipeline.Last:
+	case pipeline.Status_Last:
 		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
 			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
 				return err
@@ -635,7 +635,7 @@ func (s *service) initLockService() {
 func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
-	case pipeline.PipelineMessage:
+	case pipeline.Method_PipelineMessage:
 		var cache morpc.MessageCache
 		var err error
 		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
