@@ -24,7 +24,9 @@ select purge_log(NULL, NULL) a;
 
 -- case for issue 10421
 set @ts=now();
+-- @bvt:issue#12660
 select purge_log('statement_info,metric', DATE_ADD( @ts, interval 1 day)) a;
+-- @bvt:issue
 select count(1) val from system_metrics.metric where `collecttime` <  DATE_ADD( @ts, interval 1 minute);
 
 -- clean
