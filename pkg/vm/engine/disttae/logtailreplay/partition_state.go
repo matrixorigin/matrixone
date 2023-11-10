@@ -278,29 +278,29 @@ func NewPartitionState(noData bool) *PartitionState {
 		Degree: 4,
 	}
 	return &PartitionState{
-		noData:      noData,
-		rows:        btree.NewBTreeGOptions((RowEntry).Less, opts),
-		dataObjects: btree.NewBTreeGOptions((ObjectEntry).Less, opts),
-		//dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
-		blockDeltas:     btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
-		primaryIndex:    btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlocks:     btree.NewBTreeGOptions((types.Blockid).Less, opts),
-		objectIndexByTS: btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
-		shared:          new(sharedStates),
+		noData:                noData,
+		rows:                  btree.NewBTreeGOptions((RowEntry).Less, opts),
+		dataObjects:           btree.NewBTreeGOptions((ObjectEntry).Less, opts),
+		dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
+		blockDeltas:           btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
+		primaryIndex:          btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		dirtyBlocks:           btree.NewBTreeGOptions((types.Blockid).Less, opts),
+		objectIndexByTS:       btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
+		shared:                new(sharedStates),
 	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		rows:        p.rows.Copy(),
-		dataObjects: p.dataObjects.Copy(),
-		//dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
-		blockDeltas:     p.blockDeltas.Copy(),
-		primaryIndex:    p.primaryIndex.Copy(),
-		noData:          p.noData,
-		dirtyBlocks:     p.dirtyBlocks.Copy(),
-		objectIndexByTS: p.objectIndexByTS.Copy(),
-		shared:          p.shared,
+		rows:                  p.rows.Copy(),
+		dataObjects:           p.dataObjects.Copy(),
+		dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
+		blockDeltas:           p.blockDeltas.Copy(),
+		primaryIndex:          p.primaryIndex.Copy(),
+		noData:                p.noData,
+		dirtyBlocks:           p.dirtyBlocks.Copy(),
+		objectIndexByTS:       p.objectIndexByTS.Copy(),
+		shared:                p.shared,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
