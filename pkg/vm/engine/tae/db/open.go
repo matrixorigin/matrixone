@@ -19,6 +19,7 @@ import (
 	"fmt"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"path"
 	"sync/atomic"
 	"time"
@@ -277,8 +278,8 @@ func mpoolAllocatorSubTask(rt *dbutils.Runtime) {
 	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))
 	v2.MemTAEMutableAllocatorGauge.Set(float64(common.MutMemAllocator.CurrNB()))
 	v2.MemTAESmallAllocatorGauge.Set(float64(common.SmallAllocator.CurrNB()))
-	v2.MemTAEVectorPoolSmallGauge.Set(float64(rt.VectorPool.Small.Allocated()))
-	v2.MemTAEVectorPoolTransientGauge.Set(float64(rt.VectorPool.Transient.Allocated()))
+	v2.MemTAEVectorPoolSmallGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().CurrNB()))
+	v2.MemTAEVectorPoolTransientGauge.Set(0)
 }
 
 func transferPageSubTask() {
