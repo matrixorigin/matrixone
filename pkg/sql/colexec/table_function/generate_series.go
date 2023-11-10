@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const addBatchSize int64 = 8191
+
 func generateSeriesString(buf *bytes.Buffer) {
 	buf.WriteString("generate_series")
 }
@@ -37,121 +39,203 @@ func generateSeriesString(buf *bytes.Buffer) {
 func generateSeriesPrepare(proc *process.Process, arg *Argument) (err error) {
 	arg.ctr = new(container)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	arg.generateSeries = new(generateSeriesArg)
 	return err
+}
+
+func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
+	if arg.generateSeries.state == initArg {
+		var startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector
+		var err error
+		arg.generateSeries.state = genBatch
+
+		defer func() {
+			if startVec != nil {
+				startVec.Free(proc.Mp())
+			}
+			if endVec != nil {
+				endVec.Free(proc.Mp())
+			}
+			if stepVec != nil {
+				stepVec.Free(proc.Mp())
+			}
+			if startVecTmp != nil {
+				startVecTmp.Free(proc.Mp())
+			}
+			if endVecTmp != nil {
+				endVecTmp.Free(proc.Mp())
+			}
+		}()
+
+		if len(arg.ctr.executorsForArgs) == 1 {
+			endVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if err != nil {
+				return err
+			}
+			startVec = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+		} else {
+			startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if err != nil {
+				return err
+			}
+			endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if err != nil {
+				return err
+			}
+		}
+		if len(arg.Args) == 3 {
+			stepVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if err != nil {
+				return err
+			}
+		}
+		if !startVec.IsConst() || !endVec.IsConst() || (stepVec != nil && !stepVec.IsConst()) {
+			return moerr.NewInvalidInput(proc.Ctx, "generate_series only support scalar")
+		}
+		arg.generateSeries.startVecType = startVec.GetType()
+		switch arg.generateSeries.startVecType.Oid {
+		case types.T_int32:
+			if endVec.GetType().Oid != types.T_int32 || (stepVec != nil && stepVec.GetType().Oid != types.T_int32) {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
+			}
+			initStartAndEnd[int32](arg, startVec, endVec, stepVec)
+		case types.T_int64:
+			if endVec.GetType().Oid != types.T_int64 || (stepVec != nil && stepVec.GetType().Oid != types.T_int64) {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
+			}
+			initStartAndEnd[int64](arg, startVec, endVec, stepVec)
+		case types.T_datetime:
+			if endVec.GetType().Oid != types.T_datetime || (stepVec != nil && stepVec.GetType().Oid != types.T_varchar) {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
+			}
+			startSlice := vector.MustFixedCol[types.Datetime](startVec)
+			endSlice := vector.MustFixedCol[types.Datetime](endVec)
+			arg.generateSeries.start = startSlice[0]
+			arg.generateSeries.end = endSlice[0]
+			arg.generateSeries.last = endSlice[0]
+			if stepVec == nil {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
+			}
+			stepSlice := vector.MustStrCol(stepVec)
+			arg.generateSeries.step = stepSlice[0]
+		case types.T_varchar:
+			if stepVec == nil {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
+			}
+			startSlice := vector.MustStrCol(startVec)
+			endSlice := vector.MustStrCol(endVec)
+			startStr := startSlice[0]
+			endStr := endSlice[0]
+			scale := int32(findScale(startStr, endStr))
+			startTmp, err := types.ParseDatetime(startStr, scale)
+			if err != nil {
+				return err
+			}
+
+			endTmp, err := types.ParseDatetime(endStr, scale)
+			if err != nil {
+				return err
+			}
+			startVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), startTmp, 1, proc.Mp())
+			endVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), endTmp, 1, proc.Mp())
+
+			newStartSlice := vector.MustFixedCol[types.Datetime](startVecTmp)
+			newEndSlice := vector.MustFixedCol[types.Datetime](endVecTmp)
+			arg.generateSeries.scale = scale
+			arg.generateSeries.start = newStartSlice[0]
+			arg.generateSeries.end = newEndSlice[0]
+			arg.generateSeries.last = newEndSlice[0]
+			if stepVec == nil {
+				return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
+			}
+			stepSlice := vector.MustStrCol(stepVec)
+			arg.generateSeries.step = stepSlice[0]
+		default:
+			return moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", arg.generateSeries.startVecType.Oid.String())
+
+		}
+	}
+
+	if arg.generateSeries.state == genBatch {
+		switch arg.generateSeries.startVecType.Oid {
+		case types.T_int32:
+			computeNewStartAndEnd[int32](arg)
+		case types.T_int64:
+			computeNewStartAndEnd[int64](arg)
+		case types.T_varchar, types.T_datetime:
+			//todo split datetime batch
+			arg.generateSeries.state = genFinish
+		default:
+			arg.generateSeries.state = genFinish
+		}
+	}
+
+	return nil
 }
 
 func generateSeriesCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	var (
-		err                                               error
-		startVec, endVec, stepVec, startVecTmp, endVecTmp *vector.Vector
-		rbat                                              *batch.Batch
+		err  error
+		rbat *batch.Batch
 	)
-	bat := result.Batch
 	defer func() {
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
 		}
-		if startVec != nil {
-			startVec.Free(proc.Mp())
-		}
-		if endVec != nil {
-			endVec.Free(proc.Mp())
-		}
-		if stepVec != nil {
-			stepVec.Free(proc.Mp())
-		}
-		if startVecTmp != nil {
-			startVecTmp.Free(proc.Mp())
-		}
-		if endVecTmp != nil {
-			endVecTmp.Free(proc.Mp())
-		}
 	}()
-	if bat == nil {
+
+	if arg.generateSeries.state == genFinish {
 		return true, nil
 	}
 
-	if len(arg.ctr.executorsForArgs) == 1 {
-		endVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
-		if err != nil {
-			return false, err
-		}
-		startVec = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
-	} else {
-		startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
-		if err != nil {
-			return false, err
-		}
-		endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
-		if err != nil {
-			return false, err
-		}
+	err = resetGenerateSeriesState(proc, arg)
+	if err != nil {
+		return false, err
 	}
+
 	rbat = batch.NewWithSize(len(arg.Attrs))
 	rbat.Attrs = arg.Attrs
 	for i := range arg.Attrs {
 		rbat.Vecs[i] = proc.GetVector(arg.retSchema[i])
 	}
-	if len(arg.Args) == 3 {
-		stepVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat})
-		if err != nil {
-			return false, err
-		}
-	}
-	if !startVec.IsConst() || !endVec.IsConst() || (stepVec != nil && !stepVec.IsConst()) {
-		return false, moerr.NewInvalidInput(proc.Ctx, "generate_series only support scalar")
-	}
-	switch startVec.GetType().Oid {
+
+	switch arg.generateSeries.startVecType.Oid {
 	case types.T_int32:
-		if endVec.GetType().Oid != types.T_int32 || (stepVec != nil && stepVec.GetType().Oid != types.T_int32) {
-			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
-		}
-		err = handleInt(startVec, endVec, stepVec, generateInt32, proc, rbat)
+		start := arg.generateSeries.start.(int32)
+		end := arg.generateSeries.end.(int32)
+		step := arg.generateSeries.step.(int32)
+		err = handleInt(start, end, step, generateInt32, proc, rbat)
 		if err != nil {
 			return false, err
 		}
 	case types.T_int64:
-		if endVec.GetType().Oid != types.T_int64 || (stepVec != nil && stepVec.GetType().Oid != types.T_int64) {
-			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
-		}
-		err = handleInt(startVec, endVec, stepVec, generateInt64, proc, rbat)
+		start := arg.generateSeries.start.(int64)
+		end := arg.generateSeries.end.(int64)
+		step := arg.generateSeries.step.(int64)
+		err = handleInt(start, end, step, generateInt64, proc, rbat)
 		if err != nil {
 			return false, err
 		}
 	case types.T_datetime:
-		if endVec.GetType().Oid != types.T_datetime || (stepVec != nil && stepVec.GetType().Oid != types.T_varchar) {
-			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series arguments must be of the same type, type1: %s, type2: %s", startVec.GetType().Oid.String(), endVec.GetType().Oid.String())
-		}
-		err = handleDatetime(startVec, endVec, stepVec, -1, proc, rbat)
+		start := arg.generateSeries.start.(types.Datetime)
+		end := arg.generateSeries.end.(types.Datetime)
+		step := arg.generateSeries.step.(string)
+
+		err = handleDatetime(start, end, step, -1, proc, rbat)
 	case types.T_varchar:
-		if stepVec == nil {
-			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
-		}
-		startSlice := vector.MustStrCol(startVec)
-		endSlice := vector.MustStrCol(endVec)
-		startStr := startSlice[0]
-		endStr := endSlice[0]
-		scale := int32(findScale(startStr, endStr))
+		start := arg.generateSeries.start.(types.Datetime)
+		end := arg.generateSeries.end.(types.Datetime)
+		step := arg.generateSeries.step.(string)
+		scale := arg.generateSeries.scale
 		rbat.Vecs[0].GetType().Scale = scale
-		start, err := types.ParseDatetime(startStr, scale)
-		if err != nil {
-			return false, err
-		}
 
-		end, err := types.ParseDatetime(endStr, scale)
-		if err != nil {
-			return false, err
-		}
-		startVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), start, 1, proc.Mp())
-		endVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), end, 1, proc.Mp())
-
-		err = handleDatetime(startVecTmp, endVecTmp, stepVec, scale, proc, rbat)
+		err = handleDatetime(start, end, step, scale, proc, rbat)
 		if err != nil {
 			return false, err
 		}
 
 	default:
-		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", startVec.GetType().Oid.String())
+		return false, moerr.NewNotSupported(proc.Ctx, "generate_series not support type %s", arg.generateSeries.startVecType.Oid.String())
 
 	}
 	result.Batch = rbat
@@ -171,6 +255,60 @@ func judgeArgs[T generateSeriesNumber](ctx context.Context, start, end, step T) 
 		return []T{}, nil
 	}
 	return nil, nil
+}
+
+func initStartAndEnd[T generateSeriesNumber](arg *Argument, startVec, endVec, stepVec *vector.Vector) {
+	startSlice := vector.MustFixedCol[T](startVec)
+	endSlice := vector.MustFixedCol[T](endVec)
+	start := startSlice[0]
+	end := startSlice[0]
+	last := endSlice[0]
+	var step T
+	if stepVec != nil {
+		stepSlice := vector.MustFixedCol[T](stepVec)
+		step = stepSlice[0]
+	} else {
+		if startSlice[0] < endSlice[0] {
+			step = T(1)
+		} else {
+			step = T(-1)
+		}
+	}
+	end = end - step
+
+	arg.generateSeries.start = start
+	arg.generateSeries.end = end
+	arg.generateSeries.last = last
+	arg.generateSeries.step = step
+}
+
+func computeNewStartAndEnd[T generateSeriesNumber](arg *Argument) {
+	step := arg.generateSeries.step.(T)
+	newStart := arg.generateSeries.end.(T) + step
+	last := arg.generateSeries.last.(T)
+	newEnd := newStart + step*T(addBatchSize)
+	if step > 0 {
+		if newEnd < newStart {
+			newEnd = last
+		} else {
+			if newEnd > last {
+				newEnd = last
+			}
+		}
+	} else {
+		if newEnd > newStart {
+			newEnd = last
+		} else {
+			if newEnd < last {
+				newEnd = last
+			}
+		}
+	}
+	if newEnd == last {
+		arg.generateSeries.state = genFinish
+	}
+	arg.generateSeries.start = newStart
+	arg.generateSeries.end = newEnd
 }
 
 func trimStep(step string) string {
@@ -283,24 +421,7 @@ func generateDatetime(ctx context.Context, start, end types.Datetime, stepStr st
 	return res, nil
 }
 
-func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn func(context.Context, T, T, T) ([]T, error), proc *process.Process, rbat *batch.Batch) error {
-	var (
-		start, end, step T
-	)
-	startSlice := vector.MustFixedCol[T](startVec)
-	endSlice := vector.MustFixedCol[T](endVec)
-	start = startSlice[0]
-	end = endSlice[0]
-	if stepVec != nil {
-		stepSlice := vector.MustFixedCol[T](stepVec)
-		step = stepSlice[0]
-	} else {
-		if start < end {
-			step = 1
-		} else {
-			step = -1
-		}
-	}
+func handleInt[T int32 | int64](start, end, step T, genFn func(context.Context, T, T, T) ([]T, error), proc *process.Process, rbat *batch.Batch) error {
 	res, err := genFn(proc.Ctx, start, end, step)
 	if err != nil {
 		return err
@@ -315,20 +436,7 @@ func handleInt[T int32 | int64](startVec, endVec, stepVec *vector.Vector, genFn 
 	return nil
 }
 
-func handleDatetime(startVec, endVec, stepVec *vector.Vector, scale int32, proc *process.Process, rbat *batch.Batch) error {
-	var (
-		start, end types.Datetime
-		step       string
-	)
-	startSlice := vector.MustFixedCol[types.Datetime](startVec)
-	endSlice := vector.MustFixedCol[types.Datetime](endVec)
-	start = startSlice[0]
-	end = endSlice[0]
-	if stepVec == nil {
-		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
-	}
-	stepSlice := vector.MustStrCol(stepVec)
-	step = stepSlice[0]
+func handleDatetime(start, end types.Datetime, step string, scale int32, proc *process.Process, rbat *batch.Batch) error {
 	res, err := generateDatetime(proc.Ctx, start, end, step)
 	if err != nil {
 		return err

@@ -43,6 +43,8 @@ type Argument struct {
 	info     *vm.OperatorInfo
 	children []vm.Operator
 	buf      *batch.Batch
+
+	generateSeries *generateSeriesArg
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -57,6 +59,24 @@ type container struct {
 	state int
 
 	executorsForArgs []colexec.ExpressionExecutor
+}
+
+type generateSeriesState int
+
+var (
+	initArg   generateSeriesState = 0
+	genBatch  generateSeriesState = 1
+	genFinish generateSeriesState = 2
+)
+
+type generateSeriesArg struct {
+	state        generateSeriesState
+	startVecType *types.Type
+	start        any
+	end          any
+	last         any
+	step         any
+	scale        int32 //used by handleDateTime
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
