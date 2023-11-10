@@ -1464,10 +1464,20 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
+		indexDef.IndexAlgo = indexInfo.KeyType.ToString()
+		indexDef.IndexAlgoTableType = ""
+
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
+
+			params, err := indexParamsToJsonString(indexInfo)
+			if err != nil {
+				return err
+			}
+			indexDef.IndexAlgoParams = params
 		} else {
 			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
@@ -1775,6 +1785,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
+			KeyType:     stmt.IndexOption.IType,
 		}
 	default:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))

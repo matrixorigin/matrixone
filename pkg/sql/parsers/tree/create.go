@@ -736,8 +736,9 @@ func (it IndexType) ToString() string {
 		return "bsi"
 	case INDEX_TYPE_ZONEMAP:
 		return "zonemap"
+	case INDEX_TYPE_IVFFLAT:
+		return "ivfflat"
 	case INDEX_TYPE_INVALID:
-		//TODO: verify if this is valid?
 		return ""
 	default:
 		return "Unknown IndexType"
@@ -751,6 +752,7 @@ const (
 	INDEX_TYPE_RTREE
 	INDEX_TYPE_BSI
 	INDEX_TYPE_ZONEMAP
+	INDEX_TYPE_IVFFLAT
 )
 
 type VisibleType int
@@ -774,19 +776,22 @@ func (vt VisibleType) ToString() string {
 
 type IndexOption struct {
 	NodeFormatter
-	KeyBlockSize             uint64
-	IType                    IndexType
-	ParserName               string
-	Comment                  string
-	Visible                  VisibleType
-	EngineAttribute          string
-	SecondaryEngineAttribute string
+	KeyBlockSize                uint64
+	IType                       IndexType
+	ParserName                  string
+	Comment                     string
+	Visible                     VisibleType
+	EngineAttribute             string
+	SecondaryEngineAttribute    string
+	AlgoParamList               int64
+	AlgoParamVectorSimilarityFn string
 }
 
 // Must follow the following sequence when test
 func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.KeyBlockSize != 0 || node.ParserName != "" ||
-		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID {
+		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
+		node.AlgoParamList != 0 || node.AlgoParamVectorSimilarityFn != "" {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -802,6 +807,16 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.Comment != "" {
 		ctx.WriteString("comment ")
 		ctx.WriteString(node.Comment)
+		ctx.WriteByte(' ')
+	}
+	if node.AlgoParamList != 0 {
+		ctx.WriteString("LISTS ")
+		ctx.WriteString(strconv.FormatInt(node.AlgoParamList, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.AlgoParamVectorSimilarityFn != "" {
+		ctx.WriteString("SIMILARITY_FUNCTION ")
+		ctx.WriteString(node.AlgoParamVectorSimilarityFn)
 		ctx.WriteByte(' ')
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {

@@ -109,7 +109,7 @@ Number of columns in mo_columns
 24
 show column_number from mo_indexes;
 Number of columns in mo_indexes
-12
+15
 show column_number from mo_table_partitions;
 Number of columns in mo_table_partitions
 10
