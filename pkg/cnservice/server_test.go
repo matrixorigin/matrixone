@@ -94,7 +94,7 @@ func Test_InitServer(t *testing.T) {
 	msg.Cmd = pipeline.Method_PipelineMessage
 	session.EXPECT().CreateCache(ctx, uint64(0)).Return(&testMessageCache{}, nil).Times(2)
 
-	msg.Sid = pipeline.WaitingNext
+	msg.Sid = pipeline.Status_WaitingNext
 	err = srv.handleRequest(
 		ctx,
 		morpc.RPCMessage{
@@ -107,7 +107,7 @@ func Test_InitServer(t *testing.T) {
 	)
 	require.Nil(t, err)
 
-	msg.Sid = pipeline.Last
+	msg.Sid = pipeline.Status_WaitingNext
 	err = srv.handleRequest(
 		ctx,
 		morpc.RPCMessage{
