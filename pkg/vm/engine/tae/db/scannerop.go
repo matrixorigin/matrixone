@@ -111,9 +111,10 @@ func (d *segHelper) finish() []*catalog.SegmentEntry {
 type MergeTaskBuilder struct {
 	db *DB
 	*catalog.LoopProcessor
-	tid  uint64
-	name string
-	tbl  *catalog.TableEntry
+	tid    uint64
+	loaded int
+	name   string
+	tbl    *catalog.TableEntry
 
 	segmentHelper *segHelper
 	objPolicy     merge.Policy
@@ -175,6 +176,7 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 
 func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 	s.tid = 0
+	s.loaded = 0
 	if entry != nil {
 		s.tid = entry.ID
 		s.tbl = entry
@@ -227,6 +229,10 @@ func (s *MergeTaskBuilder) onSegment(segmentEntry *catalog.SegmentEntry) (err er
 		return moerr.GetOkStopCurrRecur()
 	}
 
+	if s.loaded > 32 && (s.name != motrace.RawLogTbl && s.name != "mixed_daily") {
+		return moerr.GetOkStopCurrRecur()
+	}
+
 	s.segmentHelper.resetForNewSeg()
 	s.segmentHelper.segIsSorted = segmentEntry.IsSortedLocked()
 	return
@@ -241,12 +247,19 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 	// for sorted segments, we have to feed it to policy to see if it is qualified to be merged
 	seg.Stat.Rows = s.segmentHelper.segRowCnt
 	seg.Stat.RemainingRows = s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel
+	if !seg.Stat.Loaded {
+		s.loaded += 1
+	}
 	seg.LoadObjectInfo()
-	if s.name == motrace.RawLogTbl && seg.Stat.OriginSize == 0 {
+	if seg.Stat.OriginSize == 0 {
 		// after loading object info, original size is still 0, we have to estimate it by experience
-		factor := 1 + seg.Stat.Rows/1600
-		seg.Stat.OriginSize = (1 << 20) * factor
-
+		if s.name == motrace.RawLogTbl {
+			factor := 1 + seg.Stat.Rows/1600
+			seg.Stat.OriginSize = (1 << 20) * factor
+		} else if s.name == "mixed_daily" {
+			factor := 1 + seg.Stat.Rows/10000
+			seg.Stat.OriginSize = (1 << 20) * factor
+		}
 	}
 	s.objPolicy.OnObject(seg)
 	return nil

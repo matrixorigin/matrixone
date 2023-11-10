@@ -233,6 +233,7 @@ func (entry *flushTableTailEntry) ApplyCommit() (err error) {
 	tbl.Stats.Lock()
 	defer tbl.Stats.Unlock()
 	tbl.Stats.LastFlush = entry.dirtyEndTs
+	logutil.Infof("flushtabletable Update %v-%v LastFlush %v", tbl.ID, tbl.GetLastestSchema().Name, entry.dirtyEndTs.ToString())
 	// no merge tasks touch the dirties, we are good to clean all
 	if entry.dirtyLen == len(tbl.DeletedDirties) {
 		tbl.DeletedDirties = tbl.DeletedDirties[:0]
