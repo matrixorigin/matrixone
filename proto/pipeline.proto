@@ -27,15 +27,17 @@ import "timestamp.proto";
 import "lock.proto";
 
 enum Method {
-    PipelineMessage = 0;
-    BatchMessage = 1;
-    PrepareDoneNotifyMessage = 2;// for dispatch
+    UnknownMethod = 0;
+    PipelineMessage = 1;
+    BatchMessage = 2;
+    PrepareDoneNotifyMessage = 3;// for dispatch
 }
 
 enum Status {
-    WaitingNext = 0;
-    Last = 1;
-    MessageEnd = 2;
+    UnknownStatus = 0;
+    WaitingNext = 1;
+    Last = 2;
+    MessageEnd = 3;
 }
 
 message Message {
