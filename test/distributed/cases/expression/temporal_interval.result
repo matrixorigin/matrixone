@@ -115,7 +115,7 @@ null
 select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
 Data truncation: data out of range: data type datetime, 
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
-invalid input: invalid datatime value 0000-00-00 00:00:00
+invalid input: invalid datetime value 0000-00-00 00:00:00
 select date_add('1998-01-30',Interval 1 month);
 date_add('1998-01-30',Interval 1 month)
 1998-02-28 00:00:00
@@ -259,7 +259,7 @@ select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND)
 1997-12-31 23:59:59
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
-invalid input: invalid datatime value 0000-00-00 00:00:00
+invalid input: invalid datetime value 0000-00-00 00:00:00
 select date_add('1998-01-30',Interval 1 month);
 date_add('1998-01-30',Interval 1 month)
 1998-02-28 00:00:00
