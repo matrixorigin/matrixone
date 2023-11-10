@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
 	"runtime"
 	"time"
@@ -403,6 +404,9 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	err := procInfo.Unmarshal(data)
 	if err != nil {
 		return processHelper{}, err
+	}
+	if len(procInfo.GetAnalysisNodeList()) == 0 {
+		panic(fmt.Sprintf("empty plan: %s", procInfo.Sql))
 	}
 
 	result := processHelper{
