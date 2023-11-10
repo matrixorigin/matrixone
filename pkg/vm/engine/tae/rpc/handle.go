@@ -1064,9 +1064,6 @@ func (h *Handle) HandleWrite(
 		if deadline, ok := ctx.Deadline(); ok {
 			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
-
-		//v2.TxnCNCommittedDeltaLocationQuantityGauge.Set(float64(len(req.DeltaLocs)))
-
 		rowidIdx := 0
 		pkIdx := 1
 		for _, key := range req.DeltaLocs {
