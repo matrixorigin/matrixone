@@ -64,3 +64,13 @@ var (
 	TaskMergedBlocksCounter = taskGeneratedStuffCounter.WithLabelValues("merged_block")
 	TasKMergedSizeCounter   = taskGeneratedStuffCounter.WithLabelValues("merged_size")
 )
+
+var (
+	TaskMergeTransferPageLengthGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_transfer_page_size",
+			Help:      "Size of merge generated transfer page",
+		})
+)

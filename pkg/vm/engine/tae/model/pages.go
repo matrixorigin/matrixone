@@ -55,6 +55,10 @@ func (page *TransferHashPage) Close() {
 	page.hashmap = make(map[uint32]types.Rowid)
 }
 
+func (page *TransferHashPage) Length() int {
+	return len(page.hashmap)
+}
+
 func (page *TransferHashPage) String() string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("hashpage[%s][%s][Len=%d]",
