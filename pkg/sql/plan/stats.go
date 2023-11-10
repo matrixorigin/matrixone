@@ -721,7 +721,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if !needStats(node.TableDef) {
 		return DefaultStats()
 	}
-	if shouldReturnMinimalStats(node.TableDef) {
+	if shouldReturnMinimalStats(node) {
 		return DefaultMinimalStats()
 	}
 	if !builder.compCtx.Stats(node.ObjRef) {
@@ -757,7 +757,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	return stats
 }
 
-func shouldReturnMinimalStats(tableDef *TableDef) bool {
+func shouldReturnMinimalStats(node *plan.Node) bool {
 	return false
 }
 
