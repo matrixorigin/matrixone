@@ -335,7 +335,7 @@ func TestDatetime_DayOfYear(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			datetime, err := ParseDatetime(c.datestr, 6)
 			if err != nil {
-				t.Fatalf("parse datatime err %+v", err)
+				t.Fatalf("parse datetime err %+v", err)
 			}
 			t.Logf("date string:%+v \n", c.datestr)
 			year := datetime.DayOfYear()

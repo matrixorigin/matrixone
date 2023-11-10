@@ -96,7 +96,7 @@ func (t Time) NumericString(scale int32) string {
 func ParseTime(s string, scale int32) (Time, error) {
 	s = strings.TrimSpace(s)
 
-	// seperate to date&time and msec parts
+	// separate to date&time and msec parts
 	strs := strings.Split(s, ".")
 	timeString := strs[0]
 	isNegative := false
@@ -266,7 +266,7 @@ func (t Time) ToDecimal64(ctx context.Context, width, scale int32) (Decimal64, e
 	tToStr := t.NumericString(scale)
 	ret, err := ParseDecimal64(tToStr, width, scale)
 	if err != nil {
-		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal64")
+		return ret, moerr.NewInternalError(ctx, "exist time cant't cast to decimal64")
 	}
 
 	return ret, nil
@@ -276,7 +276,7 @@ func (t Time) ToDecimal128(ctx context.Context, width, scale int32) (Decimal128,
 	tToStr := t.NumericString(scale)
 	ret, err := ParseDecimal128(tToStr, width, scale)
 	if err != nil {
-		return ret, moerr.NewInternalError(ctx, "exsit time cant't cast to decimal128")
+		return ret, moerr.NewInternalError(ctx, "exist time cant't cast to decimal128")
 	}
 
 	return ret, nil
