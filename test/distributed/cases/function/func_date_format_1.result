@@ -200,6 +200,9 @@ Sunday 28 February 9999
 select date_format('1997-01-02 03:04:05', '%M %W %D %Y %y %m %d %h %i %s %w');
 date_format('1997-01-02 03:04:05', '%M %W %D %Y %y %m %d %h %i %s %w')
 January Thursday 2nd 1997 97 01 02 03 04 05 4
+select date_format('1998-01-02 03:04', '%M %W %D %Y %y %m %d %h %i %s %w');
+date_format('1998-01-02 03:04', %M %W %D %Y %y %m %d %h %i %s %w)
+January Friday 2nd 1998 98 01 02 03 04 00 5
 select date_format('1997-01-02', concat('%M %W %D','%Y %y %m %d %h %i %s %w'));
 date_format('1997-01-02', concat('%M %W %D','%Y %y %m %d %h %i %s %w'))
 January Thursday 2nd1997 97 01 02 12 00 00 4

@@ -313,14 +313,6 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		}
 	}
 
-	if vector.Hash.Sum != nil && vector.Hash.New != nil {
-		h := vector.Hash.New()
-		if _, err := h.Write(content); err != nil {
-			return 0, err
-		}
-		*vector.Hash.Sum = h.Sum(nil)
-	}
-
 	r := bytes.NewReader(content)
 	var expire *time.Time
 	if !vector.ExpireAt.IsZero() {
@@ -398,10 +390,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 }
 
 func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if len(vector.Entries) == 0 {
