@@ -188,6 +188,9 @@ table_id    BIGINT UNSIGNED(64)    NO        null
 database_id    BIGINT UNSIGNED(64)    NO        null        
 name    VARCHAR(64)    NO        null        
 type    VARCHAR(11)    NO        null        
+algo    VARCHAR(11)    YES        null        
+algo_table_type    VARCHAR(11)    YES        null        
+algo_params    VARCHAR(2048)    YES        null        
 is_visible    TINYINT(8)    NO        null        
 hidden    TINYINT(8)    NO        null        
 comment    VARCHAR(2048)    NO        null        
@@ -240,6 +243,9 @@ table_id    BIGINT UNSIGNED(64)    NO        null
 database_id    BIGINT UNSIGNED(64)    NO        null        
 name    VARCHAR(64)    NO        null        
 type    VARCHAR(11)    NO        null        
+algo    VARCHAR(11)    YES        null        
+algo_table_type    VARCHAR(11)    YES        null        
+algo_params    VARCHAR(2048)    YES        null        
 is_visible    TINYINT(8)    NO        null        
 hidden    TINYINT(8)    NO        null        
 comment    VARCHAR(2048)    NO        null        

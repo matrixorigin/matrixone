@@ -52,7 +52,7 @@ func NewCompactBlockEntry(
 	rt *dbutils.Runtime,
 ) *compactBlockEntry {
 
-	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
+	page := model.NewTransferHashPage(from.Fingerprint(), time.Now(), false)
 	if to != nil {
 		toId := to.Fingerprint()
 		offsetMapping := compute.GetOffsetMapBeforeApplyDeletes(deletes)

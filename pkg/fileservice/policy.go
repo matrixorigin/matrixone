@@ -14,24 +14,25 @@
 
 package fileservice
 
-type CachePolicy uint32
+type Policy uint64
 
 const (
-	SkipMemoryReads = 1 << iota
-	SkipMemoryWrites
-	SkipDiskReads
-	SkipDiskWrites
+	SkipMemoryCacheReads = 1 << iota
+	SkipMemoryCacheWrites
+	SkipDiskCacheReads
+	SkipDiskCacheWrites
+	SkipFullFilePreloads
 )
 
 const (
-	SkipReads  = SkipMemoryReads | SkipDiskReads
-	SkipWrites = SkipMemoryWrites | SkipDiskWrites
-	SkipDisk   = SkipDiskReads | SkipDiskWrites
-	SkipMemory = SkipMemoryReads | SkipMemoryWrites
-	SkipAll    = SkipDisk | SkipMemory
+	SkipCacheReads  = SkipMemoryCacheReads | SkipDiskCacheReads
+	SkipCacheWrites = SkipMemoryCacheWrites | SkipDiskCacheWrites
+	SkipDiskCache   = SkipDiskCacheReads | SkipDiskCacheWrites
+	SkipMemoryCache = SkipMemoryCacheReads | SkipMemoryCacheWrites
+	SkipAllCache    = SkipDiskCache | SkipMemoryCache
 )
 
-func (c CachePolicy) Any(policies ...CachePolicy) bool {
+func (c Policy) Any(policies ...Policy) bool {
 	for _, policy := range policies {
 		if policy&c > 0 {
 			return true

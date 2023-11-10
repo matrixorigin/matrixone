@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"strconv"
-	"strings"
 )
 
 const (
@@ -315,12 +316,12 @@ func (s *sAggClusterCenters) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// decodeConfig will decode the config string (seperated by configSeparator) and return the k and distance_type
+// decodeConfig will decode the config string (separated by configSeparator) and return the k and distance_type
 func decodeConfig(config any) (k uint64, distType kmeans.DistanceType, err error) {
 	bts, ok := config.([]byte)
 	if ok && bts != nil {
-		commaSeperatedConfigStr := string(bts)
-		configs := strings.Split(commaSeperatedConfigStr, configSeparator)
+		commaseparatedConfigStr := string(bts)
+		configs := strings.Split(commaseparatedConfigStr, configSeparator)
 
 		parseK := func(v string) (uint64, error) {
 			return strconv.ParseUint(strings.TrimSpace(v), 10, 64)
