@@ -287,7 +287,8 @@ func (txn *Transaction) WriteFileLocked(
 		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc})
 		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 
-		for _, blk := range vector.MustBytesCol(bat.GetVector(0)) {
+		blkInfos := vector.MustBytesCol(bat.GetVector(0))
+		for _, blk := range blkInfos {
 			blkInfo := *catalog.DecodeBlockInfo(blk)
 			vector.AppendBytes(
 				newBat.GetVector(0),
