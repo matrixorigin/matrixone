@@ -44,12 +44,30 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnDequeuePreparedRow(),
 			c.initTxnDequeuePreparingRow(),
 			c.initTxnRangesLoadedObjectMetaRow(),
+			c.initCNCommittedObjectQuantityRow(),
 		)...)
 	if err != nil {
 		return err
 	}
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
+}
+
+func (c *DashboardCreator) initCNCommittedObjectQuantityRow() dashboard.Option {
+	return dashboard.Row(
+		"Quantity of Object Location The CN Have Committed to TN",
+		c.withGraph(
+			"meta location",
+			6,
+			`sum(`+c.getMetricWithFilter("mo_txn_cn_committed_location_quantity_size", `type="meta_location"`)+`)`,
+			""),
+
+		c.withGraph(
+			"delta location",
+			6,
+			`sum(`+c.getMetricWithFilter("mo_txn_cn_committed_location_quantity_size", `type="delta_location"`)+`)`,
+			""),
+	)
 }
 
 func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
