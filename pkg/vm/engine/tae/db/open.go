@@ -278,8 +278,7 @@ func mpoolAllocatorSubTask(rt *dbutils.Runtime) {
 	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))
 	v2.MemTAEMutableAllocatorGauge.Set(float64(common.MutMemAllocator.CurrNB()))
 	v2.MemTAESmallAllocatorGauge.Set(float64(common.SmallAllocator.CurrNB()))
-	v2.MemTAEVectorPoolSmallGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().CurrNB()))
-	v2.MemTAEVectorPoolTransientGauge.Set(0)
+	v2.MemTAEDefaultVectorPoolGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().CurrNB()))
 }
 
 func transferPageSubTask() {

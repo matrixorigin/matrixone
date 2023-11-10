@@ -42,32 +42,26 @@ func (c *DashboardCreator) initTAEMpoolAllocatorRow() dashboard.Option {
 		"TAE Mpool Allocator",
 		c.withGraph(
 			"TAE Defaulter Allocator",
-			2.4,
+			3,
 			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_default"`)+`) by (name)`,
 			"{{ name }}"),
 
 		c.withGraph(
 			"TAE Small Allocator",
-			2.4,
+			3,
 			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_small"`)+`) by (name)`,
 			"{{ name }}"),
 
 		c.withGraph(
 			"TAE Mutable Memory Allocator",
-			2.4,
+			3,
 			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_mutable"`)+`) by (name)`,
 			"{{ name }}"),
 
 		c.withGraph(
 			"VectorPool Default Allocator",
-			2.4,
+			3,
 			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="vectorpool_default"`)+`) by (name)`,
-			"{{ name }}"),
-
-		c.withGraph(
-			"VectorPool Transient Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="vectorpool_transient"`)+`) by (name)`,
 			"{{ name }}"),
 	)
 }

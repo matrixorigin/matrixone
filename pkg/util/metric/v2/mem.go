@@ -25,9 +25,8 @@ var (
 			Help:      "Size of mpool have allocated.",
 		}, []string{"type"})
 
-	MemTAEDefaultAllocatorGauge    = memMPoolAllocatedSizeGauge.WithLabelValues("tae_default")
-	MemTAEMutableAllocatorGauge    = memMPoolAllocatedSizeGauge.WithLabelValues("tae_mutable")
-	MemTAESmallAllocatorGauge      = memMPoolAllocatedSizeGauge.WithLabelValues("tae_small")
-	MemTAEVectorPoolSmallGauge     = memMPoolAllocatedSizeGauge.WithLabelValues("vectorpool_default")
-	MemTAEVectorPoolTransientGauge = memMPoolAllocatedSizeGauge.WithLabelValues("vectorpool_transient")
+	MemTAEDefaultAllocatorGauge  = memMPoolAllocatedSizeGauge.WithLabelValues("tae_default")
+	MemTAEMutableAllocatorGauge  = memMPoolAllocatedSizeGauge.WithLabelValues("tae_mutable")
+	MemTAESmallAllocatorGauge    = memMPoolAllocatedSizeGauge.WithLabelValues("tae_small")
+	MemTAEDefaultVectorPoolGauge = memMPoolAllocatedSizeGauge.WithLabelValues("vectorpool_default")
 )
