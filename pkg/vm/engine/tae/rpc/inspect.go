@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/spf13/cobra"
 )
 
@@ -170,6 +171,26 @@ func (c *objStatArg) Run() error {
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
 	}
+	return nil
+}
+
+type manualyIgnoreArg struct {
+	ctx *inspectContext
+	id  uint64
+}
+
+func (c *manualyIgnoreArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	c.id, _ = cmd.Flags().GetUint64("tid")
+	return nil
+}
+
+func (c *manualyIgnoreArg) String() string {
+	return fmt.Sprintf("ignore ckp table: %v", c.id)
+}
+
+func (c *manualyIgnoreArg) Run() error {
+	logtail.TempF.Add(c.id)
 	return nil
 }
 
@@ -373,6 +394,15 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	mmCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	mmCmd.Flags().StringSliceP("objects", "o", nil, "format: object_id_0000,object_id_0000")
 	rootCmd.AddCommand(mmCmd)
+
+	miCmd := &cobra.Command{
+		Use:   "ckpignore",
+		Short: "manually ignore table when checking checkpoint entry",
+		Run:   RunFactory(&manualyIgnoreArg{}),
+	}
+
+	miCmd.Flags().Uint64P("tid", "t", 0, "format: table-id")
+	rootCmd.AddCommand(miCmd)
 
 	return rootCmd
 }

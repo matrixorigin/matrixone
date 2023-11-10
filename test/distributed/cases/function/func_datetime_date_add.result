@@ -37,6 +37,12 @@ SELECT '2021-01-01 00:00:00' + INTERVAL '1' DAY AS is_tomorrow, DATE(ts)
 FROM (SELECT ADDDATE(DATE'2000-01-01', INTERVAL 1 DAY) AS ts) AS dt;
 is_tomorrow	DATE(ts)
 2021-01-02 00:00:00	2000-01-02
+SELECT ADDDATE(TIMESTAMP'2023-01-01 00:00', INTERVAL 1 DAY);
+ADDDATE(TIMESTAMP'2023-01-01 00:00', interval(1, day))
+2023-01-02 00:00:00
+SELECT ADDDATE(TIMESTAMP'2023-01-01 00:00', INTERVAL 1 HOUR);
+ADDDATE(TIMESTAMP'2023-01-01 00:00', interval(1, hour))
+2023-01-01 01:00:00
 SELECT ADDDATE(TIME'00:00:00', INTERVAL 1 HOUR);
 adddate(time(00:00:00), interval(1, hour))
 01:00:00
@@ -108,9 +114,9 @@ select date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY);
 date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY)
 1724-03-17 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH);
-Data truncation: data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime,
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
-Data truncation: data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime,
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND)
 1998-01-07 22:40:00
@@ -148,7 +154,7 @@ select date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND)
 null
 select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
-Data truncation: data out of range: data type datetime, 
+Data truncation: data out of range: data type datetime,
 select date_add('1998-01-30',Interval 1 month);
 date_add('1998-01-30',Interval 1 month)
 1998-02-28 00:00:00
