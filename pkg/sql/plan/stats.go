@@ -66,6 +66,7 @@ func NewStatsInfoMap() *StatsInfoMap {
 		MinValMap:       make(map[string]float64),
 		MaxValMap:       make(map[string]float64),
 		DataTypeMap:     make(map[string]types.T),
+		NullCntMap:      make(map[string]int64),
 		ShuffleRangeMap: make(map[string]*ShuffleRange),
 		BlockNumber:     0,
 		ObjectNumber:    0,
