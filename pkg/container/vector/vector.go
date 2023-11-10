@@ -2471,7 +2471,7 @@ func (v *Vector) String() string {
 			}
 		}
 
-		str := types.ArraysToString[float32](col)
+		str := types.ArraysToString[float32](col, types.DefaultArraysToStringSep)
 		if v.nsp.Any() {
 			return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 		}
@@ -2486,7 +2486,7 @@ func (v *Vector) String() string {
 				return types.ArrayToString[float64](col[0])
 			}
 		}
-		str := types.ArraysToString[float64](col)
+		str := types.ArraysToString[float64](col, types.DefaultArraysToStringSep)
 		if v.nsp.Any() {
 			return fmt.Sprintf("%v-%s", str, v.nsp.GetBitmap().String())
 		}

@@ -15,7 +15,6 @@
 package merge
 
 import (
-	"bytes"
 	"fmt"
 	"sort"
 	"sync"
@@ -27,22 +26,16 @@ import (
 
 var (
 	_                  Policy = (*Basic)(nil)
-	defaultBasicConfig        = &BasicPolicyConfig{
-		MergeMaxOneRun: common.DefaultMaxMergeObjN,
-		ObjectMaxRows:  common.DefaultMaxRowsObj,
-	}
+	defaultBasicConfig        = &BasicPolicyConfig{MergeMaxOneRun: common.DefaultMaxMergeObjN}
 )
 
 type BasicPolicyConfig struct {
-	FromUser       bool
-	name           string
 	ObjectMinRows  int
-	ObjectMaxRows  int
 	MergeMaxOneRun int
 }
 
 func (c *BasicPolicyConfig) String() string {
-	return fmt.Sprintf("minRowsObj:%d, maxOneRun:%d, maxRowsObject:%d", c.ObjectMinRows, c.MergeMaxOneRun, c.ObjectMaxRows)
+	return fmt.Sprintf("minRowsObj:%d, maxOneRun:%d", c.ObjectMinRows, c.MergeMaxOneRun)
 }
 
 type customConfigProvider struct {
@@ -66,34 +59,7 @@ func (o *customConfigProvider) SetConfig(id uint64, c *BasicPolicyConfig) {
 	o.Lock()
 	defer o.Unlock()
 	o.configs[id] = c
-	if c.FromUser {
-		logutil.Infof("mergeblocks config map: %v", o.configs)
-	}
-}
-
-func (o *customConfigProvider) DeleteConfig(id uint64) {
-	o.Lock()
-	defer o.Unlock()
-	delete(o.configs, id)
-}
-
-func (o *customConfigProvider) String() string {
-	o.Lock()
-	defer o.Unlock()
-	keys := make([]uint64, 0, len(o.configs))
-	for k := range o.configs {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return keys[i] < keys[j]
-	})
-	buf := bytes.Buffer{}
-	buf.WriteString("customConfigProvider: ")
-	for _, k := range keys {
-		c := o.configs[k]
-		buf.WriteString(fmt.Sprintf("%d-%v:%v,%v | ", k, c.name, c.ObjectMinRows, c.MergeMaxOneRun))
-	}
-	return buf.String()
+	logutil.Infof("mergeblocks config map: %v", o.configs)
 }
 
 func (o *customConfigProvider) ResetConfig() {
@@ -105,7 +71,7 @@ func (o *customConfigProvider) ResetConfig() {
 type Basic struct {
 	id      uint64
 	schema  *catalog.Schema
-	hist    common.MergeHistory
+	hist    *common.MergeHistory
 	objHeap *heapBuilder[*catalog.SegmentEntry]
 	accBuf  []int
 
@@ -151,7 +117,6 @@ func (o *Basic) Config(id uint64, c any) {
 		return
 	}
 	cfg := c.(*BasicPolicyConfig)
-	cfg.FromUser = true
 	o.configProvider.SetConfig(id, cfg)
 }
 
@@ -163,11 +128,6 @@ func (o *Basic) GetConfig(id uint64) any {
 			MergeMaxOneRun: int(common.RuntimeMaxMergeObjN.Load()),
 		}
 	}
-	return r
-}
-
-func (o *Basic) ConfigString() string {
-	r := o.configProvider.String()
 	return r
 }
 
@@ -200,11 +160,11 @@ func (o *Basic) optimize(segs []*catalog.SegmentEntry) []*catalog.SegmentEntry {
 	// skip merging objects with big row count gaps, 3x and more
 	for i = len(acc) - 1; i > 1 && isBigGap(acc[i-1], acc[i]); i-- {
 	}
-
-	for ; i > 1 && acc[i] > o.config.ObjectMaxRows; i-- {
-	}
-
 	readyToMergeRows := acc[i]
+
+	// if o.schema.Name == "rawlog" || o.schema.Name == "statement_info" {
+	// 	logutil.Infof("mergeblocks %d-%s acc: %v, tryMerge: %v", o.id, o.schema.Name, acc, readyToMergeRows)
+	// }
 
 	// avoid frequent small object merge
 	if readyToMergeRows < int(o.schema.BlockMaxRows) &&
@@ -223,7 +183,7 @@ func (o *Basic) controlMem(segs []*catalog.SegmentEntry, mem int64) []*catalog.S
 		mem = constMaxMemCap
 	}
 	needPopout := func(ss []*catalog.SegmentEntry) bool {
-		_, _, esize := estimateMergeConsume(ss)
+		_, esize := estimateMergeConsume(ss)
 		return esize > int(2*mem/3)
 	}
 	popCnt := 0
@@ -246,32 +206,17 @@ func (o *Basic) ResetForTable(id uint64, entry *catalog.TableEntry) {
 	o.hist = entry.Stats.GetLastMerge()
 	o.objHeap.reset()
 	o.config = o.configProvider.GetConfig(id)
-
-	updateConfig := func(min, max, run int) {
-		if o.config == nil {
-			o.config = &BasicPolicyConfig{
-				name: o.schema.Name,
-			}
+	if o.config == nil && o.schema.Name == "rawlog" {
+		o.config = &BasicPolicyConfig{
+			ObjectMinRows:  500000,
+			MergeMaxOneRun: 512,
 		}
-		o.config.ObjectMinRows = min
-		o.config.ObjectMaxRows = max
-		o.config.MergeMaxOneRun = run
 		o.configProvider.SetConfig(id, o.config)
 	}
-	if o.config == nil || !o.config.FromUser {
-		guessWorkload := entry.Stats.GetWorkloadGuess()
-		switch guessWorkload {
-		case common.WorkApInsert:
-			updateConfig(30*8192, common.DefaultMaxRowsObj, 16)
-		case common.WorkApQuiet:
-			updateConfig(80*8192, common.DefaultMaxRowsObj, 10)
-		default:
-			o.config = defaultBasicConfig
-			o.config.ObjectMinRows = determineObjectMinRows(o.schema)
-			o.config.ObjectMaxRows = int(common.RuntimeMaxRowsObj.Load())
-			o.config.MergeMaxOneRun = int(common.RuntimeMaxMergeObjN.Load())
-			o.configProvider.DeleteConfig(id)
-		}
+	if o.config == nil {
+		o.config = defaultBasicConfig
+		o.config.ObjectMinRows = determineObjectMinRows(o.schema)
+		o.config.MergeMaxOneRun = int(common.RuntimeMaxMergeObjN.Load())
 	}
 }
 

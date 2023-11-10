@@ -83,6 +83,17 @@ func AbsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Functio
 	})
 }
 
+func NormalizeL2Array[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(in []byte) ([]byte, error) {
+		_in := types.BytesToArray[T](in)
+		_out, err := moarray.NormalizeL2(_in)
+		if err != nil {
+			return nil, err
+		}
+		return types.ArrayToBytes[T](_out), nil
+	})
+}
+
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (float64, error) {
 		_in := types.BytesToArray[T](in)
@@ -105,7 +116,7 @@ func VectorDimsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 }
 
 func SummationArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return opUnaryBytesToFixed[float64](ivecs, result, proc, length, func(in []byte) (out float64) {
+	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(in []byte) (out float64, err error) {
 		_in := types.BytesToArray[T](in)
 
 		return moarray.Summation[T](_in)

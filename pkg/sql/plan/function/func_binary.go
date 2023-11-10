@@ -727,16 +727,22 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				}
 				return nil
 			}
-			maxTime := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+			maxStartTime := time.Date(9999, 12, 31, 23, 59, 59, 0, fromLoc)
 			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
+			minStartTime := time.Date(0001, 1, 1, 0, 0, 0, 0, fromLoc)
+			minEndTime := time.Date(0001, 1, 1, 0, 0, 0, 0, toLoc)
 			startTime := date.ConvertToGoTime(fromLoc)
-			if startTime.After(maxTime) { // if startTime > maxTime, return maxTime
-				if err = rs.AppendBytes([]byte(maxTime.Format(time.DateTime)), false); err != nil {
+			if startTime.After(maxStartTime) { // if startTime > maxTime, return maxTime
+				if err = rs.AppendBytes([]byte(maxStartTime.Format(time.DateTime)), false); err != nil {
 					return err
 				}
-			} else {
+			} else if startTime.Before(minStartTime) { // if startTime < minTime, return minTime
+				if err = rs.AppendBytes([]byte(minStartTime.Format(time.DateTime)), false); err != nil {
+					return err
+				}
+			} else { // if minTime <= startTime <= maxTime
 				endTime := startTime.In(toLoc)
-				if endTime.After(maxEndTime) { // if endTime > maxTime, return startTime
+				if endTime.After(maxEndTime) || endTime.Before(minEndTime) { // if endTime > maxTime or endTime < maxTime, return startTime
 					if err = rs.AppendBytes([]byte(startTime.Format(time.DateTime)), false); err != nil {
 						return err
 					}
@@ -770,6 +776,9 @@ func convertTimezone(tz string) *time.Location {
 			return nil
 		}
 		minutes, err := strconv.Atoi(parts[1])
+		if tz[0] == '-' {
+			minutes = -minutes
+		}
 		if err != nil {
 			return nil
 		}
@@ -2656,5 +2665,21 @@ func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result v
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
 		return moarray.CosineSimilarity[T](_v1, _v2)
+	})
+}
+
+func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.L2Distance[T](_v1, _v2)
+	})
+}
+
+func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.CosineDistance[T](_v1, _v2)
 	})
 }
