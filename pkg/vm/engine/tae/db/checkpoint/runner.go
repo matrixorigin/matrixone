@@ -502,7 +502,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, r.rt.Fs.Service, true)
+	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
