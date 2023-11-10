@@ -91,7 +91,7 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		if d, err := ParseDateCast(s); err == nil {
 			return d.ToDatetime(), nil
 		}
-		return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+		return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 	}
 	var year int32
 	var month, day, hour, minute, second uint8
@@ -104,65 +104,65 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		var unum uint64
 		strArr := strings.Split(s, " ")
 		if len(strArr) != 2 {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		// solve year/month/day
 		front := strings.Split(strArr[0], s[4:5])
 		if len(front) != 3 {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		num, err = strconv.ParseInt(front[0], 10, 32)
 		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		year = int32(num)
 		unum, err = strconv.ParseUint(front[1], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		month = uint8(unum)
 		unum, err = strconv.ParseUint(front[2], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		day = uint8(unum)
 
 		if !ValidDate(year, month, day) {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 
 		middleAndBack := strings.Split(strArr[1], ".")
 		// solve hour/minute/second
 		middle := strings.Split(middleAndBack[0], ":")
 		if len(middle) != 3 {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		unum, err = strconv.ParseUint(middle[0], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		hour = uint8(unum)
 		unum, err = strconv.ParseUint(middle[1], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		minute = uint8(unum)
 		unum, err = strconv.ParseUint(middle[2], 10, 8)
 		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		second = uint8(unum)
 		if !ValidTimeInDay(hour, minute, second) {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 		// solve microsecond
 		if len(middleAndBack) == 2 {
 			msec, carry, err = getMsec(middleAndBack[1], scale)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 			}
 		} else if len(middleAndBack) > 2 {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 		}
 	} else {
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
@@ -176,20 +176,20 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 				msecStr := s[15:]
 				msec, carry, err = getMsec(msecStr, scale)
 				if err != nil {
-					return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+					return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 				}
 			} else {
-				return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+				return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 			}
 		}
 	}
 	if !ValidDate(year, month, day) {
-		return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+		return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 	}
 	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
 	if !ValidDate(y, m, d) {
-		return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+		return -1, moerr.NewInvalidInputNoCtx("invalid datetime value %s", s)
 	}
 	return result, nil
 }

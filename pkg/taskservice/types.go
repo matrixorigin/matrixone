@@ -185,7 +185,7 @@ type TaskService interface {
 	GetStorage() TaskStorage
 }
 
-// TaskExecutor which is responsible for the execution logic of a specific Task, and the function exits to
+// TaskExecutor which is responsible for the execution logic of a specific Task, and the function exists to
 // represent the completion of the task execution. In the process of task execution task may be interrupted
 // at any time, so the implementation needs to frequently check the state of the Context, in the
 // Context.Done(), as soon as possible to exit. Epoch is 1 means the task is executed for the first time,
