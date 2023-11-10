@@ -585,6 +585,19 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 		}
 	}()
 
+	// try default nil config provider
+	{
+		provider, err := credentials.NewCredential(nil)
+		if err == nil {
+			_, err := provider.GetCredential()
+			if err == nil {
+				// ok
+				logutil.Info("aliyun sdk credential", zap.Any("using", "default"))
+				return toOSSCredentialProvider(provider), nil
+			}
+		}
+	}
+
 	// static
 	if o.KeyID != "" && o.KeySecret != "" {
 		logutil.Info("aliyun sdk credential", zap.Any("using", "static"))
