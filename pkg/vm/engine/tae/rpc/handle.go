@@ -583,8 +583,7 @@ func (h *Handle) HandleInspectTN(
 	return nil, nil
 }
 
-func (h *Handle) prefetchDeleteRowID(ctx context.Context,
-	req *db.WriteReq) error {
+func (h *Handle) prefetchDeleteRowID(ctx context.Context, req *db.WriteReq) error {
 	if len(req.DeltaLocs) == 0 {
 		return nil
 	}
@@ -642,16 +641,32 @@ func (h *Handle) EvaluateTxnRequest(
 	h.mu.RLock()
 	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
+
+	metaLocCnt := 0
+	deltaLocCnt := 0
+
+	defer func() {
+		if metaLocCnt != 0 {
+			v2.TxnCNCommittedMetaLocationQuantityGauge.Set(float64(metaLocCnt))
+		}
+
+		if deltaLocCnt != 0 {
+			v2.TxnCNCommittedDeltaLocationQuantityGauge.Set(float64(deltaLocCnt))
+		}
+	}()
+
 	for _, e := range txnCtx.reqs {
 		if r, ok := e.(*db.WriteReq); ok {
 			if r.FileName != "" {
 				if r.Type == db.EntryDelete {
+					deltaLocCnt += len(r.DeltaLocs)
 					// start to load deleted row ids
 					err = h.prefetchDeleteRowID(ctx, r)
 					if err != nil {
 						return
 					}
 				} else if r.Type == db.EntryInsert {
+					metaLocCnt += len(r.MetaLocs)
 					err = h.prefetchMetadata(ctx, r)
 					if err != nil {
 						return
@@ -1049,6 +1064,9 @@ func (h *Handle) HandleWrite(
 		if deadline, ok := ctx.Deadline(); ok {
 			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
+
+		//v2.TxnCNCommittedDeltaLocationQuantityGauge.Set(float64(len(req.DeltaLocs)))
+
 		rowidIdx := 0
 		pkIdx := 1
 		for _, key := range req.DeltaLocs {

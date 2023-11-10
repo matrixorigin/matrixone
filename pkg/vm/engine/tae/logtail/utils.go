@@ -367,7 +367,7 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 }
 
 func IncrementalCheckpointDataFactory(start, end types.TS,
-	fs fileservice.FileService) func(c *catalog.Catalog) (*CheckpointData, error) {
+	fs fileservice.FileService, collectUsage bool) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewIncrementalCollector(start, end)
 		defer collector.Close()
@@ -376,7 +376,10 @@ func IncrementalCheckpointDataFactory(start, end types.TS,
 			err = nil
 		}
 
-		FillUsageBatOfIncremental(c, collector, fs)
+		if collectUsage {
+			// collecting usage only happened when do ckp
+			FillUsageBatOfIncremental(c, collector, fs)
+		}
 
 		data = collector.OrphanData()
 		return
