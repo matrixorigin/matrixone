@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
 	"math"
@@ -175,7 +174,6 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 						info.ShuffleRanges[idx] = nil
 					} else {
 						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
-						logutil.Infof("update %v", tableDef.Cols[idx].Name)
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue)
 					}
 				}
@@ -183,7 +181,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 		}
 		return nil
 	}
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return 0, 0, err
 	}
 

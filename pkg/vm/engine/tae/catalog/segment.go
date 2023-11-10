@@ -37,7 +37,7 @@ type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
 type SegmentEntry struct {
 	ID   objectio.Segmentid
-	Stat *SegStat
+	Stat SegStat
 	*BaseEntryImpl[*MetadataMVCCNode]
 	table   *TableEntry
 	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
@@ -55,7 +55,7 @@ type SegStat struct {
 	compSize       int
 	sortKeyZonemap index.ZM
 	rows           int
-	remainingRows  common.HistorySampler[int]
+	remainingRows  int
 }
 
 func (s *SegStat) loadObjectInfo(blk *BlockEntry) error {
@@ -120,13 +120,13 @@ func (s *SegStat) SetRows(rows int) {
 func (s *SegStat) SetRemainingRows(rows int) {
 	s.Lock()
 	defer s.Unlock()
-	s.remainingRows.Append(rows)
+	s.remainingRows = rows
 }
 
 func (s *SegStat) GetRemainingRows() int {
 	s.RLock()
 	defer s.RUnlock()
-	return s.remainingRows.V()
+	return s.remainingRows
 }
 
 func (s *SegStat) GetRows() int {
@@ -153,12 +153,6 @@ func (s *SegStat) GetCompSize() int {
 	return s.compSize
 }
 
-func NewSegStat() *SegStat {
-	return &SegStat{
-		remainingRows: common.NewSmapler35m[int](),
-	}
-}
-
 func (s *SegStat) String(composeSortKey bool) string {
 	zonemapStr := "nil"
 	if s.sortKeyZonemap != nil {
@@ -169,7 +163,7 @@ func (s *SegStat) String(composeSortKey bool) string {
 		}
 	}
 	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
-		s.loaded, common.HumanReadableBytes(s.originSize), s.rows, s.remainingRows.V(), zonemapStr,
+		s.loaded, common.HumanReadableBytes(s.originSize), s.rows, s.remainingRows, zonemapStr,
 	)
 }
 
@@ -185,7 +179,6 @@ func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncT
 			state:    state,
 			SortHint: table.GetDB().catalog.NextSegment(),
 		},
-		Stat: NewSegStat(),
 	}
 	e.CreateWithTxn(txn, &MetadataMVCCNode{})
 	if dataFactory != nil {
@@ -200,7 +193,6 @@ func NewReplaySegmentEntry() *SegmentEntry {
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
-		Stat:    NewSegStat(),
 	}
 	return e
 }
@@ -217,7 +209,6 @@ func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 			state:   ES_Appendable,
 			IsLocal: true,
 		},
-		Stat: NewSegStat(),
 	}
 	e.CreateWithTS(ts, &MetadataMVCCNode{})
 	return e
@@ -233,7 +224,6 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 		SegmentNode: &SegmentNode{
 			state: ES_Appendable,
 		},
-		Stat: NewSegStat(),
 	}
 	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	var bid types.Blockid
