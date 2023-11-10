@@ -14,7 +14,7 @@ select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relnam
 select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'storage' and relkind = 'r';
 select count(*) from mo_catalog.mo_tables where reldatabase = 'mo_mo' and relname = 'storage_time' and relkind = 'r';
 
--- create tabel
+-- create table
 CREATE CLUSTER TABLE `mo_catalog`.`statement_mo` (`statement_id` varchar(36) NOT NULL,`account` VARCHAR(300) NOT NULL,`response_at` datetime(3) NULL,`stu` DECIMAL(23,3) NOT NULL,PRIMARY KEY (`statement_id`, `account_id`));
 CREATE TABLE `statement_time` (`cluster` varchar(191) NOT NULL,`last_time` datetime(3) NOT NULL,PRIMARY KEY (`cluster`));
 CREATE TABLE `stu` (`account` VARCHAR(300) NOT NULL,`start_time` datetime(3) NOT NULL,`end_time` datetime(3) NOT NULL,`stu` decimal(23,3) NOT NULL,`type` longtext NOT NULL);
