@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -53,6 +52,7 @@ type StatsInfoMap struct {
 	MinValMap       map[string]float64
 	MaxValMap       map[string]float64
 	DataTypeMap     map[string]types.T
+	NullCntMap      map[string]int64
 	ShuffleRangeMap map[string]*ShuffleRange
 	BlockNumber     uint16
 	ObjectNumber    int //detect if block number changes , update stats info map
@@ -66,6 +66,7 @@ func NewStatsInfoMap() *StatsInfoMap {
 		MinValMap:       make(map[string]float64),
 		MaxValMap:       make(map[string]float64),
 		DataTypeMap:     make(map[string]types.T),
+		NullCntMap:      make(map[string]int64),
 		ShuffleRangeMap: make(map[string]*ShuffleRange),
 		BlockNumber:     0,
 		ObjectNumber:    0,
@@ -107,6 +108,7 @@ type InfoFromZoneMap struct {
 	ColumnZMs     []objectio.ZoneMap
 	DataTypes     []types.Type
 	ColumnNDVs    []float64
+	NullCnts      []int64
 	ShuffleRanges []*ShuffleRange
 	TableCnt      float64
 }
@@ -116,13 +118,13 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 		ColumnZMs:     make([]objectio.ZoneMap, lenCols),
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
+		NullCnts:      make([]int64, lenCols),
 		ShuffleRanges: make([]*ShuffleRange, lenCols),
 	}
 	return info
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tableDef *plan.TableDef, s *StatsInfoMap) {
-	logutil.Debugf("need to update statsCache for table %v", tableDef.Name)
 	s.ObjectNumber = numObjs
 	s.BlockNumber = numBlks
 	s.TableCnt = info.TableCnt
@@ -133,6 +135,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tabl
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
+		s.NullCntMap[colName] = info.NullCnts[i]
 
 		if !info.ColumnZMs[i].IsInited() {
 			s.MinValMap[colName] = 0

@@ -27,7 +27,7 @@ import (
 func Test_panic(t *testing.T) {
 	r := func() {
 		err := recover()
-		require.Equal(t, err, "not supported in internal sql executor")
+		require.Equal(t, "not supported in internal sql executor", err)
 	}
 
 	c := &compilerContext{}
@@ -60,16 +60,6 @@ func Test_panic(t *testing.T) {
 	func() {
 		defer r()
 		_, _, _ = c.GetQueryResultMeta("")
-	}()
-
-	func() {
-		defer r()
-		c.SetBuildingAlterView(false, "", "")
-	}()
-
-	func() {
-		defer r()
-		_, _, _ = c.GetBuildingAlterView()
 	}()
 }
 

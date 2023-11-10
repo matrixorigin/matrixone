@@ -124,6 +124,75 @@ func TestAbsArray(t *testing.T) {
 	}
 }
 
+func initNormalizeL2ArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test normalize_l2 float32 array",
+			typ:  types.T_array_float32,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(),
+					[][]float32{
+						{},
+						{1, 2, 3, 4},
+						{-1, 2, 3, 4},
+						{10, 3.333333333333333, 4, 5},
+						{1, 2, 3.6666666666666665, 4.666666666666666}},
+					[]bool{true, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{
+					{},
+					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
+					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
+					{0.8108108, 0.27027026, 0.32432434, 0.4054054},
+					{0.1576765, 0.315353, 0.5781472, 0.73582363},
+				},
+				[]bool{true, false, false, false, false, false}),
+		},
+		{
+			info: "test normalize_l2 float64 array",
+			typ:  types.T_array_float64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(),
+					[][]float64{
+						{},
+						{1, 2, 3, 4},
+						{-1, 2, 3, 4},
+						{10, 3.333333333333333, 4, 5},
+						{1, 2, 3.6666666666666665, 4.666666666666666},
+					},
+					[]bool{true, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false,
+				[][]float64{
+					{},
+					{0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
+					{-0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
+					{0.8108108108108107, 0.27027027027027023, 0.3243243243243243, 0.4054054054054054},
+					{0.15767649936829103, 0.31535299873658207, 0.5781471643504004, 0.7358236637186913},
+				},
+				[]bool{true, false, false, false, false, false}),
+		},
+	}
+}
+
+func TestNormalizeL2Array(t *testing.T) {
+	testCases := initNormalizeL2ArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		var fcTC testutil.FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float32])
+		case types.T_array_float64:
+			fcTC = testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
 func initSummationArrayTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -227,7 +296,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.7416573867739413, 8.774964387392123},
+				[]float64{3.741657386773941, 8.774964387392123},
 				[]bool{false, false}),
 		},
 		{
@@ -239,7 +308,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.7416573867739413, 8.774964387392123},
+				[]float64{3.741657386773941, 8.774964387392124},
 				[]bool{false, false}),
 		},
 	}

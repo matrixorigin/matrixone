@@ -85,6 +85,8 @@ func (dt Datetime) String2(scale int32) string {
 //	"1999-09-09 11:11:11.1235"		"1999-09-09 11:11:11.124"
 //	"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
 //	"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
+//	"1999-09-09 11:11"              "1999-09-09 11:11:00.000"
+//	"1999-09-09 11:11:"             "1999-09-09 11:11:00.000"
 func ParseDatetime(s string, scale int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 14 {
@@ -135,7 +137,14 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		// solve hour/minute/second
 		middle := strings.Split(middleAndBack[0], ":")
 		if len(middle) != 3 {
-			return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			if len(middle) == 2 {
+				middle = append(middle, "00")
+			} else {
+				return -1, moerr.NewInvalidInputNoCtx("invalid datatime value %s", s)
+			}
+		}
+		if len(middle) == 3 && middle[2] == "" {
+			middle[2] = "00"
 		}
 		unum, err = strconv.ParseUint(middle[0], 10, 8)
 		if err != nil {

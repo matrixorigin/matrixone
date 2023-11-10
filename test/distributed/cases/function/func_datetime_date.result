@@ -10,6 +10,9 @@ DATE("2017-06-15")
 SELECT DATE("2017-06-15 09:34:21");
 DATE("2017-06-15 09:34:21")
 2017-06-15
+SELECT DATE("2023-11-08 15:38");
+DATE("2023-11-08 15:38")
+2023-11-08
 SELECT DATE("The date is 2017-06-15");
 Data truncation: data out of range: data type date, 'The date is 2017-06-15'
 SELECT DATE('2008-05-17 11:31:31') as required_DATE;

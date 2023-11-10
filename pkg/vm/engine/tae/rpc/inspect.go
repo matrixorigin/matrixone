@@ -255,7 +255,6 @@ type compactPolicyArg struct {
 	tbl              *catalog.TableEntry
 	maxMergeObjN     int32
 	minRowsQualified int32
-	maxRowsObj       int32
 	notLoadMoreThan  int32
 }
 
@@ -268,7 +267,6 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 		return err
 	}
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
-	c.maxRowsObj, _ = cmd.Flags().GetInt32("maxRowsObj")
 	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
 	c.notLoadMoreThan, _ = cmd.Flags().GetInt32("notLoadMoreThan")
 	return nil
@@ -292,12 +290,10 @@ func (c *compactPolicyArg) Run() error {
 		// set runtime global config
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
-		common.RuntimeMaxRowsObj.Store(c.maxRowsObj)
 	} else {
 		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl.ID, &merge.BasicPolicyConfig{
 			MergeMaxOneRun: int(c.maxMergeObjN),
 			ObjectMinRows:  int(c.minRowsQualified),
-			ObjectMaxRows:  int(c.maxRowsObj),
 		})
 	}
 	common.RuntimeNotLoadMoreThan.Store(c.notLoadMoreThan)
@@ -365,7 +361,6 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	policyCmd.Flags().Int32P("maxMergeObjN", "o", common.DefaultMaxMergeObjN, "max number of objects merged for one")
 	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "object with a few rows will be picked up to merge")
-	policyCmd.Flags().Int32P("maxRowsObj", "r", common.DefaultMaxRowsObj, "merged object row count is not more than maxRowsObj")
 	policyCmd.Flags().Int32P("notLoadMoreThan", "l", common.DefaultNotLoadMoreThan, "not load metadata if table has too much objects. Only works for rawlog table")
 	rootCmd.AddCommand(policyCmd)
 
