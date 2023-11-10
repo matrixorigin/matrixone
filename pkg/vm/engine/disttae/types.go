@@ -572,7 +572,8 @@ type blockReader struct {
 	// block list to scan
 	blks []*catalog.BlockInfo
 	//buffer for block's deletes
-	buffer []int64
+	buffer      []int64
+	readerCount engine.ReaderCount
 }
 
 type blockMergeReader struct {
@@ -586,7 +587,8 @@ type blockMergeReader struct {
 }
 
 type mergeReader struct {
-	rds []engine.Reader
+	rds         []engine.Reader
+	readerCount engine.ReaderCount
 }
 
 type emptyReader struct {

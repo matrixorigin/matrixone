@@ -37,13 +37,20 @@ type PartitionReader struct {
 	// inserted rows comes from txn.writes.
 	inserts []*batch.Batch
 	//deleted rows comes from txn.writes or partitionState.rows.
-	deletes  map[types.Rowid]uint8
-	iter     logtailreplay.RowsIter
-	seqnumMp map[string]int
-	typsMap  map[string]types.Type
+	deletes     map[types.Rowid]uint8
+	iter        logtailreplay.RowsIter
+	seqnumMp    map[string]int
+	typsMap     map[string]types.Type
+	readerCount engine.ReaderCount
 }
 
 var _ engine.Reader = new(PartitionReader)
+
+func (p *PartitionReader) Count() *engine.ReaderCount {
+	ret := &engine.ReaderCount{}
+	ret.CopyFrom(&p.readerCount)
+	return ret
+}
 
 func (p *PartitionReader) Close() error {
 	//p.withFilterMixin.reset()
@@ -226,6 +233,7 @@ func (p *PartitionReader) Read(
 			return nil, nil
 		}
 		b.SetRowCount(rows)
+		p.readerCount.AddRows(uint64(rows), uint64(b.Size()))
 
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
