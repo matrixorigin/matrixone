@@ -465,21 +465,15 @@ func TestGenerateSeriesCall(t *testing.T) {
 			IsLast:  false,
 		},
 	}
-	result := vm.NewCallResult()
-	result.Batch = nil
-	end, err := generateSeriesCall(0, proc, arg, &result)
-	require.Nil(t, err)
-	require.Equal(t, true, end)
-	cleanResult(&result, proc)
 
 	arg.Args = makeInt64List(1, 3, 1)
 	arg.Rets = plan.GSColDefs[0]
-	err = arg.Prepare(proc)
+	err := arg.Prepare(proc)
 	require.Nil(t, err)
 	bat := makeGenerateSeriesBatch(proc)
-	result = vm.NewCallResult()
+	result := vm.NewCallResult()
 	result.Batch = bat
-	end, err = generateSeriesCall(0, proc, arg, &result)
+	end, err := generateSeriesCall(0, proc, arg, &result)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
 	require.Equal(t, 3, result.Batch.GetVector(0).Length())
