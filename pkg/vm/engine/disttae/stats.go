@@ -144,6 +144,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 			init = true
 			for idx, col := range tableDef.Cols[:lenCols] {
 				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
+				info.NullCnts[idx] = int64(objColMeta.NullCnt())
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
@@ -154,13 +155,14 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 						info.ShuffleRanges[idx] = nil
 					} else {
 						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
-						info.ShuffleRanges[idx].Update(minvalue, maxvalue)
+						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
 					}
 				}
 			}
 		} else {
 			for idx, col := range tableDef.Cols[:lenCols] {
 				objColMeta := meta.MustGetColumn(uint16(col.Seqnum))
+				info.NullCnts[idx] += int64(objColMeta.NullCnt())
 				zm := objColMeta.ZoneMap().Clone()
 				if !zm.IsInited() {
 					continue
@@ -174,7 +176,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 						info.ShuffleRanges[idx] = nil
 					} else {
 						maxvalue, _ := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
-						info.ShuffleRanges[idx].Update(minvalue, maxvalue)
+						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
 					}
 				}
 			}
