@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const batchSize = 8192
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" cross join ")
 }
@@ -134,7 +136,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 				}
 			}
 		}
-		if ctr.rbat.Vecs[0].Length() >= 8192 {
+		if ctr.rbat.Vecs[0].Length() >= batchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
 			ctr.rbat.SetRowCount(ctr.rbat.Vecs[0].Length())
