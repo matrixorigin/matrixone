@@ -1879,12 +1879,12 @@ func (tbl *txnTable) updateDeleteInfo(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
-	createObjs []logtailreplay.ObjectInfo) error {
+	createObjs []objectio.ObjectNameShort) error {
 	var blks []catalog.BlockInfo
 
 	deleteObjsMap := make(map[objectio.ObjectNameShort]struct{})
-	for _, obj := range deleteObjs {
-		deleteObjsMap[*obj.Loc.ShortName()] = struct{}{}
+	for _, name := range deleteObjs {
+		deleteObjsMap[name] = struct{}{}
 	}
 
 	{
@@ -1896,42 +1896,44 @@ func (tbl *txnTable) updateDeleteInfo(
 		}
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
-		for _, obj := range createObjs {
-			location := obj.Location()
-			if objMeta, err = objectio.FastLoadObjectMeta(
-				ctx,
-				&location,
-				false,
-				fs); err != nil {
-				return err
-			}
-			objDataMeta = objMeta.MustDataMeta()
-			blkCnt := objDataMeta.BlockCount()
-			for i := 0; i < int(blkCnt); i++ {
-				blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-				bid := *blkMeta.GetBlockID(obj.Loc.Name())
-				metaLoc := blockio.EncodeLocation(
-					obj.Loc.Name(),
-					obj.Loc.Extent(),
-					blkMeta.GetRows(),
-					blkMeta.GetID(),
-				)
-				blkInfo := catalog.BlockInfo{
-					BlockID:    bid,
-					EntryState: obj.EntryState,
-					Sorted:     obj.Sorted,
-					MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
-					CommitTs:   obj.CommitTS,
-					SegmentID:  obj.SegmentID,
+		for _, name := range createObjs {
+			if obj, ok := state.GetObject(name); ok {
+				location := obj.Location()
+				if objMeta, err = objectio.FastLoadObjectMeta(
+					ctx,
+					&location,
+					false,
+					fs); err != nil {
+					return err
 				}
-				if obj.HasDeltaLoc {
-					deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
-					if ok {
-						blkInfo.DeltaLoc = deltaLoc
-						blkInfo.CommitTs = commitTs
+				objDataMeta = objMeta.MustDataMeta()
+				blkCnt := objDataMeta.BlockCount()
+				for i := 0; i < int(blkCnt); i++ {
+					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
+					bid := *blkMeta.GetBlockID(obj.Loc.Name())
+					metaLoc := blockio.EncodeLocation(
+						obj.Loc.Name(),
+						obj.Loc.Extent(),
+						blkMeta.GetRows(),
+						blkMeta.GetID(),
+					)
+					blkInfo := catalog.BlockInfo{
+						BlockID:    bid,
+						EntryState: obj.EntryState,
+						Sorted:     obj.Sorted,
+						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+						CommitTs:   obj.CommitTS,
+						SegmentID:  obj.SegmentID,
 					}
+					if obj.HasDeltaLoc {
+						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+						if ok {
+							blkInfo.DeltaLoc = deltaLoc
+							blkInfo.CommitTs = commitTs
+						}
+					}
+					blks = append(blks, blkInfo)
 				}
-				blks = append(blks, blkInfo)
 			}
 		}
 	}
