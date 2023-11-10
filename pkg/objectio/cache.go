@@ -128,7 +128,7 @@ func LoadObjectMetaByExtent(
 	name *ObjectName,
 	extent *Extent,
 	prefetch bool,
-	cachePolicy fileservice.CachePolicy,
+	policy fileservice.Policy,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	key := encodeCacheKey(*name.Short(), cacheKeyTypeMeta)
@@ -146,7 +146,7 @@ func LoadObjectMetaByExtent(
 		}
 		return
 	}
-	if v, err = ReadExtent(ctx, name.String(), extent, cachePolicy, fs, constructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name.String(), extent, policy, fs, constructorFactory); err != nil {
 		return
 	}
 	var obj any
@@ -176,7 +176,7 @@ func LoadBFWithMeta(
 		return v.Bytes(), nil
 	}
 	extent := meta.BlockHeader().BFExtent()
-	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipMemory, fs)
+	bf, err := ReadBloomFilter(ctx, location.Name().String(), &extent, fileservice.SkipMemoryCache|fileservice.SkipFullFilePreloads, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -193,5 +193,8 @@ func FastLoadObjectMeta(
 ) (ObjectMeta, error) {
 	extent := location.Extent()
 	name := location.Name()
-	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, fileservice.SkipMemory, fs)
+	var metaReadPolicy fileservice.Policy
+	metaReadPolicy = fileservice.SkipMemoryCache
+	metaReadPolicy |= fileservice.SkipFullFilePreloads
+	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, metaReadPolicy, fs)
 }
