@@ -58,9 +58,7 @@ insert into t1 values("c","Carol", 23);
 select * from t1;
 show index from t1;
 show create table t1;
--- @bvt:issue#12547
 select name, type, column_name from mo_catalog.mo_indexes mi where mi.column_name ="name" or mi.column_name="__mo_alias_id";
--- @bvt:issue
 
 -- 1.f Create Secondary Index on PK alone. ie SK = PK.
 drop table if exists t1;
