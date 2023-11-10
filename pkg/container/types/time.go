@@ -96,7 +96,7 @@ func (t Time) NumericString(scale int32) string {
 func ParseTime(s string, scale int32) (Time, error) {
 	s = strings.TrimSpace(s)
 
-	// seperate to date&time and msec parts
+	// separate to date&time and msec parts
 	strs := strings.Split(s, ".")
 	timeString := strs[0]
 	isNegative := false
