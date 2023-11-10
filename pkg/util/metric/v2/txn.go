@@ -89,6 +89,17 @@ var (
 	TxnCommitQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("commit")
 	TxnWaitActiveQueueSizeGauge = txnQueueSizeGauge.WithLabelValues("wait-active")
 	TxnActiveQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("active")
+
+	txnCNCommittedLocationQuantityGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "cn_committed_location_quantity_size",
+			Help:      "Quantity of object location the cn have committed to tn.",
+		}, []string{"type"})
+
+	TxnCNCommittedMetaLocationQuantityGauge  = txnCNCommittedLocationQuantityGauge.WithLabelValues("meta_location")
+	TxnCNCommittedDeltaLocationQuantityGauge = txnCNCommittedLocationQuantityGauge.WithLabelValues("delta_location")
 )
 
 var (

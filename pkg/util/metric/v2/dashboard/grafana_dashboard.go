@@ -90,6 +90,10 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
+	if err := c.initMemDashboard(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
