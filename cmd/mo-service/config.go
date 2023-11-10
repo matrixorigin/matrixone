@@ -292,16 +292,11 @@ func (c *Config) createFileService(
 	ctx context.Context,
 	st metadata.ServiceType,
 	defaultName string,
-	perfCounterSet *perfcounter.CounterSet,
 	serviceType metadata.ServiceType,
 	nodeUUID string,
 ) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
-
-	if perfCounterSet.FileServiceByName == nil {
-		perfCounterSet.FileServiceByName = make(map[string]*perfcounter.CounterSet)
-	}
 
 	// default LOCAL fs
 	ok := false
@@ -367,7 +362,6 @@ func (c *Config) createFileService(
 			config,
 			[]*perfcounter.CounterSet{
 				counterSet,
-				perfCounterSet,
 			},
 		)
 		if err != nil {
@@ -376,12 +370,12 @@ func (c *Config) createFileService(
 		services = append(services, service)
 
 		// perf counter
-		counterSetName := strings.Join([]string{
+		counterSetName := perfcounter.NameForFileService(
 			serviceType.String(),
 			nodeUUID,
 			service.Name(),
-		}, " ")
-		perfCounterSet.FileServiceByName[counterSetName] = counterSet
+		)
+		perfcounter.Named.Store(counterSetName, counterSet)
 
 		// set shared fs perf counter as node perf counter
 		if service.Name() == defines.SharedFileServiceName {
