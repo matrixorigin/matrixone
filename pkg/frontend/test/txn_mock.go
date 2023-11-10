@@ -638,6 +638,18 @@ func (m *MockTimestampWaiter) EXPECT() *MockTimestampWaiterMockRecorder {
 	return m.recorder
 }
 
+// Cancel mocks base method.
+func (m *MockTimestampWaiter) Cancel() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Cancel")
+}
+
+// Cancel indicates an expected call of Cancel.
+func (mr *MockTimestampWaiterMockRecorder) Cancel() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Cancel", reflect.TypeOf((*MockTimestampWaiter)(nil).Cancel))
+}
+
 // Close mocks base method.
 func (m *MockTimestampWaiter) Close() {
 	m.ctrl.T.Helper()
