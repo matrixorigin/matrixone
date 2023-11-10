@@ -16,8 +16,24 @@ package catalog
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strings"
 )
+
+// Index Algorithm names
+const (
+	MoIndexDefaultAlgo = tree.INDEX_TYPE_INVALID // used by UniqueIndex or default SecondaryIndex
+	//MoIndexBTreeAlgo   = tree.INDEX_TYPE_BTREE   // used for Mocking MySQL behaviour.
+	//MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
+)
+
+// IsNullIndexAlgo is used to skip printing the default "" index algo in the restoreDDL and buildShowCreateTable
+func IsNullIndexAlgo(algo string) bool {
+	_algo := strings.ToLower(strings.TrimSpace(algo))
+	return _algo == MoIndexDefaultAlgo.ToString()
+}
+
+// ------------------------[START] Aliaser------------------------
 
 // This class is used by "secondary index" to resolve the "programmatically generated PK" appended to the
 // end of the index key "__mo_index_idx_col".
@@ -37,3 +53,5 @@ func ResolveAlias(alias string) string {
 func IsAlias(column string) bool {
 	return strings.HasPrefix(column, AliasPrefix)
 }
+
+// ------------------------[END] Aliaser------------------------

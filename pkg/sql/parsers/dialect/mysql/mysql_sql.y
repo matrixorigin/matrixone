@@ -342,9 +342,10 @@ import (
 // MO table option
 %token <str> PROPERTIES
 
-// Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
+// Secondary Index
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS SIMILARITY_FUNCTION
+
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE
@@ -6143,7 +6144,11 @@ index_option_list:
                 opt1.ParserName = opt2.ParserName
             } else if opt2.Visible != tree.VISIBLE_TYPE_INVALID {
                 opt1.Visible = opt2.Visible
-            }
+            } else if opt2.AlgoParamList > 0 {
+	      opt1.AlgoParamList = opt2.AlgoParamList
+	    } else if len(opt2.AlgoParamVectorSimilarityFn) > 0 {
+	      opt1.AlgoParamVectorSimilarityFn = opt2.AlgoParamVectorSimilarityFn
+	    }
             $$ = opt1
         }
     }
@@ -6152,6 +6157,14 @@ index_option:
     KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
         $$ = &tree.IndexOption{KeyBlockSize: uint64($3.(int64))}
+    }
+|   LISTS equal_opt INTEGRAL
+    {
+	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
+    }
+|   SIMILARITY_FUNCTION STRING
+    {
+	$$ = &tree.IndexOption{AlgoParamVectorSimilarityFn: $2}
     }
 |   COMMENT_KEYWORD STRING
     {
@@ -6198,6 +6211,10 @@ using_opt:
 |   USING BTREE
     {
         $$ = tree.INDEX_TYPE_BTREE
+    }
+|   USING IVFFLAT
+    {
+	$$ = tree.INDEX_TYPE_IVFFLAT
     }
 |   USING HASH
     {
@@ -7507,6 +7524,7 @@ index_type:
 |   HASH
 |   RTREE
 |   ZONEMAP
+|   IVFFLAT
 |   BSI
 
 insert_method_options:
@@ -10500,6 +10518,8 @@ non_reserved_keyword:
 |   VECF32
 |   VECF64
 |   KEY_BLOCK_SIZE
+|   LISTS
+|   SIMILARITY_FUNCTION
 |   KEYS
 |   LANGUAGE
 |   LESS
