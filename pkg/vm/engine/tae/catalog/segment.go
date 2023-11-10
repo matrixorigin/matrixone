@@ -160,7 +160,7 @@ func (entry *SegmentEntry) LoadObjectInfo() error {
 		return nil
 	}
 	// special case for raw log table.
-	if entry.GetTable().GetLastestSchema().Name == motrace.RawLogTbl &&
+	if name := entry.GetTable().GetLastestSchema().Name; (name == motrace.RawLogTbl || name == "mixed_daily") &&
 		len(entry.table.entries) > int(common.RuntimeNotLoadMoreThan.Load()) {
 		return nil
 	}
