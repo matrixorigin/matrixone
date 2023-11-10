@@ -611,33 +611,35 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context, req *db.WriteReq) erro
 }
 
 func (h *Handle) prefetchMetadata(ctx context.Context,
-	req *db.WriteReq) error {
+	req *db.WriteReq) (error, int) {
 	if len(req.MetaLocs) == 0 {
-		return nil
+		return nil, 0
 	}
 	//start loading jobs asynchronously,should create a new root context.
+	objCnt := 0
 	var objectName objectio.ObjectNameShort
 	for _, meta := range req.MetaLocs {
 		loc, err := blockio.EncodeLocationFromString(meta)
 		if err != nil {
-			return err
+			return err, 0
 		}
 		if !objectio.IsSameObjectLocVsShort(loc, &objectName) {
 			err := blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
 			if err != nil {
-				return err
+				return err, 0
 			}
+			objCnt++
 			objectName = *loc.Name().Short()
 		}
 	}
-	return nil
+	return nil, objCnt
 }
 
 // EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
 func (h *Handle) EvaluateTxnRequest(
 	ctx context.Context,
 	meta txn.TxnMeta,
-) (err error) {
+) error {
 	h.mu.RLock()
 	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
@@ -659,24 +661,22 @@ func (h *Handle) EvaluateTxnRequest(
 		if r, ok := e.(*db.WriteReq); ok {
 			if r.FileName != "" {
 				if r.Type == db.EntryDelete {
-					deltaLocCnt += len(r.DeltaLocs)
 					// start to load deleted row ids
-					err = h.prefetchDeleteRowID(ctx, r)
-					if err != nil {
-						return
+					deltaLocCnt += len(r.DeltaLocs)
+					if err := h.prefetchDeleteRowID(ctx, r); err != nil {
+						return err
 					}
 				} else if r.Type == db.EntryInsert {
-					metaLocCnt += len(r.MetaLocs)
-					err = h.prefetchMetadata(ctx, r)
+					err, objCnt := h.prefetchMetadata(ctx, r)
 					if err != nil {
-						return
+						return err
 					}
-
+					metaLocCnt += objCnt
 				}
 			}
 		}
 	}
-	return
+	return nil
 }
 
 func (h *Handle) CacheTxnRequest(
