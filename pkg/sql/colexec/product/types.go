@@ -37,6 +37,9 @@ type container struct {
 	state int
 	bat   *batch.Batch
 	rbat  *batch.Batch
+	inBat *batch.Batch
+
+	probeIdx int
 }
 
 type Argument struct {
