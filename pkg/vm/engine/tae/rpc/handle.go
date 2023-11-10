@@ -614,9 +614,9 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context, req *db.WriteReq) erro
 }
 
 func (h *Handle) prefetchMetadata(ctx context.Context,
-	req *db.WriteReq) (error, int) {
+	req *db.WriteReq) (int, error) {
 	if len(req.MetaLocs) == 0 {
-		return nil, 0
+		return 0, nil
 	}
 	//start loading jobs asynchronously,should create a new root context.
 	objCnt := 0
@@ -624,18 +624,18 @@ func (h *Handle) prefetchMetadata(ctx context.Context,
 	for _, meta := range req.MetaLocs {
 		loc, err := blockio.EncodeLocationFromString(meta)
 		if err != nil {
-			return err, 0
+			return 0, err
 		}
 		if !objectio.IsSameObjectLocVsShort(loc, &objectName) {
 			err := blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
 			if err != nil {
-				return err, 0
+				return 0, err
 			}
 			objCnt++
 			objectName = *loc.Name().Short()
 		}
 	}
-	return nil, objCnt
+	return objCnt, nil
 }
 
 // EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
@@ -670,7 +670,7 @@ func (h *Handle) EvaluateTxnRequest(
 						return err
 					}
 				} else if r.Type == db.EntryInsert {
-					err, objCnt := h.prefetchMetadata(ctx, r)
+					objCnt, err := h.prefetchMetadata(ctx, r)
 					if err != nil {
 						return err
 					}
