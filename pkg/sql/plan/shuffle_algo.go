@@ -82,7 +82,7 @@ func NewShuffleRange() *ShuffleRange {
 	return &ShuffleRange{}
 }
 
-func (s *ShuffleRange) Update(zmmin float64, zmmax float64) {
+func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nullCount uint32) {
 	s.size++
 	if s.tree == nil {
 		s.tree = &shuffleHeap{
