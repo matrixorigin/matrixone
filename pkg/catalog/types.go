@@ -148,6 +148,11 @@ const (
 	SystemRelAttr_Version        = "rel_version"
 	SystemRelAttr_CatalogVersion = "catalog_version"
 
+	// 'mo_indexes' table
+	IndexAlgoName      = "algo"
+	IndexAlgoTableType = "algo_table_type"
+	IndexAlgoParams    = "algo_params"
+
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
 	SystemColAttr_AccID           = "account_id"
@@ -210,6 +215,11 @@ const (
 		the table partitioned has multiple partition tables
 	*/
 	SystemPartitionRel = "partition"
+
+	//// Secondary Index Relations
+	//SystemSecondaryIndex_IvfMetadataRel         = "metadata"
+	//SystemSecondaryIndex_IvfCentroidsRel        = "centroids"
+	//SystemSecondaryIndex_IvfCentroidsMappingRel = "entries"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"

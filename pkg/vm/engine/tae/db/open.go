@@ -16,24 +16,25 @@ package db
 
 import (
 	"context"
+	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"path"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
@@ -246,7 +247,40 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	db.GCManager.Start()
 
+	go TaeMetricsTask(ctx, db.Runtime)
+
 	// For debug or test
 	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
 	return
+}
+
+func TaeMetricsTask(ctx context.Context, rt *dbutils.Runtime) {
+	logutil.Info("tae metrics task started")
+	defer logutil.Info("tae metrics task exit")
+
+	timer := time.NewTicker(time.Second * 10)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			transferPageSubTask()
+			mpoolAllocatorSubTask(rt)
+		}
+	}
+
+}
+
+func mpoolAllocatorSubTask(rt *dbutils.Runtime) {
+	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))
+	v2.MemTAEMutableAllocatorGauge.Set(float64(common.MutMemAllocator.CurrNB()))
+	v2.MemTAESmallAllocatorGauge.Set(float64(common.SmallAllocator.CurrNB()))
+	v2.MemTAEVectorPoolSmallGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().CurrNB()))
+	v2.MemTAEVectorPoolTransientGauge.Set(0)
+}
+
+func transferPageSubTask() {
+	length := utils.TransferPageCounter.Load()
+	mb_size := length * (4 + 24) * 3 / 2 / (1024 * 1024)
+	logutil.Info(fmt.Sprintf("current transfer page length = %d, mb_size = %d", length, mb_size))
 }

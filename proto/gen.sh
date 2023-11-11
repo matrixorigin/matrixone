@@ -27,7 +27,7 @@ echo "GOPATH: ${GOPATH}"
 res=$(program_exists goimports)
 echo "res: ${res}"
 if [ "${res}" == "ok" ];then
-  echo "goimports exits"
+  echo "goimports exist"
 else
   echo "install goimports"
   go install golang.org/x/tools/cmd/goimports@latest
@@ -36,7 +36,7 @@ fi
 res=$(program_exists protoc)
 echo "res: ${res}"
 if [ "${res}" == "ok" ];then
-  echo "protoc exits"
+  echo "protoc exist"
   version=$(protoc --version)
   if [[ "${version}" == *"${PROTO_SYNTAX_VERSION}.${PROTOC_VERSION}"* ]];then
     echo "protoc version matches ${PROTOC_VERSION}"
@@ -89,7 +89,7 @@ res1=$(program_exists protoc-gen-gogofast)
 res2=$(program_exists protoc-gen-gogofaster)
 echo "res1: ${res1}, res2: ${res2}"
 if [ "${res1}" == "ok" -a "${res2}" == "ok" ];then
-  echo "protoc-gen-gogofast and protoc-gen-gogofaster exits"
+  echo "protoc-gen-gogofast and protoc-gen-gogofaster exist"
 else
   echo "install protoc-gen-gogofast"
   if [ -f protobuf/ ];then rm -rf protobuf/;fi

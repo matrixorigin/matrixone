@@ -81,7 +81,21 @@ func loadS3TestConfig() (config _TestS3Config, err error) {
 	return
 }
 
-func TestS3FS(t *testing.T) {
+func TestS3FS(
+	t *testing.T,
+) {
+	t.Run("default policy", func(t *testing.T) {
+		testS3FS(t, 0)
+	})
+	t.Run("skip full file preloads", func(t *testing.T) {
+		testS3FS(t, SkipFullFilePreloads)
+	})
+}
+
+func testS3FS(
+	t *testing.T,
+	policy Policy,
+) {
 	config, err := loadS3TestConfig()
 	assert.Nil(t, err)
 	if config.Endpoint == "" {
@@ -94,7 +108,7 @@ func TestS3FS(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
 	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func(name string) FileService {
+		testFileService(t, policy, func(name string) FileService {
 			ctx := context.Background()
 			fs, err := NewS3FS(
 				ctx,
@@ -206,7 +220,7 @@ func TestDynamicS3(t *testing.T) {
 		// no config
 		t.Skip()
 	}
-	testFileService(t, func(name string) FileService {
+	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		err := w.Write([]string{
@@ -242,7 +256,7 @@ func TestDynamicS3NoKey(t *testing.T) {
 	t.Setenv("AWS_REGION", config.Region)
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-	testFileService(t, func(name string) FileService {
+	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		err := w.Write([]string{
@@ -276,7 +290,7 @@ func TestDynamicS3Opts(t *testing.T) {
 	t.Setenv("AWS_REGION", config.Region)
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-	testFileService(t, func(name string) FileService {
+	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		err := w.Write([]string{
@@ -310,7 +324,7 @@ func TestDynamicS3OptsRoleARN(t *testing.T) {
 	t.Setenv("AWS_REGION", config.Region)
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-	testFileService(t, func(name string) FileService {
+	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		err := w.Write([]string{
@@ -346,7 +360,7 @@ func TestDynamicS3OptsNoRegion(t *testing.T) {
 	t.Setenv("AWS_REGION", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
-	testFileService(t, func(name string) FileService {
+	testFileService(t, 0, func(name string) FileService {
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
 		err := w.Write([]string{
@@ -437,7 +451,7 @@ func TestS3FSMinioServer(t *testing.T) {
 	// run test
 	t.Run("file service", func(t *testing.T) {
 		cacheDir := t.TempDir()
-		testFileService(t, func(name string) FileService {
+		testFileService(t, 0, func(name string) FileService {
 			ctx := context.Background()
 			fs, err := NewS3FSOnMinio(
 				ctx,
@@ -510,7 +524,7 @@ func TestS3FSWithSubPath(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
-	testFileService(t, func(name string) FileService {
+	testFileService(t, 0, func(name string) FileService {
 		ctx := context.Background()
 		fs, err := NewS3FS(
 			ctx,

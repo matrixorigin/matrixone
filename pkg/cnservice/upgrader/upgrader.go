@@ -188,6 +188,11 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		errors = append(errors, errs...)
 	}
 
+	if errs := u.UpgradeMoIndexesSchema(ctx); len(errs) > 0 {
+		logutil.Errorf("upgrade mo_indexes failed")
+		errors = append(errors, errs...)
+	}
+
 	if len(errors) > 0 {
 		//panic("Upgrade failed during system startup! " + convErrsToFormatMsg(errors))
 		return moerr.NewInternalError(ctx, "Upgrade failed during system startup! "+convErrsToFormatMsg(errors))
@@ -366,6 +371,63 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 		return errors
 	}
 	return nil
+}
+
+// UpgradeMoIndexesSchema system tables, add system views
+// Order of Execution:
+// 1. boostrap.go builds mo_catalog.mo_indexes table
+// 2. sysview.InitSchema builds INFORMATION_SCHEMA.columns table that will have columns in mo_indexes table
+// 3. UpgradeMoIndexesSchema adds 3 new columns to mo_indexes table
+func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context) []error {
+	exec := u.IEFactory()
+	if exec == nil {
+		return nil
+	}
+
+	ifEmpty := func(sql string) (bool, error) {
+		result := exec.Query(ctx, sql, ie.NewOptsBuilder().Finish())
+
+		if err := result.Error(); err != nil {
+			return false, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err.Error())
+		}
+
+		return result.RowCount() == 0, nil
+
+	}
+
+	execTxn := func(sqls []string) error {
+
+		stmt := []string{"begin;"}
+		stmt = append(stmt, sqls...)
+		stmt = append(stmt, "commit;")
+
+		upgradeSQL := strings.Join(stmt, "\n")
+
+		err := exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish())
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	var errors []error
+	for _, conditionalUpgradeSQL := range conditionalUpgradeV1SQLs {
+
+		if columnNotPresent, err1 := ifEmpty(conditionalUpgradeSQL.ifEmpty); err1 != nil {
+			errors = append(errors, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err1.Error()))
+		} else if columnNotPresent {
+			err2 := execTxn(conditionalUpgradeSQL.then)
+			if err2 != nil {
+				errors = append(errors, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err2.Error()))
+			}
+		}
+	}
+	if len(errors) > 0 {
+		return errors
+	}
+	return nil
+
 }
 
 // UpgradeExistingView: Modify the definition of existing system views

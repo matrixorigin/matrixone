@@ -23,7 +23,7 @@ select cast('2000-01-01' as datetime(0));
 cast(2000-01-01 as datetime(0))
 2000-01-01 00:00:00
 select cast('2022-01-01 25:00:00' as datetime(0));
-invalid input: invalid datatime value 2022-01-01 25:00:00
+invalid input: invalid datetime value 2022-01-01 25:00:00
 select cast('2000-01-01' as datetime(0))+1;
 cast(2000-01-01 as datetime(0))+1
 20000101000001
@@ -334,7 +334,7 @@ a	b
 drop table t1;
 create table t1(a datetime);
 insert into t1 values("9999-12-31 23:59:59.999999");
-invalid input: invalid datatime value 9999-12-31 23:59:59.999999
+invalid input: invalid datetime value 9999-12-31 23:59:59.999999
 set time_zone = '+8:00';
 drop table if exists t1;
 create table t1(t datetime(6));
