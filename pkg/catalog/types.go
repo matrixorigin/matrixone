@@ -27,23 +27,16 @@ import (
 )
 
 const (
-	Row_ID               = "__mo_rowid"
-	PrefixPriColName     = "__mo_cpkey_"
-	PrefixCBColName      = "__mo_cbkey_"
-	PrefixIndexTableName = "__mo_index_"
+	Row_ID           = "__mo_rowid"
+	PrefixPriColName = "__mo_cpkey_"
+	PrefixCBColName  = "__mo_cbkey_"
 	// Compound primary key column name, which is a hidden column
 	CPrimaryKeyColName = "__mo_cpkey_col"
 	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
 	// is added, which will not be sorted or used for any other purpose, but will only be used to add
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
-	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
-	IndexTableIndexColName        = "__mo_index_idx_col"
-	IndexTablePrimaryColName      = "__mo_index_pri_col"
-	ExternalFilePath              = "__mo_filepath"
-	IndexTableNamePrefix          = "__mo_index_"
-	UniqueIndexTableNamePrefix    = "__mo_index_unique__"
-	SecondaryIndexTableNamePrefix = "__mo_index_secondary__"
+	ExternalFilePath      = "__mo_filepath"
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 )
@@ -225,6 +218,41 @@ const (
 	SystemColNoConstraint = "n"
 
 	SystemDBTypeSubscription = "subscription"
+)
+
+// Key/Index related constants
+const (
+	IndexTableNamePrefix          = "__mo_index_"
+	UniqueIndexTableNamePrefix    = "__mo_index_unique__"
+	SecondaryIndexTableNamePrefix = "__mo_index_secondary__"
+	PrefixIndexTableName          = IndexTableNamePrefix
+
+	/************ 0. Regular Secondary Index ************/
+
+	// Regualar secondary index table columns
+	IndexTableIndexColName   = "__mo_index_idx_col"
+	IndexTablePrimaryColName = "__mo_index_pri_col"
+
+	/************ 1. IVF_FLAT Secondary Index ************/
+
+	// IVF_FLAT Table Types
+	SystemSI_IVFFLAT_TblType_Metadata  = "metadata"
+	SystemSI_IVFFLAT_TblType_Centroids = "centroids"
+	SystemSI_IVFFLAT_TblType_Entries   = "entries"
+
+	// IVF_FLAT MetadataTable - Column names
+	SystemSI_IVFFLAT_TblCol_Metadata_key = "key"
+	SystemSI_IVFFLAT_TblCol_Metadata_val = "val"
+
+	// IVF_FLAT Centroids - Column names
+	SystemSI_IVFFLAT_TblCol_Centroids_centroid = "centroid"
+	SystemSI_IVFFLAT_TblCol_Centroids_id       = "centroid_id"
+	SystemSI_IVFFLAT_TblCol_Centroids_version  = "version"
+
+	// IVF_FLAT Entries - Column names
+	SystemSI_IVFFLAT_TblCol_Entries_id      = "centroid_id"
+	SystemSI_IVFFLAT_TblCol_Entries_version = "version"
+	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 )
 
 const (

@@ -235,7 +235,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			indexStr += ")"
 			if indexdef.IndexAlgoParams != "" {
 				var paramList string
-				paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+				paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 				if err != nil {
 					return nil, err
 				}

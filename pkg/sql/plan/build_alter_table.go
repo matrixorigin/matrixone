@@ -312,7 +312,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				if indexdef.IndexAlgoParams != "" {
 					var paramList string
 					var err error
-					paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 					if err != nil {
 						return "", err
 					}

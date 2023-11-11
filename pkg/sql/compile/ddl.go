@@ -981,34 +981,65 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	tableId := r.GetTableID(c.ctx)
 
-	tableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
-	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
+	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
+	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
+	indexTableDef := indexInfo.GetTableDef()
 
-	if indexDef.Unique {
-		// 0. check original data is not duplicated
-		err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
+	// IVF -> meta 		-> indexDef
+	// 	   -> centroids -> indexDef
+	// 	   -> entries 	-> indexDef
+	multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+	for _, indexDef := range indexTableDef.Indexes {
+
+		if indexDef.Unique {
+			// 1. Unique Index related logic
+			err = s.handleUniqueIndexTable(c, indexDef, qry, originalTableDef, indexInfo)
+		} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
+			// 2. Regular Secondary index
+			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry, originalTableDef, indexInfo)
+		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+			// 3. IVF indexDefs is aggregated and handled later
+			if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
+				multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
+			}
+			multiTableIndexes[indexDef.IndexAlgo][indexDef.IndexAlgoTableType] = indexDef
+		}
 		if err != nil {
 			return err
 		}
 	}
 
-	// build and create index table for unique/secondary index
-	if qry.TableExist {
-		def := qry.GetIndex().GetIndexTables()[0]
-		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-		err = c.runSql(createSQL)
-		if err != nil {
-			return err
+	if len(multiTableIndexes) > 0 {
+
+		for indexAlgoType, indexDefs := range multiTableIndexes {
+			switch indexAlgoType {
+			case catalog.MoIndexIvfFlatAlgo.ToString():
+				// 1. handle meta table
+				err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qry, originalTableDef, indexInfo)
+				if err != nil {
+					return err
+				}
+
+				// 2. handle centroids table
+				err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qry, originalTableDef, indexInfo)
+				if err != nil {
+					return err
+				}
+
+				// 3. handle entries table
+				err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qry, originalTableDef, indexInfo,
+					indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+				if err != nil {
+					return err
+				}
+			}
 		}
 
-		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
-		err = c.runSql(insertSQL)
-		if err != nil {
-			return err
-		}
 	}
+
 	// build and update constraint def
-	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
+	//TODO: see if we need change here.
+	defs, err := planDefsToExeDefs(indexTableDef)
 	if err != nil {
 		return err
 	}
@@ -1034,14 +1065,16 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
-	// generate insert into mo_indexes metadata
-	sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
-	if err != nil {
-		return err
-	}
-	err = c.runSql(sql)
-	if err != nil {
-		return err
+	// generate inserts into mo_indexes metadata
+	for _, indexDef := range indexTableDef.Indexes {
+		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
+		if err != nil {
+			return err
+		}
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

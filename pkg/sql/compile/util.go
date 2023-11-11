@@ -155,6 +155,48 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	return insertSQL
 }
 
+// genCreateIndexTableSql: Generate ddl statements for creating index table
+func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
+	var sql string
+	planCols := indexTableDef.GetCols()
+	for i, planCol := range planCols {
+		if i >= 1 {
+			sql += ","
+		}
+		sql += "`" + planCol.Name + "`" + " "
+		typeId := types.T(planCol.Typ.Id)
+		switch typeId {
+		case types.T_char:
+			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+		case types.T_varchar:
+			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+		case types.T_binary:
+			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+		case types.T_varbinary:
+			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+		case types.T_decimal64:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_decimal128:
+			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+		case types.T_array_float32:
+			sql += fmt.Sprintf("VECF32(%d)", planCol.Typ.Width)
+		case types.T_array_float64:
+			sql += fmt.Sprintf("VECF64(%d)", planCol.Typ.Width)
+		default:
+			sql += typeId.String()
+		}
+
+	}
+
+	if indexTableDef.Pkey.Names != nil {
+		//pkStr := fmt.Sprintf(", primary key ( %s )", partsToColsStr(indexTableDef.Pkey.Names))
+		//sql += pkStr
+		//TODO: fix VECTOR PK issue
+	}
+
+	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
+}
+
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
 func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, ct *engine.ConstraintDef) (string, error) {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
@@ -422,11 +464,10 @@ func partsToColsStr(parts []string) string {
 	var temp string
 	for i, part := range parts {
 		part = catalog.ResolveAlias(part)
-		if i == 0 {
-			temp += part
-		} else {
-			temp += "," + part
+		if i > 0 {
+			temp += ","
 		}
+		temp += "`" + part + "`"
 	}
 	return temp
 }
