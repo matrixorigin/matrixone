@@ -58,6 +58,7 @@ const (
 )
 
 // IndexParamsToStringList used by buildShowCreateTable and restoreDDL
+// Eg:- "LIST 10 similarity_function 'ip'"
 func IndexParamsToStringList(indexParams string) (string, error) {
 	result, err := IndexParamsStringToMap(indexParams)
 	if err != nil {
@@ -84,6 +85,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 }
 
 // IndexParamsToJsonString used by buildSecondaryIndexDef
+// Eg:- {"lists":"10","similarity_function":"ip"}
 func IndexParamsToJsonString(def *tree.Index) (string, error) {
 
 	res, err := IndexParamsToMap(def)
