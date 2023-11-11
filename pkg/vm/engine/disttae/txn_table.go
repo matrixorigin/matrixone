@@ -42,9 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
-	"time"
-	"unsafe"
 )
 
 const (
@@ -635,7 +632,7 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
-) (err error) {
+) (loaded int, err error) {
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
 		if err != nil {
@@ -645,7 +642,7 @@ func (tbl *txnTable) rangesOnePart(
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 		if len(deleteObjs) > 0 {
 			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
-				return err
+				return loaded, err
 			}
 		}
 		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
@@ -717,8 +714,8 @@ func (tbl *txnTable) rangesOnePart(
 	if err != nil {
 		return loaded, err
 	}
-  
-	if done, err := tbl.tryFastRanges(
+
+	if done, fLoaded, err := tbl.tryFastRanges(
 		state, exprs, insertedS3Blks, dirtyBlks, ranges, fs,
 	); err != nil {
 		return fLoaded, err
@@ -758,7 +755,7 @@ func (tbl *txnTable) rangesOnePart(
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
+				loaded++
 				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 					return
 				}
@@ -819,7 +816,7 @@ func (tbl *txnTable) rangesOnePart(
 	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	iter, err := state.NewObjectsIter(ts)
 	if err != nil {
-		return err
+		return loaded, err
 	}
 	defer iter.Close()
 
@@ -902,11 +899,7 @@ func (tbl *txnTable) rangesOnePart(
 			*ranges = append(*ranges, catalog.EncodeBlockInfo(blkInfo))
 		}
 	}
-
-	bhit, btotal := len(*ranges)-1, len(insertedS3Blks)+int(cnt)
-	v2.TaskSelBlockTotal.Add(float64(btotal))
-	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
-	blockio.RecordBlockSelectivity(bhit, btotal)
+	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blks)+int(cnt))
 	return
 }
 
@@ -949,6 +942,7 @@ func (tbl *txnTable) tryFastRanges(
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
 			var objMeta objectio.ObjectMeta
+			loaded++
 			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 			if objMeta, err = objectio.FastLoadObjectMeta(
 				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
@@ -1024,7 +1018,7 @@ func (tbl *txnTable) tryFastRanges(
 	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	iter, err := state.NewObjectsIter(ts)
 	if err != nil {
-		return false, err
+		return false, loaded, err
 	}
 	defer iter.Close()
 
@@ -1109,10 +1103,7 @@ func (tbl *txnTable) tryFastRanges(
 	}
 
 	done = true
-	bhit, btotal := len(*ranges)-1, len(insertedS3Blocks)+int(cnt)
-	v2.TaskSelBlockTotal.Add(float64(btotal))
-	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
-	blockio.RecordBlockSelectivity(bhit, btotal)
+	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blocks)+int(cnt))
 	return
 }
 
