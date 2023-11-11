@@ -1556,12 +1556,16 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
 				targetArgType = tmpArgsType[0]
+				// if string union string, different length may cause error.
+				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+					for _, typ := range argsType {
+						if targetArgType.Width < typ.Width {
+							targetArgType.Width = typ.Width
+						}
+					}
+				}
 			} else {
 				targetArgType = argsCastType[0]
-			}
-			// if string union string, different length may cause error. use text type as the output
-			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-				targetArgType = types.T_text.ToType()
 			}
 
 			if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {

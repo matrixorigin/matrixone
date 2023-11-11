@@ -335,8 +335,8 @@ func getLabelPart(user string) string {
 	return ""
 }
 
-// ParseLabel parses the label string. The labels are seperated by
-// ",", key and value are seperated by "=".
+// ParseLabel parses the label string. The labels are separated by
+// ",", key and value are separated by "=".
 func ParseLabel(labelStr string) (map[string]string, error) {
 	labelMap := make(map[string]string)
 	if len(labelStr) == 0 {
@@ -881,6 +881,9 @@ var (
 				database_id bigint unsigned not null,
 				name 		varchar(64) not null,
 				type        varchar(11) not null,
+				algo	varchar(11),
+    			algo_table_type varchar(11),
+    			algo_params varchar(2048),
 				is_visible  tinyint not null,
 				hidden      tinyint not null,
 				comment 	varchar(2048) not null,
@@ -2019,7 +2022,7 @@ func getSqlForSpBody(ctx context.Context, name string, db string) (string, error
 	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
 }
 
-// isClusterTable decides a table is the index table or not
+// isIndexTable decides a table is the index table or not
 func isIndexTable(name string) bool {
 	return strings.HasPrefix(name, catalog.IndexTableNamePrefix)
 }

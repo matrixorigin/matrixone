@@ -1402,6 +1402,12 @@ var (
 			input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
 			output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10",
+			output: "create index idx using ivfflat on a (a) LISTS 10 ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 similarity_function 'IP'",
+			output: "create index idx using ivfflat on a (a) LISTS 10 SIMILARITY_FUNCTION IP ",
+		}, {
 			input: "create index idx1 on a (a)",
 		}, {
 			input: "create unique index idx1 using btree on a (a, b(10), (a + b), (a - b)) visible",
@@ -2649,6 +2655,10 @@ var (
 		{
 			input:  "show index from db.t1 from db",
 			output: "show index from db.t1 from db",
+		},
+		{
+			input:  "create table t1(a vecf32(3), b vecf64(3), c int)",
+			output: "create table t1 (a vecf32(3), b vecf64(3), c int)",
 		},
 	}
 )
