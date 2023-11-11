@@ -1526,7 +1526,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		if _, ok := colMap[name]; !ok {
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
 		}
-		if !(colMap[name].Typ.Id == int32(types.T_array_float32) || colMap[name].Typ.Id == int32(types.T_array_float64)) {
+		if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
 			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("IVFFLAT only supports VECFXX column types"))
 		}
 
@@ -1549,7 +1549,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 
 		// 1.b indexDef1 init
-		indexDefs[0], err = CreateSecondaryIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Metadata, indexParts)
+		indexDefs[0], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Metadata, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1603,7 +1603,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 
 		// 2.b indexDefs[1] init
-		indexDefs[1], err = CreateSecondaryIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Centroids, indexParts)
+		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Centroids, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1659,7 +1659,6 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	}
 
 	// 3. create ivf-flat `entries` table
-	//TODO: fix the compound pk issue
 	{
 		// 3.a tableDefs[2] init
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
@@ -1673,12 +1672,12 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 
 		// 3.b indexDefs[2] init
-		indexDefs[2], err = CreateSecondaryIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts)
+		indexDefs[2], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		// 3.c columns: id, version, pk , PRIMARY KEY (id, version)
+		// 3.c columns: centroid_id, centroid_version, origin_pk , PRIMARY KEY (centroid_id, centroid_version)
 		tableDefs[2].Cols[0] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 			Alg:  plan.CompressType_Lz4,
@@ -1727,16 +1726,18 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	return indexDefs, tableDefs, nil
 }
 
-func CreateSecondaryIndexDef(indexInfo *tree.Index,
+func CreateIndexDef(indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
-	indexParts []string) (*plan.IndexDef, error) {
+	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
+
+	//TODO: later use this function for RegularSecondaryIndex and UniqueIndex.
 
 	indexDef := &plan.IndexDef{}
 
 	indexDef.IndexTableName = indexTableName
 	indexDef.Parts = indexParts
 
-	indexDef.Unique = false
+	indexDef.Unique = isUnique
 	indexDef.TableExist = true
 
 	// Algorithm related fields
@@ -1750,10 +1751,19 @@ func CreateSecondaryIndexDef(indexInfo *tree.Index,
 		}
 		indexDef.IndexAlgoParams = params
 	} else {
-		indexDef.Comment = ""
+		// default indexInfo.IndexOption values
+		switch indexAlgoTableType {
+		case catalog.MoIndexDefaultAlgo.ToString(), catalog.MoIndexBTreeAlgo.ToString():
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
+		case catalog.MoIndexIvfFlatAlgo.ToString():
+			var err error
+			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
+			if err != nil {
+				return nil, err
+			}
+		}
 
-		// default lists and similarity_function
-		indexDef.IndexAlgoParams = ""
 	}
 
 	nameCount := make(map[string]int)

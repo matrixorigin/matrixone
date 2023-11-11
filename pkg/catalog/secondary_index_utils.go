@@ -97,6 +97,10 @@ func IndexParamsToJsonString(def *tree.Index) (string, error) {
 		return "", nil // don't return empty json "{}" string
 	}
 
+	return IndexParamsMapToJsonString(res)
+}
+
+func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 	str, err := json.Marshal(res)
 	if err != nil {
 		return "", err
@@ -142,6 +146,13 @@ func IndexParamsToMap(def *tree.Index) (map[string]string, error) {
 		}
 	}
 	return res, nil
+}
+
+func DefaultIvfIndexAlgoOptions() map[string]string {
+	res := make(map[string]string)
+	res[IndexAlgoParamLists] = "1"                                  // set lists = 1 as default
+	res[IndexAlgoParamSimilarityFn] = IndexAlgoParamSimilarityFn_l2 // set l2 as default
+	return res
 }
 
 //------------------------[END] IndexAlgoParams------------------------
