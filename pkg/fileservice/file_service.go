@@ -73,8 +73,8 @@ type IOVector struct {
 	// implementations may or may not delete the file after this time
 	// zero value means no expire
 	ExpireAt time.Time
-	// CachePolicy controls cache policy for the vector
-	CachePolicy CachePolicy
+	// Policy controls policy for the vector
+	Policy Policy
 }
 
 type IOEntry struct {

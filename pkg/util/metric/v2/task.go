@@ -83,3 +83,13 @@ var (
 	TaskSelColumnTotal     = taskSelectivityCounter.WithLabelValues("column_total")
 	TaskSelColumnHit       = taskSelectivityCounter.WithLabelValues("column_hit")
 )
+
+var (
+	TaskMergeTransferPageLengthGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "task",
+			Name:      "merge_transfer_page_size",
+			Help:      "Size of merge generated transfer page",
+		})
+)

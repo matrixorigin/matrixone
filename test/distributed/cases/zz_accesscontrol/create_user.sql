@@ -31,7 +31,7 @@ create user  " c_user_02 "  identified by '1111' ;
 create user  ' c_user_03 '  identified by '1111' ;
 select user_name, authentication_string from mo_catalog.mo_user where user_name in('c_user_01','c_user_02','c_user_03');
 
---2.支持一次性创建一个/多个用户都不存在，部分存在，全部存在，名字非法，if not exits
+--2.支持一次性创建一个/多个用户都不存在，部分存在，全部存在，名字非法，if not exist
 create user if not exists test_user1 identified by '12345678';
 create user  test_user1 identified by '12345678';
 create user if not exists test_user1 identified by '12345678';
