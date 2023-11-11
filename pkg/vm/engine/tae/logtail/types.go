@@ -595,7 +595,6 @@ func init() {
 		}
 	}
 
-<<<<<<< HEAD
 	ObjectInfoSchema = catalog.NewEmptySchema("object_info")
 	for i, colname := range ObjectInfoAttr {
 		if i == 0 {
@@ -604,7 +603,10 @@ func init() {
 			}
 		} else {
 			if err := ObjectInfoSchema.AppendCol(colname, ObjectInfoTypes[i]); err != nil {
-=======
+			}
+		}
+	}
+	
 	StorageUsageSchema = catalog.NewEmptySchema("storage_usage")
 	for i, colname := range StorageUsageSchemaAttrs {
 		if i == 0 {
@@ -613,7 +615,6 @@ func init() {
 			}
 		} else {
 			if err := StorageUsageSchema.AppendCol(colname, StorageUsageSchemaTypes[i]); err != nil {
->>>>>>> main
 				panic(err)
 			}
 		}
