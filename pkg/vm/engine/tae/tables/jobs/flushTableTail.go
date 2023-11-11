@@ -564,6 +564,8 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 		}
 	}
 
+	toSegmentHandle.UpdateStats(writer.Stats())
+
 	segmentsToDelete := make(map[types.Objectid]handle.Segment)
 	// soft delete all ablks
 	for _, blk := range task.ablksHandles {
@@ -656,6 +658,9 @@ func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, su
 		}
 		if subtask.delta == nil {
 			continue
+		}
+		if err = task.ablksHandles[i].GetSegment().UpdateStats(subtask.stat); err != nil {
+			return
 		}
 		deltaLoc := blockio.EncodeLocation(
 			subtask.name,

@@ -470,6 +470,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.dataDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
 	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
+	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	b.objectMetaBatch = makeRespBatchFromSchemaWithoutRowidAndCommitTS(ObjectInfoSchema, common.LogtailAllocator)
 	return b
 }

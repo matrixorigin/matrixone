@@ -274,6 +274,9 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
+		if err = task.compacted.GetSegment().UpdateStats(ablockTask.stat); err != nil {
+			return err
+		}
 		if deletes != nil {
 			deltaLoc := blockio.EncodeLocation(
 				ablockTask.name,
@@ -397,6 +400,9 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 
 	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
+		return
+	}
+	if err = newBlk.GetSegment().UpdateStats(ioTask.stat); err != nil {
 		return
 	}
 

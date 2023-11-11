@@ -390,6 +390,9 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 			return err
 		}
 	}
+	if err = toSegEntry.UpdateStats(writer.Stats()); err != nil {
+		return err
+	}
 	for _, blk := range task.createdBlks {
 		if err = blk.GetBlockData().Init(); err != nil {
 			return err

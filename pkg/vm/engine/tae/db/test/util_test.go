@@ -120,7 +120,7 @@ func createAndWriteSingleNASegment(t *testing.T, ctx context.Context,
 	blk, err := segHandle.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithFileIdx(0).WithBlkIdx(uint16(0)))
 	require.Nil(t, err)
 
-	name := objectio.BuildObjectName(&segEntry.ID, 0)
+	name := objectio.BuildObjectNameWithObjectID(&segEntry.ID)
 	writer, err := blockio.NewBlockWriterNew(fs.Service, name, 0, []uint16{0})
 	require.Nil(t, err)
 

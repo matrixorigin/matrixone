@@ -551,6 +551,14 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	store.dbs[id] = db
 	return
 }
+func (store *txnStore) UpdateSegmentStats(id *common.ID, stats objectio.ObjectStats) error {
+	db, err := store.getOrSetDB(id.DbID)
+	if err != nil {
+		return err
+	}
+	db.UpdateSegmentStats(id, stats)
+	return nil
+}
 
 func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var db *txnDB

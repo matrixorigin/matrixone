@@ -41,6 +41,7 @@ type SegmentReader interface {
 	GetRelation() Relation
 
 	BatchDedup(pks containers.Vector) error
+	UpdateStats(objectio.ObjectStats) error
 }
 
 type SegmentWriter interface {

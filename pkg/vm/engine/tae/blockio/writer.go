@@ -163,7 +163,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 		common.OperandField(w.writer.GetMaxSeqnum()))
 	return blocks, blocks[0].BlockHeader().MetaLocation(), err
 }
-
+func (w *BlockWriter) Stats() objectio.ObjectStats { return w.writer.Stat() }
 func (w *BlockWriter) GetName() objectio.ObjectName {
 	return w.name
 }

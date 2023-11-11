@@ -884,6 +884,18 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 	block := meta.GetBlockData()
 	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col), common.WorkspaceAllocator)
 }
+func (tbl *txnTable) UpdateSegmentStats(id *common.ID, stats objectio.ObjectStats) error {
+	meta, err := tbl.entry.GetSegmentByID(id.ObjectID())
+	isNewNode, err := meta.UpdateObjectInfo(tbl.store.txn, stats)
+	if err != nil {
+		return err
+	}
+	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
+	if isNewNode {
+		tbl.txnEntries.Append(meta)
+	}
+	return nil
+}
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
@@ -901,14 +913,6 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (er
 	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
 	if isNewNode {
 		tbl.txnEntries.Append(meta)
-	}
-	isNewNode, err = meta.GetSegment().UpdateObjectInfo(tbl.store.txn, metaLoc)
-	if err != nil {
-		return
-	}
-	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.GetSegment().ID)
-	if isNewNode {
-		tbl.txnEntries.Append(meta.GetSegment())
 	}
 	return
 }

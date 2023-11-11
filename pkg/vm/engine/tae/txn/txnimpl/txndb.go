@@ -313,7 +313,6 @@ func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err 
 	}
 	return table.CreateSegment(is1PC)
 }
-
 func (db *txnDB) CreateNonAppendableSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
@@ -322,6 +321,14 @@ func (db *txnDB) CreateNonAppendableSegment(tid uint64, is1PC bool) (seg handle.
 	return table.CreateNonAppendableSegment(is1PC, nil)
 }
 
+func (db *txnDB) UpdateSegmentStats(id *common.ID, stats objectio.ObjectStats) error {
+	table, err := db.getOrSetTable(id.TableID)
+	if err != nil {
+		return err
+	}
+	table.UpdateSegmentStats(id, stats)
+	return nil
+}
 func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	db.mu.RLock()
 	table = db.tables[id]

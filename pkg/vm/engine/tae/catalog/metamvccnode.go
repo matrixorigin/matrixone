@@ -111,6 +111,16 @@ func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNo
 	}
 }
 
+func NewObjectInfoWithObjectStats(stats objectio.ObjectStats) *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		Name:           stats.ObjectName(),
+		OriginSize:     stats.OriginSize(),
+		CompressedSize: stats.CompSize(),
+		ZoneMap:        stats.DataSortKeyZoneMap(),
+		BlockNumber:    uint16(stats.BlkCnt()),
+	}
+}
+
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		Name:           e.Name,

@@ -348,7 +348,7 @@ func (ttree *TableTree) ShortBlocksString() string {
 		var shortuuid [8]byte
 		hex.Encode(shortuuid[:], seg.ID[:4])
 		for id := range seg.Blks {
-			buf.WriteString(fmt.Sprintf(" %s-%d-%d", string(shortuuid[:]), id))
+			buf.WriteString(fmt.Sprintf(" %s-%d-%d", string(shortuuid[:]), seg.ID.Offset(), id))
 		}
 	}
 	return buf.String()
