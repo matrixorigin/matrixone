@@ -422,7 +422,7 @@ Variable_name    Value
 sql_select_limit    18446744073709551615
 show variables like 'max_allowed_packet';
 Variable_name    Value
-max_allowed_packet    16777216
+max_allowed_packet    67108864
 set max_allowed_packet = 10000;
 show variables like 'max_allowed_packet';
 Variable_name    Value
@@ -430,7 +430,7 @@ max_allowed_packet    10000
 set max_allowed_packet = default;
 show variables like 'max_allowed_packet';
 Variable_name    Value
-max_allowed_packet    16777216
+max_allowed_packet    67108864
 show variables like 'wait_timeout';
 Variable_name    Value
 wait_timeout    10
