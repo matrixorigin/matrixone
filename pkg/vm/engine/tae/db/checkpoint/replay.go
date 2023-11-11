@@ -110,6 +110,13 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	}
 	readDuration += time.Since(t0)
 	datas := make([]*logtail.CheckpointData, bat.Length())
+	defer func() {
+		for _, data := range datas {
+			if data != nil {
+				data.Close()
+			}
+		}
+	}()
 
 	entries := make([]*CheckpointEntry, bat.Length())
 	emptyFile := make([]*CheckpointEntry, 0)
