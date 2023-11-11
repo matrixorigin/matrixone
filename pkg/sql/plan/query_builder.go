@@ -142,15 +142,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := &plan.TableDef{
-			Name:          node.TableDef.Name,
-			Defs:          node.TableDef.Defs,
-			Name2ColIndex: node.TableDef.Name2ColIndex,
-			Createsql:     node.TableDef.Createsql,
-			TblFunc:       node.TableDef.TblFunc,
-			TableType:     node.TableDef.TableType,
-			Partition:     node.TableDef.Partition,
-		}
+		newTableDef := DeepCopyTableDef(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
@@ -160,12 +152,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, col)
+			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
 		}
 
 		if len(newTableDef.Cols) == 0 {
 			internalRemapping.addColRef([2]int32{tag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[0])
+			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
 		}
 
 		node.TableDef = newTableDef
@@ -267,30 +259,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := &plan.TableDef{
-			TblId:          node.TableDef.TblId,
-			Name:           node.TableDef.Name,
-			Hidden:         node.TableDef.Hidden,
-			TableType:      node.TableDef.TableType,
-			Createsql:      node.TableDef.Createsql,
-			TblFunc:        node.TableDef.TblFunc,
-			Version:        node.TableDef.Version,
-			Pkey:           node.TableDef.Pkey,
-			Indexes:        node.TableDef.Indexes,
-			Fkeys:          node.TableDef.Fkeys,
-			RefChildTbls:   node.TableDef.RefChildTbls,
-			Checks:         node.TableDef.Checks,
-			Partition:      node.TableDef.Partition,
-			ClusterBy:      node.TableDef.ClusterBy,
-			Props:          node.TableDef.Props,
-			ViewSql:        node.TableDef.ViewSql,
-			Defs:           node.TableDef.Defs,
-			Name2ColIndex:  node.TableDef.Name2ColIndex,
-			IsLocked:       node.TableDef.IsLocked,
-			TableLockType:  node.TableDef.TableLockType,
-			IsTemporary:    node.TableDef.IsTemporary,
-			AutoIncrOffset: node.TableDef.AutoIncrOffset,
-		}
+		newTableDef := DeepCopyTableDef(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
@@ -300,12 +269,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, col)
+			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
 		}
 
 		if len(newTableDef.Cols) == 0 {
 			internalRemapping.addColRef([2]int32{tag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[0])
+			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
 		}
 
 		node.TableDef = newTableDef
@@ -1400,7 +1369,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
-		rootID = builder.removeRedundantJoinCond(rootID)
+		colMap := make(map[[2]int32]int)
+		colGroup := make([]int, 0)
+		builder.removeRedundantJoinCond(rootID, colMap, colGroup)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.applySwapRuleByStats(rootID, true)
@@ -1415,14 +1386,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
-		determineHashOnPK(rootID, builder)
 		ReCalcNodeStats(rootID, builder, true, false)
 
 		builder.partitionPrune(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
+		determineHashOnPK(rootID, builder)
 		determineShuffleMethod(rootID, builder)
 		determineShuffleMethod2(rootID, -1, builder)
+		// after determine shuffle, never call recalc stats again.
+		// new optimize rule should be put before
 
 		builder.pushdownRuntimeFilters(rootID)
 
@@ -1583,12 +1556,16 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
 				targetArgType = tmpArgsType[0]
+				// if string union string, different length may cause error.
+				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+					for _, typ := range argsType {
+						if targetArgType.Width < typ.Width {
+							targetArgType.Width = typ.Width
+						}
+					}
+				}
 			} else {
 				targetArgType = argsCastType[0]
-			}
-			// if string union string, different length may cause error. use text type as the output
-			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-				targetArgType = types.T_text.ToType()
 			}
 
 			if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
@@ -1807,6 +1784,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 }
 
 const NameGroupConcat = "group_concat"
+const NameClusterCenters = "cluster_centers"
 
 func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 	windowsSpecList := make([]*plan.Expr, 0, len(bc.aggregates))
@@ -1829,6 +1807,7 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 			if j < len(bc.windows)-1 {
 				j++
 			}
+			// NOTE: no need to include NameClusterCenters
 		} else {
 			windowSpec.OrderBy = nil
 		}
@@ -2012,6 +1991,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var resultLen int
 	var havingBinder *HavingBinder
 	var lockNode *plan.Node
+	var notCacheable bool
 
 	if clause == nil {
 		proc := builder.compCtx.GetProcess()
@@ -2273,10 +2253,17 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				newFilterList = append(newFilterList, expr)
 			}
 
+			for _, filter := range newFilterList {
+				if detectedExprWhetherTimeRelated(filter) {
+					notCacheable = true
+				}
+			}
+
 			nodeID = builder.appendNode(&plan.Node{
-				NodeType:   plan.Node_FILTER,
-				Children:   []int32{nodeID},
-				FilterList: newFilterList,
+				NodeType:     plan.Node_FILTER,
+				Children:     []int32{nodeID},
+				FilterList:   newFilterList,
+				NotCacheable: notCacheable,
 			}, ctx)
 		}
 
@@ -2357,6 +2344,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		exprStr := proj.String()
 		if _, ok := ctx.projectByExpr[exprStr]; !ok {
 			ctx.projectByExpr[exprStr] = int32(i)
+		}
+
+		if !notCacheable {
+			if detectedExprWhetherTimeRelated(proj) {
+				notCacheable = true
+			}
 		}
 	}
 
@@ -2693,10 +2686,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: ctx.projects,
-		Children:    []int32{nodeID},
-		BindingTags: []int32{ctx.projectTag},
+		NodeType:     plan.Node_PROJECT,
+		ProjectList:  ctx.projects,
+		Children:     []int32{nodeID},
+		BindingTags:  []int32{ctx.projectTag},
+		NotCacheable: notCacheable,
 	}, ctx)
 
 	// append DISTINCT node

@@ -88,7 +88,9 @@ func (b *TxnLogtailRespBuilder) Close() {
 
 func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.TableLogtail, func()) {
 	now := time.Now()
-	defer v2.LogTailCollectDurationHistogram.Observe(time.Since(now).Seconds())
+	defer func() {
+		v2.LogTailCollectDurationHistogram.Observe(time.Since(now).Seconds())
+	}()
 
 	b.txn = txn
 	txn.GetStore().ObserveTxn(

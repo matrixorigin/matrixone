@@ -1395,7 +1395,25 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		}
 
 		var keyName string
-		{
+		if len(indexParts) == 1 {
+			// This means indexParts only contains the primary key column
+			keyName = catalog.IndexTableIndexColName
+			colDef := &ColDef{
+				Name: keyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  colMap[pkeyName].Typ, // Take Type of primary key column
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			}
+			tableDef.Cols = append(tableDef.Cols, colDef)
+			tableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{keyName},
+				PkeyColName: keyName,
+			}
+		} else {
 			keyName = catalog.IndexTableIndexColName
 			colDef := &ColDef{
 				Name: keyName,
@@ -1446,10 +1464,20 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
+		indexDef.IndexAlgo = indexInfo.KeyType.ToString()
+		indexDef.IndexAlgoTableType = ""
+
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
+
+			params, err := indexParamsToJsonString(indexInfo)
+			if err != nil {
+				return err
+			}
+			indexDef.IndexAlgoParams = params
 		} else {
 			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
 		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef)
@@ -1757,6 +1785,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
+			KeyType:     stmt.IndexOption.IType,
 		}
 	default:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))

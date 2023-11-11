@@ -324,10 +324,10 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 			continue
 		}
 		cnt++
-		if segment.Stat.Loaded {
+		if segment.Stat.GetLoaded() {
 			loadedCnt++
-			rows += int(segment.Stat.Rows)
-			osize += int(segment.Stat.OriginSize)
+			rows += int(segment.Stat.GetRows())
+			osize += int(segment.Stat.GetOriginSize())
 		}
 		if level > common.PPL0 {
 			_ = w.WriteByte('\n')

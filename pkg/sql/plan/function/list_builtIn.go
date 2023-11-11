@@ -1741,9 +1741,7 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_array_float32, types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					// COSINE similarity value 0 <= x <= 1
-					// TODO: Is float32 ok?
-					return types.T_float32.ToType()
+					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CosineSimilarityArray[float32]
@@ -1753,10 +1751,100 @@ var supportedArrayOperations = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_array_float64, types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float32.ToType()
+					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return CosineSimilarityArray[float64]
+				},
+			},
+		},
+	},
+	// function `l2_distance`
+	{
+		functionId: L2_DISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L2DistanceArray[float64]
+				},
+			},
+		},
+	},
+	// function `cosine_distance`
+	{
+		functionId: COSINE_DISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CosineDistanceArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CosineDistanceArray[float64]
+				},
+			},
+		},
+	},
+	// function `normalize_l2`
+	{
+		functionId: NORMALIZE_L2,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NormalizeL2Array[float32]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NormalizeL2Array[float64]
 				},
 			},
 		},

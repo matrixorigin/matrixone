@@ -110,7 +110,7 @@ KEY `idx_sub_company_id` (`sub_company_id`)
 desc `projects`;
 Field    Type    Null    Key    Default    Extra    Comment
 project_id    VARCHAR(64)    NO    PRI    null        
-company_id    VARCHAR(64)    NO        null        
+company_id    VARCHAR(64)    NO    MUL    null        
 project_no    VARCHAR(255)    YES        null        
 project_name    VARCHAR(255)    NO        null        
 project_type    VARCHAR(255)    NO        null        
@@ -118,7 +118,7 @@ project_unit    VARCHAR(255)    YES        null
 project_leader    VARCHAR(255)    NO        null        
 address    VARCHAR(255)    YES        null        
 number_of_building    INT(32)    YES        null        
-project_state    VARCHAR(64)    YES        null        
+project_state    VARCHAR(64)    YES    MUL    null        
 supervisor    VARCHAR(255)    YES        null        
 build_license    VARCHAR(64)    YES        null        
 ceiling_normal_plane_distance    VARCHAR(32)    YES        null        顶板距法面距离
@@ -126,7 +126,7 @@ floor_normal_plane_distance    VARCHAR(32)    YES        null        底板距�
 ext1    VARCHAR(1024)    YES        null        扩展字段
 ext2    VARCHAR(1024)    YES        null        扩展字段
 ext3    VARCHAR(1024)    YES        null        扩展字段
-sub_company_id    VARCHAR(64)    YES        null        
+sub_company_id    VARCHAR(64)    YES    MUL    null        
 parent_project_id    VARCHAR(64)    YES        null        
 distinguish_suite    INT(32)    YES        '1'        是否分户(0,否 1，是)
 draw_switch    INT(32)    YES        null        
@@ -160,7 +160,7 @@ ADD COLUMN `version2` varchar (64) NULL AFTER `draw_switch`;
 desc `projects`;
 Field    Type    Null    Key    Default    Extra    Comment
 project_id    VARCHAR(64)    NO    PRI    null        
-company_id    VARCHAR(64)    NO        null        
+company_id    VARCHAR(64)    NO    MUL    null        
 project_no    VARCHAR(255)    YES        null        
 project_name    VARCHAR(255)    NO        null        
 project_type    VARCHAR(255)    NO        null        
@@ -168,7 +168,7 @@ project_unit    VARCHAR(255)    YES        null
 project_leader    VARCHAR(255)    NO        null        
 address    VARCHAR(255)    YES        null        
 number_of_building    INT(32)    YES        null        
-project_state    VARCHAR(64)    YES        null        
+project_state    VARCHAR(64)    YES    MUL    null        
 supervisor    VARCHAR(255)    YES        null        
 build_license    VARCHAR(64)    YES        null        
 ceiling_normal_plane_distance    VARCHAR(32)    YES        null        顶板距法面距离
@@ -176,7 +176,7 @@ floor_normal_plane_distance    VARCHAR(32)    YES        null        底板距�
 ext1    VARCHAR(1024)    YES        null        扩展字段
 ext2    VARCHAR(1024)    YES        null        扩展字段
 ext3    VARCHAR(1024)    YES        null        扩展字段
-sub_company_id    VARCHAR(64)    YES        null        
+sub_company_id    VARCHAR(64)    YES    MUL    null        
 parent_project_id    VARCHAR(64)    YES        null        
 distinguish_suite    INT(32)    YES        '1'        是否分户(0,否 1，是)
 draw_switch2    INT(32)    YES        null        

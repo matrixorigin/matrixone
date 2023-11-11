@@ -27,7 +27,7 @@ import (
 )
 
 func handleFlush() handleFunc {
-	return getTNHandlerFunc(
+	return GetTNHandlerFunc(
 		pb.CmdMethod_Flush,
 		func(_ string) ([]uint64, error) {
 			return nil, nil

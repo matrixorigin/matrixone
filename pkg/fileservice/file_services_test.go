@@ -24,7 +24,7 @@ import (
 
 func TestFileServices(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func(name string) FileService {
+		testFileService(t, 0, func(name string) FileService {
 			ctx := context.Background()
 			dir := t.TempDir()
 			fs, err := NewLocalFS(ctx, name, dir, DisabledCacheConfig, nil)

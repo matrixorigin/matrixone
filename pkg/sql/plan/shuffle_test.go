@@ -180,7 +180,7 @@ func TestShuffleRange(t *testing.T) {
 	for i := 0; i < leng; i++ {
 		shufflerange := NewShuffleRange()
 		for j := 0; j < len(testcase[i].min); j++ {
-			shufflerange.Update(testcase[i].min[j], testcase[i].max[j])
+			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 0, 0)
 		}
 
 		shufflerange.Eval(testcase[i].bucket)

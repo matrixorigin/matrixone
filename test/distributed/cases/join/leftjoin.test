@@ -24,6 +24,10 @@ explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
 -- @separator:table
 explain select t1.c1,t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
 -- @separator:table
+explain select t3.c1 from t3 left join t1 on t1.c1 =t3.c1 and t1.c1 > t3.c2 where t3.c1<10;
+-- @separator:table
+explain select t1.c1,t3.c1 from t3 left join t1 on t1.c1 =t3.c1 where t3.c1<10;
+-- @separator:table
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c2;
 -- @separator:table
 explain select t3.c1 from t3 left join t2 on t3.c2=t2.c2;

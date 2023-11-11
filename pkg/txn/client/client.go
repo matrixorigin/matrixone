@@ -487,13 +487,18 @@ func (client *txnClient) Resume() {
 func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
 	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
-	for key, op := range client.mu.activeTxns {
+	for _, op := range client.mu.activeTxns {
 		ops = append(ops, op)
-		delete(client.mu.activeTxns, key)
 	}
 	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
 	client.mu.Unlock()
+
+	if client.timestampWaiter != nil {
+		// Cancel all waiters, means that all waiters do not need to wait for
+		// the newer timestamp from logtail consumer.
+		client.timestampWaiter.Cancel()
+	}
 
 	for _, op := range ops {
 		tempWorkspace := op.workspace

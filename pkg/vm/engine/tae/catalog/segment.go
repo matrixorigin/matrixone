@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,24 +49,121 @@ type SegmentEntry struct {
 
 type SegStat struct {
 	// min max etc. later
-	Loaded         bool
-	OriginSize     int
-	SortKeyZonemap index.ZM
-	Rows           int
-	RemainingRows  int
+	sync.RWMutex
+	loaded         bool
+	originSize     int
+	compSize       int
+	sortKeyZonemap index.ZM
+	rows           int
+	remainingRows  int
+}
+
+func (s *SegStat) loadObjectInfo(blk *BlockEntry) error {
+	schema := blk.GetSchema()
+	loc := blk.GetMetaLoc()
+
+	if len(loc) == 0 {
+		return nil
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	if s.loaded {
+		return nil
+	}
+
+	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, blk.blkData.GetFs().Service)
+	if err != nil {
+		return err
+	}
+
+	meta := objMeta.MustDataMeta()
+
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		colmata := meta.MustGetColumn(uint16(col.SeqNum))
+		s.originSize += int(colmata.Location().OriginSize())
+		s.compSize += int(colmata.Location().Length())
+	}
+
+	if schema.HasSortKey() {
+		col := schema.GetSingleSortKey()
+		s.sortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
+	}
+
+	s.loaded = true
+
+	return nil
+}
+
+func (s *SegStat) GetLoaded() bool {
+	s.RLock()
+	defer s.RUnlock()
+	return s.loaded
+}
+
+func (s *SegStat) GetSortKeyZonemap() index.ZM {
+	s.RLock()
+	defer s.RUnlock()
+	return s.sortKeyZonemap.Clone()
+}
+
+func (s *SegStat) SetRows(rows int) {
+	s.Lock()
+	defer s.Unlock()
+	s.rows = rows
+}
+
+func (s *SegStat) SetRemainingRows(rows int) {
+	s.Lock()
+	defer s.Unlock()
+	s.remainingRows = rows
+}
+
+func (s *SegStat) GetRemainingRows() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.remainingRows
+}
+
+func (s *SegStat) GetRows() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.rows
+}
+
+func (s *SegStat) GetOriginSize() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.originSize
+}
+
+func (s *SegStat) SetOriginSize(size int) {
+	s.Lock()
+	defer s.Unlock()
+	s.originSize = size
+}
+
+func (s *SegStat) GetCompSize() int {
+	s.RLock()
+	defer s.RUnlock()
+	return s.compSize
 }
 
 func (s *SegStat) String(composeSortKey bool) string {
 	zonemapStr := "nil"
-	if s.SortKeyZonemap != nil {
+	if s.sortKeyZonemap != nil {
 		if composeSortKey {
-			zonemapStr = s.SortKeyZonemap.StringForCompose()
+			zonemapStr = s.sortKeyZonemap.StringForCompose()
 		} else {
-			zonemapStr = s.SortKeyZonemap.String()
+			zonemapStr = s.sortKeyZonemap.String()
 		}
 	}
 	return fmt.Sprintf("loaded:%t, oSize:%s, rows:%d, remainingRows:%d, zm: %s",
-		s.Loaded, common.HumanReadableBytes(s.OriginSize), s.Rows, s.RemainingRows, zonemapStr,
+		s.loaded, common.HumanReadableBytes(s.originSize), s.rows, s.remainingRows, zonemapStr,
 	)
 }
 
@@ -166,6 +264,19 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	return e
 }
 
+func (entry *SegmentEntry) GetFirstBlkEntry() *BlockEntry {
+	entry.RLock()
+	defer entry.RUnlock()
+
+	// head may be nil
+	head := entry.link.GetHead()
+	if head == nil {
+		return nil
+	}
+
+	return head.GetPayload()
+}
+
 func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 	if entry.SortHint < b.SortHint {
 		return -1
@@ -177,42 +288,32 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 
 // LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
 func (entry *SegmentEntry) LoadObjectInfo() error {
-	if entry.Stat.Loaded {
+	name := entry.GetTable().GetLastestSchema().Name
+	defer func() {
+		// after loading object info, original size is still 0, we have to estimate it by experience
+		rows := entry.Stat.GetRows()
+		if name == motrace.RawLogTbl && entry.Stat.GetOriginSize() == 0 && rows != 0 {
+			factor := 1 + rows/1600
+			entry.Stat.SetOriginSize((1 << 20) * factor)
+		}
+	}()
+
+	if entry.Stat.GetLoaded() {
 		return nil
 	}
+
 	// special case for raw log table.
-	if entry.GetTable().GetLastestSchema().Name == motrace.RawLogTbl &&
+	if name == motrace.RawLogTbl &&
 		len(entry.table.entries) > int(common.RuntimeNotLoadMoreThan.Load()) {
 		return nil
 	}
-	entry.RLock()
-	blk := entry.link.GetHead().GetPayload()
-	entry.RUnlock()
+
+	blk := entry.GetFirstBlkEntry()
 	if blk == nil {
 		return nil
 	}
-	schema := blk.GetSchema()
-	loc := blk.GetMetaLoc()
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &loc, false, blk.blkData.GetFs().Service)
-	if err != nil {
-		return err
-	}
 
-	meta := objMeta.MustDataMeta()
-
-	for _, col := range schema.ColDefs {
-		if col.IsPhyAddr() {
-			continue
-		}
-		colmata := meta.MustGetColumn(uint16(col.SeqNum))
-		entry.Stat.OriginSize += int(colmata.Location().OriginSize())
-	}
-	if schema.HasSortKey() {
-		col := schema.GetSingleSortKey()
-		entry.Stat.SortKeyZonemap = meta.MustGetColumn(col.SeqNum).ZoneMap()
-	}
-	entry.Stat.Loaded = true
-	return nil
+	return entry.Stat.loadObjectInfo(blk)
 }
 
 func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {

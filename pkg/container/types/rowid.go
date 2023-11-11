@@ -140,6 +140,10 @@ func (r *Rowid) String() string {
 	return fmt.Sprintf("%s-%d", b.String(), s)
 }
 
+func (b Blockid) Less(than Blockid) bool {
+	return b.Compare(than) < 0
+}
+
 func RandomRowid() Rowid {
 	var r Rowid
 	u := uuid.New()

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -36,6 +37,7 @@ import (
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/mohae/deepcopy"
@@ -200,6 +202,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
 
+	stats := statistic.StatsInfoFromContext(requestCtx)
+	stats.CompileStart()
+	defer stats.CompileEnd()
+
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.ses.IfInitedTempEngine() {
@@ -217,6 +223,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnCtx = fileservice.EnsureStatementProfiler(txnCtx, requestCtx)
+	txnCtx = statistic.EnsureStatsInfoCanBeFound(txnCtx, requestCtx)
 
 	// Increase the statement ID and update snapshot TS before build plan, because the
 	// snapshot TS is used when build plan.
@@ -359,6 +366,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		cwft.stmt,
 		cwft.ses.isInternal,
 		deepcopy.Copy(cwft.ses.getCNLabels()).(map[string]string),
+		getStatementStartAt(requestCtx),
 	)
 	cwft.compile.SetBuildPlanFunc(func() (*plan2.Plan, error) {
 		return buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
@@ -439,4 +447,16 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 
 func (cwft *TxnComputationWrapper) GetLoadTag() bool {
 	return cwft.plan.GetQuery().GetLoadTag()
+}
+
+func appendStatementAt(ctx context.Context, value time.Time) context.Context {
+	return context.WithValue(ctx, defines.StartTS{}, value)
+}
+
+func getStatementStartAt(ctx context.Context) time.Time {
+	v := ctx.Value(defines.StartTS{})
+	if v == nil {
+		return time.Now()
+	}
+	return v.(time.Time)
 }

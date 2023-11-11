@@ -59,3 +59,34 @@ select * from t1;
 show index from t1;
 show create table t1;
 select name, type, column_name from mo_catalog.mo_indexes mi where mi.column_name ="name" or mi.column_name="__mo_alias_id";
+
+-- 1.f Create Secondary Index on PK alone. ie SK = PK.
+drop table if exists t1;
+create table t1(a double primary key, b int);
+insert into t1 values(1.5,100);
+create index idx6 on t1(a); -- sk = pk
+insert into t1 values(2.6,200);
+select * from t1;
+show index from t1;
+show create table t1;
+select name, type, column_name from mo_catalog.mo_indexes mi where name="idx6";
+
+-- 1.g Create Secondary Index with BTREE and IVF params (`lists` param will be used by BTREE)
+-- 1.e Create Secondary Index with BTREE or "" will result in regular secondary index.
+drop table if exists t1;
+create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
+create index idx7 using BTREE on t1(name) lists = 10;
+insert into t1 values(1,"Abby", 24);
+show index from t1;
+show create table t1;
+select name, type, column_name from mo_catalog.mo_indexes mi where name="idx7";
+
+-- 1.h Create Secondary Index with IVFFLAT.
+-- TODO: will treat IVFFLAT separately in a new PR.
+drop table if exists t1;
+create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
+create index idx8 using IVFFLAT on t1(name) lists = 10 similarity_function 'l2';
+insert into t1 values(1,"Abby", 24);
+show index from t1;
+show create table t1;
+select name, type, column_name from mo_catalog.mo_indexes where name="idx8"; -- TODO: this output will change.

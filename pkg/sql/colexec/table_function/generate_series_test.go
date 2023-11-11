@@ -28,6 +28,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -422,11 +423,16 @@ func getScale(s string) int32 {
 }
 
 func TestGenerateSeriesString(t *testing.T) {
-	generateSeriesString(nil, new(bytes.Buffer))
+	generateSeriesString(new(bytes.Buffer))
 }
 
 func TestGenerateSeriesPrepare(t *testing.T) {
-	err := generateSeriesPrepare(nil, &Argument{})
+	err := generateSeriesPrepare(nil, &Argument{
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		}})
 	require.Nil(t, err)
 }
 func TestGenStep(t *testing.T) {
@@ -453,49 +459,53 @@ func TestGenerateSeriesCall(t *testing.T) {
 	arg := &Argument{
 		Attrs: []string{"result"},
 		Name:  "generate_series",
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
-	proc.SetInputBatch(nil)
-	end, err := generateSeriesCall(0, proc, arg)
-	require.Nil(t, err)
-	require.Equal(t, true, end)
 
 	arg.Args = makeInt64List(1, 3, 1)
 	arg.Rets = plan.GSColDefs[0]
-	err = Prepare(proc, arg)
+	err := arg.Prepare(proc)
 	require.Nil(t, err)
 	bat := makeGenerateSeriesBatch(proc)
-	proc.SetInputBatch(bat)
-	end, err = generateSeriesCall(0, proc, arg)
+	result := vm.NewCallResult()
+	result.Batch = bat
+	end, err := generateSeriesCall(0, proc, arg, &result)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
-	require.Equal(t, 3, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
+	require.Equal(t, 3, result.Batch.GetVector(0).Length())
+	cleanResult(&result, proc)
 
 	arg.Args = makeDatetimeList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second", 0)
 	arg.Rets = plan.GSColDefs[1]
 
-	err = Prepare(proc, arg)
+	err = arg.Prepare(proc)
 	require.Nil(t, err)
 
-	proc.SetInputBatch(bat)
-	end, err = generateSeriesCall(0, proc, arg)
+	result = vm.NewCallResult()
+	result.Batch = bat
+	end, err = generateSeriesCall(0, proc, arg, &result)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
-	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
+	require.Equal(t, 60, result.Batch.GetVector(0).Length())
+	cleanResult(&result, proc)
 
 	arg.Args = makeVarcharList("2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second")
 	arg.Rets = plan.GSColDefs[2]
 
-	err = Prepare(proc, arg)
+	err = arg.Prepare(proc)
 	require.Nil(t, err)
 
-	proc.SetInputBatch(bat)
-	end, err = generateSeriesCall(0, proc, arg)
+	result = vm.NewCallResult()
+	result.Batch = bat
+	end, err = generateSeriesCall(0, proc, arg, &result)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
-	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
-	proc.InputBatch().Clean(proc.Mp())
+	require.Equal(t, 60, result.Batch.GetVector(0).Length())
+	cleanResult(&result, proc)
 
 	bat.Clean(proc.Mp())
 	require.Equal(t, beforeCall, proc.Mp().CurrNB())

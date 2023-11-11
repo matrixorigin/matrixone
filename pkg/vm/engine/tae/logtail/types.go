@@ -66,6 +66,10 @@ const (
 	AccountIDDbNameTblName = catalog.AccountIDDbNameTblName
 	AccountIDDbName        = catalog.AccountIDDbName
 
+	// supporting `show accounts` in checkpoint
+	CheckpointMetaAttr_ObjectSize = "checkpoint_meta_object_size"
+	CheckpointMetaAttr_ObjectID   = "checkpoint_meta_object_id"
+
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
 
@@ -90,6 +94,8 @@ var (
 
 	DBSpecialDeleteSchema  *catalog.Schema
 	TBLSpecialDeleteSchema *catalog.Schema
+
+	StorageUsageSchema *catalog.Schema
 )
 
 var (
@@ -321,6 +327,22 @@ var (
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_TS, 0, 0),
 		types.New(types.T_TS, 0, 0),
+	}
+
+	StorageUsageSchemaAttrs = []string{
+		pkgcatalog.SystemColAttr_AccID,
+		SnapshotAttr_DBID,
+		SnapshotAttr_TID,
+		CheckpointMetaAttr_ObjectID,
+		CheckpointMetaAttr_ObjectSize,
+	}
+
+	StorageUsageSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uuid, 0, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 )
 
@@ -573,6 +595,7 @@ func init() {
 		}
 	}
 
+<<<<<<< HEAD
 	ObjectInfoSchema = catalog.NewEmptySchema("object_info")
 	for i, colname := range ObjectInfoAttr {
 		if i == 0 {
@@ -581,6 +604,16 @@ func init() {
 			}
 		} else {
 			if err := ObjectInfoSchema.AppendCol(colname, ObjectInfoTypes[i]); err != nil {
+=======
+	StorageUsageSchema = catalog.NewEmptySchema("storage_usage")
+	for i, colname := range StorageUsageSchemaAttrs {
+		if i == 0 {
+			if err := StorageUsageSchema.AppendPKCol(colname, StorageUsageSchemaTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := StorageUsageSchema.AppendCol(colname, StorageUsageSchemaTypes[i]); err != nil {
+>>>>>>> main
 				panic(err)
 			}
 		}

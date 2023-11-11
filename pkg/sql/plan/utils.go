@@ -1196,6 +1196,9 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // and constant's value in range of column's type, then no cast was needed
 func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 	//TODO: Check if T_array is required here?
+	if constT.Eq(columnT) {
+		return true
+	}
 	switch constT.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		switch columnT.Oid {
@@ -1746,4 +1749,28 @@ func getSuitableDBName(dbName1 string, dbName2 string) string {
 		return dbName2
 	}
 	return dbName1
+}
+
+func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
+	if ef, ok := expr.Expr.(*plan.Expr_F); !ok {
+		return false
+	} else {
+		overloadID := ef.F.Func.GetObj()
+		f, exists := function.GetFunctionByIdWithoutError(overloadID)
+		// current_timestamp()
+		if !exists {
+			return false
+		}
+		if f.IsRealTimeRelated() {
+			return true
+		}
+
+		// current_timestamp() + 1
+		for _, arg := range ef.F.Args {
+			if detectedExprWhetherTimeRelated(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -45,6 +45,7 @@ type lockContext struct {
 	cb       func(pb.Result, error)
 	lockFunc func(*lockContext, bool)
 	w        *waiter
+	createAt time.Time
 }
 
 func (l *localLockTable) newLockContext(
@@ -62,6 +63,7 @@ func (l *localLockTable) newLockContext(
 	c.opts = opts
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
+	c.createAt = time.Now()
 	return c
 }
 

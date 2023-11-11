@@ -190,6 +190,9 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sub.AccountId))
 		dbName = sub.DbName
 	}
+	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
+		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+	}
 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(txnCtx, dbName, txn)
@@ -601,7 +604,11 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 			ptables[i] = ptable
 		}
 	}
-	return table.Stats(ctx, ptables, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
+	s := tcc.GetStatsCache().GetStatsInfoMap(table.GetTableID(ctx), true)
+	if s == nil {
+		return false
+	}
+	return table.Stats(ctx, ptables, s)
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {

@@ -664,6 +664,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {
+		abort.Close()
 		bat.Deletes = abortedMap
 		bat.Compact()
 	}

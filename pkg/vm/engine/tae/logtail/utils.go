@@ -50,8 +50,9 @@ const (
 	CheckpointVersion6 uint32 = 6
 	CheckpointVersion7 uint32 = 7
 	CheckpointVersion8 uint32 = 8
+	CheckpointVersion9 uint32 = 9
 
-	CheckpointCurrentVersion = CheckpointVersion8
+	CheckpointCurrentVersion = CheckpointVersion9
 )
 
 const (
@@ -87,6 +88,10 @@ const (
 	BLKCNMetaInsertIDX
 
 	TNMetaIDX
+
+	// supporting `show accounts` by recording extra
+	// account related info in checkpoint
+	SEGStorageUsageIDX
 
 	ObjectInfoIDX
 )
@@ -125,6 +130,7 @@ var checkpointDataSchemas_V5 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V6 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V7 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_V8 [MaxIDX]*catalog.Schema
+var checkpointDataSchemas_V9 [MaxIDX]*catalog.Schema
 var checkpointDataSchemas_Curr [MaxIDX]*catalog.Schema
 
 var checkpointDataReferVersions map[uint32][MaxIDX]*checkpointDataItem
@@ -156,6 +162,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V2 = [MaxIDX]*catalog.Schema{
@@ -184,6 +191,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V3 = [MaxIDX]*catalog.Schema{
@@ -212,6 +220,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V4 = [MaxIDX]*catalog.Schema{
@@ -240,6 +249,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 		ObjectInfoSchema,
 	}
 	checkpointDataSchemas_V5 = [MaxIDX]*catalog.Schema{
@@ -268,6 +278,7 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema_V1, // 23
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 		ObjectInfoSchema,
 	}
 
@@ -297,11 +308,45 @@ func init() {
 		BlkTNSchema,
 		BlkMetaSchema, // 23
 		TNMetaSchema,
+		StorageUsageSchema, // 25
 		ObjectInfoSchema,
 	}
 	// Checkpoint V7, V8 update checkpoint metadata
 	checkpointDataSchemas_V7 = checkpointDataSchemas_V6
 	checkpointDataSchemas_V8 = checkpointDataSchemas_V6
+
+	// adding extra batches in V9, recording the blk rows and size
+	// changing and the account, db, table info the blk belongs to.
+	// this enabled the optimization of `show accounts` in CN side.
+	checkpointDataSchemas_V9 = [MaxIDX]*catalog.Schema{
+		MetaSchema,
+		catalog.SystemDBSchema,
+		TxnNodeSchema,
+		DBDelSchema, // 3
+		DBTNSchema,
+		catalog.SystemTableSchema,
+		TblTNSchema,
+		TblDelSchema, // 7
+		TblTNSchema,
+		catalog.SystemColumnSchema,
+		ColumnDelSchema,
+		SegSchema, // 11
+		SegTNSchema,
+		DelSchema,
+		SegTNSchema,
+		BlkMetaSchema, // 15
+		BlkTNSchema,
+		DelSchema,
+		BlkTNSchema,
+		BlkMetaSchema, // 19
+		BlkTNSchema,
+		DelSchema,
+		BlkTNSchema,
+		BlkMetaSchema, // 23
+		TNMetaSchema,
+		StorageUsageSchema, // 25
+		ObjectInfoSchema,
+	}
 
 	checkpointDataReferVersions = make(map[uint32][MaxIDX]*checkpointDataItem)
 
@@ -313,7 +358,8 @@ func init() {
 	registerCheckpointDataReferVersion(CheckpointVersion6, checkpointDataSchemas_V6[:])
 	registerCheckpointDataReferVersion(CheckpointVersion7, checkpointDataSchemas_V7[:])
 	registerCheckpointDataReferVersion(CheckpointVersion8, checkpointDataSchemas_V8[:])
-	checkpointDataSchemas_Curr = checkpointDataSchemas_V8
+	registerCheckpointDataReferVersion(CheckpointVersion9, checkpointDataSchemas_V9[:])
+	checkpointDataSchemas_Curr = checkpointDataSchemas_V9
 }
 
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
@@ -328,7 +374,8 @@ func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schem
 	checkpointDataReferVersions[version] = checkpointDataRefer
 }
 
-func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (*CheckpointData, error) {
+func IncrementalCheckpointDataFactory(start, end types.TS,
+	fs fileservice.FileService, collectUsage bool) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewIncrementalCollector(start, end)
 		defer collector.Close()
@@ -336,12 +383,19 @@ func IncrementalCheckpointDataFactory(start, end types.TS) func(c *catalog.Catal
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
 		}
+
+		if collectUsage {
+			// collecting usage only happened when do ckp
+			FillUsageBatOfIncremental(c, collector, fs)
+		}
+
 		data = collector.OrphanData()
 		return
 	}
 }
 
-func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) func(c *catalog.Catalog) (*CheckpointData, error) {
+func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration,
+	fs fileservice.FileService, ckpMetas []*CkpLocVers) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
@@ -349,7 +403,11 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
 		}
+
+		FillUsageBatOfGlobal(c, collector, fs, ckpMetas)
+
 		data = collector.OrphanData()
+
 		return
 	}
 }
@@ -539,6 +597,8 @@ type BaseCollector struct {
 	start, end types.TS
 
 	data *CheckpointData
+	// to identify increment or global
+	isGlobal bool
 }
 
 type IncrementalCollector struct {
@@ -552,6 +612,7 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 			data:          NewCheckpointData(),
 			start:         start,
 			end:           end,
+			isGlobal:      false,
 		},
 	}
 	collector.DatabaseFn = collector.VisitDB
@@ -564,6 +625,17 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 type GlobalCollector struct {
 	*BaseCollector
 	versionThershold types.TS
+	// [0]. not used
+	// [3]. if a segment has been deleted, should record its id
+	// [2]. if a table has been deleted, should record its id
+	// [1]. if a db has been deleted, should record its id
+	// [0]. account's placeholder
+	deletes [UsageMAX]map[interface{}]struct{}
+}
+
+// GetDeletes only for test
+func (collector *GlobalCollector) GetDeletes() [UsageMAX]map[interface{}]struct{} {
+	return collector.deletes
 }
 
 func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalCollector {
@@ -573,9 +645,15 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 			LoopProcessor: new(catalog.LoopProcessor),
 			data:          NewCheckpointData(),
 			end:           end,
+			isGlobal:      true,
 		},
 		versionThershold: versionThresholdTS,
 	}
+
+	for i := uint8(0); i < UsageMAX; i++ {
+		collector.deletes[i] = make(map[interface{}]struct{})
+	}
+
 	collector.DatabaseFn = collector.VisitDB
 	collector.TableFn = collector.VisitTable
 	collector.SegmentFn = collector.VisitSeg
@@ -1778,7 +1856,6 @@ func (data *CheckpointData) ReadTNMetaBatch(
 			if err != nil {
 				return
 			}
-			// logutil.Infof("bats[0].Vecs[1].String() is %v", bats[0].Vecs[0].String())
 			data.bats[TNMetaIDX] = bats[0]
 		}
 	}
@@ -1830,6 +1907,7 @@ func (data *CheckpointData) PrefetchFrom(
 	dataType := vector.MustFixedCol[uint16](data.bats[TNMetaIDX].GetVectorByName(CheckpointMetaAttr_SchemaType).GetDownstreamVector())
 	var pref blockio.PrefetchParams
 	locations := make(map[string][]blockIdx)
+	checkpointSize := uint64(0)
 	for i := 0; i < len(blocks); i++ {
 		location := objectio.Location(blocks[i])
 		if location.IsEmpty() {
@@ -1846,6 +1924,11 @@ func (data *CheckpointData) PrefetchFrom(
 		if err != nil {
 			return
 		}
+		checkpointSize += uint64(blockIdxes[0].location.Extent().End())
+		logutil.Info("prefetch-read-checkpoint", common.OperationField("prefetch read"),
+			common.OperandField("checkpoint"),
+			common.AnyField("location", blockIdxes[0].location.String()),
+			common.AnyField("size", checkpointSize))
 		for _, idx := range blockIdxes {
 			schema := checkpointDataReferVersions[version][idx.dataType]
 			idxes := make([]uint16, len(schema.attrs))
@@ -1859,6 +1942,9 @@ func (data *CheckpointData) PrefetchFrom(
 			logutil.Warnf("PrefetchFrom PrefetchWithMerged error %v", err)
 		}
 	}
+	logutil.Info("prefetch-checkpoint",
+		common.AnyField("size", checkpointSize),
+		common.AnyField("count", len(locations)))
 	return
 }
 
@@ -1906,6 +1992,52 @@ func (data *CheckpointData) ReadFrom(
 	}
 
 	return
+}
+
+// LoadSpecifiedCkpBatch loads a specified checkpoint data batch
+func LoadSpecifiedCkpBatch(
+	ctx context.Context, location objectio.Location,
+	fs fileservice.FileService, version uint32, batchIdx uint16) (data *CheckpointData, err error) {
+	data = NewCheckpointData()
+	defer func() {
+		if err != nil {
+			data.Close()
+			data = nil
+		}
+	}()
+
+	if batchIdx >= MaxIDX {
+		err = moerr.NewInvalidArgNoCtx("out of bound batchIdx", batchIdx)
+		return
+	}
+	var reader *blockio.BlockReader
+	if reader, err = blockio.NewObjectReader(fs, location); err != nil {
+		return
+	}
+
+	if err = data.readMetaBatch(ctx, version, reader, nil); err != nil {
+		return
+	}
+
+	data.replayMetaBatch()
+	for _, val := range data.locations {
+		if reader, err = blockio.NewObjectReader(fs, val); err != nil {
+			return
+		}
+		var bats []*containers.Batch
+		item := checkpointDataReferVersions[version][batchIdx]
+		if bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, batchIdx, reader); err != nil {
+			return
+		}
+
+		for i := range bats {
+			if err = data.bats[batchIdx].Append(bats[i]); err != nil {
+				return
+			}
+		}
+	}
+
+	return data, nil
 }
 
 func (data *CheckpointData) readMetaBatch(
@@ -1977,6 +2109,8 @@ func (data *CheckpointData) readAll(
 	service fileservice.FileService,
 ) (err error) {
 	data.replayMetaBatch()
+	checkpointDataSize := uint64(0)
+	readDuration := time.Now()
 	for _, val := range data.locations {
 		var reader *blockio.BlockReader
 		reader, err = blockio.NewObjectReader(service, val)
@@ -1984,11 +2118,13 @@ func (data *CheckpointData) readAll(
 			return
 		}
 		var bats []*containers.Batch
+		now := time.Now()
 		for idx := range checkpointDataReferVersions[version] {
 			if uint16(idx) == MetaIDX || uint16(idx) == TNMetaIDX {
 				continue
 			}
 			item := checkpointDataReferVersions[version][idx]
+
 			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(idx), reader)
 			if err != nil {
 				return
@@ -2093,7 +2229,17 @@ func (data *CheckpointData) readAll(
 				data.bats[idx].Append(bats[i])
 			}
 		}
+		logutil.Info("read-checkpoint", common.OperationField("read"),
+			common.OperandField("checkpoint"),
+			common.AnyField("location", val.String()),
+			common.AnyField("size", val.Extent().End()),
+			common.AnyField("read cost", time.Since(now)))
+		checkpointDataSize += uint64(val.Extent().End())
 	}
+	logutil.Info("read-all", common.OperationField("read"),
+		common.OperandField("checkpoint"),
+		common.AnyField("size", checkpointDataSize),
+		common.AnyField("duration", time.Since(readDuration)))
 	return
 }
 
@@ -2281,6 +2427,7 @@ func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.Ba
 }
 func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.deletes[UsageDBID][entry.GetID()] = struct{}{}
 		return nil
 	}
 	return collector.BaseCollector.VisitDB(entry)
@@ -2396,6 +2543,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.deletes[UsageTblID][entry.GetID()] = struct{}{}
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetDB().BaseEntryImpl) {
@@ -2494,6 +2642,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 
 func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.deletes[UsageObjID][entry.ID] = struct{}{}
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {

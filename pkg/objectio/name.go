@@ -81,6 +81,10 @@ func (o ObjectName) Num() uint16 {
 	return types.DecodeUint16(o[FileNumOff : FileNumOff+FileNumLen])
 }
 
+func ShortName(b *Blockid) *ObjectNameShort {
+	return (*ObjectNameShort)(unsafe.Pointer(&b[0]))
+}
+
 func MockObjectName() ObjectName {
 	return BuildObjectName(NewSegmentid(), uint16(rand.Intn(1000)))
 }
