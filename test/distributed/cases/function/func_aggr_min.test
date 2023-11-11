@@ -93,8 +93,6 @@ INSERT INTO t1 SELECT result FROM generate_series(1,100000) g;
 SELECT MIN(a) FROM t1;
 DELETE FROM t1 WHERE a<=50000;
 SELECT MIN(a) FROM t1;
--- @bvt:issue#12660
 DELETE FROM t1 WHERE a%2=1;
 SELECT MIN(a) FROM t1;
--- @bvt:issue
 DROP TABLE t1;
