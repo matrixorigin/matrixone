@@ -344,5 +344,11 @@ update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 rollback ;
 
+-- Check the statements from mo_logger, should be 0
+select count(*) from system.statement_info where user = "mo_logger" limit 5;
+
+-- Check the statements should have no duplicates
+SELECT COUNT(*) FROM system.statement_info GROUP BY statement_id, status HAVING COUNT(*) > 1;
+
 -- cleanup
 drop account if exists bvt_query_type;

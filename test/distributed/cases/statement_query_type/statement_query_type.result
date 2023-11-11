@@ -672,4 +672,8 @@ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 rollback ;
+select count(*) from system.statement_info where user = "mo_logger" limit 5;
+0
+SELECT COUNT(*) FROM system.statement_info GROUP BY statement_id, status HAVING COUNT(*) > 1;
+0
 drop account if exists bvt_query_type;
