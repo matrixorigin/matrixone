@@ -16,9 +16,10 @@ package dispatch
 
 import (
 	"context"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"sync/atomic"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -248,7 +249,6 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			}
 
 		case reg.Ch <- bat:
-			proc.SetInputBatch(nil)
 			ap.ctr.sendCnt++
 			return false, nil
 		}

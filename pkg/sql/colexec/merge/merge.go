@@ -16,47 +16,50 @@ package merge
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" union all ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, true)
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
-	ap := arg.(*Argument)
-	ctr := ap.ctr
-	var bat *batch.Batch
 	var end bool
+	result := vm.NewCallResult()
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
 
 	for {
-		bat, end, _ = ctr.ReceiveFromAllRegs(anal)
+		arg.buf, end, _ = arg.ctr.ReceiveFromAllRegs(anal)
 		if end {
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 
-		if bat.Last() && ap.SinkScan {
-			proc.PutBatch(bat)
+		if arg.buf.Last() && arg.SinkScan {
+			proc.PutBatch(arg.buf)
 			continue
 		}
 		break
 	}
 
-	anal.Input(bat, isFirst)
-	anal.Output(bat, isLast)
-	proc.SetInputBatch(bat)
-	return process.ExecNext, nil
+	anal.Input(arg.buf, arg.info.IsFirst)
+	anal.Output(arg.buf, arg.info.IsLast)
+	result.Batch = arg.buf
+	return result, nil
 }

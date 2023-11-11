@@ -200,6 +200,9 @@ type InSp struct{}
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}
 
+// StartTS is the start timestamp of a statement.
+type StartTS struct{}
+
 /*
 The autoIncrCacheManager is initialized with a starting CN.
 The autoIncrCacheManager instance of each CN is stored in type service in package cnservice.

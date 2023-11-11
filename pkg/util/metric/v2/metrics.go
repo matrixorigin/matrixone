@@ -28,11 +28,16 @@ func init() {
 	initTxnMetrics()
 	initTaskMetrics()
 	initRPCMetrics()
+	initMemMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
+}
+
+func initMemMetrics() {
+	registry.MustRegister(memMPoolAllocatedSizeGauge)
 }
 
 func initTaskMetrics() {
@@ -41,6 +46,9 @@ func initTaskMetrics() {
 
 	registry.MustRegister(taskScheduledByCounter)
 	registry.MustRegister(taskGeneratedStuffCounter)
+	registry.MustRegister(taskSelectivityCounter)
+
+	registry.MustRegister(TaskMergeTransferPageLengthGauge)
 }
 
 func initFileServiceMetrics() {
@@ -61,7 +69,7 @@ func initLogtailMetrics() {
 	registry.MustRegister(logTailQueueSizeGauge)
 
 	registry.MustRegister(LogTailBytesHistogram)
-	registry.MustRegister(LogTailApplyDurationHistogram)
+	registry.MustRegister(logTailApplyDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
 	registry.MustRegister(logTailSendDurationHistogram)
 	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
@@ -84,13 +92,18 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnCommitDurationHistogram)
 	registry.MustRegister(TxnLifeCycleDurationHistogram)
+	registry.MustRegister(TxnLifeCycleStatementsTotalHistogram)
 	registry.MustRegister(txnCreateDurationHistogram)
 	registry.MustRegister(txnStatementDurationHistogram)
 	registry.MustRegister(txnLockDurationHistogram)
-	registry.MustRegister(TxnUnlockDurationHistogram)
+	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
+	registry.MustRegister(TxnLockWaitersTotalHistogram)
+	registry.MustRegister(TxnTableRangeSizeHistogram)
+	registry.MustRegister(txnMpoolDurationHistogram)
 
-	registry.MustRegister(TxnFastLoadObjectMetaTotalCounter)
+	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
+	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
 }
 
 func initRPCMetrics() {

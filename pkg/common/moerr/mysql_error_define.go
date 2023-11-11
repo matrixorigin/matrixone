@@ -106,7 +106,7 @@ const (
 	ER_TOO_MANY_KEYS             uint16 = 1069
 	ER_TOO_MANY_KEY_PARTS        uint16 = 1070
 	ER_TOO_LONG_KEY              uint16 = 1071
-	ER_KEY_COLUMN_DOES_NOT_EXITS uint16 = 1072
+	ER_KEY_COLUMN_DOES_NOT_EXIST uint16 = 1072
 	ER_BLOB_USED_AS_KEY          uint16 = 1073
 	ER_TOO_BIG_FIELDLENGTH       uint16 = 1074
 	ER_WRONG_AUTO_KEY            uint16 = 1075
@@ -210,7 +210,7 @@ const (
 	ER_REQUIRES_PRIMARY_KEY    uint16 = 1173
 	//OBSOLETE_ER_NO_RAID_COMPILED uint16 = 1174
 	ER_UPDATE_WITHOUT_KEY_IN_SAFE_MODE    uint16 = 1175
-	ER_KEY_DOES_NOT_EXITS                 uint16 = 1176
+	ER_KEY_DOES_NOT_EXIST                 uint16 = 1176
 	ER_CHECK_NO_SUCH_TABLE                uint16 = 1177
 	ER_CHECK_NOT_IMPLEMENTED              uint16 = 1178
 	ER_CANT_DO_THIS_DURING_AN_TRANSACTION uint16 = 1179
@@ -5514,7 +5514,7 @@ var MysqlErrorMsgRefer = map[uint16]errorMsgItem{
 	ER_TOO_MANY_KEYS:             {1069, []string{"42000", "S1009"}, "Too many keys specified; max %d keys allowed"},
 	ER_TOO_MANY_KEY_PARTS:        {1070, []string{"42000", "S1009"}, "Too many key parts specified; max %d parts allowed"},
 	ER_TOO_LONG_KEY:              {1071, []string{"42000", "S1009"}, "Specified key was too long; max key length is %d bytes"},
-	ER_KEY_COLUMN_DOES_NOT_EXITS: {1072, []string{"42000", "S1009"}, "Key column '%-.192s' doesn't exist in table"},
+	ER_KEY_COLUMN_DOES_NOT_EXIST: {1072, []string{"42000", "S1009"}, "Key column '%-.192s' doesn't exist in table"},
 	ER_BLOB_USED_AS_KEY:          {1073, []string{"42000", "S1009"}, "BLOB column '%-.192s' can't be used in key specification with the used table type"},
 	ER_TOO_BIG_FIELDLENGTH:       {1074, []string{"42000", "S1009"}, "Column length too big for column '%-.192s' (max = %lu); use BLOB or TEXT instead"},
 	ER_WRONG_AUTO_KEY:            {1075, []string{"42000", "S1009"}, "Incorrect table definition; there can be only one auto column and it must be defined as a key"},
@@ -5618,7 +5618,7 @@ var MysqlErrorMsgRefer = map[uint16]errorMsgItem{
 	ER_REQUIRES_PRIMARY_KEY:    {1173, []string{"42000"}, "This table type requires a primary key"},
 	//OBSOLETE_ER_NO_RAID_COMPILED : {0000,[]string{""},"This version of MySQL is not compiled with RAID support"},
 	ER_UPDATE_WITHOUT_KEY_IN_SAFE_MODE:    {1175, []string{"HY000"}, "You are using safe update mode and you tried to update a table without a WHERE that uses a KEY column. %s"},
-	ER_KEY_DOES_NOT_EXITS:                 {1176, []string{"42000", "S1009"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
+	ER_KEY_DOES_NOT_EXIST:                 {1176, []string{"42000", "S1009"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
 	ER_CHECK_NO_SUCH_TABLE:                {1177, []string{"42000"}, "Can't open table"},
 	ER_CHECK_NOT_IMPLEMENTED:              {1178, []string{"42000"}, "The storage engine for the table doesn't support %s"},
 	ER_CANT_DO_THIS_DURING_AN_TRANSACTION: {1179, []string{"25000"}, "You are not allowed to execute this command in a transaction"},

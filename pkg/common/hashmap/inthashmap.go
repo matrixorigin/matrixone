@@ -114,6 +114,34 @@ func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	}
 }
 
+func (m *IntHashMap) Dup(pool *mpool.MPool) *IntHashMap {
+	val := &IntHashMap{
+		hasNull: m.hasNull,
+		rows:    m.rows,
+
+		keys:    make([]uint64, len(m.keys)),
+		keyOffs: make([]uint32, len(m.keyOffs)),
+		values:  make([]uint64, len(m.values)),
+		zValues: make([]int64, len(m.zValues)),
+		hashes:  make([]uint64, len(m.hashes)),
+
+		ibucket: m.ibucket,
+		nbucket: m.nbucket,
+
+		m: pool,
+	}
+	copy(val.keys, m.keys)
+	copy(val.keyOffs, m.keyOffs)
+	copy(val.values, m.values)
+	copy(val.zValues, m.zValues)
+	copy(val.hashes, m.hashes)
+	if m.hashMap != nil {
+		val.hashMap = m.hashMap.Dup()
+	}
+
+	return val
+}
+
 func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32, start int, n int) {
 	keys := m.keys
 	keyOffs := m.keyOffs

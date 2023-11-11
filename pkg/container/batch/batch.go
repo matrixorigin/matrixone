@@ -277,6 +277,20 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 		rbat.SetVector(int32(j), rvec)
 	}
 	rbat.rowCount = bat.rowCount
+
+	// if len(bat.Aggs) > 0 {
+	// 	rbat.Aggs = make([]agg.Agg[any], len(bat.Aggs))
+	// 	for i, agg := range bat.Aggs {
+	// 		rbat.Aggs[i] = agg.Dup(mp)
+	// 	}
+	// }
+	// if bat.AuxData != nil {
+	// 	if m, ok := bat.AuxData.(*hashmap.JoinMap); ok {
+	// rbat.AuxData = &hashmap.JoinMap{
+	// 	cnt: m
+	// }
+	// 	}
+	// }
 	return rbat, nil
 }
 
@@ -321,9 +335,9 @@ func (bat *Batch) AddCnt(cnt int) {
 	atomic.AddInt64(&bat.Cnt, int64(cnt))
 }
 
-func (bat *Batch) SubCnt(cnt int) {
-	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
-}
+// func (bat *Batch) SubCnt(cnt int) {
+// 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
+// }
 
 func (bat *Batch) SetCnt(cnt int64) {
 	atomic.StoreInt64(&bat.Cnt, cnt)

@@ -1422,4 +1422,25 @@ select row_number() over (partition by col2 order by col1 rows between unbounded
 select rank() over (partition by col1 order by col2 rows between 0 preceding and 0 following) as newcol from time01;
 select max(col2) over (partition by col1 order by col2 rows between 3 preceding and 3 following) as newcol from time01;
 drop table time01;
+
+-- @bvt:issue#12639
+drop table if exists window01;
+create table window01(col1 int, col2 varchar(20));
+insert into window01 values(1,'老师');
+insert into window01 values(2,'医生');
+insert into window01 values(3,'工人');
+insert into window01 values(10,'学生');
+insert into window01 values(20,'学生');
+insert into window01 values(12,'学生');
+insert into window01 values(21,'老师');
+insert into window01 values(100,'老师');
+insert into window01 values(200,'工人');
+
+select col2, avg(col1) over (partition by col2 order by col1 desc) from window01;
+select col2, col1, sum(col1) over (partition by col2 order by col1 desc) from window01;
+select col2, col1, min(col1) over (partition by col2 order by col1 desc) from window01;
+select col2, col1, max(col1) over (partition by col2 order by col1 desc) from window01;
+select col2, col1, count(col1) over (partition by col2 order by col1 desc) from window01;
+-- @bvt:issue
 drop database test;
+

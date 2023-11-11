@@ -40,6 +40,10 @@ const (
 
 	OkExpectedPossibleDup uint16 = 5 // Expected Possible Duplicate
 
+	// OkExpectedNotSafeToStartTransfer is not an error, but is expected
+	// phenomenon that the connection is not safe to transfer to other nodes.
+	OkExpectedNotSafeToStartTransfer uint16 = 6
+
 	OkMax uint16 = 99
 
 	// 100 - 200 is Info
@@ -141,7 +145,7 @@ const (
 	ErrForeignKeyColumnCannotChangeChild        uint16 = 20456
 	ErrForeignKeyColumnCannotChange             uint16 = 20457
 	ErrForeignKeyOnPartitioned                  uint16 = 20458
-	ErrKeyColumnDoesNotExits                    uint16 = 20459
+	ErrKeyColumnDoesNotExist                    uint16 = 20459
 	ErrCantDropFieldOrKey                       uint16 = 20460
 	ErrTableMustHaveColumns                     uint16 = 20461
 	ErrCantRemoveAllFields                      uint16 = 20462
@@ -301,7 +305,6 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
-	ErrInvalidTz:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid time zone: %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -363,7 +366,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyColumnCannotChangeChild:        {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
-	ErrKeyColumnDoesNotExits:                    {ER_KEY_COLUMN_DOES_NOT_EXITS, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
+	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{MySQLDefaultSqlState}, "Key column '%-.192s' doesn't exist in table"},
 	ErrCantDropFieldOrKey:                       {ER_CANT_DROP_FIELD_OR_KEY, []string{MySQLDefaultSqlState}, "Can't DROP '%-.192s'; check that column/key exists"},
 	ErrTableMustHaveColumns:                     {ER_TABLE_MUST_HAVE_COLUMNS, []string{MySQLDefaultSqlState}, "A table must have at least 1 column"},
 	ErrCantRemoveAllFields:                      {ER_CANT_REMOVE_ALL_FIELDS, []string{MySQLDefaultSqlState}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},
@@ -607,6 +610,7 @@ var errOkExpectedEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
 var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
 var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
 var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
+var errOkExpectedNotSafeToStartTransfer = Error{OkExpectedNotSafeToStartTransfer, 0, "OkExpectedNotSafeToStartTransfer", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -635,6 +639,10 @@ func GetOkExpectedDup() *Error {
 
 func GetOkExpectedPossibleDup() *Error {
 	return &errOkExpectedPossibleDup
+}
+
+func GetOkExpectedNotSafeToStartTransfer() *Error {
+	return &errOkExpectedNotSafeToStartTransfer
 }
 
 func NewInfo(ctx context.Context, msg string) *Error {
@@ -1191,8 +1199,8 @@ func NewErrDupFieldName(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrDupFieldName, k)
 }
 
-func NewErrKeyColumnDoesNotExits(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrKeyColumnDoesNotExits, k)
+func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {
+	return newError(ctx, ErrKeyColumnDoesNotExist, k)
 }
 
 func NewErrCantDropFieldOrKey(ctx context.Context, k any) *Error {

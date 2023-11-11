@@ -1713,6 +1713,14 @@ func checkColModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool 
 				if colCnt1 != colCnt2 {
 					return true
 				}
+				for j := 0; j < len(p.Query.Nodes[i].TableDef.Cols); j++ {
+					if p.Query.Nodes[i].TableDef.Cols[j].Hidden {
+						continue
+					}
+					if p.Query.Nodes[i].TableDef.Cols[j].Name != tableDef.Cols[j].Name {
+						return true
+					}
+				}
 			}
 		}
 	default:
@@ -2587,7 +2595,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	ses.SetQueryInExecute(true)
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
-	defer ses.SetQueryInExecute(false)
 
 	// per statement profiler
 	requestCtx, endStmtProfile := fileservice.NewStatementProfiler(requestCtx)
@@ -2870,6 +2877,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	switch st := stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
+			if ses.pu.SV.DisableSelectInto {
+				err = moerr.NewSyntaxError(requestCtx, "Unsupport select statement")
+				return
+			}
 			ses.InitExportConfig(st.Ep)
 			defer func() {
 				ses.ClearExportParam()
@@ -3566,6 +3577,8 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
 	beginInstant := time.Now()
+	requestCtx = appendStatementAt(requestCtx, beginInstant)
+
 	ses := mce.GetSession()
 	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
