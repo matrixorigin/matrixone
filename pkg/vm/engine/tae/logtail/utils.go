@@ -594,9 +594,9 @@ func NewCheckpointData(mp *mpool.MPool) *CheckpointData {
 	}
 	for idx, schema := range checkpointDataSchemas_Curr {
 		if idx == int(ObjectInfoIDX) {
-			data.bats[idx] = makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema,mp)
+			data.bats[idx] = makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema, mp)
 		} else {
-			data.bats[idx] = makeRespBatchFromSchema(schema,mp)
+			data.bats[idx] = makeRespBatchFromSchema(schema, mp)
 		}
 	}
 	return data
@@ -2591,7 +2591,6 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		if node.IsAborted() {
 			continue
 		}
-<<<<<<< HEAD
 		visitObject(collector.data.bats[ObjectInfoIDX], entry, node)
 		// segNode := node
 		// if segNode.HasDropCommitted() {
@@ -2659,74 +2658,6 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		// }
 	}
 	delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_Name).Length()
-=======
-		segNode := node
-		if segNode.HasDropCommitted() {
-			vector.AppendFixed(
-				segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
-				objectio.HackSegid2Rowid(&entry.ID),
-				false,
-				collector.data.allocator,
-			)
-			vector.AppendFixed(
-				segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
-				segNode.GetEnd(),
-				false,
-				collector.data.allocator,
-			)
-			vector.AppendFixed(
-				segDelTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
-				entry.GetTable().GetDB().GetID(),
-				false,
-				collector.data.allocator,
-			)
-			vector.AppendFixed(
-				segDelTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
-				entry.GetTable().GetID(),
-				false,
-				collector.data.allocator,
-			)
-			segNode.TxnMVCCNode.AppendTuple(segDelTxn)
-		} else {
-			vector.AppendFixed(
-				segInsBat.GetVectorByName(SegmentAttr_ID).GetDownstreamVector(),
-				entry.ID,
-				false,
-				collector.data.allocator,
-			)
-			vector.AppendFixed(
-				segInsBat.GetVectorByName(SegmentAttr_CreateAt).GetDownstreamVector(),
-				segNode.GetEnd(),
-				false,
-				collector.data.allocator,
-			)
-			buf := &bytes.Buffer{}
-			if _, err := entry.SegmentNode.WriteTo(buf); err != nil {
-				return err
-			}
-			vector.AppendBytes(
-				segInsBat.GetVectorByName(SegmentAttr_SegNode).GetDownstreamVector(),
-				buf.Bytes(),
-				false,
-				collector.data.allocator,
-			)
-			vector.AppendFixed(
-				segInsTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
-				entry.GetTable().GetDB().GetID(),
-				false,
-				collector.data.allocator,
-			)
-			vector.AppendFixed(
-				segInsTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
-				entry.GetTable().GetID(),
-				false,
-				collector.data.allocator,
-			)
-			segNode.TxnMVCCNode.AppendTuple(segInsTxn)
-		}
-	}
-	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
->>>>>>> main
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	return nil
 }

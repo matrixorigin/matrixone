@@ -106,7 +106,7 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 }
 
 // skip rowid and committs
-func makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema *catalog.Schema) *containers.Batch {
+func makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema *catalog.Schema, mp *mpool.MPool) *containers.Batch {
 	bat := containers.NewBatch()
 
 	// Types() is not used, then empty schema can also be handled here
@@ -116,7 +116,7 @@ func makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema *catalog.Schema) *con
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
-		bat.AddVector(attr, containers.MakeVector(typs[i]))
+		bat.AddVector(attr, containers.MakeVector(typs[i], mp))
 	}
 	return bat
 }

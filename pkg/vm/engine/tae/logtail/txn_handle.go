@@ -126,7 +126,7 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 	b.batches[segMetaDelBatch].GetVectorByName(catalog.AttrRowID).Append(rowid, false)
 	b.batches[segMetaDelBatch].GetVectorByName(catalog.AttrCommitTs).Append(deleteAt, false)
 	if b.batches[objectInfoBatch] == nil {
-		b.batches[objectInfoBatch] = makeRespBatchFromSchemaWithoutRowidAndCommitTS(ObjectInfoSchema)
+		b.batches[objectInfoBatch] = makeRespBatchFromSchemaWithoutRowidAndCommitTS(ObjectInfoSchema, common.LogtailAllocator)
 	}
 	visitObject(b.batches[objectInfoBatch], seg, node)
 }
