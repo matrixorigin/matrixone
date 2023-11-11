@@ -394,8 +394,12 @@ func IncrementalCheckpointDataFactory(start, end types.TS,
 	}
 }
 
-func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration,
-	fs fileservice.FileService, ckpMetas []*CkpLocVers) func(c *catalog.Catalog) (*CheckpointData, error) {
+func GlobalCheckpointDataFactory(
+	end types.TS,
+	versionInterval time.Duration,
+	fs fileservice.FileService,
+	ckpMetas []*CkpLocVers,
+) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
 		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
@@ -580,17 +584,19 @@ type CheckpointData struct {
 	meta      map[uint64]*CheckpointMeta
 	locations map[string]objectio.Location
 	bats      [MaxIDX]*containers.Batch
+	allocator *mpool.MPool
 }
 
-func NewCheckpointData() *CheckpointData {
+func NewCheckpointData(mp *mpool.MPool) *CheckpointData {
 	data := &CheckpointData{
-		meta: make(map[uint64]*CheckpointMeta),
+		meta:      make(map[uint64]*CheckpointMeta),
+		allocator: mp,
 	}
 	for idx, schema := range checkpointDataSchemas_Curr {
 		if idx == int(ObjectInfoIDX) {
-			data.bats[idx] = makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema)
+			data.bats[idx] = makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema,mp)
 		} else {
-			data.bats[idx] = makeRespBatchFromSchema(schema)
+			data.bats[idx] = makeRespBatchFromSchema(schema,mp)
 		}
 	}
 	return data
@@ -613,7 +619,7 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 	collector := &IncrementalCollector{
 		BaseCollector: &BaseCollector{
 			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(),
+			data:          NewCheckpointData(common.CheckpointAllocator),
 			start:         start,
 			end:           end,
 			isGlobal:      false,
@@ -647,7 +653,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 	collector := &GlobalCollector{
 		BaseCollector: &BaseCollector{
 			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(),
+			data:          NewCheckpointData(common.CheckpointAllocator),
 			end:           end,
 			isGlobal:      true,
 		},
@@ -727,7 +733,10 @@ func switchCheckpointIdx(i uint16, tableID uint64) uint16 {
 	return idx
 }
 
-func (data *CNCheckpointData) InitMetaIdx(ctx context.Context, version uint32, reader *blockio.BlockReader, location objectio.Location, m *mpool.MPool) error {
+func (data *CNCheckpointData) InitMetaIdx(
+	ctx context.Context, version uint32, reader *blockio.BlockReader,
+	location objectio.Location, m *mpool.MPool,
+) error {
 	if data.bats[MetaIDX] == nil {
 		metaIdx := checkpointDataReferVersions[version][MetaIDX]
 		metaBats, err := LoadCNSubBlkColumnsByMeta(version, ctx, metaIdx.types, metaIdx.attrs, MetaIDX, reader, nil)
@@ -1374,12 +1383,14 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) {
 	}
 }
 
+func (data *CheckpointData) Allocator() *mpool.MPool { return data.allocator }
+
 func (data *CheckpointData) fillInMetaBatchWithLocation(location objectio.Location) {
 	length := data.bats[MetaIDX].Vecs[2].Length()
-	insVec := containers.MakeVector(types.T_varchar.ToType())
-	cnInsVec := containers.MakeVector(types.T_varchar.ToType())
-	delVec := containers.MakeVector(types.T_varchar.ToType())
-	segVec := containers.MakeVector(types.T_varchar.ToType())
+	insVec := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
+	cnInsVec := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
+	delVec := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
+	segVec := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
 
 	tidVec := data.bats[MetaIDX].GetVectorByName(SnapshotAttr_TID)
 	blkInsStart := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
@@ -1449,26 +1460,26 @@ func (data *CheckpointData) prepareMeta() {
 	}
 	sort.Ints(sortMeta)
 	for _, tid := range sortMeta {
-		vector.AppendFixed[uint64](tidVec, uint64(tid), false, common.DefaultAllocator)
+		vector.AppendFixed[uint64](tidVec, uint64(tid), false, data.allocator)
 		if data.meta[uint64(tid)].tables[BlockInsert] == nil {
-			vector.AppendBytes(blkInsLoc, nil, true, common.DefaultAllocator)
+			vector.AppendBytes(blkInsLoc, nil, true, data.allocator)
 		} else {
-			vector.AppendBytes(blkInsLoc, []byte(data.meta[uint64(tid)].tables[BlockInsert].locations), false, common.DefaultAllocator)
+			vector.AppendBytes(blkInsLoc, []byte(data.meta[uint64(tid)].tables[BlockInsert].locations), false, data.allocator)
 		}
 		if data.meta[uint64(tid)].tables[BlockDelete] == nil {
-			vector.AppendBytes(blkDelLoc, nil, true, common.DefaultAllocator)
+			vector.AppendBytes(blkDelLoc, nil, true, data.allocator)
 		} else {
-			vector.AppendBytes(blkDelLoc, []byte(data.meta[uint64(tid)].tables[BlockDelete].locations), false, common.DefaultAllocator)
+			vector.AppendBytes(blkDelLoc, []byte(data.meta[uint64(tid)].tables[BlockDelete].locations), false, data.allocator)
 		}
 		if data.meta[uint64(tid)].tables[CNBlockInsert] == nil {
-			vector.AppendBytes(blkCNInsLoc, nil, true, common.DefaultAllocator)
+			vector.AppendBytes(blkCNInsLoc, nil, true, data.allocator)
 		} else {
-			vector.AppendBytes(blkCNInsLoc, []byte(data.meta[uint64(tid)].tables[CNBlockInsert].locations), false, common.DefaultAllocator)
+			vector.AppendBytes(blkCNInsLoc, []byte(data.meta[uint64(tid)].tables[CNBlockInsert].locations), false, data.allocator)
 		}
 		if data.meta[uint64(tid)].tables[SegmentDelete] == nil {
-			vector.AppendBytes(segDelLoc, nil, true, common.DefaultAllocator)
+			vector.AppendBytes(segDelLoc, nil, true, data.allocator)
 		} else {
-			vector.AppendBytes(segDelLoc, []byte(data.meta[uint64(tid)].tables[SegmentDelete].locations), false, common.DefaultAllocator)
+			vector.AppendBytes(segDelLoc, []byte(data.meta[uint64(tid)].tables[SegmentDelete].locations), false, data.allocator)
 		}
 	}
 }
@@ -1747,6 +1758,7 @@ func LoadBlkColumnsByMeta(
 	colNames []string,
 	id uint16,
 	reader *blockio.BlockReader,
+	mp *mpool.MPool,
 ) ([]*containers.Batch, error) {
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
@@ -1770,9 +1782,9 @@ func LoadBlkColumnsByMeta(
 			pkgVec := ioResult.Vecs[i]
 			var vec containers.Vector
 			if pkgVec.Length() == 0 {
-				vec = containers.MakeVector(colTypes[i])
+				vec = containers.MakeVector(colTypes[i], mp)
 			} else {
-				vec = containers.ToTNVector(pkgVec)
+				vec = containers.ToTNVector(pkgVec, mp)
 			}
 			bat.AddVector(colNames[idx], vec)
 			bat.Vecs[i] = vec
@@ -1856,7 +1868,7 @@ func (data *CheckpointData) ReadTNMetaBatch(
 		} else {
 			var bats []*containers.Batch
 			item := checkpointDataReferVersions[version][TNMetaIDX]
-			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, TNMetaIDX, reader)
+			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, TNMetaIDX, reader, data.allocator)
 			if err != nil {
 				return
 			}
@@ -1981,9 +1993,8 @@ func (data *CheckpointData) ReadFrom(
 	location objectio.Location,
 	reader *blockio.BlockReader,
 	fs fileservice.FileService,
-	m *mpool.MPool,
 ) (err error) {
-	err = data.readMetaBatch(ctx, version, reader, m)
+	err = data.readMetaBatch(ctx, version, reader, data.allocator)
 	if err != nil {
 		return
 	}
@@ -2001,8 +2012,9 @@ func (data *CheckpointData) ReadFrom(
 // LoadSpecifiedCkpBatch loads a specified checkpoint data batch
 func LoadSpecifiedCkpBatch(
 	ctx context.Context, location objectio.Location,
-	fs fileservice.FileService, version uint32, batchIdx uint16) (data *CheckpointData, err error) {
-	data = NewCheckpointData()
+	fs fileservice.FileService, version uint32, batchIdx uint16,
+) (data *CheckpointData, err error) {
+	data = NewCheckpointData(common.CheckpointAllocator)
 	defer func() {
 		if err != nil {
 			data.Close()
@@ -2030,7 +2042,9 @@ func LoadSpecifiedCkpBatch(
 		}
 		var bats []*containers.Batch
 		item := checkpointDataReferVersions[version][batchIdx]
-		if bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, batchIdx, reader); err != nil {
+		if bats, err = LoadBlkColumnsByMeta(
+			version, ctx, item.types, item.attrs, batchIdx, reader, data.allocator,
+		); err != nil {
 			return
 		}
 
@@ -2053,8 +2067,9 @@ func (data *CheckpointData) readMetaBatch(
 	if data.bats[MetaIDX].Length() == 0 {
 		var bats []*containers.Batch
 		item := checkpointDataReferVersions[version][MetaIDX]
-		bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(0), reader)
-		if err != nil {
+		if bats, err = LoadBlkColumnsByMeta(
+			version, ctx, item.types, item.attrs, uint16(0), reader, data.allocator,
+		); err != nil {
 			return
 		}
 		data.bats[MetaIDX] = bats[0]
@@ -2129,15 +2144,16 @@ func (data *CheckpointData) readAll(
 			}
 			item := checkpointDataReferVersions[version][idx]
 
-			bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, uint16(idx), reader)
-			if err != nil {
+			if bats, err = LoadBlkColumnsByMeta(
+				version, ctx, item.types, item.attrs, uint16(idx), reader, data.allocator,
+			); err != nil {
 				return
 			}
 			if version == CheckpointVersion1 {
 				if uint16(idx) == TBLInsertIDX {
 					for _, bat := range bats {
 						length := bat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Length()
-						vec := containers.MakeVector(types.T_uint32.ToType())
+						vec := containers.MakeVector(types.T_uint32.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							vec.Append(pkgcatalog.CatalogVersion_V1, false)
 						}
@@ -2153,7 +2169,7 @@ func (data *CheckpointData) readAll(
 					for _, bat := range bats {
 						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
 						length := rowIDVec.Length()
-						pkVec := containers.MakeVector(types.T_uint64.ToType())
+						pkVec := containers.MakeVector(types.T_uint64.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							pkVec.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
 						}
@@ -2166,7 +2182,7 @@ func (data *CheckpointData) readAll(
 					for _, bat := range bats {
 						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
 						length := rowIDVec.Length()
-						pkVec2 := containers.MakeVector(types.T_uint64.ToType())
+						pkVec2 := containers.MakeVector(types.T_uint64.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							pkVec2.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
 							if err != nil {
@@ -2182,7 +2198,7 @@ func (data *CheckpointData) readAll(
 					for _, bat := range bats {
 						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
 						length := rowIDVec.Length()
-						pkVec2 := containers.MakeVector(types.T_varchar.ToType())
+						pkVec2 := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							pkVec2.Append(nil, true)
 							if err != nil {
@@ -2198,7 +2214,7 @@ func (data *CheckpointData) readAll(
 				if uint16(idx) == TBLColInsertIDX {
 					for _, bat := range bats {
 						length := bat.GetVectorByName(catalog.AttrRowID).Length()
-						vec := containers.MakeVector(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+						vec := containers.MakeVector(types.New(types.T_varchar, types.MaxVarcharLen, 0), data.allocator)
 						for i := 0; i < length; i++ {
 							vec.Append([]byte(""), false)
 						}
@@ -2254,6 +2270,7 @@ func (data *CheckpointData) Close() {
 			data.bats[idx] = nil
 		}
 	}
+	data.allocator = nil
 }
 
 func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {
@@ -2437,6 +2454,7 @@ func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	return collector.BaseCollector.VisitDB(entry)
 }
 
+func (collector *BaseCollector) Allocator() *mpool.MPool { return collector.data.allocator }
 func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error) {
 	if shouldIgnoreTblInLogtail(entry.ID) {
 		return nil
@@ -2573,6 +2591,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		if node.IsAborted() {
 			continue
 		}
+<<<<<<< HEAD
 		visitObject(collector.data.bats[ObjectInfoIDX], entry, node)
 		// segNode := node
 		// if segNode.HasDropCommitted() {
@@ -2640,6 +2659,74 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		// }
 	}
 	delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_Name).Length()
+=======
+		segNode := node
+		if segNode.HasDropCommitted() {
+			vector.AppendFixed(
+				segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
+				objectio.HackSegid2Rowid(&entry.ID),
+				false,
+				collector.data.allocator,
+			)
+			vector.AppendFixed(
+				segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
+				segNode.GetEnd(),
+				false,
+				collector.data.allocator,
+			)
+			vector.AppendFixed(
+				segDelTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
+				entry.GetTable().GetDB().GetID(),
+				false,
+				collector.data.allocator,
+			)
+			vector.AppendFixed(
+				segDelTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+				entry.GetTable().GetID(),
+				false,
+				collector.data.allocator,
+			)
+			segNode.TxnMVCCNode.AppendTuple(segDelTxn)
+		} else {
+			vector.AppendFixed(
+				segInsBat.GetVectorByName(SegmentAttr_ID).GetDownstreamVector(),
+				entry.ID,
+				false,
+				collector.data.allocator,
+			)
+			vector.AppendFixed(
+				segInsBat.GetVectorByName(SegmentAttr_CreateAt).GetDownstreamVector(),
+				segNode.GetEnd(),
+				false,
+				collector.data.allocator,
+			)
+			buf := &bytes.Buffer{}
+			if _, err := entry.SegmentNode.WriteTo(buf); err != nil {
+				return err
+			}
+			vector.AppendBytes(
+				segInsBat.GetVectorByName(SegmentAttr_SegNode).GetDownstreamVector(),
+				buf.Bytes(),
+				false,
+				collector.data.allocator,
+			)
+			vector.AppendFixed(
+				segInsTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
+				entry.GetTable().GetDB().GetID(),
+				false,
+				collector.data.allocator,
+			)
+			vector.AppendFixed(
+				segInsTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+				entry.GetTable().GetID(),
+				false,
+				collector.data.allocator,
+			)
+			segNode.TxnMVCCNode.AppendTuple(segInsTxn)
+		}
+	}
+	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
+>>>>>>> main
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	return nil
 }
@@ -2746,37 +2833,37 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					blkTNMetaDelRowIDVec,
 					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaDelCommitTsVec,
 					metaNode.GetEnd(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaDelTxnDBIDVec,
 					entry.GetSegment().GetTable().GetDB().GetID(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaDelTxnTIDVec,
 					entry.GetSegment().GetTable().GetID(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkTNMetaDelTxnMetaLocVec,
 					[]byte(metaNode.BaseNode.MetaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkTNMetaDelTxnDeltaLocVec,
 					[]byte(metaNode.BaseNode.DeltaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				metaNode.TxnMVCCNode.AppendTuple(blkTNMetaDelTxnBat)
 			} else {
@@ -2784,31 +2871,31 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					blkTNMetaInsIDVec,
 					entry.ID,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaInsStateVec,
 					entry.IsAppendable(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaInsCommitTsVec,
 					metaNode.GetEnd(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkTNMetaInsMetaLocVec,
 					[]byte(metaNode.BaseNode.MetaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkTNMetaInsDelLocVec,
 					[]byte(metaNode.BaseNode.DeltaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				is_sorted := false
 				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
@@ -2818,50 +2905,50 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					blkTNMetaInsSortedVec,
 					is_sorted,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaInsSegIDVec,
 					*entry.GetSegment().ID.Segment(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaInsCommitTimeVec,
 					metaNode.CreatedAt,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
-				vector.AppendFixed(blkTNMetaInsMemTruncVec, metaNode.Start, false, common.DefaultAllocator)
+				vector.AppendFixed(blkTNMetaInsMemTruncVec, metaNode.Start, false, collector.data.allocator)
 				vector.AppendFixed(
 					blkTNMetaInsRowIDVec,
 					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaInsTxnDBIDVec,
 					entry.GetSegment().GetTable().GetDB().GetID(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkTNMetaInsTxnTIDVec,
 					entry.GetSegment().GetTable().GetID(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkTNMetaInsTxnMetaLocVec,
 					[]byte(metaNode.BaseNode.MetaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkTNMetaInsTxnDeltaLocVec,
 					[]byte(metaNode.BaseNode.DeltaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				metaNode.TxnMVCCNode.AppendTuple(blkTNMetaInsTxnBat)
 			}
@@ -2871,38 +2958,38 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					blkMetaDelRowIDVec,
 					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaDelCommitTsVec,
 					metaNode.GetEnd(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 
 				vector.AppendFixed(
 					blkMetaDelTxnDBIDVec,
 					entry.GetSegment().GetTable().GetDB().GetID(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaDelTxnTIDVec,
 					entry.GetSegment().GetTable().GetID(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkMetaDelTxnMetaLocVec,
 					[]byte(metaNode.BaseNode.MetaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkMetaDelTxnDeltaLocVec,
 					[]byte(metaNode.BaseNode.DeltaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				metaNode.TxnMVCCNode.AppendTuple(blkMetaDelTxnBat)
 				is_sorted := false
@@ -2913,61 +3000,61 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					blkCNMetaInsIDVec,
 					entry.ID,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkCNMetaInsStateVec,
 					entry.IsAppendable(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkCNMetaInsMetaLocVec,
 					[]byte(metaNode.BaseNode.MetaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkCNMetaInsDelLocVec,
 					[]byte(metaNode.BaseNode.DeltaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkCNMetaInsSortedVec,
 					is_sorted,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkCNMetaInsSegIDVec,
 					*entry.GetSegment().ID.Segment(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkCNMetaInsCommitTsVec,
 					metaNode.GetEnd(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkCNMetaInsRowIDVec,
 					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkCNMetaInsCommitTimeVec,
 					metaNode.CreatedAt,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				memTrucate := metaNode.Start
 				if !entry.IsAppendable() && metaNode.DeletedAt.Equal(metaNode.GetEnd()) {
 					memTrucate = types.TS{}
 				}
-				vector.AppendFixed(blkCNMetaInsMemTruncVec, memTrucate, false, common.DefaultAllocator)
+				vector.AppendFixed(blkCNMetaInsMemTruncVec, memTrucate, false, collector.data.allocator)
 
 			} else {
 				is_sorted := false
@@ -2978,82 +3065,82 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 					blkMetaInsIDVec,
 					entry.ID,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaInsStateVec,
 					entry.IsAppendable(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkMetaInsMetaLocVec,
 					[]byte(metaNode.BaseNode.MetaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkMetaInsDelLocVec,
 					[]byte(metaNode.BaseNode.DeltaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaInsCommitTsVec,
 					metaNode.GetEnd(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaInsSortedVec,
 					is_sorted,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaInsSegIDVec,
 					*entry.GetSegment().ID.Segment(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaInsCommitTimeVec,
 					metaNode.CreatedAt,
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaInsRowIDVec,
 					objectio.HackBlockid2Rowid(&entry.ID),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 
-				vector.AppendFixed(blkMetaInsMemTruncVec, metaNode.Start, false, common.DefaultAllocator)
+				vector.AppendFixed(blkMetaInsMemTruncVec, metaNode.Start, false, collector.data.allocator)
 
 				vector.AppendFixed(
 					blkMetaInsTxnDBIDVec,
 					entry.GetSegment().GetTable().GetDB().GetID(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendFixed(
 					blkMetaInsTxnTIDVec,
 					entry.GetSegment().GetTable().GetID(),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkMetaInsTxnMetaLocVec,
 					[]byte(metaNode.BaseNode.MetaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 				vector.AppendBytes(
 					blkMetaInsTxnDeltaLocVec,
 					[]byte(metaNode.BaseNode.DeltaLoc),
 					false,
-					common.DefaultAllocator,
+					collector.data.allocator,
 				)
 
 				metaNode.TxnMVCCNode.AppendTuple(blkMetaInsTxnBat)

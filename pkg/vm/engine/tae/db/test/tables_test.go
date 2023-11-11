@@ -230,7 +230,7 @@ func TestTxn4(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		pk := containers.MakeVector(schema.GetSingleSortKey().Type)
+		pk := containers.MakeVector(schema.GetSingleSortKey().Type, common.DefaultAllocator)
 		defer pk.Close()
 		pk.AppendMany([]any{int32(1), int32(2), int32(1)}, []bool{false, false, false})
 		provider := containers.NewMockDataProvider()
@@ -423,7 +423,7 @@ func TestTxn6(t *testing.T) {
 			it := rel.MakeBlockIt()
 			for it.Valid() {
 				blk := it.GetBlock()
-				view, err := blk.GetColumnDataByName(context.Background(), schema.ColDefs[3].Name)
+				view, err := blk.GetColumnDataByName(context.Background(), schema.ColDefs[3].Name, common.DefaultAllocator)
 				assert.Nil(t, err)
 				defer view.Close()
 				assert.NotEqual(t, bats[0].Length(), view.Length())
@@ -449,9 +449,9 @@ func TestMergeBlocks1(t *testing.T) {
 	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
-	pk := containers.MakeVector(schema.GetSingleSortKey().Type)
+	pk := containers.MakeVector(schema.GetSingleSortKey().Type, common.DefaultAllocator)
 	defer pk.Close()
-	col3 := containers.MakeVector(schema.ColDefs[3].Type)
+	col3 := containers.MakeVector(schema.ColDefs[3].Type, common.DefaultAllocator)
 	defer col3.Close()
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
@@ -492,7 +492,7 @@ func TestMergeBlocks1(t *testing.T) {
 			rel, _ := database.GetRelationByName(schema.Name)
 			it := rel.MakeBlockIt()
 			blk := it.GetBlock()
-			err := blk.RangeDelete(4, 4, handle.DT_Normal)
+			err := blk.RangeDelete(4, 4, handle.DT_Normal, common.DefaultAllocator)
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit(context.Background()))
 		}
@@ -517,13 +517,13 @@ func TestMergeBlocks1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3)
+			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
 			assert.NotNil(t, view)
 			defer view.Close()
 			if view.DeleteMask != nil {
 				t.Log(view.DeleteMask.String())
 			}
-			pkView, _ := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
+			pkView, _ := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx(), common.DefaultAllocator)
 			defer pkView.Close()
 			for i := 0; i < pkView.Length(); i++ {
 				pkv, _ := pkView.GetValue(i)
@@ -555,8 +555,8 @@ func TestMergeBlocks2(t *testing.T) {
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 
-	pk := containers.MakeVector(schema.GetSingleSortKey().Type)
-	col3 := containers.MakeVector(schema.ColDefs[3].Type)
+	pk := containers.MakeVector(schema.GetSingleSortKey().Type, common.DefaultAllocator)
+	col3 := containers.MakeVector(schema.ColDefs[3].Type, common.DefaultAllocator)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
 		pk.Append(v, false)
@@ -621,7 +621,7 @@ func TestCompaction1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3)
+			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
@@ -643,7 +643,7 @@ func TestCompaction1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3)
+			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
@@ -689,7 +689,7 @@ func TestCompaction2(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3)
+			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
@@ -704,7 +704,7 @@ func TestCompaction2(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3)
+			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
 			assert.NotNil(t, view)
 			view.Close()
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())

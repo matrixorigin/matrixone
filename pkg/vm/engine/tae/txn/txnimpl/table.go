@@ -683,7 +683,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 				if err != nil {
 					return err
 				}
-				vec := containers.ToTNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -777,7 +777,7 @@ func (tbl *txnTable) RangeDelete(
 		mvcc := chain.GetController()
 		mvcc.Lock()
 		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
-			node.RangeDeleteLocked(start, end, pk)
+			node.RangeDeleteLocked(start, end, pk, common.WorkspaceAllocator)
 		}
 		mvcc.Unlock()
 		if err != nil {
@@ -849,7 +849,7 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 			blockIt.Next()
 			continue
 		}
-		offset, err = h.GetByFilter(ctx, filter)
+		offset, err = h.GetByFilter(ctx, filter, common.WorkspaceAllocator)
 		if err == nil {
 			id = h.Fingerprint()
 			break
@@ -882,7 +882,7 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
+	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col), common.WorkspaceAllocator)
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
@@ -1143,6 +1143,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			rowmask,
 			false,
 			bf,
+			common.WorkspaceAllocator,
 		); err != nil {
 			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 			return
@@ -1210,7 +1211,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				if err != nil {
 					return err
 				}
-				vec := containers.ToTNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(
@@ -1221,6 +1222,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				rowmask,
 				false,
 				objectio.BloomFilter{},
+				common.WorkspaceAllocator,
 			); err != nil {
 				// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 				loaded[i].Close()
@@ -1313,6 +1315,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 					rowmask,
 					true,
 					objectio.BloomFilter{},
+					common.WorkspaceAllocator,
 				); err != nil {
 					return
 				}
@@ -1353,7 +1356,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 
 		//TODO::load ZM/BF index first, then load PK column if necessary.
 		if pks == nil {
-			colV, err := node.GetColumnDataById(ctx, tbl.schema.GetSingleSortKeyIdx())
+			colV, err := node.GetColumnDataById(ctx, tbl.schema.GetSingleSortKeyIdx(), common.WorkspaceAllocator)
 			if err != nil {
 				return err
 			}
@@ -1408,6 +1411,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 				rowmask,
 				true,
 				objectio.BloomFilter{},
+				common.WorkspaceAllocator,
 			); err != nil {
 				return err
 			}

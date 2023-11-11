@@ -826,6 +826,11 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 			return err
 		}
 
+		// commit failed, refresh invalid lock tables
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			tc.option.lockService.ForceRefreshLockTableBinds(resp.CommitResponse.InvalidLockTables...)
+		}
+
 		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
 		if ok && v.(bool) {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||

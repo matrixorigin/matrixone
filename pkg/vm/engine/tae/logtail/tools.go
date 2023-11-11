@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -78,11 +79,17 @@ func BatchToString(name string, bat *containers.Batch, isSpecialRowID bool) stri
 }
 
 // make batch, append necessary field like commit ts
-func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
+func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *containers.Batch {
 	bat := containers.NewBatch()
 
-	bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType()))
-	bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType()))
+	bat.AddVector(
+		catalog.AttrRowID,
+		containers.MakeVector(types.T_Rowid.ToType(), mp),
+	)
+	bat.AddVector(
+		catalog.AttrCommitTs,
+		containers.MakeVector(types.T_TS.ToType(), mp),
+	)
 	// Types() is not used, then empty schema can also be handled here
 	typs := schema.AllTypes()
 	attrs := schema.AllNames()
@@ -90,7 +97,10 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
-		bat.AddVector(attr, containers.MakeVector(typs[i]))
+		bat.AddVector(
+			attr,
+			containers.MakeVector(typs[i], mp),
+		)
 	}
 	return bat
 }
