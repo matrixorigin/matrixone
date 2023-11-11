@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -360,7 +361,8 @@ func (txn *Transaction) resetSnapshot() error {
 }
 
 func (txn *Transaction) IncrSQLCount() {
-	txn.sqlCount.Add(1)
+	n := txn.sqlCount.Add(1)
+	v2.TxnLifeCycleStatementsTotalHistogram.Observe(float64(n))
 }
 
 func (txn *Transaction) GetSQLCount() uint64 {
@@ -456,13 +458,14 @@ type txnTable struct {
 	typs       []types.Type
 	_partState *logtailreplay.PartitionState
 
-	// blockInfos stores all the block infos for this table of this transaction
+	// objInofs stores all the data object infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
-	// it is initialized by updateBlockInfos and once it is initialized, it will not be updated
-	blockInfos []catalog.BlockInfo
+	// it is initialized by updateObjectInfos and once it is initialized, it will not be updated
+	//objInfos []logtailreplay.ObjectEntry
 
-	// specify whether the blockInfos is updated. once it is updated, it will not be updated again
-	blockInfosUpdated bool
+	// specify whether the objInfos is updated. once it is updated, it will not be updated again
+	//TODO::remove it in next PR.
+	objInfosUpdated bool
 	// specify whether the logtail is updated. once it is updated, it will not be updated again
 	logtailUpdated bool
 
@@ -569,7 +572,8 @@ type blockReader struct {
 	// block list to scan
 	blks []*catalog.BlockInfo
 	//buffer for block's deletes
-	buffer []int64
+	buffer      []int64
+	readerCount engine.ReaderCount
 }
 
 type blockMergeReader struct {
@@ -583,7 +587,8 @@ type blockMergeReader struct {
 }
 
 type mergeReader struct {
-	rds []engine.Reader
+	rds         []engine.Reader
+	readerCount engine.ReaderCount
 }
 
 type emptyReader struct {

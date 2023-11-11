@@ -184,6 +184,10 @@ func (t *TableReader) Read(ctx context.Context, colNames []string, plan *plan.Ex
 
 }
 
+func (t *TableReader) Count() *engine.ReaderCount {
+	return &engine.ReaderCount{}
+}
+
 func (t *TableReader) Close() error {
 	if t == nil {
 		return nil
@@ -222,6 +226,6 @@ func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([][]byte, error) {
 	return shards, nil
 }
 
-func (t *Table) UpdateBlockInfos(_ context.Context) error {
+func (t *Table) UpdateObjectInfos(_ context.Context) error {
 	return nil
 }

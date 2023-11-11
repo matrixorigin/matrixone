@@ -145,15 +145,15 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		case catalog.MO_DATABASE:
 			id := uint64(catalog.MO_DATABASE_ID)
 			defs := catalog.MoDatabaseTableDefs
-			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 		case catalog.MO_TABLES:
 			id := uint64(catalog.MO_TABLES_ID)
 			defs := catalog.MoTablesTableDefs
-			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 		case catalog.MO_COLUMNS:
 			id := uint64(catalog.MO_COLUMNS_ID)
 			defs := catalog.MoColumnsTableDefs
-			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 		}
 	}
 	item := &cache.TableItem{
@@ -424,7 +424,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	return nil
 }
 
-func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
+func (db *txnDatabase) openSysTable(p *process.Process, key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	tbl := &txnTable{
 		db:            db,
@@ -436,5 +436,6 @@ func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
 		clusterByIdx:  -1,
 	}
 	tbl.getTableDef()
+	tbl.proc.Store(p)
 	return tbl
 }

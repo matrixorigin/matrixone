@@ -40,6 +40,10 @@ const (
 
 	OkExpectedPossibleDup uint16 = 5 // Expected Possible Duplicate
 
+	// OkExpectedNotSafeToStartTransfer is not an error, but is expected
+	// phenomenon that the connection is not safe to transfer to other nodes.
+	OkExpectedNotSafeToStartTransfer uint16 = 6
+
 	OkMax uint16 = 99
 
 	// 100 - 200 is Info
@@ -79,6 +83,7 @@ const (
 	ErrBadFieldError        uint16 = 20309
 	ErrWrongDatetimeSpec    uint16 = 20310
 	ErrUpgrateError         uint16 = 20311
+	ErrInvalidTz            uint16 = 20312
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -581,6 +586,7 @@ var errOkExpectedEOF = Error{OkExpectedEOF, 0, "ExpectedEOF", "00000"}
 var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000"}
 var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000"}
 var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000"}
+var errOkExpectedNotSafeToStartTransfer = Error{OkExpectedNotSafeToStartTransfer, 0, "OkExpectedNotSafeToStartTransfer", "00000"}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -609,6 +615,10 @@ func GetOkExpectedDup() *Error {
 
 func GetOkExpectedPossibleDup() *Error {
 	return &errOkExpectedPossibleDup
+}
+
+func GetOkExpectedNotSafeToStartTransfer() *Error {
+	return &errOkExpectedNotSafeToStartTransfer
 }
 
 func NewInfo(ctx context.Context, msg string) *Error {

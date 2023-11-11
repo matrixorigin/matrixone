@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,28 +14,10 @@
 
 package fileservice
 
-type CachePolicy uint32
-
-const (
-	SkipMemoryReads = 1 << iota
-	SkipMemoryWrites
-	SkipDiskReads
-	SkipDiskWrites
+import (
+	"context"
 )
 
-const (
-	SkipReads  = SkipMemoryReads | SkipDiskReads
-	SkipWrites = SkipMemoryWrites | SkipDiskWrites
-	SkipDisk   = SkipDiskReads | SkipDiskWrites
-	SkipMemory = SkipMemoryReads | SkipMemoryWrites
-	SkipAll    = SkipDisk | SkipMemory
-)
-
-func (c CachePolicy) Any(policies ...CachePolicy) bool {
-	for _, policy := range policies {
-		if policy&c > 0 {
-			return true
-		}
-	}
-	return false
+type FileCache interface {
+	SetFile(ctx context.Context, path string, content []byte) error
 }

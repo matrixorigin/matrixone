@@ -17,6 +17,7 @@ package dashboard
 import (
 	"context"
 
+	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 )
 
@@ -32,6 +33,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskFlushTableTailRow(),
 			c.initTaskCkpEntryPendingRow(),
 			c.initTaskMergeRow(),
+			c.initTaskMergeTransferPageRow(),
 		)...)
 
 	if err != nil {
@@ -41,13 +43,27 @@ func (c *DashboardCreator) initTaskDashboard() error {
 	return err
 }
 
+func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
+	return dashboard.Row(
+		"Task Merge Transfer Page Length",
+		c.withGraph(
+			"Transfer Page Length",
+			12,
+			`sum(`+c.getMetricWithFilter("mo_task_merge_transfer_page_size", ``)+`)`,
+			"{{ "+c.by+" }}"),
+	)
+}
+
 func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 	return dashboard.Row(
 		"Flush Table Tail Duration",
 		c.getHistogram(
-			c.getMetricWithFilter(`mo_task_duration_seconds_bucket`, `type="flush_table_tail"`),
+			"Flush Table Tail Duration",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="flush_table_tail"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3})...,
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 
@@ -55,9 +71,12 @@ func (c *DashboardCreator) initTaskCkpEntryPendingRow() dashboard.Option {
 	return dashboard.Row(
 		"Checkpoint Entry Pending Time",
 		c.getHistogram(
-			c.getMetricWithFilter(`mo_task_duration_seconds_bucket`, `type="ckp_entry_pending"`),
+			"Checkpoint Entry Pending Time",
+			c.getMetricWithFilter(`mo_task_long_duration_seconds_bucket`, `type="ckp_entry_pending"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3})...,
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 
@@ -67,17 +86,17 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 		c.withGraph(
 			"Scheduled By Counting",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_scheduled_by_total", `type="merge"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_scheduled_by_total", `type="merge"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{"+c.by+"-type }}"),
 		c.withGraph(
 			"Merged Blocks Each Schedule",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_block"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_block"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{"+c.by+"-type }}"),
 		c.withGraph(
 			"Merged Size Each Schedule",
 			4,
-			`sum(rate(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_size"`)+`[$interval])) by (`+c.by+`, type)`,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_size"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
 	)
 }

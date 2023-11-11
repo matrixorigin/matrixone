@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -568,7 +570,7 @@ func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
 type Relation interface {
 	Statistics
 
-	UpdateBlockInfos(context.Context) error
+	UpdateObjectInfos(context.Context) error
 
 	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
 
@@ -621,6 +623,7 @@ type Relation interface {
 type Reader interface {
 	Close() error
 	Read(context.Context, []string, *plan.Expr, *mpool.MPool, VectorPool) (*batch.Batch, error)
+	Count() *ReaderCount
 }
 
 type Database interface {
@@ -690,4 +693,76 @@ type EntireEngine struct {
 
 func IsMemtable(tblRange []byte) bool {
 	return len(tblRange) == 0
+}
+
+type ReaderCount struct {
+	DbName    atomic.Value
+	TableName atomic.Value
+	TableId   atomic.Uint64
+	RowsRead  atomic.Uint64
+	BytesRead atomic.Uint64
+}
+
+func (rc *ReaderCount) Init() {
+	rc.DbName.Store("")
+	rc.TableName.Store("")
+	rc.TableId.Store(0)
+	rc.RowsRead.Store(0)
+	rc.BytesRead.Store(0)
+}
+
+func (rc *ReaderCount) Database() string {
+	if s, ok := rc.DbName.Load().(string); ok {
+		return s
+	}
+	return ""
+}
+
+func (rc *ReaderCount) Table() string {
+	if s, ok := rc.TableName.Load().(string); ok {
+		return s
+	}
+	return ""
+}
+
+func (rc *ReaderCount) TableID() uint64 {
+	return rc.TableId.Load()
+}
+
+func (rc *ReaderCount) Rows() uint64 {
+	return rc.RowsRead.Load()
+}
+
+func (rc *ReaderCount) Bytes() uint64 {
+	return rc.BytesRead.Load()
+}
+
+func (rc *ReaderCount) String() string {
+	return fmt.Sprintf("%s %s %d %d %d",
+		rc.Database(),
+		rc.Table(),
+		rc.TableID(),
+		rc.Rows(),
+		rc.Bytes())
+}
+
+func (rc *ReaderCount) ReplaceTableName(dbName, tableName string, tableId uint64) {
+	rc.DbName.Store(dbName)
+	rc.TableName.Store(tableName)
+	rc.TableId.Store(tableId)
+}
+
+func (rc *ReaderCount) ReplaceRows(rowsRead, bytesRead uint64) {
+	rc.RowsRead.Store(rowsRead)
+	rc.BytesRead.Store(bytesRead)
+}
+
+func (rc *ReaderCount) AddRows(rowsRead, bytesRead uint64) {
+	rc.RowsRead.Add(rowsRead)
+	rc.BytesRead.Add(bytesRead)
+}
+
+func (rc *ReaderCount) CopyFrom(src *ReaderCount) {
+	rc.ReplaceTableName(src.Database(), src.Table(), src.TableID())
+	rc.ReplaceRows(src.Rows(), src.Bytes())
 }

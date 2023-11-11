@@ -42,6 +42,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strconv"
+	"time"
+	"unsafe"
 )
 
 const (
@@ -592,8 +595,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 			newExprs[i] = foldedExpr
 		}
 	}
-
-	err = tbl.rangesOnePart(
+	var loaded int
+	loaded, err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.getTableDef(),
@@ -601,6 +604,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		&ranges,
 		tbl.proc.Load(),
 	)
+	v2.TxnRangesLoadedObjectHistogram.Observe(float64(loaded))
+	v2.TxnRangesLoadedObjectMetaTotalCounter.Add(float64(loaded))
+
 	return
 }
 
@@ -633,7 +639,7 @@ func (tbl *txnTable) rangesOnePart(
 	if tbl.db.txn.op.Txn().IsRCIsolation() {
 		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
 		if err != nil {
-			return err
+			return loaded, err
 		}
 		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
@@ -665,7 +671,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	insertedS3Blks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
 	if err != nil {
-		return err
+		return loaded, err
 	}
 	for _, blk := range insertedS3Blks {
 		if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
@@ -709,15 +715,17 @@ func (tbl *txnTable) rangesOnePart(
 
 	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
-		return err
+		return loaded, err
 	}
-
+  
 	if done, err := tbl.tryFastRanges(
 		state, exprs, insertedS3Blks, dirtyBlks, ranges, fs,
 	); err != nil {
-		return err
+		return fLoaded, err
 	} else if done {
-		return nil
+		return fLoaded, nil
+	} else {
+		loaded += fLoaded
 	}
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
@@ -910,7 +918,7 @@ func (tbl *txnTable) tryFastRanges(
 	dirtyBlks map[types.Blockid]struct{},
 	ranges *[][]byte,
 	fs fileservice.FileService,
-) (done bool, err error) {
+) (done bool, loaded int, err error) {
 	if tbl.primaryIdx == -1 {
 		done = false
 		return
@@ -1705,6 +1713,7 @@ func (tbl *txnTable) newReader(
 		seqnumMp: seqnumMp,
 		typsMap:  mp,
 	}
+	partReader.readerCount.ReplaceTableName(tbl.db.databaseName, tbl.tableName, tbl.tableId)
 
 	//tbl.Lock()
 	proc := tbl.proc.Load()
@@ -1727,7 +1736,9 @@ func (tbl *txnTable) newReader(
 				),
 			)
 		}
-		return []engine.Reader{&mergeReader{readers}}, nil
+		mReader := &mergeReader{rds: readers}
+		mReader.readerCount.Init()
+		return []engine.Reader{mReader}, nil
 	}
 
 	if len(dirtyBlks) < readerNumber-1 {

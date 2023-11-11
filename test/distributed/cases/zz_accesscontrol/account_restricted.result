@@ -71,7 +71,7 @@ res_test
 use res_test;
 desc r_test;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    INT(32)    YES        null        
+c1    INT(32)    YES    UNI    null        
 c2    VARCHAR(20)    YES        null        
 show tables;
 Tables_in_res_test
@@ -81,11 +81,11 @@ Table    Create Table
 r_test    CREATE TABLE `r_test` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(20) DEFAULT NULL,\nUNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    INT(32)    YES        null        
+c1    INT(32)    YES    UNI    null        
 c2    VARCHAR(20)    YES        null        
 show full columns from r_test;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-c1    INT(32)    null    YES        null        select,insert,update,references    
+c1    INT(32)    null    YES    UNI    null        select,insert,update,references    
 c2    VARCHAR(20)    null    YES        null        select,insert,update,references    
 show variables where value = 'MatrixOne';
 Variable_name    Value
@@ -258,11 +258,11 @@ Table    Create Table
 r_test    CREATE TABLE `r_test` (\n`c1` INT DEFAULT NULL,\n`c2` VARCHAR(20) DEFAULT NULL,\nUNIQUE KEY `ui` (`c1`)\n)
 show columns from r_test;
 Field    Type    Null    Key    Default    Extra    Comment
-c1    INT(32)    YES        null        
+c1    INT(32)    YES    UNI    null        
 c2    VARCHAR(20)    YES        null        
 show full columns from r_test;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
-c1    INT(32)    null    YES        null        select,insert,update,references    
+c1    INT(32)    null    YES    UNI    null        select,insert,update,references    
 c2    VARCHAR(20)    null    YES        null        select,insert,update,references    
 show variables where value = 'MatrixOne';
 Variable_name    Value

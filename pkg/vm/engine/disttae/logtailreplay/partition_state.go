@@ -708,7 +708,6 @@ func (p *PartitionState) HandleMetadataInsert(
 					p.objectIndexByTS.Set(e)
 				}
 			}
-
 		})
 	}
 
@@ -763,7 +762,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						Time:         objEntry.DeleteTime,
 						ShortObjName: objEntry.ShortObjName,
 						IsDelete:     true,
-
+            
 						IsAppendable: objEntry.EntryState,
 					}
 					p.objectIndexByTS.Set(e)
@@ -915,6 +914,38 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 				CreateTime:   objEntry.CreateTime,
 				ShortObjName: objEntry.ShortObjName,
 			})
+			if objGced {
+				objsToDelete = fmt.Sprintf("%s, %s", objsToDelete, objEntry.Location().Name().String())
+			} else {
+				objsToDelete = fmt.Sprintf("%s%s", objsToDelete, objEntry.Location().Name().String())
+			}
+			objGced = true
+		}
+	}
+	if objGced {
+		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objsToDelete)
+	}
+
+	objsToDelete := ""
+	objIter := p.dataObjects.Copy().Iter()
+	objGced := false
+	firstCalled := false
+	for {
+		if !firstCalled {
+			if !objIter.First() {
+				break
+			}
+			firstCalled = true
+		} else {
+			if !objIter.Next() {
+				break
+			}
+		}
+
+		objEntry := objIter.Item()
+
+		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(ts) {
+			p.dataObjects.Delete(objEntry)
 			if objGced {
 				objsToDelete = fmt.Sprintf("%s, %s", objsToDelete, objEntry.Location().Name().String())
 			} else {

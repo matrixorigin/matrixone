@@ -11352,7 +11352,7 @@ yydefault:
 //line mysql_sql.y:2997
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				&tree.VarAssignmentExpr{
+				{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -12281,7 +12281,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.DropIndex{
 				Name:      tree.Identifier(yyDollar[4].cstrUnion().Compare()),
-				TableName: *yyDollar[6].tableNameUnion(),
+				TableName: yyDollar[6].tableNameUnion(),
 				IfExists:  yyDollar[3].boolValUnion(),
 			}
 		}
@@ -15307,7 +15307,7 @@ yydefault:
 			}
 			yyLOCAL = &tree.CreateIndex{
 				Name:        tree.Identifier(yyDollar[4].cstrUnion().Compare()),
-				Table:       *yyDollar[7].tableNameUnion(),
+				Table:       yyDollar[7].tableNameUnion(),
 				IndexCat:    yyDollar[2].indexCategoryUnion(),
 				KeyParts:    yyDollar[9].keyPartsUnion(),
 				IndexOption: io,
