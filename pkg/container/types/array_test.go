@@ -122,8 +122,8 @@ func TestArrayToString(t *testing.T) {
 		},
 		{
 			name:    "Test3.2 - Float32 with precision issue on Multiply",
-			argsF32: []float32{4635.894*4635.894 + 0.66616553, 2, 3},
-			want:    "[21491514, 2, 3]",
+			argsF32: []float32{4635.894 * 4635.894, 0.66616553 * 0.66616553, 2, 3},
+			want:    "[21491514, 0.44377652, 2, 3]",
 		},
 		{
 			name:    "Test4.1 - Float64 with precision issue on Add",
