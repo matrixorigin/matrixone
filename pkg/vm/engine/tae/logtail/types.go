@@ -606,7 +606,7 @@ func init() {
 			}
 		}
 	}
-	
+
 	StorageUsageSchema = catalog.NewEmptySchema("storage_usage")
 	for i, colname := range StorageUsageSchemaAttrs {
 		if i == 0 {

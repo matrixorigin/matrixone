@@ -94,6 +94,8 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	}
 	return bat
 }
+
+// skip rowid and committs
 func makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema *catalog.Schema) *containers.Batch {
 	bat := containers.NewBatch()
 

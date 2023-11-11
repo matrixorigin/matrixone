@@ -587,7 +587,11 @@ func NewCheckpointData() *CheckpointData {
 		meta: make(map[uint64]*CheckpointMeta),
 	}
 	for idx, schema := range checkpointDataSchemas_Curr {
-		data.bats[idx] = makeRespBatchFromSchema(schema)
+		if idx == int(ObjectInfoIDX) {
+			data.bats[idx] = makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema)
+		} else {
+			data.bats[idx] = makeRespBatchFromSchema(schema)
+		}
 	}
 	return data
 }
