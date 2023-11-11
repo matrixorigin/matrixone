@@ -107,7 +107,7 @@ select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.col
 show columns from rename06;
 drop table rename06;
 
--- rename internal table column: have no priviledge
+-- rename internal table column: have no privilege
 alter table system.statement_info rename column role_id to role_idNew;
 alter table mo_catalog.mo_database rename column dat_type to newdat_type;
 alter table mysql.procs_priv rename column grantor to newGrantor;

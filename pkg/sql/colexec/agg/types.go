@@ -101,6 +101,8 @@ type Agg[T any] interface {
 
 	IsDistinct() bool
 
+	Dup(m *mpool.MPool) Agg[any]
+
 	// WildAggReAlloc reallocate for agg structure from memory pool.
 	// todo: remove this method.
 	WildAggReAlloc(m *mpool.MPool) error
@@ -109,6 +111,8 @@ type Agg[T any] interface {
 type AggStruct interface {
 	encoding.BinaryMarshaler
 	encoding.BinaryUnmarshaler
+
+	Dup() AggStruct
 }
 
 // UnaryAgg generic aggregation function with one input vector and without distinct

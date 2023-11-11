@@ -387,7 +387,7 @@ func writeIncrementalCheckpoint(
 	checkpointSize int,
 	fs fileservice.FileService,
 ) (objectio.Location, objectio.Location) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end)
+	factory := logtail.IncrementalCheckpointDataFactory(start, end, fs, false)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
@@ -451,8 +451,9 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	return
 }
 
-func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData, start, end types.TS, c *catalog.Catalog) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end)
+func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData,
+	start, end types.TS, c *catalog.Catalog, fs fileservice.FileService) {
+	factory := logtail.IncrementalCheckpointDataFactory(start, end, fs, false)
 	data2, err := factory(c)
 	assert.NoError(t, err)
 	defer data2.Close()
@@ -626,7 +627,7 @@ func CheckCheckpointReadWrite(
 	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, checkpointSize, fs)
 	tnData := tnReadCheckpoint(t, location, fs)
 
-	checkTNCheckpointData(context.Background(), t, tnData, start, end, c)
+	checkTNCheckpointData(context.Background(), t, tnData, start, end, c, fs)
 	p := &catalog.LoopProcessor{}
 
 	ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, pkgcatalog.MO_DATABASE_ID, location, fs)

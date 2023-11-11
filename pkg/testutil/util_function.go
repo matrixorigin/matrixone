@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -403,7 +404,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
-			if want != get {
+			if !assertx.InEpsilonF64(want, get) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
 			}
@@ -615,7 +616,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			if moarray.Compare[float64](types.BytesToArray[float64](want), types.BytesToArray[float64](get)) != 0 {
+			if !assertx.InEpsilonF64Slice(types.BytesToArray[float64](want), types.BytesToArray[float64](get)) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
 			}

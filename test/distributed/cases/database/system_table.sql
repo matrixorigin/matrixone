@@ -24,9 +24,7 @@ show columns from `KEY_COLUMN_USAGE`;
 show columns from `COLUMNS`;
 show columns from `PROFILING`;
 show columns from `USER_PRIVILEGES`;
--- @bvt:issue#12196
 show columns from `SCHEMATA`;
--- @bvt:issue
 show columns from `CHARACTER_SETS`;
 show columns from `TRIGGERS`;
 show columns from `TABLES`;

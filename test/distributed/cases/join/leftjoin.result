@@ -34,6 +34,22 @@ Project
         Join Cond: (t2.c1 = t1.c1)
         ->  Table Scan on d1.t2
         ->  Table Scan on d1.t1
+explain select t3.c1 from t3 left join t1 on t1.c1 =t3.c1 and t1.c1 > t3.c2 where t3.c1<10;
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t3
+        Filter Cond: (t3.c1 < 10)
+        Block Filter Cond: (t3.c1 < 10)
+explain select t1.c1,t3.c1 from t3 left join t1 on t1.c1 =t3.c1 where t3.c1<10;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: RIGHT
+        Join Cond: (t1.c1 = t3.c1)
+        ->  Table Scan on d1.t1
+        ->  Table Scan on d1.t3
+              Filter Cond: (t3.c1 < 10)
+              Block Filter Cond: (t3.c1 < 10)
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c2;
 QUERY PLAN
 Project

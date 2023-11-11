@@ -95,13 +95,14 @@ func NewFlushTableTailEntry(
 
 // add transfer pages for dropped ablocks
 func (entry *flushTableTailEntry) addTransferPages() {
+	isTransient := !entry.tableEntry.GetLastestSchema().HasPK()
 	for i, m := range entry.transMappings.Mappings {
 		if len(m) == 0 {
 			continue
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now())
+		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range m {
 			blkid := entry.createdBlkHandles[dst.Idx].ID()
 			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))

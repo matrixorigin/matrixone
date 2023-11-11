@@ -25,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -36,40 +34,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-func (txn *Transaction) getBlockInfos(
-	ctx context.Context,
-	tbl *txnTable,
-) (blocks []catalog.BlockInfo, err error) {
-	ts := types.TimestampToTS(txn.op.SnapshotTS())
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var objectName objectio.ObjectNameShort
-	iter, err := state.NewBlocksIter(ts)
-	if err != nil {
-		return nil, err
-	}
-	fs, err := fileservice.Get[fileservice.FileService](txn.proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
-	for iter.Next() {
-		entry := iter.Entry()
-		location := entry.MetaLocation()
-		if !objectio.IsSameObjectLocVsShort(location, &objectName) {
-			// Prefetch object meta
-			if err = blockio.PrefetchMeta(fs, location); err != nil {
-				iter.Close()
-				return
-			}
-			objectName = *location.Name().Short()
-		}
-		blocks = append(blocks, entry.BlockInfo)
-	}
-	iter.Close()
-	return
-}
+//func (txn *Transaction) getObjInfos(
+//	ctx context.Context,
+//	tbl *txnTable,
+//) (objs []logtailreplay.ObjectEntry, err error) {
+//	ts := types.TimestampToTS(txn.op.SnapshotTS())
+//	state, err := tbl.getPartitionState(ctx)
+//	if err != nil {
+//		return nil, err
+//	}
+//	iter, err := state.NewObjectsIter(ts)
+//	if err != nil {
+//		return nil, err
+//	}
+//	for iter.Next() {
+//		entry := iter.Entry()
+//		objs = append(objs, entry)
+//	}
+//	iter.Close()
+//	return
+//}
 
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
@@ -303,7 +287,8 @@ func (txn *Transaction) WriteFileLocked(
 		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc})
 		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 
-		for _, blk := range vector.MustBytesCol(bat.GetVector(0)) {
+		blkInfos := vector.MustBytesCol(bat.GetVector(0))
+		for _, blk := range blkInfos {
 			blkInfo := *catalog.DecodeBlockInfo(blk)
 			vector.AppendBytes(
 				newBat.GetVector(0),

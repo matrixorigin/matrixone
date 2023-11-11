@@ -109,7 +109,9 @@ func NewMOCluster(
 			panic(err)
 		}
 	} else {
-		close(c.readyC)
+		c.readyOnce.Do(func() {
+			close(c.readyC)
+		})
 	}
 	return c
 }

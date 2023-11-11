@@ -17,6 +17,7 @@ package dashboard
 import (
 	"context"
 
+	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 )
 
@@ -32,10 +33,7 @@ func (c *DashboardCreator) initRPCDashboard() error {
 			c.initRPCOverviewRow(),
 			c.initRPCConnectionRow(),
 			c.initRPCConnectDurationRow(),
-			c.initRPCClientWriteDurationRow(),
-			c.initRPCServerWriteDurationRow(),
-			c.initRPCClientWriteLatencyDurationRow(),
-			c.initRPCServerWriteLatencyDurationRow(),
+			c.initRPCWriteDurationRow(),
 			c.initRPCRequestDoneDurationRow(),
 		)...)
 	if err != nil {
@@ -49,28 +47,34 @@ func (c *DashboardCreator) initRPCOverviewRow() dashboard.Option {
 	return dashboard.Row(
 		"RPC overview",
 		c.withGraph(
+			"RPC Client Create",
+			6,
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_client_create_total", "")+`[$interval])) by (name)`,
+			"{{ name }}"),
+
+		c.withGraph(
 			"Connection pool",
-			3,
-			`sum(`+c.getMetricWithFilter("mo_rpc_backend_pool_size", ``)+`) by (`+c.by+`, name)`,
-			"{{ "+c.by+"-name }}"),
+			6,
+			`sum(`+c.getMetricWithFilter("mo_rpc_backend_pool_size", ``)+`) by (name)`,
+			"{{ name }}"),
 
 		c.withGraph(
 			"Sending queue",
-			3,
-			`sum(`+c.getMetricWithFilter("mo_rpc_sending_queue_size", ``)+`) by (`+c.by+`, name, side)`,
-			"{{ "+c.by+"-name-side }}"),
+			4,
+			`sum(`+c.getMetricWithFilter("mo_rpc_sending_queue_size", ``)+`) by (name, side)`,
+			"{{ name }}({{ side }})"),
 
 		c.withGraph(
 			"Write Batch Size",
-			3,
-			`sum(`+c.getMetricWithFilter("mo_rpc_sending_batch_size", ``)+`) by (`+c.by+`, name)`,
-			"{{ "+c.by+"-name }}"),
+			4,
+			`sum(`+c.getMetricWithFilter("mo_rpc_sending_batch_size", ``)+`) by (name)`,
+			"{{ name }}"),
 
 		c.withGraph(
 			"Server sessions",
-			3,
-			`sum(`+c.getMetricWithFilter("mo_rpc_server_session_size", ``)+`) by (`+c.by+`, name)`,
-			"{{ "+c.by+"-name }}"),
+			4,
+			`sum(`+c.getMetricWithFilter("mo_rpc_server_session_size", ``)+`) by (name)`,
+			"{{ name }}"),
 	)
 }
 
@@ -80,81 +84,81 @@ func (c *DashboardCreator) initRPCConnectionRow() dashboard.Option {
 		c.withGraph(
 			"Create",
 			3,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_create_total", "")+`[$interval])) by (`+c.by+`, name)`,
-			"{{ "+c.by+"-name }}"),
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_create_total", "")+`[$interval])) by (name)`,
+			"{{ name }}"),
 
 		c.withGraph(
 			"Close",
 			3,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_close_total", "")+`[$interval])) by (`+c.by+`, name)`,
-			"{{ "+c.by+"-name }}"),
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_close_total", "")+`[$interval])) by (name)`,
+			"{{ name }}"),
 
 		c.withGraph(
 			"Reconnect Total",
 			3,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="total"`)+`[$interval])) by (`+c.by+`, name)`,
-			"{{ "+c.by+"-name }}"),
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="total"`)+`[$interval])) by (name)`,
+			"{{ name }}"),
 
 		c.withGraph(
 			"Reconnect Failed",
 			3,
-			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="failed"`)+`[$interval])) by (`+c.by+`, name)`,
-			"{{ "+c.by+"-name }}"),
+			`sum(rate(`+c.getMetricWithFilter("mo_rpc_backend_connect_total", `type="failed"`)+`[$interval])) by (name)`,
+			"{{ name }}"),
 	)
 }
 
 func (c *DashboardCreator) initRPCConnectDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"Connect Duration",
+		"RPC connection duration",
 		c.getHistogramWithExtraBy(
+			"Connect duration",
 			c.getMetricWithFilter(`mo_rpc_backend_connect_duration_seconds_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			"name")...,
+			12,
+			"name",
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 
-func (c *DashboardCreator) initRPCClientWriteDurationRow() dashboard.Option {
+func (c *DashboardCreator) initRPCWriteDurationRow() dashboard.Option {
 	return dashboard.Row(
-		"Client-side Write To Network Duration",
+		"RPC write duration",
 		c.getHistogramWithExtraBy(
+			"Client-side Write To Network Duration",
 			c.getMetricWithFilter(`mo_rpc_write_duration_seconds_bucket`, `side="client"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			"name")...,
-	)
-}
+			3,
+			"name",
+			axis.Unit("s"),
+			axis.Min(0)),
 
-func (c *DashboardCreator) initRPCServerWriteDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"Server-side Write To Network Duration",
 		c.getHistogramWithExtraBy(
-			c.getMetricWithFilter(`mo_rpc_write_duration_seconds_bucket`, `side="server"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			"name")...,
-	)
-}
-
-func (c *DashboardCreator) initRPCClientWriteLatencyDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"Client-side Write Latency Duration",
-		c.getHistogramWithExtraBy(
+			"Client-side Write Latency Duration",
 			c.getMetricWithFilter(`mo_rpc_write_latency_duration_seconds_bucket`, `side="client"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			"name")...,
-	)
-}
+			3,
+			"name",
+			axis.Unit("s"),
+			axis.Min(0)),
 
-func (c *DashboardCreator) initRPCServerWriteLatencyDurationRow() dashboard.Option {
-	return dashboard.Row(
-		"Server-side Write Latency Duration",
 		c.getHistogramWithExtraBy(
+			"Server-side Write To Network Duration",
+			c.getMetricWithFilter(`mo_rpc_write_duration_seconds_bucket`, `side="server"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			3,
+			"name",
+			axis.Unit("s"),
+			axis.Min(0)),
+
+		c.getHistogramWithExtraBy(
+			"Server-side Write Latency Duration",
 			c.getMetricWithFilter(`mo_rpc_write_latency_duration_seconds_bucket`, `side="server"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			"name")...,
+			3,
+			"name",
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }
 
@@ -162,9 +166,12 @@ func (c *DashboardCreator) initRPCRequestDoneDurationRow() dashboard.Option {
 	return dashboard.Row(
 		"Request done Duration",
 		c.getHistogramWithExtraBy(
+			"Request done Duration",
 			c.getMetricWithFilter(`mo_rpc_backend_done_duration_seconds_bucket`, ``),
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
-			"name")...,
+			12,
+			"name",
+			axis.Unit("s"),
+			axis.Min(0)),
 	)
 }

@@ -15,7 +15,11 @@
 package functionAgg
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math"
 	"testing"
 
@@ -133,10 +137,6 @@ func generateBytesList(str ...string) [][]byte {
 		list[i] = []byte(s)
 	}
 	return list
-}
-
-func f64equal(a, b float64) bool {
-	return a-b < 1e-6 && b-a < 1e-6
 }
 
 var testMoAllTypes = []types.T{
@@ -615,7 +615,7 @@ func TestVarPop(t *testing.T) {
 			eval:   s.Eval,
 		}
 		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, func(result float64, isEmpty bool) bool {
-			return !isEmpty && f64equal(result, 6.666666666666667)
+			return !isEmpty && assertx.InEpsilonF64(result, 6.666666666666667)
 		})
 		require.NoError(t, err)
 
@@ -623,7 +623,7 @@ func TestVarPop(t *testing.T) {
 		nsp := nulls.NewWithSize(10)
 		nsp.Add(9)
 		err = tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 0}, nsp, func(result float64, isEmpty bool) bool {
-			return !isEmpty && f64equal(result, 6.666666666666667)
+			return !isEmpty && assertx.InEpsilonF64(result, 6.666666666666667)
 		})
 		require.NoError(t, err)
 	}
@@ -659,19 +659,52 @@ func TestStdDevPop(t *testing.T) {
 			eval:   s.EvalStdDevPop,
 		}
 		err := tr.testUnaryAgg([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, func(result float64, isEmpty bool) bool {
-			return !isEmpty && f64equal(result, math.Sqrt(6.666666666666667))
+			return !isEmpty && assertx.InEpsilonF64(result, math.Sqrt(6.666666666666667))
 		})
 		require.NoError(t, err)
 	}
 }
 
-// todo: there is not a good way to test the multi-agg function.
-//
-//	should implement the multi-agg function in the future.
 func TestGroupConcat(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggGroupConcat, []types.T{types.T_varchar}, AggGroupConcatReturnType))
 
-	s := &sAggGroupConcat{}
+	// input strings
+	var strs = []string{
+		"A",
+		"B",
+		"C",
+		"D",
+	}
+
+	// pack the input strings into [][]byte
+	var packedInput = make([][]byte, len(strs))
+	packers := types.NewPackerArray(len(strs), mpool.MustNewZero())
+	for i, str := range strs {
+		packers[i].EncodeStringType(util.UnsafeStringToBytes(str))
+		packedInput[i] = packers[i].GetBuf()
+	}
+
+	nsp := nulls.NewWithSize(4)
+	nsp.Add(3)
+	s := &sAggGroupConcat{
+		separator: ",",
+	}
+
+	{
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s,
+			grow:   s.Grows,
+			free:   s.Free,
+			fill:   s.Fill,
+			merge:  s.Merge,
+			eval:   s.Eval,
+		}
+		err := tr.testUnaryAgg(packedInput, nsp, func(result []byte, isEmpty bool) bool {
+			return util.UnsafeBytesToString(result) == "A,B,C" && !isEmpty
+		})
+		require.NoError(t, err)
+
+	}
 	{
 		data, err := s.MarshalBinary()
 		require.NoError(t, err)
@@ -684,5 +717,66 @@ func TestGroupConcat(t *testing.T) {
 		for i := range s.result {
 			require.Equal(t, s.result[i], s2.result[i])
 		}
+	}
+}
+
+func TestClusterCenters(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggClusterCenters, AggClusterCentersSupportedParameters, AggClusterCentersReturnType))
+
+	s1 := &sAggClusterCenters{
+		clusterCnt: 2,
+		distType:   kmeans.CosineDistance,
+		arrType:    types.T_array_float64.ToType(),
+	}
+	// input vectors/arrays of 7 rows with 6th row as null
+	var vecf64Input = [][]byte{
+		types.ArrayToBytes[float64]([]float64{1, 2, 3, 4}),
+		types.ArrayToBytes[float64]([]float64{1, 2, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{1, 2, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{10, 2, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{10, 3, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{0, 0, 0, 0}),
+		types.ArrayToBytes[float64]([]float64{10, 5, 4, 5}),
+	}
+	nsp := nulls.NewWithSize(7)
+	nsp.Add(5)
+	wantVecf64Output := [][]float64{
+		{0.1591527, 0.3183054, 0.57575274, 0.7349054},    // approx {1, 2, 3.6666666666666665, 4.666666666666666},
+		{0.80770063, 0.26637173, 0.32308024, 0.40385032}, // approx {10, 3.333333333333333, 4, 5}
+	}
+
+	{
+		// Test aggFn
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s1,
+			grow:   s1.Grows,
+			free:   s1.Free,
+			fill:   s1.Fill,
+			merge:  s1.Merge,
+			eval:   s1.Eval,
+		}
+		err := tr.testUnaryAgg(vecf64Input, nsp, func(result []byte, isEmpty bool) bool {
+			var vecf64Output [][]float64
+			err := json.Unmarshal(result, &vecf64Output)
+			//t.Log(vecf64Output)
+			return err == nil && !isEmpty && assertx.InEpsilonF64Slices(wantVecf64Output, vecf64Output)
+		})
+
+		require.NoError(t, err)
+	}
+
+	{
+		// Test Marshall and Unmarshall
+		data, err := s1.MarshalBinary()
+		require.NoError(t, err)
+		s2 := new(sAggClusterCenters)
+		err = s2.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		require.Equal(t, s1.arrType, s2.arrType)
+		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
+		require.Equal(t, s1.distType, s2.distType)
+		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
+		require.Equal(t, s1.groupedData, s2.groupedData)
 	}
 }

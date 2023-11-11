@@ -19,6 +19,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"math"
-	"strings"
 )
 
 func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
@@ -283,7 +284,11 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				} else {
 					indexStr = "KEY "
 				}
-				indexStr += fmt.Sprintf("`%s` (", formatStr(indexdef.IndexName))
+				indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
+				if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
+					indexStr += fmt.Sprintf("USING `%s` ", formatStr(indexdef.IndexAlgo))
+				}
+				indexStr += "("
 				i := 0
 				for _, part := range indexdef.Parts {
 					// NOTE: we skip the alias PK column from the secondary keys list here.
@@ -303,6 +308,15 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 				if indexdef.Comment != "" {
 					indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
 					indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				}
+				if indexdef.IndexAlgoParams != "" {
+					var paramList string
+					var err error
+					paramList, err = indexParamsToStringList(indexdef.IndexAlgoParams)
+					if err != nil {
+						return "", err
+					}
+					indexStr += paramList
 				}
 				if rowCount != 0 {
 					createStr += ",\n"
@@ -536,7 +550,7 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 }
 
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
-	replicaTableDef := DeepCopyTableDef(tableDef)
+	replicaTableDef := DeepCopyTableDef(tableDef, true)
 
 	id, err := uuid.NewUUID()
 	if err != nil {

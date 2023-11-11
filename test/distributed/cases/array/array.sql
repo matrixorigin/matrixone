@@ -43,9 +43,15 @@ select l2_norm(b) from vec_table;
 select vector_dims(b) from vec_table;
 select inner_product(b,"[1,2,3]") from vec_table;
 select cosine_similarity(b,"[1,2,3]") from vec_table;
+select l2_distance(b,"[1,2,3]") from vec_table;
+select cosine_distance(b,"[1,2,3]") from vec_table;
+select normalize_l2(b) from vec_table;
 
 -- top K
 select * FROM vec_table ORDER BY cosine_similarity(b, '[3,1,2]') LIMIT 5;
+select * FROM vec_table ORDER BY l2_distance(b, '[3,1,2]') LIMIT 5;
+select * FROM vec_table ORDER BY inner_product(b, '[3,1,2]') LIMIT 5;
+
 
 -- throw error cases
 select b + "[1,2,3" from vec_table;
@@ -92,6 +98,18 @@ insert into t6 (a,b) values (1, '[1,2,3]'), (2, '[4,5,6]'), (3, '[2,1,1]'), (4, 
 select * from t6;
 update t6 set b = NULL;
 select * from t6;
+
+-- vector precision/scale check
+create table t7(a int, b vecf32(3), c vecf32(5));
+insert into t7 values(1, NULL,NULL);
+insert into t7 values(2, "[0.8166459, 0.66616553, 0.4886152]", NULL);
+insert into t7 values(3, "[0.1726299, 3.2908857, 30.433094]","[0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]");
+insert into t7 values(4, "[8.560689, 6.790359, 821.9778]", "[0.46323407, 23.498016, 563.923, 56.076736, 8732.958]");
+select * from t7;
+select a, b + b, c + c from t7;
+select a, b * b, c * c from t7;
+select l2_norm(b), l2_norm(c) from t7;
+
 
 -- insert, flush and select
 insert into vec_table values(2, "[0,2,3]", "[4,4,6]");

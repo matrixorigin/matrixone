@@ -73,15 +73,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
 // The current insertion of around 200,000 rows triggers cn to write s3 directly
 const (
-	DistributedThreshold              uint64 = 10 * mpool.MB
-	SingleLineSizeEstimate            uint64 = 300 * mpool.B
-	shuffleJoinMergeChannelBufferSize        = 4
-	shuffleJoinProbeChannelBufferSize        = 16
+	DistributedThreshold     uint64 = 10 * mpool.MB
+	SingleLineSizeEstimate   uint64 = 300 * mpool.B
+	shuffleChannelBufferSize        = 16
 )
 
 var (
@@ -100,7 +100,12 @@ var pool = sync.Pool{
 func New(
 	addr, db, sql, tenant, uid string,
 	ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
+	e engine.Engine,
+	proc *process.Process,
+	stmt tree.Statement,
+	isInternal bool,
+	cnLabel map[string]string,
+	startAt time.Time) *Compile {
 	c := pool.Get().(*Compile)
 	c.e = e
 	c.db = db
@@ -116,6 +121,7 @@ func New(
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
 	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
+	c.startAt = startAt
 	return c
 }
 
@@ -155,6 +161,7 @@ func (c *Compile) clear() {
 	c.proc = nil
 	c.cnList = nil
 	c.stmt = nil
+	c.startAt = time.Time{}
 
 	for k := range c.nodeRegs {
 		delete(c.nodeRegs, k)
@@ -200,6 +207,11 @@ func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 // Compile is the entrance of the compute-execute-layer.
 // It generates a scope (logic pipeline) for a query plan.
 func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
 	defer task.End()
 	defer func() {
@@ -293,7 +305,9 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	case Remote:
 		defer c.fillAnalyzeInfo()
-		return s.RemoteRun(c)
+		err := s.RemoteRun(c)
+		c.addAffectedRows(s.affectedRows())
+		return err
 	case CreateDatabase:
 		err := s.CreateDatabase(c)
 		if err != nil {
@@ -358,6 +372,7 @@ func (c *Compile) run(s *Scope) error {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 	start := time.Now()
+	v2.TxnStatementExecuteLatencyDurationHistogram.Observe(start.Sub(c.startAt).Seconds())
 	defer func() {
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
@@ -407,7 +422,7 @@ func (c *Compile) Run(_ uint64) (*util2.RunResult, error) {
 
 		// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 		// improved to refresh expression in the future.
-		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel)
+		cc = New(c.addr, c.db, c.sql, c.tenant, c.uid, c.proc.Ctx, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 			pn, e := c.buildPlanFunc()
 			if e != nil {
@@ -455,6 +470,7 @@ func (c *Compile) ifNeedRerun(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -466,12 +482,13 @@ func (c *Compile) runOnce() error {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
+					getLogger().Error("panic in run",
+						zap.String("error", err.Error()))
 					errC <- err
-					wg.Done()
 				}
+				wg.Done()
 			}()
 			errC <- c.run(scope)
-			wg.Done()
 		})
 	}
 	wg.Wait()
@@ -2727,7 +2744,7 @@ func (c *Compile) newScopeListForShuffleGroup(childrenCount int, blocks int) ([]
 		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, 16)
+				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, scopes...)
@@ -2883,7 +2900,7 @@ func (c *Compile) newShuffleJoinScopeList(left, right []*Scope, n *plan.Node) ([
 			ss[i].BuildIdx = lnum
 			ss[i].ShuffleCnt = dop
 			for _, rr := range ss[i].Proc.Reg.MergeReceivers {
-				rr.Ch = make(chan *batch.Batch, shuffleJoinMergeChannelBufferSize)
+				rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
 			}
 		}
 		children = append(children, ss...)
@@ -2966,6 +2983,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	if ss == nil {
 		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Ctx: s.Proc.Ctx,
+			Ch:  make(chan *batch.Batch, shuffleChannelBufferSize),
 		}
 		rs.appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -3244,7 +3262,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, error) {
 				}
 				var objMeta objectio.ObjectMeta
 				location := blk.MetaLocation()
-				fs := c.proc.FileService
+				var fs fileservice.FileService
+				fs, err = fileservice.Get[fileservice.FileService](c.proc.FileService, defines.SharedFileServiceName)
+				if err != nil {
+					return nil, nil, err
+				}
 				objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 				if err != nil {
 					partialresults = nil

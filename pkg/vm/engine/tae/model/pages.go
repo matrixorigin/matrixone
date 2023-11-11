@@ -28,16 +28,18 @@ type HashPageTable = TransferTable[*TransferHashPage]
 
 type TransferHashPage struct {
 	common.RefHelper
-	bornTS  time.Time
-	id      *common.ID
-	hashmap map[uint32]types.Rowid
+	bornTS      time.Time
+	id          *common.ID
+	hashmap     map[uint32]types.Rowid
+	isTransient bool
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool) *TransferHashPage {
 	page := &TransferHashPage{
-		bornTS:  ts,
-		id:      id,
-		hashmap: make(map[uint32]types.Rowid),
+		bornTS:      ts,
+		id:          id,
+		hashmap:     make(map[uint32]types.Rowid),
+		isTransient: isTransient,
 	}
 	page.OnZeroCB = page.Close
 	return page
@@ -47,12 +49,19 @@ func (page *TransferHashPage) ID() *common.ID    { return page.id }
 func (page *TransferHashPage) BornTS() time.Time { return page.bornTS }
 
 func (page *TransferHashPage) TTL(now time.Time, ttl time.Duration) bool {
+	if page.isTransient {
+		ttl /= 2
+	}
 	return now.After(page.bornTS.Add(ttl))
 }
 
 func (page *TransferHashPage) Close() {
 	logutil.Debugf("Closing %s", page.String())
 	page.hashmap = make(map[uint32]types.Rowid)
+}
+
+func (page *TransferHashPage) Length() int {
+	return len(page.hashmap)
 }
 
 func (page *TransferHashPage) String() string {

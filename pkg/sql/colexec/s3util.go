@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -262,7 +263,7 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 //	}
 //}
 
-func (w *S3Writer) Output(proc *process.Process) error {
+func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	bat := batch.NewWithSize(len(w.blockInfoBat.Attrs))
 	bat.SetAttributes(w.blockInfoBat.Attrs)
 
@@ -275,12 +276,12 @@ func (w *S3Writer) Output(proc *process.Process) error {
 	}
 	bat.SetRowCount(w.blockInfoBat.RowCount())
 	w.ResetBlockInfoBat(proc)
-	proc.SetInputBatch(bat)
+	result.Batch = bat
 	return nil
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	var S3SizeThreshold = TagS3Size
+	var S3SizeThreshold = TagS3SizeForMOLogger
 
 	if proc != nil && proc.Ctx != nil {
 		isMoLogger, ok := proc.Ctx.Value(defines.IsMoLogger{}).(bool)
