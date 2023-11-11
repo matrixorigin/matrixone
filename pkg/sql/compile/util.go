@@ -115,47 +115,8 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
 }
 
-// genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
-func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) string {
-	// insert data into index table
-	var insertSQL string
-	temp := partsToColsStr(indexDef.Parts)
-	if originTableDef.Pkey == nil || len(originTableDef.Pkey.PkeyColName) == 0 {
-		if len(indexDef.Parts) == 1 {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
-		} else {
-			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
-		}
-	} else {
-		pkeyName := originTableDef.Pkey.PkeyColName
-		var pKeyMsg string
-		if pkeyName == catalog.CPrimaryKeyColName {
-			pKeyMsg = "serial("
-			for i, part := range originTableDef.Pkey.Names {
-				if i == 0 {
-					pKeyMsg += part
-				} else {
-					pKeyMsg += "," + part
-				}
-			}
-			pKeyMsg += ")"
-		} else {
-			pKeyMsg = pkeyName
-		}
-		if len(indexDef.Parts) == 1 {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
-		} else {
-			if isUnique {
-				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
-			} else {
-				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name)
-			}
-		}
-	}
-	return insertSQL
-}
-
-// genCreateIndexTableSql: Generate ddl statements for creating index table
+// genCreateIndexTableSqlForIvfIndex: Generate ddl statements for creating ivf index table
+// TODO: later on merge with genCreateIndexTableSql
 func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	var sql string
 	planCols := indexTableDef.GetCols()
@@ -195,6 +156,46 @@ func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *p
 	}
 
 	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
+}
+
+// genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
+func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) string {
+	// insert data into index table
+	var insertSQL string
+	temp := partsToColsStr(indexDef.Parts)
+	if originTableDef.Pkey == nil || len(originTableDef.Pkey.PkeyColName) == 0 {
+		if len(indexDef.Parts) == 1 {
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
+		} else {
+			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
+		}
+	} else {
+		pkeyName := originTableDef.Pkey.PkeyColName
+		var pKeyMsg string
+		if pkeyName == catalog.CPrimaryKeyColName {
+			pKeyMsg = "serial("
+			for i, part := range originTableDef.Pkey.Names {
+				if i == 0 {
+					pKeyMsg += part
+				} else {
+					pKeyMsg += "," + part
+				}
+			}
+			pKeyMsg += ")"
+		} else {
+			pKeyMsg = pkeyName
+		}
+		if len(indexDef.Parts) == 1 {
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+		} else {
+			if isUnique {
+				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name, temp)
+			} else {
+				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, temp, pKeyMsg, DBName, originTableDef.Name)
+			}
+		}
+	}
+	return insertSQL
 }
 
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`

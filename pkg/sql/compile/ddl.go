@@ -998,7 +998,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			// 2. Regular Secondary index
 			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
-			// 3. IVF indexDefs is aggregated and handled later
+			// 3. IVF indexDefs are aggregated and handled later
 			if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
 				multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
 			}
