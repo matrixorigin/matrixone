@@ -599,7 +599,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 // visitBlkData collects logtail in memory
 func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
-	insBatch, err := block.CollectAppendInRange(b.start, b.end, false)
+	insBatch, err := block.CollectAppendInRange(b.start, b.end, false, common.LogtailAllocator)
 	if err != nil {
 		return
 	}

@@ -233,7 +233,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	if oldBMeta.IsAppendable() {
 		// for ablk, flush data and deletes
 		var data *containers.Batch
-		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
+		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator)
 		if errr != nil {
 			return errr
 		}

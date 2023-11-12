@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -294,10 +295,12 @@ func (blk *ablock) BatchDedup(
 
 func (blk *ablock) CollectAppendInRange(
 	start, end types.TS,
-	withAborted bool) (*containers.BatchWithVersion, error) {
+	withAborted bool,
+	mp *mpool.MPool,
+) (*containers.BatchWithVersion, error) {
 	node := blk.PinNode()
 	defer node.Unref()
-	return node.CollectAppendInRange(start, end, withAborted)
+	return node.CollectAppendInRange(start, end, withAborted, mp)
 }
 
 func (blk *ablock) estimateRawScore() (score int, dropped bool) {

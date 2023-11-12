@@ -17,9 +17,10 @@ package jobs
 import (
 	"context"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 	"unsafe"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -578,7 +579,9 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 		var data, deletes *containers.Batch
 		var dataVer *containers.BatchWithVersion
 		blkData := blk.GetBlockData()
-		if dataVer, err = blkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true); err != nil {
+		if dataVer, err = blkData.CollectAppendInRange(
+			types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
+		); err != nil {
 			return
 		}
 		data = dataVer.Batch

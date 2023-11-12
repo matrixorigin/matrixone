@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -329,7 +330,7 @@ func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
 // abortVec: is the abort vector
 // aborts: is the aborted bitmap
 func (n *MVCCHandle) CollectAppendLocked(
-	start, end types.TS,
+	start, end types.TS, mp *mpool.MPool,
 ) (
 	minRow, maxRow uint32,
 	commitTSVec, abortVec containers.Vector,
@@ -347,8 +348,8 @@ func (n *MVCCHandle) CollectAppendLocked(
 	maxRow = node.maxRow
 
 	aborts = &nulls.Bitmap{}
-	commitTSVec = containers.MakeVector(types.T_TS.ToType())
-	abortVec = containers.MakeVector(types.T_bool.ToType())
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), containers.Options{Allocator: mp})
+	abortVec = containers.MakeVector(types.T_bool.ToType(), containers.Options{Allocator: mp})
 	n.appends.LoopOffsetRange(
 		startOffset,
 		endOffset,

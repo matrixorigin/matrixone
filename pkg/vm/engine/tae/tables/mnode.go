@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -468,11 +469,11 @@ func (node *memoryNode) checkConflictAandVisibility(
 }
 
 func (node *memoryNode) CollectAppendInRange(
-	start, end types.TS, withAborted bool,
+	start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (batWithVer *containers.BatchWithVersion, err error) {
 	node.block.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-		node.block.mvcc.CollectAppendLocked(start, end)
+		node.block.mvcc.CollectAppendLocked(start, end, mp)
 	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow)
 	if err != nil {
 		node.block.RUnlock()
@@ -486,6 +487,7 @@ func (node *memoryNode) CollectAppendInRange(
 		batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_ABORT)
 		batWithVer.AddVector(catalog.AttrAborted, abortVec)
 	} else {
+		abortVec.Close()
 		batWithVer.Deletes = abortedMap
 		batWithVer.Compact()
 	}

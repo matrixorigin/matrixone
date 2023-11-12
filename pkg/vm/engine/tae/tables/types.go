@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -66,7 +67,7 @@ type NodeT interface {
 
 	GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter) (row uint32, err error)
 	CollectAppendInRange(
-		start, end types.TS, withAborted bool,
+		start, end types.TS, withAborted bool, mp *mpool.MPool,
 	) (batWithVer *containers.BatchWithVersion, err error)
 }
 

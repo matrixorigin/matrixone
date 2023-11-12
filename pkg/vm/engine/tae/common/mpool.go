@@ -27,6 +27,7 @@ var MutMemAllocator *mpool.MPool
 var SmallAllocator *mpool.MPool
 var LogtailAllocator *mpool.MPool
 var CheckpointAllocator *mpool.MPool
+var MergeAllocator *mpool.MPool
 var DebugAllocator *mpool.MPool
 
 // init with zero fixed pool, for test.
@@ -62,6 +63,11 @@ func InitTAEMPool() {
 
 		mpool.DeleteMPool(CheckpointAllocator)
 		if CheckpointAllocator, err = mpool.NewMPool("tae_checkpoint", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(MergeAllocator)
+		if MergeAllocator, err = mpool.NewMPool("tae_merge", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 

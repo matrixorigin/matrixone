@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -222,7 +223,7 @@ func (node *persistedNode) GetRowByFilter(
 }
 
 func (node *persistedNode) CollectAppendInRange(
-	start, end types.TS, withAborted bool,
+	start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (bat *containers.BatchWithVersion, err error) {
 	// logtail should have sent metaloc
 	return nil, nil
