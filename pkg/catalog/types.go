@@ -38,10 +38,14 @@ const (
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
-	IndexTableIndexColName   = "__mo_index_idx_col"
-	IndexTablePrimaryColName = "__mo_index_pri_col"
-	ExternalFilePath         = "__mo_filepath"
-	IndexTableNamePrefix     = "__mo_index_unique__"
+	IndexTableIndexColName        = "__mo_index_idx_col"
+	IndexTablePrimaryColName      = "__mo_index_pri_col"
+	ExternalFilePath              = "__mo_filepath"
+	UniqueIndexSuffix             = "unique_"
+	SecondaryIndexSuffix          = "secondary_"
+	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
+	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
+	IndexTableNamePrefix          = PrefixIndexTableName
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 )
