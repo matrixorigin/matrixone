@@ -315,7 +315,6 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 			collector,
 			tae.Runtime.Fs.Service,
 			checkpointMetaInfoFactory(entries),
-			common.CheckpointAllocator,
 		)
 
 		data := collector.OrphanData()
@@ -345,7 +344,6 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 			collector,
 			tae.Runtime.Fs.Service,
 			checkpointMetaInfoFactory(entries),
-			common.CheckpointAllocator,
 		)
 
 		data := collector.OrphanData()

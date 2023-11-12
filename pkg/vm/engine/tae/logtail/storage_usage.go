@@ -28,7 +28,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type CkpLocVers struct {
@@ -130,7 +129,7 @@ func FillUsageBatOfIncremental(c *catalog.Catalog, collector *IncrementalCollect
 	start := time.Now()
 	defer v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 
-	loaded := traverseCatalog(c, collector.BaseCollector, fs, common.CheckpointAllocator)
+	loaded := traverseCatalog(c, collector.BaseCollector, fs, collector.Allocator())
 	logutil.Info(fmt.Sprintf("[storage usage]: incremental checkpoint loaded %d object meta", loaded))
 
 	v2.TaskICkpLoadObjectCounter.Add(float64(loaded))
@@ -247,7 +246,6 @@ func FillUsageBatOfGlobal(
 	collector *GlobalCollector,
 	fs fileservice.FileService,
 	locVers []*CkpLocVers,
-	mp *mpool.MPool,
 ) {
 	start := time.Now()
 	defer v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
@@ -272,7 +270,7 @@ func FillUsageBatOfGlobal(
 					combine[UsageAccID], combine[UsageDBID], combine[UsageTblID], objId, combine[UsageSize],
 				},
 				destVecs,
-				mp,
+				collector.Allocator(),
 			)
 		}
 		return
@@ -281,7 +279,7 @@ func FillUsageBatOfGlobal(
 	// cannot collect data from previous checkpoint, so
 	// we traverse the catalog to get the full datasets of storage usage.
 	// this code below should only execute exactly once when upgrade from old TN version
-	loaded := traverseCatalog(c, collector.BaseCollector, fs, mp)
+	loaded := traverseCatalog(c, collector.BaseCollector, fs, collector.Allocator())
 	logutil.Info(fmt.Sprintf("[storage usage]: global checkpoint loaded %d object meta", loaded))
 
 	v2.TaskGCkpLoadObjectCounter.Add(float64(loaded))

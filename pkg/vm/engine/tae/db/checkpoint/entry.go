@@ -200,7 +200,6 @@ func (e *CheckpointEntry) Read(
 		e.tnLocation,
 		reader,
 		fs.Service,
-		data.Allocator(),
 	); err != nil {
 		return
 	}
