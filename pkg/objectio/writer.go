@@ -131,15 +131,14 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	fileName := name.String()
 	object := NewObject(fileName, fs)
 	writer := &objectWriterV1{
-		schemaVer:      schemaVersion,
-		seqnums:        NewSeqnums(seqnums),
-		fileName:       fileName,
-		name:           name,
-		object:         object,
-		buffer:         NewObjectBuffer(fileName),
-		blocks:         make([][]blockData, 2),
-		lastId:         0,
-		objDescription: newObjectDescription(),
+		schemaVer: schemaVersion,
+		seqnums:   NewSeqnums(seqnums),
+		fileName:  fileName,
+		name:      name,
+		object:    object,
+		buffer:    NewObjectBuffer(fileName),
+		blocks:    make([][]blockData, 2),
+		lastId:    0,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
