@@ -33,11 +33,10 @@ var CompactPrimaryCol = compactPrimaryCol
 
 func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	var name string
-	name = catalog.PrefixIndexTableName
 	if unique {
-		name += "unique_"
+		name = catalog.UniqueIndexTableNamePrefix
 	} else {
-		name += "secondary_"
+		name = catalog.SecondaryIndexTableNamePrefix
 	}
 	id, err := uuid.NewUUID()
 	if err != nil {
