@@ -406,7 +406,7 @@ func tnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.F
 		location,
 		reader,
 		fs,
-		common.DefaultAllocator,
+		common.CheckpointAllocator,
 	)
 	assert.NoError(t, err)
 	return data
@@ -427,7 +427,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 		"tbl",
 		0,
 		"db",
-		common.DefaultAllocator,
+		common.CheckpointAllocator,
 		fs,
 	)
 	assert.NoError(t, err)

@@ -17,7 +17,10 @@ package logtail
 import (
 	"context"
 	"fmt"
+	"time"
+
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -26,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"time"
 )
 
 type CkpLocVers struct {
@@ -64,12 +66,12 @@ func getStorageUsageBatVectors(data *CheckpointData) []*vector.Vector {
 
 // the order:
 // [account_id_vec, db_id_vec, tbl_id_vec, obj_id_vec, size_vec]
-func appendToStorageUsageVectors(data UsageData, vecs []*vector.Vector) {
-	vector.AppendFixed(vecs[UsageAccID], data[UsageAccID].(uint64), false, common.DefaultAllocator)
-	vector.AppendFixed(vecs[UsageDBID], data[UsageDBID].(uint64), false, common.DefaultAllocator)
-	vector.AppendFixed(vecs[UsageTblID], data[UsageTblID].(uint64), false, common.DefaultAllocator)
-	vector.AppendFixed(vecs[UsageObjID], data[UsageObjID].(types.Uuid), false, common.DefaultAllocator)
-	vector.AppendFixed(vecs[UsageSize], data[UsageSize].(uint64), false, common.DefaultAllocator)
+func appendToStorageUsageVectors(data UsageData, vecs []*vector.Vector, mp *mpool.MPool) {
+	vector.AppendFixed(vecs[UsageAccID], data[UsageAccID].(uint64), false, mp)
+	vector.AppendFixed(vecs[UsageDBID], data[UsageDBID].(uint64), false, mp)
+	vector.AppendFixed(vecs[UsageTblID], data[UsageTblID].(uint64), false, mp)
+	vector.AppendFixed(vecs[UsageObjID], data[UsageObjID].(types.Uuid), false, mp)
+	vector.AppendFixed(vecs[UsageSize], data[UsageSize].(uint64), false, mp)
 }
 
 func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
@@ -85,14 +87,18 @@ func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
 	return true
 }
 
-func fillUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
+func fillUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry, mp *mpool.MPool) {
 	vecs := getStorageUsageBatVectors(collector.data)
+	accId := uint64(entry.GetTable().GetDB().GetTenantID())
+	dbId := entry.GetTable().GetDB().GetID()
+	tblId := entry.GetTable().GetID()
+	segId := entry.ID
 	appendTo := func(size uint64) {
-		accId := uint64(entry.GetTable().GetDB().GetTenantID())
-		dbId := entry.GetTable().GetDB().GetID()
-		tblId := entry.GetTable().GetID()
-		segId := entry.ID
-		appendToStorageUsageVectors(UsageData{accId, dbId, tblId, segId, size}, vecs)
+		appendToStorageUsageVectors(
+			UsageData{accId, dbId, tblId, segId, size},
+			vecs,
+			mp,
+		)
 	}
 
 	if err := entry.LoadObjectInfo(); err != nil {
@@ -124,7 +130,7 @@ func FillUsageBatOfIncremental(c *catalog.Catalog, collector *IncrementalCollect
 	start := time.Now()
 	defer v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 
-	loaded := traverseCatalog(c, collector.BaseCollector, fs)
+	loaded := traverseCatalog(c, collector.BaseCollector, fs, common.CheckpointAllocator)
 	logutil.Info(fmt.Sprintf("[storage usage]: incremental checkpoint loaded %d object meta", loaded))
 
 	v2.TaskICkpLoadObjectCounter.Add(float64(loaded))
@@ -186,7 +192,12 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 	return tmpRest
 }
 
-func traverseCatalog(c *catalog.Catalog, collector *BaseCollector, fs fileservice.FileService) (loaded int) {
+func traverseCatalog(
+	c *catalog.Catalog,
+	collector *BaseCollector,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (loaded int) {
 	processor := new(catalog.LoopProcessor)
 	var segs []*catalog.SegmentEntry
 
@@ -215,14 +226,14 @@ func traverseCatalog(c *catalog.Catalog, collector *BaseCollector, fs fileservic
 
 		// deal with the previously prefetched batch
 		for idx%batchCnt == 0 && i < idx {
-			fillUsageBat(collector, segs[i])
+			fillUsageBat(collector, segs[i], mp)
 			i++
 		}
 	}
 
 	// deal with the left segments
 	for ; i < len(segs); i++ {
-		fillUsageBat(collector, segs[i])
+		fillUsageBat(collector, segs[i], mp)
 	}
 
 	return loaded
@@ -231,8 +242,13 @@ func traverseCatalog(c *catalog.Catalog, collector *BaseCollector, fs fileservic
 // FillUsageBatOfGlobal recording storage usage info into global
 // checkpoint by reading all increment checkpoints before this moment
 // [account_id, db_id, table_id, table_total_size_in_bytes]
-func FillUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
-	fs fileservice.FileService, locVers []*CkpLocVers) {
+func FillUsageBatOfGlobal(
+	c *catalog.Catalog,
+	collector *GlobalCollector,
+	fs fileservice.FileService,
+	locVers []*CkpLocVers,
+	mp *mpool.MPool,
+) {
 	start := time.Now()
 	defer v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 
@@ -251,8 +267,13 @@ func FillUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
 				continue
 			}
 
-			appendToStorageUsageVectors(UsageData{
-				combine[UsageAccID], combine[UsageDBID], combine[UsageTblID], objId, combine[UsageSize]}, destVecs)
+			appendToStorageUsageVectors(
+				UsageData{
+					combine[UsageAccID], combine[UsageDBID], combine[UsageTblID], objId, combine[UsageSize],
+				},
+				destVecs,
+				mp,
+			)
 		}
 		return
 	}
@@ -260,9 +281,8 @@ func FillUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
 	// cannot collect data from previous checkpoint, so
 	// we traverse the catalog to get the full datasets of storage usage.
 	// this code below should only execute exactly once when upgrade from old TN version
-	loaded := traverseCatalog(c, collector.BaseCollector, fs)
+	loaded := traverseCatalog(c, collector.BaseCollector, fs, mp)
 	logutil.Info(fmt.Sprintf("[storage usage]: global checkpoint loaded %d object meta", loaded))
 
 	v2.TaskGCkpLoadObjectCounter.Add(float64(loaded))
-
 }

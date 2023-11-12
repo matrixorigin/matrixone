@@ -82,7 +82,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	if err != nil {
 		return
 	}
-	bats, err := reader.LoadAllColumns(ctx, nil, common.DefaultAllocator)
+	bats, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
 	if err != nil {
 		return
 	}

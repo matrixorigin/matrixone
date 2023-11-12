@@ -16,6 +16,7 @@ package containers
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,6 +54,12 @@ func ToTNBatch(cnBat *batch.Batch) *Batch {
 		tnBat.AddVector(cnBat.Attrs[i], v)
 	}
 	return tnBat
+}
+
+func ToTNVector2(v *movec.Vector, mp *mpool.MPool) Vector {
+	vec := MakeVector(*v.GetType(), Options{Allocator: mp})
+	vec.setDownstreamVector(v)
+	return vec
 }
 
 func ToTNVector(v *movec.Vector) Vector {

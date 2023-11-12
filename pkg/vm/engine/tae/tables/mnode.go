@@ -200,11 +200,12 @@ func (node *memoryNode) GetColumnDataWindow(
 }
 
 func (node *memoryNode) GetDataWindowOnWriteSchema(
-	from, to uint32) (bat *containers.BatchWithVersion, err error) {
+	from, to uint32, mp *mpool.MPool,
+) (bat *containers.BatchWithVersion, err error) {
 	if node.data == nil {
 		schema := node.writeSchema
 		opts := containers.Options{
-			Allocator: common.DefaultAllocator,
+			Allocator: mp,
 		}
 		inner := containers.BuildBatch(
 			schema.AllNames(), schema.AllTypes(), opts,
@@ -295,7 +296,7 @@ func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		return
 	}
 	err = node.mustData().Vecs[node.writeSchema.PhyAddrKey.Idx].ExtendVec(col)
-	col.Free(common.DefaultAllocator)
+	col.Free(common.MutMemAllocator)
 	return
 }
 
@@ -474,7 +475,7 @@ func (node *memoryNode) CollectAppendInRange(
 	node.block.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
 		node.block.mvcc.CollectAppendLocked(start, end, mp)
-	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow)
+	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow, mp)
 	if err != nil {
 		node.block.RUnlock()
 		return nil, err
