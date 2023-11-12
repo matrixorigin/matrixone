@@ -14,7 +14,9 @@
 
 package objectio
 
-import "github.com/matrixorigin/matrixone/pkg/fileservice"
+import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+)
 
 const Magic = 0xFFFFFFFF
 const Version = 1
@@ -37,4 +39,41 @@ func NewObject(name string, fs fileservice.FileService) *Object {
 
 func (o *Object) GetFs() fileservice.FileService {
 	return o.fs
+}
+
+type ObjectDescriber interface {
+	DescribeObject() (*ObjectStats, error)
+}
+
+type ObjectStats struct {
+	zoneMaps map[uint16]ZoneMap
+	blkCnt   int
+	extent   Extent
+	name     ObjectName
+}
+
+func newObjectStats() *ObjectStats {
+	description := new(ObjectStats)
+	description.zoneMaps = make(map[uint16]ZoneMap)
+	return description
+}
+
+func (des *ObjectStats) GetOriginSize() uint32 {
+	return des.extent.OriginSize()
+}
+
+func (des *ObjectStats) GetCompSize() uint32 {
+	return des.extent.Length()
+}
+
+func (des *ObjectStats) GetObjLoc() Location {
+	return BuildLocation(des.name, des.extent, 0, 0)
+}
+
+func (des *ObjectStats) GetBlkCnt() int {
+	return des.blkCnt
+}
+
+func (des *ObjectStats) GetZoneMaps() map[uint16]ZoneMap {
+	return des.zoneMaps
 }

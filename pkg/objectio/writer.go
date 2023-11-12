@@ -45,8 +45,6 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-
-	objDescription *ObjectDescription
 }
 
 type blockData struct {
@@ -54,38 +52,6 @@ type blockData struct {
 	seqnums     *Seqnums
 	data        [][]byte
 	bloomFilter []byte
-}
-
-type ObjectDescription struct {
-	zoneMaps map[uint16]ZoneMap
-	blkCnt   int
-	location Location
-}
-
-func newObjectDescription() *ObjectDescription {
-	description := new(ObjectDescription)
-	description.zoneMaps = make(map[uint16]ZoneMap)
-	return description
-}
-
-func (des *ObjectDescription) GetOriginSize() uint32 {
-	return des.location.Extent().OriginSize()
-}
-
-func (des *ObjectDescription) GetCompSize() uint32 {
-	return des.location.Extent().Length()
-}
-
-func (des *ObjectDescription) GetObjLoc() Location {
-	return des.location
-}
-
-func (des *ObjectDescription) GetBlkCnt() int {
-	return des.blkCnt
-}
-
-func (des *ObjectDescription) GetZoneMaps() map[uint16]ZoneMap {
-	return des.zoneMaps
 }
 
 type WriterType int8
@@ -131,27 +97,31 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	fileName := name.String()
 	object := NewObject(fileName, fs)
 	writer := &objectWriterV1{
-		schemaVer:      schemaVersion,
-		seqnums:        NewSeqnums(seqnums),
-		fileName:       fileName,
-		name:           name,
-		object:         object,
-		buffer:         NewObjectBuffer(fileName),
-		blocks:         make([][]blockData, 2),
-		lastId:         0,
-		objDescription: newObjectDescription(),
+		schemaVer: schemaVersion,
+		seqnums:   NewSeqnums(seqnums),
+		fileName:  fileName,
+		name:      name,
+		object:    object,
+		buffer:    NewObjectBuffer(fileName),
+		blocks:    make([][]blockData, 2),
+		lastId:    0,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
 	return writer, nil
 }
 
-func (w *objectWriterV1) ConstructObjDescription(typ DataMetaType) {
-	w.objDescription.blkCnt = len(w.blocks[typ])
-	w.objDescription.location = BuildLocation(w.name, w.blocks[typ][0].meta.GetExtent(), 0, 0)
-	for i := uint16(0); i <= w.GetMaxSeqnum(); i++ {
-		w.objDescription.zoneMaps[i] = w.colmeta[i].ZoneMap()
+func (w *objectWriterV1) DescribeObject() (*ObjectStats, error) {
+	objStats := newObjectStats()
+	objStats.extent = Header(w.buffer.vector.Entries[0].Data).Extent()
+	objStats.blkCnt = len(w.blocks)
+	objStats.name = w.name
+
+	for idx := range w.colmeta {
+		objStats.zoneMaps[uint16(idx)] = w.colmeta[idx].ZoneMap()
 	}
+
+	return objStats, nil
 }
 
 func (w *objectWriterV1) GetSeqnums() []uint16 {
@@ -504,7 +474,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			blockObjects = append(blockObjects, w.blocks[i][j].meta)
 		}
 	}
-	err = w.Sync(ctx, items...)
+	_, err = w.Sync(ctx, items...)
 	if err != nil {
 		return nil, err
 	}
@@ -517,18 +487,23 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 }
 
 // Sync is for testing
-func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error {
+func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) (*ObjectStats, error) {
 	w.buffer.SetDataOptions(items...)
 	// if a compact task is rollbacked, it may leave a written file in fs
 	// here we just delete it and write again
 	err := w.object.fs.Write(ctx, w.buffer.GetData())
 	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
-			return err
+			return nil, err
 		}
-		return w.object.fs.Write(ctx, w.buffer.GetData())
+		err = w.object.fs.Write(ctx, w.buffer.GetData())
 	}
-	return err
+
+	if err != nil {
+		return nil, err
+	}
+
+	return w.DescribeObject()
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
