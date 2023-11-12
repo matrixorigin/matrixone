@@ -132,7 +132,11 @@ func (node *DeleteNode) GetID() *common.ID {
 func (node *DeleteNode) SetDeletes(mask *roaring.Bitmap) {
 	node.mask = mask
 }
-
+func (node *DeleteNode) Close() {
+	for _, vec := range node.rowid2PK {
+		vec.Close()
+	}
+}
 func (node *DeleteNode) IsMerged() bool { return node.nt == NT_Merge }
 func (node *DeleteNode) AttachTo(chain *DeleteChain) {
 	node.chain.Store(chain)

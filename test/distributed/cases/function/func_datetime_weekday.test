@@ -1,6 +1,7 @@
 #SELECT, 嵌套
 
 SELECT weekday(date('2007-02-03 03:42:24'));
+SELECT weekday(date('2023-11-08 13:42'));
 
 
 #NULL

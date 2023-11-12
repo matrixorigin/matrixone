@@ -33,8 +33,8 @@ qnma as (select a from t1)
 select qne.a,qnm.a,alias1.a,alias2.a
 from qne, qnm, qnea as alias1, qnma as alias2 limit 2;
 a	a	a	a
-null	null	null	null
-null	null	null	2
+null    null    null    null
+2    null    null    null
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4);

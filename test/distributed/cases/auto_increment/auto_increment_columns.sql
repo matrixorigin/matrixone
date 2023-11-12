@@ -317,7 +317,7 @@ select * from t9 order by c;
 drop table t8;
 drop table t9;
 
--- test truncate tabel,auto_increment columns whether it will be cleared.
+-- test truncate table,auto_increment columns whether it will be cleared.
 drop table if exists t10;
 create table t10(
 a int auto_increment primary key,

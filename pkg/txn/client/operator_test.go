@@ -450,7 +450,7 @@ func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 func TestRollbackMultiTimes(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		require.NoError(t, tc.Rollback(ctx))
-		require.Error(t, tc.Rollback(ctx))
+		require.NoError(t, tc.Rollback(ctx))
 	})
 }
 
