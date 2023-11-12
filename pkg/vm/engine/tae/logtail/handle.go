@@ -890,7 +890,7 @@ func LoadCheckpointEntries(
 func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32) ([]objectio.Location, *CheckpointData, error) {
 	locations := make([]objectio.Location, 0)
 	locations = append(locations, location)
-	data := NewCheckpointData()
+	data := NewCheckpointData(common.CheckpointAllocator)
 	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, nil, err

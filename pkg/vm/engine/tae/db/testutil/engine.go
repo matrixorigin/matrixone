@@ -399,7 +399,7 @@ func writeIncrementalCheckpoint(
 func tnReadCheckpoint(t *testing.T, location objectio.Location, fs fileservice.FileService) *logtail.CheckpointData {
 	reader, err := blockio.NewObjectReader(fs, location)
 	assert.NoError(t, err)
-	data := logtail.NewCheckpointData()
+	data := logtail.NewCheckpointData(common.CheckpointAllocator)
 	err = data.ReadFrom(
 		context.Background(),
 		logtail.CheckpointCurrentVersion,

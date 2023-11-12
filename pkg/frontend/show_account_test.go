@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/assert"
@@ -160,15 +161,15 @@ func Test_embeddingSizeToBatch(t *testing.T) {
 
 func mockCheckpointData(t *testing.T, accIds []uint64, sizes []uint64) *logtail.CheckpointData {
 	var err error
-	ckpData := logtail.NewCheckpointData()
+	ckpData := logtail.NewCheckpointData(common.CheckpointAllocator)
 	storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
 
 	accVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector()
 	sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector()
 
 	for idx := range accIds {
-		vector.AppendFixed(accVec, accIds[idx], false, storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetAllocator())
-		vector.AppendFixed(sizeVec, sizes[idx], false, storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetAllocator())
+		vector.AppendFixed(accVec, accIds[idx], false, ckpData.Allocator())
+		vector.AppendFixed(sizeVec, sizes[idx], false, ckpData.Allocator())
 	}
 
 	return ckpData

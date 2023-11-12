@@ -576,14 +576,16 @@ type CheckpointData struct {
 	meta      map[uint64]*CheckpointMeta
 	locations map[string]objectio.Location
 	bats      [MaxIDX]*containers.Batch
+	allocator *mpool.MPool
 }
 
-func NewCheckpointData() *CheckpointData {
+func NewCheckpointData(mp *mpool.MPool) *CheckpointData {
 	data := &CheckpointData{
-		meta: make(map[uint64]*CheckpointMeta),
+		meta:      make(map[uint64]*CheckpointMeta),
+		allocator: mp,
 	}
 	for idx, schema := range checkpointDataSchemas_Curr {
-		data.bats[idx] = makeRespBatchFromSchema(schema, common.CheckpointAllocator)
+		data.bats[idx] = makeRespBatchFromSchema(schema, mp)
 	}
 	return data
 }
@@ -605,7 +607,7 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 	collector := &IncrementalCollector{
 		BaseCollector: &BaseCollector{
 			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(),
+			data:          NewCheckpointData(common.CheckpointAllocator),
 			start:         start,
 			end:           end,
 			isGlobal:      false,
@@ -639,7 +641,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 	collector := &GlobalCollector{
 		BaseCollector: &BaseCollector{
 			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(),
+			data:          NewCheckpointData(common.CheckpointAllocator),
 			end:           end,
 			isGlobal:      true,
 		},
@@ -1369,6 +1371,8 @@ func windowCNBatch(bat *batch.Batch, start, end uint64) {
 	}
 }
 
+func (data *CheckpointData) Allocator() *mpool.MPool { return data.allocator }
+
 func (data *CheckpointData) fillInMetaBatchWithLocation(location objectio.Location) {
 	length := data.bats[MetaIDX].Vecs[2].Length()
 	insVec := containers.MakeVector(types.T_varchar.ToType(), containers.Options{Allocator: common.CheckpointAllocator})
@@ -1976,9 +1980,9 @@ func (data *CheckpointData) ReadFrom(
 	location objectio.Location,
 	reader *blockio.BlockReader,
 	fs fileservice.FileService,
-	m *mpool.MPool,
+	mp *mpool.MPool,
 ) (err error) {
-	err = data.readMetaBatch(ctx, version, reader, m)
+	err = data.readMetaBatch(ctx, version, reader, mp)
 	if err != nil {
 		return
 	}
@@ -1996,8 +2000,9 @@ func (data *CheckpointData) ReadFrom(
 // LoadSpecifiedCkpBatch loads a specified checkpoint data batch
 func LoadSpecifiedCkpBatch(
 	ctx context.Context, location objectio.Location,
-	fs fileservice.FileService, version uint32, batchIdx uint16) (data *CheckpointData, err error) {
-	data = NewCheckpointData()
+	fs fileservice.FileService, version uint32, batchIdx uint16,
+) (data *CheckpointData, err error) {
+	data = NewCheckpointData(common.CheckpointAllocator)
 	defer func() {
 		if err != nil {
 			data.Close()
@@ -2249,6 +2254,7 @@ func (data *CheckpointData) Close() {
 			data.bats[idx] = nil
 		}
 	}
+	data.allocator = nil
 }
 
 func (data *CheckpointData) CloseWhenLoadFromCache(version uint32) {

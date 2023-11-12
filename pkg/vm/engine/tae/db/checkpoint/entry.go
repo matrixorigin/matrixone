@@ -200,7 +200,7 @@ func (e *CheckpointEntry) Read(
 		e.tnLocation,
 		reader,
 		fs.Service,
-		common.CheckpointAllocator,
+		data.Allocator(),
 	); err != nil {
 		return
 	}
@@ -211,7 +211,7 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	data = logtail.NewCheckpointData()
+	data = logtail.NewCheckpointData(common.CheckpointAllocator)
 	if err = data.PrefetchMeta(
 		ctx,
 		e.version,
