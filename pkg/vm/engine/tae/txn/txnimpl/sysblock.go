@@ -223,7 +223,7 @@ func (blk *txnSysBlock) GetDeltaPersistedTS() types.TS {
 
 func (blk *txnSysBlock) getColumnTableVec(ts types.TS, colIdx int) (colData containers.Vector, err error) {
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
-	colData = containers.MakeVector(col.Type)
+	colData = makeWorkspaceVector(col.Type)
 	tableFn := func(table *catalog.TableEntry) error {
 		table.RLock()
 		node := table.GetVisibleNode(blk.Txn)
@@ -288,12 +288,12 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 	case pkgcatalog.SystemRelAttr_CatalogVersion:
 		colData.Append(schema.CatalogVersion, false)
 	case catalog.AccountIDDbNameTblName:
-		packer := types.NewPacker(common.DefaultAllocator)
+		packer := types.NewPacker(common.WorkspaceAllocator)
 		packer.EncodeUint32(schema.AcInfo.TenantID)
 		packer.EncodeStringType([]byte(table.GetDB().GetName()))
 		packer.EncodeStringType([]byte(schema.Name))
 		colData.Append(packer.Bytes(), false)
-		packer.Reset()
+		packer.FreeMem()
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
@@ -301,7 +301,7 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 
 func (blk *txnSysBlock) getRelTableVec(ts types.TS, colIdx int) (colData containers.Vector, err error) {
 	colDef := catalog.SystemTableSchema.ColDefs[colIdx]
-	colData = containers.MakeVector(colDef.Type)
+	colData = makeWorkspaceVector(colDef.Type)
 	tableFn := func(table *catalog.TableEntry) error {
 		table.RLock()
 		node := table.GetVisibleNode(blk.Txn)
@@ -347,18 +347,18 @@ func FillDBRow(db *catalog.DBEntry, _ *catalog.MVCCNode[*catalog.EmptyMVCCNode],
 	case pkgcatalog.SystemDBAttr_Type:
 		colData.Append([]byte(db.GetDatType()), false)
 	case catalog.AccountIDDbName:
-		packer := types.NewPacker(common.DefaultAllocator)
+		packer := types.NewPacker(common.WorkspaceAllocator)
 		packer.EncodeUint32(db.GetTenantID())
 		packer.EncodeStringType([]byte(db.GetName()))
 		colData.Append(packer.Bytes(), false)
-		packer.Reset()
+		packer.FreeMem()
 	default:
 		panic("unexpected colname. if add new catalog def, fill it in this switch")
 	}
 }
 func (blk *txnSysBlock) getDBTableVec(colIdx int) (colData containers.Vector, err error) {
 	colDef := catalog.SystemDBSchema.ColDefs[colIdx]
-	colData = containers.MakeVector(colDef.Type)
+	colData = makeWorkspaceVector(colDef.Type)
 	fn := func(db *catalog.DBEntry) error {
 		FillDBRow(db, nil, colDef.Name, colData)
 		return nil

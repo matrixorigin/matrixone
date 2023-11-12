@@ -221,7 +221,8 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 	}
 	schema := h.table.GetLocalSchema()
 	pkDef := schema.GetPrimaryKey()
-	pkVec := containers.MakeVector(pkDef.Type)
+	pkVec := makeWorkspaceVector(pkDef.Type)
+	defer pkVec.Close()
 	pkVal, _, err := h.table.GetValue(ctx, id, row, uint16(pkDef.Idx))
 	if err != nil {
 		return err
@@ -244,7 +245,7 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 				return err
 			}
 		}
-		vec := containers.MakeVector(def.Type)
+		vec := makeWorkspaceVector(def.Type)
 		vec.Append(colVal, colValIsNull)
 		bat.AddVector(def.Name, vec)
 	}
@@ -294,7 +295,8 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 	id.BlockID = bid
 	schema := h.table.GetLocalSchema()
 	pkDef := schema.GetPrimaryKey()
-	pkVec := containers.MakeVector(pkDef.Type)
+	pkVec := makeWorkspaceVector(pkDef.Type)
+	defer pkVec.Close()
 	val, _, err := h.table.GetValue(h.table.store.ctx, id, row, uint16(pkDef.Idx))
 	if err != nil {
 		return err
@@ -306,7 +308,8 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
 	schema := h.table.GetLocalSchema()
 	pkDef := schema.GetPrimaryKey()
-	pkVec := containers.MakeVector(pkDef.Type)
+	pkVec := h.table.store.rt.VectorPool.Small.GetVector(&pkDef.Type)
+	defer pkVec.Close()
 	for row := start; row <= end; row++ {
 		pkVal, _, err := h.table.GetValue(h.table.store.GetContext(), id, row, uint16(pkDef.Idx))
 		if err != nil {

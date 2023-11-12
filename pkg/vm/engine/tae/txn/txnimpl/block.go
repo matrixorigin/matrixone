@@ -192,7 +192,8 @@ func (blk *txnBlock) getDBID() uint64 {
 func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
 	schema := blk.table.GetLocalSchema()
 	pkDef := schema.GetPrimaryKey()
-	pkVec := containers.MakeVector(pkDef.Type)
+	pkVec := makeWorkspaceVector(pkDef.Type)
+	defer pkVec.Close()
 	for row := start; row <= end; row++ {
 		pkVal, _, err := blk.entry.GetBlockData().GetValue(blk.table.store.GetContext(), blk.Txn, schema, int(row), pkDef.Idx)
 		if err != nil {

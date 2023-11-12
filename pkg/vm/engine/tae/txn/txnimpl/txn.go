@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -107,4 +108,8 @@ func (txn *txnImpl) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, read
 
 func (txn *txnImpl) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
 	return txn.Store.LogTxnState(sync)
+}
+
+func makeWorkspaceVector(typ types.Type) containers.Vector {
+	return containers.MakeVector(typ, containers.Options{Allocator: common.WorkspaceAllocator})
 }
