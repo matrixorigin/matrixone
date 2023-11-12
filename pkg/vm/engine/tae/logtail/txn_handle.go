@@ -202,7 +202,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	commitTSVec := batch.GetVectorByName(catalog.AttrCommitTs)
 	var pkVec containers.Vector
 	if len(batch.Vecs) == 2 {
-		pkVec = containers.MakeVector(pkDef.Type)
+		pkVec = containers.MakeVector(pkDef.Type, containers.Options{Allocator: common.LogtailAllocator})
 		batch.AddVector(pkDef.Name, pkVec)
 	} else {
 		pkVec = batch.GetVectorByName(pkDef.Name)
