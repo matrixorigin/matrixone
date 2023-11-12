@@ -25,6 +25,9 @@ import (
 var DefaultAllocator *mpool.MPool
 var MutMemAllocator *mpool.MPool
 var SmallAllocator *mpool.MPool
+var TxnHandleAllocator *mpool.MPool
+var CheckpointAllocator *mpool.MPool
+var DebugAllocator *mpool.MPool
 
 // init with zero fixed pool, for test.
 func init() {
@@ -49,6 +52,21 @@ func InitTAEMPool() {
 
 		mpool.DeleteMPool(SmallAllocator)
 		if SmallAllocator, err = mpool.NewMPool("tae_small", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(TxnHandleAllocator)
+		if TxnHandleAllocator, err = mpool.NewMPool("tae_txn_handle", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(CheckpointAllocator)
+		if CheckpointAllocator, err = mpool.NewMPool("tae_checkpoint", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(DebugAllocator)
+		if DebugAllocator, err = mpool.NewMPool("tae_debug", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 	}
