@@ -226,16 +226,16 @@ func NewCatalogLogtailRespBuilder(ctx context.Context, scope Scope, ckp string, 
 	}
 	switch scope {
 	case ScopeDatabases:
-		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema)
-		b.delBatch = makeRespBatchFromSchema(DBDelSchema)
-		b.specailDeleteBatch = makeRespBatchFromSchema(DBSpecialDeleteSchema)
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema, common.LogtailAllocator)
+		b.delBatch = makeRespBatchFromSchema(DBDelSchema, common.LogtailAllocator)
+		b.specailDeleteBatch = makeRespBatchFromSchema(DBSpecialDeleteSchema, common.LogtailAllocator)
 	case ScopeTables:
-		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema)
-		b.delBatch = makeRespBatchFromSchema(TblDelSchema)
-		b.specailDeleteBatch = makeRespBatchFromSchema(TBLSpecialDeleteSchema)
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema, common.LogtailAllocator)
+		b.delBatch = makeRespBatchFromSchema(TblDelSchema, common.LogtailAllocator)
+		b.specailDeleteBatch = makeRespBatchFromSchema(TBLSpecialDeleteSchema, common.LogtailAllocator)
 	case ScopeColumns:
-		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
-		b.delBatch = makeRespBatchFromSchema(ColumnDelSchema)
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema, common.LogtailAllocator)
+		b.delBatch = makeRespBatchFromSchema(ColumnDelSchema, common.LogtailAllocator)
 	}
 	b.DatabaseFn = b.VisitDB
 	b.TableFn = b.VisitTbl
@@ -466,10 +466,10 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.tname = tbl.GetLastestSchema().Name
 
 	b.dataInsBatches = make(map[uint32]*containers.Batch)
-	b.dataDelBatch = makeRespBatchFromSchema(DelSchema)
-	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema)
-	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema)
-	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema)
+	b.dataDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
+	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
+	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
+	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	return b
 }
 

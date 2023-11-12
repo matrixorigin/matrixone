@@ -25,7 +25,7 @@ import (
 var DefaultAllocator *mpool.MPool
 var MutMemAllocator *mpool.MPool
 var SmallAllocator *mpool.MPool
-var TxnHandleAllocator *mpool.MPool
+var LogtailAllocator *mpool.MPool
 var CheckpointAllocator *mpool.MPool
 var DebugAllocator *mpool.MPool
 
@@ -55,8 +55,8 @@ func InitTAEMPool() {
 			panic(err)
 		}
 
-		mpool.DeleteMPool(TxnHandleAllocator)
-		if TxnHandleAllocator, err = mpool.NewMPool("tae_txn_handle", 0, mpool.NoFixed); err != nil {
+		mpool.DeleteMPool(LogtailAllocator)
+		if LogtailAllocator, err = mpool.NewMPool("tae_logtail", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 
