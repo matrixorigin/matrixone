@@ -16,6 +16,10 @@ package test
 
 import (
 	"context"
+	"math/rand"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/require"
-	"math/rand"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -309,7 +310,13 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 		deletes := collector.GetDeletes()
 		deletes[logtail.UsageTblID][rels[0].ID()] = struct{}{}
 
-		logtail.FillUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
+		logtail.FillUsageBatOfGlobal(
+			tae.Catalog,
+			collector,
+			tae.Runtime.Fs.Service,
+			checkpointMetaInfoFactory(entries),
+			common.CheckpointAllocator,
+		)
 
 		data := collector.OrphanData()
 		defer data.Close()
@@ -333,7 +340,13 @@ func Test_FillSEGStorageUsageBatOfGlobal(t *testing.T) {
 			deletes[logtail.UsageTblID][rels[i].ID()] = struct{}{}
 		}
 
-		logtail.FillUsageBatOfGlobal(tae.Catalog, collector, tae.Runtime.Fs.Service, checkpointMetaInfoFactory(entries))
+		logtail.FillUsageBatOfGlobal(
+			tae.Catalog,
+			collector,
+			tae.Runtime.Fs.Service,
+			checkpointMetaInfoFactory(entries),
+			common.CheckpointAllocator,
+		)
 
 		data := collector.OrphanData()
 		defer data.Close()
