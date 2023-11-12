@@ -16,6 +16,10 @@ package disttae
 
 import (
 	"context"
+	"strconv"
+	"time"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,9 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
-	"time"
-	"unsafe"
 )
 
 const (
@@ -150,32 +151,13 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		rows += int64(meta.BlockHeader().Rows())
 		return nil
 	}
-	if err = tbl.ForeachDataObject(partition, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(partition, onObjFn); err != nil {
 		return 0, err
 	}
 	return rows, nil
 }
 
-//func (tbl *txnTable) ForeachBlock(
-//	state *logtailreplay.PartitionState,
-//	fn func(block logtailreplay.BlockEntry) error,
-//) (err error) {
-//	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
-//	iter, err := state.NewBlocksIter(ts)
-//	if err != nil {
-//		return err
-//	}
-//	for iter.Next() {
-//		entry := iter.Entry()
-//		if err = fn(entry); err != nil {
-//			break
-//		}
-//	}
-//	iter.Close()
-//	return
-//}
-
-func (tbl *txnTable) ForeachDataObject(
+func (tbl *txnTable) ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
 	fn func(obj logtailreplay.ObjectEntry) error,
 ) (err error) {
@@ -253,7 +235,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return nil, nil, err
 	}
 
@@ -376,7 +358,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		}
 		return nil
 	}
-	if err = tbl.ForeachDataObject(part, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
 		return 0, err
 	}
 	return ret, nil
@@ -451,9 +433,18 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil
 	}
 
-	if err = tbl.ForeachDataObject(state, onObjFn); err != nil {
+	if err = tbl.ForeachVisibleDataObject(state, onObjFn); err != nil {
 		return nil, err
 	}
+
+	var logStr string
+	for i, col := range needCols {
+		if i > 0 {
+			logStr += ", "
+		}
+		logStr += col.GetName()
+	}
+	logutil.Infof("cols in GetColumMetadataScanInfo: %s, result len: %d", logStr, len(infoList))
 
 	return infoList, nil
 }
@@ -647,10 +638,10 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return loaded, err
 		}
-		deleteBlks, createBlks := state.GetChangedBlocksBetween(types.TimestampToTS(tbl.lastTS),
+		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
-		if len(deleteBlks) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteBlks, createBlks); err != nil {
+		if len(deleteObjs) > 0 {
+			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
 				return loaded, err
 			}
 		}
@@ -834,6 +825,7 @@ func (tbl *txnTable) rangesOnePart(
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
 		location := obj.Location()
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 		if objMeta, err = objectio.FastLoadObjectMeta(
 			tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 		); err != nil {
@@ -887,7 +879,7 @@ func (tbl *txnTable) rangesOnePart(
 				SegmentID:  obj.SegmentID,
 			}
 			if obj.HasDeltaLoc {
-				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 				if ok {
 					blkInfo.DeltaLoc = deltaLoc
 					blkInfo.CommitTs = commitTs
@@ -907,7 +899,6 @@ func (tbl *txnTable) rangesOnePart(
 			*ranges = append(*ranges, catalog.EncodeBlockInfo(blkInfo))
 		}
 	}
-
 	blockio.RecordBlockSelectivity(len(*ranges)-1, len(insertedS3Blks)+int(cnt))
 	return
 }
@@ -952,6 +943,7 @@ func (tbl *txnTable) tryFastRanges(
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
 			var objMeta objectio.ObjectMeta
 			loaded++
+			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 			if objMeta, err = objectio.FastLoadObjectMeta(
 				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 			); err != nil {
@@ -1036,6 +1028,7 @@ func (tbl *txnTable) tryFastRanges(
 		var objMeta objectio.ObjectMeta
 		var bf objectio.BloomFilter
 		location := obj.Location()
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 		if objMeta, err = objectio.FastLoadObjectMeta(
 			tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
 		); err != nil {
@@ -1088,7 +1081,7 @@ func (tbl *txnTable) tryFastRanges(
 				SegmentID:  obj.SegmentID,
 			}
 			if obj.HasDeltaLoc {
-				deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
+				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
 				if ok {
 					blkInfo.DeltaLoc = deltaLoc
 					blkInfo.CommitTs = commitTs
@@ -1887,13 +1880,13 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 func (tbl *txnTable) updateDeleteInfo(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
-	deleteBlks,
-	createBlks []types.Blockid) error {
+	deleteObjs,
+	createObjs []objectio.ObjectNameShort) error {
 	var blks []catalog.BlockInfo
 
-	deleteBlksMap := make(map[types.Blockid]struct{})
-	for _, id := range deleteBlks {
-		deleteBlksMap[id] = struct{}{}
+	deleteObjsMap := make(map[objectio.ObjectNameShort]struct{})
+	for _, name := range deleteObjs {
+		deleteObjsMap[name] = struct{}{}
 	}
 
 	{
@@ -1905,8 +1898,8 @@ func (tbl *txnTable) updateDeleteInfo(
 		}
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
-		for _, id := range createBlks {
-			if obj, ok := state.GetObject(id); ok {
+		for _, name := range createObjs {
+			if obj, ok := state.GetObject(name); ok {
 				location := obj.Location()
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,
@@ -1920,31 +1913,28 @@ func (tbl *txnTable) updateDeleteInfo(
 				for i := 0; i < int(blkCnt); i++ {
 					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
 					bid := *blkMeta.GetBlockID(obj.Loc.Name())
-					if bid == id {
-						metaLoc := blockio.EncodeLocation(
-							obj.Loc.Name(),
-							obj.Loc.Extent(),
-							blkMeta.GetRows(),
-							blkMeta.GetID(),
-						)
-						blkInfo := catalog.BlockInfo{
-							BlockID:    bid,
-							EntryState: obj.EntryState,
-							Sorted:     obj.Sorted,
-							MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
-							CommitTs:   obj.CommitTS,
-							SegmentID:  obj.SegmentID,
-						}
-						if obj.HasDeltaLoc {
-							deltaLoc, commitTs, ok := state.GetBockInfo(blkInfo.BlockID)
-							if ok {
-								blkInfo.DeltaLoc = deltaLoc
-								blkInfo.CommitTs = commitTs
-							}
-						}
-						blks = append(blks, blkInfo)
-						break
+					metaLoc := blockio.EncodeLocation(
+						obj.Loc.Name(),
+						obj.Loc.Extent(),
+						blkMeta.GetRows(),
+						blkMeta.GetID(),
+					)
+					blkInfo := catalog.BlockInfo{
+						BlockID:    bid,
+						EntryState: obj.EntryState,
+						Sorted:     obj.Sorted,
+						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
+						CommitTs:   obj.CommitTS,
+						SegmentID:  obj.SegmentID,
 					}
+					if obj.HasDeltaLoc {
+						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
+						if ok {
+							blkInfo.DeltaLoc = deltaLoc
+							blkInfo.CommitTs = commitTs
+						}
+					}
+					blks = append(blks, blkInfo)
 				}
 			}
 		}
@@ -1958,7 +1948,7 @@ func (tbl *txnTable) updateDeleteInfo(
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
-				if _, ok := deleteBlksMap[blkid]; ok {
+				if _, ok := deleteObjsMap[*objectio.ShortName(&blkid)]; ok {
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err
