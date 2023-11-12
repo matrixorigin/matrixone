@@ -776,7 +776,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
-						//ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Delete(old)
 					objEntry.DeleteTime = deleteTimeVector[i]
@@ -795,7 +794,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
-						//ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(new)
 				} else if objEntry.DeleteTime.Equal(deleteTimeVector[i]) {
