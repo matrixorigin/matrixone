@@ -380,8 +380,8 @@ func MockCNDeleteInS3(
 ) (location objectio.Location, err error) {
 	pkDef := schema.GetPrimaryKey()
 	view, err := blk.GetColumnDataById(context.Background(), txn, schema, pkDef.Idx, common.DefaultAllocator)
-	pkVec := containers.MakeVector(pkDef.Type)
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType())
+	pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	blkID := &blk.GetMeta().(*catalog.BlockEntry).ID
 	if err != nil {
 		return
