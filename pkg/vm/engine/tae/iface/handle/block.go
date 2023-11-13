@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,10 +59,10 @@ type BlockReader interface {
 	String() string
 	IsUncommitted() bool
 	GetByFilter(ctx context.Context, filter *Filter) (uint32, error)
-	GetColumnDataByNames(ctx context.Context, attrs []string) (*containers.BlockView, error)
-	GetColumnDataByIds(ctx context.Context, colIdxes []int) (*containers.BlockView, error)
-	GetColumnDataByName(context.Context, string) (*containers.ColumnView, error)
-	GetColumnDataById(context.Context, int) (*containers.ColumnView, error)
+	GetColumnDataByNames(ctx context.Context, attrs []string, mp *mpool.MPool) (*containers.BlockView, error)
+	GetColumnDataByIds(ctx context.Context, colIdxes []int, mp *mpool.MPool) (*containers.BlockView, error)
+	GetColumnDataByName(context.Context, string, *mpool.MPool) (*containers.ColumnView, error)
+	GetColumnDataById(context.Context, int, *mpool.MPool) (*containers.ColumnView, error)
 	GetMeta() any
 	GetDeltaPersistedTS() types.TS
 	GetMetaLoc() objectio.Location

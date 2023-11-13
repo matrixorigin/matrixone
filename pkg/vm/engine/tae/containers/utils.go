@@ -23,12 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-func FillConstVector(length int, typ types.Type, defautV any) Vector {
+func FillConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) Vector {
 	// TODO(aptend): use default value
-	vec := movec.NewConstNull(typ, length, common.DefaultAllocator)
+	vec := movec.NewConstNull(typ, length, m)
 	return ToTNVector(vec)
 }
 

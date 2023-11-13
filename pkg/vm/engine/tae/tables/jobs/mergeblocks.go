@@ -235,7 +235,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	}
 
 	for i, block := range task.compacted {
-		if views[i], err = block.GetColumnDataByIds(ctx, Idxs); err != nil {
+		if views[i], err = block.GetColumnDataByIds(ctx, Idxs, common.MergeAllocator); err != nil {
 			return
 		}
 		defer views[i].Close()

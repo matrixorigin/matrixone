@@ -177,7 +177,7 @@ func (n *MVCCHandle) IsDeletedLocked(
 
 // it collects all deletes in the range [start, end)
 func (n *MVCCHandle) CollectDeleteLocked(
-	start, end types.TS, pkType types.Type,
+	start, end types.TS, pkType types.Type, mp *mpool.MPool,
 ) (rowIDVec, commitTSVec, pkVec, abortVec containers.Vector,
 	aborts *nulls.Bitmap, deletes []uint32, minTS types.TS,
 ) {
@@ -193,15 +193,15 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		if rowIDVec != nil {
 			rowIDVec.Close()
 		}
-		rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
+		rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), containers.Options{Allocator: mp})
 		if commitTSVec != nil {
 			commitTSVec.Close()
 		}
-		commitTSVec = containers.MakeVector(types.T_TS.ToType())
+		commitTSVec = containers.MakeVector(types.T_TS.ToType(), containers.Options{Allocator: mp})
 		if pkVec != nil {
 			pkVec.Close()
 		}
-		pkVec = containers.MakeVector(pkType)
+		pkVec = containers.MakeVector(pkType, containers.Options{Allocator: mp})
 		aborts = &nulls.Bitmap{}
 		id := n.meta.ID
 
@@ -256,7 +256,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 			break
 		}
 	}
-	abortVec = containers.NewConstFixed[bool](types.T_bool.ToType(), false, rowIDVec.Length())
+	abortVec = containers.NewConstFixed[bool](types.T_bool.ToType(), false, rowIDVec.Length(), containers.Options{Allocator: mp})
 	return
 }
 

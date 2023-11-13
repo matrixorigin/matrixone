@@ -322,7 +322,7 @@ func (task *flushTableTailTask) prepareAblkSortedData(ctx context.Context, blkid
 	}
 	blk := task.ablksHandles[blkidx]
 
-	views, err := blk.GetColumnDataByIds(ctx, idxs)
+	views, err := blk.GetColumnDataByIds(ctx, idxs, common.MergeAllocator)
 	if err != nil {
 		return
 	}

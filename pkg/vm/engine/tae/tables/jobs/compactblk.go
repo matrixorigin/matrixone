@@ -118,7 +118,7 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 	}
 	if len(idxs) > 0 {
 		var views *containers.BlockView
-		views, err = task.compacted.GetColumnDataByIds(ctx, idxs)
+		views, err = task.compacted.GetColumnDataByIds(ctx, idxs, common.MergeAllocator)
 		if err != nil {
 			return
 		}
