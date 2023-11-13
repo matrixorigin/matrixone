@@ -190,6 +190,10 @@ func (s *sPool) output() (bat *batch.Batch, err error) {
 		s.sPools[0].bat = nil
 
 		for i := 1; i < len(s.sPools); i++ {
+			if s.sPools[i].bat == nil {
+				continue
+			}
+
 			bat, err = bat.Append(s.proc.Ctx, mp, s.sPools[i].bat)
 			if err != nil {
 				s.proc.PutBatch(bat)
@@ -204,6 +208,10 @@ func (s *sPool) output() (bat *batch.Batch, err error) {
 		s.mPools[0].bat = nil
 
 		for i := 1; i < len(s.mPools); i++ {
+			if s.mPools[i].bat == nil {
+				continue
+			}
+
 			bat, err = bat.Append(s.proc.Ctx, mp, s.mPools[i].bat)
 			if err != nil {
 				s.proc.PutBatch(bat)
