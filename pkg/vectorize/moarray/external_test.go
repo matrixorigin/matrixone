@@ -55,7 +55,7 @@ func TestAdd(t *testing.T) {
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes, err := Add[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if gotRes, err := Add[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !assertx.InEpsilonF64Slice(gotRes, tt.wantF64) {
 					t.Errorf("Add() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -98,7 +98,7 @@ func TestSubtract(t *testing.T) {
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes, err := Subtract[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if gotRes, err := Subtract[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Subtract() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -131,17 +131,22 @@ func TestMultiply(t *testing.T) {
 			args:    args{leftArgF64: []float64{1, 4, 3}, rightArgF64: []float64{1, 3, 4}},
 			wantF64: []float64{1, 12, 12},
 		},
+		{
+			name:    "Test3 - float64",
+			args:    args{leftArgF64: []float64{0.66616553}, rightArgF64: []float64{0.66616553}},
+			wantF64: []float64{0.4437765133601809},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.rightArgF32 != nil {
-				if gotRes, err := Multiply[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				if gotRes, err := Multiply[float32](tt.args.leftArgF32, tt.args.rightArgF32); err != nil || !reflect.DeepEqual(tt.wantF32, gotRes) {
 					t.Errorf("Multiply() = %v, want %v", gotRes, tt.wantF32)
 				}
 			}
 			if tt.args.rightArgF64 != nil {
-				if gotRes, err := Multiply[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if gotRes, err := Multiply[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Multiply() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -208,7 +213,7 @@ func TestDivide(t *testing.T) {
 					if _, gotErr := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); gotErr == nil {
 						t.Errorf("Divide() should throw error")
 					}
-				} else if gotRes, err := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantF64) {
+				} else if gotRes, err := Divide[float64](tt.args.leftArgF64, tt.args.rightArgF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Divide() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -316,13 +321,13 @@ func TestCast(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil && tt.wantF64 != nil {
-				if gotRes, err := Cast[float32, float64](tt.args.argF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF64) {
-					t.Errorf("Cast() = %v, want %v", gotRes, tt.wantF64)
+				if gotResF64, err := Cast[float32, float64](tt.args.argF32); err != nil || !assertx.InEpsilonF64Slice(gotResF64, tt.wantF64) {
+					t.Errorf("Cast() = %v, want %v", gotResF64, tt.wantF64)
 				}
 			}
 			if tt.args.argF64 != nil && tt.wantF32 != nil {
-				if gotRes, err := Cast[float64, float32](tt.args.argF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
-					t.Errorf("Cast() = %v, want %v", gotRes, tt.wantF32)
+				if gotResF32, err := Cast[float64, float32](tt.args.argF64); err != nil || !reflect.DeepEqual(gotResF32, tt.wantF32) {
+					t.Errorf("Cast() = %v, want %v", gotResF32, tt.wantF32)
 				}
 			}
 		})
@@ -362,7 +367,7 @@ func TestAbs(t *testing.T) {
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, err := Abs[float64](tt.args.argF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantF64) {
+				if gotRes, err := Abs[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Abs() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
@@ -503,7 +508,7 @@ func TestSqrt(t *testing.T) {
 					if _, err := Sqrt[float64](tt.args.argF64); err == nil {
 						t.Errorf("Sqrt() should throw error")
 					}
-				} else if gotRes, err := Sqrt[float64](tt.args.argF64); err != nil || !reflect.DeepEqual(gotRes, tt.wantF64) {
+				} else if gotRes, err := Sqrt[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Sqrt() = %v, want %v", gotRes, tt.wantF64)
 				}
 			}
