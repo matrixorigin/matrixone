@@ -21,8 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -145,8 +143,7 @@ func newTNService(
 	fs fileservice.FileService,
 	opts tnOptions,
 ) (TNService, error) {
-	CounterSet := new(perfcounter.CounterSet)
-	svc, err := tnservice.NewService(CounterSet, cfg, rt, fs, nil, opts...)
+	svc, err := tnservice.NewService(cfg, rt, fs, nil, opts...)
 	if err != nil {
 		return nil, err
 	}
