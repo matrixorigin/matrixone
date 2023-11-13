@@ -3257,7 +3257,8 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn TxnOperator) (*plan.SubscriptionMeta, error) {
 	dbMeta, err := ses.GetParameterUnit().StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
-		return nil, err
+		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
+		return nil, moerr.NewBadDB(ctx, dbName)
 	}
 
 	if dbMeta.IsSubscription(ctx) {
