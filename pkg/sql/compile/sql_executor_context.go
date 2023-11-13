@@ -85,7 +85,11 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef) bool {
 	if err != nil {
 		return false
 	}
-	return t.Stats(c.ctx, nil, c.GetStatsCache().GetStatsInfoMap(t.GetTableID(c.ctx)))
+	s := c.GetStatsCache().GetStatsInfoMap(t.GetTableID(c.ctx), true)
+	if s == nil {
+		return false
+	}
+	return t.Stats(c.ctx, nil, s)
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
