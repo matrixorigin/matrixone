@@ -87,3 +87,10 @@ func (des *ObjectStats) GetDataSortKeyZoneMap() ZoneMap {
 func (des *ObjectStats) GetTombstoneZoneSortKeyMap() ZoneMap {
 	return des.zoneMaps[SchemaTombstone]
 }
+
+func (des *ObjectStats) GetZoneMapsBySeqNum(seqNum uint16) ZoneMap {
+	if len(des.zoneMaps) <= int(seqNum) {
+		return nil
+	}
+	return des.zoneMaps[seqNum]
+}

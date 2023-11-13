@@ -155,6 +155,9 @@ func (w *objectWriterV1) DescribeObject() (*ObjectStats, error) {
 	if len(w.blocks[SchemaData]) != 0 && len(w.colmeta) > w.pkColIdx {
 		objStats.zoneMaps[SchemaData] = w.colmeta[w.pkColIdx].ZoneMap()
 	}
+	for idx := range w.colmeta {
+		objStats.zoneMaps = append(objStats.zoneMaps, w.colmeta[idx].ZoneMap())
+	}
 
 	return objStats, nil
 }
