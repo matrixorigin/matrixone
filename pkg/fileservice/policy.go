@@ -40,3 +40,12 @@ func (c Policy) Any(policies ...Policy) bool {
 	}
 	return false
 }
+
+func (c Policy) CacheIOEntry() bool {
+	// cache IOEntry if not caching full file
+	return c.Any(SkipFullFilePreloads)
+}
+
+func (c Policy) CacheFullFile() bool {
+	return !c.Any(SkipFullFilePreloads)
+}
