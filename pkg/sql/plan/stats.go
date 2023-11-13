@@ -675,10 +675,12 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	case plan.Node_FILTER:
 		//filters which can not push down to scan nodes. hard to estimate selectivity
-		node.Stats.Outcnt = childStats.Outcnt * 0.05
-		node.Stats.Cost = childStats.Cost
+		node.Stats.Cost = childStats.Outcnt
 		node.Stats.Selectivity = 0.05
-
+		node.Stats.Outcnt = childStats.Outcnt * node.Stats.Selectivity
+		if node.Stats.Outcnt < 1 {
+			node.Stats.Outcnt = 1
+		}
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt
