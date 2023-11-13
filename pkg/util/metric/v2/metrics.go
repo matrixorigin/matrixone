@@ -38,6 +38,7 @@ func init() {
 
 func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
+	registry.MustRegister(MemTotalCrossPoolFreeCounter)
 }
 
 func initTaskMetrics() {

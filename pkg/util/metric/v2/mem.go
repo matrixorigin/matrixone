@@ -31,3 +31,13 @@ var (
 	MemTAEVectorPoolSmallGauge     = memMPoolAllocatedSizeGauge.WithLabelValues("vectorpool_default")
 	MemTAEVectorPoolTransientGauge = memMPoolAllocatedSizeGauge.WithLabelValues("vectorpool_transient")
 )
+
+var (
+	MemTotalCrossPoolFreeCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "cross_pool_free_total",
+			Help:      "Total number of cross pool free",
+		})
+)
