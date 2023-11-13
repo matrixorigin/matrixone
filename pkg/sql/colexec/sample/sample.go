@@ -97,6 +97,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if lastErr != nil {
 		return result, lastErr
 	}
+
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+	arg.buf = result.Batch
 	bat := result.Batch
 
 	ctr := arg.ctr
@@ -147,7 +153,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 	}
-	proc.PutBatch(bat)
 
 	var err error
 	result.Batch, err = ctr.samplePool.Output(false)

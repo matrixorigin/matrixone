@@ -51,6 +51,7 @@ type Argument struct {
 
 	info     *vm.OperatorInfo
 	children []vm.Operator
+	buf      *batch.Batch
 }
 
 type container struct {
@@ -124,6 +125,11 @@ func (arg *Argument) SimpleDup() *Argument {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
+		arg.buf = nil
+	}
+
 	if arg.ctr != nil {
 		if arg.ctr.intHashMap != nil {
 			arg.ctr.intHashMap.Free()
