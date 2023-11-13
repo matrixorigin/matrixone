@@ -45,12 +45,8 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-<<<<<<< HEAD
-	pkColIdx          int
 	objDescription    *ObjectDescription
-=======
 	pkColIdx          uint16
->>>>>>> 5cf8d3611 (redesign object stats)
 }
 
 type blockData struct {
