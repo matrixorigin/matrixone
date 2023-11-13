@@ -451,7 +451,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 					return
 				}
 				n += int64(sn3)
-				pk := containers.MakeVector(*typ)
+				pk := containers.MakeVector(*typ, containers.Options{Allocator: common.MutMemAllocator})
 				if sn2, err = pk.ReadFrom(r); err != nil {
 					return
 				}
