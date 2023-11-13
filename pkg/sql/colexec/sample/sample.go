@@ -33,7 +33,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	case sampleByRow:
 		buf.WriteString(fmt.Sprintf(" sample %d rows ", arg.Rows))
 	case sampleByPercent:
-		buf.WriteString(fmt.Sprintf(" sample %.2f percent ", arg.Percents*100))
+		buf.WriteString(fmt.Sprintf(" sample %.2f percent ", arg.Percents))
 	default:
 		buf.WriteString("unknown sample type")
 	}
@@ -51,7 +51,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	case sampleByRow:
 		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs))
 	case sampleByPercent:
-		return moerr.NewInternalErrorNoCtx("sample operator doesn't supported sample by percent now.")
+		arg.ctr.samplePool = newSamplePoolByPercent(proc, arg.Percents, len(arg.SampleExprs))
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown sample type %d", arg.Type))
 	}
@@ -101,7 +101,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	ctr := arg.ctr
 	if bat == nil {
-		result.Batch, lastErr = ctr.samplePool.output()
+		result.Batch, lastErr = ctr.samplePool.Output(true)
 		if result.Batch == nil {
 			// no sample data, return empty and stop.
 			result.Batch = batch.EmptyBatch
@@ -135,22 +135,23 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		} else {
 			if ctr.isMultiSample {
-				err = ctr.samplePool.sampleFromColumns(1, ctr.tempVectors, bat)
+				err = ctr.samplePool.SampleFromColumns(1, ctr.tempVectors, bat)
 				if err != nil {
 					return result, err
 				}
 			} else {
-				err = ctr.samplePool.sampleFromColumn(1, ctr.tempVectors[0], bat)
+				err = ctr.samplePool.SampleFromColumn(1, ctr.tempVectors[0], bat)
 				if err != nil {
 					return result, err
 				}
 			}
 		}
 	}
-
 	proc.PutBatch(bat)
-	result.Batch = batch.EmptyBatch
-	return result, nil
+
+	var err error
+	result.Batch, err = ctr.samplePool.Output(false)
+	return result, err
 }
 
 func (ctr *container) hashAndSample(bat *batch.Batch, ib, nb int, mp *mpool.MPool) (err error) {
@@ -188,7 +189,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch, ib, nb int, mp *mpool.MPoo
 			if err != nil {
 				return err
 			}
-			err = ctr.samplePool.batchSampleFromColumns(n, groupList, ctr.tempVectors, bat)
+			err = ctr.samplePool.BatchSampleFromColumns(n, groupList, ctr.tempVectors, bat)
 			if err != nil {
 				return err
 			}
@@ -204,7 +205,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch, ib, nb int, mp *mpool.MPoo
 			if err != nil {
 				return err
 			}
-			err = ctr.samplePool.batchSampleFromColumn(n, groupList, ctr.tempVectors[0], bat)
+			err = ctr.samplePool.BatchSampleFromColumn(n, groupList, ctr.tempVectors[0], bat)
 			if err != nil {
 				return err
 			}

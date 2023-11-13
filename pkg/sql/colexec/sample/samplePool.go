@@ -29,8 +29,15 @@ import (
 type sPool struct {
 	proc *process.Process
 
+	// sample type.
+	// same as the Type attribute of sample.Argument.
+	typ int
+
 	// capacity for each group.
 	capacity int
+
+	// 1000 means 10.00%, 1234 means 12.34%
+	percents int
 
 	// pools for each group to do sample by only one column.
 	sPools []singlePool
@@ -44,7 +51,17 @@ type sPool struct {
 func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
 	return &sPool{
 		proc:     proc,
+		typ:      sampleByRow,
 		capacity: capacity,
+		columns:  make(sampleColumnList, sampleColumnCount),
+	}
+}
+
+func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCount int) *sPool {
+	return &sPool{
+		proc:     proc,
+		typ:      sampleByPercent,
+		percents: int(per * 100),
 		columns:  make(sampleColumnList, sampleColumnCount),
 	}
 }
@@ -86,7 +103,7 @@ func (s *sPool) growMulPool(target int, colNumber int) {
 	}
 }
 
-func (s *sPool) sampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *batch.Batch) error {
+func (s *sPool) SampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *batch.Batch) error {
 	if groupIndex == 0 {
 		return nil
 	}
@@ -94,10 +111,17 @@ func (s *sPool) sampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *
 	groupIndex--
 
 	s.updateReused1(sampleVec)
-	return s.sPools[groupIndex].add(s.proc, s.columns[0], bat)
+
+	switch s.typ {
+	case sampleByRow:
+		return s.sPools[groupIndex].add(s.proc, s.columns[0], bat)
+	case sampleByPercent:
+		return s.sPools[groupIndex].addByPercent(s.proc, s.columns[0], bat, s.percents)
+	}
+	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 }
 
-func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) SampleFromColumns(groupIndex int, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
 	if groupIndex == 0 {
 		return
 	}
@@ -105,48 +129,98 @@ func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector
 	groupIndex--
 
 	s.updateReused2(sampleVectors)
-	return s.mPools[groupIndex].add(s.proc, s.columns, bat)
+
+	switch s.typ {
+	case sampleByRow:
+		return s.mPools[groupIndex].add(s.proc, s.columns, bat)
+	case sampleByPercent:
+		return s.mPools[groupIndex].addByPercent(s.proc, s.columns, bat, s.percents)
+	}
+	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 }
 
-func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec *vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) BatchSampleFromColumn(length int, groupList []uint64, sampleVec *vector.Vector, bat *batch.Batch) (err error) {
 	s.updateReused1(sampleVec)
 
 	mp := s.proc.Mp()
-	for row, v := range groupList[:length] {
-		if v == 0 {
-			continue
+
+	switch s.typ {
+	case sampleByRow:
+		for row, v := range groupList[:length] {
+			if v == 0 {
+				continue
+			}
+
+			groupIndex := int(v)
+			s.growSiPool(groupIndex)
+			groupIndex--
+
+			err = s.sPools[groupIndex].addRow(s.proc, mp, s.columns[0], bat, row)
+			if err != nil {
+				return err
+			}
 		}
 
-		groupIndex := int(v)
-		s.growSiPool(groupIndex)
-		groupIndex--
+	case sampleByPercent:
+		for row, v := range groupList[:length] {
+			if v == 0 {
+				continue
+			}
 
-		err = s.sPools[groupIndex].addRow(s.proc, mp, s.columns[0], bat, row)
-		if err != nil {
-			return err
+			groupIndex := int(v)
+			s.growSiPool(groupIndex)
+			groupIndex--
+
+			err = s.sPools[groupIndex].addRowByPercent(s.proc, mp, s.columns[0], bat, row, s.percents)
+			if err != nil {
+				return err
+			}
 		}
+	default:
+		return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 	}
 	return nil
 }
 
-func (s *sPool) batchSampleFromColumns(length int, groupList []uint64, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) BatchSampleFromColumns(length int, groupList []uint64, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
 	s.updateReused2(sampleVectors)
 
 	mp := s.proc.Mp()
-	for row, v := range groupList[:length] {
-		if v == 0 {
-			continue
-		}
-		groupIndex := int(v)
-		s.growMulPool(groupIndex, len(sampleVectors))
-		groupIndex--
 
-		err = s.mPools[groupIndex].addRow(s.proc, mp, s.columns, bat, row)
-		if err != nil {
-			return err
+	switch s.typ {
+	case sampleByRow:
+		for row, v := range groupList[:length] {
+			if v == 0 {
+				continue
+			}
+			groupIndex := int(v)
+			s.growMulPool(groupIndex, len(sampleVectors))
+			groupIndex--
+
+			err = s.mPools[groupIndex].addRow(s.proc, mp, s.columns, bat, row)
+			if err != nil {
+				return err
+			}
 		}
+
+	case sampleByPercent:
+		for row, v := range groupList[:length] {
+			if v == 0 {
+				continue
+			}
+			groupIndex := int(v)
+			s.growMulPool(groupIndex, len(sampleVectors))
+			groupIndex--
+
+			err = s.mPools[groupIndex].addRowByPercent(s.proc, mp, s.columns, bat, row, s.percents)
+			if err != nil {
+				return err
+			}
+		}
+	default:
+		return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 	}
-	return
+	return nil
 }
 
 func (s *sPool) updateReused1(col *vector.Vector) {
@@ -183,7 +257,13 @@ func (s *sPool) updateReused2(columns []*vector.Vector) {
 	}
 }
 
-func (s *sPool) output() (bat *batch.Batch, err error) {
+func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
+	if !end {
+		if s.typ == sampleByRow {
+			return batch.EmptyBatch, nil
+		}
+	}
+
 	mp := s.proc.Mp()
 	if len(s.sPools) > 0 {
 		bat = s.sPools[0].bat
@@ -369,6 +449,38 @@ func (sp *singlePool) add(proc *process.Process, column sampleColumn, bat *batch
 	return nil
 }
 
+func (sp *singlePool) addByPercent(proc *process.Process, column sampleColumn, bat *batch.Batch, percent int) error {
+	if percent == 0 {
+		return nil
+	}
+
+	k := bat.RowCount()
+	mp := proc.Mp()
+
+	if column.anyNull() {
+		for i := 0; i < k; i++ {
+			if column.isNull(i) {
+				continue
+			}
+
+			if percent == 10000 || rand.Intn(10000) < percent {
+				if err := sp.appendResult(proc, mp, bat, i, 1); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		for i := 0; i < k; i++ {
+			if percent == 10000 || rand.Intn(10000) < percent {
+				if err := sp.appendResult(proc, mp, bat, i, 1); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (sp *singlePool) addRow(proc *process.Process, mp *mpool.MPool, column sampleColumn, bat *batch.Batch, row int) (err error) {
 	if column.isNull(row) {
 		return
@@ -385,6 +497,21 @@ func (sp *singlePool) addRow(proc *process.Process, mp *mpool.MPool, column samp
 		}
 	}
 	return err
+}
+
+func (sp *singlePool) addRowByPercent(proc *process.Process, mp *mpool.MPool, column sampleColumn, bat *batch.Batch, row int, percent int) (err error) {
+	if percent == 0 {
+		return
+	}
+
+	if column.isNull(row) {
+		return
+	}
+
+	if percent == 10000 || rand.Intn(10000) < percent {
+		err = sp.appendResult(proc, mp, bat, row, 1)
+	}
+	return
 }
 
 func (sp *singlePool) appendResult(proc *process.Process, mp *mpool.MPool, bat *batch.Batch, offset int, length int) (err error) {
@@ -514,6 +641,27 @@ func (p *multiPool) add(proc *process.Process, columns sampleColumnList, bat *ba
 	return nil
 }
 
+func (p *multiPool) addByPercent(proc *process.Process, columns sampleColumnList, bat *batch.Batch, percent int) (err error) {
+	if percent == 0 {
+		return nil
+	}
+
+	k := bat.RowCount()
+
+	for i := 0; i < k; i++ {
+		if columns.isAllNull(i) {
+			continue
+		}
+		if percent == 10000 || rand.Intn(10000) < percent {
+			err = p.appendOneRow(proc, proc.Mp(), columns, bat, i)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (p *multiPool) addRow(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int) (err error) {
 	if columns.isAllNull(row) {
 		return
@@ -561,6 +709,20 @@ func (p *multiPool) addRow(proc *process.Process, mp *mpool.MPool, columns sampl
 	return nil
 }
 
+func (p *multiPool) addRowByPercent(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int, percent int) (err error) {
+	if percent == 0 {
+		return
+	}
+
+	if columns.isAllNull(row) {
+		return
+	}
+	if percent == 10000 || rand.Intn(10000) < percent {
+		err = p.appendOneRow(proc, proc.Mp(), columns, bat, row)
+	}
+	return nil
+}
+
 type sampleColumn interface {
 	isNull(index int) bool
 	anyNull() bool
@@ -589,7 +751,7 @@ func (l sampleColumnList) isAllNull(index int) bool {
 }
 
 // batRowReplace replaces the row1 of toBatch with the bat's row2.
-// TODO: use a big switch temporary.
+// TODO: need an optimized function to do the row replace work.
 func batRowReplace(mp *mpool.MPool, toBatch *batch.Batch, bat *batch.Batch, row1, row2 int) (err error) {
 	var right int
 	for i, vec := range bat.Vecs {

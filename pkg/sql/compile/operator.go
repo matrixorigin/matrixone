@@ -1065,7 +1065,10 @@ func constructSample(n *plan.Node) *sample.Argument {
 	if n.SampleFunc.Rows != plan2.NotSampleByRows {
 		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy)
 	}
-	panic("only support sample by rows now.")
+	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
+		return sample.NewSampleByPercent(n.SampleFunc.Percent, n.AggList, n.GroupBy)
+	}
+	panic("only support sample by rows / percent now.")
 }
 
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {

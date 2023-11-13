@@ -40,6 +40,7 @@ type Argument struct {
 
 	Rows     int
 	Percents float64
+
 	// sample(expression1, expression2, ..., number)'s expression.
 	SampleExprs []*plan.Expr
 
@@ -87,12 +88,27 @@ func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr) *Argument {
 	}
 }
 
+func NewSampleByPercent(percent float64, sampleExprs, groupExprs []*plan.Expr) *Argument {
+	return &Argument{
+		Type:        sampleByPercent,
+		Percents:    percent,
+		SampleExprs: sampleExprs,
+		GroupExprs:  groupExprs,
+		IBucket:     0,
+		NBucket:     0,
+	}
+}
+
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
 	arg.info = info
 }
 
 func (arg *Argument) AppendChild(child vm.Operator) {
 	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) IsByPercent() bool {
+	return arg.Type == sampleByPercent
 }
 
 func (arg *Argument) SimpleDup() *Argument {
@@ -161,6 +177,6 @@ func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
 	if s.SampleType == pipeline.SampleFunc_Rows {
 		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
 	} else {
-		panic("unsupported sample type")
+		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
 	}
 }

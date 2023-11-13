@@ -273,7 +273,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 			// very large vectors should not put back into pool, which cause these memory can not release.
 			// XXX I left the old logic here. But it's unreasonable to use the number of rows to determine if a vector's size.
 			// use Allocated() may suitable.
-			if vec.IsConst() || vec.NeedDup() || vec.Capacity() > 8192*64 {
+			if vec.IsConst() || vec.Capacity() > 8192*64 {
 				vec.Free(proc.mp)
 				bat.ReplaceVector(vec, nil)
 				continue

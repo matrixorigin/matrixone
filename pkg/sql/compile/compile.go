@@ -953,10 +953,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		if n.SampleFunc.Rows == plan2.NotSampleByRows {
-			return nil, moerr.NewInternalErrorNoCtx("only support sample by rows now.")
-		}
-
 		ss = c.compileSample(n, ss)
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_WINDOW:

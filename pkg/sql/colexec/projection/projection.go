@@ -83,5 +83,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	anal.Output(arg.buf, arg.info.IsLast)
 	result.Batch = arg.buf
+	arg.buf = nil
 	return result, nil
 }
