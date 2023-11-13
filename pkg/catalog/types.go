@@ -30,7 +30,6 @@ const (
 	Row_ID           = "__mo_rowid"
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
-	PrefixIndexTableName = "__mo_index_"
 	// Compound primary key column name, which is a hidden column
 	CPrimaryKeyColName = "__mo_cpkey_col"
 	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
@@ -38,11 +37,7 @@ const (
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
 	ExternalFilePath      = "__mo_filepath"
-	UniqueIndexSuffix             = "unique_"
-	SecondaryIndexSuffix          = "secondary_"
-	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
-	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
-	IndexTableNamePrefix          = PrefixIndexTableName
+
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 )
@@ -228,10 +223,12 @@ const (
 
 // Key/Index related constants
 const (
-	IndexTableNamePrefix          = "__mo_index_"
-	UniqueIndexTableNamePrefix    = "__mo_index_unique__"
-	SecondaryIndexTableNamePrefix = "__mo_index_secondary__"
-	PrefixIndexTableName          = IndexTableNamePrefix
+	UniqueIndexSuffix             = "unique_"
+	SecondaryIndexSuffix          = "secondary_"
+	PrefixIndexTableName          = "__mo_index_"
+	IndexTableNamePrefix          = PrefixIndexTableName
+	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
+	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
 
 	/************ 0. Regular Secondary Index ************/
 
