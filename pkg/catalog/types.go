@@ -208,13 +208,7 @@ const (
 		the partition table contains the data of the partition.
 		the table partitioned has multiple partition tables
 	*/
-	SystemPartitionRel = "partition"
-
-	//// Secondary Index Relations
-	//SystemSecondaryIndex_IvfMetadataRel         = "metadata"
-	//SystemSecondaryIndex_IvfCentroidsRel        = "centroids"
-	//SystemSecondaryIndex_IvfCentroidsMappingRel = "entries"
-
+	SystemPartitionRel    = "partition"
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"
 

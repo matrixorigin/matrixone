@@ -1826,7 +1826,8 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.IndexTableNames = make([]string, 0)
 		if tableDef.Indexes != nil {
 			for _, indexdef := range tableDef.Indexes {
-				if indexdef.TableExist {
+				// We only handle truncate on regular index. For other indexes such as IVF, we don't handle truncate now.
+				if indexdef.TableExist && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo) {
 					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
