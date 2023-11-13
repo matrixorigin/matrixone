@@ -160,7 +160,6 @@ func Test_embeddingSizeToBatch(t *testing.T) {
 }
 
 func mockCheckpointData(t *testing.T, accIds []uint64, sizes []uint64) *logtail.CheckpointData {
-	var err error
 	ckpData := logtail.NewCheckpointData(common.CheckpointAllocator)
 	storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
 
