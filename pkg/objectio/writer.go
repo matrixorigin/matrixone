@@ -45,6 +45,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
+	pkColIdx          int
 }
 
 type blockData struct {
@@ -111,6 +112,20 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
+func (w *objectWriterV1) DescribeObject() (*ObjectStats, error) {
+	objStats := newObjectStats()
+	objStats.extent = Header(w.buffer.vector.Entries[0].Data).Extent()
+	objStats.blkCnt = len(w.blocks)
+	objStats.name = w.name
+	objStats.sortKeyIdx = w.pkColIdx
+
+	if len(w.blocks[SchemaData]) != 0 && len(w.colmeta) > w.pkColIdx {
+		objStats.zoneMaps[SchemaData] = w.colmeta[w.pkColIdx].ZoneMap()
+	}
+
+	return objStats, nil
+}
+
 func (w *objectWriterV1) GetSeqnums() []uint16 {
 	return w.seqnums.Seqs
 }
@@ -160,6 +175,7 @@ func (w *objectWriterV1) UpdateBlockZM(blkIdx int, seqnum uint16, zm ZoneMap) {
 
 func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.pkColIdx = int(seqnum)
 	return
 }
 
@@ -461,7 +477,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			blockObjects = append(blockObjects, w.blocks[i][j].meta)
 		}
 	}
-	err = w.Sync(ctx, items...)
+	_, err = w.Sync(ctx, items...)
 	if err != nil {
 		return nil, err
 	}
@@ -474,18 +490,23 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 }
 
 // Sync is for testing
-func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error {
+func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) (*ObjectStats, error) {
 	w.buffer.SetDataOptions(items...)
 	// if a compact task is rollbacked, it may leave a written file in fs
 	// here we just delete it and write again
 	err := w.object.fs.Write(ctx, w.buffer.GetData())
 	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
-			return err
+			return nil, err
 		}
-		return w.object.fs.Write(ctx, w.buffer.GetData())
+		err = w.object.fs.Write(ctx, w.buffer.GetData())
 	}
-	return err
+
+	if err != nil {
+		return nil, err
+	}
+
+	return w.DescribeObject()
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
