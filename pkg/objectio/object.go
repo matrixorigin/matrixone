@@ -46,7 +46,7 @@ type ObjectDescriber interface {
 }
 
 type ObjectStats struct {
-	zoneMaps map[uint16]ZoneMap
+	zoneMaps []ZoneMap
 	blkCnt   int
 	extent   Extent
 	name     ObjectName
@@ -54,7 +54,6 @@ type ObjectStats struct {
 
 func newObjectStats() *ObjectStats {
 	description := new(ObjectStats)
-	description.zoneMaps = make(map[uint16]ZoneMap)
 	return description
 }
 
@@ -74,6 +73,13 @@ func (des *ObjectStats) GetBlkCnt() int {
 	return des.blkCnt
 }
 
-func (des *ObjectStats) GetZoneMaps() map[uint16]ZoneMap {
+func (des *ObjectStats) GetAllZoneMaps() []ZoneMap {
 	return des.zoneMaps
+}
+
+func (des *ObjectStats) GetZoneMapsBySeqNum(seqNum uint16) ZoneMap {
+	if len(des.zoneMaps) <= int(seqNum) {
+		return nil
+	}
+	return des.zoneMaps[seqNum]
 }

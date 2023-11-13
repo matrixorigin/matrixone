@@ -118,7 +118,7 @@ func (w *objectWriterV1) DescribeObject() (*ObjectStats, error) {
 	objStats.name = w.name
 
 	for idx := range w.colmeta {
-		objStats.zoneMaps[uint16(idx)] = w.colmeta[idx].ZoneMap()
+		objStats.zoneMaps = append(objStats.zoneMaps, w.colmeta[idx].ZoneMap())
 	}
 
 	return objStats, nil
