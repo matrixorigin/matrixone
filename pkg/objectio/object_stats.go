@@ -20,7 +20,7 @@ import (
 )
 
 type ObjectDescriber interface {
-	DescribeObject() (*ObjectStats, error)
+	DescribeObject() (ObjectStats, error)
 }
 
 // ObjectStatsLen has format:
