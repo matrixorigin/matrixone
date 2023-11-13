@@ -122,7 +122,9 @@ func fillUsageBat(collector *BaseCollector, entry *catalog.SegmentEntry) {
 // [account_id, db_id, table_id, obj_id, table_total_size_in_bytes]
 func FillUsageBatOfIncremental(c *catalog.Catalog, collector *IncrementalCollector, fs fileservice.FileService) {
 	start := time.Now()
-	defer v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	loaded := traverseCatalog(c, collector.BaseCollector, fs)
 	logutil.Info(fmt.Sprintf("[storage usage]: incremental checkpoint loaded %d object meta", loaded))
@@ -234,7 +236,9 @@ func traverseCatalog(c *catalog.Catalog, collector *BaseCollector, fs fileservic
 func FillUsageBatOfGlobal(c *catalog.Catalog, collector *GlobalCollector,
 	fs fileservice.FileService, locVers []*CkpLocVers) {
 	start := time.Now()
-	defer v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	destVecs := getStorageUsageBatVectors(collector.data)
 
