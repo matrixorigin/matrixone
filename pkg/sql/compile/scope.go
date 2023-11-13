@@ -43,10 +43,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
@@ -646,27 +644,27 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					},
 				})
 			}
-		case vm.Order:
-			flg = true
-			arg := in.Arg.(*order.Argument)
-			s.Instructions = s.Instructions[i:]
-			s.Instructions[0] = vm.Instruction{
-				Op:  vm.MergeOrder,
-				Idx: in.Idx,
-				Arg: &mergeorder.Argument{
-					OrderBySpecs: arg.OrderBySpec,
-				},
-			}
-			for j := range ss {
-				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Order,
-					Idx:     in.Idx,
-					IsFirst: in.IsFirst,
-					Arg: &order.Argument{
-						OrderBySpec: arg.OrderBySpec,
-					},
-				})
-			}
+		//case vm.Order:
+		//	flg = true
+		//	arg := in.Arg.(*order.Argument)
+		//	s.Instructions = s.Instructions[i:]
+		//	s.Instructions[0] = vm.Instruction{
+		//		Op:  vm.MergeOrder,
+		//		Idx: in.Idx,
+		//		Arg: &mergeorder.Argument{
+		//			OrderBySpecs: arg.OrderBySpec,
+		//		},
+		//	}
+		//	for j := range ss {
+		//		ss[j].appendInstruction(vm.Instruction{
+		//			Op:      vm.Order,
+		//			Idx:     in.Idx,
+		//			IsFirst: in.IsFirst,
+		//			Arg: &order.Argument{
+		//				OrderBySpec: arg.OrderBySpec,
+		//			},
+		//		})
+		//	}
 		case vm.Limit:
 			flg = true
 			arg := in.Arg.(*limit.Argument)
