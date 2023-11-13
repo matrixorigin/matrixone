@@ -3258,7 +3258,7 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn T
 	dbMeta, err := ses.GetParameterUnit().StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
 		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
-		return nil, moerr.NewBadDB(ctx, dbName)
+		return nil, moerr.NewNoDB(ctx)
 	}
 
 	if dbMeta.IsSubscription(ctx) {
