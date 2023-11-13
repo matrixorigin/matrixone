@@ -150,8 +150,8 @@ func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *p
 	}
 
 	if indexTableDef.Pkey.Names != nil {
-		//pkStr := fmt.Sprintf(", primary key ( %s )", partsToColsStr(indexTableDef.Pkey.Names))
-		//sql += pkStr
+		pkStr := fmt.Sprintf(", primary key ( %s )", partsToColsStr(indexTableDef.Pkey.Names))
+		sql += pkStr
 		//TODO: fix VECTOR PK issue
 	}
 
