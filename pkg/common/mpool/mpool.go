@@ -507,6 +507,7 @@ var nextPool int64
 var globalCap int64
 var globalStats MPoolStats
 var globalPools sync.Map
+var crossPoolFreeCounter atomic.Int64
 
 func InitCap(cap int64) {
 	if cap < GB {
@@ -514,6 +515,10 @@ func InitCap(cap int64) {
 	} else {
 		globalCap = cap
 	}
+}
+
+func TotalCrossPoolFreeCounter() int64 {
+	return crossPoolFreeCounter.Load()
 }
 
 func GlobalStats() *MPoolStats {
@@ -626,6 +631,7 @@ func (mp *MPool) Free(bs []byte) {
 
 	// if cross pool free.
 	if pHdr.poolId != mp.id {
+		crossPoolFreeCounter.Add(1)
 		otherPool, ok := globalPools.Load(pHdr.poolId)
 		if !ok {
 			panic(moerr.NewInternalErrorNoCtx("invalid mpool id %d", pHdr.poolId))
