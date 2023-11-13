@@ -16,10 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"fmt"
 	"hash/crc32"
 	"runtime"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -413,6 +415,9 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	err := procInfo.Unmarshal(data)
 	if err != nil {
 		return processHelper{}, err
+	}
+	if len(procInfo.GetAnalysisNodeList()) == 0 {
+		panic(fmt.Sprintf("empty plan: %s", procInfo.Sql))
 	}
 
 	result := processHelper{

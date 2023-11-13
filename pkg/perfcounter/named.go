@@ -26,7 +26,20 @@ import (
 var Named sync.Map
 
 func NameForNode(nodeType, uuid string) string {
-	return "node:" + nodeType + ":" + uuid
+	return strings.Join([]string{
+		"node",
+		nodeType,
+		uuid,
+	}, ":")
+}
+
+func NameForFileService(nodeType string, uuid string, fsName string) string {
+	return strings.Join([]string{
+		"fs",
+		nodeType,
+		uuid,
+		fsName,
+	}, ":")
 }
 
 func decodeName(name string) (string, string) {
