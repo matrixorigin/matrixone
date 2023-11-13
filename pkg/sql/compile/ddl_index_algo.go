@@ -25,15 +25,15 @@ import (
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile,
-	indexDef *plan.IndexDef, qry *plan.CreateIndex,
+	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-	err := genNewUniqueIndexDuplicateCheck(c, qry.Database, originalTableDef.Name, partsToColsStr(indexDef.Parts))
+	err := genNewUniqueIndexDuplicateCheck(c, qryDatabase, originalTableDef.Name, partsToColsStr(indexDef.Parts))
 	if err != nil {
 		return err
 	}
 
-	err = s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qry, originalTableDef, indexInfo)
+	err = s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 	if err != nil {
 		return err
 	}
@@ -42,10 +42,10 @@ func (s *Scope) handleUniqueIndexTable(c *Compile,
 }
 
 func (s *Scope) handleRegularSecondaryIndexTable(c *Compile,
-	indexDef *plan.IndexDef, qry *plan.CreateIndex,
+	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-	err := s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qry, originalTableDef, indexInfo)
+	err := s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 	if err != nil {
 		return err
 	}
@@ -54,20 +54,20 @@ func (s *Scope) handleRegularSecondaryIndexTable(c *Compile,
 }
 
 func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
-	qry *plan.CreateIndex, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
+	createSQL := genCreateIndexTableSql(def, indexDef, qryDatabase)
 	err := c.runSql(createSQL)
 	if err != nil {
 		return err
 	}
 
-	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qry.Database, indexDef.Unique)
+	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
 	err = c.runSql(insertSQL)
 	if err != nil {
 		return err
@@ -76,18 +76,18 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 }
 
 func (s *Scope) handleIvfIndexMetaTable(c *Compile,
-	indexDef *plan.IndexDef, qry *plan.CreateIndex,
+	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
 	// 0. create table
-	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[0], indexDef, qry.Database)
+	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[0], indexDef, qryDatabase)
 	err := c.runSql(createSQL)
 	if err != nil {
 		return err
 	}
 
 	// 1. insert version
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` values('version', '1');", qry.Database, indexDef.IndexTableName)
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` values('version', '1');", qryDatabase, indexDef.IndexTableName)
 	err = c.runSql(insertSQL)
 	if err != nil {
 		return err
@@ -97,11 +97,11 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile,
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
-	indexDef *plan.IndexDef, qry *plan.CreateIndex,
+	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
 	// 0. create table
-	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[1], indexDef, qry.Database)
+	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[1], indexDef, qryDatabase)
 	err := c.runSql(createSQL)
 	if err != nil {
 		return err
@@ -126,7 +126,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 
 	// 2.1 Number of records in the table
 	indexColumnName := indexDef.Parts[0]
-	countTotalSql := fmt.Sprintf("select count(%s) from `%s`.`%s`;", indexColumnName, qry.Database, originalTableDef.Name)
+	countTotalSql := fmt.Sprintf("select count(%s) from `%s`.`%s`;", indexColumnName, qryDatabase, originalTableDef.Name)
 	rs, err := c.runSqlWithResult(countTotalSql)
 	if err != nil {
 		return err
@@ -201,7 +201,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 	fmt.Printf(a)
 
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
-		qry.Database,
+		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
@@ -225,11 +225,11 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 }
 
 func (s *Scope) handleIvfIndexEntriesTable(c *Compile,
-	indexDef *plan.IndexDef, qry *plan.CreateIndex,
+	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable, centroidsTableName string) error {
 
 	// 1. create table
-	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDef, qry.Database)
+	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDef, qryDatabase)
 	err := c.runSql(createSQL)
 	if err != nil {
 		return err
@@ -274,7 +274,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile,
 	indexColumnName := indexDef.Parts[0]
 
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (%s, %s, %s) ",
-		qry.Database,
+		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,

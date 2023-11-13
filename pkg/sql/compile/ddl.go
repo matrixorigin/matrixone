@@ -316,43 +316,59 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
-			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
-			for i := range addIndex {
-				if indexDef.IndexName == addIndex[i].IndexName {
-					return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
+
+			indexInfo := act.AddIndex.IndexInfo // IndexInfo is named same as planner's IndexInfo
+			indexTableDef := act.AddIndex.IndexInfo.TableDef
+
+			// IVF -> meta      -> indexDef
+			//     -> centroids -> indexDef
+			//     -> entries   -> indexDef
+			multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
+			for _, indexDef := range indexTableDef.Indexes {
+
+				for i := range addIndex {
+					if indexDef.IndexName == addIndex[i].IndexName {
+						return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
+					}
+				}
+				addIndex = append(addIndex, indexDef)
+
+				if indexDef.Unique {
+					// 1. Unique Index related logic
+					err = s.handleUniqueIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+				} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
+					// 2. Regular Secondary index
+					err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+					// 3. IVF indexDefs are aggregated and handled later
+					if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
+						multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
+					}
+					multiTableIndexes[indexDef.IndexAlgo][indexDef.IndexAlgoTableType] = indexDef
+				}
+				if err != nil {
+					return err
 				}
 			}
-			addIndex = append(addIndex, indexDef)
-			if indexDef.Unique {
-				// 0. check original data is not duplicated
-				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
+
+			for indexAlgoType, indexDefs := range multiTableIndexes {
+				switch indexAlgoType {
+				case catalog.MoIndexIvfFlatAlgo.ToString():
+					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, indexInfo)
+				}
+
 				if err != nil {
 					return err
 				}
 			}
 
 			//1. build and update constraint def
-			insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
-			if err != nil {
-				return err
-			}
-			err = c.runSql(insertSql)
-			if err != nil {
-				return err
-			}
-			//---------------------------------------------------------
-			if act.AddIndex.IndexTableExist {
-				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
-				// 2. create index table from unique index object
-				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-				err = c.runSql(createSQL)
+			for _, indexDef := range indexTableDef.Indexes {
+				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
 				if err != nil {
 					return err
 				}
-
-				// 3. insert data into index table for unique index object
-				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database, indexDef.Unique)
-				err = c.runSql(insertSQL)
+				err = c.runSql(insertSql)
 				if err != nil {
 					return err
 				}
@@ -993,10 +1009,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 
 		if indexDef.Unique {
 			// 1. Unique Index related logic
-			err = s.handleUniqueIndexTable(c, indexDef, qry, originalTableDef, indexInfo)
+			err = s.handleUniqueIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
 			// 2. Regular Secondary index
-			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry, originalTableDef, indexInfo)
+			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
 			// 3. IVF indexDefs are aggregated and handled later
 			if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
@@ -1012,7 +1028,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	for indexAlgoType, indexDefs := range multiTableIndexes {
 		switch indexAlgoType {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, indexDefs, qry, originalTableDef, indexInfo)
+			err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -1062,26 +1078,26 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	return nil
 }
 
-func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qry *plan.CreateIndex, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 	// 0. check index table definition
 	if len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
 	}
 
 	// 1. handle meta table
-	err := s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qry, originalTableDef, indexInfo)
+	err := s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef, indexInfo)
 	if err != nil {
 		return err
 	}
 
 	// 2. handle centroids table
-	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qry, originalTableDef, indexInfo)
+	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef, indexInfo)
 	if err != nil {
 		return err
 	}
 
 	// 3. handle entries table
-	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qry, originalTableDef, indexInfo,
+	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef, indexInfo,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
 	if err != nil {
 		return err
