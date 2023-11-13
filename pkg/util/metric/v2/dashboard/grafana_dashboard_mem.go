@@ -28,7 +28,7 @@ func (c *DashboardCreator) initMemDashboard() error {
 	build, err := dashboard.New(
 		"Memory Metrics",
 		c.withRowOptions(
-			c.initTAEMpoolAllocatorRow(),
+			c.initMpoolAllocatorRow(),
 		)...)
 	if err != nil {
 		return err
@@ -37,37 +37,29 @@ func (c *DashboardCreator) initMemDashboard() error {
 	return err
 }
 
-func (c *DashboardCreator) initTAEMpoolAllocatorRow() dashboard.Option {
+func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
 	return dashboard.Row(
-		"TAE Mpool Allocator",
-		c.withGraph(
-			"TAE Defaulter Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_default"`)+`) by (name)`,
-			"{{ name }}"),
+		"",
+		c.withMultiGraph(
+			"TAE Mpool Allocator",
+			6,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_default"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_small"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_mutable"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="vectorpool_default"`) + `)`,
+			},
+			[]string{
+				"tae-defaulter-allocator",
+				"tae-small-allocator",
+				"tae-mutable-memory-allocator",
+				"vectorPool-default-allocator",
+			}),
 
 		c.withGraph(
-			"TAE Small Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_small"`)+`) by (name)`,
-			"{{ name }}"),
-
-		c.withGraph(
-			"TAE Mutable Memory Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_mutable"`)+`) by (name)`,
-			"{{ name }}"),
-
-		c.withGraph(
-			"VectorPool Default Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="vectorpool_default"`)+`) by (name)`,
-			"{{ name }}"),
-
-		c.withGraph(
-			"VectorPool Transient Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="vectorpool_transient"`)+`) by (name)`,
-			"{{ name }}"),
+			"Cross Pool Free Counter",
+			6,
+			`increase(`+c.getMetricWithFilter("mo_mem_cross_pool_free_total", "")+`[$interval])`,
+			""),
 	)
 }
