@@ -777,7 +777,7 @@ func (tbl *txnTable) RangeDelete(
 		mvcc := chain.GetController()
 		mvcc.Lock()
 		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
-			node.RangeDeleteLocked(start, end, pk)
+			node.RangeDeleteLocked(start, end, pk, common.WorkspaceAllocator)
 		}
 		mvcc.Unlock()
 		if err != nil {

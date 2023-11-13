@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring"
@@ -235,7 +236,7 @@ type DeleteNode interface {
 	GetChain() DeleteChain
 	DeletedRows() []uint32
 	DeletedPK() map[uint32]containers.Vector
-	RangeDeleteLocked(start, end uint32, pk containers.Vector)
+	RangeDeleteLocked(start, end uint32, pk containers.Vector, mp *mpool.MPool)
 	GetCardinalityLocked() uint32
 	IsDeletedLocked(row uint32) bool
 	GetRowMaskRefLocked() *roaring.Bitmap

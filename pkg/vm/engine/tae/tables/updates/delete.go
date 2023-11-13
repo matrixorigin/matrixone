@@ -19,6 +19,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -174,7 +175,9 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
 }
 
-func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vector) {
+func (node *DeleteNode) RangeDeleteLocked(
+	start, end uint32, pk containers.Vector, mp *mpool.MPool,
+) {
 	// logutil.Debugf("RangeDelete BLK-%d Start=%d End=%d",
 	// 	node.chain.mvcc.meta.ID,
 	// 	start,
@@ -183,7 +186,7 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vecto
 	if pk != nil && pk.Length() > 0 {
 		begin := start
 		for ; begin < end+1; begin++ {
-			node.rowid2PK[begin] = pk.CloneWindow(int(begin-start), 1)
+			node.rowid2PK[begin] = pk.CloneWindow(int(begin-start), 1, mp)
 		}
 	} else {
 		panic("pk vector is empty")

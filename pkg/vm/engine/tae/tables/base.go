@@ -589,7 +589,7 @@ func (blk *baseBlock) RangeDelete(
 		return
 	}
 	node = blk.mvcc.CreateDeleteNode(txn, dt)
-	node.RangeDeleteLocked(start, end, pk)
+	node.RangeDeleteLocked(start, end, pk, common.WorkspaceAllocator)
 	return
 }
 
