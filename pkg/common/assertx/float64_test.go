@@ -36,12 +36,28 @@ func TestInEpsilonF64(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "Test 2 - difference is less than epsilon",
+			name: "Test 2.a - difference is less than epsilon",
 			args: args{
 				want: 2.0,
-				got:  2.0 + float64EqualityThreshold/2,
+				got:  2.0 + 0.5*float64EqualityThreshold,
 			},
 			want: true,
+		},
+		{
+			name: "Test 2.b - difference is more than epsilon",
+			args: args{
+				want: 2.0,
+				got:  2.0 + 2*float64EqualityThreshold,
+			},
+			want: false,
+		},
+		{
+			name: "Test 2.c - difference is -ve of epsilon",
+			args: args{
+				want: 2.0,
+				got:  2.0 - float64EqualityThreshold,
+			},
+			want: false,
 		},
 		{
 			name: "Test 3 - till 9th digit is same, 10th digit is different",
