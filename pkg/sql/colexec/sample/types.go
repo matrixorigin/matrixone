@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -81,8 +82,8 @@ func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr) *Argument {
 		Rows:        rows,
 		SampleExprs: sampleExprs,
 		GroupExprs:  groupExprs,
-		IBucket: 0,
-		NBucket: 0,
+		IBucket:     0,
+		NBucket:     0,
 	}
 }
 
@@ -134,5 +135,32 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 				proc.PutBatch(p.bat)
 			}
 		}
+	}
+}
+
+func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
+	in.Agg = &pipeline.Group{
+		Ibucket: uint64(arg.IBucket),
+		Nbucket: uint64(arg.NBucket),
+		Exprs:   arg.GroupExprs,
+	}
+	in.SampleFunc = &pipeline.SampleFunc{
+		SampleColumns: arg.SampleExprs,
+		SampleType:    pipeline.SampleFunc_Rows,
+		SampleRows:    int32(arg.Rows),
+		SamplePercent: arg.Percents,
+	}
+	if arg.Type == sampleByPercent {
+		in.SampleFunc.SampleType = pipeline.SampleFunc_Percent
+	}
+}
+
+func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
+	s := opr.GetSampleFunc()
+	g := opr.GetAgg()
+	if s.SampleType == pipeline.SampleFunc_Rows {
+		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
+	} else {
+		panic("unsupported sample type")
 	}
 }

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -826,6 +827,9 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Aggs:         convertToPipelineAggregates(t.Aggs),
 			MultiAggs:    convertPipelineMultiAggs(t.MultiAggs),
 		}
+	case *sample.Argument:
+		t.ConvertToPipelineOperator(in)
+
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
@@ -1239,6 +1243,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Aggs:         convertToAggregates(t.Aggs),
 			MultiAggs:    convertToMultiAggs(t.MultiAggs),
 		}
+	case vm.Sample:
+		v.Arg = sample.GenerateFromPipelineOperator(opr)
+
 	case vm.Join:
 		t := opr.GetJoin()
 		v.Arg = &join.Argument{
