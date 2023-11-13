@@ -46,15 +46,22 @@ type ObjectDescriber interface {
 }
 
 type ObjectStats struct {
-	zoneMaps []ZoneMap
-	blkCnt   int
-	extent   Extent
-	name     ObjectName
+	// 0: Data
+	// 1: Tombstone
+	zoneMaps   [2]ZoneMap
+	blkCnt     int
+	extent     Extent
+	name       ObjectName
+	sortKeyIdx int
 }
 
 func newObjectStats() *ObjectStats {
 	description := new(ObjectStats)
 	return description
+}
+
+func (des *ObjectStats) GetSortKeyIdx() int {
+	return des.sortKeyIdx
 }
 
 func (des *ObjectStats) GetOriginSize() uint32 {
@@ -73,13 +80,10 @@ func (des *ObjectStats) GetBlkCnt() int {
 	return des.blkCnt
 }
 
-func (des *ObjectStats) GetAllZoneMaps() []ZoneMap {
-	return des.zoneMaps
+func (des *ObjectStats) GetDataSortKeyZoneMap() ZoneMap {
+	return des.zoneMaps[SchemaData]
 }
 
-func (des *ObjectStats) GetZoneMapsBySeqNum(seqNum uint16) ZoneMap {
-	if len(des.zoneMaps) <= int(seqNum) {
-		return nil
-	}
-	return des.zoneMaps[seqNum]
+func (des *ObjectStats) GetTombstoneZoneSortKeyMap() ZoneMap {
+	return des.zoneMaps[SchemaTombstone]
 }

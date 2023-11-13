@@ -45,6 +45,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
+	pkColIdx          int
 }
 
 type blockData struct {
@@ -116,9 +117,10 @@ func (w *objectWriterV1) DescribeObject() (*ObjectStats, error) {
 	objStats.extent = Header(w.buffer.vector.Entries[0].Data).Extent()
 	objStats.blkCnt = len(w.blocks)
 	objStats.name = w.name
+	objStats.sortKeyIdx = w.pkColIdx
 
-	for idx := range w.colmeta {
-		objStats.zoneMaps = append(objStats.zoneMaps, w.colmeta[idx].ZoneMap())
+	if len(w.blocks[SchemaData]) != 0 {
+		objStats.zoneMaps[SchemaData] = w.colmeta[w.pkColIdx].ZoneMap()
 	}
 
 	return objStats, nil
@@ -173,6 +175,7 @@ func (w *objectWriterV1) UpdateBlockZM(blkIdx int, seqnum uint16, zm ZoneMap) {
 
 func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.pkColIdx = int(seqnum)
 	return
 }
 
