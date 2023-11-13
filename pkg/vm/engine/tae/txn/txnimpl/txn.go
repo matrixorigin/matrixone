@@ -111,5 +111,5 @@ func (txn *txnImpl) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
 }
 
 func makeWorkspaceVector(typ types.Type) containers.Vector {
-	return containers.MakeVector(typ, containers.Options{Allocator: common.WorkspaceAllocator})
+	return containers.MakeVector(typ, common.WorkspaceAllocator)
 }

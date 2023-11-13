@@ -55,7 +55,7 @@ func TestDeleteChain1(t *testing.T) {
 	txn1.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), types.TS{})
 	n1 := chain.AddNodeLocked(txn1, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	assert.Equal(t, 1, chain.Depth())
-	mockPK := containers.MakeVector(types.New(types.T_uint8, 0, 0))
+	mockPK := containers.MakeVector(types.New(types.T_uint8, 0, 0), common.DefaultAllocator)
 	for i := 0; i < 33; i++ {
 		mockPK.Append(uint8(i), false)
 	}
@@ -158,7 +158,7 @@ func TestDeleteChain2(t *testing.T) {
 	seg := objectio.NewSegmentid()
 	controller := NewMVCCHandle(catalog.NewStandaloneBlock(nil, objectio.NewBlockid(seg, 0, 0), types.TS{}))
 	chain := NewDeleteChain(nil, controller)
-	mockPK := containers.MakeVector(types.New(types.T_uint8, 0, 0))
+	mockPK := containers.MakeVector(types.New(types.T_uint8, 0, 0), common.DefaultAllocator)
 	for i := 0; i < 13; i++ {
 		mockPK.Append(uint8(i), false)
 	}

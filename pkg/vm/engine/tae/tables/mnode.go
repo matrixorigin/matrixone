@@ -197,7 +197,7 @@ func (node *memoryNode) GetColumnDataWindow(
 		return containers.FillConstVector(int(to-from), readSchema.ColDefs[col].Type, nil, mp), nil
 	}
 	if node.data == nil {
-		vec = containers.MakeVector(node.writeSchema.AllTypes()[idx], containers.Options{Allocator: mp})
+		vec = containers.MakeVector(node.writeSchema.AllTypes()[idx], mp)
 		return
 	}
 	data := node.data.Vecs[idx]

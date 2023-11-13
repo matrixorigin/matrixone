@@ -201,7 +201,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if bat.Vecs[0].GetType().Oid != types.T_TS {
 		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
 	}
-	vec = containers.ToTNVector(bat.Vecs[0])
+	vec = containers.ToTNVector(bat.Vecs[0], common.DefaultAllocator)
 	return
 }
 

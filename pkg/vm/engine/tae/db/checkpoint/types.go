@@ -145,7 +145,7 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
-		bat.AddVector(attr, containers.MakeVector(typs[i], containers.Options{Allocator: common.CheckpointAllocator}))
+		bat.AddVector(attr, containers.MakeVector(typs[i], common.CheckpointAllocator))
 	}
 	return bat
 }

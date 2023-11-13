@@ -683,7 +683,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 				if err != nil {
 					return err
 				}
-				vec := containers.ToTNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
 				pkVecs = append(pkVecs, vec)
 			}
 			for _, v := range pkVecs {
@@ -1203,7 +1203,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				if err != nil {
 					return err
 				}
-				vec := containers.ToTNVector(bat.Vecs[0])
+				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(

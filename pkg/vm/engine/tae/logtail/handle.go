@@ -622,7 +622,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.B
 		if len(b.dataDelBatch.Vecs) == 2 {
 			b.dataDelBatch.AddVector(
 				delBatch.Attrs[2],
-				containers.MakeVector(*delBatch.Vecs[2].GetType(), containers.Options{Allocator: common.LogtailAllocator}),
+				containers.MakeVector(*delBatch.Vecs[2].GetType(), common.LogtailAllocator),
 			)
 		}
 		b.dataDelBatch.Extend(delBatch)

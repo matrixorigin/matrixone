@@ -90,7 +90,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
 		}
-		columnData := containers.ToTNVector(vec)
+		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
 		// update null count and distinct value
 		w.objMetaBuilder.InspectVector(i, columnData, isPK)
 

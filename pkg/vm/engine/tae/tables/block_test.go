@@ -62,7 +62,7 @@ func TestGetActiveRow(t *testing.T) {
 	an2.End = ts1
 
 	// index uint8(1)-0,1
-	vec := containers.MakeVector(types.T_int8.ToType())
+	vec := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
 	vec.Append(int8(1), false)
 	vec.Append(int8(1), false)
 	idx := indexwrapper.NewMutIndex(types.T_int8.ToType())

@@ -451,7 +451,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
 		pkDef := schema.GetPrimaryKey()
-		pkVec := containers.MakeVector(pkDef.Type)
+		pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
 		val1, _, err := dataBlk.GetValue(ctx, txn, schema, 1, pkDef.Idx, common.DefaultAllocator)
 		assert.NoError(t, err)
 		pkVec.Append(val1, false)
@@ -6566,13 +6566,13 @@ func TestAlterTableBasic(t *testing.T) {
 	}, true)
 
 	bat, _ := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
-	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
+	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
 	require.Equal(t, 3, cstrCol.Length())
 	require.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
 	require.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
 	require.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
 
-	commetCol := containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
+	commetCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
 	require.Equal(t, 3, cstrCol.Length())
 	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
@@ -6589,13 +6589,13 @@ func TestAlterTableBasic(t *testing.T) {
 	}, true)
 
 	bat, _ = batch.ProtoBatchToBatch(resp.Commands[0].Bat)
-	cstrCol = containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
+	cstrCol = containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(pkgcatalog.SystemRelAttr_Constraint)
 	require.Equal(t, 3, cstrCol.Length())
 	require.Equal(t, []byte("start version"), cstrCol.Get(0).([]byte))
 	require.Equal(t, []byte("version 1"), cstrCol.Get(1).([]byte))
 	require.Equal(t, []byte("version 2"), cstrCol.Get(2).([]byte))
 
-	commetCol = containers.NewNonNullBatchWithSharedMemory(bat).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
+	commetCol = containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(pkgcatalog.SystemRelAttr_Comment)
 	require.Equal(t, 3, cstrCol.Length())
 	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
@@ -6704,7 +6704,7 @@ func TestAlterFakePk(t *testing.T) {
 
 	insBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
 	require.NoError(t, err)
-	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat)
+	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, common.DefaultAllocator)
 	t.Log(tnInsBat.Attrs)
 	require.Equal(t, 6, len(tnInsBat.Vecs)) // 3 col + 1 fake pk + 1 rowid + 1 committs
 	for _, v := range tnInsBat.Vecs {
@@ -6714,7 +6714,7 @@ func TestAlterFakePk(t *testing.T) {
 
 	delBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat)
 	require.NoError(t, err)
-	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat)
+	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, common.DefaultAllocator)
 	t.Log(tnDelBat.Attrs)
 	require.Equal(t, 3, len(tnDelBat.Vecs)) // 1 fake pk + 1 rowid + 1 committs
 	for _, v := range tnDelBat.Vecs {

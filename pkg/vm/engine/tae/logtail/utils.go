@@ -1375,10 +1375,10 @@ func (data *CheckpointData) Allocator() *mpool.MPool { return data.allocator }
 
 func (data *CheckpointData) fillInMetaBatchWithLocation(location objectio.Location) {
 	length := data.bats[MetaIDX].Vecs[2].Length()
-	insVec := containers.MakeVector(types.T_varchar.ToType(), containers.Options{Allocator: data.allocator})
-	cnInsVec := containers.MakeVector(types.T_varchar.ToType(), containers.Options{Allocator: data.allocator})
-	delVec := containers.MakeVector(types.T_varchar.ToType(), containers.Options{Allocator: data.allocator})
-	segVec := containers.MakeVector(types.T_varchar.ToType(), containers.Options{Allocator: data.allocator})
+	insVec := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
+	cnInsVec := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
+	delVec := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
+	segVec := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
 
 	tidVec := data.bats[MetaIDX].GetVectorByName(SnapshotAttr_TID)
 	blkInsStart := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchStart).GetDownstreamVector()
@@ -1770,9 +1770,9 @@ func LoadBlkColumnsByMeta(
 			pkgVec := ioResult.Vecs[i]
 			var vec containers.Vector
 			if pkgVec.Length() == 0 {
-				vec = containers.MakeVector(colTypes[i], containers.Options{Allocator: mp})
+				vec = containers.MakeVector(colTypes[i], mp)
 			} else {
-				vec = containers.ToTNVector2(pkgVec, mp)
+				vec = containers.ToTNVector(pkgVec, mp)
 			}
 			bat.AddVector(colNames[idx], vec)
 			bat.Vecs[i] = vec
@@ -2141,7 +2141,7 @@ func (data *CheckpointData) readAll(
 				if uint16(idx) == TBLInsertIDX {
 					for _, bat := range bats {
 						length := bat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).Length()
-						vec := containers.MakeVector(types.T_uint32.ToType(), containers.Options{Allocator: data.allocator})
+						vec := containers.MakeVector(types.T_uint32.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							vec.Append(pkgcatalog.CatalogVersion_V1, false)
 						}
@@ -2157,7 +2157,7 @@ func (data *CheckpointData) readAll(
 					for _, bat := range bats {
 						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
 						length := rowIDVec.Length()
-						pkVec := containers.MakeVector(types.T_uint64.ToType(), containers.Options{Allocator: data.allocator})
+						pkVec := containers.MakeVector(types.T_uint64.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							pkVec.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
 						}
@@ -2170,7 +2170,7 @@ func (data *CheckpointData) readAll(
 					for _, bat := range bats {
 						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
 						length := rowIDVec.Length()
-						pkVec2 := containers.MakeVector(types.T_uint64.ToType(), containers.Options{Allocator: data.allocator})
+						pkVec2 := containers.MakeVector(types.T_uint64.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							pkVec2.Append(objectio.HackRowidToU64(rowIDVec.Get(i).(types.Rowid)), false)
 							if err != nil {
@@ -2186,7 +2186,7 @@ func (data *CheckpointData) readAll(
 					for _, bat := range bats {
 						rowIDVec := bat.GetVectorByName(catalog.AttrRowID)
 						length := rowIDVec.Length()
-						pkVec2 := containers.MakeVector(types.T_varchar.ToType(), containers.Options{Allocator: data.allocator})
+						pkVec2 := containers.MakeVector(types.T_varchar.ToType(), data.allocator)
 						for i := 0; i < length; i++ {
 							pkVec2.Append(nil, true)
 							if err != nil {
@@ -2202,7 +2202,7 @@ func (data *CheckpointData) readAll(
 				if uint16(idx) == TBLColInsertIDX {
 					for _, bat := range bats {
 						length := bat.GetVectorByName(catalog.AttrRowID).Length()
-						vec := containers.MakeVector(types.New(types.T_varchar, types.MaxVarcharLen, 0), containers.Options{Allocator: data.allocator})
+						vec := containers.MakeVector(types.New(types.T_varchar, types.MaxVarcharLen, 0), data.allocator)
 						for i := 0; i < length; i++ {
 							vec.Append([]byte(""), false)
 						}

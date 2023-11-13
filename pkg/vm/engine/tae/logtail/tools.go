@@ -84,11 +84,11 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 
 	bat.AddVector(
 		catalog.AttrRowID,
-		containers.MakeVector(types.T_Rowid.ToType(), containers.Options{Allocator: mp}),
+		containers.MakeVector(types.T_Rowid.ToType(), mp),
 	)
 	bat.AddVector(
 		catalog.AttrCommitTs,
-		containers.MakeVector(types.T_TS.ToType(), containers.Options{Allocator: mp}),
+		containers.MakeVector(types.T_TS.ToType(), mp),
 	)
 	// Types() is not used, then empty schema can also be handled here
 	typs := schema.AllTypes()
@@ -99,7 +99,7 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 		}
 		bat.AddVector(
 			attr,
-			containers.MakeVector(typs[i], containers.Options{Allocator: mp}),
+			containers.MakeVector(typs[i], mp),
 		)
 	}
 	return bat

@@ -193,15 +193,15 @@ func (n *MVCCHandle) CollectDeleteLocked(
 		if rowIDVec != nil {
 			rowIDVec.Close()
 		}
-		rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), containers.Options{Allocator: mp})
+		rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), mp)
 		if commitTSVec != nil {
 			commitTSVec.Close()
 		}
-		commitTSVec = containers.MakeVector(types.T_TS.ToType(), containers.Options{Allocator: mp})
+		commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
 		if pkVec != nil {
 			pkVec.Close()
 		}
-		pkVec = containers.MakeVector(pkType, containers.Options{Allocator: mp})
+		pkVec = containers.MakeVector(pkType, mp)
 		aborts = &nulls.Bitmap{}
 		id := n.meta.ID
 
@@ -348,8 +348,8 @@ func (n *MVCCHandle) CollectAppendLocked(
 	maxRow = node.maxRow
 
 	aborts = &nulls.Bitmap{}
-	commitTSVec = containers.MakeVector(types.T_TS.ToType(), containers.Options{Allocator: mp})
-	abortVec = containers.MakeVector(types.T_bool.ToType(), containers.Options{Allocator: mp})
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
+	abortVec = containers.MakeVector(types.T_bool.ToType(), mp)
 	n.appends.LoopOffsetRange(
 		startOffset,
 		endOffset,

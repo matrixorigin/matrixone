@@ -519,7 +519,7 @@ func isProtoTNBatchEqual(ctx context.Context, t *testing.T, bat1 *api.Batch, bat
 	} else {
 		moIns, err := batch.ProtoBatchToBatch(bat1)
 		assert.NoError(t, err)
-		tnIns := containers.ToTNBatch(moIns)
+		tnIns := containers.ToTNBatch(moIns, common.DefaultAllocator)
 		isBatchEqual(ctx, t, tnIns, bat2)
 	}
 }

@@ -286,7 +286,8 @@ func (node *DeleteNode) setPersistedRows() {
 		}
 	}
 	node.mask = roaring.NewBitmap()
-	rowids := containers.ToTNVector(bat.Vecs[0])
+	rowids := containers.ToTNVector(bat.Vecs[0], common.MutMemAllocator)
+	defer rowids.Close()
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
 		offset := rowid.GetRowOffset()
 		node.mask.Add(offset)
@@ -451,7 +452,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 					return
 				}
 				n += int64(sn3)
-				pk := containers.MakeVector(*typ, containers.Options{Allocator: common.MutMemAllocator})
+				pk := containers.MakeVector(*typ, common.MutMemAllocator)
 				if sn2, err = pk.ReadFrom(r); err != nil {
 					return
 				}
