@@ -215,9 +215,9 @@ type statsInfoKey struct{}
 
 // statistic info of sql
 type StatsInfo struct {
-	ParseDuration   time.Duration
-	PlanDuration    time.Duration
-	CompileDuration time.Duration
+	ParseDuration   time.Duration `json:"ParseDuration"`
+	PlanDuration    time.Duration `json:"PlanDuration"`
+	CompileDuration time.Duration `json:"CompileDuration"`
 
 	PipelineTimeConsumption      time.Duration
 	PipelineBlockTimeConsumption time.Duration
@@ -226,10 +226,8 @@ type StatsInfo struct {
 	S3ReadBytes             uint
 	S3WriteBytes            uint
 
-	//temporary fields which is used to compute data above
-
-	planStart time.Time
-
+	ParseStart   time.Time `json:"ParseStart"`
+	planStart    time.Time
 	compileStart time.Time
 }
 
