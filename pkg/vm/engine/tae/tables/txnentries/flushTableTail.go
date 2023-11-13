@@ -134,7 +134,13 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			continue
 		}
 		dataBlock := blk.GetBlockData()
-		bat, err := dataBlock.CollectDeleteInRange(entry.txn.GetContext(), entry.txn.GetStartTS().Next(), entry.txn.GetPrepareTS(), false)
+		bat, err := dataBlock.CollectDeleteInRange(
+			entry.txn.GetContext(),
+			entry.txn.GetStartTS().Next(),
+			entry.txn.GetPrepareTS(),
+			false,
+			common.MergeAllocator,
+		)
 		if err != nil {
 			return err
 		}
@@ -155,7 +161,9 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 				delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 			}
 			delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
-			if err = entry.createdBlkHandles[destpos.Idx].RangeDelete(uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact); err != nil {
+			if err = entry.createdBlkHandles[destpos.Idx].RangeDelete(
+				uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+			); err != nil {
 				return err
 			}
 		}

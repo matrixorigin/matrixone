@@ -17,9 +17,10 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -199,7 +200,6 @@ func (e *CheckpointEntry) Read(
 		e.tnLocation,
 		reader,
 		fs.Service,
-		common.DefaultAllocator,
 	); err != nil {
 		return
 	}
@@ -210,7 +210,7 @@ func (e *CheckpointEntry) PrefetchMetaIdx(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
-	data = logtail.NewCheckpointData()
+	data = logtail.NewCheckpointData(common.CheckpointAllocator)
 	if err = data.PrefetchMeta(
 		ctx,
 		e.version,
@@ -249,7 +249,7 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 	if err != nil {
 		return
 	}
-	err = data.InitMetaIdx(ctx, e.version, reader, e.cnLocation, common.DefaultAllocator)
+	err = data.InitMetaIdx(ctx, e.version, reader, e.cnLocation, common.CheckpointAllocator)
 	if err != nil {
 		return
 	}
@@ -262,7 +262,7 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 		return
 	}
 	var bats []*batch.Batch
-	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.DefaultAllocator); err != nil {
+	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.CheckpointAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, segDel, err = data.GetTableDataFromBats(tid, bats)

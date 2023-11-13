@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,11 +58,11 @@ type BlockReader interface {
 	ID() types.Blockid
 	String() string
 	IsUncommitted() bool
-	GetByFilter(ctx context.Context, filter *Filter) (uint32, error)
-	GetColumnDataByNames(ctx context.Context, attrs []string) (*containers.BlockView, error)
-	GetColumnDataByIds(ctx context.Context, colIdxes []int) (*containers.BlockView, error)
-	GetColumnDataByName(context.Context, string) (*containers.ColumnView, error)
-	GetColumnDataById(context.Context, int) (*containers.ColumnView, error)
+	GetByFilter(ctx context.Context, filter *Filter, mp *mpool.MPool) (uint32, error)
+	GetColumnDataByNames(ctx context.Context, attrs []string, mp *mpool.MPool) (*containers.BlockView, error)
+	GetColumnDataByIds(ctx context.Context, colIdxes []int, mp *mpool.MPool) (*containers.BlockView, error)
+	GetColumnDataByName(context.Context, string, *mpool.MPool) (*containers.ColumnView, error)
+	GetColumnDataById(context.Context, int, *mpool.MPool) (*containers.ColumnView, error)
 	GetMeta() any
 	GetDeltaPersistedTS() types.TS
 	GetMetaLoc() objectio.Location
@@ -87,7 +88,7 @@ type BlockWriter interface {
 	io.Closer
 	Append(data *containers.Batch, offset uint32) (uint32, error)
 	Update(row uint32, col uint16, v any) error
-	RangeDelete(start, end uint32, dt DeleteType) error
+	RangeDelete(start, end uint32, dt DeleteType, mp *mpool.MPool) error
 	UpdateMetaLoc(metaLoc objectio.Location) error
 	UpdateDeltaLoc(deltaLoc objectio.Location) error
 
