@@ -33,14 +33,14 @@ create user user_role identified by '12345678';
 create role user_role;
 create role '';
 
---3.rolename已存在/不存在，包含初始化moadmin，public,if not exits存在/不存在
+--3.rolename已存在/不存在，包含初始化moadmin，public,if not exist存在/不存在
 create role moadmin,public;
 create role if not exists moadmin,public;
 select role_name from mo_catalog.mo_role where role_name in ('moadmin','public');
 create role if not exists role_7;
 select role_name from mo_catalog.mo_role where role_name = 'role_7';
 
---4.一次性创建多个role都不存在，部分存在，全部存在，名字非法，管理员角色，if not exits
+--4.一次性创建多个role都不存在，部分存在，全部存在，名字非法，管理员角色，if not exist
 use mo_catalog;
 create role if not exists role_role1,role_role2,role_role3,role_role4,role_role5,role_role6;
 select role_name from mo_role where role_name like 'role_role%' order by role_name;

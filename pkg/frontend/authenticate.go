@@ -328,8 +328,8 @@ func getLabelPart(user string) string {
 	return ""
 }
 
-// ParseLabel parses the label string. The labels are seperated by
-// ",", key and value are seperated by "=".
+// ParseLabel parses the label string. The labels are separated by
+// ",", key and value are separated by "=".
 func ParseLabel(labelStr string) (map[string]string, error) {
 	labelMap := make(map[string]string)
 	if len(labelStr) == 0 {
