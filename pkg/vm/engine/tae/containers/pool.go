@@ -44,6 +44,10 @@ func init() {
 	}
 }
 
+func GetDefaultVectorPoolALLocator() *mpool.MPool {
+	return _vectorPoolAlloactor
+}
+
 type VectorPoolOption func(*VectorPool)
 
 func WithAllocationLimit(maxv int) VectorPoolOption {

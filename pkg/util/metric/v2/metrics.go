@@ -28,11 +28,16 @@ func init() {
 	initTxnMetrics()
 	initTaskMetrics()
 	initRPCMetrics()
+	initMemMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
+}
+
+func initMemMetrics() {
+	registry.MustRegister(memMPoolAllocatedSizeGauge)
 }
 
 func initTaskMetrics() {
@@ -42,6 +47,8 @@ func initTaskMetrics() {
 	registry.MustRegister(taskScheduledByCounter)
 	registry.MustRegister(taskGeneratedStuffCounter)
 	registry.MustRegister(taskSelectivityCounter)
+
+	registry.MustRegister(TaskMergeTransferPageLengthGauge)
 }
 
 func initFileServiceMetrics() {
@@ -96,6 +103,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnMpoolDurationHistogram)
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
+	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
 }
 
 func initRPCMetrics() {

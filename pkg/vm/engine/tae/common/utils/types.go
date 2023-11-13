@@ -68,3 +68,5 @@ type SimpleSensor struct {
 	name  string
 	state atomic.Int32
 }
+
+var TransferPageCounter atomic.Int64
