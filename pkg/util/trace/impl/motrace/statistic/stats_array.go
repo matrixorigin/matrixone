@@ -226,40 +226,40 @@ type StatsInfo struct {
 	S3ReadBytes             uint
 	S3WriteBytes            uint
 
-	ParseStart   time.Time `json:"ParseStart"`
-	planStart    time.Time
-	compileStart time.Time
+	ParseStartTime   time.Time `json:"ParseStartTime"`
+	PlanStartTime    time.Time `json:"PlanStartTime"`
+	CompileStartTime time.Time `json:"CompileStartTime"`
 }
 
 func (stats *StatsInfo) CompileStart() {
 	if stats == nil {
 		return
 	}
-	if !stats.compileStart.IsZero() {
+	if !stats.CompileStartTime.IsZero() {
 		return
 	}
-	stats.compileStart = time.Now()
+	stats.CompileStartTime = time.Now()
 }
 
 func (stats *StatsInfo) CompileEnd() {
 	if stats == nil {
 		return
 	}
-	stats.CompileDuration = time.Since(stats.compileStart)
+	stats.CompileDuration = time.Since(stats.CompileStartTime)
 }
 
 func (stats *StatsInfo) PlanStart() {
 	if stats == nil {
 		return
 	}
-	stats.planStart = time.Now()
+	stats.PlanStartTime = time.Now()
 }
 
 func (stats *StatsInfo) PlanEnd() {
 	if stats == nil {
 		return
 	}
-	stats.PlanDuration = time.Since(stats.planStart)
+	stats.PlanDuration = time.Since(stats.PlanStartTime)
 }
 
 // reset StatsInfo into zero state
@@ -278,8 +278,8 @@ func (stats *StatsInfo) Reset() {
 	stats.S3ReadBytes = 0
 	stats.S3WriteBytes = 0
 
-	stats.compileStart = time.Time{}
-	stats.planStart = time.Time{}
+	stats.CompileStartTime = time.Time{}
+	stats.PlanStartTime = time.Time{}
 
 }
 
