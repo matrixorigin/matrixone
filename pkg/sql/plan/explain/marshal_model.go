@@ -25,12 +25,12 @@ import (
 )
 
 type ExplainData struct {
-	Steps     []Step `json:"steps"`
-	Code      uint16 `json:"code"`
-	Message   string `json:"message"`
-	Success   bool   `json:"success"`
-	Uuid      string `json:"uuid"`
-	StatsInfo statistic.StatsInfo
+	Steps        []Step `json:"steps"`
+	Code         uint16 `json:"code"`
+	Message      string `json:"message"`
+	Success      bool   `json:"success"`
+	Uuid         string `json:"uuid"`
+	NewPlanStats statistic.StatsInfo
 }
 
 type Step struct {
