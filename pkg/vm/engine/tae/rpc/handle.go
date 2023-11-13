@@ -1102,9 +1102,9 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			rowIDVec := containers.ToTNVector(bat.Vecs[0])
+			rowIDVec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
 			defer rowIDVec.Close()
-			pkVec := containers.ToTNVector(bat.Vecs[1])
+			pkVec := containers.ToTNVector(bat.Vecs[1], common.WorkspaceAllocator)
 			//defer pkVec.Close()
 			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
@@ -1115,9 +1115,9 @@ func (h *Handle) HandleWrite(
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
-	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0))
+	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
 	defer rowIDVec.Close()
-	pkVec := containers.ToTNVector(req.Batch.GetVector(1))
+	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return

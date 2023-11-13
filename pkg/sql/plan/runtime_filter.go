@@ -52,10 +52,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 			return
 		}
 
-		if leftChild.NodeType > 0 {
-			return
-		}
-
 		rfTag := builder.genNewTag()
 
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{Tag: rfTag})

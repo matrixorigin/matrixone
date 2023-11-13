@@ -62,8 +62,9 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 
 	ti, _ := time.Now().MarshalBinary()
 	procInfo := &pipeline.ProcessInfo{
-		Lim:         &pipeline.ProcessLimitation{Size: 1},
-		SessionInfo: &pipeline.SessionInfo{TimeZone: ti},
+		Lim:              &pipeline.ProcessLimitation{Size: 1},
+		SessionInfo:      &pipeline.SessionInfo{TimeZone: ti},
+		AnalysisNodeList: []int32{1, 2},
 	}
 	procInfoData, err := procInfo.Marshal()
 	require.Nil(t, err)
