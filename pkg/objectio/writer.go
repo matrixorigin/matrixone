@@ -119,7 +119,7 @@ func (w *objectWriterV1) DescribeObject() (*ObjectStats, error) {
 	objStats.name = w.name
 	objStats.sortKeyIdx = w.pkColIdx
 
-	if len(w.blocks[SchemaData]) != 0 {
+	if len(w.blocks[SchemaData]) != 0 && len(w.colmeta) > w.pkColIdx {
 		objStats.zoneMaps[SchemaData] = w.colmeta[w.pkColIdx].ZoneMap()
 	}
 
