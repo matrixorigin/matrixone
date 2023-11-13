@@ -45,7 +45,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-	objDescription    *ObjectStats
+	objStats          ObjectStats
 	pkColIdx          uint16
 }
 
@@ -480,7 +480,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 			blockObjects = append(blockObjects, w.blocks[i][j].meta)
 		}
 	}
-	_, err = w.Sync(ctx, items...)
+	err = w.Sync(ctx, items...)
 	if err != nil {
 		return nil, err
 	}
@@ -493,23 +493,24 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 }
 
 // Sync is for testing
-func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) (ObjectStats, error) {
+func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error {
 	w.buffer.SetDataOptions(items...)
 	// if a compact task is rollbacked, it may leave a written file in fs
 	// here we just delete it and write again
 	err := w.object.fs.Write(ctx, w.buffer.GetData())
 	if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
-			return nil, err
+			return err
 		}
 		err = w.object.fs.Write(ctx, w.buffer.GetData())
 	}
 
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return w.DescribeObject()
+	w.objStats, err = w.DescribeObject()
+	return err
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
