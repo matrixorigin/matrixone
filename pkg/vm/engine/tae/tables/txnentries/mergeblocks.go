@@ -189,7 +189,9 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 			delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 		}
 		delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
-		if err = blks[destpos.Idx].RangeDelete(uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact); err != nil {
+		if err = blks[destpos.Idx].RangeDelete(
+			uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+		); err != nil {
 			return err
 		}
 	}

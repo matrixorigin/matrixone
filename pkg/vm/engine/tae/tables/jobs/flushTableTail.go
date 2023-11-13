@@ -591,7 +591,9 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 			continue
 		}
 		// do not close data, leave that to wait phase
-		if deletes, err = blkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true); err != nil {
+		if deletes, err = blkData.CollectDeleteInRange(
+			ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
+		); err != nil {
 			return
 		}
 		if deletes != nil {
@@ -661,7 +663,9 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 	for i, blk := range task.delSrcMetas {
 		blkData := blk.GetBlockData()
 		var deletes *containers.Batch
-		if deletes, err = blkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true); err != nil {
+		if deletes, err = blkData.CollectDeleteInRange(
+			ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
+		); err != nil {
 			return
 		}
 		if deletes == nil || deletes.Length() == 0 {

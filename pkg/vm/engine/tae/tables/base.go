@@ -164,7 +164,8 @@ func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
 	txn txnif.TxnReader,
 	view *containers.BaseView,
-	rwlocker *sync.RWMutex) (err error) {
+	rwlocker *sync.RWMutex,
+) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
 	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
 	if err != nil || deletes.IsEmpty() {
@@ -267,7 +268,9 @@ func (blk *baseBlock) FillPersistedDeletes(
 		ctx,
 		types.TS{},
 		txn.GetStartTS(),
-		view)
+		view,
+		mp,
+	)
 	return nil
 }
 
@@ -298,7 +301,9 @@ func (blk *baseBlock) fillPersistedDeletesInRange(
 
 func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 	ctx context.Context,
-	start, end types.TS) (deletes *nulls.Nulls, err error) {
+	start, end types.TS,
+	mp *mpool.MPool,
+) (deletes *nulls.Nulls, err error) {
 	err = blk.foreachPersistedDeletesCommittedInRange(
 		ctx,
 		start,
@@ -313,6 +318,7 @@ func (blk *baseBlock) persistedCollectDeleteMaskInRange(
 			deletes.Add(uint64(row))
 		},
 		nil,
+		mp,
 	)
 	return
 }
@@ -416,7 +422,7 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
 	blk.RUnlock()
 
-	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
 		return
 	}
 	return
@@ -447,7 +453,7 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 		}
 	}()
 
-	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
 		return
 	}
 
@@ -542,7 +548,7 @@ func (blk *baseBlock) getPersistedValue(
 	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
 	view := containers.NewColumnView(col)
-	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
 		return
 	}
 	if !skipMemory {
@@ -697,7 +703,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 		blk.Foreach(ctx, schema, pkIdx, func(v any, isNull bool, row int) error {
 			pk.Append(v, false)
 			return nil
-		}, deletes)
+		}, deletes, mp)
 	}
 	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
@@ -729,7 +735,6 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 	sels := blk.rt.VectorPool.Transient.GetVector(&t)
 	defer sels.Close()
 	selsVec := sels.GetDownstreamVector()
-	mp := sels.GetAllocator()
 	blk.foreachPersistedDeletesCommittedInRange(
 		ctx,
 		start, end,

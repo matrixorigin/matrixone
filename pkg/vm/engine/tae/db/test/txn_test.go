@@ -248,7 +248,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 	found := false
 	for blockIt.Valid() {
 		blk := blockIt.GetBlock()
-		view, err = blk.GetColumnDataByName(context.Background(), repertory.ColDefs[1].Name)
+		view, err = blk.GetColumnDataByName(context.Background(), repertory.ColDefs[1].Name, common.DefaultAllocator)
 		if err != nil {
 			return
 		}
@@ -554,7 +554,7 @@ func TestWarehouse(t *testing.T) {
 		assert.Nil(t, err)
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
-		view, _ := blk.GetColumnDataById(context.Background(), 1)
+		view, _ := blk.GetColumnDataById(context.Background(), 1, common.DefaultAllocator)
 		t.Log(view.GetData().String())
 		defer view.Close()
 		testutil.CheckAllColRowsByScan(t, rel, 20, false)
@@ -701,7 +701,7 @@ func TestTxn9(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(context.Background(), 2)
+			view, err := blk.GetColumnDataById(context.Background(), 2, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			t.Log(view.GetData().String())

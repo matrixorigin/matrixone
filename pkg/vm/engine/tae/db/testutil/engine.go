@@ -214,11 +214,11 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	for it.Valid() {
 		blk := it.GetBlock()
 		defer blk.Close()
-		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
+		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()
-		pkView, err := blk.GetColumnDataByName(context.Background(), pkName)
+		pkView, err := blk.GetColumnDataByName(context.Background(), pkName, common.DefaultAllocator)
 		assert.NoError(e.t, err)
 		defer pkView.Close()
 		pkView.ApplyDeletes()
@@ -692,14 +692,16 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 	txn, rel := e.GetRelation()
 	ForEachBlock(rel, func(blk handle.Block) error {
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		deleteBat, err := meta.GetBlockData().CollectDeleteInRange(context.Background(), types.TS{}, txn.GetStartTS(), false)
+		deleteBat, err := meta.GetBlockData().CollectDeleteInRange(
+			context.Background(), types.TS{}, txn.GetStartTS(), false, common.DefaultAllocator,
+		)
 		assert.NoError(e.t, err)
 		pkDef := e.schema.GetPrimaryKey()
 		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
 		deletePKs := deleteBat.GetVectorByName(pkDef.Name)
-		pks, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, pkDef.Idx)
+		pks, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, pkDef.Idx, common.DefaultAllocator)
 		assert.NoError(e.t, err)
-		rowIDs, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, e.schema.PhyAddrKey.Idx)
+		rowIDs, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
 		assert.NoError(e.t, err)
 		for i := 0; i < deleteBat.Length(); i++ {
 			rowID := deleteRowIDs.Get(i).(types.Rowid)

@@ -239,7 +239,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 		data = dataVer.Batch
 		defer data.Close()
-		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
+		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator)
 		if err != nil {
 			return
 		}
@@ -283,7 +283,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 	} else {
 		// for nablk, flush deletes
-		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
+		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator)
 		if err != nil {
 			return
 		}

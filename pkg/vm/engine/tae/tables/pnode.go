@@ -207,7 +207,7 @@ func (node *persistedNode) GetRowByFilter(
 
 	// Load persisted deletes
 	view := containers.NewColumnView(0)
-	if err = node.block.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
+	if err = node.block.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
 		return
 	}
 

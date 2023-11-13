@@ -257,9 +257,13 @@ type TxnStore interface {
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(ctx context.Context, dbId, id uint64, metaLocs []objectio.Location) error
 
-	RangeDelete(id *common.ID, start, end uint32, pkVec containers.Vector, dt handle.DeleteType) error
+	RangeDelete(
+		id *common.ID, start, end uint32, pkVec containers.Vector, dt handle.DeleteType,
+	) error
 	TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error)
-	GetByFilter(ctx context.Context, dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
+	GetByFilter(
+		ctx context.Context, dbId uint64, id uint64, filter *handle.Filter,
+	) (*common.ID, uint32, error)
 	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)

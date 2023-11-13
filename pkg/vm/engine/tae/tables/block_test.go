@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
@@ -71,14 +72,18 @@ func TestGetActiveRow(t *testing.T) {
 
 	node := blk.node.Load().MustMNode()
 	// row, err := blk.GetActiveRow(int8(1), ts2)
-	row, err := node.GetRowByFilter(context.Background(), updates.MockTxnWithStartTS(ts2), handle.NewEQFilter(int8(1)))
+	row, err := node.GetRowByFilter(
+		context.Background(), updates.MockTxnWithStartTS(ts2), handle.NewEQFilter(int8(1)), common.DefaultAllocator,
+	)
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(1), row)
 
 	//abort appendnode2
 	an2.Aborted = true
 
-	row, err = node.GetRowByFilter(context.Background(), updates.MockTxnWithStartTS(ts2), handle.NewEQFilter(int8(1)))
+	row, err = node.GetRowByFilter(
+		context.Background(), updates.MockTxnWithStartTS(ts2), handle.NewEQFilter(int8(1)), common.DefaultAllocator,
+	)
 	// row, err = blk.GetActiveRow(int8(1), ts2)
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(0), row)
