@@ -28,6 +28,9 @@ func WithCounterSet(ctx context.Context, sets ...*CounterSet) context.Context {
 	if v == nil {
 		v := make(CounterSets)
 		for _, s := range sets {
+			if s == nil {
+				panic("nil counter set")
+			}
 			v[s] = struct{}{}
 		}
 		return context.WithValue(ctx, CtxKeyCounters, v)
@@ -54,6 +57,9 @@ func WithCounterSet(ctx context.Context, sets ...*CounterSet) context.Context {
 	}
 
 	for _, s := range sets {
+		if s == nil {
+			panic("nil counter set")
+		}
 		newCounters[s] = struct{}{}
 	}
 	return context.WithValue(ctx, CtxKeyCounters, newCounters)

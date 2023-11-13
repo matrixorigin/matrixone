@@ -14,39 +14,11 @@
 
 package perfcounter
 
-import (
-	"context"
-)
+var globalCounterSet = new(CounterSet)
 
-func Update(ctx context.Context, fn func(*CounterSet), extraCounterSets ...*CounterSet) {
-	var counterSets CounterSets
-
-	// from context
-	v := ctx.Value(CtxKeyCounters)
-	if v != nil {
-		counterSets = v.(CounterSets)
-		for set := range counterSets {
-			fn(set)
-		}
-	}
-
-	// extra
-	for _, set := range extraCounterSets {
-		if set == nil {
-			continue
-		}
-		if counterSets != nil {
-			if _, ok := counterSets[set]; ok {
-				continue
-			}
-		}
-		fn(set)
-	}
-
-	// global
-	if _, ok := counterSets[globalCounterSet]; !ok {
-		fn(globalCounterSet)
-	}
-
-	// per table TODO
-}
+var NameForGlobal = func() string {
+	// we don't put these codes into init function to avoid initialization order problem
+	name := "global"
+	Named.Store(name, globalCounterSet)
+	return name
+}()
