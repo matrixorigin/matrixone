@@ -45,7 +45,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-	objDescription    *ObjectDescription
+	objDescription    *ObjectStats
 	pkColIdx          uint16
 }
 
@@ -54,38 +54,6 @@ type blockData struct {
 	seqnums     *Seqnums
 	data        [][]byte
 	bloomFilter []byte
-}
-
-type ObjectDescription struct {
-	zoneMaps map[uint16]ZoneMap
-	blkCnt   int
-	location Location
-}
-
-func newObjectDescription() *ObjectDescription {
-	description := new(ObjectDescription)
-	description.zoneMaps = make(map[uint16]ZoneMap)
-	return description
-}
-
-func (des *ObjectDescription) GetOriginSize() uint32 {
-	return des.location.Extent().OriginSize()
-}
-
-func (des *ObjectDescription) GetCompSize() uint32 {
-	return des.location.Extent().Length()
-}
-
-func (des *ObjectDescription) GetObjLoc() Location {
-	return des.location
-}
-
-func (des *ObjectDescription) GetBlkCnt() int {
-	return des.blkCnt
-}
-
-func (des *ObjectDescription) GetZoneMaps() map[uint16]ZoneMap {
-	return des.zoneMaps
 }
 
 type WriterType int8
