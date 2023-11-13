@@ -40,6 +40,7 @@ func NewObject(name string, fs fileservice.FileService) *Object {
 func (o *Object) GetFs() fileservice.FileService {
 	return o.fs
 }
+<<<<<<< HEAD
 
 type ObjectDescriber interface {
 	DescribeObject() (*ObjectStats, error)
@@ -94,3 +95,5 @@ func (des *ObjectStats) GetZoneMapsBySeqNum(seqNum uint16) ZoneMap {
 	}
 	return des.zoneMaps[seqNum]
 }
+=======
+>>>>>>> 5cf8d3611 (redesign object stats)
