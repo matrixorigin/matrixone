@@ -365,10 +365,18 @@ func init() {
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
 	var checkpointDataRefer [MaxIDX]*checkpointDataItem
 	for idx, schema := range schemas {
-		checkpointDataRefer[idx] = &checkpointDataItem{
-			schema,
-			append(BaseTypes, schema.Types()...),
-			append(BaseAttr, schema.AllNames()...),
+		if idx == int(ObjectInfoIDX) {
+			checkpointDataRefer[idx] = &checkpointDataItem{
+				schema,
+				schema.Types(),
+				schema.AllNames(),
+			}
+		} else {
+			checkpointDataRefer[idx] = &checkpointDataItem{
+				schema,
+				append(BaseTypes, schema.Types()...),
+				append(BaseAttr, schema.AllNames()...),
+			}
 		}
 	}
 	checkpointDataReferVersions[version] = checkpointDataRefer

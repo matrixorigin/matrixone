@@ -2973,7 +2973,7 @@ func TestSegDelLogtail(t *testing.T) {
 		require.Equal(t, uint32(6), cnins.Vecs[0].Len)  // 3 ablk + 3 nablk
 		require.Equal(t, uint32(9), segdel.Vecs[0].Len) // 4 create + 5 update
 		require.Equal(t, 2, len(del.Vecs))
-		require.Equal(t, 15, len(segdel.Vecs))
+		require.Equal(t, 13, len(segdel.Vecs))
 	}
 	check()
 
