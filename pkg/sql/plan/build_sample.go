@@ -53,14 +53,15 @@ func (s *SampleFuncCtx) GenerateSampleFunc(se *tree.SampleExpr) error {
 	return nil
 }
 
-func (s *SampleFuncCtx) BindSampleColumn(ctx *BindContext, binder *ProjectionBinder, sampleList tree.SelectExprs) error {
+func (s *SampleFuncCtx) BindSampleColumn(ctx *BindContext, binder *ProjectionBinder, sampleList tree.SelectExprs) ([]*plan.Expr, error) {
 	s.columns = make([]*plan.Expr, 0, s.offset)
 
+	pList := make([]*plan.Expr, 0, len(sampleList))
 	for _, se := range sampleList {
 		astStr := tree.String(se.Expr, dialect.MYSQL)
 
 		if _, ok := ctx.groupByAst[astStr]; ok {
-			return moerr.NewInternalErrorNoCtx("cannot sample the group by column.")
+			return nil, moerr.NewInternalErrorNoCtx("cannot sample the group by column.")
 		}
 
 		if colPos, ok := ctx.sampleByAst[astStr]; ok {
@@ -78,13 +79,13 @@ func (s *SampleFuncCtx) BindSampleColumn(ctx *BindContext, binder *ProjectionBin
 		}
 		expr, err := binder.baseBindExpr(se.Expr, 0, true)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		colPos := int32(len(s.columns))
 		ctx.sampleByAst[astStr] = colPos
 		s.columns = append(s.columns, expr)
 
-		ctx.projects = append(ctx.projects, &plan.Expr{
+		pList = append(pList, &plan.Expr{
 			Typ: ctx.sampleFunc.columns[colPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -94,7 +95,7 @@ func (s *SampleFuncCtx) BindSampleColumn(ctx *BindContext, binder *ProjectionBin
 			},
 		})
 	}
-	return nil
+	return pList, nil
 }
 
 func (s *SampleFuncCtx) SetStartOffset(start, offset int) {

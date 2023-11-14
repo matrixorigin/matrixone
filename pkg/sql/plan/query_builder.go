@@ -2913,11 +2913,17 @@ func appendSelectList(
 func bindProjectionList(
 	ctx *BindContext,
 	projectionBinder *ProjectionBinder,
-	selectList tree.SelectExprs) (err error) {
+	selectList tree.SelectExprs) error {
 	ctx.binder = projectionBinder
 
 	sampleRangeLeft, sampleRangeRight := ctx.sampleFunc.start, ctx.sampleFunc.start+ctx.sampleFunc.offset
 	if ctx.sampleFunc.hasSampleFunc {
+		// IF sample function exists, we should bind the sample column first.
+		sampleList, err := ctx.sampleFunc.BindSampleColumn(ctx, projectionBinder, selectList[sampleRangeLeft:sampleRangeRight])
+		if err != nil {
+			return err
+		}
+
 		for i := range selectList[:sampleRangeLeft] {
 			expr, err := projectionBinder.BindExpr(selectList[i].Expr, 0, true)
 			if err != nil {
@@ -2925,10 +2931,7 @@ func bindProjectionList(
 			}
 			ctx.projects = append(ctx.projects, expr)
 		}
-
-		if err = ctx.sampleFunc.BindSampleColumn(ctx, projectionBinder, selectList[sampleRangeLeft:sampleRangeRight]); err != nil {
-			return err
-		}
+		ctx.projects = append(ctx.projects, sampleList...)
 	}
 
 	for i := range selectList[sampleRangeRight:] {

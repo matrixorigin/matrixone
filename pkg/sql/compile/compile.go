@@ -2475,7 +2475,7 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 
 	rs := c.newMergeScope(ss)
 	// should sample again if sample by rows.
-	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+	if n.SampleFunc.Rows != plan2.NotSampleByRows || len(ss) == 1 {
 		rs.appendInstruction(vm.Instruction{
 			Op:      vm.Sample,
 			Idx:     c.anal.curr,

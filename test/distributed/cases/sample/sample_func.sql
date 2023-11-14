@@ -36,3 +36,6 @@ select c1, c2, sample(c3, 3 rows) from s_t1 where c1 = 1 order by c3;
 select sample(c3, 100 percent) from s_t1 order by c3;
 /* 7. sample 0 percent from table by column c1, expected to get empty */
 select sample(c1, 0 percent) from s_t1;
+/* 8. some case I don't know how to describe it, in short, these cases should be OK */
+select count(*) from (select c1, c2, sample(c2, 100 percent), c3 from s_t1);
+select count(*) from (select c1, sample(c2, 100 percent), c2, c3 from s_t1);
