@@ -810,8 +810,10 @@ func LoadCheckpointEntriesFromKey(
 		locations = append(locations, location)
 	}
 	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
-		deltaLoc := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).(objectio.Location)
-		metaLoc := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).(objectio.Location)
+		deltaLoc := objectio.Location(
+			data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(
+			data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		if !metaLoc.IsEmpty() {
 			locations = append(locations, metaLoc)
 		}
@@ -820,8 +822,10 @@ func LoadCheckpointEntriesFromKey(
 		}
 	}
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
-		deltaLoc := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).(objectio.Location)
-		metaLoc := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).(objectio.Location)
+		deltaLoc := objectio.Location(
+			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		metaLoc := objectio.Location(
+			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		if !metaLoc.IsEmpty() {
 			locations = append(locations, metaLoc)
 			if len((*softDeletes)[metaLoc.Name().String()]) == 0 {
