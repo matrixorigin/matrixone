@@ -99,12 +99,12 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]map[uint16]bool)
-	for _, name := range names {
+	for i, name := range names {
 		if len(name) == 0 {
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 {
+		if len(ckpStr) != 2 && i > 0 {
 			return moerr.NewInternalError(ctx, "invalid checkpoint string")
 		}
 		metaLoc := ckpStr[0]
