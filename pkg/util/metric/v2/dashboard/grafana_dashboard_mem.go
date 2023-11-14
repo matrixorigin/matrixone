@@ -16,7 +16,10 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
 	"github.com/K-Phoen/grabana/dashboard"
+	"github.com/K-Phoen/grabana/row"
+	"strings"
 )
 
 func (c *DashboardCreator) initMemDashboard() error {
@@ -28,7 +31,7 @@ func (c *DashboardCreator) initMemDashboard() error {
 	build, err := dashboard.New(
 		"Memory Metrics",
 		c.withRowOptions(
-			c.initTAEMpoolAllocatorRow(),
+			c.initMpoolAllocatorRow(),
 		)...)
 	if err != nil {
 		return err
@@ -37,37 +40,64 @@ func (c *DashboardCreator) initMemDashboard() error {
 	return err
 }
 
-func (c *DashboardCreator) initTAEMpoolAllocatorRow() dashboard.Option {
+//func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
+//	return dashboard.Row(
+//		"",
+//		c.withMultiGraph(
+//			"TAE Mpool Allocator",
+//			6,
+//			[]string{
+//				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_default"`) + `)`,
+//				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_small"`) + `)`,
+//				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_mutable"`) + `)`,
+//				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="vectorpool_default"`) + `)`,
+//			},
+//			[]string{
+//				"tae-defaulter-allocator",
+//				"tae-small-allocator",
+//				"tae-mutable-memory-allocator",
+//				"vectorPool-default-allocator",
+//			}),
+//
+//		c.withGraph(
+//			"Cross Pool Free Counter",
+//			6,
+//			`increase(`+c.getMetricWithFilter("mo_mem_cross_pool_free_total", "")+`[$interval])`,
+//			""),
+//	)
+//}
+
+func (c *DashboardCreator) initMpoolAllocatorRow() dashboard.Option {
+	options := make([]row.Option, 0)
+	names := []string{
+		"tae_default", "tae_mutable", "tae_small",
+		"vectorpool_default", "tae_logtail",
+		"tae_checkpoint", "tae_merge", "tae_workspace",
+		"tae_debug", "global_stats_allocated",
+	}
+
+	for idx := 0; idx < len(names); idx++ {
+		options = append(options, c.withMultiGraph(
+			strings.ToTitle(strings.Replace(names[idx], "_", " ", 10)),
+			3,
+			[]string{
+				`sum(` + c.getMetricWithFilter("mo_mem_mpool_allocated_size", fmt.Sprintf(`type="%s"`, names[idx])) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_mem_mpool_high_water_mark_size", fmt.Sprintf(`type="%s_high_water_mark"`, names[idx])) + `)`,
+			},
+			[]string{
+				names[idx],
+				names[idx] + "_high_water_mark",
+			}))
+	}
+
+	options = append(options, c.withGraph(
+		"Cross Pool Free Counter",
+		6,
+		`increase(`+c.getMetricWithFilter("mo_mem_cross_pool_free_total", "")+`[$interval])`,
+		""))
+
 	return dashboard.Row(
 		"TAE Mpool Allocator",
-		c.withGraph(
-			"TAE Defaulter Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_default"`)+`) by (name)`,
-			"{{ name }}"),
-
-		c.withGraph(
-			"TAE Small Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_small"`)+`) by (name)`,
-			"{{ name }}"),
-
-		c.withGraph(
-			"TAE Mutable Memory Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="tae_mutable"`)+`) by (name)`,
-			"{{ name }}"),
-
-		c.withGraph(
-			"VectorPool Default Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="vectorpool_default"`)+`) by (name)`,
-			"{{ name }}"),
-
-		c.withGraph(
-			"VectorPool Transient Allocator",
-			2.4,
-			`sum(`+c.getMetricWithFilter("mo_mem_mpool_allocated_size", `type="vectorpool_transient"`)+`) by (name)`,
-			"{{ name }}"),
+		options...,
 	)
 }
