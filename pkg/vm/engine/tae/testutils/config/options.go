@@ -60,44 +60,6 @@ var segmentSizes map[SegmentSizeType]uint16 = map[SegmentSizeType]uint16{
 	SST_L:    uint16(400),
 }
 
-func NewOptions(dir string, cst CacheSizeType, bst BlockSizeType, sst SegmentSizeType) *options.Options {
-	blockSize := blockSizes[bst]
-	blockCnt := segmentSizes[sst]
-	opts := new(options.Options)
-	storageCfg := new(options.StorageCfg)
-	storageCfg.BlockMaxRows = blockSize
-	storageCfg.SegmentMaxBlocks = blockCnt
-	opts.StorageCfg = storageCfg
-
-	if cst == CST_Customize {
-		cacheCfg := new(options.CacheCfg)
-		cacheCfg.IndexCapacity = uint64(blockSize) * uint64(blockCnt) * 80
-		opts.CacheCfg = cacheCfg
-	}
-	opts.Ctx = context.Background()
-	opts.FillDefaults(dir)
-	return opts
-}
-
-func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows uint32, blockCnt uint16, opts *options.Options) *options.Options {
-	if opts == nil {
-		opts = new(options.Options)
-	}
-	storageCfg := &options.StorageCfg{
-		BlockMaxRows:     blockRows,
-		SegmentMaxBlocks: blockCnt,
-	}
-	opts.StorageCfg = storageCfg
-	if cst == CST_Customize {
-		cacheCfg := new(options.CacheCfg)
-		cacheCfg.IndexCapacity = uint64(blockRows) * uint64(blockCnt) * 2000
-		opts.CacheCfg = cacheCfg
-	}
-	opts.Ctx = context.Background()
-	opts.FillDefaults(dir)
-	return opts
-}
-
 func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Options) {
 	opts = WithQuickScanAndCKPOpts(in)
 	opts.CheckpointCfg.ScanInterval *= time.Duration(factor)
