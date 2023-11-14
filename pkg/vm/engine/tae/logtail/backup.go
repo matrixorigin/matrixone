@@ -318,7 +318,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 		if !metaLoc.IsEmpty() && !isABlk {
 			addBlockToObjectData(metaLoc, isABlk, true, i,
-				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
+				blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
 			name := metaLoc.Name().String()
 
 			if isABlk && !deltaLoc.IsEmpty() && !deltaLoc.Name().Equal(metaLoc.Name()) {
@@ -346,7 +346,7 @@ func ReWriteCheckpointAndBlockFromKey(
 
 		if !deltaLoc.IsEmpty() {
 			addBlockToObjectData(deltaLoc, isABlk, false, i,
-				blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
+				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 		}
 	}
 
