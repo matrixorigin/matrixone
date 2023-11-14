@@ -219,12 +219,12 @@ type StatsInfo struct {
 	PlanDuration    time.Duration `json:"PlanDuration"`
 	CompileDuration time.Duration `json:"CompileDuration"`
 
-	PipelineTimeConsumption      time.Duration
-	PipelineBlockTimeConsumption time.Duration
+	//PipelineTimeConsumption      time.Duration
+	//PipelineBlockTimeConsumption time.Duration
 
-	S3AccessTimeConsumption time.Duration
-	S3ReadBytes             uint
-	S3WriteBytes            uint
+	//S3AccessTimeConsumption time.Duration
+	//S3ReadBytes             uint
+	//S3WriteBytes            uint
 
 	ParseStartTime   time.Time `json:"ParseStartTime"`
 	PlanStartTime    time.Time `json:"PlanStartTime"`
@@ -271,12 +271,12 @@ func (stats *StatsInfo) Reset() {
 	stats.CompileDuration = 0
 	stats.PlanDuration = 0
 
-	stats.PipelineTimeConsumption = 0
-	stats.PipelineBlockTimeConsumption = 0
+	//stats.PipelineTimeConsumption = 0
+	//stats.PipelineBlockTimeConsumption = 0
 
-	stats.S3AccessTimeConsumption = 0
-	stats.S3ReadBytes = 0
-	stats.S3WriteBytes = 0
+	//stats.S3AccessTimeConsumption = 0
+	//stats.S3ReadBytes = 0
+	//stats.S3WriteBytes = 0
 
 	stats.CompileStartTime = time.Time{}
 	stats.PlanStartTime = time.Time{}
