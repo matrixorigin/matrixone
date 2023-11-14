@@ -765,7 +765,7 @@ func GetStreamCurrentSize(ctx context.Context, configs map[string]interface{}, f
 	return totalSize, nil
 }
 
-func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool, factory KafkaAdapterFactory) (*batch.Batch, error) {
+func RetrieveData(ctx context.Context, msgs []*kafka.Message, configs map[string]interface{}, attrs []string, types []types.Type, offset int64, limit int64, mp *mpool.MPool, factory KafkaAdapterFactory) (*batch.Batch, error) {
 	err := ValidateConfig(ctx, configs, NewKafkaAdapter)
 	if err != nil {
 		return nil, err
@@ -787,15 +787,25 @@ func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []s
 		}
 	}
 
-	messages, err := ka.ReadMessagesFromTopic(configs["topic"].(string), offset, limit)
-	if err != nil {
-		return nil, err
+	var messages []*kafka.Message // Replace 'YourMessageType' with the actual type of your messages
+
+	// Determine the source of messages based on whether 'msgs' is nil or not
+	if msgs != nil {
+		messages = msgs
+	} else {
+		var err error
+		messages, err = ka.ReadMessagesFromTopic(configs["topic"].(string), offset, limit)
+		if err != nil {
+			return nil, err
+		}
 	}
 
+	// Common logic for processing messages
 	b, err := PopulateBatchFromMSG(ctx, ka, types, attrs, messages, configs, mp)
 	if err != nil {
 		return nil, err
 	}
 
 	return b, nil
+
 }

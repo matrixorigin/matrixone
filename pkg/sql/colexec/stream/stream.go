@@ -67,14 +67,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	result := vm.NewCallResult()
 	var err error
-	if proc.SessionInfo.StreamInMemScanBatch != nil {
-		arg.buf = proc.SessionInfo.StreamInMemScanBatch
-	} else {
-		arg.buf, err = mokafka.RetrieveData(proc.Ctx, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
-		if err != nil {
-			result.Status = vm.ExecStop
-			return result, err
-		}
+
+	arg.buf, err = mokafka.RetrieveData(proc.Ctx, proc.SessionInfo.StreamInMemScanBatch, arg.Configs, arg.attrs, arg.types, arg.Offset, arg.Limit, proc.Mp(), mokafka.NewKafkaAdapter)
+	if err != nil {
+		result.Status = vm.ExecStop
+		return result, err
 	}
 
 	result.Batch = arg.buf

@@ -21,7 +21,6 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -178,6 +177,8 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 		return moerr.NewInternalError(ctx, "Failed to subscribe to topic")
 	}
 	// Continuously listen for messages
+
+	var buffered_messages []*kafka.Message
 	for {
 		select {
 		case <-ctx.Done():
@@ -200,38 +201,17 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 				return nil
 			}
 			ev := ct.Poll(100)
-			k.queryResult()
 			if ev == nil {
 				continue
 			}
 
 			switch e := ev.(type) {
 			case *kafka.Message:
-				var insertSQL string
-				switch k.options["value"] {
-				case "json":
-					obj, err := k.decoder.Decode(e.Value)
-					if err != nil {
-						k.logger.Error("failed to decode from json data", zap.Error(err))
-						continue
-					}
-					insertSQL, err = k.converter.Convert(ctx, obj)
-					if err != nil {
-						k.logger.Error("failed to convert to insert SQL", zap.Error(err))
-						continue
-					}
-				case "avro":
-					// Handle Avro decoding and conversion to SQL here
-					// For now, we'll skip it since you mentioned not to use SchemaRegistry
-				case "protobuf":
-					// Handle Protobuf decoding and conversion to SQL here
-					// For now, we'll skip it since you mentioned not to use SchemaRegistry
-				default:
-					return moerr.NewInternalError(ctx, "Unsupported value format")
+				buffered_messages = append(buffered_messages, e)
+				if len(buffered_messages) >= 10 {
+					res =: k.queryResult(buffered_messages)
+					k.insertRow(insertSQL)
 				}
-
-				// Insert the row data to table.
-				k.insertRow(insertSQL)
 
 			case kafka.Error:
 				// Handle the error accordingly.
@@ -286,16 +266,13 @@ func (k *KafkaMoConnector) insertRow(sql string) {
 
 type STREAMKEY struct{}
 
-func (k *KafkaMoConnector) queryResult() {
+func (k *KafkaMoConnector) queryResult(msgs []*kafka.Message) ie.InternalExecResult  {
+	// todo : get the sql from the user input
 	sql := "select * from `test`.test_stream_2"
 	opts := ie.SessionOverrideOptions{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3000)
-	value := batch.NewWithSize(10)
-	ctx = context.WithValue(ctx, "test", value)
-	//todo: Add tag to the context to specify this is the in-memory stream scan
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	ctx = context.WithValue(ctx, "msgs", msgs)
 	defer cancel()
-	err := k.ie.Exec(ctx, sql, opts)
-	if err != nil {
-		k.logger.Error("failed to insert row", zap.String("SQL", sql), zap.Error(err))
-	}
+	res := k.ie.Query(ctx, sql, opts)
+	return res
 }

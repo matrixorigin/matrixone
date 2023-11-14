@@ -30,6 +30,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -3577,9 +3578,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
 	// set the batch buf for stream scan
-	var inMemStreamScan *batch.Batch
+	var inMemStreamScan []*kafka.Message
 
-	if batchValue, ok := requestCtx.Value("test").(*batch.Batch); ok {
+	if batchValue, ok := requestCtx.Value("test").([]*kafka.Message); ok {
 		inMemStreamScan = batchValue
 	} else {
 		inMemStreamScan = batchValue

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -118,7 +119,7 @@ type SessionInfo struct {
 	SeqLastValue         []string
 	SqlHelper            sqlHelper
 	Buf                  *buffer.Buffer
-	StreamInMemScanBatch *batch.Batch
+	StreamInMemScanBatch []*kafka.Message
 }
 
 // AnalyzeInfo  analyze information for query
