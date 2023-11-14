@@ -235,7 +235,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	}
 
 	for i, block := range task.compacted {
-		if views[i], err = block.GetColumnDataByIds(ctx, Idxs); err != nil {
+		if views[i], err = block.GetColumnDataByIds(ctx, Idxs, common.MergeAllocator); err != nil {
 			return
 		}
 		defer views[i].Close()
@@ -302,11 +302,11 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 
 	// merge sort the sort key
 	allocSz := length * 4
-	node, err := common.DefaultAllocator.Alloc(allocSz)
+	node, err := common.MergeAllocator.Alloc(allocSz)
 	if err != nil {
 		panic(err)
 	}
-	defer common.DefaultAllocator.Free(node)
+	defer common.MergeAllocator.Free(node)
 	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&node[0])), length)
 
 	vecs, mapping := mergeColumns(sortVecs, &sortedIdx, true, rows, to, schema.HasSortKey(), task.rt.VectorPool.Transient)
