@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
@@ -46,12 +45,6 @@ func TestService_RegisterServices(t *testing.T) {
 				ListenAddress:  fmt.Sprintf("%s:%d", listenHost, port1+1),
 				ServiceAddress: fmt.Sprintf("%s:%d", serviceHost, port1+1),
 			},
-			Ctl: ctlservice.Config{
-				Address: address.Address{
-					ListenAddress:  fmt.Sprintf("%s:%d", listenHost, port1+2),
-					ServiceAddress: fmt.Sprintf("%s:%d", serviceHost, port1+2),
-				},
-			},
 			QueryServiceConfig: queryservice.Config{
 				Address: address.Address{
 					ListenAddress:  fmt.Sprintf("%s:%d", listenHost, port1+3),
@@ -66,8 +59,6 @@ func TestService_RegisterServices(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port1), s.pipelineServiceListenAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", serviceHost, port1+1), s.lockServiceServiceAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port1+1), s.lockServiceListenAddr())
-	assert.Equal(t, fmt.Sprintf("%s:%d", serviceHost, port1+2), s.ctlServiceServiceAddr())
-	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port1+2), s.ctlServiceListenAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", serviceHost, port1+3), s.queryServiceServiceAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port1+3), s.queryServiceListenAddr())
 
@@ -77,8 +68,6 @@ func TestService_RegisterServices(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port2), s.pipelineServiceListenAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", serviceHost, port2+1), s.lockServiceServiceAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port2+1), s.lockServiceListenAddr())
-	assert.Equal(t, fmt.Sprintf("%s:%d", serviceHost, port2+2), s.ctlServiceServiceAddr())
-	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port2+2), s.ctlServiceListenAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", serviceHost, port2+3), s.queryServiceServiceAddr())
 	assert.Equal(t, fmt.Sprintf("%s:%d", listenHost, port2+3), s.queryServiceListenAddr())
 }

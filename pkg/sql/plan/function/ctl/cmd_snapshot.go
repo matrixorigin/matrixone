@@ -25,10 +25,10 @@ import (
 func handleGetSnapshotTS(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error) {
+	sender requestSender) (pb.Result, error) {
 	rt := runtime.ProcessLevelRuntime()
 	now, _ := rt.Clock().Now()
-	return pb.CtlResult{
+	return pb.Result{
 		Method: pb.CmdMethod_GetSnapshot.String(),
 		Data:   now.DebugString(),
 	}, nil
@@ -37,19 +37,19 @@ func handleGetSnapshotTS(proc *process.Process,
 func handleUseSnapshotTS(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error) {
+	sender requestSender) (pb.Result, error) {
 	var options []client.TxnOption
 	rt := runtime.ProcessLevelRuntime()
 	if parameter != "" {
 		ts, err := tspb.ParseTimestamp(parameter)
 		if err != nil {
-			return pb.CtlResult{}, err
+			return pb.Result{}, err
 		}
 		options = append(options, client.WithSnapshotTS(ts))
 	}
 
 	rt.SetGlobalVariables(runtime.TxnOptions, options)
-	return pb.CtlResult{
+	return pb.Result{
 		Method: pb.CmdMethod_UseSnapshot.String(),
 		Data:   "OK",
 	}, nil

@@ -25,11 +25,11 @@ import (
 func handleCNGC(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error) {
+	sender requestSender) (pb.Result, error) {
 	logger := runtime.ProcessLevelRuntime().Logger()
 	debug.FreeOSMemory()
 	logger.Info("force free memory completed")
-	return pb.CtlResult{
+	return pb.Result{
 		Method: pb.CmdMethod_ForceGC.String(),
 		Data:   "OK",
 	}, nil

@@ -155,7 +155,7 @@ func requestStorageUsage(ses *Session) (resp interface{}, err error) {
 		ses.proc.UdfService, ses.proc.Aicm,
 	)
 
-	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
+	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
 	result, err := handler(proc, "DN", "", ctl2.MoCtlTNCmdSender)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `show accounts`")

@@ -40,14 +40,13 @@ message CNStore {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  string          CtlAddress         = 5;
-  metadata.CNRole Role               = 6;
-  uint64          Tick               = 7;
-  NodeState       State              = 8;
-  map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
-  metadata.WorkState WorkState       = 10;
-  string          QueryAddress       = 11;
-  ConfigData ConfigData = 12;
+  metadata.CNRole Role               = 5;
+  uint64          Tick               = 6;
+  NodeState       State              = 7;
+  map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
+  metadata.WorkState WorkState       = 9;
+  string          QueryAddress       = 10;
+  ConfigData ConfigData = 11;
 }
 
 message TNStore {
@@ -62,10 +61,9 @@ message TNStore {
   string LogtailServerAddress = 6;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 7;
-  string          CtlAddress         = 8;
-  ConfigData ConfigData = 9;
+  ConfigData ConfigData = 8;
   // QueryAddress is the address of the queryservice on tn
-  string          QueryAddress       = 10;
+  string QueryAddress = 9;
 }
 
 message LogStore {
@@ -110,16 +108,14 @@ message CNStoreHeartbeat {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  string          CtlAddress         = 5;
-  metadata.CNRole Role               = 6;
-  bool            TaskServiceCreated = 7;
-  string          QueryAddress       = 8;
-  string          InitWorkState      = 9;
-  string          GossipAddress      = 10;
-  bool            GossipJoined       = 11;
-  ConfigData      ConfigData         = 12;
+  metadata.CNRole Role               = 5;
+  bool            TaskServiceCreated = 6;
+  string          QueryAddress       = 7;
+  string          InitWorkState      = 8;
+  string          GossipAddress      = 9;
+  bool            GossipJoined       = 10;
+  ConfigData      ConfigData         = 11;
 }
-
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
 message CNAllocateID {
@@ -174,10 +170,9 @@ message TNStoreHeartbeat {
   string LogtailServerAddress = 5;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
-  string          CtlAddress         = 7;
-  ConfigData ConfigData = 8;
+  ConfigData ConfigData = 7;
   // QueryAddress is the address of queryservice on tn
-  string          QueryAddress       = 9;
+  string          QueryAddress       = 8;
 };
 
 message RSMState {
@@ -479,15 +474,14 @@ message CNStoreInfo {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  string          CtlAddress         = 5;
-  metadata.CNRole Role               = 6;
-  bool            TaskServiceCreated = 7;
-  map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
-  metadata.WorkState WorkState       = 9;
-  string          QueryAddress       = 10;
-  string          GossipAddress      = 11;
-  bool            GossipJoined       = 12;
-  ConfigData      ConfigData         = 13;
+  metadata.CNRole Role               = 5;
+  bool            TaskServiceCreated = 6;
+  map<string, metadata.LabelList> Labels = 7 [(gogoproto.nullable) = false];
+  metadata.WorkState WorkState       = 8;
+  string          QueryAddress       = 9;
+  string          GossipAddress      = 10;
+  bool            GossipJoined       = 11;
+  ConfigData      ConfigData         = 12;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -509,10 +503,9 @@ message TNStoreInfo {
   string LogtailServerAddress = 5;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
-  string CtlAddress         = 7;
-  ConfigData ConfigData = 8;
+  ConfigData ConfigData = 7;
   // QueryAddress is the address of queryservice on tn
-  string          QueryAddress       = 9;
+  string          QueryAddress       = 8;
 }
 
 // TNState contains all TN details known to the HAKeeper.

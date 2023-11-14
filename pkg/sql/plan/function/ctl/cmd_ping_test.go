@@ -40,7 +40,7 @@ func TestCmdPingTNWithEmptyTN(t *testing.T) {
 			return nil, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.CtlResult{Method: pb.CmdMethod_Ping.String(), Data: make([]interface{}, 0)},
+	assert.Equal(t, pb.Result{Method: pb.CmdMethod_Ping.String(), Data: make([]interface{}, 0)},
 		result)
 }
 
@@ -61,7 +61,7 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 			}, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.CtlResult{
+	assert.Equal(t, pb.Result{
 		Method: pb.CmdMethod_Ping.String(),
 		Data:   []interface{}{pb.TNPingResponse{ShardID: shardID}},
 	}, result)
@@ -85,7 +85,7 @@ func TestCmdPingTNWithMultiTN(t *testing.T) {
 			}, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.CtlResult{
+	assert.Equal(t, pb.Result{
 		Method: pb.CmdMethod_Ping.String(),
 		Data:   []interface{}{pb.TNPingResponse{ShardID: 1}, pb.TNPingResponse{ShardID: 2}},
 	}, result)
@@ -106,7 +106,7 @@ func TestCmdPingTNWithParameter(t *testing.T) {
 			}, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, pb.CtlResult{
+	assert.Equal(t, pb.Result{
 		Method: pb.CmdMethod_Ping.String(),
 		Data:   []interface{}{pb.TNPingResponse{ShardID: 1}},
 	}, result)

@@ -209,8 +209,6 @@ func NewService(
 		opt(srv)
 	}
 
-	srv.initCtlService()
-
 	// TODO: global client need to refactor
 	err = cnclient.NewCNClient(
 		srv.pipelineServiceServiceAddr(),
@@ -227,10 +225,6 @@ func (s *service) Start() error {
 	s.initSqlWriterFactory()
 
 	if err := s.queryService.Start(); err != nil {
-		return err
-	}
-
-	if err := s.ctlservice.Start(); err != nil {
 		return err
 	}
 
@@ -320,11 +314,6 @@ func (s *service) stopRPCs() error {
 	}
 	if s.lockService != nil {
 		if err := s.lockService.Close(); err != nil {
-			return err
-		}
-	}
-	if s.ctlservice != nil {
-		if err := s.ctlservice.Close(); err != nil {
 			return err
 		}
 	}
