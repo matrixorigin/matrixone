@@ -21,6 +21,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -199,6 +200,7 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 				return nil
 			}
 			ev := ct.Poll(100)
+			k.queryResult()
 			if ev == nil {
 				continue
 			}
@@ -275,6 +277,21 @@ func (k *KafkaMoConnector) Close() error {
 func (k *KafkaMoConnector) insertRow(sql string) {
 	opts := ie.SessionOverrideOptions{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	err := k.ie.Exec(ctx, sql, opts)
+	if err != nil {
+		k.logger.Error("failed to insert row", zap.String("SQL", sql), zap.Error(err))
+	}
+}
+
+type STREAMKEY struct{}
+
+func (k *KafkaMoConnector) queryResult() {
+	sql := "select * from `test`.test_stream_2"
+	opts := ie.SessionOverrideOptions{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3000)
+	value := batch.NewWithSize(10)
+	ctx = context.WithValue(ctx, "test", value)
 	//todo: Add tag to the context to specify this is the in-memory stream scan
 	defer cancel()
 	err := k.ie.Exec(ctx, sql, opts)

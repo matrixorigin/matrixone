@@ -3576,6 +3576,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
+	// set the batch buf for stream scan
+	var inMemStreamScan *batch.Batch
+
+	if batchValue, ok := requestCtx.Value("test").(*batch.Batch); ok {
+		inMemStreamScan = batchValue
+	} else {
+		inMemStreamScan = batchValue
+	}
+
 	beginInstant := time.Now()
 	requestCtx = appendStatementAt(requestCtx, beginInstant)
 
@@ -3588,6 +3597,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	//the ses.GetUserName returns the user_name with the account_name.
 	//here,we only need the user_name.
 	userNameOnly := rootName
+
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
@@ -3607,16 +3617,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
-		User:          ses.GetUserName(),
-		Host:          pu.SV.Host,
-		ConnectionID:  uint64(proto.ConnectionID()),
-		Database:      ses.GetDatabaseName(),
-		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
-		TimeZone:      ses.GetTimeZone(),
-		StorageEngine: pu.StorageEngine,
-		LastInsertID:  ses.GetLastInsertID(),
-		SqlHelper:     ses.GetSqlHelper(),
-		Buf:           ses.GetBuffer(),
+		User:                 ses.GetUserName(),
+		Host:                 pu.SV.Host,
+		ConnectionID:         uint64(proto.ConnectionID()),
+		Database:             ses.GetDatabaseName(),
+		Version:              makeServerVersion(pu, serverVersion.Load().(string)),
+		TimeZone:             ses.GetTimeZone(),
+		StorageEngine:        pu.StorageEngine,
+		LastInsertID:         ses.GetLastInsertID(),
+		SqlHelper:            ses.GetSqlHelper(),
+		Buf:                  ses.GetBuffer(),
+		StreamInMemScanBatch: inMemStreamScan,
 	}
 	proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)

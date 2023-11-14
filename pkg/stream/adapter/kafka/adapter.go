@@ -423,7 +423,7 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) (*batch.Batch
 	return batch, nil
 }
 
-func populateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []types.Type, attrKeys []string, msgs []*kafka.Message, configs map[string]interface{}, mp *mpool.MPool) (*batch.Batch, error) {
+func PopulateBatchFromMSG(ctx context.Context, ka KafkaAdapterInterface, typs []types.Type, attrKeys []string, msgs []*kafka.Message, configs map[string]interface{}, mp *mpool.MPool) (*batch.Batch, error) {
 	b, err := newBatch(len(msgs), typs, mp)
 	if err != nil {
 		return nil, err
@@ -792,7 +792,7 @@ func RetrieveData(ctx context.Context, configs map[string]interface{}, attrs []s
 		return nil, err
 	}
 
-	b, err := populateBatchFromMSG(ctx, ka, types, attrs, messages, configs, mp)
+	b, err := PopulateBatchFromMSG(ctx, ka, types, attrs, messages, configs, mp)
 	if err != nil {
 		return nil, err
 	}
