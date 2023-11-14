@@ -321,7 +321,7 @@ func (db *txnDB) CreateNonAppendableSegment(tid uint64, is1PC bool) (seg handle.
 	return table.CreateNonAppendableSegment(is1PC, nil)
 }
 
-func (db *txnDB) UpdateSegmentStats(id *common.ID, stats objectio.ObjectStats) error {
+func (db *txnDB) UpdateSegmentStats(id *common.ID, stats *objectio.ObjectStats) error {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err

@@ -551,7 +551,7 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	store.dbs[id] = db
 	return
 }
-func (store *txnStore) UpdateSegmentStats(id *common.ID, stats objectio.ObjectStats) error {
+func (store *txnStore) UpdateSegmentStats(id *common.ID, stats *objectio.ObjectStats) error {
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err

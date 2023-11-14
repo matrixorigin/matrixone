@@ -365,18 +365,10 @@ func init() {
 func registerCheckpointDataReferVersion(version uint32, schemas []*catalog.Schema) {
 	var checkpointDataRefer [MaxIDX]*checkpointDataItem
 	for idx, schema := range schemas {
-		if idx == int(ObjectInfoIDX) {
-			checkpointDataRefer[idx] = &checkpointDataItem{
-				schema,
-				schema.Types(),
-				schema.AllNames(),
-			}
-		} else {
-			checkpointDataRefer[idx] = &checkpointDataItem{
-				schema,
-				append(BaseTypes, schema.Types()...),
-				append(BaseAttr, schema.AllNames()...),
-			}
+		checkpointDataRefer[idx] = &checkpointDataItem{
+			schema,
+			append(BaseTypes, schema.Types()...),
+			append(BaseAttr, schema.AllNames()...),
 		}
 	}
 	checkpointDataReferVersions[version] = checkpointDataRefer
@@ -601,11 +593,7 @@ func NewCheckpointData(mp *mpool.MPool) *CheckpointData {
 		allocator: mp,
 	}
 	for idx, schema := range checkpointDataSchemas_Curr {
-		if idx == int(ObjectInfoIDX) {
-			data.bats[idx] = makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema, mp)
-		} else {
-			data.bats[idx] = makeRespBatchFromSchema(schema, mp)
-		}
+		data.bats[idx] = makeRespBatchFromSchema(schema, mp)
 	}
 	return data
 }

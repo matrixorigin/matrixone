@@ -93,6 +93,7 @@ func (e *MetadataMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64
 }
 
 type ObjectMVCCNode struct {
+	objectio.ObjectStats
 	Name           objectio.ObjectName
 	OriginSize     uint32
 	CompressedSize uint32
@@ -111,7 +112,7 @@ func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNo
 	}
 }
 
-func NewObjectInfoWithObjectStats(stats objectio.ObjectStats) *ObjectMVCCNode {
+func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		Name:           stats.ObjectName(),
 		OriginSize:     stats.OriginSize(),

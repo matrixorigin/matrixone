@@ -326,7 +326,7 @@ func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEn
 	return entry.GetBlockEntryByIDLocked(id)
 }
 
-func (entry *SegmentEntry) UpdateObjectInfo(txn txnif.TxnReader, stats objectio.ObjectStats) (isNewNode bool, err error) {
+func (entry *SegmentEntry) UpdateObjectInfo(txn txnif.TxnReader, stats *objectio.ObjectStats) (isNewNode bool, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())

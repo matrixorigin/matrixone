@@ -884,7 +884,7 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 	block := meta.GetBlockData()
 	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col), common.WorkspaceAllocator)
 }
-func (tbl *txnTable) UpdateSegmentStats(id *common.ID, stats objectio.ObjectStats) error {
+func (tbl *txnTable) UpdateSegmentStats(id *common.ID, stats *objectio.ObjectStats) error {
 	meta, err := tbl.entry.GetSegmentByID(id.ObjectID())
 	isNewNode, err := meta.UpdateObjectInfo(tbl.store.txn, stats)
 	if err != nil {
