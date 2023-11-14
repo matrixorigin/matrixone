@@ -27,3 +27,38 @@ select c1, c2, c3 from s_t1 where sample(c1, 1 rows) = 1;
 expr 'sample' is not yet implemented
 select c1, c2, c3 from s_t1 where sample(c1, 1 percent) = 1;
 expr 'sample' is not yet implemented
+/* expected success case */
+/* 1. sample 2 rows from table by column c1 */
+select count(*) from (select sample(c1, 2 rows) from s_t1);
+count(*)
+2
+/* 2. sample 2 rows from table by column c2 */
+select count(*) from (select sample(c2, 2 rows) from s_t1);
+count(*)
+2
+/* 3. sample 2 rows from table by column c2 group by col1 */
+select count(*) from (select sample(c2, 2 rows) from s_t1 group by c1);
+count(*)
+6
+/* 4. sample 3 rows from table by column c3 where c1 = 2, expected to get only 2 rows because one row's c3 is null */
+select sample(c3, 3 rows) from s_t1 where c1 = 2;
+c3
+0
+0
+/* 5. sample 3 rows from table by column c3 where c1 = 1, expected to get 3 rows (0),(1),(2) */
+select c1, c2, sample(c3, 3 rows) from s_t1 where c1 = 1 order by c3;
+c1 c2 c3
+1  1  0
+1  1  1
+1  1  2
+/* 6. sample 100 percent from table by column c3, expected to get all rows except null rows */
+select sample(c3, 100 percent) from s_t1 order by c3;
+c3
+0
+0
+0
+1
+2
+/* 7. sample 0 percent from table by column c1, expected to get empty */
+select sample(c1, 0 percent) from s_t1;
+c1
