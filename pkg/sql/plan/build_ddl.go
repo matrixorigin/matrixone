@@ -126,9 +126,6 @@ func buildCreateStream(stmt *tree.CreateStream, ctx CompilerContext) (*Plan, err
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createStream.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
@@ -253,9 +250,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		createTable.Database = ctx.DefaultDatabase()
 	}
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
@@ -516,12 +510,9 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(alterSequence.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
+		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter sequence in subscription database")
 	}
 
 	err := buildAlterSequenceTableDef(stmt, ctx, alterSequence)
@@ -556,9 +547,6 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
@@ -602,9 +590,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return nil, moerr.NewNoDB(ctx.GetContext())
-		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create table in subscription database")

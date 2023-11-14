@@ -71,19 +71,23 @@ func (rel *TxnRelation) Schema() any                                            
 func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                          { return nil }
 func (rel *TxnRelation) MakeSegmentItOnSnap() handle.SegmentIt                    { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                              { return nil }
-func (rel *TxnRelation) BatchDedup(col containers.Vector) error                   { return nil }
+func (rel *TxnRelation) BatchDedup(containers.Vector) error                       { return nil }
 func (rel *TxnRelation) Append(ctx context.Context, data *containers.Batch) error { return nil }
 func (rel *TxnRelation) AddBlksWithMetaLoc(context.Context, []objectio.Location) error {
 	return nil
 }
-func (rel *TxnRelation) GetMeta() any                                                         { return nil }
-func (rel *TxnRelation) GetDB() (handle.Database, error)                                      { return nil, nil }
-func (rel *TxnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error)       { return }
-func (rel *TxnRelation) SoftDeleteSegment(id *types.Segmentid) (err error)                    { return }
-func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)                   { return }
-func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error)      { return }
-func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error)  { return }
-func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error)        { return }
+func (rel *TxnRelation) GetMeta() any                                                    { return nil }
+func (rel *TxnRelation) GetDB() (handle.Database, error)                                 { return nil, nil }
+func (rel *TxnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error)  { return }
+func (rel *TxnRelation) SoftDeleteSegment(id *types.Segmentid) (err error)               { return }
+func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)              { return }
+func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error) { return }
+func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error) {
+	return
+}
+func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error) {
+	return
+}
 func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any, bool) (err error)             { return }
 func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                                   { return }
 func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, containers.Vector) (err error) { return }
@@ -96,7 +100,7 @@ func (rel *TxnRelation) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Loc
 func (rel *TxnRelation) GetByFilter(context.Context, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }
-func (rel *TxnRelation) GetValueByFilter(ctx context.Context, filter *handle.Filter, col int) (v any, isNull bool, err error) {
+func (rel *TxnRelation) GetValueByFilter(context.Context, *handle.Filter, int) (v any, isNull bool, err error) {
 	return
 }
 func (rel *TxnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
