@@ -670,8 +670,8 @@ func (catalog *Catalog) replaySegmentByBlock(
 			node.Start = start
 			node.End = end
 			seg.Insert(node)
+			node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation)
 		}
-		node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation)
 	}
 	// apply commit
 	node := seg.SearchNode(
@@ -687,11 +687,6 @@ func (catalog *Catalog) replaySegmentByBlock(
 		if err != nil {
 			panic(err)
 		}
-	}
-	// update blk count
-	_, offset := blkID.Offsets()
-	if node.BaseNode.BlockNumber < offset+1 {
-		node.BaseNode.BlockNumber = offset + 1 // TODO
 	}
 	// TODO: Next Object Idx
 }
