@@ -50,7 +50,7 @@ func (p *MockDataProvider) GetColumnProvider(colIdx int) Vector {
 }
 
 func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vector) {
-	vec = MakeVector(t)
+	vec = MakeVector(t, common.DefaultAllocator)
 	if provider != nil {
 		vec.Extend(provider)
 		return
@@ -241,7 +241,7 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 }
 
 func MockVector2(typ types.Type, rows int, offset int) Vector {
-	vec := MakeVector(typ)
+	vec := MakeVector(typ, common.DefaultAllocator)
 	switch typ.Oid {
 	case types.T_bool:
 		for i := 0; i < rows; i++ {

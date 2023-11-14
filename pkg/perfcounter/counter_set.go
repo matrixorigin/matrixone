@@ -22,10 +22,9 @@ import (
 )
 
 type CounterSet struct {
-	FileService       FileServiceCounterSet
-	FileServiceByName map[string]*CounterSet
-	DistTAE           DistTAECounterSet
-	TAE               TAECounterSet
+	FileService FileServiceCounterSet
+	DistTAE     DistTAECounterSet
+	TAE         TAECounterSet
 }
 
 type FileServiceCounterSet struct {

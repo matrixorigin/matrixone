@@ -377,8 +377,15 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		if err := s.diskCache.Read(ctx, vector); err != nil {
 			return err
 		}
-		// we don't cache IOEntry to disk
-		// disk cache will be set by diskCache.SetFile in S3FS.read and S3FS.write
+		// try to cache IOEntry if not caching the full file
+		if vector.Policy.CacheIOEntry() {
+			defer func() {
+				if err != nil {
+					return
+				}
+				err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+			}()
+		}
 	}
 
 	if s.remoteCache != nil {
@@ -428,7 +435,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 		return err
 	}
 
-	readFullObject := !vector.Policy.Any(SkipFullFilePreloads) &&
+	readFullObject := vector.Policy.CacheFullFile() &&
 		!vector.Policy.Any(SkipDiskCache)
 
 	var min, max *int64

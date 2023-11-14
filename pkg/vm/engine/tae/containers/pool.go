@@ -205,7 +205,7 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 		}
 	}
 
-	return NewVector(*t)
+	return NewVector(*t, Options{Allocator: p.mp})
 }
 
 func (p *VectorPool) Allocated() int {

@@ -16,19 +16,19 @@ package containers
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-func FillConstVector(length int, typ types.Type, defautV any) Vector {
+func FillConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) Vector {
 	// TODO(aptend): use default value
-	vec := movec.NewConstNull(typ, length, common.DefaultAllocator)
-	return ToTNVector(vec)
+	vec := movec.NewConstNull(typ, length, m)
+	return ToTNVector(vec, m)
 }
 
 func FillCNConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) *movec.Vector {
@@ -46,17 +46,17 @@ func ToCNBatch(tnBat *Batch) *batch.Batch {
 	return cnBat
 }
 
-func ToTNBatch(cnBat *batch.Batch) *Batch {
+func ToTNBatch(cnBat *batch.Batch, mp *mpool.MPool) *Batch {
 	tnBat := NewEmptyBatch()
 	for i, vec := range cnBat.Vecs {
-		v := ToTNVector(vec)
+		v := ToTNVector(vec, mp)
 		tnBat.AddVector(cnBat.Attrs[i], v)
 	}
 	return tnBat
 }
 
-func ToTNVector(v *movec.Vector) Vector {
-	vec := MakeVector(*v.GetType())
+func ToTNVector(v *movec.Vector, mp *mpool.MPool) Vector {
+	vec := MakeVector(*v.GetType(), mp)
 	vec.setDownstreamVector(v)
 	return vec
 }
@@ -122,9 +122,9 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 
 // ### Update Function
 
-var mockMp = common.DefaultAllocator
-
-func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any, isNull bool) {
+func GenericUpdateFixedValue[T types.FixedSizeT](
+	vec *movec.Vector, row uint32, v any, isNull bool, _ *mpool.MPool,
+) {
 	if isNull {
 		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
@@ -138,11 +138,13 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 	}
 }
 
-func GenericUpdateBytes(vec *movec.Vector, row uint32, v any, isNull bool) {
+func GenericUpdateBytes(
+	vec *movec.Vector, row uint32, v any, isNull bool, mp *mpool.MPool,
+) {
 	if isNull {
 		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
-		err := movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
+		err := movec.SetBytesAt(vec, int(row), v.([]byte), mp)
 		if err != nil {
 			panic(err)
 		}
@@ -152,56 +154,56 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any, isNull bool) {
 	}
 }
 
-func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool) {
+func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool, mp *mpool.MPool) {
 	switch col.GetType().Oid {
 	case types.T_bool:
-		GenericUpdateFixedValue[bool](col, row, val, isNull)
+		GenericUpdateFixedValue[bool](col, row, val, isNull, mp)
 	case types.T_int8:
-		GenericUpdateFixedValue[int8](col, row, val, isNull)
+		GenericUpdateFixedValue[int8](col, row, val, isNull, mp)
 	case types.T_int16:
-		GenericUpdateFixedValue[int16](col, row, val, isNull)
+		GenericUpdateFixedValue[int16](col, row, val, isNull, mp)
 	case types.T_int32:
-		GenericUpdateFixedValue[int32](col, row, val, isNull)
+		GenericUpdateFixedValue[int32](col, row, val, isNull, mp)
 	case types.T_int64:
-		GenericUpdateFixedValue[int64](col, row, val, isNull)
+		GenericUpdateFixedValue[int64](col, row, val, isNull, mp)
 	case types.T_uint8:
-		GenericUpdateFixedValue[uint8](col, row, val, isNull)
+		GenericUpdateFixedValue[uint8](col, row, val, isNull, mp)
 	case types.T_uint16:
-		GenericUpdateFixedValue[uint16](col, row, val, isNull)
+		GenericUpdateFixedValue[uint16](col, row, val, isNull, mp)
 	case types.T_uint32:
-		GenericUpdateFixedValue[uint32](col, row, val, isNull)
+		GenericUpdateFixedValue[uint32](col, row, val, isNull, mp)
 	case types.T_uint64:
-		GenericUpdateFixedValue[uint64](col, row, val, isNull)
+		GenericUpdateFixedValue[uint64](col, row, val, isNull, mp)
 	case types.T_decimal64:
-		GenericUpdateFixedValue[types.Decimal64](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Decimal64](col, row, val, isNull, mp)
 	case types.T_decimal128:
-		GenericUpdateFixedValue[types.Decimal128](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Decimal128](col, row, val, isNull, mp)
 	case types.T_float32:
-		GenericUpdateFixedValue[float32](col, row, val, isNull)
+		GenericUpdateFixedValue[float32](col, row, val, isNull, mp)
 	case types.T_float64:
-		GenericUpdateFixedValue[float64](col, row, val, isNull)
+		GenericUpdateFixedValue[float64](col, row, val, isNull, mp)
 	case types.T_date:
-		GenericUpdateFixedValue[types.Date](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Date](col, row, val, isNull, mp)
 	case types.T_time:
-		GenericUpdateFixedValue[types.Time](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Time](col, row, val, isNull, mp)
 	case types.T_datetime:
-		GenericUpdateFixedValue[types.Datetime](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Datetime](col, row, val, isNull, mp)
 	case types.T_timestamp:
-		GenericUpdateFixedValue[types.Timestamp](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Timestamp](col, row, val, isNull, mp)
 	case types.T_enum:
-		GenericUpdateFixedValue[types.Enum](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Enum](col, row, val, isNull, mp)
 	case types.T_uuid:
-		GenericUpdateFixedValue[types.Uuid](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Uuid](col, row, val, isNull, mp)
 	case types.T_TS:
-		GenericUpdateFixedValue[types.TS](col, row, val, isNull)
+		GenericUpdateFixedValue[types.TS](col, row, val, isNull, mp)
 	case types.T_Rowid:
-		GenericUpdateFixedValue[types.Rowid](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Rowid](col, row, val, isNull, mp)
 	case types.T_Blockid:
-		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull)
+		GenericUpdateFixedValue[types.Blockid](col, row, val, isNull, mp)
 	case types.T_varchar, types.T_char, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64:
-		GenericUpdateBytes(col, row, val, isNull)
+		GenericUpdateBytes(col, row, val, isNull, mp)
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%v not supported", col.GetType()))
 	}
@@ -257,10 +259,10 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	return bats
 }
 
-func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
+func NewNonNullBatchWithSharedMemory(b *batch.Batch, mp *mpool.MPool) *Batch {
 	bat := NewBatch()
 	for i, attr := range b.Attrs {
-		v := ToTNVector(b.Vecs[i])
+		v := ToTNVector(b.Vecs[i], mp)
 		bat.AddVector(attr, v)
 	}
 	return bat
