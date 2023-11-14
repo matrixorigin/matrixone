@@ -112,18 +112,18 @@ func parseCNLabel(param string) (cnLabel, error) {
 func handleSetLabel(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (ctlpb.Result, error) {
+	sender requestSender) (ctlpb.CtlResult, error) {
 	cluster := clusterservice.GetMOCluster()
 	c, err := parseCNLabel(parameter)
 	if err != nil {
-		return ctlpb.Result{}, err
+		return ctlpb.CtlResult{}, err
 	}
 	kvs := make(map[string][]string)
 	kvs[c.key] = c.values
 	if err := cluster.DebugUpdateCNLabel(c.uuid, kvs); err != nil {
-		return ctlpb.Result{}, err
+		return ctlpb.CtlResult{}, err
 	}
-	return ctlpb.Result{
+	return ctlpb.CtlResult{
 		Method: ctlpb.CmdMethod_Label.String(),
 		Data:   "OK",
 	}, nil
@@ -133,7 +133,7 @@ func handleSyncCommit(
 	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (ctlpb.Result, error) {
+	sender requestSender) (ctlpb.CtlResult, error) {
 	cs := proc.QueryService
 	mc := clusterservice.GetMOCluster()
 	var services []string
@@ -150,7 +150,7 @@ func handleSyncCommit(
 		req := cs.NewRequest(querypb.CmdMethod_GetCommit)
 		resp, err := cs.SendMessage(ctx, id, req)
 		if err != nil {
-			return ctlpb.Result{}, err
+			return ctlpb.CtlResult{}, err
 		}
 		if maxCommitTS.Less(resp.GetCommit.CurrentCommitTS) {
 			maxCommitTS = resp.GetCommit.CurrentCommitTS
@@ -163,12 +163,12 @@ func handleSyncCommit(
 		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: maxCommitTS}
 		resp, err := cs.SendMessage(ctx, id, req)
 		if err != nil {
-			return ctlpb.Result{}, err
+			return ctlpb.CtlResult{}, err
 		}
 		cs.Release(resp)
 	}
 
-	return ctlpb.Result{
+	return ctlpb.CtlResult{
 		Method: ctlpb.CmdMethod_SyncCommit.String(),
 		Data: fmt.Sprintf("sync %d cn services's commit ts to %s",
 			len(services),

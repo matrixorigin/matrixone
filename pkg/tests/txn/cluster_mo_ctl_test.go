@@ -113,7 +113,7 @@ func mustGetSnapshot(t *testing.T, cli Client) string {
 	defer mustCloseRows(t, rows)
 	require.True(t, rows.Next())
 
-	var result pb.Result
+	var result pb.CtlResult
 	value := ""
 	require.NoError(t, rows.Scan(&value))
 	json.MustUnmarshal([]byte(value), &result)

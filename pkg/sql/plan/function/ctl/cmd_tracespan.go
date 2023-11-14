@@ -89,9 +89,9 @@ func checkParameter(param string, ignoreUUID bool) (args []string, threshold int
 func handleTraceSpan(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.Result, error) {
+	sender requestSender) (pb.CtlResult, error) {
 	if service != cn && service != tn {
-		return pb.Result{}, moerr.NewWrongServiceNoCtx("CN or DN", string(service))
+		return pb.CtlResult{}, moerr.NewWrongServiceNoCtx("CN or DN", string(service))
 	}
 
 	if service == tn {
@@ -100,7 +100,7 @@ func handleTraceSpan(proc *process.Process,
 
 	args, threshold, err := checkParameter(parameter, false)
 	if err != nil {
-		return pb.Result{}, err
+		return pb.CtlResult{}, err
 	}
 
 	// the uuids of cn
@@ -136,7 +136,7 @@ func handleTraceSpan(proc *process.Process,
 		data += fmt.Sprintf("%s:%s; ", k, v)
 	}
 
-	return pb.Result{
+	return pb.CtlResult{
 		Method: pb.CmdMethod_TraceSpan.String(),
 		Data:   data,
 	}, nil
@@ -177,7 +177,7 @@ func transferRequest(proc *process.Process, uuid string, cmd string, spans strin
 func send2TNAndWaitResp(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.Result, error) {
+	sender requestSender) (pb.CtlResult, error) {
 
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payloadFn := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {

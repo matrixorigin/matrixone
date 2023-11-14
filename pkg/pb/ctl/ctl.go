@@ -14,8 +14,8 @@
 
 package ctl
 
-// Result ctl result
-type Result struct {
+// CtlResult ctl result
+type CtlResult struct {
 	Method string `json:"method"`
 	Data   any    `json:"result"`
 }

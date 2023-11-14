@@ -29,20 +29,20 @@ var (
 func handleTask(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.Result, error) {
+	sender requestSender) (pb.CtlResult, error) {
 	switch parameter {
 	case disableTask:
 		taskservice.DebugCtlTaskFramwork(true)
 	case enableTask:
 		taskservice.DebugCtlTaskFramwork(false)
 	default:
-		return pb.Result{},
+		return pb.CtlResult{},
 			moerr.NewInvalidInput(proc.Ctx, "task command only support %s and %s",
 				enableTask,
 				disableTask)
 	}
 
-	return pb.Result{
+	return pb.CtlResult{
 		Method: pb.CmdMethod_Task.String(),
 		Data:   "OK",
 	}, nil

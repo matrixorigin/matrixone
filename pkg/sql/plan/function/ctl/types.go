@@ -60,4 +60,4 @@ type requestSender = func(context.Context, *process.Process, []txn.CNOpRequest) 
 type handleFunc func(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.Result, error)
+	sender requestSender) (pb.CtlResult, error)

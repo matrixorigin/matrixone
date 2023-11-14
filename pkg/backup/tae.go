@@ -36,7 +36,7 @@ import (
 
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	var err error
-	cr := pb.Result{}
+	cr := pb.CtlResult{}
 	err = json.Unmarshal(retBytes[0][0], &cr)
 	if err != nil {
 		return nil, err
