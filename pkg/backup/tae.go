@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,7 +106,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		}
 		ckpStr := strings.Split(name, ":")
 		if len(ckpStr) != 2 && i > 0 {
-			return moerr.NewInternalError(ctx, "invalid checkpoint string")
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		metaLoc := ckpStr[0]
 		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
@@ -176,7 +177,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	if trimInfo != "" {
 		ckpStr := strings.Split(trimInfo, ":")
 		if len(ckpStr) != 5 {
-			return moerr.NewInternalError(ctx, "invalid checkpoint string")
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		cnLoc := ckpStr[0]
 		mergeEnd := ckpStr[2]
