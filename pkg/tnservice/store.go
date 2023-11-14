@@ -96,7 +96,6 @@ func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 }
 
 type store struct {
-	perfCounter         *perfcounter.CounterSet
 	cfg                 *Config
 	rt                  runtime.Runtime
 	sender              rpc.TxnSender
@@ -138,7 +137,6 @@ type store struct {
 
 // NewService create TN Service
 func NewService(
-	perfCounter *perfcounter.CounterSet,
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
@@ -164,7 +162,6 @@ func NewService(
 	blockio.Start()
 
 	s := &store{
-		perfCounter:         perfCounter,
 		cfg:                 cfg,
 		rt:                  rt,
 		fileService:         fileService,
@@ -302,7 +299,6 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 			case <-ctx.Done():
 				return
 			default:
-				ctx = perfcounter.WithCounterSet(ctx, s.perfCounter)
 				storage, err := s.createTxnStorage(ctx, shard)
 				if err != nil {
 					r.logger.Error("start DNShard failed",

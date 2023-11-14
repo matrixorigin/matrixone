@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -114,6 +115,14 @@ func CnServerMessageHandler(
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
+	defer func() {
+		if e := recover(); e != nil {
+			err := moerr.ConvertPanicError(ctx, e)
+			getLogger().Error("panic in cn message handler",
+				zap.String("error", err.Error()))
+			cs.Close()
+		}
+	}()
 
 	msg, ok := message.(*pipeline.Message)
 	if !ok {
@@ -347,7 +356,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	s.Instructions = append(s.Instructions, lastInstruction)
 
 	// encode the process related information
-	pData, errEncodeProc := encodeProcessInfo(s.Proc)
+	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
 	if errEncodeProc != nil {
 		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
@@ -406,10 +415,14 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 }
 
 // encodeProcessInfo get needed information from proc, and do serialization work.
-func encodeProcessInfo(proc *process.Process) ([]byte, error) {
+func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 	procInfo := &pipeline.ProcessInfo{}
+	if len(proc.AnalInfos) == 0 {
+		getLogger().Error("empty plan", zap.String("sql", sql))
+	}
 	{
 		procInfo.Id = proc.Id
+		procInfo.Sql = sql
 		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
 		procInfo.UnixTime = proc.UnixTime
 		procInfo.AccountId = defines.GetAccountId(proc.Ctx)

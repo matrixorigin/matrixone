@@ -402,7 +402,7 @@ insert into rename06 values(1),(2);
 alter table rename06 rename to '';
 drop table rename06;
 
--- rename internal table name: have no priviledge
+-- rename internal table name: have no privilege
 alter table system.statement_info rename to statement_info01;
 alter table mo_catalog.mo_account rename to mo_account01;
 alter table mysql.procs_priv rename to `procs_priv01`;

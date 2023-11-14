@@ -290,6 +290,7 @@ func (cleaner *DiskCleaner) collectCkpData(
 		ckp.GetStart(),
 		ckp.GetEnd(),
 		cleaner.fs.Service,
+		false,
 	)
 	data, err = factory(cleaner.catalog)
 	return
