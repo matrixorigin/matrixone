@@ -471,7 +471,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
 	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
-	b.objectMetaBatch = makeRespBatchFromSchemaWithoutRowidAndCommitTS(ObjectInfoSchema, common.LogtailAllocator)
+	b.objectMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	return b
 }
 
@@ -513,6 +513,9 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 }
 
 func visitObject(batch *containers.Batch, entry *catalog.SegmentEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) {
+	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
+	batch.GetVectorByName(catalog.AttrCommitTs).Append(node.TxnMVCCNode.End, false)
+	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
 	node.BaseNode.AppendTuple(&entry.ID, batch)
 	node.TxnMVCCNode.AppendTuple(batch)
 	node.EntryMVCCNode.AppendTuple(batch)

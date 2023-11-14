@@ -105,22 +105,6 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 	return bat
 }
 
-// skip rowid and committs
-func makeRespBatchFromSchemaWithoutRowidAndCommitTS(schema *catalog.Schema, mp *mpool.MPool) *containers.Batch {
-	bat := containers.NewBatch()
-
-	// Types() is not used, then empty schema can also be handled here
-	typs := schema.AllTypes()
-	attrs := schema.AllNames()
-	for i, attr := range attrs {
-		if attr == catalog.PhyAddrColumnName {
-			continue
-		}
-		bat.AddVector(attr, containers.MakeVector(typs[i], mp))
-	}
-	return bat
-}
-
 // GetDataWindowForLogtail returns the batch according to the writeSchema.
 // columns are sorted by seqnum and vacancy is filled with zero value
 func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {

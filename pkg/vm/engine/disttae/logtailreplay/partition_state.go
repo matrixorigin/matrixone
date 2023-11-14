@@ -372,19 +372,19 @@ func (p *PartitionState) HandleLogtailEntry(
 func (p *PartitionState) HandleObject(
 	ctx context.Context,
 	input *api.Batch) {
-	nameVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[0]))
-	sizeVector := vector.MustFixedCol[uint32](mustVectorFromProto(input.Vecs[1]))
-	compressedSizeVector := vector.MustFixedCol[uint32](mustVectorFromProto(input.Vecs[2]))
-	zoneMapVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[3]))
-	blkNumberVector := vector.MustFixedCol[uint16](mustVectorFromProto(input.Vecs[4]))
-	stateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[5]))
-	dbIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[6]))
-	tIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[7]))
-	createAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[8]))
-	deleteAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
-	startVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[10]))
-	prepareVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[11]))
-	commitVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[12]))
+	nameVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[2]))
+	sizeVector := vector.MustFixedCol[uint32](mustVectorFromProto(input.Vecs[3]))
+	compressedSizeVector := vector.MustFixedCol[uint32](mustVectorFromProto(input.Vecs[4]))
+	zoneMapVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[5]))
+	blkNumberVector := vector.MustFixedCol[uint16](mustVectorFromProto(input.Vecs[6]))
+	stateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[7]))
+	dbIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[8]))
+	tIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[9]))
+	createAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[10]))
+	deleteAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[11]))
+	startVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[11]))
+	prepareVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[12]))
+	commitVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[13]))
 	for i, name := range nameVector {
 		logutil.Infof("lalala blk %v, [%d %d %v %d], state %v, db-%d, t-%d, c@%v, d@%v, %v-%v-%v",
 			name, sizeVector[i], compressedSizeVector[i], zoneMapVector[i], blkNumberVector[i],
