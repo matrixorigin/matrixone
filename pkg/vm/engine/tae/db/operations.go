@@ -16,15 +16,21 @@ package db
 
 import (
 	"context"
-	"fmt"
+	fmt "fmt"
 	"time"
+
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+)
+
+const (
+	OpPreCommit  = uint32(apipb.OpCode_OpPreCommit)
+	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
 
 type Request interface {
@@ -209,7 +215,7 @@ type WriteReq struct {
 	TableID      uint64
 	DatabaseName string
 	TableName    string
-	Schema       *catalog.Schema
+	Schema       *catalog2.Schema
 	Batch        *batch.Batch
 	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup], default is IncrementalDedup.
 	//If incremental-dedup in dn.toml is false, IncrementalDedup will be treated as FullSkipWorkspaceDedup.
