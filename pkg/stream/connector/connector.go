@@ -135,7 +135,7 @@ func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.In
 func (k *KafkaMoConnector) validateParams() error {
 	// 1. Check mandatory fields
 	mandatoryFields := []string{
-		"type", "topic", "database", "table", "value",
+		"type", "topic", "value",
 		"bootstrap.servers",
 	}
 
