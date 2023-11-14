@@ -155,8 +155,10 @@ const (
 	maxSeqLen          = 2
 	startIDOff         = maxSeqOff + maxSeqLen
 	StartIDLen         = 2
-	headerDummyOff     = startIDOff + StartIDLen
-	headerDummyLen     = 33
+	pkIdxOff           = startIDOff + StartIDLen
+	pkIdxLen           = 4
+	headerDummyOff     = pkIdxOff + pkIdxLen
+	headerDummyLen     = 29
 	headerLen          = headerDummyOff + headerDummyLen
 )
 
@@ -257,6 +259,14 @@ func (bh BlockHeader) BFExtent() Extent {
 
 func (bh BlockHeader) SetBFExtent(location Extent) {
 	copy(bh[bloomFilterOff:bloomFilterOff+bloomFilterLen], location)
+}
+
+func (bh BlockHeader) SetPkIdxOff(pk int32) {
+	copy(bh[pkIdxOff:pkIdxOff+pkIdxLen], types.EncodeInt32(&pk))
+}
+
+func (bh BlockHeader) PkIdxID() int32 {
+	return types.DecodeInt32(bh[pkIdxOff : pkIdxOff+pkIdxLen])
 }
 
 func (bh BlockHeader) IsEmpty() bool {

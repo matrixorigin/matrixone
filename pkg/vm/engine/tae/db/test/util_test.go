@@ -266,7 +266,7 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 		incrCkpData := collector.OrphanData()
 		defer incrCkpData.Close()
 
-		cnLocation, tnLocation, err := incrCkpData.WriteTo(tae.Runtime.Fs.Service,
+		cnLocation, tnLocation, _, err := incrCkpData.WriteTo(tae.Runtime.Fs.Service,
 			logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
 		require.Nil(t, err)
 

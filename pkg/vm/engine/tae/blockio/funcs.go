@@ -104,3 +104,24 @@ func LoadBF(
 	bf = objectio.BloomFilter(v)
 	return
 }
+
+func LoadOneBlock(
+	ctx context.Context,
+	fs fileservice.FileService,
+	key objectio.Location,
+	metaType objectio.DataMetaType,
+) (*batch.Batch, error) {
+	meta, err := objectio.FastLoadObjectMeta(ctx, &key, false, fs)
+	if err != nil {
+		return nil, err
+	}
+	data := meta.MustGetMeta(metaType)
+
+	idxes := make([]uint16, data.BlockHeader().ColumnCount())
+	for i := range idxes {
+		idxes[i] = uint16(i)
+	}
+	bat, err := objectio.ReadOneBlockAllColumns(ctx, &data, key.Name().String(),
+		uint32(key.ID()), idxes, fileservice.SkipAllCache, fs)
+	return bat, err
+}
