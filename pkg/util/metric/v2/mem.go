@@ -14,7 +14,9 @@
 
 package v2
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	memMPoolAllocatedSizeGauge = prometheus.NewGaugeVec(
@@ -25,11 +27,35 @@ var (
 			Help:      "Size of mpool have allocated.",
 		}, []string{"type"})
 
-	MemTAEDefaultAllocatorGauge    = memMPoolAllocatedSizeGauge.WithLabelValues("tae_default")
-	MemTAEMutableAllocatorGauge    = memMPoolAllocatedSizeGauge.WithLabelValues("tae_mutable")
-	MemTAESmallAllocatorGauge      = memMPoolAllocatedSizeGauge.WithLabelValues("tae_small")
-	MemTAEVectorPoolSmallGauge     = memMPoolAllocatedSizeGauge.WithLabelValues("vectorpool_default")
-	MemTAEVectorPoolTransientGauge = memMPoolAllocatedSizeGauge.WithLabelValues("vectorpool_transient")
+	MemTAEDefaultAllocatorGauge           = memMPoolAllocatedSizeGauge.WithLabelValues("tae_default")
+	MemTAEMutableAllocatorGauge           = memMPoolAllocatedSizeGauge.WithLabelValues("tae_mutable")
+	MemTAESmallAllocatorGauge             = memMPoolAllocatedSizeGauge.WithLabelValues("tae_small")
+	MemTAEVectorPoolDefaultAllocatorGauge = memMPoolAllocatedSizeGauge.WithLabelValues("vectorpool_default")
+	MemTAELogtailAllocatorGauge           = memMPoolAllocatedSizeGauge.WithLabelValues("tae_logtail")
+	MemTAECheckpointAllocatorGauge        = memMPoolAllocatedSizeGauge.WithLabelValues("tae_checkpoint")
+	MemTAEMergeAllocatorGauge             = memMPoolAllocatedSizeGauge.WithLabelValues("tae_merge")
+	MemTAEWorkSpaceAllocatorGauge         = memMPoolAllocatedSizeGauge.WithLabelValues("tae_workspace")
+	MemTAEDebugAllocatorGauge             = memMPoolAllocatedSizeGauge.WithLabelValues("tae_debug")
+	MemGlobalStatsAllocatedGauge          = memMPoolAllocatedSizeGauge.WithLabelValues("global_stats_allocated")
+
+	memMPoolHighWaterMarkGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "mpool_high_water_mark_size",
+			Help:      "Size of high water mark mp have ever reached",
+		}, []string{"type"})
+
+	MemTAEDefaultHighWaterMarkGauge           = memMPoolHighWaterMarkGauge.WithLabelValues("tae_default_high_water_mark")
+	MemTAEMutableHighWaterMarkGauge           = memMPoolHighWaterMarkGauge.WithLabelValues("tae_mutable_high_water_mark")
+	MemTAESmallHighWaterMarkGauge             = memMPoolHighWaterMarkGauge.WithLabelValues("tae_small_high_water_mark")
+	MemTAEVectorPoolDefaultHighWaterMarkGauge = memMPoolHighWaterMarkGauge.WithLabelValues("vectorpool_default_high_water_mark")
+	MemTAELogtailHighWaterMarkGauge           = memMPoolHighWaterMarkGauge.WithLabelValues("tae_logtail_high_water_mark")
+	MemTAECheckpointHighWaterMarkGauge        = memMPoolHighWaterMarkGauge.WithLabelValues("tae_checkpoint_high_water_mark")
+	MemTAEMergeHighWaterMarkGauge             = memMPoolHighWaterMarkGauge.WithLabelValues("tae_merge_high_water_mark")
+	MemTAEWorkSpaceHighWaterMarkGauge         = memMPoolHighWaterMarkGauge.WithLabelValues("tae_workspace_high_water_mark")
+	MemTAEDebugHighWaterMarkGauge             = memMPoolHighWaterMarkGauge.WithLabelValues("tae_debug_high_water_mark")
+	MemGlobalStatsHighWaterMarkGauge          = memMPoolHighWaterMarkGauge.WithLabelValues("global_stats_allocated_high_water_mark")
 )
 
 var (

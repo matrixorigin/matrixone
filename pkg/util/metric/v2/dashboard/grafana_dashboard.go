@@ -269,23 +269,23 @@ func (c *DashboardCreator) withRowOptions(rows ...dashboard.Option) []dashboard.
 			interval.Values([]string{"1m", "5m", "10m", "30m", "1h", "6h", "12h"}),
 		),
 		dashboard.VariableAsQuery(
-			"physicalCluster",
+			"namespace",
 			query.DataSource(c.dataSource),
 			query.DefaultAll(),
 			query.IncludeAll(),
 			query.Multiple(),
-			query.Label("matrixone_cloud_main_cluster"),
-			query.Request("label_values(matrixone_cloud_main_cluster)"),
+			query.Label("namespace"),
+			query.Request("label_values(namespace)"),
 		),
-		dashboard.VariableAsQuery(
-			"cluster",
-			query.DataSource(c.dataSource),
-			query.DefaultAll(),
-			query.IncludeAll(),
-			query.Multiple(),
-			query.Label("matrixone_cloud_cluster"),
-			query.Request("label_values(matrixone_cloud_cluster)"),
-		),
+		//dashboard.VariableAsQuery(
+		//	"cluster",
+		//	query.DataSource(c.dataSource),
+		//	query.DefaultAll(),
+		//	query.IncludeAll(),
+		//	query.Multiple(),
+		//	query.Label("matrixone_cloud_cluster"),
+		//	query.Request("label_values(matrixone_cloud_cluster)"),
+		//),
 		dashboard.VariableAsQuery(
 			"pod",
 			query.DataSource(c.dataSource),
@@ -321,7 +321,7 @@ func (c *DashboardCreator) getMetricWithFilter(name string, filter string) strin
 }
 
 func (c *DashboardCreator) getCloudFilters() string {
-	return `matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"`
+	return `namespace=~"$namespace", pod=~"$pod"`
 }
 
 func (c *DashboardCreator) getLocalFilters() string {
