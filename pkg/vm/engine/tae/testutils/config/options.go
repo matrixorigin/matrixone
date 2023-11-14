@@ -28,38 +28,6 @@ const (
 	CST_Customize
 )
 
-type BlockSizeType uint8
-
-const (
-	BST_None BlockSizeType = iota
-	BST_S
-	BST_M
-	BST_L
-)
-
-var blockSizes map[BlockSizeType]uint32 = map[BlockSizeType]uint32{
-	BST_None: options.DefaultBlockMaxRows,
-	BST_S:    uint32(16),
-	BST_M:    uint32(1600),
-	BST_L:    uint32(160000),
-}
-
-type SegmentSizeType uint8
-
-const (
-	SST_None SegmentSizeType = iota
-	SST_S
-	SST_M
-	SST_L
-)
-
-var segmentSizes map[SegmentSizeType]uint16 = map[SegmentSizeType]uint16{
-	SST_None: options.DefaultBlocksPerSegment,
-	SST_S:    uint16(4),
-	SST_M:    uint16(40),
-	SST_L:    uint16(400),
-}
-
 func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Options) {
 	opts = WithQuickScanAndCKPOpts(in)
 	opts.CheckpointCfg.ScanInterval *= time.Duration(factor)
