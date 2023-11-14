@@ -161,6 +161,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		anal.Alloc(int64(arg.buf.Size()))
 	}
 	result.Batch = arg.buf
+	result.Batch.ShuffleIDX = param.Idx
 	return result, nil
 }
 
