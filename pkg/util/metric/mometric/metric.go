@@ -17,6 +17,8 @@ package mometric
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"net/http"
 	"strings"
 	"sync"
@@ -125,6 +127,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 				panic(fmt.Sprintf("status server error: %v", err))
 			}
 		}()
+
+		startCrossServicesMetricsTask(ctx)
+
 		logutil.Debugf("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
 
@@ -134,6 +139,28 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	logutil.Debugf("metric with ExportInterval: %v", initOpts.exportInterval)
 	logutil.Debugf("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
 	return true
+}
+
+// this cron task can gather some service level metrics,
+func startCrossServicesMetricsTask(ctx context.Context) {
+	go func() {
+		logutil.Info("cross service metrics task started")
+		defer logutil.Info("cross service metrics task exiting")
+
+		timer := time.NewTimer(time.Second * 5)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+				mpoolRelatedMetrics()
+			}
+		}
+	}()
+}
+
+func mpoolRelatedMetrics() {
+	v2.MemTotalCrossPoolFreeCounter.Add(float64(mpool.TotalCrossPoolFreeCounter()))
 }
 
 func IsEnable() bool {
