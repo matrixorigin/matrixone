@@ -30,5 +30,24 @@ select cluster_centers(c spherical_kmeans '2,vector_cosine_ops') from t1;
 SELECT value FROM  (SELECT cluster_centers(c spherical_kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 
 
+
+-- 3. Create Secondary Index with IVFFLAT.
+drop table if exists tbl;
+create table tbl(id int primary key, embedding vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[120,50,70]");
+insert into tbl values(8, "[130,40,90]");
+create index idx1 using IVFFLAT on tbl(embedding) lists = 2 op_type 'vector_l2_ops';
+
+show index from tbl;
+show create table tbl;
+select name, type, column_name from mo_catalog.mo_indexes where name="idx1";
+
+
 -- post
 drop database vecdb2;

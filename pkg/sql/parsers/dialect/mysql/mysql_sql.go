@@ -342,7 +342,7 @@ const BOTH = 57664
 const TRAILING = 57665
 const UNKNOWN = 57666
 const LISTS = 57667
-const SIMILARITY_FUNCTION = 57668
+const OP_TYPE = 57668
 const EXPIRE = 57669
 const ACCOUNT = 57670
 const ACCOUNTS = 57671
@@ -958,7 +958,7 @@ var yyToknames = [...]string{
 	"TRAILING",
 	"UNKNOWN",
 	"LISTS",
-	"SIMILARITY_FUNCTION",
+	"OP_TYPE",
 	"EXPIRE",
 	"ACCOUNT",
 	"ACCOUNTS",
@@ -11660,7 +11660,7 @@ yydefault:
 //line mysql_sql.y:3027
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				{
+				&tree.VarAssignmentExpr{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -15838,8 +15838,8 @@ yydefault:
 					opt1.Visible = opt2.Visible
 				} else if opt2.AlgoParamList > 0 {
 					opt1.AlgoParamList = opt2.AlgoParamList
-				} else if len(opt2.AlgoParamVectorSimilarityFn) > 0 {
-					opt1.AlgoParamVectorSimilarityFn = opt2.AlgoParamVectorSimilarityFn
+				} else if len(opt2.AlgoParamVectorOpType) > 0 {
+					opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
 				}
 				yyLOCAL = opt1
 			}
@@ -15866,7 +15866,7 @@ yydefault:
 		var yyLOCAL *tree.IndexOption
 //line mysql_sql.y:6166
 		{
-			yyLOCAL = &tree.IndexOption{AlgoParamVectorSimilarityFn: yyDollar[2].str}
+			yyLOCAL = &tree.IndexOption{AlgoParamVectorOpType: yyDollar[2].str}
 		}
 		yyVAL.union = yyLOCAL
 	case 990:
@@ -19247,7 +19247,7 @@ yydefault:
 		yyDollar = yyS[yypt-0 : yypt+1]
 //line mysql_sql.y:8365
 		{
-			yyVAL.str = "1,vector_cosine_ops"
+			yyVAL.str = "1,vector_l2_ops"
 		}
 	case 1380:
 		yyDollar = yyS[yypt-2 : yypt+1]

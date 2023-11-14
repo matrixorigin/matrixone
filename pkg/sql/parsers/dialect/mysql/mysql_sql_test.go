@@ -82,7 +82,7 @@ var (
 		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
 	}, {
 		input:  "select cluster_centers(a) from t1;",
-		output: "select cluster_centers(a, 1,vector_cosine_ops) from t1",
+		output: "select cluster_centers(a, 1,vector_l2_ops) from t1",
 	}, {
 		input:  "select cluster_centers(a spherical_kmeans '5') from t1;",
 		output: "select cluster_centers(a, 5) from t1",
@@ -1405,8 +1405,8 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10",
 			output: "create index idx using ivfflat on a (a) LISTS 10 ",
 		}, {
-			input:  "create index idx using ivfflat on A (a) LISTS 10 similarity_function 'IP'",
-			output: "create index idx using ivfflat on a (a) LISTS 10 SIMILARITY_FUNCTION IP ",
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {

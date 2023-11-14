@@ -344,7 +344,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS SIMILARITY_FUNCTION
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE
 
 
 // Alter
@@ -6146,8 +6146,8 @@ index_option_list:
                 opt1.Visible = opt2.Visible
             } else if opt2.AlgoParamList > 0 {
 	      opt1.AlgoParamList = opt2.AlgoParamList
-	    } else if len(opt2.AlgoParamVectorSimilarityFn) > 0 {
-	      opt1.AlgoParamVectorSimilarityFn = opt2.AlgoParamVectorSimilarityFn
+	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
+	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
 	    }
             $$ = opt1
         }
@@ -6162,9 +6162,9 @@ index_option:
     {
 	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
     }
-|   SIMILARITY_FUNCTION STRING
+|   OP_TYPE STRING
     {
-	$$ = &tree.IndexOption{AlgoParamVectorSimilarityFn: $2}
+	$$ = &tree.IndexOption{AlgoParamVectorOpType: $2}
     }
 |   COMMENT_KEYWORD STRING
     {
@@ -8364,7 +8364,7 @@ separator_opt:
 
 spherical_kmeans_opt:
     {
-        $$ = "1,vector_cosine_ops"
+        $$ = "1,vector_l2_ops"
     }
 |   SPHERICAL_KMEANS STRING
     {
@@ -10519,7 +10519,7 @@ non_reserved_keyword:
 |   VECF64
 |   KEY_BLOCK_SIZE
 |   LISTS
-|   SIMILARITY_FUNCTION
+|   OP_TYPE
 |   KEYS
 |   LANGUAGE
 |   LESS

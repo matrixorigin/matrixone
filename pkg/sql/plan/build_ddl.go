@@ -1678,7 +1678,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			return nil, nil, err
 		}
 
-		// 3.c columns: centroid_id, centroid_version, origin_pk , PRIMARY KEY (centroid_id, centroid_version)
+		// 3.c columns: centroid_id, centroid_version, origin_pk FOREIGN KEY (centroid_id, centroid_version) REFERENCES clusters(centroid_id, centroid_version)
 		tableDefs[2].Cols[0] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 			Alg:  plan.CompressType_Lz4,
@@ -1716,11 +1716,6 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				Expr:         nil,
 				OriginString: "",
 			},
-		}
-
-		// 3.d PK def
-		tableDefs[2].Pkey = &PrimaryKeyDef{
-			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Centroids_id, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version},
 		}
 	}
 

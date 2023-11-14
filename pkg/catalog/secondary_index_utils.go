@@ -50,15 +50,15 @@ func IsIvfIndexAlgo(algo string) bool {
 
 // ------------------------[START] IndexAlgoParams------------------------
 const (
-	IndexAlgoParamLists            = "lists"
-	IndexAlgoParamSimilarityFn     = "similarity_function"
-	IndexAlgoParamSimilarityFn_ip  = "ip"
-	IndexAlgoParamSimilarityFn_l2  = "l2"
-	IndexAlgoParamSimilarityFn_cos = "cos"
+	IndexAlgoParamLists      = "lists"
+	IndexAlgoParamOpType     = "op_type"
+	IndexAlgoParamOpType_ip  = "vector_ip_ops"
+	IndexAlgoParamOpType_l2  = "vector_l2_ops"
+	IndexAlgoParamOpType_cos = "vector_cosine_ops"
 )
 
 // IndexParamsToStringList used by buildShowCreateTable and restoreDDL
-// Eg:- "LIST 10 similarity_function 'ip'"
+// Eg:- "LIST 10 op_type 'vector_l2_ops'"
 func IndexParamsToStringList(indexParams string) (string, error) {
 	result, err := IndexParamsStringToMap(indexParams)
 	if err != nil {
@@ -70,14 +70,14 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s %s", IndexAlgoParamLists, val)
 	}
 
-	if similarityFn, ok := result[IndexAlgoParamSimilarityFn]; ok {
-		if similarityFn == IndexAlgoParamSimilarityFn_ip ||
-			similarityFn == IndexAlgoParamSimilarityFn_l2 ||
-			similarityFn == IndexAlgoParamSimilarityFn_cos {
-			res += fmt.Sprintf(" %s '%s'", IndexAlgoParamSimilarityFn, similarityFn)
+	if opType, ok := result[IndexAlgoParamOpType]; ok {
+		if opType == IndexAlgoParamOpType_ip ||
+			opType == IndexAlgoParamOpType_l2 ||
+			opType == IndexAlgoParamOpType_cos {
+			res += fmt.Sprintf(" %s '%s'", IndexAlgoParamOpType, opType)
 		} else {
-			return "", moerr.NewInternalErrorNoCtx("invalid similarity function. not of type '%s', '%s', '%s'",
-				IndexAlgoParamSimilarityFn_ip, IndexAlgoParamSimilarityFn_l2, IndexAlgoParamSimilarityFn_cos)
+			return "", moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s', '%s', '%s'",
+				IndexAlgoParamOpType_ip, IndexAlgoParamOpType_l2, IndexAlgoParamOpType_cos)
 		}
 	}
 
@@ -85,7 +85,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 }
 
 // IndexParamsToJsonString used by buildSecondaryIndexDef
-// Eg:- {"lists":"10","similarity_function":"ip"}
+// Eg:- {"lists":"10","op_type":"vector_l2_ops"}
 func IndexParamsToJsonString(def *tree.Index) (string, error) {
 
 	res, err := IndexParamsToMap(def)
@@ -131,18 +131,18 @@ func IndexParamsToMap(def *tree.Index) (map[string]string, error) {
 			res[IndexAlgoParamLists] = "1" // set lists = 1 as default
 		}
 
-		if len(def.IndexOption.AlgoParamVectorSimilarityFn) > 0 {
-			similarityFn := strings.ToLower(strings.TrimSpace(def.IndexOption.AlgoParamVectorSimilarityFn))
-			if similarityFn == IndexAlgoParamSimilarityFn_ip ||
-				similarityFn == IndexAlgoParamSimilarityFn_l2 ||
-				similarityFn == IndexAlgoParamSimilarityFn_cos {
-				res[IndexAlgoParamSimilarityFn] = def.IndexOption.AlgoParamVectorSimilarityFn
+		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
+			opType := strings.ToLower(strings.TrimSpace(def.IndexOption.AlgoParamVectorOpType))
+			if opType == IndexAlgoParamOpType_ip ||
+				opType == IndexAlgoParamOpType_l2 ||
+				opType == IndexAlgoParamOpType_cos {
+				res[IndexAlgoParamOpType] = def.IndexOption.AlgoParamVectorOpType
 			} else {
-				return nil, moerr.NewInternalErrorNoCtx("invalid similarity function. not of type '%s', '%s', '%s'",
-					IndexAlgoParamSimilarityFn_ip, IndexAlgoParamSimilarityFn_l2, IndexAlgoParamSimilarityFn_cos)
+				return nil, moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s', '%s', '%s'",
+					IndexAlgoParamOpType_ip, IndexAlgoParamOpType_l2, IndexAlgoParamOpType_cos)
 			}
 		} else {
-			res[IndexAlgoParamSimilarityFn] = IndexAlgoParamSimilarityFn_cos // set cos as default
+			res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
 		}
 	}
 	return res, nil
@@ -150,8 +150,8 @@ func IndexParamsToMap(def *tree.Index) (map[string]string, error) {
 
 func DefaultIvfIndexAlgoOptions() map[string]string {
 	res := make(map[string]string)
-	res[IndexAlgoParamLists] = "1"                                  // set lists = 1 as default
-	res[IndexAlgoParamSimilarityFn] = IndexAlgoParamSimilarityFn_l2 // set l2 as default
+	res[IndexAlgoParamLists] = "1"                      // set lists = 1 as default
+	res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
 	return res
 }
 

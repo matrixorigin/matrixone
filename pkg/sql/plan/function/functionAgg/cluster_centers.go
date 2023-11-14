@@ -34,7 +34,7 @@ import (
 const (
 	defaultKmeansMaxIteration   = 500
 	defaultKmeansDeltaThreshold = 0.01
-	defaultKmeansDistanceType   = kmeans.CosineDistance
+	defaultKmeansDistanceType   = kmeans.L2Distance
 	defaultInitType             = kmeans.Random
 	defaultKmeansClusterCnt     = 1
 

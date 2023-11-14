@@ -80,13 +80,3 @@ insert into t1 values(1,"Abby", 24);
 show index from t1;
 show create table t1;
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx7";
-
--- 1.h Create Secondary Index with IVFFLAT.
--- TODO: will treat IVFFLAT separately in a new PR.
-drop table if exists t1;
-create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
-create index idx8 using IVFFLAT on t1(name) lists = 10 similarity_function 'l2';
-insert into t1 values(1,"Abby", 24);
-show index from t1;
-show create table t1;
-select name, type, column_name from mo_catalog.mo_indexes where name="idx8"; -- TODO: this output will change.
