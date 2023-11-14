@@ -536,7 +536,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 
 					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-					// deal with case:  update t1 set a = a.  then do not need to check constaints
+					// deal with case:  update t1 set a = a.  then do not need to check constraint
 					if isUpdate {
 						var filterExpr, tmpExpr *Expr
 						for updateName, newIdx := range updateRefColumn {
