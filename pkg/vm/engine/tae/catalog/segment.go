@@ -264,6 +264,10 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	return e
 }
 
+// for test
+func (entry *SegmentEntry) GetInMemoryObjectInfo() *ObjectMVCCNode {
+	return entry.BaseEntryImpl.GetLatestCommittedNode().BaseNode
+}
 func (entry *SegmentEntry) GetFirstBlkEntry() *BlockEntry {
 	entry.RLock()
 	defer entry.RUnlock()

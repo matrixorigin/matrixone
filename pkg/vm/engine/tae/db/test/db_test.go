@@ -8904,3 +8904,28 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	assert.Equal(t, 1, len(entries))
 
 }
+
+func TestObjectInfo(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	options.WithCheckpointGlobalMinCount(3)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.CompactBlocks(false)
+
+	tae.MergeBlocks(false)
+
+	tae.CheckObjectInfo()
+	t.Logf(tae.Catalog.SimplePPString(3))
+}

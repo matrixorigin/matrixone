@@ -656,11 +656,11 @@ func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, su
 		if err = task.ablksHandles[i].UpdateMetaLoc(metaLocABlk); err != nil {
 			return
 		}
-		if subtask.delta == nil {
-			continue
-		}
 		if err = task.ablksHandles[i].GetSegment().UpdateStats(subtask.stat); err != nil {
 			return
+		}
+		if subtask.delta == nil {
+			continue
 		}
 		deltaLoc := blockio.EncodeLocation(
 			subtask.name,

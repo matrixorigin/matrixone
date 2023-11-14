@@ -143,7 +143,7 @@ func (e *ObjectMVCCNode) String() string {
 	if e == nil || e.IsEmpty() {
 		return "empty"
 	}
-	return e.Name.String()
+	return fmt.Sprintf("[BlkCnt:%d,Size:%d/%d,%v", e.BlockNumber, e.OriginSize, e.CompressedSize, e.ZoneMap)
 }
 func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
 	e.Name = vun.Name

@@ -719,3 +719,21 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 	err := txn.Commit(context.Background())
 	assert.NoError(e.t, err)
 }
+
+func (e *TestEngine) CheckObjectInfo() {
+	p := &catalog.LoopProcessor{}
+	p.SegmentFn = func(se *catalog.SegmentEntry) error {
+		blk := se.MakeBlockIt(false).Get().GetPayload()
+		info1 := se.GetInMemoryObjectInfo()
+		if !blk.GetMetaLoc().IsEmpty() {
+			err := se.LoadObjectInfo()
+			assert.NoError(e.t, err)
+			assert.Equal(e.t, se.Stat.GetSortKeyZonemap(), info1.ZoneMap)
+		} else {
+			assert.True(e.t, info1.IsEmpty())
+		}
+		return nil
+	}
+	err := e.Catalog.RecurLoop(p)
+	assert.NoError(e.t, err)
+}
