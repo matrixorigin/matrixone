@@ -95,13 +95,14 @@ func NewFlushTableTailEntry(
 
 // add transfer pages for dropped ablocks
 func (entry *flushTableTailEntry) addTransferPages() {
+	isTransient := !entry.tableEntry.GetLastestSchema().HasPK()
 	for i, m := range entry.transMappings.Mappings {
 		if len(m) == 0 {
 			continue
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
-		page := model.NewTransferHashPage(id, time.Now())
+		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range m {
 			blkid := entry.createdBlkHandles[dst.Idx].ID()
 			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
@@ -133,7 +134,13 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			continue
 		}
 		dataBlock := blk.GetBlockData()
-		bat, err := dataBlock.CollectDeleteInRange(entry.txn.GetContext(), entry.txn.GetStartTS().Next(), entry.txn.GetPrepareTS(), false)
+		bat, err := dataBlock.CollectDeleteInRange(
+			entry.txn.GetContext(),
+			entry.txn.GetStartTS().Next(),
+			entry.txn.GetPrepareTS(),
+			false,
+			common.MergeAllocator,
+		)
 		if err != nil {
 			return err
 		}
@@ -154,7 +161,9 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 				delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 			}
 			delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
-			if err = entry.createdBlkHandles[destpos.Idx].RangeDelete(uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact); err != nil {
+			if err = entry.createdBlkHandles[destpos.Idx].RangeDelete(
+				uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+			); err != nil {
 				return err
 			}
 		}

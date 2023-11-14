@@ -38,10 +38,14 @@ const (
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
-	IndexTableIndexColName   = "__mo_index_idx_col"
-	IndexTablePrimaryColName = "__mo_index_pri_col"
-	ExternalFilePath         = "__mo_filepath"
-	IndexTableNamePrefix     = "__mo_index_unique__"
+	IndexTableIndexColName        = "__mo_index_idx_col"
+	IndexTablePrimaryColName      = "__mo_index_pri_col"
+	ExternalFilePath              = "__mo_filepath"
+	UniqueIndexSuffix             = "unique_"
+	SecondaryIndexSuffix          = "secondary_"
+	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
+	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
+	IndexTableNamePrefix          = PrefixIndexTableName
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 )
@@ -146,6 +150,11 @@ const (
 	SystemRelAttr_Version        = "rel_version"
 	SystemRelAttr_CatalogVersion = "catalog_version"
 
+	// 'mo_indexes' table
+	IndexAlgoName      = "algo"
+	IndexAlgoTableType = "algo_table_type"
+	IndexAlgoParams    = "algo_params"
+
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
 	SystemColAttr_AccID           = "account_id"
@@ -208,6 +217,11 @@ const (
 		the table partitioned has multiple partition tables
 	*/
 	SystemPartitionRel = "partition"
+
+	//// Secondary Index Relations
+	//SystemSecondaryIndex_IvfMetadataRel         = "metadata"
+	//SystemSecondaryIndex_IvfCentroidsRel        = "centroids"
+	//SystemSecondaryIndex_IvfCentroidsMappingRel = "entries"
 
 	SystemColPKConstraint = "p"
 	SystemColNoConstraint = "n"

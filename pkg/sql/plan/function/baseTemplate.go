@@ -1834,6 +1834,10 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 				for i := uint64(0); i < rowCount; i++ {
 					v2, null2 := p2.GetStrValue(i)
 					if null2 {
+						err := rs.AppendMustNullForBytesResult()
+						if err != nil {
+							return err
+						}
 						continue
 					}
 					r, err := fn(v1, v2)
@@ -1874,6 +1878,10 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 				for i := uint64(0); i < rowCount; i++ {
 					v1, null1 := p1.GetStrValue(i)
 					if null1 {
+						err := rs.AppendMustNullForBytesResult()
+						if err != nil {
+							return err
+						}
 						continue
 					}
 					r, err := fn(v1, v2)
@@ -1911,6 +1919,10 @@ func opBinaryBytesBytesToBytesWithErrorCheck(
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			if null1 || null2 {
+				err := rs.AppendMustNullForBytesResult()
+				if err != nil {
+					return err
+				}
 				continue
 			}
 			r, err := fn(v1, v2)

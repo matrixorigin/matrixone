@@ -21,7 +21,7 @@ jobs:
       - name: Build normal
         run: |
           make build
-          zip -r mo-linux-x86_64.zip mo-service ./etc/launch
+          zip -r mo-linux-x86_64.zip mo-service ./etc/launch ./etc/launch-with-python-udf-server ./pkg/udf/pythonservice/pyserver
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -55,7 +55,7 @@ jobs:
       - name: Build normal
         run: |
           make build
-          zip -r mo-linux-arm64.zip mo-service ./etc/launch
+          zip -r mo-linux-arm64.zip mo-service ./etc/launch ./etc/launch-with-python-udf-server ./pkg/udf/pythonservice/pyserver
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -110,7 +110,7 @@ jobs:
           cd ./mo-macos11
           spctl -a -vvv -t install mo-service
           codesign --test-requirement="=notarized" -vv mo-service
-          zip -r mo-darwin-x86_64.zip mo-service ./etc/launch
+          zip -r mo-darwin-x86_64.zip mo-service ./etc/launch ./etc/launch-with-python-udf-server ./pkg/udf/pythonservice/pyserver
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
@@ -156,7 +156,7 @@ jobs:
           cd ./mo-macos11
           spctl -a -vvv -t install mo-service
           codesign --test-requirement="=notarized" -vv mo-service
-          zip -r mo-darwin-arm64.zip mo-service ./etc/launch
+          zip -r mo-darwin-arm64.zip mo-service ./etc/launch ./etc/launch-with-python-udf-server ./pkg/udf/pythonservice/pyserver
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2

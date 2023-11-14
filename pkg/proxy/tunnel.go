@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"go.uber.org/zap"
 )
 
@@ -232,7 +233,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(); !ok {
 		t.counterSet.connMigrationCannotStart.Add(1)
-		return moerr.NewInternalError(ctx, "not safe to start transfer")
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	defer func() {
 		t.mu.Lock()
@@ -397,7 +398,8 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 			if errors.Is(re, io.EOF) {
 				return false, re
 			}
-			return false, moerr.NewInternalErrorNoCtx("preRecv message: %s, name %s", re.Error(), p.name)
+			return false, moerr.NewInternalError(errutil.ContextWithNoReport(ctx, true),
+				"preRecv message: %s, name %s", re.Error(), p.name)
 		}
 		p.mu.lastCmdTime = time.Now()
 		return false, nil

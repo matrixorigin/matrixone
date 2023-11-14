@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -109,7 +110,7 @@ type LockService interface {
 	// GetWaitingList get special txnID's waiting list
 	GetWaitingList(ctx context.Context, txnID []byte) (bool, []pb.WaitTxn, error)
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
-	ForceRefreshLockTableBinds()
+	ForceRefreshLockTableBinds(targets ...uint64)
 	// GetLockTableBind returns lock table bind
 	GetLockTableBind(tableID uint64) (pb.LockTable, error)
 	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
@@ -167,7 +168,7 @@ type LockTableAllocator interface {
 	// period of time to maintain the binding, the binding will become invalid.
 	KeepLockTableBind(serviceID string) bool
 	// Valid check for changes in the binding relationship of a specific locktable.
-	Valid(binds []pb.LockTable) bool
+	Valid(binds []pb.LockTable) []uint64
 	// Close close the lock table allocator
 	Close() error
 }
@@ -217,6 +218,7 @@ type LockOptions struct {
 // in the LockStorage at runtime, this object has been specially designed to save memory
 // usage.
 type Lock struct {
+	createAt time.Time
 	// all lock info will encode into this field to save memory overhead
 	value byte
 	// all active transactions which hold this lock. Every waiter has a reference to the lock

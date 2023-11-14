@@ -130,18 +130,12 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		//rel.Lock()
 		//defer rel.Unlock()
 		//rel.proc = p
-		if proc == nil {
-			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in cache", name, defines.GetAccountId(ctx), db.databaseId)
-		}
 		rel.proc.Store(p)
 		return rel, nil
 	}
 	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		//v.(*txnTable).proc = p
-		if proc == nil {
-			logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in create map", name, defines.GetAccountId(ctx), db.databaseId)
-		}
 		v.(*txnTable).proc.Store(p)
 		return v.(*txnTable), nil
 	}
@@ -152,15 +146,15 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		case catalog.MO_DATABASE:
 			id := uint64(catalog.MO_DATABASE_ID)
 			defs := catalog.MoDatabaseTableDefs
-			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 		case catalog.MO_TABLES:
 			id := uint64(catalog.MO_TABLES_ID)
 			defs := catalog.MoTablesTableDefs
-			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 		case catalog.MO_COLUMNS:
 			id := uint64(catalog.MO_COLUMNS_ID)
 			defs := catalog.MoColumnsTableDefs
-			return db.openSysTable(genTableKey(ctx, name, db.databaseId), id, name, defs), nil
+			return db.openSysTable(p, genTableKey(ctx, name, db.databaseId), id, name, defs), nil
 		}
 	}
 	item := &cache.TableItem{
@@ -170,7 +164,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		Ts:         db.txn.op.SnapshotTS(),
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
-		logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) does not exist", name, defines.GetAccountId(ctx), db.databaseId)
+		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist", name, defines.GetAccountId(ctx), db.databaseId)
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	tbl := &txnTable{
@@ -197,9 +191,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	}
 	tbl.proc.Store(p)
 
-	if proc == nil {
-		logutil.Infof("txnDatabase.Relation table %q(acc %d db %d) in logtail", name, defines.GetAccountId(ctx), db.databaseId)
-	}
 	db.txn.tableCache.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
 }
@@ -436,7 +427,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	return nil
 }
 
-func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
+func (db *txnDatabase) openSysTable(p *process.Process, key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	tbl := &txnTable{
 		db:            db,
@@ -448,5 +439,6 @@ func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
 		clusterByIdx:  -1,
 	}
 	tbl.getTableDef()
+	tbl.proc.Store(p)
 	return tbl
 }

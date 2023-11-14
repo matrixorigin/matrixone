@@ -165,3 +165,16 @@ result
 2020-02-29 23:59:59.124358
 2020-02-29 23:59:59.124359
 2020-02-29 23:59:59.124360
+select * from generate_series(5) g;
+result
+1
+2
+3
+4
+5
+create table t(a int, b text);
+insert into t select result, repeat('foobarzoo', 600) t from generate_series(1, 200000) t;
+select count(*) as ttl from t;
+ttl
+200000
+drop table t;

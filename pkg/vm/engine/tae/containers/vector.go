@@ -205,7 +205,7 @@ func (vec *vectorWrapper) Update(i int, v any, isNull bool) {
 		panic(moerr.NewInternalErrorNoCtx("update to const vectorWrapper"))
 	}
 	vec.tryCOW()
-	UpdateValue(vec.wrapped, uint32(i), v, isNull)
+	UpdateValue(vec.wrapped, uint32(i), v, isNull, vec.mpool)
 }
 
 func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
@@ -385,9 +385,11 @@ func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MP
 	}
 
 	cloned := NewVector(*vec.GetType(), opts)
-	if err := vec.wrapped.CloneWindowTo(cloned.wrapped, offset, offset+length, cloned.GetAllocator()); err != nil {
+	v, err := vec.wrapped.CloneWindow(offset, offset+length, cloned.GetAllocator())
+	if err != nil {
 		panic(err)
 	}
+	cloned.setDownstreamVector(v)
 	return cloned
 }
 

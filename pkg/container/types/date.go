@@ -94,7 +94,7 @@ func toNumber(s string) (result int64) {
 
 // rewrite ParseDateCast, don't use regexp, that's too slow
 // the format we need to support:
-// 1.yyyy-mm-dd hh:mm:ss.ms
+// 1.yyyy-mm-dd hh:mm:ss.ms or yyyy-mm-dd hh:mm: or yyyy-mm-dd hh:mm
 // 2.yyyy-mm-dd
 // 3.yyyymmdd
 func ParseDateCast(s string) (Date, error) {
@@ -213,10 +213,16 @@ func ParseDateCast(s string) (Date, error) {
 					if mm.Len() >= 3 {
 						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
+					if i == len(s)-1 { // we need to support '2022-09-01 23:11'
+						s = s + ":00"
+					}
 				} else if s[i] == ':' {
 					// Can't go into secondState, because the Minute is empty
 					if mm.Len() == 0 {
 						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
+					}
+					if i == len(s)-1 { // we need to support '2022-09-01 23:11:'
+						s = s + "00"
 					}
 					state = secondState
 				}
@@ -723,7 +729,7 @@ func isLeap(year int32) bool {
 }
 
 func (d Date) ToDatetime() Datetime {
-	return Datetime(int64(d) * secsPerDay * microSecsPerSec)
+	return Datetime(int64(d) * SecsPerDay * MicroSecsPerSec)
 }
 
 func (d Date) ToTime() Time {

@@ -120,7 +120,7 @@ db    CHAR(64)    NO    PRI    ''
 user    CHAR(32)    NO    PRI    ''
 routine_name    CHAR(64)    NO    PRI    ''
 routine_type    VARCHAR(10)    NO    PRI    null
-grantor    VARCHAR(288)    NO        ''
+grantor    VARCHAR(288)    NO    MUL    ''        
 proc_priv    VARCHAR(10)    NO        ''
 timestamp    TIMESTAMP(0)    NO        current_timestamp()
 show columns from `columns_priv`;
@@ -138,7 +138,7 @@ host    CHAR(255)    NO    PRI    ''
 db    CHAR(64)    NO    PRI    ''
 user    CHAR(32)    NO    PRI    ''
 table_name    CHAR(64)    NO    PRI    ''
-grantor    VARCHAR(288)    NO        ''
+grantor    VARCHAR(288)    NO    MUL    ''        
 timestamp    TIMESTAMP(0)    NO        current_timestamp()
 table_priv    VARCHAR(10)    NO        ''
 column_priv    VARCHAR(10)    NO        ''
@@ -228,7 +228,7 @@ is_grantable    VARCHAR(3)    NO        ''
 show columns from `SCHEMATA`;
 Field    Type    Null    Key    Default    Extra    Comment
 catalog_name    VARCHAR(5000)    YES        null        
-schema_name    VARCHAR(5000)    NO        null        
+schema_name    VARCHAR(5000)    YES        null
 default_character_set_name    VARCHAR(7)    NO        null        
 default_collation_name    VARCHAR(18)    NO        null        
 sql_path    VARCHAR(0)    YES        null        

@@ -20,7 +20,10 @@ import (
 	"time"
 	"unsafe"
 
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -38,6 +41,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+type TestFlushBailout struct{}
 
 var FlushTableTailTaskFactory = func(
 	metas []*catalog.BlockEntry, rt *dbutils.Runtime, endTs types.TS, /* end of dirty range*/
@@ -155,6 +160,7 @@ func (task *flushTableTailTask) Name() string {
 }
 
 func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
+	enc.AddString("endTs", task.dirtyEndTs.ToString())
 	blks := ""
 	for _, blk := range task.ablksMetas {
 		blks = fmt.Sprintf("%s%s,", blks, blk.ID.ShortStringEx())
@@ -204,7 +210,9 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	defer releaseFlushBlkTasks(snapshotSubtasks, nil)
+	defer func() {
+		releaseFlushBlkTasks(snapshotSubtasks, err)
+	}()
 
 	/////////////////////
 	//// phase seperator
@@ -216,9 +224,9 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	if deleteTask != nil && deleteTask.delta != nil {
-		defer deleteTask.delta.Close()
-	}
+	defer func() {
+		relaseFlushDelTask(deleteTask, err)
+	}()
 	/////////////////////
 	//// phase seperator
 	///////////////////
@@ -227,6 +235,11 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	// merge ablocks, no need to wait, it is a sync procedure, that is why put it
 	// after flushAblksForSnapshot and flushAllDeletesFromNBlks
 	if err = task.mergeAblks(ctx); err != nil {
+		return
+	}
+
+	if v := ctx.Value(TestFlushBailout{}); v != nil {
+		err = moerr.NewInternalErrorNoCtx("test merge bail out")
 		return
 	}
 
@@ -283,13 +296,16 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	}
 	/////////////////////
 
+	duration := time.Since(now)
 	logutil.Info("[End]", common.OperationField(task.Name()),
 		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
 		zap.Int("ablks-deletes", task.ablksDeletesCnt),
 		zap.Int("ablks-merge-rows", task.mergeRowsCnt),
 		zap.Int("nblks-deletes", task.nblksDeletesCnt),
-		common.DurationField(time.Since(now)),
+		common.DurationField(duration),
 		common.OperandField(task))
+
+	v2.TaskFlushTableTailDurationHistogram.Observe(duration.Seconds())
 
 	sleep, name, exist := fault.TriggerFault("slow_flush")
 	if exist && name == task.schema.Name {
@@ -306,7 +322,7 @@ func (task *flushTableTailTask) prepareAblkSortedData(ctx context.Context, blkid
 	}
 	blk := task.ablksHandles[blkidx]
 
-	views, err := blk.GetColumnDataByIds(ctx, idxs)
+	views, err := blk.GetColumnDataByIds(ctx, idxs, common.MergeAllocator)
 	if err != nil {
 		return
 	}
@@ -452,11 +468,11 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 
 	// do first sort
 	allocSz := totalRowCnt * 4
-	node, err := common.DefaultAllocator.Alloc(allocSz)
+	node, err := common.MergeAllocator.Alloc(allocSz)
 	if err != nil {
 		panic(err)
 	}
-	defer common.DefaultAllocator.Free(node)
+	defer common.MergeAllocator.Free(node)
 	// sortedIdx is used to shuffle other columns according to the order of the sort key
 	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&node[0])), totalRowCnt)
 	orderedVecs, mapping := mergeColumns(sortVecs, &sortedIdx, true, fromLayout, toLayout, schema.HasSortKey(), task.rt.VectorPool.Transient)
@@ -563,7 +579,9 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 		var data, deletes *containers.Batch
 		var dataVer *containers.BatchWithVersion
 		blkData := blk.GetBlockData()
-		if dataVer, err = blkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true); err != nil {
+		if dataVer, err = blkData.CollectAppendInRange(
+			types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
+		); err != nil {
 			return
 		}
 		data = dataVer.Batch
@@ -573,7 +591,9 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 			continue
 		}
 		// do not close data, leave that to wait phase
-		if deletes, err = blkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true); err != nil {
+		if deletes, err = blkData.CollectDeleteInRange(
+			ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
+		); err != nil {
 			return
 		}
 		if deletes != nil {
@@ -643,7 +663,9 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 	for i, blk := range task.delSrcMetas {
 		blkData := blk.GetBlockData()
 		var deletes *containers.Batch
-		if deletes, err = blkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true); err != nil {
+		if deletes, err = blkData.CollectDeleteInRange(
+			ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
+		); err != nil {
 			return
 		}
 		if deletes == nil || deletes.Length() == 0 {
@@ -704,6 +726,15 @@ func makeDeletesTempBatch(template *containers.Batch, pool *containers.VectorPoo
 		bat.AddVector(name, pool.GetVector(template.Vecs[i].GetType()))
 	}
 	return bat
+}
+
+func relaseFlushDelTask(task *flushDeletesTask, err error) {
+	if err != nil && task != nil {
+		task.WaitDone()
+	}
+	if task != nil && task.delta != nil {
+		task.delta.Close()
+	}
 }
 
 func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {

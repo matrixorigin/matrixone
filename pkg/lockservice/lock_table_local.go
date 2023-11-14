@@ -19,12 +19,14 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -68,6 +70,8 @@ func (l *localLockTable) lock(
 	rows [][]byte,
 	opts LockOptions,
 	cb func(pb.Result, error)) {
+	v2.TxnLocalLockTotalCounter.Inc()
+
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock.local")
 	defer span.End()
@@ -78,9 +82,6 @@ func (l *localLockTable) lock(
 		c.lockFunc = l.doLock
 	}
 	l.doLock(c, false)
-	if !opts.async {
-		c.release()
-	}
 }
 
 func (l *localLockTable) doLock(
@@ -110,6 +111,7 @@ func (l *localLockTable) doLock(
 			}
 			// no waiter, all locks are added
 			if c.w == nil {
+				v2.TxnAcquireLockWaitDurationHistogram.Observe(time.Since(c.createAt).Seconds())
 				c.txn.clearBlocked(old)
 				logLocalLockAdded(c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
@@ -168,6 +170,11 @@ func (l *localLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
 	commitTS timestamp.Timestamp) {
+	start := time.Now()
+	defer func() {
+		v2.TxnUnlockBtreeTotalDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	logUnlockTableOnLocal(
 		l.bind.ServiceID,
 		txn,
@@ -177,6 +184,8 @@ func (l *localLockTable) unlock(
 	defer locks.unref()
 
 	l.mu.Lock()
+	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
+
 	defer l.mu.Unlock()
 	if l.mu.closed {
 		return
@@ -193,12 +202,16 @@ func (l *localLockTable) unlock(
 			if !lock.holders.contains(txn.txnID) {
 				getLogger().Fatal("BUG: unlock a lock that is not held by the current txn")
 			}
+			if len(startKey) > 0 && !lock.isLockRangeEnd() {
+				panic("BUG: missing range end key")
+			}
 
-			lock.closeTxn(
+			lockCanRemoved := lock.closeTxn(
 				txn,
 				notifyValue{ts: commitTS})
 			logLockUnlocked(txn, key, lock)
-			if lock.isEmpty() {
+			if lockCanRemoved {
+				v2.TxnHoldLockDurationHistogram.Observe(time.Since(lock.createAt).Seconds())
 				l.mu.store.Delete(key)
 				if len(startKey) > 0 {
 					l.mu.store.Delete(startKey)

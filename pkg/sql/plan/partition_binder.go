@@ -116,3 +116,7 @@ func (p *PartitionBinder) BindWinFunc(s string, expr *tree.FuncExpr, i int32, b 
 func (p *PartitionBinder) BindSubquery(subquery *tree.Subquery, b bool) (*plan.Expr, error) {
 	return nil, moerr.NewSyntaxError(p.GetContext(), "subquery not allowed in partition clause")
 }
+
+func (p *PartitionBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	return nil, moerr.NewInvalidInput(p.GetContext(), "cannot bind time window functions '%s'", funcName)
+}

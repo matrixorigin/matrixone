@@ -32,6 +32,8 @@ enum ServiceType {
   LOG = 2;
   // Proxy proxy service
   PROXY = 3;
+  // PYTHON_UDF python udf service
+  PYTHON_UDF = 4;
 }
 
 // TNShardRecord is TN shard metadata describing what is a TN shard. It
@@ -142,6 +144,8 @@ message TNService {
   repeated TNShard Shards       = 6 [(gogoproto.nullable) = false];
   // Labels labels on service
   map<string, LabelList> Labels = 7 [(gogoproto.nullable) = false];
+  // QueryAddress it the address of query service on the tn
+  string          QueryAddress       = 8;
 }
 
 // LabelList defines the labels on CN store.

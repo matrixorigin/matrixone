@@ -40,29 +40,32 @@ func NewOverlapPolicy() *Overlap {
 
 // impl Policy for Basic
 func (o *Overlap) OnObject(obj *catalog.SegmentEntry) {
-	if obj.Stat.SortKeyZonemap != nil {
-		o.analyzer.push(obj.Stat.SortKeyZonemap.GetMin(), true, obj)
-		o.analyzer.push(obj.Stat.SortKeyZonemap.GetMax(), false, obj)
+	sortKeyZonemap := obj.Stat.GetSortKeyZonemap()
+	if sortKeyZonemap != nil {
+		o.analyzer.push(sortKeyZonemap.GetMin(), true, obj)
+		o.analyzer.push(sortKeyZonemap.GetMax(), false, obj)
 
 		if o.schema.Name == "bmsql_new_order" {
-			minv := obj.Stat.SortKeyZonemap.GetMinBuf()
-			maxv := obj.Stat.SortKeyZonemap.GetMaxBuf()
+			minv := sortKeyZonemap.GetMinBuf()
+			maxv := sortKeyZonemap.GetMaxBuf()
 			mint, _, _ := types.DecodeTuple(minv)
 			maxt, _, _ := types.DecodeTuple(maxv)
 			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(), maxt.ErrString())
 		}
 	}
-
 }
 
-func (o *Overlap) Revise(cpu, mem float64) []*catalog.SegmentEntry {
+func (o *Overlap) Config(uint64, any)   {}
+func (o *Overlap) GetConfig(uint64) any { return nil }
+
+func (o *Overlap) Revise(cpu, mem int64) []*catalog.SegmentEntry {
 	o.analyzer.analyze(o.schema.GetSingleSortKeyType().Oid, o.schema.Name)
 	return nil
 }
 
-func (o *Overlap) ResetForTable(id uint64, schema *catalog.Schema) {
+func (o *Overlap) ResetForTable(id uint64, entry *catalog.TableEntry) {
 	o.id = id
-	o.schema = schema
+	o.schema = entry.GetLastestSchema()
 	o.analyzer.reset()
 }
 

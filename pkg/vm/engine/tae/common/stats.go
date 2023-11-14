@@ -15,12 +15,51 @@
 package common
 
 import (
+	"encoding/hex"
+	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
+
+const (
+	DefaultNotLoadMoreThan  = 4096
+	DefaultMinRowsQualified = 40960
+	DefaultMaxMergeObjN     = 2
+)
+
+var (
+	RuntimeNotLoadMoreThan  atomic.Int32
+	RuntimeMaxMergeObjN     atomic.Int32
+	RuntimeMinRowsQualified atomic.Int32
+)
+
+func init() {
+	RuntimeNotLoadMoreThan.Store(DefaultNotLoadMoreThan)
+	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
+	RuntimeMinRowsQualified.Store(DefaultMinRowsQualified)
+}
+
+type MergeHistory struct {
+	LastTime time.Time
+	OSize    int
+	NObj     int
+	NBlk     int
+}
+
+func (h *MergeHistory) Add(osize, nobj, nblk int) {
+	h.OSize = osize
+	h.NObj = nobj
+	h.NBlk = nblk
+	h.LastTime = time.Now()
+}
+
+func (h *MergeHistory) IsLastBefore(d time.Duration) bool {
+	return h.LastTime.Before(time.Now().Add(-d))
+}
 
 type TableCompactStat struct {
 	sync.RWMutex
@@ -29,23 +68,21 @@ type TableCompactStat struct {
 
 	// Configs
 
-	// make this table apply flush table tail policy
-	FlushTableTailEnabled bool
 	// how often to flush table tail
 	// this duration will be add some random value to avoid flush many tables at the same time
 	FlushGapDuration time.Duration
 	// if the size of table tail, in bytes, exceeds FlushMemCapacity, flush it immediately
 	FlushMemCapacity int
 
-	EstimateRowSize int
-
 	// Status
 
-	// dirty end range flushed by last flush txn. If we are waiting for a ckp [a, b], if all dirty tables' LastFlush are greater than b,
+	// dirty end range flushed by last flush txn. If we are waiting for a ckp [a, b], and all dirty tables' LastFlush are greater than b,
 	// the checkpoint is ready to collect data and write all down.
 	LastFlush types.TS
 	// FlushDeadline is the deadline to flush table tail
 	FlushDeadline time.Time
+
+	MergeHist MergeHistory
 }
 
 func (s *TableCompactStat) ResetDeadlineWithLock() {
@@ -57,18 +94,36 @@ func (s *TableCompactStat) ResetDeadlineWithLock() {
 func (s *TableCompactStat) InitWithLock(durationHint time.Duration) {
 	s.FlushGapDuration = durationHint * 5
 	s.FlushMemCapacity = 20 * 1024 * 1024
-	s.FlushTableTailEnabled = true
 	s.Inited = true
 }
 
-func (s *TableCompactStat) UpdateEstimateRowSize(rowSize int) {
+func (s *TableCompactStat) AddMerge(osize, nobj, nblk int) {
 	s.Lock()
 	defer s.Unlock()
-	s.EstimateRowSize = rowSize
+	s.MergeHist.Add(osize, nobj, nblk)
 }
 
-func (s *TableCompactStat) GetEstimateRowSize() int {
+func (s *TableCompactStat) GetLastMerge() *MergeHistory {
 	s.RLock()
 	defer s.RUnlock()
-	return s.EstimateRowSize
+	return &s.MergeHist
+}
+
+func HumanReadableBytes(bytes int) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	if bytes < 1024*1024 {
+		return fmt.Sprintf("%.2fKB", float64(bytes)/1024)
+	}
+	if bytes < 1024*1024*1024 {
+		return fmt.Sprintf("%.2fMB", float64(bytes)/1024/1024)
+	}
+	return fmt.Sprintf("%.2fGB", float64(bytes)/1024/1024/1024)
+}
+
+func ShortSegId(x types.Uuid) string {
+	var shortuuid [8]byte
+	hex.Encode(shortuuid[:], x[:4])
+	return string(shortuuid[:])
 }

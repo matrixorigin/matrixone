@@ -16,10 +16,10 @@ package db
 
 import (
 	"sort"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 )
@@ -108,11 +108,17 @@ func (d *segHelper) finish() []*catalog.SegmentEntry {
 type MergeTaskBuilder struct {
 	db *DB
 	*catalog.LoopProcessor
-	tid           uint64
-	schema        *catalog.Schema
+	tid  uint64
+	name string
+	tbl  *catalog.TableEntry
+
 	segmentHelper *segHelper
 	objPolicy     merge.Policy
 	executor      *merge.MergeExecutor
+
+	// concurrecy control
+	suspend    atomic.Bool
+	suspendCnt atomic.Int32
 }
 
 func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
@@ -132,22 +138,47 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	return op
 }
 
+func (s *MergeTaskBuilder) ManuallyMerge(entry *catalog.TableEntry, segs []*catalog.SegmentEntry) error {
+	// stop new merge task
+	s.suspend.Store(true)
+	defer s.suspend.Store(false)
+	// waiting the runing merge sched task to finish
+	for s.suspendCnt.Load() < 3 {
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// all status are safe in the TaskBuilder
+	for _, seg := range segs {
+		seg.LoadObjectInfo()
+	}
+	return s.executor.ManuallyExecute(entry, segs)
+}
+
+func (s *MergeTaskBuilder) ConfigPolicy(id uint64, c any) {
+	s.objPolicy.Config(id, c)
+}
+
+func (s *MergeTaskBuilder) GetPolicy(id uint64) any {
+	return s.objPolicy.GetConfig(id)
+}
+
 func (s *MergeTaskBuilder) trySchedMergeTask() {
 	if s.tid == 0 {
 		return
 	}
 	delSegs := s.segmentHelper.finish()
-	s.executor.ExecuteFor(s.tid, s.schema.Name, delSegs, s.objPolicy)
+	s.executor.ExecuteFor(s.tbl, delSegs, s.objPolicy)
 }
 
 func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 	s.tid = 0
 	if entry != nil {
 		s.tid = entry.ID
-		s.schema = entry.GetLastestSchema()
+		s.tbl = entry
+		s.name = entry.GetLastestSchema().Name
 	}
 	s.segmentHelper.reset()
-	s.objPolicy.ResetForTable(entry.ID, entry.GetLastestSchema())
+	s.objPolicy.ResetForTable(entry.ID, entry)
 }
 
 func (s *MergeTaskBuilder) PreExecute() error {
@@ -157,11 +188,15 @@ func (s *MergeTaskBuilder) PreExecute() error {
 
 func (s *MergeTaskBuilder) PostExecute() error {
 	s.executor.PrintStats()
-	logutil.Infof("mergeblocks ------------------------------------")
 	return nil
 }
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
+	if s.suspend.Load() {
+		s.suspendCnt.Add(1)
+		return moerr.GetOkStopCurrRecur()
+	}
+	s.suspendCnt.Store(0)
 	if !tableEntry.IsActive() {
 		err = moerr.GetOkStopCurrRecur()
 	}
@@ -200,9 +235,11 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 		return nil
 	}
 	// for sorted segments, we have to feed it to policy to see if it is qualified to be merged
-	seg.Stat.Rows = s.segmentHelper.segRowCnt
-	seg.Stat.Dels = s.segmentHelper.segRowDel
+	seg.Stat.SetRows(s.segmentHelper.segRowCnt)
+	seg.Stat.SetRemainingRows(s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel)
+
 	seg.LoadObjectInfo()
+
 	s.objPolicy.OnObject(seg)
 	return nil
 }

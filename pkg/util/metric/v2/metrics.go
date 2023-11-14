@@ -22,43 +22,105 @@ var (
 	registry = prometheus.DefaultRegisterer
 )
 
-// MustRegister Delegate the prometheus MustRegister
-func MustRegister(cs ...prometheus.Collector) {
-	registry.MustRegister(cs...)
+func init() {
+	initFileServiceMetrics()
+	initLogtailMetrics()
+	initTxnMetrics()
+	initTaskMetrics()
+	initRPCMetrics()
+	initMemMetrics()
+
+	registry.MustRegister(HeartbeatHistogram)
+	registry.MustRegister(HeartbeatFailureCounter)
+	registry.MustRegister(HeartbeatRecvHistogram)
+	registry.MustRegister(HeartbeatRecvFailureCounter)
 }
 
-func init() {
-	registry.MustRegister(S3FSCounter)
-	registry.MustRegister(LocalFSCounter)
-	registry.MustRegister(MemFSCounter)
-	registry.MustRegister(TxnCounter)
-	registry.MustRegister(TxnStatementCounter)
-	registry.MustRegister(TxnStatementRetryCounter)
-	registry.MustRegister(TxnHandleCommitCounter)
+func initMemMetrics() {
+	registry.MustRegister(memMPoolAllocatedSizeGauge)
+}
 
-	registry.MustRegister(S3IOSizeGauge)
-	registry.MustRegister(LocalIOSizeGauge)
-	registry.MustRegister(LogTailSizeGauge)
-	registry.MustRegister(TxnCommitSizeGauge)
-	registry.MustRegister(TxnHandleQueueSizeGauge)
+func initTaskMetrics() {
+	registry.MustRegister(taskShortDurationHistogram)
+	registry.MustRegister(taskLongDurationHistogram)
 
-	registry.MustRegister(S3IODurationHistogram)
-	registry.MustRegister(LocalIODurationHistogram)
-	registry.MustRegister(S3GetConnDurationHistogram)
-	registry.MustRegister(S3DNSDurationHistogram)
-	registry.MustRegister(S3ConnectDurationHistogram)
-	registry.MustRegister(S3TLSHandshakeDurationHistogram)
-	registry.MustRegister(LogTailApplyDurationHistogram)
-	registry.MustRegister(LogTailWaitDurationHistogram)
+	registry.MustRegister(taskScheduledByCounter)
+	registry.MustRegister(taskGeneratedStuffCounter)
+	registry.MustRegister(taskSelectivityCounter)
+
+	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+}
+
+func initFileServiceMetrics() {
+	registry.MustRegister(fsReadCounter)
+	registry.MustRegister(S3ConnectCounter)
+	registry.MustRegister(S3DNSResolveCounter)
+
+	registry.MustRegister(s3IOBytesHistogram)
+	registry.MustRegister(s3IODurationHistogram)
+	registry.MustRegister(s3ConnDurationHistogram)
+	registry.MustRegister(localIOBytesHistogram)
+	registry.MustRegister(localIODurationHistogram)
+}
+
+func initLogtailMetrics() {
+	registry.MustRegister(LogtailLoadCheckpointCounter)
+
+	registry.MustRegister(logTailQueueSizeGauge)
+
+	registry.MustRegister(LogTailBytesHistogram)
+	registry.MustRegister(logTailApplyDurationHistogram)
 	registry.MustRegister(LogTailAppendDurationHistogram)
-	registry.MustRegister(SQLBuildPlanDurationHistogram)
-	registry.MustRegister(TxnDetermineSnapshotDurationHistogram)
-	registry.MustRegister(TxnWaitActiveDurationHistogram)
-	registry.MustRegister(TxnLockDurationHistogram)
-	registry.MustRegister(TxnUnlockDurationHistogram)
-	registry.MustRegister(TxnCommitDurationHistogram)
+	registry.MustRegister(logTailSendDurationHistogram)
+	registry.MustRegister(LogTailLoadCheckpointDurationHistogram)
+
+	registry.MustRegister(LogTailCollectDurationHistogram)
+	registry.MustRegister(LogTailSubscriptionCounter)
+	registry.MustRegister(txnTNSideDurationHistogram)
+
+	registry.MustRegister(TxnShowAccountsDurationHistogram)
+}
+
+func initTxnMetrics() {
+	registry.MustRegister(txnCounter)
+	registry.MustRegister(txnStatementCounter)
+	registry.MustRegister(txnCommitCounter)
+	registry.MustRegister(TxnRollbackCounter)
+	registry.MustRegister(txnLockCounter)
+
+	registry.MustRegister(txnQueueSizeGauge)
+
+	registry.MustRegister(txnCommitDurationHistogram)
+	registry.MustRegister(TxnLifeCycleDurationHistogram)
+	registry.MustRegister(TxnLifeCycleStatementsTotalHistogram)
+	registry.MustRegister(txnCreateDurationHistogram)
+	registry.MustRegister(txnStatementDurationHistogram)
+	registry.MustRegister(txnLockDurationHistogram)
+	registry.MustRegister(txnUnlockDurationHistogram)
 	registry.MustRegister(TxnTableRangeDurationHistogram)
-	registry.MustRegister(TxnSendRequestDurationHistogram)
-	registry.MustRegister(TxnHandleQueueInDurationHistogram)
-	registry.MustRegister(TxnHandleCommitDurationHistogram)
+	registry.MustRegister(TxnLockWaitersTotalHistogram)
+	registry.MustRegister(TxnTableRangeSizeHistogram)
+	registry.MustRegister(txnMpoolDurationHistogram)
+
+	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
+	registry.MustRegister(txnCNCommittedLocationQuantityGauge)
+}
+
+func initRPCMetrics() {
+	registry.MustRegister(RPCClientCreateCounter)
+	registry.MustRegister(rpcBackendCreateCounter)
+	registry.MustRegister(rpcBackendClosedCounter)
+	registry.MustRegister(rpcBackendConnectCounter)
+	registry.MustRegister(rpcMessageCounter)
+
+	registry.MustRegister(rpcBackendPoolSizeGauge)
+	registry.MustRegister(rpcSendingQueueSizeGauge)
+	registry.MustRegister(rpcSendingBatchSizeGauge)
+	registry.MustRegister(rpcServerSessionSizeGauge)
+
+	registry.MustRegister(rpcBackendConnectDurationHistogram)
+	registry.MustRegister(rpcWriteDurationHistogram)
+	registry.MustRegister(rpcWriteLatencyDurationHistogram)
+	registry.MustRegister(rpcBackendDoneDurationHistogram)
+
 }

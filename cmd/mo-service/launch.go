@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
 )
 
@@ -38,7 +37,6 @@ var (
 func startCluster(
 	ctx context.Context,
 	stopper *stopper.Stopper,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
 	if *launchFile == "" {
@@ -51,7 +49,7 @@ func startCluster(
 	}
 
 	if cfg.Dynamic.Enable {
-		return startDynamicCluster(ctx, cfg, stopper, perfCounterSet, shutdownC)
+		return startDynamicCluster(ctx, cfg, stopper, shutdownC)
 	}
 
 	/*
@@ -62,20 +60,23 @@ func startCluster(
 	backup.SaveLaunchConfigPath(backup.LogConfig, cfg.LogServiceConfigFiles)
 	backup.SaveLaunchConfigPath(backup.DnConfig, cfg.TNServiceConfigsFiles)
 	backup.SaveLaunchConfigPath(backup.CnConfig, cfg.CNServiceConfigsFiles)
-	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
 	if *withProxy {
 		backup.SaveLaunchConfigPath(backup.ProxyConfig, cfg.ProxyServiceConfigsFiles)
-		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, shutdownC); err != nil {
 			return err
 		}
+	}
+	if err := startPythonUdfServiceCluster(ctx, cfg.PythonUdfServiceConfigsFiles, stopper, shutdownC); err != nil {
+		return err
 	}
 	return nil
 }
@@ -84,7 +85,6 @@ func startLogServiceCluster(
 	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
 	if len(files) == 0 {
@@ -97,7 +97,7 @@ func startLogServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, perfCounterSet, shutdownC); err != nil {
+		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -108,7 +108,6 @@ func startTNServiceCluster(
 	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
 	if len(files) == 0 {
@@ -117,10 +116,12 @@ func startTNServiceCluster(
 
 	for _, file := range files {
 		cfg := NewConfig()
+		// mo boosting in standalone mode
+		cfg.IsStandalone = true
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, perfCounterSet, shutdownC); err != nil {
+		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
 			return nil
 		}
 	}
@@ -131,7 +132,6 @@ func startCNServiceCluster(
 	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
 	if len(files) == 0 {
@@ -147,7 +147,7 @@ func startCNServiceCluster(
 			return err
 		}
 		upstreams = append(upstreams, fmt.Sprintf("127.0.0.1:%d", cfg.getCNServiceConfig().Frontend.Port))
-		if err := startService(ctx, cfg, stopper, perfCounterSet, shutdownC); err != nil {
+		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -169,7 +169,6 @@ func startProxyServiceCluster(
 	ctx context.Context,
 	files []string,
 	stopper *stopper.Stopper,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
 	if len(files) == 0 {
@@ -182,11 +181,33 @@ func startProxyServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, perfCounterSet, shutdownC); err != nil {
+		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+func startPythonUdfServiceCluster(
+	ctx context.Context,
+	files []string,
+	stopper *stopper.Stopper,
+	shutdownC chan struct{},
+) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	for _, file := range files {
+		cfg := NewConfig()
+		if err := parseConfigFromFile(file, cfg); err != nil {
+			return err
+		}
+		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

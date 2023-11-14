@@ -122,6 +122,9 @@ type sAggDecimal128Min struct{}
 type sAggUuidMin struct{}
 type sAggStrMin struct{}
 
+func (s *sAggMin[T]) Dup() agg.AggStruct {
+	return &sAggMin[T]{}
+}
 func (s *sAggMin[T]) Grows(_ int)         {}
 func (s *sAggMin[T]) Free(_ *mpool.MPool) {}
 func (s *sAggMin[T]) Fill(groupNumber int64, values T, lastResult T, count int64, isEmpty bool, isNull bool) (newResult T, isStillEmpty bool, err error) {
@@ -147,6 +150,9 @@ func (s *sAggMin[T]) Eval(lastResult []T) (result []T, err error) {
 func (s *sAggMin[T]) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggMin[T]) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggBoolMin) Dup() agg.AggStruct {
+	return &sAggBoolMin{}
+}
 func (s *sAggBoolMin) Grows(_ int)         {}
 func (s *sAggBoolMin) Free(_ *mpool.MPool) {}
 func (s *sAggBoolMin) Fill(groupNumber int64, values bool, lastResult bool, count int64, isEmpty bool, isNull bool) (newResult bool, isStillEmpty bool, err error) {
@@ -172,6 +178,9 @@ func (s *sAggBoolMin) Eval(lastResult []bool) (result []bool, err error) {
 func (s *sAggBoolMin) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggBoolMin) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggDecimal64Min) Dup() agg.AggStruct {
+	return &sAggDecimal64Min{}
+}
 func (s *sAggDecimal64Min) Grows(_ int)         {}
 func (s *sAggDecimal64Min) Free(_ *mpool.MPool) {}
 func (s *sAggDecimal64Min) Fill(groupNumber int64, values types.Decimal64, lastResult types.Decimal64, count int64, isEmpty bool, isNull bool) (newResult types.Decimal64, isStillEmpty bool, err error) {
@@ -197,6 +206,9 @@ func (s *sAggDecimal64Min) Eval(lastResult []types.Decimal64) (result []types.De
 func (s *sAggDecimal64Min) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggDecimal64Min) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggDecimal128Min) Dup() agg.AggStruct {
+	return &sAggDecimal128Min{}
+}
 func (s *sAggDecimal128Min) Grows(_ int)         {}
 func (s *sAggDecimal128Min) Free(_ *mpool.MPool) {}
 func (s *sAggDecimal128Min) Fill(groupNumber int64, values types.Decimal128, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (newResult types.Decimal128, isStillEmpty bool, err error) {
@@ -222,6 +234,9 @@ func (s *sAggDecimal128Min) Eval(lastResult []types.Decimal128) (result []types.
 func (s *sAggDecimal128Min) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggDecimal128Min) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggUuidMin) Dup() agg.AggStruct {
+	return &sAggUuidMin{}
+}
 func (s *sAggUuidMin) Grows(_ int)         {}
 func (s *sAggUuidMin) Free(_ *mpool.MPool) {}
 func (s *sAggUuidMin) Fill(groupNumber int64, values types.Uuid, lastResult types.Uuid, count int64, isEmpty bool, isNull bool) (newResult types.Uuid, isStillEmpty bool, err error) {
@@ -247,6 +262,9 @@ func (s *sAggUuidMin) Eval(lastResult []types.Uuid) (result []types.Uuid, err er
 func (s *sAggUuidMin) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggUuidMin) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggStrMin) Dup() agg.AggStruct {
+	return &sAggStrMin{}
+}
 func (s *sAggStrMin) Grows(_ int)         {}
 func (s *sAggStrMin) Free(_ *mpool.MPool) {}
 func (s *sAggStrMin) Fill(groupNumber int64, values []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) (newResult []byte, isStillEmpty bool, err error) {

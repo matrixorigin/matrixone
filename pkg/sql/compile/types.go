@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -101,7 +102,7 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic magicType
 
-	// IsEnd means the pipeline is join
+	// IsJoin means the pipeline is join
 	IsJoin bool
 
 	// IsEnd means the pipeline is end
@@ -110,7 +111,7 @@ type Scope struct {
 	// IsRemote means the pipeline is remote
 	IsRemote bool
 
-	// IsRemote means the pipeline is load
+	// IsLoad means the pipeline is load
 	IsLoad bool
 
 	Plan *plan.Plan
@@ -217,6 +218,7 @@ type Compile struct {
 	cnLabel map[string]string
 
 	buildPlanFunc func() (*plan2.Plan, error)
+	startAt       time.Time
 }
 
 type runtimeFilterReceiver struct {

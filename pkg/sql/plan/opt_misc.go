@@ -14,7 +14,9 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 // removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
 func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
@@ -52,7 +54,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			projMap[ref] = expr
 		}
 
-	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW:
+	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_Fill:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
 			node.Children[i] = newChildID
@@ -139,7 +141,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DELETE {
 		return false
 	}
-	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK {
+	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
 	}
 
@@ -194,6 +196,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	var canPushdown, cantPushdown []*plan.Expr
 
+	if node.Limit != nil {
+		// can not push down over limit
+		cantPushdown = filters
+		filters = nil
+	}
+
 	switch node.NodeType {
 	case plan.Node_AGG:
 		groupTag := node.BindingTags[0]
@@ -220,6 +228,29 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[0] = childID
 
 	case plan.Node_WINDOW:
+		windowTag := node.BindingTags[0]
+
+		for _, filter := range filters {
+			if !containsTag(filter, windowTag) {
+				canPushdown = append(canPushdown, replaceColRefs(filter, windowTag, node.WinSpecList))
+			} else {
+				node.FilterList = append(node.FilterList, filter)
+			}
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
+
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+
+		node.Children[0] = childID
+
+	case plan.Node_TIME_WINDOW:
 		windowTag := node.BindingTags[0]
 
 		for _, filter := range filters {
@@ -656,6 +687,7 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 	}
 }
 
+/*
 func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
 	fun, ok := cond.Expr.(*plan.Expr_F)
 	if !ok || fun.F.Func.ObjName != "=" {
@@ -676,50 +708,61 @@ func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
 		return rightCol
 	}
 	return nil
-}
+}*/
 
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
-func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32) int32 {
+func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) []int {
 	node := builder.qry.Nodes[nodeID]
-	if len(node.Children) > 0 {
-		for i, child := range node.Children {
-			node.Children[i] = builder.removeRedundantJoinCond(child)
-		}
-	} else {
-		return nodeID
+	for i := range node.Children {
+		colGroup = builder.removeRedundantJoinCond(node.Children[i], colMap, colGroup)
 	}
-	if !builder.IsEquiJoin(node) {
-		return nodeID
+	if len(node.OnList) == 0 {
+		return colGroup
 	}
 
-	leftTags := make(map[int32]any)
-	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = nil
-	}
-
-	rightTags := make(map[int32]any)
-	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = nil
-	}
-
-	newOnList := make([]*Expr, 0, len(node.OnList))
-	colMap := make(map[[2]int32]int32)
+	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
-		if equi := isEquiCond(expr, leftTags, rightTags); equi {
-			col := getJoinCondLeftCol(expr, leftTags)
-			if col != nil {
-				if _, ok := colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}]; ok {
-					continue
+		if exprf, ok := expr.Expr.(*plan.Expr_F); ok {
+			if SupportedJoinCondition(exprf.F.Func.GetObj()) {
+				leftcol, leftok := exprf.F.Args[0].Expr.(*plan.Expr_Col)
+				rightcol, rightok := exprf.F.Args[1].Expr.(*plan.Expr_Col)
+				if leftok && rightok {
+					left, leftok := colMap[[2]int32{leftcol.Col.RelPos, leftcol.Col.ColPos}]
+					if !leftok {
+						left = len(colGroup)
+						colGroup = append(colGroup, left)
+						colMap[[2]int32{leftcol.Col.RelPos, leftcol.Col.ColPos}] = left
+					}
+					right, rightok := colMap[[2]int32{rightcol.Col.RelPos, rightcol.Col.ColPos}]
+					if !rightok {
+						right = len(colGroup)
+						colGroup = append(colGroup, right)
+						colMap[[2]int32{rightcol.Col.RelPos, rightcol.Col.ColPos}] = right
+					}
+					for colGroup[left] != colGroup[colGroup[left]] {
+						colGroup[left] = colGroup[colGroup[left]]
+					}
+					for colGroup[right] != colGroup[colGroup[right]] {
+						colGroup[right] = colGroup[colGroup[right]]
+					}
+					if colGroup[left] == colGroup[right] {
+						continue
+					}
+					newOnList = append(newOnList, expr)
+					colGroup[colGroup[left]] = colGroup[right]
 				} else {
-					colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}] = 0
+					newOnList = append(newOnList, expr)
 				}
+			} else {
+				newOnList = append(newOnList, expr)
 			}
+		} else {
+			newOnList = append(newOnList, expr)
 		}
-		newOnList = append(newOnList, expr)
 	}
-
 	node.OnList = newOnList
-	return nodeID
+
+	return colGroup
 }
 
 func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[int32]int) int32 {
@@ -738,68 +781,27 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	for i := range node.OrderBy {
 		increaseTagCnt(node.OrderBy[i].Expr, 1, tagCnt)
 	}
-
 	for i, childID := range node.Children {
 		node.Children[i] = builder.removeEffectlessLeftJoins(childID, tagCnt)
 	}
-
-	var (
-		rightChild *plan.Node
-		tableDef   *plan.TableDef
-		tag        int32
-		name2Pos   map[string]int
-		equiCols   []bool
-	)
-
 	increaseTagCntForExprList(node.OnList, -1, tagCnt)
 
 	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_LEFT {
 		goto END
 	}
 
-	rightChild = builder.qry.Nodes[node.Children[1]]
-	if rightChild.NodeType != plan.Node_TABLE_SCAN {
-		goto END
-	}
-
-	tag = rightChild.BindingTags[0]
-	if tagCnt[tag] > 0 {
-		goto END
-	}
-
-	tableDef = rightChild.TableDef
-	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) > len(node.OnList) {
-		goto END
-	}
-
-	equiCols = make([]bool, len(tableDef.Pkey.Names))
-	name2Pos = make(map[string]int)
-	for i, name := range tableDef.Pkey.Names {
-		name2Pos[name] = i
-	}
-
-	for _, cond := range node.OnList {
-		if f, ok := cond.Expr.(*plan.Expr_F); ok && SupportedJoinCondition(f.F.Func.Obj) {
-			if col, ok := f.F.Args[0].Expr.(*plan.Expr_Col); ok && col.Col.RelPos == tag && !hasTag(f.F.Args[1], tag) {
-				if pos, ok := name2Pos[col.Col.Name]; ok {
-					equiCols[pos] = true
-				}
-			}
-			if col, ok := f.F.Args[1].Expr.(*plan.Expr_Col); ok && col.Col.RelPos == tag && !hasTag(f.F.Args[0], tag) {
-				if pos, ok := name2Pos[col.Col.Name]; ok {
-					equiCols[pos] = true
-				}
-			}
-		}
-	}
-
-	for i := range equiCols {
-		if !equiCols[i] {
+	// if output column is in right, can not optimize this one
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		if tagCnt[tag] > 0 {
 			goto END
 		}
 	}
 
-	// All primary key columns of right table are presented in equi conditions
+	//reuse hash on primary key logic
+	if !node.Stats.HashmapStats.HashOnPK {
+		goto END
+	}
+
 	nodeID = node.Children[0]
 
 END:

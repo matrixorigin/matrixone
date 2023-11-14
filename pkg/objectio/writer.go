@@ -45,6 +45,8 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
+	objStats          ObjectStats
+	pkColIdx          uint16
 }
 
 type blockData struct {
@@ -111,6 +113,22 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
+func (w *objectWriterV1) DescribeObject() (ObjectStats, error) {
+	stats := newObjectStats()
+	copy(stats[objectNameOffset:], w.name)
+	copy(stats[extentOffset:], Header(w.buffer.vector.Entries[0].Data).Extent())
+	blkCnt := uint32(len(w.blocks))
+	copy(stats[rowCntOffset:], types.EncodeUint32(&w.totalRow))
+	copy(stats[blkCntOffset:], types.EncodeUint32(&blkCnt))
+	copy(stats[sortKeyIdxOffset:], types.EncodeUint16(&w.pkColIdx))
+
+	if len(w.blocks[SchemaData]) != 0 && len(w.colmeta) > int(w.pkColIdx) {
+		copy(stats[dataZoneMapOffset:], w.colmeta[w.pkColIdx].ZoneMap())
+	}
+
+	return stats, nil
+}
+
 func (w *objectWriterV1) GetSeqnums() []uint16 {
 	return w.seqnums.Seqs
 }
@@ -160,6 +178,7 @@ func (w *objectWriterV1) UpdateBlockZM(blkIdx int, seqnum uint16, zm ZoneMap) {
 
 func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
+	w.pkColIdx = seqnum
 	return
 }
 
@@ -483,8 +502,14 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 		if err = w.object.fs.Delete(ctx, w.fileName); err != nil {
 			return err
 		}
-		return w.object.fs.Write(ctx, w.buffer.GetData())
+		err = w.object.fs.Write(ctx, w.buffer.GetData())
 	}
+
+	if err != nil {
+		return err
+	}
+
+	w.objStats, err = w.DescribeObject()
 	return err
 }
 

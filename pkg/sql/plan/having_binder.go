@@ -273,3 +273,30 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr, isRoot)
 }
+
+func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+		return nil, moerr.NewNotSupported(b.GetContext(), "DISTINCT in time window")
+	}
+
+	b.insideAgg = true
+	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err != nil {
+		return nil, err
+	}
+	b.insideAgg = false
+
+	colPos := int32(len(b.ctx.times))
+	astStr := tree.String(astExpr, dialect.MYSQL)
+	b.ctx.timeByAst[astStr] = colPos
+	b.ctx.times = append(b.ctx.times, expr)
+	return &plan.Expr{
+		Typ: expr.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: b.ctx.timeTag,
+				ColPos: colPos,
+			},
+		},
+	}, nil
+}

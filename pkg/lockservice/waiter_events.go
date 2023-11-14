@@ -33,19 +33,19 @@ var (
 )
 
 type lockContext struct {
-	ctx       context.Context
-	txn       *activeTxn
-	waitTxn   pb.WaitTxn
-	rows      [][]byte
-	opts      LockOptions
-	offset    int
-	idx       int
-	lockedTS  timestamp.Timestamp
-	result    pb.Result
-	cb        func(pb.Result, error)
-	lockFunc  func(*lockContext, bool)
-	w         *waiter
-	completed bool
+	ctx      context.Context
+	txn      *activeTxn
+	waitTxn  pb.WaitTxn
+	rows     [][]byte
+	opts     LockOptions
+	offset   int
+	idx      int
+	lockedTS timestamp.Timestamp
+	result   pb.Result
+	cb       func(pb.Result, error)
+	lockFunc func(*lockContext, bool)
+	w        *waiter
+	createAt time.Time
 }
 
 func (l *localLockTable) newLockContext(
@@ -63,12 +63,13 @@ func (l *localLockTable) newLockContext(
 	c.opts = opts
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
+	c.createAt = time.Now()
 	return c
 }
 
 func (c *lockContext) done(err error) {
 	c.cb(c.result, err)
-	c.completed = true
+	c.release()
 }
 
 func (c *lockContext) release() {
@@ -159,12 +160,10 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case c := <-mw.eventC:
-			c.txn.Lock()
+			txn := c.txn
+			txn.Lock()
 			c.doLock()
-			c.txn.Unlock()
-			if c.completed {
-				c.release()
-			}
+			txn.Unlock()
 		case <-timer.C:
 			mw.check()
 			timer.Reset(defaultLazyCheckDuration)

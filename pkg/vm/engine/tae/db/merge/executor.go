@@ -17,9 +17,11 @@ package merge
 import (
 	"bytes"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -76,9 +78,8 @@ func (e *MergeExecutor) PrintStats() {
 	)
 }
 
-func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn int, msegs []*catalog.SegmentEntry) {
-	size := estimateMergeConsume(msegs)
-	atomic.AddInt64(&e.activeEstimateBytes, int64(size))
+func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn, esize int) {
+	atomic.AddInt64(&e.activeEstimateBytes, int64(esize))
 	atomic.AddInt32(&e.activeMergeBlkCount, int32(blkn))
 	e.taskConsume.Lock()
 	if e.taskConsume.m == nil {
@@ -87,9 +88,8 @@ func (e *MergeExecutor) AddActiveTask(taskId uint64, blkn int, msegs []*catalog.
 	e.taskConsume.m[taskId] = struct {
 		blk      int
 		estBytes int
-	}{blkn, size}
+	}{blkn, esize}
 	e.taskConsume.Unlock()
-	logutil.Infof("Mergeblocks active task %d-%s, blk %d, size %s", taskId, e.tableName, blkn, humanReadableBytes(size))
 }
 
 func (e *MergeExecutor) OnExecDone(v any) {
@@ -104,15 +104,50 @@ func (e *MergeExecutor) OnExecDone(v any) {
 	atomic.AddInt64(&e.activeEstimateBytes, -int64(stat.estBytes))
 }
 
-func (e *MergeExecutor) ExecuteFor(tid uint64, tblName string, delSegs []*catalog.SegmentEntry, policy Policy) {
-	e.tableName = tblName
+func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catalog.SegmentEntry) error {
+	mem := e.memAvailBytes()
+	if mem > constMaxMemCap {
+		mem = constMaxMemCap
+	}
+	osize, esize := estimateMergeConsume(segs)
+	if esize > 2*mem/3 {
+		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
+	}
+
+	mergedBlks, msegs := expandObjectList(segs)
+	blkCnt := len(mergedBlks)
+
+	scopes := make([]common.ID, blkCnt)
+	for i, blk := range mergedBlks {
+		scopes[i] = *blk.AsCommonID()
+	}
+
+	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+		return jobs.NewMergeBlocksTask(ctx, txn, mergedBlks, msegs, nil, e.rt)
+	}
+	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, tasks.DataCompactionTask, scopes, factory)
+	if err == tasks.ErrScheduleScopeConflict {
+		return moerr.NewInternalErrorNoCtx("conflict with running merging jobs, try later")
+	} else if err != nil {
+		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
+	}
+	logMergeTask(entry.GetLastestSchema().Name, task.ID(), nil, msegs, len(mergedBlks), osize, esize)
+	if err = task.WaitDone(); err != nil {
+		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
+	}
+	return nil
+}
+
+func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog.SegmentEntry, policy Policy) {
+	e.tableName = entry.GetLastestSchema().Name
 	hasDelSeg := len(delSegs) > 0
 
 	hasMergeObjects := false
 
-	mergedBlks, msegs := expandObjectList(policy.Revise(0, 0))
+	objectList := policy.Revise(0, int64(e.memAvailBytes()))
+	mergedBlks, msegs := expandObjectList(objectList)
 	blkCnt := len(mergedBlks)
-	if blkCnt > 0 && e.checkMemAvail(msegs) {
+	if blkCnt > 0 {
 		delSegs = append(delSegs, msegs...)
 		hasMergeObjects = true
 	}
@@ -134,7 +169,7 @@ func (e *MergeExecutor) ExecuteFor(tid uint64, tblName string, delSegs []*catalo
 		if _, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, segScopes, factory); err != nil {
 			logutil.Infof("[Mergeblocks] Schedule del seg errinfo=%v", err)
 		} else {
-			logutil.Infof("[Mergeblocks] Scheduled Object Del| %d-%s del %d segs", tid, tblName, len(delSegs))
+			logutil.Infof("[Mergeblocks] Scheduled Object Del| %d-%s del %d segs", entry.ID, e.tableName, len(delSegs))
 		}
 		return
 	}
@@ -157,21 +192,20 @@ func (e *MergeExecutor) ExecuteFor(tid uint64, tblName string, delSegs []*catalo
 		return
 	}
 
-	e.AddActiveTask(task.ID(), blkCnt, msegs)
+	osize, esize := estimateMergeConsume(msegs)
+	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
-
-	logMergeTask(e.tableName, delSegs, msegs)
+	entry.Stats.AddMerge(osize, len(msegs), blkCnt)
+	logMergeTask(e.tableName, task.ID(), delSegs, msegs, blkCnt, osize, esize)
 }
 
-func (e *MergeExecutor) checkMemAvail(msegs []*catalog.SegmentEntry) bool {
+func (e *MergeExecutor) memAvailBytes() int {
 	merging := int(atomic.LoadInt64(&e.activeEstimateBytes))
-	consume := estimateMergeConsume(msegs)
-	left := e.memAvail - consume - merging
-	sufficient := left > e.memSpare
-	if !sufficient {
-		logutil.Infof("mergeblocks skip %s, estimate cost %s", e.tableName, humanReadableBytes(consume))
+	avail := e.memAvail - e.memSpare - merging
+	if avail < 0 {
+		avail = 0
 	}
-	return sufficient
+	return avail
 }
 
 func expandObjectList(segs []*catalog.SegmentEntry) (
@@ -200,33 +234,25 @@ func expandObjectList(segs []*catalog.SegmentEntry) (
 	return
 }
 
-func estimateMergeConsume(msegs []*catalog.SegmentEntry) int {
-	size, rows, merged := 0, 0, 0
-	for _, m := range msegs {
-		rows += m.Stat.Rows
-		merged += m.Stat.Rows - m.Stat.Dels
-		size += m.Stat.OriginSize
-	}
-	// by test exprience, full 8192 rows batch will expand to (6~8)x memory comsupation.
-	// the ExpansionRate will be moderated by the actual row number after applying deletes
-	rate := float64(constMergeExpansionRate*merged) / float64(rows)
-	if rate < 2 {
-		rate = 2
-	}
-	return int(float64(size) * rate)
-}
+func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEntry, blkn, osize, esize int) {
+	v2.TaskMergeScheduledByCounter.Inc()
+	v2.TaskMergedBlocksCounter.Add(float64(blkn))
+	v2.TasKMergedSizeCounter.Add(float64(osize))
 
-func logMergeTask(name string, dels, merges []*catalog.SegmentEntry) {
 	infoBuf := &bytes.Buffer{}
 	infoBuf.WriteString("merged:")
 	for _, seg := range merges {
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.Rows-seg.Stat.Dels, shortSegId(seg.ID)))
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.GetRemainingRows(), common.ShortSegId(seg.ID)))
 	}
 	if len(dels) > 0 {
 		infoBuf.WriteString(" | del:")
 		for _, seg := range dels {
-			infoBuf.WriteString(fmt.Sprintf(" %s", shortSegId(seg.ID)))
+			infoBuf.WriteString(fmt.Sprintf(" %s", common.ShortSegId(seg.ID)))
 		}
 	}
-	logutil.Infof("[Mergeblocks] Scheduled %v, %s", name, infoBuf.String())
+	logutil.Infof(
+		"[Mergeblocks] Scheduled %v [t%d|bn%d,on%d|%s,%s], %s", name,
+		taskId, len(merges), blkn, common.HumanReadableBytes(osize), common.HumanReadableBytes(esize),
+		infoBuf.String(),
+	)
 }

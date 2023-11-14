@@ -21,8 +21,6 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
@@ -31,17 +29,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"go.uber.org/zap"
 )
 
 const (
-	LogtailServiceRPCName = "logtail-push-service"
+	LogtailServiceRPCName = "logtail-server"
 
 	// FIXME: make this configurable
 	// duration to detect slow morpc stream
 	RpcStreamPoisionTime = 1 * time.Second
+
+	// updateEventMaxInterval is the max interval between update events.
+	// If 3s has passed since last update event, we should try to send an
+	// update event, rather than a suscription, to avoid there are no
+	// update events and cause logtail consumer waits for too long.
+	updateEventMaxInterval = time.Second * 3
 )
 
 type ServerOption func(*LogtailServer)
@@ -350,142 +356,162 @@ func (s *LogtailServer) sessionErrorHandler(ctx context.Context) {
 
 // logtailSender sends total or incremental logtail.
 func (s *LogtailServer) logtailSender(ctx context.Context) {
-	logger := s.logger
-
 	e, ok := <-s.event.C
 	if !ok {
-		logger.Info("publishemtn channel closed")
+		s.logger.Info("publishemtn channel closed")
 		return
 	}
 	s.waterline.Advance(e.to)
-	logger.Info("init waterline", zap.String("to", e.to.String()))
+	s.logger.Info("init waterline", zap.String("to", e.to.String()))
+
+	// lastUpdate is used to record the time of update event.
+	lastUpdate := time.Now()
 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Error("stop subscription handler", zap.Error(ctx.Err()))
+			s.logger.Error("stop subscription handler", zap.Error(ctx.Err()))
 			return
 
 		case sub, ok := <-s.subChan:
 			if !ok {
-				logger.Info("subscription channel closed")
+				s.logger.Info("subscription channel closed")
 				return
 			}
 
-			logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
+			v2.LogTailSubscriptionCounter.Inc()
+			interval := time.Since(lastUpdate)
+			if interval > updateEventMaxInterval {
+				s.logger.Info("long time passed since last update event", zap.Duration("interval", interval))
 
-			subscriptionFunc := func(sub subscription) {
-				sendCtx, cancel := context.WithTimeout(ctx, sub.timeout)
-				defer cancel()
-
-				var subErr error
-				defer func() {
-					if subErr != nil {
-						sub.session.Unregister(sub.tableID)
+				select {
+				case e, ok := <-s.event.C:
+					if !ok {
+						s.logger.Info("publishment channel closed")
+						return
 					}
-				}()
+					s.logger.Info("send an update event first as long time passed since last one.")
+					s.publishEvent(ctx, e)
+					lastUpdate = time.Now()
 
-				table := *sub.req.Table
-				from := timestamp.Timestamp{}
-				to := s.waterline.Waterline()
-
-				// fetch total logtail for table
-				var tail logtail.TableLogtail
-				var closeCB func()
-				moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
-					tail, closeCB, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
-				})
-
-				if subErr != nil {
-					if closeCB != nil {
-						closeCB()
-					}
-					logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
-					if err := sub.session.SendErrorResponse(
-						sendCtx, table, moerr.ErrInternal, "fail to fetch table total logtail",
-					); err != nil {
-						logger.Error("fail to send error response", zap.Error(err))
-					}
-					return
+				default:
+					s.logger.Info("there is no update event, although we want to send it first")
 				}
-
-				cb := func() {
-					if closeCB != nil {
-						closeCB()
-					}
-				}
-
-				// send subscription response
-				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail, cb)
-				if subErr != nil {
-					logger.Error("fail to send subscription response", zap.Error(subErr))
-					return
-				}
-
-				// mark table as subscribed
-				sub.session.AdvanceState(sub.tableID)
 			}
 
-			subscriptionFunc(sub)
+			s.logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
+			s.sendSubscription(ctx, sub)
 
 		case e, ok := <-s.event.C:
 			if !ok {
-				logger.Info("publishemtn channel closed")
+				s.logger.Info("publishment channel closed")
 				return
 			}
-
-			publishmentFunc := func() {
-				// NOTE: there's gap between multiple (e.from, e.to], so we
-				// maintain waterline to make UpdateResponse monotonous.
-				from := s.waterline.Waterline()
-				to := e.to
-
-				wraps := make([]wrapLogtail, 0, len(e.logtails))
-				for _, tail := range e.logtails {
-					// skip empty logtail
-					if tail.CkpLocation == "" && len(tail.Commands) == 0 {
-						continue
-					}
-					wraps = append(wraps, wrapLogtail{
-						id:   MarshalTableID(tail.GetTable()),
-						tail: tail,
-					})
-				}
-
-				// publish incremental logtail for all subscribed tables
-				sessions := s.ssmgr.ListSession()
-
-				if len(sessions) == 0 {
-					if e.closeCB != nil {
-						e.closeCB()
-					}
-				} else {
-					var refcount atomic.Int32
-					closeCB := func() {
-						if refcount.Add(-1) == 0 {
-							if e.closeCB != nil {
-								e.closeCB()
-							}
-						}
-					}
-					refcount.Add(int32(len(sessions)))
-					for _, session := range sessions {
-						if err := session.Publish(ctx, from, to, closeCB, wraps...); err != nil {
-							logger.Error("fail to publish incremental logtail", zap.Error(err),
-								zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
-							)
-							continue
-						}
-					}
-				}
-
-				// update waterline for all subscribed tables
-				s.waterline.Advance(to)
-			}
-
-			publishmentFunc()
+			s.publishEvent(ctx, e)
+			lastUpdate = time.Now()
 		}
 	}
+}
+
+func (s *LogtailServer) sendSubscription(ctx context.Context, sub subscription) {
+	sendCtx, cancel := context.WithTimeout(ctx, sub.timeout)
+	defer cancel()
+
+	var subErr error
+	defer func() {
+		if subErr != nil {
+			sub.session.Unregister(sub.tableID)
+		}
+	}()
+
+	table := *sub.req.Table
+	from := timestamp.Timestamp{}
+	to := s.waterline.Waterline()
+
+	// fetch total logtail for table
+	var tail logtail.TableLogtail
+	var closeCB func()
+	moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
+		tail, closeCB, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
+	})
+
+	if subErr != nil {
+		if closeCB != nil {
+			closeCB()
+		}
+		s.logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
+		if err := sub.session.SendErrorResponse(
+			sendCtx, table, moerr.ErrInternal, "fail to fetch table total logtail",
+		); err != nil {
+			s.logger.Error("fail to send error response", zap.Error(err))
+		}
+		return
+	}
+
+	cb := func() {
+		if closeCB != nil {
+			closeCB()
+		}
+	}
+
+	// send subscription response
+	subErr = sub.session.SendSubscriptionResponse(sendCtx, tail, cb)
+	if subErr != nil {
+		s.logger.Error("fail to send subscription response", zap.Error(subErr))
+		return
+	}
+
+	// mark table as subscribed
+	sub.session.AdvanceState(sub.tableID)
+}
+
+func (s *LogtailServer) publishEvent(ctx context.Context, e event) {
+	// NOTE: there's gap between multiple (e.from, e.to], so we
+	// maintain waterline to make UpdateResponse monotonous.
+	from := s.waterline.Waterline()
+	to := e.to
+
+	wraps := make([]wrapLogtail, 0, len(e.logtails))
+	for _, tail := range e.logtails {
+		// skip empty logtail
+		if tail.CkpLocation == "" && len(tail.Commands) == 0 {
+			continue
+		}
+		wraps = append(wraps, wrapLogtail{
+			id:   MarshalTableID(tail.GetTable()),
+			tail: tail,
+		})
+	}
+
+	// publish incremental logtail for all subscribed tables
+	sessions := s.ssmgr.ListSession()
+
+	if len(sessions) == 0 {
+		if e.closeCB != nil {
+			e.closeCB()
+		}
+	} else {
+		var refcount atomic.Int32
+		closeCB := func() {
+			if refcount.Add(-1) == 0 {
+				if e.closeCB != nil {
+					e.closeCB()
+				}
+			}
+		}
+		refcount.Add(int32(len(sessions)))
+		for _, session := range sessions {
+			if err := session.Publish(ctx, from, to, closeCB, wraps...); err != nil {
+				s.logger.Error("fail to publish incremental logtail", zap.Error(err),
+					zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
+				)
+				continue
+			}
+		}
+	}
+
+	// update waterline for all subscribed tables
+	s.waterline.Advance(to)
 }
 
 // Close closes api server.

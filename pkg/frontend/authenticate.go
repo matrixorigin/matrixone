@@ -20,15 +20,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/bits"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 
@@ -39,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -48,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -329,8 +335,8 @@ func getLabelPart(user string) string {
 	return ""
 }
 
-// ParseLabel parses the label string. The labels are seperated by
-// ",", key and value are seperated by "=".
+// ParseLabel parses the label string. The labels are separated by
+// ",", key and value are separated by "=".
 func ParseLabel(labelStr string) (map[string]string, error) {
 	labelMap := make(map[string]string)
 	if len(labelStr) == 0 {
@@ -824,6 +830,7 @@ var (
 		"mo_locks":                    0,
 		"mo_variables":                0,
 		"mo_transactions":             0,
+		"mo_cache":                    0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -855,6 +862,7 @@ var (
 		"mo_locks":                    0,
 		"mo_variables":                0,
 		"mo_transactions":             0,
+		"mo_cache":                    0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -873,6 +881,9 @@ var (
 				database_id bigint unsigned not null,
 				name 		varchar(64) not null,
 				type        varchar(11) not null,
+				algo	varchar(11),
+    			algo_table_type varchar(11),
+    			algo_params varchar(2048),
 				is_visible  tinyint not null,
 				hidden      tinyint not null,
 				comment 	varchar(2048) not null,
@@ -903,7 +914,7 @@ var (
 		`create table mo_user(
 				user_id int signed auto_increment primary key,
 				user_host varchar(100),
-				user_name varchar(300),
+				user_name varchar(300) unique key,
 				authentication_string varchar(100),
 				status   varchar(8),
 				created_time  timestamp,
@@ -924,7 +935,7 @@ var (
 			);`,
 		`create table mo_role(
 				role_id int signed auto_increment primary key,
-				role_name varchar(300),
+				role_name varchar(300) unique key,
 				creator int signed,
 				owner int signed,
 				created_time timestamp,
@@ -961,9 +972,9 @@ var (
 			);`,
 		`create table mo_user_defined_function(
 				function_id int auto_increment,
-				name     varchar(100),
+				name     varchar(100) unique key,
 				owner  int unsigned,
-				args     text,
+				args     json,
 				retType  varchar(20),
 				body     text,
 				language varchar(20),
@@ -1003,7 +1014,7 @@ var (
     		);`,
 		`create table mo_stored_procedure(
 				proc_id int auto_increment,
-				name     varchar(100),
+				name     varchar(100) unique key,
 				creator  int unsigned,
 				args     text,
 				body     text,
@@ -1021,7 +1032,7 @@ var (
 			);`,
 		`create table mo_stages(
 				stage_id int unsigned auto_increment,
-				stage_name varchar(64),
+				stage_name varchar(64) unique key,
 				url text,
 				stage_credentials text,
 				stage_status varchar(64),
@@ -1034,6 +1045,7 @@ var (
 		`CREATE VIEW IF NOT EXISTS mo_locks AS SELECT * FROM mo_locks() AS mo_locks_tmp;`,
 		`CREATE VIEW IF NOT EXISTS mo_variables AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;`,
 		`CREATE VIEW IF NOT EXISTS mo_transactions AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;`,
+		`CREATE VIEW IF NOT EXISTS mo_cache AS SELECT * FROM mo_cache() AS mo_cache_tmp;`,
 	}
 
 	//drop tables for the tenant
@@ -1052,6 +1064,7 @@ var (
 		`drop view if exists mo_catalog.mo_locks;`,
 		`drop view if exists mo_catalog.mo_variables;`,
 		`drop view if exists mo_catalog.mo_transactions;`,
+		`drop view if exists mo_catalog.mo_cache;`,
 	}
 	dropMoPubsSql         = `drop table if exists mo_catalog.mo_pubs;`
 	dropAutoIcrColSql     = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
@@ -1096,6 +1109,22 @@ var (
 			character_set_client,
 			collation_connection,
 			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+
+	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
+			set owner = %d, 
+			    args = '%s',
+			    retType = '%s',
+			    body = '%s',
+			    language = '%s',
+			    definer = '%s',
+			    modified_time = '%s',
+			    type = '%s',
+			    security_type = '%s',
+			    comment = '%s',
+			    character_set_client = '%s',
+			    collation_connection = '%s',
+			    database_collation = '%s'
+			where function_id = %d;`
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
@@ -1185,27 +1214,27 @@ var (
 
 const (
 	//privilege verification
-	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s";`
+	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s" order by account_id;`
 
 	getTenantNameForMat = `select account_name from mo_catalog.mo_account where account_id = %d;`
 
-	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s";`
+	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s" order by account_id;;`
 
-	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s";`
+	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s" order by account_id;;`
 
-	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = "%s" where account_name = "%s";`
+	updateStatusAndVersionOfAccountFormat = `update mo_catalog.mo_account set status = "%s",version = %d,suspended_time = default where account_name = "%s";`
 
-	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
+	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s" order by account_id;;`
 
-	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s";`
+	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s";`
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s" order by user_id;;`
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
 
-	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s";`
+	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s" order by role_id;`
 
 	//operations on the mo_user_grant
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
@@ -1418,16 +1447,16 @@ const (
 					and mg.user_id = %d 
 					order by role.created_time asc limit 1;`
 
-	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
+	checkUdfArgs = `select args,function_id,body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" order by function_id;`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and args = '%s';`
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s order by function_id;`
 
-	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
+	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
-	checkProcedureExistence = `select proc_id from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s";`
+	checkProcedureExistence = `select proc_id from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
 	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
-	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d;`
+	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d order by role_id;`
 
 	deleteRoleFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where role_id = %d;`
 
@@ -1482,21 +1511,21 @@ const (
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
-	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s";`
+	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
 
-	checkStageStatusFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_status = "%s";`
+	checkStageStatusFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_status = "%s" order by stage_id;`
 
-	checkStageStatusWithStageNameFormat = `select url, stage_status from mo_catalog.mo_stages where stage_name = "%s";`
+	checkStageStatusWithStageNameFormat = `select url, stage_status from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
 
-	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s';`
+	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
 
-	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s';`
+	updateStageUrlFotmat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s';`
+	updateStageCredentialsFotmat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageStatusFotmat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s';`
+	updateStageStatusFotmat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
 
-	updateStageCommentFotmat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s';`
+	updateStageCommentFotmat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -1507,7 +1536,7 @@ const (
 	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
-	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s';`
+	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 )
 
 var (
@@ -1624,12 +1653,12 @@ func getSqlForUpdateStatusOfAccount(ctx context.Context, status, timestamp, acco
 	return fmt.Sprintf(updateStatusOfAccountFormat, status, timestamp, account), nil
 }
 
-func getSqlForUpdateStatusAndVersionOfAccount(ctx context.Context, status, timestamp, account string, version uint64) (string, error) {
+func getSqlForUpdateStatusAndVersionOfAccount(ctx context.Context, status, account string, version uint64) (string, error) {
 	err := inputNameIsInvalid(ctx, status, account)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(updateStatusAndVersionOfAccountFormat, status, version, timestamp, account), nil
+	return fmt.Sprintf(updateStatusAndVersionOfAccountFormat, status, version, account), nil
 }
 
 func getSqlForDeleteAccountFromMoAccount(ctx context.Context, account string) (string, error) {
@@ -1993,7 +2022,7 @@ func getSqlForSpBody(ctx context.Context, name string, db string) (string, error
 	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
 }
 
-// isClusterTable decides a table is the index table or not
+// isIndexTable decides a table is the index table or not
 func isIndexTable(name string) bool {
 	return strings.HasPrefix(name, catalog.IndexTableNamePrefix)
 }
@@ -3001,7 +3030,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 						return err
 					}
 				} else if aa.StatusOption.Option == tree.AccountStatusOpen {
-					sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), aa.Name, (version+1)%math.MaxUint64)
+					sql, err = getSqlForUpdateStatusAndVersionOfAccount(ctx, aa.StatusOption.Option.String(), aa.Name, (version+1)%math.MaxUint64)
 					if err != nil {
 						return err
 					}
@@ -3228,7 +3257,8 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn TxnOperator) (*plan.SubscriptionMeta, error) {
 	dbMeta, err := ses.GetParameterUnit().StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
-		return nil, err
+		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
+		return nil, moerr.NewNoDB(ctx)
 	}
 
 	if dbMeta.IsSubscription(ctx) {
@@ -3505,7 +3535,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3524,7 +3554,7 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) erro
 
 	if stageExist {
 		if !cs.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s exists", cs.Name)
+			return moerr.NewInternalError(ctx, "the stage %s exists", cs.Name)
 		} else {
 			// do nothing
 			return err
@@ -3657,7 +3687,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error 
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	optionBits := uint8(0)
@@ -3697,7 +3727,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) error 
 
 	if !stageExist {
 		if !as.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s not exists", as.Name)
+			return moerr.NewInternalError(ctx, "the stage %s not exists", as.Name)
 		} else {
 			// do nothing
 			return err
@@ -3749,7 +3779,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -3768,7 +3798,7 @@ func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) error {
 
 	if !stageExist {
 		if !ds.IfNotExists {
-			return moerr.NewInternalError(ctx, "the satge %s not exists", ds.Name)
+			return moerr.NewInternalError(ctx, "the stage %s not exists", ds.Name)
 		} else {
 			// do nothing
 			return err
@@ -4475,13 +4505,15 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	return err
 }
 
-func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (err error) {
+type rmPkg func(path string) error
+
+func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm rmPkg) (err error) {
 	var sql string
 	var argstr string
+	var bodyStr string
 	var checkDatabase string
 	var dbName string
 	var funcId int64
-	var fmtctx *tree.FmtCtx
 	var erArray []ExecResult
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -4497,8 +4529,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 		dbName = string(df.Name.Name.SchemaName)
 	}
 
-	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-
 	// validate database name and signature (name + args)
 	bh.ClearExecResultSet()
 	checkDatabase = fmt.Sprintf(checkUdfArgs, string(df.Name.Name.ObjectName), dbName)
@@ -4513,6 +4543,15 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 	}
 
 	if execResultArrayHasData(erArray) {
+		receivedArgsType := make([]string, len(df.Args))
+		for i, arg := range df.Args {
+			typ, err := plan2.GetFunctionArgTypeStrFromAst(arg)
+			if err != nil {
+				return err
+			}
+			receivedArgsType[i] = typ
+		}
+
 		// function with provided name and db exists, now check arguments
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			argstr, err = erArray[0].GetString(ctx, i, 0)
@@ -4523,22 +4562,35 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 			if err != nil {
 				return err
 			}
-			argMap := make(map[string]string)
-			json.Unmarshal([]byte(argstr), &argMap)
-			argCount := 0
-			if len(argMap) == len(df.Args) {
-				for _, v := range argMap {
-					if v != (df.Args[argCount].GetType(fmtctx)) {
-						return moerr.NewInvalidInput(ctx, "invalid parameter")
+			bodyStr, err = erArray[0].GetString(ctx, i, 2)
+			if err != nil {
+				return err
+			}
+			argList := make([]*function.Arg, 0)
+			json.Unmarshal([]byte(argstr), &argList)
+			if len(argList) == len(df.Args) {
+				match := true
+				for j, arg := range argList {
+					typ := receivedArgsType[j]
+					if arg.Type != typ {
+						match = false
+						break
 					}
-					argCount++
-					fmtctx.Reset()
+				}
+				if !match {
+					continue
 				}
 				handleArgMatch := func() error {
 					//put it into the single transaction
 					err = bh.Exec(ctx, "begin;")
 					defer func() {
 						err = finishTxn(ctx, bh, err)
+						if err == nil {
+							u := &function.NonSqlUdfBody{}
+							if json.Unmarshal([]byte(bodyStr), u) == nil && u.Import {
+								rm(u.Body)
+							}
+						}
 					}()
 					if err != nil {
 						return err
@@ -4555,11 +4607,9 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 				return handleArgMatch()
 			}
 		}
-		return err
-	} else {
-		// no such function
-		return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 	}
+	// no such function
+	return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 }
 
 func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) (err error) {
@@ -5701,10 +5751,20 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 		canExecInRestricted = true
-	case *tree.CreateIndex, *tree.DropIndex:
+	case *tree.CreateIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		if st.Table != nil {
+			dbName = string(st.Table.SchemaName)
+		}
+	case *tree.DropIndex:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
+		if st.TableName != nil {
+			dbName = string(st.TableName.SchemaName)
+		}
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
@@ -5938,6 +5998,22 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				tableName:             dropTable.GetTable(),
 				isClusterTable:        dropTable.GetClusterTable().GetIsClusterTable(),
 				clusterTableOperation: clusterTableDrop,
+			})
+		} else if p.GetDdl().GetCreateIndex() != nil {
+			createIndex := p.GetDdl().GetCreateIndex()
+			appendPt(privilegeTips{
+				typ:                   PrivilegeTypeDropTable,
+				databaseName:          createIndex.GetDatabase(),
+				tableName:             createIndex.GetTable(),
+				clusterTableOperation: clusterTableModify,
+			})
+		} else if p.GetDdl().GetDropIndex() != nil {
+			dropIndex := p.GetDdl().GetDropIndex()
+			appendPt(privilegeTips{
+				typ:                   PrivilegeTypeDropTable,
+				databaseName:          dropIndex.GetDatabase(),
+				tableName:             dropIndex.GetTable(),
+				clusterTableOperation: clusterTableModify,
 			})
 		}
 	}
@@ -8329,14 +8405,62 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, storageDir string) (string, error) {
+	loadLocalReader, loadLocalWriter := io.Pipe()
+
+	// watch and cancel
+	// TODO use context.AfterFunc in go1.21
+	funcCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		defer loadLocalReader.Close()
+
+		<-funcCtx.Done()
+	}()
+
+	// write to pipe
+	loadLocalErrGroup := new(errgroup.Group)
+	loadLocalErrGroup.Go(func() error {
+		param := &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Filepath: localPath,
+			},
+		}
+		return mce.processLoadLocal(ctx, param, loadLocalWriter)
+	})
+
+	// read from pipe and upload
+	ioVector := fileservice.IOVector{
+		FilePath: path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:]),
+		Entries: []fileservice.IOEntry{
+			{
+				Size:           -1,
+				ReaderForWrite: loadLocalReader,
+			},
+		},
+	}
+
+	fileService := mce.ses.proc.FileService
+	_ = fileService.Delete(ctx, ioVector.FilePath)
+	err := fileService.Write(ctx, ioVector)
+	err = errors.Join(err, loadLocalErrGroup.Wait())
+	if err != nil {
+		return "", err
+	}
+
+	return ioVector.FilePath, nil
+}
+
+func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
 	var checkExistence string
 	var argsJson []byte
+	var argsCondition string
 	var fmtctx *tree.FmtCtx
-	var argMap map[string]string
+	var argList []*function.Arg
+	var typeList []string
 	var erArray []ExecResult
 
 	// a database must be selected or specified as qualifier when create a function
@@ -8354,26 +8478,42 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 
 	// format return type
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-	cf.ReturnType.Format(fmtctx)
-	retTypeStr = fmtctx.String()
-	fmtctx.Reset()
-
-	// build argmap and marshal as json
-	argMap = make(map[string]string)
-	for i := 0; i < len(cf.Args); i++ {
-		curName := cf.Args[i].GetName(fmtctx)
-		fmtctx.Reset()
-		argMap[curName] = cf.Args[i].GetType(fmtctx)
-		fmtctx.Reset()
-	}
-	argsJson, err = json.Marshal(argMap)
+	retTypeStr, err = plan2.GetFunctionTypeStrFromAst(cf.ReturnType.Type)
 	if err != nil {
 		return err
 	}
 
+	// build argmap and marshal as json
+	argList = make([]*function.Arg, len(cf.Args))
+	typeList = make([]string, len(cf.Args))
+	for i := 0; i < len(cf.Args); i++ {
+		argList[i] = &function.Arg{}
+		argList[i].Name = cf.Args[i].GetName(fmtctx)
+		fmtctx.Reset()
+		typ, err := plan2.GetFunctionArgTypeStrFromAst(cf.Args[i])
+		if err != nil {
+			return err
+		}
+		argList[i].Type = typ
+		typeList[i] = typ
+	}
+	argsJson, err = json.Marshal(argList)
+	if err != nil {
+		return err
+	}
+
+	if len(typeList) == 0 {
+		argsCondition = "is null"
+	} else if len(typeList) == 1 {
+		argsCondition = fmt.Sprintf(`= '"%v"'`, typeList[0])
+	} else {
+		typesJson, _ := json.Marshal(typeList)
+		argsCondition = fmt.Sprintf(`= '%v'`, string(typesJson))
+	}
+
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
-	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(argsJson))
+	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, argsCondition)
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
 		return err
@@ -8384,7 +8524,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return err
 	}
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) && !cf.Replace {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
 
@@ -8396,12 +8536,67 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		return err
 	}
 
-	initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
-		string(cf.Name.Name.ObjectName),
-		ses.GetTenantInfo().GetDefaultRoleID(),
-		string(argsJson),
-		retTypeStr, cf.Body, cf.Language, dbName,
-		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	var body string
+	if cf.Language == string(tree.SQL) {
+		body = cf.Body
+	} else {
+		if cf.Import {
+			// check
+			if cf.Language == string(tree.PYTHON) {
+				if !strings.HasSuffix(cf.Body, ".py") &&
+					!strings.HasSuffix(cf.Body, ".whl") {
+					return moerr.NewInvalidInput(ctx, "file '"+cf.Body+"', only support '*.py', '*.whl'")
+				}
+				if strings.HasSuffix(cf.Body, ".whl") {
+					dotIdx := strings.LastIndex(cf.Handler, ".")
+					if dotIdx < 1 {
+						return moerr.NewInvalidInput(ctx, "handler '"+cf.Handler+"', when you import a *.whl, the handler should be in the format of '<file or module name>.<function name>'")
+					}
+				}
+			}
+			// upload
+			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
+			cf.Body, err = mce.Upload(ctx, cf.Body, storageDir)
+			if err != nil {
+				return err
+			}
+		}
+
+		nb := function.NonSqlUdfBody{
+			Handler: cf.Handler,
+			Import:  cf.Import,
+			Body:    cf.Body,
+		}
+		var byt []byte
+		byt, err = json.Marshal(nb)
+		if err != nil {
+			return err
+		}
+		body = strconv.Quote(string(byt))
+		body = body[1 : len(body)-1]
+	}
+
+	if execResultArrayHasData(erArray) { // replace
+		var id int64
+		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+		initMoUdf = fmt.Sprintf(updateMoUserDefinedFunctionFormat,
+			ses.GetTenantInfo().GetDefaultRoleID(),
+			string(argsJson),
+			retTypeStr, body, cf.Language,
+			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			int32(id))
+	} else { // create
+		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
+			string(cf.Name.Name.ObjectName),
+			ses.GetTenantInfo().GetDefaultRoleID(),
+			string(argsJson),
+			retTypeStr, body, cf.Language, dbName,
+			tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	}
+
 	err = bh.Exec(ctx, initMoUdf)
 	if err != nil {
 		return err

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -268,8 +269,11 @@ type FrontendParameters struct {
 	// SkipCheckPrivilege denotes the privilege check should be passed.
 	SkipCheckPrivilege bool `toml:"skipCheckPrivilege"`
 
-	//skip checking the password of the user
+	// skip checking the password of the user
 	SkipCheckUser bool `toml:"skipCheckUser"`
+
+	// disable select into
+	DisableSelectInto bool `toml:"disable-select-into"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -667,6 +671,8 @@ type ParameterUnit struct {
 
 	// QueryService instance
 	QueryService queryservice.QueryService
+
+	UdfService udf.Service
 
 	// HAKeeper client, which is used to get connection ID
 	// from HAKeeper currently.
