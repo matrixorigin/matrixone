@@ -163,6 +163,25 @@ func LoadObjectMetaByExtent(
 	return
 }
 
+func FastLoadBF(
+	ctx context.Context,
+	location Location,
+	isPrefetch bool,
+	fs fileservice.FileService,
+) (BloomFilter, error) {
+	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
+	v, ok := metaCache.Get(ctx, key)
+	if ok {
+		metaCacheStats.Record(1, 1)
+		return v.Bytes(), nil
+	}
+	meta, err := FastLoadObjectMeta(ctx, &location, isPrefetch, fs)
+	if err != nil {
+		return nil, err
+	}
+	return LoadBFWithMeta(ctx, meta.MustDataMeta(), location, fs)
+}
+
 func LoadBFWithMeta(
 	ctx context.Context,
 	meta ObjectDataMeta,
