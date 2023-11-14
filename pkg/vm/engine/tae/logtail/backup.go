@@ -137,7 +137,7 @@ func trimObjectsData(
 		isChange := false
 		for id, block := range objectData.data {
 			if !block.isAblk && block.blockType == objectio.SchemaData {
-				panic(any(fmt.Sprintf("The inserted block is an nBlock: %v-%d", block.location.String(), id)))
+				continue
 			}
 			var bat *batch.Batch
 			var err error
