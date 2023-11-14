@@ -55,7 +55,6 @@ import (
 
 var (
 	defaultListenAddress             = "127.0.0.1:6002"
-	defaultCtlListenAddress          = "127.0.0.1:19958"
 	defaultQueryServiceListenAddress = "0.0.0.0:19998"
 	// defaultTxnIsolation     = txn.TxnIsolation_SI
 	defaultTxnMode             = txn.TxnMode_Pessimistic

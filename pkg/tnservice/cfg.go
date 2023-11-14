@@ -38,7 +38,6 @@ var (
 	defaultLogtailServiceAddress = "127.0.0.1:22001"
 	defaultLockListenAddress     = "0.0.0.0:22002"
 	defaultLockServiceAddress    = "127.0.0.1:22002"
-	defaultCtlListenAddress      = "127.0.0.1:29958"
 	defaultZombieTimeout         = time.Hour
 	defaultDiscoveryTimeout      = time.Second * 30
 	defaultHeatbeatInterval      = time.Second
