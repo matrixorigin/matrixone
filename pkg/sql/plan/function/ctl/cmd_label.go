@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	ctlpb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -112,19 +112,19 @@ func parseCNLabel(param string) (cnLabel, error) {
 func handleSetLabel(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (ctlpb.CtlResult, error) {
+	sender requestSender) (pb.CtlResult, error) {
 	cluster := clusterservice.GetMOCluster()
 	c, err := parseCNLabel(parameter)
 	if err != nil {
-		return ctlpb.CtlResult{}, err
+		return pb.CtlResult{}, err
 	}
 	kvs := make(map[string][]string)
 	kvs[c.key] = c.values
 	if err := cluster.DebugUpdateCNLabel(c.uuid, kvs); err != nil {
-		return ctlpb.CtlResult{}, err
+		return pb.CtlResult{}, err
 	}
-	return ctlpb.CtlResult{
-		Method: ctlpb.CmdMethod_Label.String(),
+	return pb.CtlResult{
+		Method: pb.CmdMethod_Label.String(),
 		Data:   "OK",
 	}, nil
 }
@@ -133,7 +133,7 @@ func handleSyncCommit(
 	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (ctlpb.CtlResult, error) {
+	sender requestSender) (pb.CtlResult, error) {
 	cs := proc.QueryService
 	mc := clusterservice.GetMOCluster()
 	var services []string
@@ -150,7 +150,7 @@ func handleSyncCommit(
 		req := cs.NewRequest(querypb.CmdMethod_GetCommit)
 		resp, err := cs.SendMessage(ctx, id, req)
 		if err != nil {
-			return ctlpb.CtlResult{}, err
+			return pb.CtlResult{}, err
 		}
 		if maxCommitTS.Less(resp.GetCommit.CurrentCommitTS) {
 			maxCommitTS = resp.GetCommit.CurrentCommitTS
@@ -163,13 +163,13 @@ func handleSyncCommit(
 		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: maxCommitTS}
 		resp, err := cs.SendMessage(ctx, id, req)
 		if err != nil {
-			return ctlpb.CtlResult{}, err
+			return pb.CtlResult{}, err
 		}
 		cs.Release(resp)
 	}
 
-	return ctlpb.CtlResult{
-		Method: ctlpb.CmdMethod_SyncCommit.String(),
+	return pb.CtlResult{
+		Method: pb.CmdMethod_SyncCommit.String(),
 		Data: fmt.Sprintf("sync %d cn services's commit ts to %s",
 			len(services),
 			maxCommitTS.DebugString()),
