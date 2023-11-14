@@ -386,6 +386,19 @@ func IncrementalCheckpointDataFactory(start, end types.TS,
 	}
 }
 
+func BackupCheckpointDataFactory(start, end types.TS) func(c *catalog.Catalog) (*CheckpointData, error) {
+	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
+		collector := NewBackupCollector(start, end)
+		defer collector.Close()
+		err = c.RecurLoop(collector)
+		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+			err = nil
+		}
+		data = collector.OrphanData()
+		return
+	}
+}
+
 func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration,
 	fs fileservice.FileService, ckpMetas []*CkpLocVers) func(c *catalog.Catalog) (*CheckpointData, error) {
 	return func(c *catalog.Catalog) (data *CheckpointData, err error) {
@@ -611,6 +624,20 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 	collector.TableFn = collector.VisitTable
 	collector.SegmentFn = collector.VisitSeg
 	collector.BlockFn = collector.VisitBlk
+	return collector
+}
+
+func NewBackupCollector(start, end types.TS) *IncrementalCollector {
+	collector := &IncrementalCollector{
+		BaseCollector: &BaseCollector{
+			LoopProcessor: new(catalog.LoopProcessor),
+			data:          NewCheckpointData(),
+			start:         start,
+			end:           end,
+		},
+	}
+	collector.BlockFn = collector.VisitBlkForBackup
+	collector.SegmentFn = collector.VisitSegForBackup
 	return collector
 }
 
@@ -2605,14 +2632,7 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	return collector.BaseCollector.VisitTable(entry)
 }
 
-func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
-	entry.RLock()
-	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
-	entry.RUnlock()
-	if len(mvccNodes) == 0 {
-		return nil
-	}
-
+func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) {
 	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	segDelBat := collector.data.bats[SEGDeleteIDX]
 	segDelTxn := collector.data.bats[SEGDeleteTxnIDX]
@@ -2690,6 +2710,31 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	}
 	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
+}
+
+func (collector *BaseCollector) VisitSegForBackup(entry *catalog.SegmentEntry) (err error) {
+	entry.RLock()
+	if entry.GetCreatedAtLocked().Greater(collector.start) {
+		entry.RUnlock()
+		return nil
+	}
+	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+	entry.RUnlock()
+	if len(mvccNodes) == 0 {
+		return nil
+	}
+	collector.visitSegmentEntry(entry)
+	return nil
+}
+
+func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
+	entry.RLock()
+	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+	entry.RUnlock()
+	if len(mvccNodes) == 0 {
+		return nil
+	}
+	collector.visitSegmentEntry(entry)
 	return nil
 }
 
@@ -2707,13 +2752,7 @@ func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
 	return collector.BaseCollector.VisitSeg(entry)
 }
 
-func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) {
-	entry.RLock()
-	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
-	entry.RUnlock()
-	if len(mvccNodes) == 0 {
-		return nil
-	}
+func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 	insStart := collector.data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	delStart := collector.data.bats[BLKMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	blkTNMetaDelBat := collector.data.bats[BLKTNMetaDeleteIDX]
@@ -3112,6 +3151,31 @@ func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) 
 	insEnd := collector.data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	delEnd := collector.data.bats[BLKMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	collector.data.UpdateBlkMeta(entry.GetSegment().GetTable().ID, int32(insStart), int32(insEnd), int32(delStart), int32(delEnd))
+}
+
+func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (err error) {
+	entry.RLock()
+	if entry.GetCreatedAtLocked().Greater(collector.start) {
+		entry.RUnlock()
+		return nil
+	}
+	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+	entry.RUnlock()
+	if len(mvccNodes) == 0 {
+		return nil
+	}
+	collector.visitBlockEntry(entry)
+	return nil
+}
+
+func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) {
+	entry.RLock()
+	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+	entry.RUnlock()
+	if len(mvccNodes) == 0 {
+		return nil
+	}
+	collector.visitBlockEntry(entry)
 	return nil
 }
 
