@@ -330,7 +330,11 @@ func ReWriteCheckpointAndBlockFromKey(
 	for i := 0; i < blkMetaInsert.Length(); i++ {
 		metaLoc := objectio.Location(blkMetaInsertMetaLoc.Get(i).([]byte))
 		deltaLoc := objectio.Location(blkMetaInsertDeltaLoc.Get(i).([]byte))
-		blkID := blkMetaInsertDeltaLoc.Get(i).(types.Blockid)
+		blkID := types.Blockid{}
+		err = blkID.Unmarshal(blkMetaInsertDeltaLoc.Get(i).([]byte))
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
 		isABlk := blkMetaInsertEntryState.Get(i).(bool)
 		if isABlk {
 			panic(any(fmt.Sprintf("The inserted block is an ablock: %v-%d", metaLoc.String(), i)))
