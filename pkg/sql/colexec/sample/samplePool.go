@@ -303,6 +303,10 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 		}
 	}
 
+	// If a middle result is empty, cannot return nil directly. It will cause the pipeline closed early.
+	if !end && bat == nil {
+		return batch.EmptyBatch, nil
+	}
 	return bat, nil
 }
 

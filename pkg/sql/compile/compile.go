@@ -2457,6 +2457,9 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Sample,
 			Idx:     c.anal.curr,
@@ -2467,12 +2470,18 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 	c.anal.isFirst = false
 
 	rs := c.newMergeScope(ss)
-	rs.appendInstruction(vm.Instruction{
-		Op:      vm.Sample,
-		Idx:     c.anal.curr,
-		IsFirst: c.anal.isFirst,
-		Arg:     constructSample(n),
-	})
+	// should sample again if sample by rows.
+	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+		rs.appendInstruction(vm.Instruction{
+			Op:      vm.Sample,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructSample(n),
+		})
+	}
+	// should do nothing if sample by percent.
+	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
+	}
 	return []*Scope{rs}
 }
 

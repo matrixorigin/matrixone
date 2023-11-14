@@ -108,11 +108,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := arg.ctr
 	if bat == nil {
 		result.Batch, lastErr = ctr.samplePool.Output(true)
-		if result.Batch == nil {
-			// no sample data, return empty and stop.
-			result.Batch = batch.EmptyBatch
-			result.Status = vm.ExecStop
-		}
 		return result, lastErr
 	}
 
