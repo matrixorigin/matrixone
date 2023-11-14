@@ -62,8 +62,9 @@ message TNStore {
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 7;
   ConfigData ConfigData = 8;
+  reserved 9;
   // QueryAddress is the address of the queryservice on tn
-  string QueryAddress = 9;
+  string QueryAddress = 10;
 }
 
 message LogStore {
@@ -475,14 +476,15 @@ message CNStoreInfo {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  metadata.CNRole Role               = 5;
-  bool            TaskServiceCreated = 6;
-  map<string, metadata.LabelList> Labels = 7 [(gogoproto.nullable) = false];
-  metadata.WorkState WorkState       = 8;
-  string          QueryAddress       = 9;
-  string          GossipAddress      = 10;
-  bool            GossipJoined       = 11;
-  ConfigData      ConfigData         = 12;
+  reserved 5;
+  metadata.CNRole Role               = 6;
+  bool            TaskServiceCreated = 7;
+  map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
+  metadata.WorkState WorkState       = 9;
+  string          QueryAddress       = 10;
+  string          GossipAddress      = 11;
+  bool            GossipJoined       = 12;
+  ConfigData      ConfigData         = 13;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -504,9 +506,10 @@ message TNStoreInfo {
   string LogtailServerAddress = 5;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
-  ConfigData ConfigData = 7;
+  reserved 7;
+  ConfigData ConfigData = 8;
   // QueryAddress is the address of queryservice on tn
-  string          QueryAddress       = 8;
+  string          QueryAddress       = 9;
 }
 
 // TNState contains all TN details known to the HAKeeper.

@@ -48,15 +48,17 @@ enum CmdMethod {
     // ensure data visibility, we need to synchronize CommitTS between multiple CNs so that the whole 
     // cluster can see the latest writes from other CNs.
     SyncCommit      = 9;
+
+    reserved 10;
     // GetCommit get latest commit timestamp of cn.
-    AddFaultPoint   = 10;
+    AddFaultPoint   = 11;
     // Backup backup data
-    Backup          = 11;
+    Backup          = 12;
     // Enable or disable specified span
-    TraceSpan    = 12;
+    TraceSpan    = 13;
     // for CN launches storage usage query to TN,
     // not used in mo_ctl for now
-    CmdMethod_StorageUsage = 13;
+    StorageUsage = 14;
 }
 
 // TNPingRequest ping request
