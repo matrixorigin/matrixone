@@ -110,7 +110,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 		ret := moctl.SelfProcess(req.Cmd, req.Spans, req.Threshold)
 		return []byte(ret), nil
 
-	case uint32(ctl.CmdMethod_CmdMethod_StorageUsage):
+	case uint32(ctl.CmdMethod_StorageUsage):
 		resp, _ := handleRead(ctx, s, txnMeta, data, s.taeHandler.HandleStorageUsage)
 		return resp.Read()
 
