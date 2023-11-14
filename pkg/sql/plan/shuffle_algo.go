@@ -82,7 +82,7 @@ func NewShuffleRange() *ShuffleRange {
 	return &ShuffleRange{}
 }
 
-func (s *ShuffleRange) Update(zmmin float64, zmmax float64) {
+func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nullCount uint32) {
 	s.size++
 	if s.tree == nil {
 		s.tree = &shuffleHeap{
@@ -144,6 +144,13 @@ func (s *ShuffleRange) Eval(k int) {
 	last := step
 	k -= 2
 	for {
+		if Head == nil {
+			for k >= 0 {
+				s.Result[k] = 0
+				k--
+			}
+			break
+		}
 		size := float64(Head.size)
 		if last > size {
 			last -= size
@@ -153,13 +160,19 @@ func (s *ShuffleRange) Eval(k int) {
 		var valuetree *shuffleHeap
 		var speed float64
 		now := Head.tree.key
-		for last <= size-1e-12 {
+		for last <= size {
 			if valuetree == nil || (Head.tree != nil && valuetree.key < Head.tree.key) {
+				if Head.tree == nil {
+					s.Result[k] = now
+					k--
+					last = step
+					break
+				}
 				Head.tree, key, value = Head.tree.Pop()
 				delta := speed * (now - key)
 				last -= delta
 				size -= delta
-				for last < 0 {
+				for last <= 0 {
 					s.Result[k] = key - (last/delta)*(now-key)
 					last += step
 					k--

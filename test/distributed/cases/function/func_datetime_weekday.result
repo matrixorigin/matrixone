@@ -1,6 +1,9 @@
 SELECT weekday(date('2007-02-03 03:42:24'));
 weekday(date('2007-02-03 03:42:24'))
 5
+SELECT weekday(date('2023-11-08 13:42'));
+weekday(date('2023-11-08 13:42'))
+2
 SELECT weekday(NULL);
 weekday(NULL)
 null

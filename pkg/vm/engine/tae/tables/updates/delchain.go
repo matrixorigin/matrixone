@@ -230,6 +230,7 @@ func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
 				row := it.Next()
 				new.persistedMask.Add(uint64(row))
 			}
+			n.Close()
 		}
 		return true
 	})

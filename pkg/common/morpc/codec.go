@@ -235,7 +235,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	}
 
 	if payloadMsg, hasPayload = msg.Message.(PayloadMessage); hasPayload {
-		// set payload filed to nil to avoid payload being written to the out buffer, and write directly
+		// set payload field to nil to avoid payload being written to the out buffer, and write directly
 		// to the socket afterwards to reduce one payload.
 		payloadData = payloadMsg.GetPayloadField()
 		payloadMsg.SetPayloadField(nil)

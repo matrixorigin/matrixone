@@ -485,8 +485,8 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	if err := tc.checkStatus(true); err != nil {
-		return err
+	if tc.mu.closed {
+		return nil
 	}
 
 	defer func() {
@@ -824,6 +824,11 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		err := tc.checkTxnError(resp.TxnError, commitTxnErrors)
 		if err == nil || !tc.mu.txn.IsPessimistic() {
 			return err
+		}
+
+		// commit failed, refresh invalid lock tables
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			tc.option.lockService.ForceRefreshLockTableBinds(resp.CommitResponse.InvalidLockTables...)
 		}
 
 		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)

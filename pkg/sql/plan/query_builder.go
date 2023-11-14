@@ -251,7 +251,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
-			increaseRefCnt(rfSpec.Expr, 1, colRefCnt)
+			if rfSpec.Expr != nil {
+				increaseRefCnt(rfSpec.Expr, 1, colRefCnt)
+			}
 		}
 
 		internalRemapping := &ColRefRemapping{
@@ -296,10 +298,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
-			increaseRefCnt(rfSpec.Expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
-			if err != nil {
-				return nil, err
+			if rfSpec.Expr != nil {
+				increaseRefCnt(rfSpec.Expr, -1, colRefCnt)
+				err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -1369,7 +1373,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
-		rootID = builder.removeRedundantJoinCond(rootID)
+		colMap := make(map[[2]int32]int)
+		colGroup := make([]int, 0)
+		builder.removeRedundantJoinCond(rootID, colMap, colGroup)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.applyAssociativeLaw(rootID)
 		builder.applySwapRuleByStats(rootID, true)
@@ -1554,12 +1560,16 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			var targetArgType types.Type
 			if len(argsCastType) == 0 {
 				targetArgType = tmpArgsType[0]
+				// if string union string, different length may cause error.
+				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+					for _, typ := range argsType {
+						if targetArgType.Width < typ.Width {
+							targetArgType.Width = typ.Width
+						}
+					}
+				}
 			} else {
 				targetArgType = argsCastType[0]
-			}
-			// if string union string, different length may cause error. use text type as the output
-			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-				targetArgType = types.T_text.ToType()
 			}
 
 			if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
@@ -1778,6 +1788,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 }
 
 const NameGroupConcat = "group_concat"
+const NameClusterCenters = "cluster_centers"
 
 func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 	windowsSpecList := make([]*plan.Expr, 0, len(bc.aggregates))
@@ -1800,6 +1811,7 @@ func (bc *BindContext) generateForceWinSpecList() ([]*plan.Expr, error) {
 			if j < len(bc.windows)-1 {
 				j++
 			}
+			// NOTE: no need to include NameClusterCenters
 		} else {
 			windowSpec.OrderBy = nil
 		}
