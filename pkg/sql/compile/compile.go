@@ -262,7 +262,8 @@ func (c *Compile) run(s *Scope) error {
 		return nil
 	}
 
-	//fmt.Println(DebugShowScopes([]*Scope{s}))
+	fmt.Println("pipeline in run()")
+	fmt.Println(DebugShowScopes([]*Scope{s}))
 
 	switch s.Magic {
 	case Normal:
@@ -753,8 +754,8 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		steps = append(steps, scope)
 	}
 
-	debugstr := DebugShowScopes(steps)
-	logutil.Infof("!!!!!!!!!!%v", debugstr)
+	fmt.Println("pipeline in compile()")
+	fmt.Println(DebugShowScopes(steps))
 
 	return steps, err
 }
