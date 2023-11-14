@@ -124,7 +124,7 @@ func main() {
 			for blkIt.Valid() {
 				blk := blkIt.GetBlock()
 				logutil.Info(blk.String())
-				view, err := blk.GetColumnDataById(context.Background(), 0)
+				view, err := blk.GetColumnDataById(context.Background(), 0, common.DefaultAllocator)
 				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), view.Length())
 				if err != nil {
 					panic(err)
