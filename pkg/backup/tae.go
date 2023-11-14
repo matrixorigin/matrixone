@@ -94,8 +94,8 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
 	backupTime := names[0]
-	names = names[1:]
 	trimInfo := names[1]
+	names = names[1:]
 	files := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
