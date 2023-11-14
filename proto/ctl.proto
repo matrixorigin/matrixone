@@ -50,7 +50,7 @@ enum CmdMethod {
     SyncCommit      = 9;
 
     reserved 10;
-    // GetCommit get latest commit timestamp of cn.
+    // AddFaultPoint add a fault point
     AddFaultPoint   = 11;
     // Backup backup data
     Backup          = 12;

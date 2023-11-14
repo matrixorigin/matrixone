@@ -40,13 +40,14 @@ message CNStore {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  metadata.CNRole Role               = 5;
-  uint64          Tick               = 6;
-  NodeState       State              = 7;
-  map<string, metadata.LabelList> Labels = 8 [(gogoproto.nullable) = false];
-  metadata.WorkState WorkState       = 9;
-  string          QueryAddress       = 10;
-  ConfigData ConfigData = 11;
+  reserved 5;
+  metadata.CNRole Role               = 6;
+  uint64          Tick               = 7;
+  NodeState       State              = 8;
+  map<string, metadata.LabelList> Labels = 9 [(gogoproto.nullable) = false];
+  metadata.WorkState WorkState       = 10;
+  string          QueryAddress       = 11;
+  ConfigData ConfigData = 12;
 }
 
 message TNStore {
@@ -61,8 +62,8 @@ message TNStore {
   string LogtailServerAddress = 6;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 7;
-  ConfigData ConfigData = 8;
-  reserved 9;
+  reserved 8;
+  ConfigData ConfigData = 9;
   // QueryAddress is the address of the queryservice on tn
   string QueryAddress = 10;
 }
