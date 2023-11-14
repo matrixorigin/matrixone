@@ -2632,12 +2632,12 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	return collector.BaseCollector.VisitTable(entry)
 }
 
-func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) {
+func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) error {
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
 	if len(mvccNodes) == 0 {
-		return
+		return nil
 	}
 	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	segDelBat := collector.data.bats[SEGDeleteIDX]
@@ -2716,6 +2716,7 @@ func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) {
 	}
 	delEnd := segDelBat.GetVectorByName(catalog.AttrRowID).Length()
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
+	return nil
 }
 
 func (collector *BaseCollector) VisitSegForBackup(entry *catalog.SegmentEntry) (err error) {
@@ -2725,8 +2726,7 @@ func (collector *BaseCollector) VisitSegForBackup(entry *catalog.SegmentEntry) (
 		return nil
 	}
 	entry.RUnlock()
-	collector.visitSegmentEntry(entry)
-	return nil
+	return collector.visitSegmentEntry(entry)
 }
 
 func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
