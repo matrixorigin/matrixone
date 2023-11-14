@@ -171,7 +171,7 @@ func (o ObjectInfo) Location() objectio.Location {
 type ObjectEntry struct {
 	ShortObjName objectio.ObjectNameShort
 
-	*ObjectInfo
+	ObjectInfo
 }
 
 func (o ObjectEntry) Less(than ObjectEntry) bool {
@@ -191,7 +191,7 @@ type ObjectIndexByCreateTSEntry struct {
 	CreateTime   types.TS
 	ShortObjName objectio.ObjectNameShort
 
-	*ObjectInfo
+	ObjectInfo
 }
 
 func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
@@ -244,7 +244,6 @@ type ObjectIndexByTSEntry struct {
 	IsDelete     bool
 
 	IsAppendable bool
-	*ObjectInfo
 }
 
 func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
@@ -658,10 +657,15 @@ func (p *PartitionState) HandleMetadataInsert(
 					}
 
 					p.dataObjects.Set(objEntry)
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry{
+						CreateTime:   objEntry.CreateTime,
+						ShortObjName: objEntry.ShortObjName,
+
+						ObjectInfo: objEntry.ObjectInfo,
+					})
 					return
 				}
 				objEntry = objPivot
-				objEntry.ObjectInfo = &ObjectInfo{}
 				if metaLocation := objectio.Location(metaLocationVector.GetBytesAt(i)); !metaLocation.IsEmpty() {
 					objEntry.Loc = metaLocation
 				}
@@ -680,10 +684,12 @@ func (p *PartitionState) HandleMetadataInsert(
 				}
 
 				p.dataObjects.Set(objEntry)
+
 				//prefetch the object meta
 				if err := blockio.PrefetchMeta(fs, objEntry.Loc); err != nil {
 					logutil.Errorf("prefetch object meta failed. %v", err)
 				}
+
 				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry{
 					CreateTime:   objEntry.CreateTime,
 					ShortObjName: objEntry.ShortObjName,
@@ -698,7 +704,6 @@ func (p *PartitionState) HandleMetadataInsert(
 						IsDelete:     false,
 
 						IsAppendable: objEntry.EntryState,
-						ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(e)
 				}
@@ -746,6 +751,13 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 
 				p.dataObjects.Set(objEntry)
 
+				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry{
+					CreateTime:   objEntry.CreateTime,
+					ShortObjName: objEntry.ShortObjName,
+
+					ObjectInfo: objEntry.ObjectInfo,
+				})
+
 				{
 					e := ObjectIndexByTSEntry{
 						Time:         objEntry.DeleteTime,
@@ -753,7 +765,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
-						ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(e)
 				}
@@ -766,29 +777,36 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
-						ObjectInfo:   objEntry.ObjectInfo,
+						//ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Delete(old)
 					objEntry.DeleteTime = deleteTimeVector[i]
 					p.dataObjects.Set(objEntry)
+
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry{
+						CreateTime:   objEntry.CreateTime,
+						ShortObjName: objEntry.ShortObjName,
+
+						ObjectInfo: objEntry.ObjectInfo,
+					})
+
 					new := ObjectIndexByTSEntry{
 						Time:         objEntry.DeleteTime,
 						ShortObjName: objEntry.ShortObjName,
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
-						ObjectInfo:   objEntry.ObjectInfo,
+						//ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(new)
 				} else if objEntry.DeleteTime.Equal(deleteTimeVector[i]) {
-					//TODO:: should we do something here?
+					//FIXME:: should we do something here?
 					e := ObjectIndexByTSEntry{
 						Time:         objEntry.DeleteTime,
 						ShortObjName: objEntry.ShortObjName,
 						IsDelete:     true,
 
 						IsAppendable: objEntry.EntryState,
-						ObjectInfo:   objEntry.ObjectInfo,
 					}
 					p.objectIndexByTS.Set(e)
 				}

@@ -251,7 +251,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
-			increaseRefCnt(rfSpec.Expr, 1, colRefCnt)
+			if rfSpec.Expr != nil {
+				increaseRefCnt(rfSpec.Expr, 1, colRefCnt)
+			}
 		}
 
 		internalRemapping := &ColRefRemapping{
@@ -296,10 +298,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
-			increaseRefCnt(rfSpec.Expr, -1, colRefCnt)
-			err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
-			if err != nil {
-				return nil, err
+			if rfSpec.Expr != nil {
+				increaseRefCnt(rfSpec.Expr, -1, colRefCnt)
+				err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 

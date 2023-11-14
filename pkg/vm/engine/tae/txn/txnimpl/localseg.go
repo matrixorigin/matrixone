@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -94,7 +95,6 @@ func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc object
 		meta,
 	)
 	seg.nodes = append(seg.nodes, n)
-
 }
 
 // register an appendable insertNode.
@@ -494,20 +494,22 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
+	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
-	return n.GetColumnDataByIds(colIdxes)
+	return n.GetColumnDataByIds(colIdxes, mp)
 }
 
 func (seg *localSegment) GetColumnDataById(
 	ctx context.Context,
 	blk *catalog.BlockEntry,
 	colIdx int,
+	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
-	return n.GetColumnDataById(ctx, colIdx)
+	return n.GetColumnDataById(ctx, colIdx, mp)
 }
 
 func (seg *localSegment) Prefetch(blk *catalog.BlockEntry, idxes []uint16) error {
