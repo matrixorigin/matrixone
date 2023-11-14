@@ -2633,6 +2633,12 @@ func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 }
 
 func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) {
+	entry.RLock()
+	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+	entry.RUnlock()
+	if len(mvccNodes) == 0 {
+		return
+	}
 	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	segDelBat := collector.data.bats[SEGDeleteIDX]
 	segDelTxn := collector.data.bats[SEGDeleteTxnIDX]
@@ -2718,22 +2724,12 @@ func (collector *BaseCollector) VisitSegForBackup(entry *catalog.SegmentEntry) (
 		entry.RUnlock()
 		return nil
 	}
-	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
-	if len(mvccNodes) == 0 {
-		return nil
-	}
 	collector.visitSegmentEntry(entry)
 	return nil
 }
 
 func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error) {
-	entry.RLock()
-	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
-	entry.RUnlock()
-	if len(mvccNodes) == 0 {
-		return nil
-	}
 	collector.visitSegmentEntry(entry)
 	return nil
 }
@@ -2753,6 +2749,12 @@ func (collector *GlobalCollector) VisitSeg(entry *catalog.SegmentEntry) error {
 }
 
 func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
+	entry.RLock()
+	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+	entry.RUnlock()
+	if len(mvccNodes) == 0 {
+		return
+	}
 	insStart := collector.data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.AttrRowID).Length()
 	delStart := collector.data.bats[BLKMetaDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	blkTNMetaDelBat := collector.data.bats[BLKTNMetaDeleteIDX]
@@ -3159,22 +3161,12 @@ func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (er
 		entry.RUnlock()
 		return nil
 	}
-	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
 	entry.RUnlock()
-	if len(mvccNodes) == 0 {
-		return nil
-	}
 	collector.visitBlockEntry(entry)
 	return nil
 }
 
 func (collector *BaseCollector) VisitBlk(entry *catalog.BlockEntry) (err error) {
-	entry.RLock()
-	mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
-	entry.RUnlock()
-	if len(mvccNodes) == 0 {
-		return nil
-	}
 	collector.visitBlockEntry(entry)
 	return nil
 }
