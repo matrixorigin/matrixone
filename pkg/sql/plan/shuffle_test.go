@@ -137,7 +137,7 @@ func TestShuffleRange(t *testing.T) {
 		min:           []float64{},
 		max:           []float64{},
 		expectoverlap: 0,
-		bucket:        64,
+		bucket:        1024,
 	})
 	testcase[0].min = append(testcase[0].min, 0)
 	testcase[0].max = append(testcase[0].max, 10000)
@@ -157,7 +157,7 @@ func TestShuffleRange(t *testing.T) {
 	for i := 0; i < leng; i++ {
 		shufflerange := NewShuffleRange()
 		for j := 0; j < len(testcase[i].min); j++ {
-			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 0, 0)
+			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 1000000, 1)
 		}
 
 		shufflerange.Eval(testcase[i].bucket)

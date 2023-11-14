@@ -132,23 +132,24 @@ func (s *ShuffleRange) Eval(k int) {
 			size:  node.size,
 			value: node.value,
 		}
-		for head.next != nil {
-			next := head.next
-			if head.tree.value >= next.tree.key {
-				break
+		if head.next != nil {
+			for head.next != nil {
+				next := head.next
+				if head.tree.value >= next.tree.key {
+					break
+				}
+				if head.value <= next.value {
+					s.Overlap += 0.25 * float64(next.size)
+				} else {
+					s.Overlap += next.tree.key - head.value
+				}
+				head.tree = head.tree.Merge(next.tree)
+				head.size += next.size
+				head.next = next.next
 			}
-			if next.value >= head.value {
-				s.Overlap += float64(head.size) * float64(next.size) * (next.tree.key - next.value) / (head.tree.key - head.value)
-			} else {
-				s.Overlap += float64(head.size) * float64(next.size) * (next.tree.key - head.value) * (next.tree.key - head.value) / (head.tree.key - head.value) / (next.tree.key - next.value)
-				head.value = next.value
-			}
-			head.tree = head.tree.Merge(next.tree)
-			head.size += next.size
-			head.next = next.next
+
 		}
 	}
-	s.Overlap /= float64(s.size)
 	s.Overlap /= float64(s.size)
 
 	step := float64(s.size) / float64(k)
