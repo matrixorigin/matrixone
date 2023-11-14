@@ -108,13 +108,14 @@ message CNStoreHeartbeat {
   string          ServiceAddress     = 2;
   string          SQLAddress         = 3;
   string          LockServiceAddress = 4;
-  metadata.CNRole Role               = 5;
-  bool            TaskServiceCreated = 6;
-  string          QueryAddress       = 7;
-  string          InitWorkState      = 8;
-  string          GossipAddress      = 9;
-  bool            GossipJoined       = 10;
-  ConfigData      ConfigData         = 11;
+  reserved 5;
+  metadata.CNRole Role               = 6;
+  bool            TaskServiceCreated = 7;
+  string          QueryAddress       = 8;
+  string          InitWorkState      = 9;
+  string          GossipAddress      = 10;
+  bool            GossipJoined       = 11;
+  ConfigData      ConfigData         = 12;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -165,14 +166,14 @@ message TNStoreHeartbeat {
   // TN store.
   repeated TNShardInfo Shards = 3 [(gogoproto.nullable) = false];
   bool            TaskServiceCreated = 4;
-
   // Server address for logtail push model
   string LogtailServerAddress = 5;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress = 6;
-  ConfigData ConfigData = 7;
+  reserved 7;
+  ConfigData ConfigData = 8;
   // QueryAddress is the address of queryservice on tn
-  string          QueryAddress       = 8;
+  string QueryAddress = 9;
 };
 
 message RSMState {
