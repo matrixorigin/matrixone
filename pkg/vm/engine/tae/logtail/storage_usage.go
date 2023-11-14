@@ -80,7 +80,10 @@ func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
 
 	// the incremental ckp should consider the time range.
 	// we only collect the segments which updates happened in [start, end]
-	if !collector.isGlobal && len(entry.ClonePreparedInRange(collector.start, collector.end)) == 0 {
+	entry.RLock()
+	cnt := len(entry.ClonePreparedInRange(collector.start, collector.end))
+	entry.RUnlock()
+	if !collector.isGlobal && cnt == 0 {
 		return false
 	}
 	return true
