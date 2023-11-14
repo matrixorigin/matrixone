@@ -40,6 +40,10 @@ spec:
       logtail-collect-interval = "2ms"
       logtail-response-send-timeout = "10s"
       max-logtail-fetch-failure = 5
+      [observability]
+      metricUpdateStorageUsageInterval = "15m"
+      enableStmtMerge = true
+      enableMetricToProm = true
     replicas: 1
     resources:
       requests:
@@ -84,6 +88,10 @@ spec:
       level = "info"
       format = "json"
       max-size = 512
+      [observability]
+      metricUpdateStorageUsageInterval = "15m"
+      enableStmtMerge = true
+      enableMetricToProm = true
   tp:
     cacheVolume:
       size: 100Gi
@@ -103,6 +111,10 @@ spec:
       busy-queue-size = 1
       [cn.ctl.address]
       listen-address = "0.0.0.0:19958"
+      [observability]
+      metricUpdateStorageUsageInterval = "15m"
+      enableStmtMerge = true
+      enableMetricToProm = true
     replicas: 2
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression: "true"
