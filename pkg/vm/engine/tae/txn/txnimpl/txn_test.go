@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -439,12 +438,11 @@ func TestTxnManager1(t *testing.T) {
 func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
 	c := catalog.MockCatalog()
 	driver := wal.NewDriverWithBatchStore(context.Background(), dir, "store", nil)
-	indexCache := model.NewSimpleLRU(int64(mpool.GB))
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
 	rt := dbutils.NewRuntime(
-		dbutils.WithRuntimeObjectFS(fs), dbutils.WithRuntimeFilterIndexCache(indexCache),
+		dbutils.WithRuntimeObjectFS(fs),
 	)
 	factory := tables.NewDataFactory(rt, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, factory, 0),
