@@ -109,7 +109,7 @@ var (
 			resultCntCol,
 		},
 		PrimaryKeyColumn: nil,
-		ClusterBy:        []table.Column{reqAtCol, accountCol},
+		ClusterBy:        []table.Column{reqAtCol},
 		// Engine
 		Engine:        table.NormalTableEngine,
 		Comment:       "record each statement and stats info",

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +37,10 @@ type compilerContext struct {
 	engine     engine.Engine
 	proc       *process.Process
 	statsCache *plan.StatsCache
+
+	buildAlterView       bool
+	dbOfView, nameOfView string
+	mu                   sync.Mutex
 }
 
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
@@ -80,7 +85,11 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef) bool {
 	if err != nil {
 		return false
 	}
-	return t.Stats(c.ctx, nil, c.GetStatsCache().GetStatsInfoMap(t.GetTableID(c.ctx)))
+	s := c.GetStatsCache().GetStatsInfoMap(t.GetTableID(c.ctx), true)
+	if s == nil {
+		return false
+	}
+	return t.Stats(c.ctx, nil, s)
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
@@ -206,11 +215,17 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
-	panic("not supported in internal sql executor")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buildAlterView = yesOrNo
+	c.dbOfView = dbName
+	c.nameOfView = viewName
 }
 
 func (c *compilerContext) GetBuildingAlterView() (bool, string, string) {
-	panic("not supported in internal sql executor")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buildAlterView, c.dbOfView, c.nameOfView
 }
 
 func (c *compilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {

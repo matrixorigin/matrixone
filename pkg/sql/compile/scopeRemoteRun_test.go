@@ -102,8 +102,9 @@ func Test_CnServerMessageHandler(t *testing.T) {
 
 	ti, _ := time.Now().MarshalBinary()
 	procInfo := &pipeline.ProcessInfo{
-		Lim:         &pipeline.ProcessLimitation{Size: 1},
-		SessionInfo: &pipeline.SessionInfo{TimeZone: ti},
+		Lim:              &pipeline.ProcessLimitation{Size: 1},
+		SessionInfo:      &pipeline.SessionInfo{TimeZone: ti},
+		AnalysisNodeList: []int32{1, 2, 3},
 	}
 	procInfoData, err := procInfo.Marshal()
 	require.Nil(t, err)
@@ -306,7 +307,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 			SqlHelper:      nil,
 		},
 	}
-	_, err := encodeProcessInfo(proc)
+	_, err := encodeProcessInfo(proc, "")
 	require.Nil(t, err)
 }
 

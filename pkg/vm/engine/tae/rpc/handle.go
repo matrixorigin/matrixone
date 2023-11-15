@@ -583,8 +583,7 @@ func (h *Handle) HandleInspectTN(
 	return nil, nil
 }
 
-func (h *Handle) prefetchDeleteRowID(ctx context.Context,
-	req *db.WriteReq) error {
+func (h *Handle) prefetchDeleteRowID(ctx context.Context, req *db.WriteReq) error {
 	if len(req.DeltaLocs) == 0 {
 		return nil
 	}
@@ -612,56 +611,72 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 }
 
 func (h *Handle) prefetchMetadata(ctx context.Context,
-	req *db.WriteReq) error {
+	req *db.WriteReq) (int, error) {
 	if len(req.MetaLocs) == 0 {
-		return nil
+		return 0, nil
 	}
 	//start loading jobs asynchronously,should create a new root context.
+	objCnt := 0
 	var objectName objectio.ObjectNameShort
 	for _, meta := range req.MetaLocs {
 		loc, err := blockio.EncodeLocationFromString(meta)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if !objectio.IsSameObjectLocVsShort(loc, &objectName) {
 			err := blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
 			if err != nil {
-				return err
+				return 0, err
 			}
+			objCnt++
 			objectName = *loc.Name().Short()
 		}
 	}
-	return nil
+	return objCnt, nil
 }
 
 // EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
 func (h *Handle) EvaluateTxnRequest(
 	ctx context.Context,
 	meta txn.TxnMeta,
-) (err error) {
+) error {
 	h.mu.RLock()
 	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
+
+	metaLocCnt := 0
+	deltaLocCnt := 0
+
+	defer func() {
+		if metaLocCnt != 0 {
+			v2.TxnCNCommittedMetaLocationQuantityGauge.Set(float64(metaLocCnt))
+		}
+
+		if deltaLocCnt != 0 {
+			v2.TxnCNCommittedDeltaLocationQuantityGauge.Set(float64(deltaLocCnt))
+		}
+	}()
+
 	for _, e := range txnCtx.reqs {
 		if r, ok := e.(*db.WriteReq); ok {
 			if r.FileName != "" {
 				if r.Type == db.EntryDelete {
 					// start to load deleted row ids
-					err = h.prefetchDeleteRowID(ctx, r)
-					if err != nil {
-						return
+					deltaLocCnt += len(r.DeltaLocs)
+					if err := h.prefetchDeleteRowID(ctx, r); err != nil {
+						return err
 					}
 				} else if r.Type == db.EntryInsert {
-					err = h.prefetchMetadata(ctx, r)
+					objCnt, err := h.prefetchMetadata(ctx, r)
 					if err != nil {
-						return
+						return err
 					}
-
+					metaLocCnt += objCnt
 				}
 			}
 		}
 	}
-	return
+	return nil
 }
 
 func (h *Handle) CacheTxnRequest(
@@ -1087,9 +1102,9 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			rowIDVec := containers.ToTNVector(bat.Vecs[0])
+			rowIDVec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
 			defer rowIDVec.Close()
-			pkVec := containers.ToTNVector(bat.Vecs[1])
+			pkVec := containers.ToTNVector(bat.Vecs[1], common.WorkspaceAllocator)
 			//defer pkVec.Close()
 			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
@@ -1100,9 +1115,9 @@ func (h *Handle) HandleWrite(
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
-	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0))
+	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
 	defer rowIDVec.Close()
-	pkVec := containers.ToTNVector(req.Batch.GetVector(1))
+	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return

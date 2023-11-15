@@ -95,7 +95,7 @@ func InsertOp[T comparable](
 }
 
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
-	vec := containers.MakeVector(kType)
+	vec := makeWorkspaceVector(kType)
 	switch kType.Oid {
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
@@ -116,7 +116,7 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 }
 
 func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector {
-	vec := containers.MakeVector(kType)
+	vec := makeWorkspaceVector(kType)
 	var vecs []containers.Vector
 	switch kType.Oid {
 	case types.T_char, types.T_varchar, types.T_json,
@@ -124,7 +124,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 		for k := range idx.tree {
 			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
-				vec = containers.MakeVector(kType)
+				vec = makeWorkspaceVector(kType)
 			}
 			vec.Append([]byte(k.(string)), false)
 		}
@@ -133,7 +133,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 		for k := range idx.tree {
 			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
-				vec = containers.MakeVector(kType)
+				vec = makeWorkspaceVector(kType)
 			}
 			vec.Append(types.BytesToArrayToString[float32](k.([]byte)), false)
 		}
@@ -141,7 +141,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 		for k := range idx.tree {
 			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
-				vec = containers.MakeVector(kType)
+				vec = makeWorkspaceVector(kType)
 			}
 			vec.Append(types.BytesToArrayToString[float64](k.([]byte)), false)
 		}
@@ -149,7 +149,7 @@ func (idx *simpleTableIndex) KeyToVectors(kType types.Type) []containers.Vector 
 		for k := range idx.tree {
 			if vec.Length() > int(MaxNodeRows) {
 				vecs = append(vecs, vec)
-				vec = containers.MakeVector(kType)
+				vec = makeWorkspaceVector(kType)
 			}
 			vec.Append(k, false)
 		}

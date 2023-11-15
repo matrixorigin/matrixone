@@ -229,7 +229,7 @@ func (a *AliyunSDK) Write(
 	err error,
 ) {
 
-	_, err = a.putObject(
+	err = a.putObject(
 		ctx,
 		key,
 		r,
@@ -396,7 +396,7 @@ func (a *AliyunSDK) putObject(
 	r io.Reader,
 	size int64,
 	expire *time.Time,
-) (any, error) {
+) error {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.putObject")
 	defer task.End()
 	t0 := time.Now()
@@ -417,7 +417,7 @@ func (a *AliyunSDK) putObject(
 		key,
 		r,
 		opts...,
-	), nil
+	)
 }
 
 func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
@@ -468,7 +468,7 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 	return r, nil
 }
 
-func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (any, error) {
+func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObject")
 	defer task.End()
 	t0 := time.Now()
@@ -478,23 +478,23 @@ func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (any, error) {
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return doWithRetry[bool](
 		"s3 delete object",
-		func() (any, error) {
+		func() (bool, error) {
 			if err := a.bucket.DeleteObject(
 				key,
 				oss.WithContext(ctx),
 			); err != nil {
-				return nil, err
+				return false, err
 			}
-			return nil, nil
+			return true, nil
 		},
 		maxRetryAttemps,
 		isRetryableError,
 	)
 }
 
-func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (any, error) {
+func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObjects")
 	defer task.End()
 	t0 := time.Now()
@@ -504,17 +504,17 @@ func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (any, err
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
-	return doWithRetry(
+	return doWithRetry[bool](
 		"s3 delete objects",
-		func() (any, error) {
+		func() (bool, error) {
 			_, err := a.bucket.DeleteObjects(
 				keys,
 				oss.WithContext(ctx),
 			)
 			if err != nil {
-				return nil, err
+				return false, err
 			}
-			return nil, nil
+			return true, nil
 		},
 		maxRetryAttemps,
 		isRetryableError,
@@ -584,6 +584,19 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 			})
 		}
 	}()
+
+	// try default nil config provider
+	{
+		provider, err := credentials.NewCredential(nil)
+		if err == nil {
+			_, err := provider.GetCredential()
+			if err == nil {
+				// ok
+				logutil.Info("aliyun sdk credential", zap.Any("using", "default"))
+				return toOSSCredentialProvider(provider), nil
+			}
+		}
+	}
 
 	// static
 	if o.KeyID != "" && o.KeySecret != "" {

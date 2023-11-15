@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/chaos"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 var (
@@ -47,20 +46,19 @@ func startDynamicCluster(
 	ctx context.Context,
 	cfg *LaunchConfig,
 	stopper *stopper.Stopper,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
-	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
 	if err := startDynamicCNServices("./mo-data", cfg.Dynamic); err != nil {
 		return err
 	}
 	if *withProxy {
-		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, perfCounterSet, shutdownC); err != nil {
+		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, shutdownC); err != nil {
 			return err
 		}
 	} else {

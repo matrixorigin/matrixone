@@ -38,3 +38,9 @@ select * from generate_series('2020-02-29 23:59:59.124356','2020-02-29 23:59:59.
 
 # Test one parameter
 select * from generate_series(5) g;
+
+# Test split
+create table t(a int, b text);
+insert into t select result, repeat('foobarzoo', 600) t from generate_series(1, 200000) t;
+select count(*) as ttl from t;
+drop table t;

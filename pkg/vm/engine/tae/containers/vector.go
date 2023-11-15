@@ -205,7 +205,7 @@ func (vec *vectorWrapper) Update(i int, v any, isNull bool) {
 		panic(moerr.NewInternalErrorNoCtx("update to const vectorWrapper"))
 	}
 	vec.tryCOW()
-	UpdateValue(vec.wrapped, uint32(i), v, isNull)
+	UpdateValue(vec.wrapped, uint32(i), v, isNull, vec.mpool)
 }
 
 func (vec *vectorWrapper) WriteTo(w io.Writer) (n int64, err error) {

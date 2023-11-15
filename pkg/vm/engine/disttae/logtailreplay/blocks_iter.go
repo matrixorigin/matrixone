@@ -140,8 +140,8 @@ func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,
 ) (
-	deleted []ObjectInfo,
-	inserted []ObjectInfo,
+	deleted []objectio.ObjectNameShort,
+	inserted []objectio.ObjectNameShort,
 ) {
 
 	iter := p.objectIndexByTS.Copy().Iter()
@@ -157,10 +157,10 @@ func (p *PartitionState) GetChangedObjsBetween(
 		}
 
 		if entry.IsDelete {
-			deleted = append(deleted, *entry.ObjectInfo)
+			deleted = append(deleted, entry.ShortObjName)
 		} else {
 			if !entry.IsAppendable {
-				inserted = append(inserted, *entry.ObjectInfo)
+				inserted = append(inserted, entry.ShortObjName)
 			}
 		}
 
@@ -201,7 +201,7 @@ func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, b
 	if ok := iter.Seek(ObjectEntry{
 		ShortObjName: name,
 	}); ok {
-		return *iter.Item().ObjectInfo, true
+		return iter.Item().ObjectInfo, true
 	}
 	return ObjectInfo{}, false
 }
