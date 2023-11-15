@@ -256,4 +256,13 @@ var (
 			Help:      "Bucketed histogram of the quantity distribution of ranges loaded object.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 16),
 		})
+
+	TxnShowAccountsDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "show_accounts_duration_seconds",
+			Help:      "Bucketed histogram of show accounts duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+		})
 )
