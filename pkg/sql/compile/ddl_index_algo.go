@@ -79,9 +79,26 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
+	// -1. check if table contains any data
+	indexColumnName := indexDef.Parts[0]
+	countTotalSql := fmt.Sprintf("select count(%s) from `%s`.`%s`;", indexColumnName, qryDatabase, originalTableDef.Name)
+	rs, err := c.runSqlWithResult(countTotalSql)
+	if err != nil {
+		return err
+	}
+	var totalCnt int64
+	rs.ReadRows(func(cols []*vector.Vector) bool {
+		totalCnt = executor.GetFixedRows[int64](cols[0])[0]
+		return false
+	})
+	rs.Close()
+	if totalCnt == 0 {
+		return moerr.NewInternalErrorNoCtx("table should have some data")
+	}
+
 	// 0. create table
 	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[0], indexDef, qryDatabase)
-	err := c.runSql(createSQL)
+	err = c.runSql(createSQL)
 	if err != nil {
 		return err
 	}
@@ -165,9 +182,9 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 
 	insert into centroids(`centroid`, `id`, `version`)
 	SELECT cast(value as VARCHAR),ROW_NUMBER() OVER () AS row_num, 1 FROM
-	(SELECT cluster_centers(`embedding` spherical_kmeans '2,vector_l2_ops') AS centers FROM
+	((SELECT cluster_centers(`embedding` spherical_kmeans '2,vector_l2_ops') AS centers FROM
 	(select `embedding` from `tbl` rand limit 10)) AS subquery
-	CROSS JOIN UNNEST(subquery.centers) AS u;
+	CROSS JOIN UNNEST(subquery.centers) AS u) WHERE EXISTS ( select  from tbl);
 
 
 	+-------------------------------------+---------+------+
@@ -205,7 +222,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid)
 
 	clusterCentersSQL := fmt.Sprintf("%s SELECT 1, ROW_NUMBER() OVER () AS row_num, cast(value as VARCHAR) FROM "+
-		"(SELECT cluster_centers(`%s` spherical_kmeans '%d,%s') AS centers FROM %s) AS subquery "+
+		"(SELECT cluster_centers(`%s` spherical_kmeans '%d,%s') AS centers FROM %s ) AS subquery "+
 		"CROSS JOIN UNNEST(subquery.centers) AS u;",
 		insertSQL,
 		indexColumnName,
