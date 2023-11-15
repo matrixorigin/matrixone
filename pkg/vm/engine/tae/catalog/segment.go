@@ -265,15 +265,34 @@ func (entry *SegmentEntry) Less(b *SegmentEntry) int {
 	return 0
 }
 
+/*
+if seg.Stat.OriginSize == 0 {
+		// after loading object info, original size is still 0, we have to estimate it by experience
+		if s.name == motrace.RawLogTbl {
+			factor := 1 + seg.Stat.Rows/1600
+			seg.Stat.OriginSize = (1 << 20) * factor
+		} else if s.name == "mixed_daily" {
+			factor := 1 + seg.Stat.Rows/10000
+			seg.Stat.OriginSize = (1 << 20) * factor
+		}
+	}
+*/
+
 // LoadObjectInfo is called only in merge scanner goroutine, no need to hold lock
 func (entry *SegmentEntry) LoadObjectInfo() error {
 	name := entry.GetTable().GetLastestSchema().Name
 	defer func() {
 		// after loading object info, original size is still 0, we have to estimate it by experience
 		rows := entry.Stat.GetRows()
-		if name == motrace.RawLogTbl && entry.Stat.GetOriginSize() == 0 && rows != 0 {
-			factor := 1 + rows/1600
-			entry.Stat.SetOriginSize((1 << 20) * factor)
+		if entry.Stat.GetOriginSize() == 0 && rows != 0 {
+			if name == motrace.RawLogTbl {
+				factor := 1 + rows/1600
+				entry.Stat.SetOriginSize((1 << 20) * factor)
+			} else if name == "mixed_daily" {
+				factor := 1 + rows/10000
+				entry.Stat.SetOriginSize((1 << 20) * factor)
+			}
+
 		}
 	}()
 

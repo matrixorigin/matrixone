@@ -247,6 +247,10 @@ func (s *MergeTaskBuilder) onPostSegment(seg *catalog.SegmentEntry) (err error) 
 	seg.Stat.SetRows(s.segmentHelper.segRowCnt)
 	seg.Stat.SetRemainingRows(s.segmentHelper.segRowCnt - s.segmentHelper.segRowDel)
 
+	if !seg.Stat.GetLoaded() {
+		s.loaded += 1
+	}
+
 	seg.LoadObjectInfo()
 
 	s.objPolicy.OnObject(seg)
