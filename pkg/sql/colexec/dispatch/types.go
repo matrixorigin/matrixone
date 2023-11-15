@@ -120,8 +120,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 				message := cnclient.AcquireMessage()
 				{
 					message.Id = r.msgId
-					message.Cmd = pipeline.BatchMessage
-					message.Sid = pipeline.MessageEnd
+					message.Cmd = pipeline.Method_BatchMessage
+					message.Sid = pipeline.Status_MessageEnd
 					message.Uuid = r.uuid[:]
 				}
 				if pipelineFailed {
