@@ -40,7 +40,7 @@ func TestCmdPingTNWithEmptyTN(t *testing.T) {
 			return nil, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, Result{Method: PingMethod, Data: make([]interface{}, 0)},
+	assert.Equal(t, Result{Method: PingMethod, Data: make([]any, 0)},
 		result)
 }
 
@@ -63,7 +63,7 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, Result{
 		Method: PingMethod,
-		Data:   []interface{}{api.TNPingResponse{ShardID: shardID}},
+		Data:   []any{api.TNPingResponse{ShardID: shardID}},
 	}, result)
 }
 
@@ -87,7 +87,7 @@ func TestCmdPingTNWithMultiTN(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, Result{
 		Method: PingMethod,
-		Data:   []interface{}{api.TNPingResponse{ShardID: 1}, api.TNPingResponse{ShardID: 2}},
+		Data:   []any{api.TNPingResponse{ShardID: 1}, api.TNPingResponse{ShardID: 2}},
 	}, result)
 }
 
@@ -108,7 +108,7 @@ func TestCmdPingTNWithParameter(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, Result{
 		Method: PingMethod,
-		Data:   []interface{}{api.TNPingResponse{ShardID: 1}},
+		Data:   []any{api.TNPingResponse{ShardID: 1}},
 	}, result)
 }
 
