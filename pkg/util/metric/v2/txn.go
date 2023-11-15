@@ -89,6 +89,7 @@ var (
 	TxnCommitQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("commit")
 	TxnWaitActiveQueueSizeGauge = txnQueueSizeGauge.WithLabelValues("wait-active")
 	TxnActiveQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("active")
+	TxnLockRPCQueueSizeGauge    = txnQueueSizeGauge.WithLabelValues("lock-rpc")
 
 	txnCNCommittedLocationQuantityGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -133,6 +134,15 @@ var (
 			Name:      "life_statements_total",
 			Help:      "Bucketed histogram of statement total in a txn.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		})
+
+	TxnUnlockTableTotalHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "unlock_table_total",
+			Help:      "Size of txn unlock tables count.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 4),
 		})
 
 	txnCreateDurationHistogram = prometheus.NewHistogramVec(

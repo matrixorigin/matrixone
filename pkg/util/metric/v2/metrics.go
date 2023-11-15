@@ -100,6 +100,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
 	registry.MustRegister(TxnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
+	registry.MustRegister(TxnUnlockTableTotalHistogram)
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(TxnRangesLoadedObjectHistogram)
