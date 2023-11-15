@@ -1609,7 +1609,6 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 
 		// 2.c columns: version, id, centroid, PRIMARY KEY (version,id)
-		// TODO: check if we need to keep centroid as PK?
 		tableDefs[1].Cols[0] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 			Alg:  plan.CompressType_Lz4,
@@ -1679,7 +1678,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			return nil, nil, err
 		}
 
-		// 3.c columns: version, id, origin_pk, PRIMARY KEY (version, id)
+		// 3.c columns: version, id, origin_pk
 		tableDefs[2].Cols[0] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 			Alg:  plan.CompressType_Lz4,

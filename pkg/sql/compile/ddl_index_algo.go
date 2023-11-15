@@ -134,7 +134,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 		return err
 	}
 
-	centroidParamsDistFn := params[catalog.IndexAlgoParamOpType]
+	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
 
 	// 2.1 Number of records in the table
 	indexColumnName := indexDef.Parts[0]

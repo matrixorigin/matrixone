@@ -31,27 +31,28 @@ const (
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
-// 1. Default secondary index algo type is "". It was hard to represent "" as ENUM in protobuf.
-// 2. IndexAlgoParamOpType is serialized and stored in the mo_indexes as JSON string.
+//  1. Changing AlgoType from string to Enum will break the backward compatibility.
+//     "panic: Unable to find target column from predefined table columns"
+//  2. IndexAlgoParamOpType is serialized and stored in the mo_indexes as JSON string.
 func ToLower(str string) string {
 	return strings.ToLower(strings.TrimSpace(str))
 }
 
 // IsNullIndexAlgo is used to skip printing the default "" index algo in the restoreDDL and buildShowCreateTable
 func IsNullIndexAlgo(algo string) bool {
-	_algo := strings.ToLower(strings.TrimSpace(algo))
+	_algo := ToLower(algo)
 	return _algo == MoIndexDefaultAlgo.ToString()
 }
 
 // IsRegularIndexAlgo are indexes which will be handled by regular index flow, ie the one where
 // we have one hidden table.
 func IsRegularIndexAlgo(algo string) bool {
-	_algo := strings.ToLower(strings.TrimSpace(algo))
+	_algo := ToLower(algo)
 	return _algo == MoIndexDefaultAlgo.ToString() || _algo == MoIndexBTreeAlgo.ToString()
 }
 
 func IsIvfIndexAlgo(algo string) bool {
-	_algo := strings.ToLower(strings.TrimSpace(algo))
+	_algo := ToLower(algo)
 	return _algo == MoIndexIvfFlatAlgo.ToString()
 }
 
@@ -140,7 +141,7 @@ func IndexParamsToMap(def *tree.Index) (map[string]string, error) {
 		}
 
 		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
-			opType := strings.ToLower(strings.TrimSpace(def.IndexOption.AlgoParamVectorOpType))
+			opType := ToLower(def.IndexOption.AlgoParamVectorOpType)
 			if opType == IndexAlgoParamOpType_ip ||
 				opType == IndexAlgoParamOpType_l2 ||
 				opType == IndexAlgoParamOpType_cos {
