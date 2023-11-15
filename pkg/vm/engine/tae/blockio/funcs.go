@@ -16,13 +16,13 @@ package blockio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 func LoadColumnsData(
@@ -78,29 +78,4 @@ func LoadTombstoneColumns(
 	m *mpool.MPool,
 ) (bat *batch.Batch, err error) {
 	return LoadColumnsData(ctx, objectio.SchemaTombstone, cols, typs, fs, location, m)
-}
-
-func LoadBF(
-	ctx context.Context,
-	loc objectio.Location,
-	cache model.LRUCache,
-	fs fileservice.FileService,
-	noLoad bool,
-) (bf objectio.BloomFilter, err error) {
-	v, ok := cache.Get(ctx, *loc.ShortName())
-	if ok {
-		bf = objectio.BloomFilter(v)
-		return
-	}
-	if noLoad {
-		return
-	}
-	r, _ := NewObjectReader(fs, loc)
-	v, _, err = r.LoadAllBF(ctx)
-	if err != nil {
-		return
-	}
-	cache.Set(ctx, *loc.ShortName(), v)
-	bf = objectio.BloomFilter(v)
-	return
 }

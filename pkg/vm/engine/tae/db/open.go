@@ -16,12 +16,13 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"path"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -81,7 +82,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
-	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
@@ -92,7 +92,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
-		dbutils.WithRuntimeFilterIndexCache(indexCache),
 		dbutils.WithRuntimeObjectFS(fs),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
