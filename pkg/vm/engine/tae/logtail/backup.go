@@ -384,10 +384,12 @@ func ReWriteCheckpointAndBlockFromKey(
 		if !objectData.isChange && !objectData.isDeleteBatch {
 			continue
 		}
+		logutil.Infof("object %v, isChange %v, isCnBatch %v", fileName, objectData.isChange, objectData.isDeleteBatch)
 		dataBlocks := make([]*blockData, 0)
 		var blocks []objectio.BlockObject
 		var extent objectio.Extent
 		for _, block := range objectData.data {
+			logutil.Infof("object %v, id is %d", fileName, block.num)
 			dataBlocks = append(dataBlocks, block)
 		}
 		sort.Slice(dataBlocks, func(i, j int) bool {
@@ -404,6 +406,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				return nil, nil, nil, nil, err
 			}
 			for _, block := range dataBlocks {
+				logutil.Infof("write object %v, id is %d", fileName, block.num)
 				if block.pk > -1 {
 					writer.SetPrimaryKey(uint16(block.pk))
 				}
@@ -434,6 +437,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					return nil, nil, nil, nil, err
 				}
 			}
+			logutil.Infof("write object %v, blocks is %v", fileName, blocks)
 		}
 
 		if objectData.isDeleteBatch &&
@@ -443,6 +447,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				// Case of merge nBlock
 				for _, dt := range dataBlocks {
 					if insertBatch[dataBlocks[0].tid] == nil {
+						logutil.Infof("tid is %d, file is %v", dataBlocks[0].location.String())
 						insertBatch[dataBlocks[0].tid] = &iBlocks{
 							insertBlocks: make([]*insertBlock, 0),
 						}
@@ -461,6 +466,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					panic(any(fmt.Sprintf("dataBlocks len > 2: %v - %d", dataBlocks[0].location.String(), len(dataBlocks))))
 				}
 				if objectData.data[0].tombstone != nil {
+					logutil.Infof("datas len is %d", dataBlocks[0].data.Vecs[0].Length())
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
 				}
 				dataBlocks[0].data.Attrs = make([]string, 0)
@@ -481,7 +487,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					result.Vecs[i] = dataBlocks[0].data.Vecs[i]
 				}
 				dataBlocks[0].data = result
-
+				logutil.Infof("datas2 len is %d, locatio %s", dataBlocks[0].data.Vecs[0].Length(), dataBlocks[0].location.String())
 				fileNum := uint16(1000) + dataBlocks[0].location.Name().Num()
 				segment := dataBlocks[0].location.Name().SegmentId()
 				name := objectio.BuildObjectName(&segment, fileNum)
@@ -504,6 +510,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				files = append(files, name.String())
 				blockLocation := objectio.BuildLocation(name, extent, blocks[0].GetRows(), blocks[0].GetID())
 				if insertBatch[dataBlocks[0].tid] == nil {
+					logutil.Infof("tid is %d, file is %v", dataBlocks[0].tid, blockLocation.String())
 					insertBatch[dataBlocks[0].tid] = &iBlocks{
 						insertBlocks: make([]*insertBlock, 0),
 					}
@@ -518,12 +525,14 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 		} else {
 			for i := range dataBlocks {
+				logutil.Infof("write11 object %v, id is %d", fileName, dataBlocks[i].num)
 				blockLocation := dataBlocks[i].location
 				if objectData.isChange {
 					blockLocation = objectio.BuildLocation(objectData.name, extent, blocks[uint16(i)].GetRows(), dataBlocks[i].num)
 				}
 				for _, insertRow := range dataBlocks[i].insertRow {
 					if dataBlocks[uint16(i)].blockType == objectio.SchemaData {
+						logutil.Infof("rewrite BlockMeta_DataLocdn %s, row is %d", blockLocation.String(), insertRow)
 						data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Update(
 							insertRow,
 							[]byte(blockLocation),
@@ -534,6 +543,7 @@ func ReWriteCheckpointAndBlockFromKey(
 							false)
 					}
 					if dataBlocks[uint16(i)].blockType == objectio.SchemaTombstone {
+						logutil.Infof("rewrite BlockMeta_DeltaLocdn %s, row is %d", blockLocation.String(), insertRow)
 						data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Update(
 							insertRow,
 							[]byte(blockLocation),
@@ -546,6 +556,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 				for _, deleteRow := range dataBlocks[uint16(i)].deleteRow {
 					if dataBlocks[uint16(i)].blockType == objectio.SchemaData {
+						logutil.Infof("rewrite BlockMeta_DataLoc %s, row is %d", blockLocation.String(), deleteRow)
 						if dataBlocks[uint16(i)].isABlock {
 							data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Update(
 								deleteRow,
@@ -558,6 +569,7 @@ func ReWriteCheckpointAndBlockFromKey(
 						}
 					}
 					if dataBlocks[uint16(i)].blockType == objectio.SchemaTombstone {
+						logutil.Infof("rewrite BlockMeta_DeltaLoc %s, row is %d", blockLocation.String(), deleteRow)
 						data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Update(
 							deleteRow,
 							[]byte(blockLocation),
@@ -599,6 +611,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					}
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
+					logutil.Infof("rewrite BLKCNMetaInsertIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), deleteRow)
 					for v, vec := range data.bats[BLKCNMetaInsertIDX].Vecs {
 						if !blk.location.IsEmpty() && data.bats[BLKCNMetaInsertIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
 							blkMeta.Vecs[v].Append(nil, true)
@@ -611,6 +624,7 @@ func ReWriteCheckpointAndBlockFromKey(
 							blkMeta.Vecs[v].Append(val, false)
 						}
 					}
+					logutil.Infof("rewrite BLKMetaDeleteTxnIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), deleteRow)
 					for v, vec := range data.bats[BLKMetaDeleteTxnIDX].Vecs {
 						if !blk.location.IsEmpty() && data.bats[BLKMetaDeleteTxnIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
 							blkMetaTxn.Vecs[v].Append(nil, true)
@@ -625,6 +639,9 @@ func ReWriteCheckpointAndBlockFromKey(
 					}
 
 					row := blkMeta.Vecs[0].Length() - 1
+					ti := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(row)
+					t2 := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(deleteRow)
+					logutil.Infof("rewrite update  BLKMetaInsertIDX %s, row is %d, t2 is %d, leng %d", insertBatch[tid].insertBlocks[b].location.String(), ti, t2, row)
 					if !blk.location.IsEmpty() {
 						updateBlockMeta(blkMeta, blkMetaTxn, row,
 							insertBatch[tid].insertBlocks[b].blockId,
@@ -636,12 +653,14 @@ func ReWriteCheckpointAndBlockFromKey(
 
 		for tid := range insertBatch {
 			for b := range insertBatch[tid].insertBlocks {
+				logutil.Infof("insertBatch is %d, apply is %v,file is %v", tid, insertBatch[tid].insertBlocks[b].apply, insertBatch[tid].insertBlocks[b].location.String())
 				if insertBatch[tid].insertBlocks[b].apply {
 					continue
 				}
 				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
 					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
+					logutil.Infof("rewrite1 BLKCNMetaInsertIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), deleteRow)
 					for v, vec := range data.bats[BLKCNMetaInsertIDX].Vecs {
 						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() && data.bats[BLKCNMetaInsertIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
 							blkMeta.Vecs[v].Append(nil, true)
@@ -654,6 +673,7 @@ func ReWriteCheckpointAndBlockFromKey(
 							blkMeta.Vecs[v].Append(val, false)
 						}
 					}
+					logutil.Infof("rewrite1 BLKMetaDeleteTxnIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), deleteRow)
 					for v, vec := range data.bats[BLKMetaDeleteTxnIDX].Vecs {
 						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() && data.bats[BLKMetaDeleteTxnIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
 							blkMetaTxn.Vecs[v].Append(nil, true)
@@ -668,6 +688,9 @@ func ReWriteCheckpointAndBlockFromKey(
 					}
 
 					i := blkMeta.Vecs[0].Length() - 1
+					ti := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(i)
+					t2 := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(deleteRow)
+					logutil.Infof("rewrite111 update  BLKMetaInsertIDX %s, row is %d, t2 is %d", insertBatch[tid].insertBlocks[b].location.String(), ti, t2)
 					if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
 						updateBlockMeta(blkMeta, blkMetaTxn, i,
 							insertBatch[tid].insertBlocks[b].blockId,
@@ -695,6 +718,8 @@ func ReWriteCheckpointAndBlockFromKey(
 		tableInsertOff := make(map[uint64]*tableOffset)
 		for i := 0; i < blkMetaTxn.Vecs[0].Length(); i++ {
 			tid := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+			loca := blkMeta.GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte)
+			del := blkMeta.GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte)
 			if tableInsertOff[tid] == nil {
 				tableInsertOff[tid] = &tableOffset{
 					offset: i,
@@ -702,10 +727,14 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 			}
 			tableInsertOff[tid].end += 1
+			logutil.Infof("tableOff tid  %d, loc %v, del %v, start %d, end %d, row is %d", tid, objectio.Location(loca).String(), objectio.Location(del).String(), tableInsertOff[tid].offset, tableInsertOff[tid].end, i)
 		}
 		tableDeleteOff := make(map[uint64]*tableOffset)
 		for i := 0; i < data.bats[BLKMetaDeleteTxnIDX].Vecs[0].Length(); i++ {
+			rid := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.AttrRowID)
 			tid := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+			loca := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte)
+			del := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte)
 			if tableDeleteOff[tid] == nil {
 				tableDeleteOff[tid] = &tableOffset{
 					offset: i,
@@ -713,6 +742,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 			}
 			tableDeleteOff[tid].end += 1
+			logutil.Infof("tableOff11 tid  %d, loc %v, del %v, start %d, end %d, row is %d, rid is %v", tid, objectio.Location(loca).String(), objectio.Location(del).String(), tableDeleteOff[tid].offset, tableDeleteOff[tid].end, i, rid.String())
 		}
 
 		for tid, table := range tableInsertOff {
