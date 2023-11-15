@@ -99,7 +99,7 @@ func (d *DiskCache) Read(
 	err error,
 ) {
 
-	if vector.CachePolicy.Any(SkipDiskReads) {
+	if vector.Policy.Any(SkipDiskCacheReads) {
 		return nil
 	}
 
@@ -195,7 +195,7 @@ func (d *DiskCache) Update(
 	err error,
 ) {
 
-	if vector.CachePolicy.Any(SkipDiskWrites) {
+	if vector.Policy.Any(SkipDiskCacheWrites) {
 		return nil
 	}
 
@@ -386,7 +386,7 @@ func (d *DiskCache) evict(ctx context.Context) {
 
 		var size int64
 		if sys, ok := info.Sys().(*syscall.Stat_t); ok {
-			size = int64(sys.Blocks) * int64(sys.Blksize)
+			size = int64(sys.Blocks) * 512 // it's always 512, not sys.Blksize
 		} else {
 			size = info.Size()
 		}
@@ -462,6 +462,20 @@ func (d *DiskCache) pathForFile(path string) string {
 		toOSPath(path),
 		fmt.Sprintf("full%s", cacheFileSuffix),
 	)
+}
+
+var ErrNotCacheFile = errorStr("not a cache file")
+
+func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
+	path, err := filepath.Rel(d.path, diskPath)
+	if err != nil {
+		return "", err
+	}
+	dir, file := filepath.Split(path)
+	if file != fmt.Sprintf("full%s", cacheFileSuffix) {
+		return "", ErrNotCacheFile
+	}
+	return fromOSPath(dir), nil
 }
 
 func (d *DiskCache) waitUpdateComplete(path string) {

@@ -37,6 +37,9 @@ type container struct {
 	state int
 	bat   *batch.Batch
 	rbat  *batch.Batch
+	inBat *batch.Batch
+
+	probeIdx int
 }
 
 type Argument struct {
@@ -73,5 +76,9 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)
 		ctr.rbat = nil
+	}
+	if ctr.inBat != nil {
+		ctr.inBat.Clean(mp)
+		ctr.inBat = nil
 	}
 }

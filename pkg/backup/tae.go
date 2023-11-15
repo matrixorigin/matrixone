@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
@@ -36,7 +36,7 @@ import (
 
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	var err error
-	cr := pb.CtlResult{}
+	cr := ctl.Result{}
 	err = json.Unmarshal(retBytes[0][0], &cr)
 	if err != nil {
 		return nil, err
@@ -207,9 +207,9 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 		name = path.Join(dstDir, name)
 	}
 	ioVec := &fileservice.IOVector{
-		FilePath:    name,
-		Entries:     make([]fileservice.IOEntry, 1),
-		CachePolicy: fileservice.SkipAll,
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 1),
+		Policy:   fileservice.SkipAllCache,
 	}
 	logutil.Infof("copy file %v", dentry)
 	ioVec.Entries[0] = fileservice.IOEntry{
@@ -221,9 +221,9 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 		return nil, err
 	}
 	dstIoVec := fileservice.IOVector{
-		FilePath:    name,
-		Entries:     make([]fileservice.IOEntry, 1),
-		CachePolicy: fileservice.SkipAll,
+		FilePath: name,
+		Entries:  make([]fileservice.IOEntry, 1),
+		Policy:   fileservice.SkipAllCache,
 	}
 	dstIoVec.Entries[0] = fileservice.IOEntry{
 		Offset: 0,

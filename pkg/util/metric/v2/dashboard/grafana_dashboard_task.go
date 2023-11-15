@@ -37,6 +37,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskMergeRow(),
 			c.initTaskCheckpointRow(),
 			c.initTaskSelectivityRow(),
+			c.initTaskMergeTransferPageRow(),
 		)...)
 
 	if err != nil {
@@ -44,6 +45,17 @@ func (c *DashboardCreator) initTaskDashboard() error {
 	}
 	_, err = c.cli.UpsertDashboard(context.Background(), folder, build)
 	return err
+}
+
+func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
+	return dashboard.Row(
+		"Task Merge Transfer Page Length",
+		c.withGraph(
+			"Transfer Page Length",
+			12,
+			`sum(`+c.getMetricWithFilter("mo_task_merge_transfer_page_size", ``)+`)`,
+			"{{ "+c.by+" }}"),
+	)
 }
 
 func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {

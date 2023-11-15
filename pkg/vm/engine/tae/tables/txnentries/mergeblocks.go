@@ -147,19 +147,24 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		panic("cannot tranfer empty block")
 	}
 	tblEntry := dropped.GetSegment().GetTable()
-	if tblEntry.GetLastestSchema().HasPK() {
-		id := dropped.AsCommonID()
-		page := model.NewTransferHashPage(id, time.Now())
-		for srcRow, dst := range mapping {
-			blkid := blks[dst.Idx].ID()
-			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
-		}
-		_ = entry.rt.TransferTable.AddPage(page)
+	isTransient := !tblEntry.GetLastestSchema().HasPK()
+	id := dropped.AsCommonID()
+	page := model.NewTransferHashPage(id, time.Now(), isTransient)
+	for srcRow, dst := range mapping {
+		blkid := blks[dst.Idx].ID()
+		page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
 	}
+	_ = entry.rt.TransferTable.AddPage(page)
 
 	dataBlock := dropped.GetBlockData()
 
-	bat, err := dataBlock.CollectDeleteInRange(entry.txn.GetContext(), entry.txn.GetStartTS().Next(), entry.txn.GetPrepareTS(), false)
+	bat, err := dataBlock.CollectDeleteInRange(
+		entry.txn.GetContext(),
+		entry.txn.GetStartTS().Next(),
+		entry.txn.GetPrepareTS(),
+		false,
+		common.MergeAllocator,
+	)
 	if err != nil {
 		return err
 	}
@@ -184,7 +189,9 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 			delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 		}
 		delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
-		if err = blks[destpos.Idx].RangeDelete(uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact); err != nil {
+		if err = blks[destpos.Idx].RangeDelete(
+			uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+		); err != nil {
 			return err
 		}
 	}

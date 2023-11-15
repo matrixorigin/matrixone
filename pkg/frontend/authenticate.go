@@ -335,8 +335,8 @@ func getLabelPart(user string) string {
 	return ""
 }
 
-// ParseLabel parses the label string. The labels are seperated by
-// ",", key and value are seperated by "=".
+// ParseLabel parses the label string. The labels are separated by
+// ",", key and value are separated by "=".
 func ParseLabel(labelStr string) (map[string]string, error) {
 	labelMap := make(map[string]string)
 	if len(labelStr) == 0 {
@@ -3257,7 +3257,8 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn TxnOperator) (*plan.SubscriptionMeta, error) {
 	dbMeta, err := ses.GetParameterUnit().StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
-		return nil, err
+		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
+		return nil, moerr.NewNoDB(ctx)
 	}
 
 	if dbMeta.IsSubscription(ctx) {

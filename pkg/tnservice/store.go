@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -97,7 +96,6 @@ func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 }
 
 type store struct {
-	perfCounter         *perfcounter.CounterSet
 	cfg                 *Config
 	rt                  runtime.Runtime
 	sender              rpc.TxnSender
@@ -107,7 +105,6 @@ type store struct {
 	metadataFileService fileservice.ReplaceableFileService
 	lockTableAllocator  lockservice.LockTableAllocator
 	moCluster           clusterservice.MOCluster
-	ctlservice          ctlservice.CtlService
 	replicas            *sync.Map
 	stopper             *stopper.Stopper
 	shutdownC           chan struct{}
@@ -140,7 +137,6 @@ type store struct {
 
 // NewService create TN Service
 func NewService(
-	perfCounter *perfcounter.CounterSet,
 	cfg *Config,
 	rt runtime.Runtime,
 	fileService fileservice.FileService,
@@ -166,7 +162,6 @@ func NewService(
 	blockio.Start()
 
 	s := &store{
-		perfCounter:         perfCounter,
 		cfg:                 cfg,
 		rt:                  rt,
 		fileService:         fileService,
@@ -204,9 +199,6 @@ func NewService(
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
-	if err := s.initCtlService(); err != nil {
-		return nil, err
-	}
 
 	s.initQueryService(cfg.InStandalone)
 
@@ -222,9 +214,6 @@ func (s *store) Start() error {
 	if err := s.server.Start(); err != nil {
 		return err
 	}
-	if err := s.ctlservice.Start(); err != nil {
-		return err
-	}
 	if s.queryService != nil {
 		if err := s.queryService.Start(); err != nil {
 			return err
@@ -238,7 +227,6 @@ func (s *store) Close() error {
 	s.stopper.Stop()
 	s.moCluster.Close()
 	err := errors.Join(
-		s.ctlservice.Close(),
 		s.hakeeperClient.Close(),
 		s.sender.Close(),
 		s.server.Close(),
@@ -311,7 +299,6 @@ func (s *store) createReplica(shard metadata.TNShard) error {
 			case <-ctx.Done():
 				return
 			default:
-				ctx = perfcounter.WithCounterSet(ctx, s.perfCounter)
 				storage, err := s.createTxnStorage(ctx, shard)
 				if err != nil {
 					r.logger.Error("start DNShard failed",

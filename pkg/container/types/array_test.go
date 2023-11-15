@@ -116,14 +116,24 @@ func TestArrayToString(t *testing.T) {
 		},
 		{
 			// Ref issue: https://github.com/matrixorigin/matrixone/issues/12420
-			name:    "Test3 - Float32 with precision issue on Add",
-			argsF64: []float64{0.66616553 + 0.66616553, 2, 3},
+			name:    "Test3.1 - Float32 with precision issue on Add",
+			argsF32: []float32{0.66616553 + 0.66616553, 2, 3},
 			want:    "[1.3323311, 2, 3]",
 		},
 		{
-			name:    "Test4 - Float32 with precision issue on Multiply",
-			argsF64: []float64{4635.894*4635.894 + 0.66616553, 2, 3},
-			want:    "[21491514, 2, 3]",
+			name:    "Test3.2 - Float32 with precision issue on Multiply",
+			argsF32: []float32{4635.894 * 4635.894, 0.66616553 * 0.66616553, 2, 3},
+			want:    "[21491514, 0.44377652, 2, 3]",
+		},
+		{
+			name:    "Test4.1 - Float64 with precision issue on Add",
+			argsF64: []float64{0.66616553 + 0.66616553, 2, 3},
+			want:    "[1.33233106, 2, 3]",
+		},
+		{
+			name:    "Test4.2 - Float64 with precision issue on Multiply",
+			argsF64: []float64{4635.894 * 4635.894, 0.66616553 * 0.66616553, 2, 3},
+			want:    "[21491513.179236, 0.4437765133601809, 2, 3]",
 		},
 	}
 

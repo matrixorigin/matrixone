@@ -199,11 +199,10 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		}
 	}
 
-	sc := builder.compCtx.GetStatsCache()
-	if sc == nil {
+	s := getStatsInfoByTableID(tableDef.TblId, builder)
+	if s == nil {
 		return
 	}
-	s := sc.GetStatsInfoMap(tableDef.TblId)
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
 	n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
@@ -367,11 +366,10 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	if n.TableDef.Pkey != nil {
 		firstColName := n.TableDef.Pkey.Names[0]
 		firstColID := n.TableDef.Name2ColIndex[firstColName]
-		sc := builder.compCtx.GetStatsCache()
-		if sc == nil {
+		s := getStatsInfoByTableID(n.TableDef.TblId, builder)
+		if s == nil {
 			return
 		}
-		s := sc.GetStatsInfoMap(n.TableDef.TblId)
 		if s.NdvMap[firstColName] < ShuffleThreshHoldOfNDV {
 			return
 		}

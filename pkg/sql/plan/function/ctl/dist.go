@@ -35,13 +35,13 @@ func GetTNHandlerFunc(method pb.CmdMethod,
 	return func(proc *process.Process,
 		service serviceType,
 		parameter string,
-		sender requestSender) (pb.CtlResult, error) {
+		sender requestSender) (Result, error) {
 		if service != tn {
-			return pb.CtlResult{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
+			return Result{}, moerr.NewNotSupported(proc.Ctx, "service %s not supported", service)
 		}
 		targetTNs, err := whichTN(parameter)
 		if err != nil {
-			return pb.CtlResult{}, moerr.ConvertGoError(proc.Ctx, err)
+			return Result{}, moerr.ConvertGoError(proc.Ctx, err)
 		}
 
 		containsTN := func(id uint64) bool {
@@ -80,14 +80,14 @@ func GetTNHandlerFunc(method pb.CmdMethod,
 				return true
 			})
 		if err != nil {
-			return pb.CtlResult{}, err
+			return Result{}, err
 		}
 
 		results := make([]interface{}, 0, len(requests))
 		if len(requests) > 0 {
 			responses, err := sender(proc.Ctx, proc, requests)
 			if err != nil {
-				return pb.CtlResult{}, err
+				return Result{}, err
 			}
 			if len(responses) != len(requests) {
 				panic("requests and response not match")
@@ -96,11 +96,11 @@ func GetTNHandlerFunc(method pb.CmdMethod,
 			for _, resp := range responses {
 				r, err := repsonseUnmarshaler(resp.Payload)
 				if err != nil {
-					return pb.CtlResult{}, err
+					return Result{}, err
 				}
 				results = append(results, r)
 			}
 		}
-		return pb.CtlResult{Method: method.String(), Data: results}, nil
+		return Result{Method: method.String(), Data: results}, nil
 	}
 }

@@ -6,7 +6,7 @@ create table test01(col1 datetime);
 insert into test01 values('2020-01-13 12:20:59.1234586153121');
 insert into test01 values('2023-04-17 01:01:45');
 insert into test01 values('9999-01-01 26:25:26');
-invalid input: invalid datatime value 9999-01-01 26:25:26
+invalid input: invalid datetime value 9999-01-01 26:25:26
 insert into test01 values(NULL);
 select * from test01;
 col1
