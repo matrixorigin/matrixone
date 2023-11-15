@@ -678,11 +678,11 @@ message Node {
 		PRE_INSERT = 61;
 		PRE_DELETE = 62;
 		// the node which build insert batch for hidden table(unique key)
-		PRE_INSERT_UK = 62;
-		PRE_INSERT_SK = 63;
+		PRE_INSERT_UK = 63;
+		PRE_INSERT_SK = 64;
 		//
-		TIME_WINDOW = 64;
-		Fill = 65;
+		TIME_WINDOW = 65;
+		Fill = 66;
 	}
 
 	enum JoinType {
