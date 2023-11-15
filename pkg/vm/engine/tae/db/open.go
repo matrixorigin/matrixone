@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
@@ -296,6 +295,4 @@ func mpoolAllocatorSubTask() {
 	v2.MemTAEDebugAllocatorGauge.Set(float64(common.DebugAllocator.CurrNB()))
 	v2.MemTAEDebugHighWaterMarkGauge.Set(float64(common.DebugAllocator.Stats().HighWaterMark.Load()))
 
-	v2.MemGlobalStatsAllocatedGauge.Set(float64(mpool.GlobalStats().NumCurrBytes.Load()))
-	v2.MemGlobalStatsHighWaterMarkGauge.Set(float64(mpool.GlobalStats().HighWaterMark.Load()))
 }
