@@ -770,7 +770,7 @@ func needStats(tableDef *TableDef) bool {
 	case "sys_async_task", "sys_cron_task":
 		return false
 	}
-	if strings.HasPrefix(tableDef.Name, "mo_") || strings.HasPrefix(tableDef.Name, "__mo_") {
+	if strings.HasPrefix(tableDef.Name, "mo_") {
 		return false
 	}
 	return true
