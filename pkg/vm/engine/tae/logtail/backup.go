@@ -374,6 +374,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		return loc, tnLocation, data, files, nil
 	}
 
+	logutil.Infof("objectsData: %v", objectsData)
 	backupPool := dbutils.MakeDefaultSmallPool("backup-vector-pool")
 	defer backupPool.Destory()
 
