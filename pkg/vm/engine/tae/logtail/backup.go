@@ -338,7 +338,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			name := metaLoc.Name().String()
 
 			if isABlk && !deltaLoc.IsEmpty() {
-				objectsData[name].data[metaLoc.ID()].tombstone = objectsData[deltaLoc.Name().String()].data[metaLoc.ID()]
+				objectsData[name].data[metaLoc.ID()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
 			}
 		}
 	}
