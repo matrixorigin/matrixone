@@ -1749,11 +1749,11 @@ func CreateIndexDef(indexInfo *tree.Index,
 		indexDef.IndexAlgoParams = params
 	} else {
 		// default indexInfo.IndexOption values
-		switch indexAlgoTableType {
-		case catalog.MoIndexDefaultAlgo.ToString(), catalog.MoIndexBTreeAlgo.ToString():
+		switch indexInfo.KeyType {
+		case catalog.MoIndexDefaultAlgo, catalog.MoIndexBTreeAlgo:
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
-		case catalog.MoIndexIvfFlatAlgo.ToString():
+		case catalog.MoIndexIvfFlatAlgo:
 			var err error
 			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
 			if err != nil {
