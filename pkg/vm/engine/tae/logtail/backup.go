@@ -731,7 +731,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 		tableDeleteOff := make(map[uint64]*tableOffset)
 		for i := 0; i < data.bats[BLKMetaDeleteTxnIDX].Vecs[0].Length(); i++ {
-			rid := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.AttrRowID)
+			rid := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog2.AttrRowID)
 			tid := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 			loca := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte)
 			del := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte)
