@@ -318,11 +318,14 @@ func ReWriteCheckpointAndBlockFromKey(
 		if commits.Less(ts) {
 			panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commits.ToString(), ts.ToString())))
 		}
+
+		logutil.Infof("delete metaloc %v", blkID.String())
 		if !metaLoc.IsEmpty() && softDeletes[metaLoc.Name().String()] != nil &&
 			softDeletes[metaLoc.Name().String()][metaLoc.ID()] {
 			// It has been soft deleted by the previous checkpoint, so it will be skipped and not collected.
 			continue
 		}
+		logutil.Infof("delete111 metaloc %v", blkID.String())
 
 		if !deltaLoc.IsEmpty() {
 			addBlockToObjectData(deltaLoc, isABlk, true, i,
