@@ -2994,6 +2994,8 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 					false,
 					common.DefaultAllocator,
 				)
+				logutil.Infof("metaNode.BaseNode.DeltaLoc1111 is not null : %v, metaNode.BaseNode.MetaLoc is :%v, stat is :%v, entry.ID is : %v : %v-%v",
+					metaNode.BaseNode.DeltaLoc.String(), metaNode.BaseNode.MetaLoc.String(), entry.IsAppendable(), entry.ID.String(), metaNode.GetStart().ToString(), metaNode.GetEnd().ToString())
 				metaNode.TxnMVCCNode.AppendTuple(blkMetaDelTxnBat)
 				is_sorted := false
 				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
@@ -3162,6 +3164,7 @@ func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (er
 		return nil
 	}
 	entry.RUnlock()
+	logutil.Infof("backup block VisitBlkForBackup %v", entry.ID)
 	collector.visitBlockEntry(entry)
 	return nil
 }
