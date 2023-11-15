@@ -558,190 +558,189 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 			}
 		}
-
-		if len(insertBatch) > 0 {
-			blkMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertIDX])
-			blkMetaTxn := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertTxnIDX])
-			for i := 0; i < blkMetaInsert.Length(); i++ {
-				tid := data.bats[BLKMetaInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-				for v, vec := range data.bats[BLKMetaInsertIDX].Vecs {
-					val := vec.Get(i)
-					if val == nil {
-						blkMeta.Vecs[v].Append(val, true)
-					} else {
-						blkMeta.Vecs[v].Append(val, false)
-					}
-				}
-				for v, vec := range data.bats[BLKMetaInsertTxnIDX].Vecs {
-					val := vec.Get(i)
-					if val == nil {
-						blkMetaTxn.Vecs[v].Append(val, true)
-					} else {
-						blkMetaTxn.Vecs[v].Append(val, false)
-					}
-				}
-				if insertBatch[tid] != nil {
-					for b, blk := range insertBatch[tid].insertBlocks {
-						if blk.apply {
-							continue
-						}
-						cnRow := insertBatch[tid].insertBlocks[b].cnRow
-						insertBatch[tid].insertBlocks[b].apply = true
-						logutil.Infof("rewrite BLKCNMetaInsertIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), cnRow)
-						for v, vec := range data.bats[BLKCNMetaInsertIDX].Vecs {
-							if !blk.location.IsEmpty() && data.bats[BLKCNMetaInsertIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
-								blkMeta.Vecs[v].Append(nil, true)
-								continue
-							}
-							val := vec.Get(cnRow)
-							if val == nil {
-								blkMeta.Vecs[v].Append(val, true)
-							} else {
-								blkMeta.Vecs[v].Append(val, false)
-							}
-						}
-						logutil.Infof("rewrite BLKMetaDeleteTxnIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), cnRow)
-						for v, vec := range data.bats[BLKMetaDeleteTxnIDX].Vecs {
-							if !blk.location.IsEmpty() && data.bats[BLKMetaDeleteTxnIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
-								blkMetaTxn.Vecs[v].Append(nil, true)
-								continue
-							}
-							val := vec.Get(cnRow)
-							if val == nil {
-								blkMetaTxn.Vecs[v].Append(val, true)
-							} else {
-								blkMetaTxn.Vecs[v].Append(val, false)
-							}
-						}
-
-						row := blkMeta.Vecs[0].Length() - 1
-						ti := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(row)
-						t2 := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(cnRow)
-						logutil.Infof("rewrite update  BLKMetaInsertIDX %s, row is %d, t2 is %d, leng %d", insertBatch[tid].insertBlocks[b].location.String(), ti, t2, row)
-						if !blk.location.IsEmpty() {
-							updateBlockMeta(blkMeta, blkMetaTxn, row,
-								insertBatch[tid].insertBlocks[b].blockId,
-								insertBatch[tid].insertBlocks[b].location)
-						}
-					}
+	}
+	if len(insertBatch) > 0 {
+		blkMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertIDX])
+		blkMetaTxn := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertTxnIDX])
+		for i := 0; i < blkMetaInsert.Length(); i++ {
+			tid := data.bats[BLKMetaInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+			for v, vec := range data.bats[BLKMetaInsertIDX].Vecs {
+				val := vec.Get(i)
+				if val == nil {
+					blkMeta.Vecs[v].Append(val, true)
+				} else {
+					blkMeta.Vecs[v].Append(val, false)
 				}
 			}
-
-			for tid := range insertBatch {
-				for b := range insertBatch[tid].insertBlocks {
-					logutil.Infof("insertBatch is %d, apply is %v,file is %v", tid, insertBatch[tid].insertBlocks[b].apply, insertBatch[tid].insertBlocks[b].location.String())
-					if insertBatch[tid].insertBlocks[b].apply {
+			for v, vec := range data.bats[BLKMetaInsertTxnIDX].Vecs {
+				val := vec.Get(i)
+				if val == nil {
+					blkMetaTxn.Vecs[v].Append(val, true)
+				} else {
+					blkMetaTxn.Vecs[v].Append(val, false)
+				}
+			}
+			if insertBatch[tid] != nil {
+				for b, blk := range insertBatch[tid].insertBlocks {
+					if blk.apply {
 						continue
 					}
-					if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
-						cnRow := insertBatch[tid].insertBlocks[b].cnRow
-						insertBatch[tid].insertBlocks[b].apply = true
-						logutil.Infof("rewrite1 BLKCNMetaInsertIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), cnRow)
-						for v, vec := range data.bats[BLKCNMetaInsertIDX].Vecs {
-							if !insertBatch[tid].insertBlocks[b].location.IsEmpty() && data.bats[BLKCNMetaInsertIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
-								blkMeta.Vecs[v].Append(nil, true)
-								continue
-							}
-							val := vec.Get(cnRow)
-							if val == nil {
-								blkMeta.Vecs[v].Append(val, true)
-							} else {
-								blkMeta.Vecs[v].Append(val, false)
-							}
+					cnRow := insertBatch[tid].insertBlocks[b].cnRow
+					insertBatch[tid].insertBlocks[b].apply = true
+					logutil.Infof("rewrite BLKCNMetaInsertIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), cnRow)
+					for v, vec := range data.bats[BLKCNMetaInsertIDX].Vecs {
+						if !blk.location.IsEmpty() && data.bats[BLKCNMetaInsertIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
+							blkMeta.Vecs[v].Append(nil, true)
+							continue
 						}
-						logutil.Infof("rewrite1 BLKMetaDeleteTxnIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), cnRow)
-						for v, vec := range data.bats[BLKMetaDeleteTxnIDX].Vecs {
-							if !insertBatch[tid].insertBlocks[b].location.IsEmpty() && data.bats[BLKMetaDeleteTxnIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
-								blkMetaTxn.Vecs[v].Append(nil, true)
-								continue
-							}
-							val := vec.Get(cnRow)
-							if val == nil {
-								blkMetaTxn.Vecs[v].Append(val, true)
-							} else {
-								blkMetaTxn.Vecs[v].Append(val, false)
-							}
+						val := vec.Get(cnRow)
+						if val == nil {
+							blkMeta.Vecs[v].Append(val, true)
+						} else {
+							blkMeta.Vecs[v].Append(val, false)
 						}
-						i := blkMeta.Vecs[0].Length() - 1
+					}
+					logutil.Infof("rewrite BLKMetaDeleteTxnIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), cnRow)
+					for v, vec := range data.bats[BLKMetaDeleteTxnIDX].Vecs {
+						if !blk.location.IsEmpty() && data.bats[BLKMetaDeleteTxnIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
+							blkMetaTxn.Vecs[v].Append(nil, true)
+							continue
+						}
+						val := vec.Get(cnRow)
+						if val == nil {
+							blkMetaTxn.Vecs[v].Append(val, true)
+						} else {
+							blkMetaTxn.Vecs[v].Append(val, false)
+						}
+					}
 
-						ti := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(i)
-						t2 := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(cnRow)
-						logutil.Infof("rewrite111 update  BLKMetaInsertIDX %s, row is %d, t2 is %d", insertBatch[tid].insertBlocks[b].location.String(), ti, t2)
-						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
-							updateBlockMeta(blkMeta, blkMetaTxn, i,
-								insertBatch[tid].insertBlocks[b].blockId,
-								insertBatch[tid].insertBlocks[b].location)
-						}
+					row := blkMeta.Vecs[0].Length() - 1
+					ti := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(row)
+					t2 := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(cnRow)
+					logutil.Infof("rewrite update  BLKMetaInsertIDX %s, row is %d, t2 is %d, leng %d", insertBatch[tid].insertBlocks[b].location.String(), ti, t2, row)
+					if !blk.location.IsEmpty() {
+						updateBlockMeta(blkMeta, blkMetaTxn, row,
+							insertBatch[tid].insertBlocks[b].blockId,
+							insertBatch[tid].insertBlocks[b].location)
 					}
 				}
 			}
-
-			for i := range insertBatch {
-				for _, block := range insertBatch[i].insertBlocks {
-					if block.data != nil {
-						for _, cnRow := range block.data.cnRow {
-							data.bats[BLKCNMetaInsertIDX].Delete(cnRow)
-							data.bats[BLKMetaDeleteTxnIDX].Delete(cnRow)
-							data.bats[BLKMetaDeleteIDX].Delete(cnRow)
-						}
-					}
-				}
-			}
-
-			data.bats[BLKCNMetaInsertIDX].Compact()
-			data.bats[BLKMetaDeleteTxnIDX].Compact()
-			data.bats[BLKMetaDeleteIDX].Compact()
-			tableOff := make(map[uint64]*tableOffset)
-			for i := 0; i < blkMetaTxn.Vecs[0].Length(); i++ {
-				tid := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-				loca := blkMeta.GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte)
-				del := blkMeta.GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte)
-				if tableOff[tid] == nil {
-					tableOff[tid] = &tableOffset{
-						offset: i,
-						end:    i,
-					}
-				}
-				tableOff[tid].end += 1
-				logutil.Infof("tableOff tid  %d, loc %v, del %v, start %d, end %d, row is %d", tid, objectio.Location(loca).String(), objectio.Location(del).String(), tableOff[tid].offset, tableOff[tid].end, i)
-			}
-			tableOff1 := make(map[uint64]*tableOffset)
-			for i := 0; i < data.bats[BLKMetaDeleteTxnIDX].Vecs[0].Length(); i++ {
-				rid := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog2.AttrRowID)
-				tid := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-				loca := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte)
-				del := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte)
-				if tableOff1[tid] == nil {
-					tableOff1[tid] = &tableOffset{
-						offset: i,
-						end:    i,
-					}
-				}
-				tableOff1[tid].end += 1
-				logutil.Infof("tableOff11 tid  %d, loc %v, del %v, start %d, end %d, row is %d, rid is %v", tid, objectio.Location(loca).String(), objectio.Location(del).String(), tableOff1[tid].offset, tableOff1[tid].end, i, rid.String())
-			}
-
-			for tid, tabl := range tableOff {
-				data.UpdateBlockInsertBlkMeta(tid, int32(tabl.offset), int32(tabl.end))
-			}
-			for tid, tabl := range tableOff1 {
-				data.UpdateBlockDeleteBlkMeta(tid, int32(tabl.offset), int32(tabl.end))
-			}
-			data.bats[BLKMetaInsertIDX].Close()
-			data.bats[BLKMetaInsertTxnIDX].Close()
-			data.bats[BLKMetaInsertIDX] = blkMeta
-			data.bats[BLKMetaInsertTxnIDX] = blkMetaTxn
 		}
-		cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
-		if err != nil {
-			return nil, nil, nil, nil, err
+
+		for tid := range insertBatch {
+			for b := range insertBatch[tid].insertBlocks {
+				logutil.Infof("insertBatch is %d, apply is %v,file is %v", tid, insertBatch[tid].insertBlocks[b].apply, insertBatch[tid].insertBlocks[b].location.String())
+				if insertBatch[tid].insertBlocks[b].apply {
+					continue
+				}
+				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
+					cnRow := insertBatch[tid].insertBlocks[b].cnRow
+					insertBatch[tid].insertBlocks[b].apply = true
+					logutil.Infof("rewrite1 BLKCNMetaInsertIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), cnRow)
+					for v, vec := range data.bats[BLKCNMetaInsertIDX].Vecs {
+						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() && data.bats[BLKCNMetaInsertIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
+							blkMeta.Vecs[v].Append(nil, true)
+							continue
+						}
+						val := vec.Get(cnRow)
+						if val == nil {
+							blkMeta.Vecs[v].Append(val, true)
+						} else {
+							blkMeta.Vecs[v].Append(val, false)
+						}
+					}
+					logutil.Infof("rewrite1 BLKMetaDeleteTxnIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), cnRow)
+					for v, vec := range data.bats[BLKMetaDeleteTxnIDX].Vecs {
+						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() && data.bats[BLKMetaDeleteTxnIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
+							blkMetaTxn.Vecs[v].Append(nil, true)
+							continue
+						}
+						val := vec.Get(cnRow)
+						if val == nil {
+							blkMetaTxn.Vecs[v].Append(val, true)
+						} else {
+							blkMetaTxn.Vecs[v].Append(val, false)
+						}
+					}
+					i := blkMeta.Vecs[0].Length() - 1
+
+					ti := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(i)
+					t2 := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(cnRow)
+					logutil.Infof("rewrite111 update  BLKMetaInsertIDX %s, row is %d, t2 is %d", insertBatch[tid].insertBlocks[b].location.String(), ti, t2)
+					if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
+						updateBlockMeta(blkMeta, blkMetaTxn, i,
+							insertBatch[tid].insertBlocks[b].blockId,
+							insertBatch[tid].insertBlocks[b].location)
+					}
+				}
+			}
 		}
-		logutil.Infof("checkpoint cnLocation %s, dnLocation %s, checkpointFiles %s", cnLocation.String(), dnLocation.String(), checkpointFiles)
-		loc = cnLocation
-		tnLocation = dnLocation
-		files = append(files, checkpointFiles...)
-		files = append(files, cnLocation.Name().String())
+
+		for i := range insertBatch {
+			for _, block := range insertBatch[i].insertBlocks {
+				if block.data != nil {
+					for _, cnRow := range block.data.cnRow {
+						data.bats[BLKCNMetaInsertIDX].Delete(cnRow)
+						data.bats[BLKMetaDeleteTxnIDX].Delete(cnRow)
+						data.bats[BLKMetaDeleteIDX].Delete(cnRow)
+					}
+				}
+			}
+		}
+
+		data.bats[BLKCNMetaInsertIDX].Compact()
+		data.bats[BLKMetaDeleteTxnIDX].Compact()
+		data.bats[BLKMetaDeleteIDX].Compact()
+		tableOff := make(map[uint64]*tableOffset)
+		for i := 0; i < blkMetaTxn.Vecs[0].Length(); i++ {
+			tid := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+			loca := blkMeta.GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte)
+			del := blkMeta.GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte)
+			if tableOff[tid] == nil {
+				tableOff[tid] = &tableOffset{
+					offset: i,
+					end:    i,
+				}
+			}
+			tableOff[tid].end += 1
+			logutil.Infof("tableOff tid  %d, loc %v, del %v, start %d, end %d, row is %d", tid, objectio.Location(loca).String(), objectio.Location(del).String(), tableOff[tid].offset, tableOff[tid].end, i)
+		}
+		tableOff1 := make(map[uint64]*tableOffset)
+		for i := 0; i < data.bats[BLKMetaDeleteTxnIDX].Vecs[0].Length(); i++ {
+			rid := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog2.AttrRowID)
+			tid := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+			loca := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte)
+			del := data.bats[BLKMetaDeleteTxnIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Get(i).([]byte)
+			if tableOff1[tid] == nil {
+				tableOff1[tid] = &tableOffset{
+					offset: i,
+					end:    i,
+				}
+			}
+			tableOff1[tid].end += 1
+			logutil.Infof("tableOff11 tid  %d, loc %v, del %v, start %d, end %d, row is %d, rid is %v", tid, objectio.Location(loca).String(), objectio.Location(del).String(), tableOff1[tid].offset, tableOff1[tid].end, i, rid.String())
+		}
+
+		for tid, tabl := range tableOff {
+			data.UpdateBlockInsertBlkMeta(tid, int32(tabl.offset), int32(tabl.end))
+		}
+		for tid, tabl := range tableOff1 {
+			data.UpdateBlockDeleteBlkMeta(tid, int32(tabl.offset), int32(tabl.end))
+		}
+		data.bats[BLKMetaInsertIDX].Close()
+		data.bats[BLKMetaInsertTxnIDX].Close()
+		data.bats[BLKMetaInsertIDX] = blkMeta
+		data.bats[BLKMetaInsertTxnIDX] = blkMetaTxn
 	}
+	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	logutil.Infof("checkpoint cnLocation %s, dnLocation %s, checkpointFiles %s", cnLocation.String(), dnLocation.String(), checkpointFiles)
+	loc = cnLocation
+	tnLocation = dnLocation
+	files = append(files, checkpointFiles...)
+	files = append(files, cnLocation.Name().String())
 	return loc, tnLocation, data, files, nil
 }
 
