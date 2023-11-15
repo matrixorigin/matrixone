@@ -133,9 +133,9 @@ func trimObjectsData(
 	objectsData *map[string]*fileData,
 ) (bool, error) {
 	isCkpChange := false
-	for name, objectData := range *objectsData {
+	for name := range *objectsData {
 		isChange := false
-		for id, block := range objectData.data {
+		for id, block := range (*objectsData)[name].data {
 			if !block.isABlock && block.blockType == objectio.SchemaData {
 				continue
 			}
@@ -154,7 +154,7 @@ func trimObjectsData(
 				blockMeta := meta.MustTombstoneMeta().GetBlockMeta(uint32(block.location.ID()))
 				zm := blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 3))
 				if !zm.ZoneMap().Contains(ts) {
-					objectData.data[id].data = bat
+					(*objectsData)[name].data[id].data = bat
 					continue
 				}
 				deleteRow := make([]int64, 0)
@@ -185,8 +185,8 @@ func trimObjectsData(
 				blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
 				zm := blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 2))
 				if !zm.ZoneMap().Contains(ts) {
-					objectData.data[id].pk = pk
-					objectData.data[id].data = bat
+					(*objectsData)[name].data[id].pk = pk
+					(*objectsData)[name].data[id].data = bat
 					continue
 				}
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
@@ -203,9 +203,9 @@ func trimObjectsData(
 						break
 					}
 				}
-				objectData.data[id].pk = pk
+				(*objectsData)[name].data[id].pk = pk
 			}
-			objectData.data[id].data = bat
+			(*objectsData)[name].data[id].data = bat
 		}
 		(*objectsData)[name].isChange = isChange
 	}
