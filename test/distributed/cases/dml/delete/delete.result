@@ -287,3 +287,54 @@ select * from t2;
 a    b    c    d
 1    2    1    2
 drop database if exists `delete`;
+drop database if exists db1;
+drop database if exists db2;
+create database db1;
+create database db2;
+use db2;
+drop table if exists t1;
+create table t1 (a int);
+insert into t1 values (1),(2),(4);
+use db1;
+drop table if exists t2;
+create table t2 (b int);
+insert into t2 values(1),(2),(3);
+delete from db1.t2, db2.t1 using db1.t2 join db2.t1 on db1.t2.b = db2.t1.a;
+select * from db1.t2;
+b
+3
+select * from db2.t1;
+a
+4
+drop table if exists t3;
+create table t3 (a int primary key, b int unique key, c int, key(c));
+insert into t3 (a, b, c) values (1, 100, 1000);
+insert into t3 (a, b, c) values (2, 200, 2000);
+insert into t3 (a, b, c) values (3, 300, 3000);
+delete from t3 where a > 2;
+select * from t3;
+a    b    c
+1    100    1000
+2    200    2000
+delete from t3;
+select * from t3;
+a    b    c
+drop table if exists t4;
+create table t4 (a int, b int, c int);
+insert into t4 (a, b, c) values (1, 100, 1000);
+insert into t4 (a, b, c) values (2, 200, 2000);
+insert into t4 (a, b, c) values (3, 300, 3000);
+delete from t4 where a > 2;
+select * from t4;
+a    b    c
+1    100    1000
+2    200    2000
+delete from t4;
+select * from t4;
+a    b    c
+drop table if exists t1;
+drop table if exists t2;
+drop table if exists t3;
+drop table if exists t4;
+drop database if exists db1;
+drop database if exists db2;
