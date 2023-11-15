@@ -142,10 +142,20 @@ func trimObjectsData(
 			var bat *batch.Batch
 			var err error
 			commitTs := types.TS{}
+			meta, err := objectio.FastLoadObjectMeta(ctx, &block.location, false, fs)
+			if err != nil {
+				return isCkpChange, err
+			}
+			blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
 			if block.blockType == objectio.SchemaTombstone {
 				bat, err = blockio.LoadOneBlock(ctx, fs, block.location, objectio.SchemaTombstone)
 				if err != nil {
 					return isCkpChange, err
+				}
+				zm := blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 3))
+				if !zm.ZoneMap().Contains(ts) {
+					objectData.data[id].data = bat
+					continue
 				}
 				deleteRow := make([]int64, 0)
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
@@ -167,14 +177,16 @@ func trimObjectsData(
 				}
 			} else {
 				pk := int32(-1)
-				meta, err := objectio.FastLoadObjectMeta(ctx, &block.location, false, fs)
-				if err != nil {
-					return isCkpChange, err
-				}
 				pk = meta.MustDataMeta().BlockHeader().PkIdxID()
 				bat, err = blockio.LoadOneBlock(ctx, fs, block.location, objectio.SchemaData)
 				if err != nil {
 					return isCkpChange, err
+				}
+				zm := blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 2))
+				if !zm.ZoneMap().Contains(ts) {
+					objectData.data[id].pk = pk
+					objectData.data[id].data = bat
+					continue
 				}
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
 					err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
