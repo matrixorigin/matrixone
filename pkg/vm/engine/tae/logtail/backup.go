@@ -196,7 +196,7 @@ func trimObjectsData(
 					}
 					if commitTs.Greater(ts) {
 						windowCNBatch(bat, 0, uint64(v))
-						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
+						logutil.Infof("blkCommitTs %v ts %v , block is %v",
 							commitTs.ToString(), ts.ToString(), block.location.String())
 						isChange = true
 						isCkpChange = true
@@ -464,7 +464,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					panic(any(fmt.Sprintf("dataBlocks len > 2: %v - %d", dataBlocks[0].location.String(), len(dataBlocks))))
 				}
 				if objectData.data[0].tombstone != nil {
-					logutil.Infof("datas len is %d", dataBlocks[0].data.Vecs[0].Length())
+					logutil.Infof("datas len is %d, objectData.data[0].tombstone.data %d", dataBlocks[0].data.Vecs[0].Length(), objectData.data[0].tombstone.data.Vecs[0].Length())
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
 				}
 				dataBlocks[0].data.Attrs = make([]string, 0)
