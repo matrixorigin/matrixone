@@ -12,24 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tnservice
+package perfcounter
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/ctlservice"
-)
+var globalCounterSet = new(CounterSet)
 
-func (s *store) initCtlService() error {
-	cs, err := ctlservice.NewCtlService(s.cfg.UUID, s.ctlServiceListenAddr(), s.cfg.RPC)
-	if err != nil {
-		return err
-	}
-	s.ctlservice = cs
-	s.initCtlCommandHandler()
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.CtlService, s.ctlservice)
-	return nil
-}
-
-func (s *store) initCtlCommandHandler() {
-
-}
+var NameForGlobal = func() string {
+	// we don't put these codes into init function to avoid initialization order problem
+	name := "global"
+	Named.Store(name, globalCounterSet)
+	return name
+}()

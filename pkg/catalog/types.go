@@ -41,9 +41,11 @@ const (
 	IndexTableIndexColName        = "__mo_index_idx_col"
 	IndexTablePrimaryColName      = "__mo_index_pri_col"
 	ExternalFilePath              = "__mo_filepath"
-	IndexTableNamePrefix          = "__mo_index_"
-	UniqueIndexTableNamePrefix    = "__mo_index_unique__"
-	SecondaryIndexTableNamePrefix = "__mo_index_secondary__"
+	UniqueIndexSuffix             = "unique_"
+	SecondaryIndexSuffix          = "secondary_"
+	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
+	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
+	IndexTableNamePrefix          = PrefixIndexTableName
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
 )

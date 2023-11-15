@@ -26,9 +26,23 @@ import "plan.proto";
 import "timestamp.proto";
 import "lock.proto";
 
+enum Method {
+    UnknownMethod = 0;
+    PipelineMessage = 1;
+    BatchMessage = 2;
+    PrepareDoneNotifyMessage = 3;// for dispatch
+}
+
+enum Status {
+    UnknownStatus = 0;
+    WaitingNext = 1;
+    Last = 2;
+    MessageEnd = 3;
+}
+
 message Message {
-  uint64  sid = 1;
-  uint64  cmd = 2;
+  Status  sid = 1;
+  Method  cmd = 2;
   bytes   err = 3;
   bytes   data = 4;
   bytes   proc_info_data = 5;
@@ -419,12 +433,13 @@ message ProcessLimitation {
 
 message ProcessInfo {
   string id = 1;
-  ProcessLimitation lim = 2;
-  int64 unix_time = 3;
-  uint32 account_id = 4;
-  string snapshot = 5;
-  SessionInfo session_info = 6;
-  repeated int32 analysis_node_list = 7;
+  string sql = 2;
+  ProcessLimitation lim = 3;
+  int64 unix_time = 4;
+  uint32 account_id = 5;
+  string snapshot = 6;
+  SessionInfo session_info = 7;
+  repeated int32 analysis_node_list = 8;
 }
 
 message SessionInfo {

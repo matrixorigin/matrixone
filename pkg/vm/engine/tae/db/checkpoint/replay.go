@@ -82,7 +82,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	if err != nil {
 		return
 	}
-	bats, err := reader.LoadAllColumns(ctx, nil, common.DefaultAllocator)
+	bats, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
 	if err != nil {
 		return
 	}
@@ -102,9 +102,9 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		}
 		var vec containers.Vector
 		if bats[0].Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i])
+			vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
 		} else {
-			vec = containers.ToTNVector(bats[0].Vecs[i])
+			vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
 		}
 		bat.AddVector(colNames[i], vec)
 	}

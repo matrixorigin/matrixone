@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -40,13 +41,14 @@ type NodeT interface {
 	) (from int, err error)
 
 	GetDataWindow(
-		readSchema *catalog.Schema, colIdxes []int, from, to uint32,
+		readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
 	) (bat *containers.Batch, err error)
 	GetColumnDataWindow(
 		readSchema *catalog.Schema,
 		from uint32,
 		to uint32,
 		col int,
+		mp *mpool.MPool,
 	) (vec containers.Vector, err error)
 
 	GetValueByRow(readSchema *catalog.Schema, row, col int) (v any, isNull bool)
@@ -64,9 +66,9 @@ type NodeT interface {
 
 	Rows() uint32
 
-	GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter) (row uint32, err error)
+	GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter, mp *mpool.MPool) (row uint32, err error)
 	CollectAppendInRange(
-		start, end types.TS, withAborted bool,
+		start, end types.TS, withAborted bool, mp *mpool.MPool,
 	) (batWithVer *containers.BatchWithVersion, err error)
 }
 
