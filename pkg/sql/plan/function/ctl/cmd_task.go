@@ -16,7 +16,6 @@ package ctl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,7 +42,7 @@ func handleTask(proc *process.Process,
 	}
 
 	return Result{
-		Method: pb.CmdMethod_Task.String(),
+		Method: TaskMethod,
 		Data:   "OK",
 	}, nil
 }

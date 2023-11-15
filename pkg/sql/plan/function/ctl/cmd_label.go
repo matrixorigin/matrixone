@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -81,20 +80,22 @@ func (m *multiValues) parse() cnLabel {
 	return c
 }
 
+const (
+	singlePattern   = `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):([a-zA-Z0-9_]+)$`
+	multiplePattern = `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):\[([a-zA-Z0-9_]+(,[a-zA-Z0-9_]+)*)\]$`
+)
+
+var (
+	singlePatternReg = regexp.MustCompile(singlePattern)
+	multiPatternReg  = regexp.MustCompile(multiplePattern)
+)
+
 func identifyParser(param string) parser {
-	singlePattern := `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):([a-zA-Z0-9_]+)$`
-	multiplePattern := `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):\[([a-zA-Z0-9_]+(,[a-zA-Z0-9_]+)*)\]$`
-	matched, err := regexp.MatchString(singlePattern, param)
-	if err != nil {
-		return nil
-	} else if matched {
-		return newSingleValue(param, regexp.MustCompile(singlePattern))
+	if matched := singlePatternReg.MatchString(param); matched {
+		return newSingleValue(param, singlePatternReg)
 	}
-	matched, err = regexp.MatchString(multiplePattern, param)
-	if err != nil {
-		return nil
-	} else if matched {
-		return newMultiValue(param, regexp.MustCompile(multiplePattern))
+	if matched := multiPatternReg.MatchString(param); matched {
+		return newMultiValue(param, multiPatternReg)
 	}
 	return nil
 }
@@ -118,13 +119,13 @@ func handleSetLabel(proc *process.Process,
 	if err != nil {
 		return Result{}, err
 	}
-	kvs := make(map[string][]string)
+	kvs := make(map[string][]string, 1)
 	kvs[c.key] = c.values
 	if err := cluster.DebugUpdateCNLabel(c.uuid, kvs); err != nil {
 		return Result{}, err
 	}
 	return Result{
-		Method: pb.CmdMethod_Label.String(),
+		Method: LabelMethod,
 		Data:   "OK",
 	}, nil
 }
@@ -134,44 +135,44 @@ func handleSyncCommit(
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	cs := proc.QueryService
+	qs := proc.QueryService
 	mc := clusterservice.GetMOCluster()
-	var services []string
+	var addrs []string
 	mc.GetCNService(
 		clusterservice.NewSelector(),
 		func(c metadata.CNService) bool {
-			services = append(services, c.QueryAddress)
+			addrs = append(addrs, c.QueryAddress)
 			return true
 		})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	maxCommitTS := timestamp.Timestamp{}
-	for _, id := range services {
-		req := cs.NewRequest(querypb.CmdMethod_GetCommit)
-		resp, err := cs.SendMessage(ctx, id, req)
+	for _, addr := range addrs {
+		req := qs.NewRequest(querypb.CmdMethod_GetCommit)
+		resp, err := qs.SendMessage(ctx, addr, req)
 		if err != nil {
 			return Result{}, err
 		}
 		if maxCommitTS.Less(resp.GetCommit.CurrentCommitTS) {
 			maxCommitTS = resp.GetCommit.CurrentCommitTS
 		}
-		cs.Release(resp)
+		qs.Release(resp)
 	}
 
-	for _, id := range services {
-		req := cs.NewRequest(querypb.CmdMethod_SyncCommit)
+	for _, id := range addrs {
+		req := qs.NewRequest(querypb.CmdMethod_SyncCommit)
 		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: maxCommitTS}
-		resp, err := cs.SendMessage(ctx, id, req)
+		resp, err := qs.SendMessage(ctx, id, req)
 		if err != nil {
 			return Result{}, err
 		}
-		cs.Release(resp)
+		qs.Release(resp)
 	}
 
 	return Result{
-		Method: pb.CmdMethod_SyncCommit.String(),
+		Method: SyncCommitMethod,
 		Data: fmt.Sprintf("sync %d cn services's commit ts to %s",
-			len(services),
+			len(addrs),
 			maxCommitTS.DebugString()),
 	}, nil
 }

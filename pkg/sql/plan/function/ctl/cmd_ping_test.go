@@ -21,7 +21,7 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,7 +40,7 @@ func TestCmdPingTNWithEmptyTN(t *testing.T) {
 			return nil, nil
 		})
 	require.NoError(t, err)
-	assert.Equal(t, Result{Method: pb.CmdMethod_Ping.String(), Data: make([]interface{}, 0)},
+	assert.Equal(t, Result{Method: PingMethod, Data: make([]interface{}, 0)},
 		result)
 }
 
@@ -56,14 +56,14 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: shardID}),
+					Payload: protoc.MustMarshal(&api.TNPingResponse{ShardID: shardID}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, Result{
-		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.TNPingResponse{ShardID: shardID}},
+		Method: PingMethod,
+		Data:   []interface{}{api.TNPingResponse{ShardID: shardID}},
 	}, result)
 }
 
@@ -77,17 +77,17 @@ func TestCmdPingTNWithMultiTN(t *testing.T) {
 		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 1}),
+					Payload: protoc.MustMarshal(&api.TNPingResponse{ShardID: 1}),
 				},
 				{
-					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 2}),
+					Payload: protoc.MustMarshal(&api.TNPingResponse{ShardID: 2}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, Result{
-		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.TNPingResponse{ShardID: 1}, pb.TNPingResponse{ShardID: 2}},
+		Method: PingMethod,
+		Data:   []interface{}{api.TNPingResponse{ShardID: 1}, api.TNPingResponse{ShardID: 2}},
 	}, result)
 }
 
@@ -101,14 +101,14 @@ func TestCmdPingTNWithParameter(t *testing.T) {
 		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
-					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 1}),
+					Payload: protoc.MustMarshal(&api.TNPingResponse{ShardID: 1}),
 				},
 			}, nil
 		})
 	require.NoError(t, err)
 	assert.Equal(t, Result{
-		Method: pb.CmdMethod_Ping.String(),
-		Data:   []interface{}{pb.TNPingResponse{ShardID: 1}},
+		Method: PingMethod,
+		Data:   []interface{}{api.TNPingResponse{ShardID: 1}},
 	}, result)
 }
 

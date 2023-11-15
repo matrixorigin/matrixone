@@ -677,7 +677,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 
 	triggerTimes, err := m.getTriggerTimes(ctx, conn, cronTask.Metadata.ID)
 	if err == sql.ErrNoRows || triggerTimes != cronTask.TriggerTimes-1 {
-		return 0, nil
+		return 0, moerr.NewInternalError(ctx, "cron task trigger times does not match")
 	}
 
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
