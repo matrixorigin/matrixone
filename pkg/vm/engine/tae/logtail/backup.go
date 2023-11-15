@@ -146,12 +146,12 @@ func trimObjectsData(
 			if err != nil {
 				return isCkpChange, err
 			}
-			blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
 			if block.blockType == objectio.SchemaTombstone {
 				bat, err = blockio.LoadOneBlock(ctx, fs, block.location, objectio.SchemaTombstone)
 				if err != nil {
 					return isCkpChange, err
 				}
+				blockMeta := meta.MustTombstoneMeta().GetBlockMeta(uint32(block.location.ID()))
 				zm := blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 3))
 				if !zm.ZoneMap().Contains(ts) {
 					objectData.data[id].data = bat
@@ -182,6 +182,7 @@ func trimObjectsData(
 				if err != nil {
 					return isCkpChange, err
 				}
+				blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
 				zm := blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 2))
 				if !zm.ZoneMap().Contains(ts) {
 					objectData.data[id].pk = pk
