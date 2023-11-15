@@ -1710,7 +1710,10 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	arg.FuncId = dispatch.SendToAnyLocalFunc
+	//arg.FuncId = dispatch.SendToAnyLocalFunc
+	//use shuffle instead of SendToAnyLocalFunc
+	arg.FuncId = dispatch.ShuffleToAllFunc
+	arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
