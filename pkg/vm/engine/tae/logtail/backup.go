@@ -164,7 +164,7 @@ func trimObjectsData(
 						return isCkpChange, err
 					}
 					if commitTs.Greater(ts) {
-						logutil.Debugf("delete row %v, commitTs %v, location %v",
+						logutil.Infof("delete row %v, commitTs %v, location %v",
 							v, commitTs.ToString(), block.location.String())
 						isChange = true
 						isCkpChange = true
