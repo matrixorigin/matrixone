@@ -45,7 +45,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-	objStats          ObjectStats
+	objStats          []ObjectStats
 	pkColIdx          uint16
 }
 
@@ -113,17 +113,39 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
-func (w *objectWriterV1) DescribeObject() (ObjectStats, error) {
-	stats := newObjectStats()
-	copy(stats[objectNameOffset:], w.name)
-	copy(stats[extentOffset:], Header(w.buffer.vector.Entries[0].Data).Extent())
-	blkCnt := uint32(len(w.blocks))
-	copy(stats[rowCntOffset:], types.EncodeUint32(&w.totalRow))
-	copy(stats[blkCntOffset:], types.EncodeUint32(&blkCnt))
-	copy(stats[sortKeyIdxOffset:], types.EncodeUint16(&w.pkColIdx))
+func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
+	ss := NewObjectStats()
+	SetObjectStatsObjectName(ss, w.name)
+	SetObjectStatsExtent(ss, Header(w.buffer.vector.Entries[0].Data).Extent())
+	SetObjectStatsRowCnt(ss, w.totalRow)
+	SetObjectStatsBlkCnt(ss, uint32(len(w.blocks[idx])))
 
-	if len(w.blocks[SchemaData]) != 0 && len(w.colmeta) > int(w.pkColIdx) {
-		copy(stats[dataZoneMapOffset:], w.colmeta[w.pkColIdx].ZoneMap())
+	if len(colmeta) > int(w.pkColIdx) {
+		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.pkColIdx].ZoneMap())
+	}
+
+	return *ss
+}
+
+// DescribeObject generates two object stats:
+//
+// 0: data object stats
+//
+// 1: tombstone object stats
+//
+// if an object only has inserts, only the data object stats valid.
+//
+// if an object only has deletes, only the tombstone object stats valid.
+//
+// if an object has both inserts and deletes, both stats are valid.
+func (w *objectWriterV1) DescribeObject() ([]ObjectStats, error) {
+	stats := make([]ObjectStats, 2)
+	if len(w.blocks[SchemaData]) != 0 {
+		stats[SchemaData] = describeObjectHelper(w, w.colmeta, SchemaData)
+	}
+
+	if len(w.blocks[SchemaTombstone]) != 0 {
+		stats[SchemaTombstone] = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
 	}
 
 	return stats, nil
