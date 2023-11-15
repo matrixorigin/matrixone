@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -105,11 +107,16 @@ func TestMergeBlock(t *testing.T) {
 		Tbl: &mockRelation{},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
-		notFreeBatch: true,
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
 	}
-	proc.Reg.InputBatch = batch1
-	Prepare(proc, &argument1)
-	_, err := Call(0, proc, &argument1, false, false)
+	resetChildren(&argument1, batch1)
+
+	argument1.Prepare(proc)
+	_, err := argument1.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15*3), argument1.affectedRows)
 	// Check Tbl
@@ -141,6 +148,25 @@ func TestMergeBlock(t *testing.T) {
 	//		require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
 	//	}
 	//}
-	argument1.Free(proc, false)
-	//require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+	argument1.Free(proc, false, nil)
+	for k := range argument1.container.mp {
+		argument1.container.mp[k].Clean(proc.GetMPool())
+	}
+	argument1.children[0].Free(proc, false, nil)
+	proc.FreeVectors()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func resetChildren(arg *Argument, bat *batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: []*batch.Batch{bat},
+		})
+	}
 }

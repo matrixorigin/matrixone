@@ -68,11 +68,28 @@ var (
 			details                     blob)`,
 			catalog.MOTaskDB, catalog.MOSysDaemonTask),
 	}
+
+	MoStagesTable = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_CATALOG,
+		Table:    catalog.MO_STAGES,
+		CreateTableSql: fmt.Sprintf(`CREATE TABLE %s.%s (
+			stage_id int unsigned auto_increment,
+			stage_name varchar(64),
+			url text,
+			stage_credentials text,
+			stage_status varchar(64),
+			created_time timestamp,
+			comment text,
+			primary key(stage_id)
+		  );`, catalog.MO_CATALOG, catalog.MO_STAGES),
+	}
 )
 
 var needUpgradeNewTable = []*table.Table{
 	MoTablePartitionsTable,
 	SysDaemonTaskTable,
+	MoStagesTable,
 }
 
 var PARTITIONSView = &table.Table{
@@ -174,8 +191,8 @@ var processlistView = &table.Table{
 		table.StringColumn("user", "the user name"),
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
-	//actually drop view here
-	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
+	//actually drop table here
+	CreateTableSql: "drop table if exists `information_schema`.`PROCESSLIST`;",
 }
 
 var MoSessionsView = &table.Table{
@@ -204,7 +221,7 @@ var MoSessionsView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_sessions` AS SELECT * FROM mo_sessions() AS mo_sessions_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_sessions`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_sessions`;",
 }
 
 var MoConfigurationsView = &table.Table{
@@ -221,7 +238,7 @@ var MoConfigurationsView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_configurations` AS SELECT * FROM mo_configurations() AS mo_configurations_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_configurations`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_configurations`;",
 }
 
 var MoLocksView = &table.Table{
@@ -240,7 +257,25 @@ var MoLocksView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_locks` AS SELECT * FROM mo_locks() AS mo_locks_tmp;",
 	//actually drop view here
-	CreateTableSql: "drop view `mo_catalog`.`mo_locks`;",
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_locks`;",
+}
+
+var MoVariablesView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_variables",
+	Columns: []table.Column{
+		table.StringColumn("configuration_id", "the id of configuration"),
+		table.StringColumn("account_id", ""),
+		table.StringColumn("account_name", ""),
+		table.StringColumn("dat_name", "database name"),
+		table.StringColumn("variable_name", "the name of variable"),
+		table.StringColumn("variable_value", "the value of variable"),
+		table.StringColumn("system_variables", "is system variable or not"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_variables` AS SELECT * FROM mo_catalog.mo_mysql_compatibility_mode;",
+	//actually drop view here
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_variables`;",
 }
 
 var SqlStatementHotspotView = &table.Table{
@@ -254,5 +289,96 @@ var SqlStatementHotspotView = &table.Table{
 	CreateTableSql: "DROP VIEW IF EXISTS `system`.`sql_statement_hotspot`;",
 }
 
-var registeredViews = []*table.Table{processlistView, MoLocksView}
-var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView}
+var MoTransactionsView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_transactions",
+	Columns: []table.Column{
+		table.StringColumn("cn_id", "the cn id which cn lock stays on"),
+		table.StringColumn("txn_id", "the txn id which txn holds the lock"),
+		table.StringColumn("create_ts", "the timestamp of the creation of the txn"),
+		table.StringColumn("snapshot_ts", "the snapshot timestamp"),
+		table.StringColumn("prepared_ts", "the prepared timestamp"),
+		table.StringColumn("commit_ts", "the commit timestamp"),
+		table.StringColumn("txn_mode", "pessimistic or optimistic"),
+		table.StringColumn("isolation", "the txn isolation"),
+		table.StringColumn("user_txn", "the user txn or not"),
+		table.StringColumn("txn_status", "the txn status(active, committed, aborting, aborted). (distributed txn, prepared, committing"),
+		table.StringColumn("table_id", "the table id"),
+		table.StringColumn("lock_key", "point or range"),
+		table.StringColumn("lock_content", "the content the clock is on"),
+		table.StringColumn("lock_mode", "shared or exclusive"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_transactions` AS SELECT * FROM mo_transactions() AS mo_transactions_tmp;",
+	//actually drop view here
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_transactions`;",
+}
+
+var MoCacheView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_CATALOG,
+	Table:    "mo_cache",
+	Columns: []table.Column{
+		table.StringColumn("node_type", "the type of the node. cn,tn"),
+		table.StringColumn("node_id", "the id of node"),
+		table.StringColumn("type", "the type of fileservice cache. memory, disk_cache"),
+		table.StringColumn("used", "used bytes of the cache"),
+		table.StringColumn("free", "free bytes of the cache"),
+		table.StringColumn("hit_ratio", "the hit ratio of the cache"),
+	},
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `mo_catalog`.`mo_cache` AS SELECT * FROM mo_cache() AS mo_cache_tmp;",
+	//actually drop view here
+	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
+}
+
+var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
+var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
+
+var InformationSchemaSCHEMATA = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "SCHEMATA",
+	CreateViewSql: "CREATE VIEW information_schema.SCHEMATA AS SELECT " +
+		"dat_catalog_name AS CATALOG_NAME," +
+		"datname AS SCHEMA_NAME," +
+		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
+		"'utf8mb4_0900_ai_ci' AS DEFAULT_COLLATION_NAME," +
+		"if(true, NULL, '') AS SQL_PATH," +
+		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
+		"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))",
+}
+
+var InformationSchemaCOLUMNS = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "COLUMNS",
+	CreateViewSql: fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
+		"'def' as TABLE_CATALOG,"+
+		"att_database as TABLE_SCHEMA,"+
+		"att_relname AS TABLE_NAME,"+
+		"attname AS COLUMN_NAME,"+
+		"attnum AS ORDINAL_POSITION,"+
+		"mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,"+
+		"(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,"+
+		"mo_show_visible_bin(atttyp,2) as DATA_TYPE,"+
+		"internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,"+
+		"internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,"+
+		"internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,"+
+		"internal_numeric_scale(atttyp) AS NUMERIC_SCALE,"+
+		"internal_datetime_scale(atttyp) AS DATETIME_PRECISION,"+
+		"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,"+
+		"(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,"+
+		"mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,"+
+		"case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,"+
+		"case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,"+
+		"'select,insert,update,references' as `PRIVILEGES`,"+
+		"att_comment as COLUMN_COMMENT,"+
+		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
+		"if(true, NULL, 0) as SRS_ID "+
+		"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+}
+
+var needUpgradeExistingView = []*table.Table{
+	InformationSchemaSCHEMATA,
+	InformationSchemaCOLUMNS,
+}

@@ -39,7 +39,7 @@ func (s *service) initRemote() {
 	s.remote.client = rpcClient
 	s.remote.server = rpcServer
 	s.remote.keeper = NewLockTableKeeper(
-		s.cfg.ServiceID,
+		s.serviceID,
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
@@ -341,7 +341,7 @@ func (s *service) handleFetchWhoWaitingMe(ctx context.Context) {
 				continue
 			}
 			txn.fetchWhoWaitingMe(
-				s.cfg.ServiceID,
+				s.serviceID,
 				w.txnID,
 				s.activeTxnHolder,
 				func(wt pb.WaitTxn) bool {

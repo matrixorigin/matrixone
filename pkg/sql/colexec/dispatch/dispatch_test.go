@@ -22,7 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -53,23 +55,26 @@ func init() {
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestDispatch(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		bat := newBatch(t, tc.types, tc.proc, Rows)
-		tc.proc.Reg.InputBatch = bat
+		bats := []*batch.Batch{
+			newBatch(t, tc.types, tc.proc, Rows),
+			batch.EmptyBatch,
+		}
+		resetChildren(tc.arg, bats)
 		/*{
 			for _, vec := range bat.Vecs {
 				if vec.IsOriginal() {
@@ -77,15 +82,12 @@ func TestDispatch(t *testing.T) {
 				}
 			}
 		}*/
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = batch.EmptyBatch
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = nil
-		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.arg.Free(tc.proc, false)
+		_, _ = tc.arg.Call(tc.proc)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.Children[0].Free(tc.proc, false, nil)
 		for _, re := range tc.arg.LocalRegs {
 			for len(re.Ch) > 0 {
-				bat = <-re.Ch
+				bat := <-re.Ch
 				if bat == nil {
 					break
 				}
@@ -108,6 +110,11 @@ func newTestCase(all bool) dispatchTestCase {
 		arg: &Argument{
 			FuncId:    SendToAllLocalFunc,
 			LocalRegs: []*process.WaitRegister{reg},
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 		cancel: cancel,
 	}
@@ -117,4 +124,18 @@ func newTestCase(all bool) dispatchTestCase {
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func resetChildren(arg *Argument, bats []*batch.Batch) {
+	if len(arg.Children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: bats,
+		})
+
+	} else {
+		arg.Children = arg.Children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: bats,
+		})
+	}
 }

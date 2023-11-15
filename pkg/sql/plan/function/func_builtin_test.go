@@ -344,6 +344,64 @@ func Test_BuiltIn_Serial(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_SerialFull(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	// serial_full functionality (preserving nulls)
+	input1 := []bool{true, false, true, true}
+	input1Nulls := []bool{true, false, true, true}
+	input2 := []int8{10, 1, 120, -1}
+	input2Nulls := []bool{false, true, false, true}
+
+	tc := tcTemp{
+		info: "test serial_full(a, b, c)",
+		inputs: []testutil.FunctionTestInput{
+			testutil.NewFunctionTestInput(types.T_bool.ToType(), input1, input1Nulls),
+			testutil.NewFunctionTestInput(types.T_int8.ToType(), input2, input2Nulls),
+		},
+		expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"serial_full(null, 10)", "serial_full(false, null)", "serial_full(null, 120)", "serial_full(null, null)"}, nil),
+	}
+	tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, BuiltInSerialFull)
+	tcc.Run()
+
+	vec := tcc.GetResultVectorDirectly()
+	p1 := vector.GenerateFunctionStrParameter(vec)
+	{
+		v, null := p1.GetStrValue(0)
+		require.False(t, null)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err)
+		require.Equal(t, nil, tuple[0]) // note: nulls are preserved
+		require.Equal(t, input2[0], tuple[1])
+	}
+	{
+		v, null := p1.GetStrValue(1)
+		require.False(t, null)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err)
+		require.Equal(t, input1[1], tuple[0])
+		require.Equal(t, nil, tuple[1]) // note: nulls are preserved
+	}
+	{
+		v, null := p1.GetStrValue(2)
+		require.False(t, null)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err)
+		require.Equal(t, nil, tuple[0]) // note: nulls are preserved
+		require.Equal(t, input2[2], tuple[1])
+	}
+	{
+		v, null := p1.GetStrValue(3)
+		require.False(t, null)
+		tuple, err := types.Unpack(v)
+		require.NoError(t, err)
+		require.Equal(t, nil, tuple[0]) // note: nulls are preserved
+		require.Equal(t, nil, tuple[1]) // note: nulls are preserved
+	}
+
+}
+
 func Test_BuiltIn_Math(t *testing.T) {
 	proc := testutil.NewProcess()
 	{
@@ -555,6 +613,78 @@ func Test_BuiltIn_Math(t *testing.T) {
 				nil, nil),
 		}
 		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test log2",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						8,
+					},
+					nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{3}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog2)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test log2 with err",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						-10,
+					},
+					nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true,
+				nil, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog2)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test log10",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						100,
+					},
+					nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{2}, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test log10 with err",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{
+						-10,
+					},
+					nil),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), true,
+				nil, nil),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog10)
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}

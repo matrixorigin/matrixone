@@ -213,6 +213,8 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_UNION_ALL:         "Union All",
 	plan2.Node_UNIQUE:            "Unique",
 	plan2.Node_WINDOW:            "Window",
+	plan2.Node_TIME_WINDOW:       "Time window",
+	plan2.Node_Fill:              "Fill",
 	plan2.Node_BROADCAST:         "Broadcast",
 	plan2.Node_SPLIT:             "Split",
 	plan2.Node_GATHER:            "Gather",
@@ -252,6 +254,7 @@ const (
 	Label_Minus_Expressions         = "Minus expressions"
 	Label_Pre_Insert                = "Pre insert"
 	Label_Pre_InsertUk              = "Pre insert uk"
+	Label_Pre_InsertSk              = "Pre insert sk"
 	Label_Pre_Delete                = "Pre delete"
 	Label_Sink                      = "Sink"
 	Label_Sink_Scan                 = "Sink scan"

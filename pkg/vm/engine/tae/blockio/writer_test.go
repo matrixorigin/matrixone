@@ -76,6 +76,13 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.True(t, res)
 	res = zm.Contains(int32(40000))
 	require.False(t, res)
+	require.Equal(t, int32(0), zm.GetMin())
+	require.Equal(t, int32(39999), zm.GetMax())
+	sum := int64(0)
+	for i := int64(0); i < 40000; i++ {
+		sum += i
+	}
+	require.Equal(t, sum, zm.GetSum())
 
 	mp := mpool.MustNewZero()
 	metaloc := EncodeLocation(writer.GetName(), blocks[0].GetExtent(), 40000, blocks[0].GetID())
@@ -107,6 +114,17 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.True(t, zm.Contains(int32(40000)))
 	require.True(t, zm.Contains(int32(79999)))
 	require.False(t, zm.Contains(int32(80000)))
+	sum = int64(0)
+	for i := int64(40000); i < 80000; i++ {
+		sum += i
+		if sum < 0 {
+			sum = 0
+			break
+		}
+	}
+	require.Equal(t, int32(40000), zm.GetMin())
+	require.Equal(t, int32(79999), zm.GetMax())
+	require.Equal(t, sum, zm.GetSum())
 }
 
 func TestWriter_WriteBlockAfterAlter(t *testing.T) {

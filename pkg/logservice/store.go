@@ -616,6 +616,20 @@ func (l *store) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) err
 	}
 }
 
+func (l *store) addProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+	data := MustMarshal(&hb)
+	cmd := hakeeper.GetProxyHeartbeatCmd(data)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	if result, err := l.propose(ctx, session, cmd); err != nil {
+		l.runtime.Logger().Error("propose failed", zap.Error(err))
+		return pb.CommandBatch{}, handleNotHAKeeperError(ctx, err)
+	} else {
+		var cb pb.CommandBatch
+		MustUnmarshal(&cb, result.Data)
+		return cb, nil
+	}
+}
+
 func (l *store) decodeCmd(ctx context.Context, e raftpb.Entry) []byte {
 	if e.Type == raftpb.ApplicationEntry {
 		panic(moerr.NewInvalidState(ctx, "unexpected entry type"))

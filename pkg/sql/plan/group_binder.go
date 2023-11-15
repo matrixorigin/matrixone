@@ -78,3 +78,7 @@ func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth
 func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return nil, moerr.NewNYI(b.GetContext(), "subquery in GROUP BY clause")
 }
+
+func (b *GroupBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	return nil, moerr.NewInvalidInput(b.GetContext(), "cannot bind time window functions '%s'", funcName)
+}

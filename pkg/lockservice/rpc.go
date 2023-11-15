@@ -60,7 +60,8 @@ func NewClient(cfg morpc.Config) (Client, error) {
 	c.cfg.BackendOptions = append(c.cfg.BackendOptions,
 		morpc.WithBackendReadTimeout(defaultRPCTimeout))
 
-	client, err := c.cfg.NewClient("",
+	client, err := c.cfg.NewClient(
+		"lock-client",
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
@@ -84,6 +85,10 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 	resp := v.(*pb.Response)
 	if err := resp.UnwrapError(); err != nil {
 		releaseResponse(resp)
+		// uuid and ip changed, async refresh cluster
+		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+			c.cluster.ForceRefresh(false)
+		}
 		return nil, err
 	}
 	return resp, nil
@@ -95,41 +100,53 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	defer span.End()
 
 	var address string
-	switch request.Method {
-	case pb.Method_ForwardLock:
-		sid := request.Lock.Options.ForwardTo
-		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-	case pb.Method_Lock,
-		pb.Method_Unlock,
-		pb.Method_GetTxnLock,
-		pb.Method_KeepRemoteLock:
-		sid := request.LockTable.ServiceID
-		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-	case pb.Method_GetWaitingList:
-		sid := request.GetWaitingList.Txn.CreatedOn
-		c.cluster.GetCNService(
-			clusterservice.NewServiceIDSelector(sid),
-			func(s metadata.CNService) bool {
-				address = s.LockServiceAddress
-				return false
-			})
-	default:
-		c.cluster.GetTNService(
-			clusterservice.NewSelector(),
-			func(d metadata.TNService) bool {
-				address = d.LockServiceAddress
-				return false
-			})
+	for i := 0; i < 2; i++ {
+		switch request.Method {
+		case pb.Method_ForwardLock:
+			sid := getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
+			c.cluster.GetCNService(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_Lock,
+			pb.Method_Unlock,
+			pb.Method_GetTxnLock,
+			pb.Method_KeepRemoteLock:
+			sid := getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
+			c.cluster.GetCNService(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_GetWaitingList:
+			sid := getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
+			c.cluster.GetCNService(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		default:
+			c.cluster.GetTNService(
+				clusterservice.NewSelector(),
+				func(d metadata.TNService) bool {
+					address = d.LockServiceAddress
+					return false
+				})
+		}
+		if address != "" {
+			break
+		}
+		if i == 0 {
+			c.cluster.ForceRefresh(true)
+		}
+	}
+	if address == "" {
+		getLogger().Error("cannot find lockservice address",
+			zap.String("request", request.DebugString()))
 	}
 	return c.client.Send(ctx, address, request)
 }
@@ -172,7 +189,8 @@ func NewServer(
 		opt(s)
 	}
 
-	rpc, err := s.cfg.NewServer("server",
+	rpc, err := s.cfg.NewServer(
+		"lock-server",
 		address,
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireRequest() },
@@ -233,10 +251,17 @@ func (s *server) onMessage(
 
 	handler, ok := s.handlers[req.Method]
 	if !ok {
-		return moerr.NewNotSupportedNoCtx("method [%s], from %s, current %s",
+		err := moerr.NewNotSupportedNoCtx("method [%s], from %s, current %s",
 			req.Method.String(),
 			cs.RemoteAddress(),
 			s.address)
+		writeResponse(
+			ctx,
+			msg.Cancel,
+			getResponse(req),
+			err,
+			cs)
+		return nil
 	}
 
 	select {
@@ -252,13 +277,18 @@ func (s *server) onMessage(
 
 	fn := func(req *pb.Request) error {
 		defer releaseRequest(req)
-		resp := acquireResponse()
-		resp.RequestID = req.RequestID
-		resp.Method = req.Method
+		resp := getResponse(req)
 		handler(ctx, msg.Cancel, req, resp, cs)
 		return nil
 	}
 	return fn(req)
+}
+
+func getResponse(req *pb.Request) *pb.Response {
+	resp := acquireResponse()
+	resp.RequestID = req.RequestID
+	resp.Method = req.Method
+	return resp
 }
 
 func writeResponse(

@@ -62,3 +62,7 @@ func JoinGossipClusterOp(brief, uuid string, existing []string) *Operator {
 		JoinGossipCluster{StoreID: uuid, Existing: existing},
 	)
 }
+
+func CreateDeleteProxyOp(brief, uuid string) *Operator {
+	return NewOperator(brief, 0, 0, DeleteProxyStore{StoreID: uuid})
+}

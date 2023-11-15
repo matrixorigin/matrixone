@@ -36,10 +36,15 @@ SELECT COUNT(NULL) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 -- @bvt:issue
 
 -- span_info
+-- for now, currently no graceful way to
+-- ensure that records already flushed into span_info
+
+-- @bvt:issue#11947
 SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 SELECT COUNT(0) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 SELECT COUNT('') FROM (SELECT * FROM span_info LIMIT 10) AS temp;
 SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+-- @bvt:issue
 
 -- tables in system_metrics
 USE system_metrics;

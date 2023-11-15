@@ -25,6 +25,9 @@ const (
 	SchemaTombstone DataMetaType = 1
 
 	CkpMetaStart DataMetaType = 2
+
+	// CkpMetaEnd = CkpMetaStart + `MaxIDX`
+	CkpMetaEnd DataMetaType = 26 + 2
 )
 
 const (

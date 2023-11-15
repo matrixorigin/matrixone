@@ -17,6 +17,8 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -475,7 +477,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-
+		t0 := time.Now()
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
 			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
@@ -506,9 +508,17 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
 		}
 
+		dequeuePreparingDuration := time.Since(t0)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && dequeuePreparingDuration > threshold && op.Txn.GetContext() != nil {
+			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.DequeuePreparing, &common.DurationRecords{Duration: dequeuePreparingDuration}))
+		}
+
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
+
+		v2.TxnDequeuePreparingDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePreparing]",
@@ -521,6 +531,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	now := time.Now()
 	for _, item := range items {
+		t0 := time.Now()
 		op := item.(*OpTxn)
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			if err := op.Txn.PrepareWAL(); err != nil {
@@ -534,11 +545,18 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 				}
 				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
 			}
+			prepareWALDuration := time.Since(t0)
+			_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+			if enable && prepareWALDuration > threshold && op.Txn.GetContext() != nil {
+				op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: prepareWALDuration}))
+			}
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
 		}
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
+
+		v2.TxnOnPrepareWALDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[prepareWAL]",
@@ -555,6 +573,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 		//Notice that WaitPrepared do nothing when op is OpRollback
+		t0 := time.Now()
 		if err = op.Txn.WaitPrepared(op.ctx); err != nil {
 			// v0.6 TODO: Error handling
 			panic(err)
@@ -565,6 +584,12 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		} else {
 			mgr.on1PCPrepared(op)
 		}
+		dequeuePreparedDuration := time.Since(t0)
+		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		if enable && dequeuePreparedDuration > threshold && op.Txn.GetContext() != nil {
+			op.Txn.GetStore().SetContext(context.WithValue(op.Txn.GetContext(), common.PrepareWAL, &common.DurationRecords{Duration: dequeuePreparedDuration}))
+		}
+		v2.TxnDequeuePreparedDurationHistogram.Observe(dequeuePreparedDuration.Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePrepared]",

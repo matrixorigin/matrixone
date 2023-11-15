@@ -580,3 +580,33 @@ func TestCNStateLabelPatch(t *testing.T) {
 		},
 	})
 }
+
+func TestProxyStateUpdate(t *testing.T) {
+	state := ProxyState{Stores: map[string]ProxyStore{}}
+
+	hb1 := ProxyHeartbeat{
+		UUID:          "proxy-1",
+		ListenAddress: "addr-a",
+	}
+	tick1 := uint64(100)
+
+	state.Update(hb1, tick1)
+	assert.Equal(t, state.Stores[hb1.UUID], ProxyStore{
+		UUID:          hb1.UUID,
+		Tick:          tick1,
+		ListenAddress: hb1.ListenAddress,
+	})
+
+	hb2 := ProxyHeartbeat{
+		UUID:          "proxy-1",
+		ListenAddress: "addr-a",
+	}
+	tick2 := uint64(200)
+
+	state.Update(hb2, tick2)
+	assert.Equal(t, state.Stores[hb2.UUID], ProxyStore{
+		UUID:          hb1.UUID,
+		Tick:          tick2,
+		ListenAddress: hb1.ListenAddress,
+	})
+}

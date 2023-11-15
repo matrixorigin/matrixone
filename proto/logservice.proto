@@ -64,6 +64,8 @@ message TNStore {
   string LockServiceAddress = 7;
   string          CtlAddress         = 8;
   ConfigData ConfigData = 9;
+  // QueryAddress is the address of the queryservice on tn
+  string          QueryAddress       = 10;
 }
 
 message LogStore {
@@ -174,6 +176,8 @@ message TNStoreHeartbeat {
   string LockServiceAddress = 6;
   string          CtlAddress         = 7;
   ConfigData ConfigData = 8;
+  // QueryAddress is the address of queryservice on tn
+  string          QueryAddress       = 9;
 };
 
 message RSMState {
@@ -204,6 +208,7 @@ enum MethodType {
   UPDATE_CN_WORK_STATE = 16;
   PATCH_CN_STORE = 17;
   DELETE_CN_STORE = 18;
+  PROXY_HEARTBEAT = 19;
 };
 
 enum RecordType {
@@ -277,6 +282,7 @@ message Request {
   CNWorkState CNWorkState        = 10;
   CNStateLabel CNStateLabel      = 11;
   DeleteCNStore DeleteCNStore    = 12;
+  ProxyHeartbeat ProxyHeartbeat  = 13;
 };
 
 message LogResponse {
@@ -331,6 +337,7 @@ enum HAKeeperUpdateType {
   UpdateCNWorkState = 11;
   PatchCNStore = 12;
   RemoveCNStore = 13;
+  ProxyHeartbeatUpdate = 14;
 }
 
 // HAKeeperState state transition diagram
@@ -422,6 +429,7 @@ enum ServiceType {
   LogService = 0;
   TNService  = 1;
   CNService  = 2;
+  ProxyService = 3;
 }
 
 // ScheduleCommand contains a shard schedule command.
@@ -435,6 +443,7 @@ message ScheduleCommand {
   CreateTaskService CreateTaskService = 6;
   DeleteCNStore     DeleteCNStore     = 7;
   JoinGossipCluster JoinGossipCluster = 8;
+  DeleteProxyStore  DeleteProxyStore  = 9;
 }
 
 message JoinGossipCluster {
@@ -451,6 +460,11 @@ message CreateTaskService {
 
 // DeleteCNStore deletes CN store from CNState to save hakeeper's memory.
 message DeleteCNStore {
+  string StoreID = 1;
+}
+
+// DeleteProxyStore deletes Proxy store from ProxyState to save hakeeper's memory.
+message DeleteProxyStore {
   string StoreID = 1;
 }
 
@@ -497,6 +511,8 @@ message TNStoreInfo {
   string LockServiceAddress = 6;
   string CtlAddress         = 7;
   ConfigData ConfigData = 8;
+  // QueryAddress is the address of queryservice on tn
+  string          QueryAddress       = 9;
 }
 
 // TNState contains all TN details known to the HAKeeper.
@@ -505,10 +521,28 @@ message TNState {
   map<string, TNStoreInfo> Stores = 1 [(gogoproto.nullable) = false];
 }
 
+message ProxyStore {
+  string UUID = 1;
+  uint64 Tick = 2;
+  string ListenAddress = 3;
+  ConfigData ConfigData = 4;
+}
+
+message ProxyState {
+  map<string, ProxyStore> Stores = 1 [(gogoproto.nullable) = false];
+}
+
+message ProxyHeartbeat {
+  string UUID = 1;
+  string ListenAddress = 2;
+  ConfigData ConfigData = 3;
+};
+
 message ClusterDetails {
   repeated TNStore  TNStores    = 1 [(gogoproto.nullable) = false];
   repeated CNStore  CNStores    = 2 [(gogoproto.nullable) = false];
   repeated LogStore LogStores   = 3 [(gogoproto.nullable) = false];
+  repeated ProxyStore ProxyStores = 4 [(gogoproto.nullable) = false];
 }
 
 // ClusterInfo provides a global view of all shards in the cluster. It
@@ -564,6 +598,7 @@ message CheckerState {
   TaskTableUser TaskTableUser           = 8 [(gogoproto.nullable) = false];
   uint64 NextId                         = 9;
   map<string, uint64> NextIDByKey       = 10;
+  ProxyState ProxyState = 11 [(gogoproto.nullable) = false];
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
@@ -584,6 +619,7 @@ message HAKeeperRSMState {
   LogState LogState             = 12 [(gogoproto.nullable) = false];
   ClusterInfo ClusterInfo       = 13 [(gogoproto.nullable) = false];
   TaskTableUser TaskTableUser   = 14 [(gogoproto.nullable) = false];
+  ProxyState ProxyState         = 15 [(gogoproto.nullable) = false];
 }
 
 // ReplicaInfo contains details of a replica

@@ -346,7 +346,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 			table := uint64(1)
 			for _, c := range cases {
 				stopper := stopper.NewStopper("")
-				v, err := l.getLockTable(table)
+				v, err := l.getLockTableWithCreate(table, true)
 				require.NoError(t, err)
 				lt := v.(*localLockTable)
 
@@ -719,7 +719,7 @@ func TestLockedTSIsLastCommittedTS(t *testing.T) {
 			defer cancel()
 
 			tableID := uint64(1)
-			v, err := l.getLockTable(tableID)
+			v, err := l.getLockTableWithCreate(tableID, true)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -790,7 +790,7 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 			defer cancel()
 
 			tableID := uint64(1)
-			v, err := l.getLockTable(tableID)
+			v, err := l.getLockTableWithCreate(tableID, true)
 			require.NoError(t, err)
 			lt := v.(*localLockTable)
 			lt.mu.Lock()
@@ -853,54 +853,4 @@ func TestLockedTSIsLastCommittedTSWithRange(t *testing.T) {
 type target struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
-}
-
-func TestCannotBlockByDeadlockBusyCheck(t *testing.T) {
-	table := uint64(1)
-
-	cases := []struct {
-		option pb.LockOptions
-		rows   [][]byte
-	}{
-		{
-			option: newTestRowExclusiveOptions(),
-			rows:   newTestRows(1),
-		},
-		{
-			option: newTestRangeExclusiveOptions(),
-			rows:   newTestRows(1, 2),
-		},
-	}
-
-	for _, c := range cases {
-		getRunner(false)(
-			t,
-			table,
-			func(
-				ctx context.Context,
-				s *service,
-				lt *localLockTable) {
-				s.deadlockDetector.mu.Lock()
-				s.deadlockDetector.mu.preCheckFunc = func(holdTxnID []byte, txn pb.WaitTxn) error {
-					return ErrDeadlockCheckBusy
-				}
-				s.deadlockDetector.mu.Unlock()
-
-				txn1 := newTestTxnID(1)
-
-				_, err := s.Lock(ctx, table, c.rows, txn1, c.option)
-				require.NoError(t, err)
-
-				defer func() {
-					assert.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
-				}()
-
-				// txn2 will failed by busy check
-				txn2 := newTestTxnID(2)
-				_, err = s.Lock(ctx, table, c.rows, txn2, c.option)
-				require.Equal(t, ErrDeadlockCheckBusy, err)
-			},
-		)
-	}
-
 }

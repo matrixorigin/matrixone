@@ -49,6 +49,7 @@ func SetupAutoIncrService() {
 	rt.SetGlobalVariables(
 		runtime.AutoIncrmentService,
 		incrservice.NewIncrService(
+			"",
 			incrservice.NewMemStore(),
 			incrservice.Config{}))
 }
@@ -61,6 +62,7 @@ func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
+		nil,
 		nil,
 		nil,
 		nil,

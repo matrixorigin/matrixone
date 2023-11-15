@@ -22,9 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -83,7 +82,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		require.NoError(t1, err)
 		qry, err := opt.Optimize(stmts[0], false)
 		require.NoError(t1, err)
-		c := New("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil, false)
+		c := New("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil, time.Now())
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, nil, func(a any, batch *batch.Batch) error {
 			return nil
 		})

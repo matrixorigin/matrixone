@@ -22,8 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	Build = iota
@@ -43,7 +46,8 @@ type container struct {
 
 	inBuckets []uint8
 
-	bat *batch.Batch
+	bat  *batch.Batch
+	rbat *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -68,10 +72,22 @@ type Argument struct {
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 
+	HashOnPK           bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
@@ -93,6 +109,10 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(mp)
+		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
 		ctr.joinBat1.Clean(mp)

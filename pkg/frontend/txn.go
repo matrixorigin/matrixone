@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,6 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+var (
+	dumpUUID = uuid.UUID{}
 )
 
 type TxnHandler struct {
@@ -83,6 +88,9 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	}
 	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
+	}
+	if v := reqCtx.Value(defines.NodeIDKey{}); v != nil {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey{}, v)
 	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
 	if th.ses != nil && th.ses.tenant != nil && th.ses.tenant.User == db_holder.MOLoggerUser {
@@ -226,7 +234,11 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	//	txnOp.GetWorkspace().StartStatement()
 	//	th.enableStartStmt()
 	//}
-	th.ses.SetTxnId(txnOp.Txn().ID)
+	if err != nil {
+		th.ses.SetTxnId(dumpUUID[:])
+	} else {
+		th.ses.SetTxnId(txnOp.Txn().ID)
+	}
 	return txnCtx, txnOp, err
 }
 
@@ -268,6 +280,10 @@ func (th *TxnHandler) GetSession() *Session {
 }
 
 func (th *TxnHandler) CommitTxn() error {
+	_, span := trace.Start(th.ses.requestCtx, "TxnHandler.CommitTxn",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
+
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
 	if !th.IsValidTxnOperator() || th.IsShareTxn() {
@@ -330,10 +346,15 @@ func (th *TxnHandler) CommitTxn() error {
 		ses.updateLastCommitTS(txnOp.Txn().CommitTS)
 	}
 	th.SetTxnOperatorInvalid()
+	th.ses.SetTxnId(dumpUUID[:])
 	return err
 }
 
 func (th *TxnHandler) RollbackTxn() error {
+	_, span := trace.Start(th.ses.requestCtx, "TxnHandler.RollbackTxn",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(th.ses.GetTxnId(), th.ses.GetStmtId(), th.ses.GetSqlOfStmt()))
+
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
 	if !th.IsValidTxnOperator() || th.IsShareTxn() {
@@ -390,6 +411,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		}
 	}
 	th.SetTxnOperatorInvalid()
+	th.ses.SetTxnId(dumpUUID[:])
 	return err
 }
 

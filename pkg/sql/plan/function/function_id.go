@@ -107,6 +107,7 @@ const (
 	COUNT_IF          // COUNT_IF
 	COVAR_POP         // COVAR_POP
 	COVAR_SAMPLE      // COVAR_SAMPLE
+	CONVERT_TZ        // CONVERT_TZ
 	CUME_DIST         // CUME_DIST
 	CURRENT_DATE      // CURRENT_DATE
 	CURRENT_TIMESTAMP // CURRENT_TIMESTAMP
@@ -149,6 +150,8 @@ const (
 	LN       // LN
 	NOT_IN   // NOT_IN
 	LOG      // LOG
+	LOG2     // LOG2
+	LOG10    // LOG10
 	LOWER    // LOWER
 	LPAD     // LPAD
 	LTRIM    // LTRIM
@@ -277,6 +280,7 @@ const (
 
 	UUID
 	SERIAL
+	SERIAL_FULL
 	BIN //BIN
 
 	ENABLE_FAULT_INJECTION
@@ -335,7 +339,13 @@ const (
 	L2_NORM // L2 NORMALIZATION
 	INNER_PRODUCT
 	COSINE_SIMILARITY
-	VECTOR_DIMS //VECTOR DIMENSIONS
+	VECTOR_DIMS     //VECTOR DIMENSIONS
+	NORMALIZE_L2    //NORMALIZE L2
+	L2_DISTANCE     //L2_DISTANCE
+	COSINE_DISTANCE //COSINE_DISTANCE
+	CLUSTER_CENTERS // CLUSTER_CENTERS
+
+	PYTHON_UDF
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -407,9 +417,11 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"cluster_centers":       CLUSTER_CENTERS,
 	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
+	"var_pop":               VAR_POP,
 	"approx_count":          APPROX_COUNT,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
@@ -471,6 +483,8 @@ var functionIdRegister = map[string]int32{
 	"char_length":                    LENGTH_UTF8,
 	"ln":                             LN,
 	"log":                            LOG,
+	"log2":                           LOG2,
+	"log10":                          LOG10,
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
 	"not_in_rows":                    NOT_IN_ROWS,
@@ -504,6 +518,7 @@ var functionIdRegister = map[string]int32{
 	"connection_id":                  CONNECTION_ID,
 	"charset":                        CHARSET,
 	"convert":                        CONVERT,
+	"convert_tz":                     CONVERT_TZ,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
 	"current_role":                   CURRENT_ROLE,
@@ -533,6 +548,7 @@ var functionIdRegister = map[string]int32{
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
 	"serial":                         SERIAL,
+	"serial_full":                    SERIAL_FULL,
 	"hash_value":                     HASH,
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,
@@ -595,4 +611,9 @@ var functionIdRegister = map[string]int32{
 	"inner_product":     INNER_PRODUCT,
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
+	"normalize_l2":      NORMALIZE_L2,
+	"l2_distance":       L2_DISTANCE,
+	"cosine_distance":   COSINE_DISTANCE,
+
+	"python_user_defined_function": PYTHON_UDF,
 }

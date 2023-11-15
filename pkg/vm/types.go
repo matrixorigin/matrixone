@@ -14,7 +14,12 @@
 
 package vm
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 type OpType int
 
@@ -24,6 +29,8 @@ const (
 	Order
 	Group
 	Window
+	TimeWin
+	Fill
 	Output
 	Offset
 	Product
@@ -68,6 +75,8 @@ const (
 	HashBuild
 
 	TableFunction
+	TableScan
+	ValueScan
 	// MergeBlock is used to recieve S3 block metLoc Info, and write
 	// them to S3
 	MergeBlock
@@ -78,6 +87,7 @@ const (
 	FuzzyFilter
 	PreInsert
 	PreInsertUnique
+	PreInsertSecondaryIndex
 	// LastInstructionOp is not a true operator and must set at last.
 	// It was used by unit testing to ensure that
 	// all functions related to instructions can reach 100% coverage.
@@ -98,17 +108,65 @@ type Instruction struct {
 	// Idx specified the analysis information index.
 	Idx int
 	// Arg contains the operand of this instruction.
-	Arg InstructionArgument
+	Arg Operator
 
 	// flag for analyzeInfo record the row information
 	IsFirst bool
 	IsLast  bool
 }
 
-type InstructionArgument interface {
+type Operator interface {
 	// Free release all the memory allocated from mPool in an operator.
 	// pipelineFailed marks the process status of the pipeline when the method is called.
-	Free(proc *process.Process, pipelineFailed bool)
+	Free(proc *process.Process, pipelineFailed bool, err error)
+
+	// String returns the string representation of an operator.
+	String(buf *bytes.Buffer)
+
+	//Prepare prepares an operator for execution.
+	Prepare(proc *process.Process) error
+
+	//Call calls an operator.
+	Call(proc *process.Process) (CallResult, error)
+
+	//SetInfo set operator info
+	SetInfo(info *OperatorInfo)
+
+	//AppendChild append child to operator
+	AppendChild(child Operator)
+}
+
+type ExecStatus int
+
+const (
+	ExecStop ExecStatus = iota
+	ExecNext
+	ExecHasMore
+)
+
+type CtrState int
+
+const (
+	Build CtrState = iota
+	Eval
+	End
+)
+
+type CallResult struct {
+	Status ExecStatus
+	Batch  *batch.Batch
+}
+
+func NewCallResult() CallResult {
+	return CallResult{
+		Status: ExecNext,
+	}
+}
+
+type OperatorInfo struct {
+	Idx     int
+	IsFirst bool
+	IsLast  bool
 }
 
 type Instructions []Instruction
@@ -126,6 +184,8 @@ func (ins *Instruction) IsBrokenNode() bool {
 	case Top, MergeTop:
 		return true
 	case Window:
+		return true
+	case TimeWin, Fill:
 		return true
 	case MergeRecursive:
 		return true

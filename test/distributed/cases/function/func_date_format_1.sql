@@ -88,6 +88,7 @@ SELECT DATE_FORMAT('0000-02-28','%W %d %M %Y') as valid_date;
 SELECT DATE_FORMAT('9999-02-28','%W %d %M %Y') as valid_date;
 
 select date_format('1997-01-02 03:04:05', '%M %W %D %Y %y %m %d %h %i %s %w');
+select date_format('1998-01-02 03:04', '%M %W %D %Y %y %m %d %h %i %s %w');
 select date_format('1997-01-02', concat('%M %W %D','%Y %y %m %d %h %i %s %w'));
 
 select date_format('1998-12-31','%x-%v'),date_format('1999-01-01','%x-%v');

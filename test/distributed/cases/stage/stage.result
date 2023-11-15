@@ -1,6 +1,6 @@
 CREATE STAGE my_ext_stage URL='s3://load/files/';
 CREATE STAGE my_ext_stage URL='s3://load/files/';
-internal error: the satge my_ext_stage exists
+internal error: the stage my_ext_stage exists
 CREATE STAGE if not exists my_ext_stage URL='s3://load/files/';
 SELECT stage_name from mo_catalog.mo_stages;
 stage_name
@@ -20,14 +20,14 @@ my_ext_stage1    disabled
 my_ext_stage2    disabled
 my_ext_stage3    enabled
 ALTER STAGE my_ext_stage4 SET URL='s3://load/files2/';
-internal error: the satge my_ext_stage4 not exists
+internal error: the stage my_ext_stage4 not exists
 ALTER STAGE if exists my_ext_stage4 SET URL='s3://load/files2/';
 ALTER STAGE my_ext_stage1 SET URL='s3://load/files2/' CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KEY'='4x5y6z'};
 internal error: at most one option at a time
 ALTER STAGE my_ext_stage1 SET URL='s3://load/files2/';
 ALTER STAGE my_ext_stage1 SET CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KEY'='4x5y6z'};
 DROP STAGE my_ext_stage5;
-internal error: the satge my_ext_stage5 not exists
+internal error: the stage my_ext_stage5 not exists
 DROP STAGE if exists my_ext_stage5;
 DROP STAGE my_ext_stage;
 DROP STAGE my_ext_stage1;
@@ -50,53 +50,232 @@ drop account default_1;
 drop stage my_ext_stage;
 CREATE STAGE my_ext_stage URL='s3://load/files/';
 CREATE STAGE my_ext_stage URL='s3://load/files/';
-internal error: the satge my_ext_stage exists
+internal error: the stage my_ext_stage exists
 CREATE STAGE if not exists my_ext_stage URL='s3://load/files/';
 SHOW STAGES;
 STAGE_NAME    URL    STATUS    COMMENT
-my_ext_stage    s3://load/files/    DISABLED    
+my_ext_stage    s3://load/files/    DISABLED
 CREATE STAGE my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 CREATE STAGE my_ext_stage2 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 SHOW STAGES;
 STAGE_NAME    URL    STATUS    COMMENT
-my_ext_stage    s3://load/files/    DISABLED    
-my_ext_stage1    s3://load/files/    DISABLED    
-my_ext_stage2    s3://load/files/    DISABLED    
+my_ext_stage    s3://load/files/    DISABLED
+my_ext_stage1    s3://load/files/    DISABLED
+my_ext_stage2    s3://load/files/    DISABLED
 CREATE STAGE my_ext_stage3 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE;
-CREATE STAGE my_ext_stage4 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE COMMENT 'self stage';
+CREATE STAGE my_ext_stage4 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'} ENABLE = TRUE COMMENT = 'self stage';
 SHOW STAGES;
 STAGE_NAME    URL    STATUS    COMMENT
-my_ext_stage    s3://load/files/    DISABLED    
-my_ext_stage1    s3://load/files/    DISABLED    
-my_ext_stage2    s3://load/files/    DISABLED    
-my_ext_stage3    s3://load/files/    ENABLED    
+my_ext_stage    s3://load/files/    DISABLED
+my_ext_stage1    s3://load/files/    DISABLED
+my_ext_stage2    s3://load/files/    DISABLED
+my_ext_stage3    s3://load/files/    ENABLED
 my_ext_stage4    s3://load/files/    ENABLED    self stage
 SHOW STAGES like 'my_ext_stage3';
 STAGE_NAME    URL    STATUS    COMMENT
-my_ext_stage3    s3://load/files/    ENABLED    
+my_ext_stage3    s3://load/files/    ENABLED
 ALTER STAGE my_ext_stage5 SET URL='s3://load/files2/';
-internal error: the satge my_ext_stage5 not exists
+internal error: the stage my_ext_stage5 not exists
 ALTER STAGE if exists my_ext_stage5 SET URL='s3://load/files2/';
 ALTER STAGE my_ext_stage1 SET URL='s3://load/files2/' CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KEY'='4x5y6z'};
 internal error: at most one option at a time
 ALTER STAGE my_ext_stage1 SET URL='s3://load/files2/';
 ALTER STAGE my_ext_stage1 SET CREDENTIALS={'AWS_KEY_ID'='1a2b3d' ,'AWS_SECRET_KEY'='4x5y6z'};
-ALTER STAGE my_ext_stage4 SET COMMENT 'user stage';
+ALTER STAGE my_ext_stage4 SET COMMENT = 'user stage';
 SHOW STAGES;
 STAGE_NAME    URL    STATUS    COMMENT
-my_ext_stage    s3://load/files/    DISABLED    
-my_ext_stage2    s3://load/files/    DISABLED    
-my_ext_stage3    s3://load/files/    ENABLED    
-my_ext_stage1    s3://load/files2/    DISABLED    
+my_ext_stage    s3://load/files/    DISABLED
+my_ext_stage2    s3://load/files/    DISABLED
+my_ext_stage3    s3://load/files/    ENABLED
+my_ext_stage1    s3://load/files2/    DISABLED
 my_ext_stage4    s3://load/files/    ENABLED    user stage
 SHOW STAGES like 'my_ext_stage1';
 STAGE_NAME    URL    STATUS    COMMENT
-my_ext_stage1    s3://load/files2/    DISABLED    
+my_ext_stage1    s3://load/files2/    DISABLED
 DROP STAGE my_ext_stage5;
-internal error: the satge my_ext_stage5 not exists
+internal error: the stage my_ext_stage5 not exists
 DROP STAGE if exists my_ext_stage5;
 DROP STAGE my_ext_stage;
 DROP STAGE my_ext_stage1;
 DROP STAGE my_ext_stage2;
 DROP STAGE my_ext_stage3;
 DROP STAGE my_ext_stage4;
+drop stage if exists aws_stage;
+drop stage if exists local_stage;
+create stage aws_stage URL= 's3.us-east-2.amazonaws.com' CREDENTIALS={ 'access_key_id' = 'AKIAYOFAMAB', 'secret_access_key' = '7OtGNgIwlkBVwyL9rV', 'bucket' = 'hn-test2', 'region' = 'us-east-2', 'compression' = 'none'};
+show stages;
+STAGE_NAME    URL    STATUS    COMMENT
+aws_stage    s3.us-east-2.amazonaws.com    DISABLED
+alter stage aws_stage set enable=TRUE;
+show stages;
+STAGE_NAME    URL    STATUS    COMMENT
+aws_stage    s3.us-east-2.amazonaws.com    ENABLED
+alter stage if exists aws_stage set URL= 's3.us-east-1.amazonaws.com';
+show stages;
+STAGE_NAME    URL    STATUS    COMMENT
+aws_stage    s3.us-east-1.amazonaws.com    ENABLED
+alter stage if exists aws_stage set CREDENTIALS={ 'bucket' = 'hn-test2', 'region' = 'us-east-1'};
+select stage_name,url,stage_credentials,stage_status,comment from mo_catalog.mo_stages;
+stage_name    url    stage_credentials    stage_status    comment
+aws_stage    s3.us-east-1.amazonaws.com    *7EF9F8E04FF86741707B29BD325543FA2168F6D5    enabled
+alter stage aws_stage set comment='comment1';
+show stages;
+STAGE_NAME    URL    STATUS    COMMENT
+aws_stage    s3.us-east-1.amazonaws.com    ENABLED    comment1
+drop stage aws_stage;
+CREATE TABLE stage_table(
+R_REGIONKEY  INTEGER NOT NULL,
+R_NAME       CHAR(25) NOT NULL,
+R_COMMENT    VARCHAR(152),
+PRIMARY KEY (R_REGIONKEY)
+);
+insert into stage_table values
+(0,"AFRICA","lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to "),
+(1,"AMERICA","hs use ironic, even requests. s"),
+(2,"ASIA","ges. thinly even pinto beans ca"),
+(3,"EUROPE","ly final courts cajole furiously final excuse"),
+(4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
+create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
+stage_name    stage_status    comment
+local_stage    enabled    local stage configure
+select * from stage_table into outfile 'local_stage:/stage_table.csv';
+r_regionkey    r_name    r_comment
+drop stage local_stage;
+show stages;
+STAGE_NAME    URL    STATUS    COMMENT
+create stage local_stage URL= '$resources/into_outfile' ENABLE=FALSE;
+select * from stage_table into outfile 'local_stage:/stage_table.csv';
+internal error: stage 'local_stage' is invalid, please check
+select * from stage_table into outfile '$resources/into_outfile/stage_table00.csv';
+r_regionkey    r_name    r_comment
+alter stage local_stage set ENABLE=TRUE;
+select * from stage_table into outfile '$resources/into_outfile/stage_table01.csv';
+internal error: stage exists, please try to check and use a stage instead
+drop stage local_stage;
+select * from stage_table into outfile '$resources/into_outfile/stage_table02.csv';
+r_regionkey    r_name    r_comment
+create stage local_stage URL= '$resources/into_outfile' ENABLE=FALSE;
+alter stage local_stage set ENABLE=TRUE;
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
+stage_name    stage_status    comment
+local_stage    enabled
+select * from stage_table into outfile 'local_stage:/stage_table1.csv';
+r_regionkey    r_name    r_comment
+truncate table stage_table;
+load data infile '$resources/into_outfile/stage_table1.csv' into table stage_table ignore 1 lines;
+select r_name from stage_table;
+r_name
+AFRICA
+AMERICA
+ASIA
+EUROPE
+MIDDLE EAST
+alter stage local_stage set URL= '$resources/into_outfile_2';
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
+stage_name    stage_status    comment
+local_stage    enabled
+select * from stage_table into outfile 'local_stage:/stage_table2.csv';
+r_regionkey    r_name    r_comment
+truncate table stage_table;
+load data infile '$resources/into_outfile_2/stage_table2.csv' into table stage_table ignore 1 lines;
+select r_name from stage_table;
+r_name
+AFRICA
+AMERICA
+ASIA
+EUROPE
+MIDDLE EAST
+alter stage local_stage set comment = 'new comment';
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
+stage_name    stage_status    comment
+local_stage    enabled    new comment
+create stage local_stage URL= '$resources/into_outfile_2' ENABLE=FALSE;
+internal error: the stage local_stage exists
+alter stage local_stage set URL= '$resources/into_outfile_2' comment='alter comment';
+internal error: at most one option at a time
+drop stage local_stage;
+drop stage if exists local_stage;
+create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
+select * from stage_table into outfile 'local_stage:/stage_table3.csv';
+r_regionkey    r_name    r_comment
+drop stage local_stage;
+create stage if not exists local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
+create stage if not exists local_stage URL= '$resources/into_outfile2' ENABLE=FALSE;
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
+stage_name    stage_status    comment
+local_stage    enabled    local stage configure
+alter stage if exists l_stage set ENABLE=TRUE;
+create user "stage_user" identified by '123456';
+create role s_role;
+grant all on table *.* to s_role;
+grant all on account * to s_role;
+grant all on database *.* to s_role;
+grant s_role to stage_user;
+create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
+internal error: do not have privilege to execute the statement
+create database sdb;
+use sdb;
+CREATE TABLE stage_table(
+R_REGIONKEY  INTEGER NOT NULL,
+R_NAME       CHAR(25) NOT NULL,
+R_COMMENT    VARCHAR(152),
+PRIMARY KEY (R_REGIONKEY)
+);
+insert into stage_table values
+(0,"AFRICA","lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to "),
+(1,"AMERICA","hs use ironic, even requests. s"),
+(2,"ASIA","ges. thinly even pinto beans ca"),
+(3,"EUROPE","ly final courts cajole furiously final excuse"),
+(4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
+alter stage local_stage set ENABLE=FALSE;
+internal error: do not have privilege to execute the statement
+drop stage stage_user;
+internal error: do not have privilege to execute the statement
+drop database sdb;
+drop user stage_user;
+drop role s_role;
+drop account if exists stage_account;
+create account `stage_account` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE comment='local stage configure';
+create database sdb;
+use sdb;
+CREATE TABLE stage_table(
+R_REGIONKEY  INTEGER NOT NULL,
+R_NAME       CHAR(25) NOT NULL,
+R_COMMENT    VARCHAR(152),
+PRIMARY KEY (R_REGIONKEY)
+);
+insert into stage_table values
+(0,"AFRICA","lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to "),
+(1,"AMERICA","hs use ironic, even requests. s"),
+(2,"ASIA","ges. thinly even pinto beans ca"),
+(3,"EUROPE","ly final courts cajole furiously final excuse"),
+(4,"MIDDLE EAST","uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl");
+select stage_name,stage_status,comment from mo_catalog.mo_stages;
+stage_name    stage_status    comment
+local_stage    enabled    local stage configure
+select * from stage_table into outfile 'local_stage:/stage_table5.csv';
+r_regionkey    r_name    r_comment
+drop stage local_stage;
+drop database sdb;
+create user "stage_user02" identified by '123456';
+create role s_role;
+grant all on table *.* to s_role;
+grant all on account * to s_role;
+grant all on database *.* to s_role;
+grant s_role to stage_user02;
+create stage local_stage URL= '$resources/into_outfile' ENABLE=TRUE;
+internal error: do not have privilege to execute the statement
+show stages;
+STAGE_NAME    URL    STATUS    COMMENT
+alter stage local_stage set ENABLE=FALSE;
+internal error: do not have privilege to execute the statement
+drop stage local_stage;
+internal error: do not have privilege to execute the statement
+drop account stage_account;
+drop database if exists stage;
+drop stage if exists aws_stage;
+drop stage if exists local_stage;
+drop user if exists stage_user;
+drop role if exists s_role;

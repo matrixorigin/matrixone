@@ -290,9 +290,9 @@ func TestNewObjectReader(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = objectWriter.WriteTombstone(bat)
 	assert.Nil(t, err)
-	_, err = objectWriter.WriteSubBlock(bat, 2)
+	_, _, err = objectWriter.WriteSubBlock(bat, 2)
 	assert.Nil(t, err)
-	_, err = objectWriter.WriteSubBlock(bat, 26)
+	_, _, err = objectWriter.WriteSubBlock(bat, 26)
 	assert.Nil(t, err)
 	ts := time.Now()
 	option := WriteOptions{

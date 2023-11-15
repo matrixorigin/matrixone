@@ -240,6 +240,10 @@ func GetTNStoreHeartbeatCmd(data []byte) []byte {
 	return getHeartbeatCmd(data, pb.TNHeartbeatUpdate)
 }
 
+func GetProxyHeartbeatCmd(data []byte) []byte {
+	return getHeartbeatCmd(data, pb.ProxyHeartbeatUpdate)
+}
+
 func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
 	cmd := make([]byte, headerSize+len(data))
 	binaryEnc.PutUint32(cmd, uint32(tag))
@@ -346,6 +350,10 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		}
 		if c.DeleteCNStore != nil {
 			s.handleDeleteCNCmd(c.UUID)
+			continue
+		}
+		if c.DeleteProxyStore != nil {
+			s.handleDeleteProxyCmd(c.UUID)
 			continue
 		}
 		l, ok := s.state.ScheduleCommands[c.UUID]
@@ -516,6 +524,21 @@ func (s *stateMachine) handleDeleteCNCmd(uuid string) sm.Result {
 	return sm.Result{}
 }
 
+func (s *stateMachine) handleDeleteProxyCmd(uuid string) sm.Result {
+	delete(s.state.ProxyState.Stores, uuid)
+	return sm.Result{}
+}
+
+func (s *stateMachine) handleProxyHeartbeat(cmd []byte) sm.Result {
+	data := parseHeartbeatCmd(cmd)
+	var hb pb.ProxyHeartbeat
+	if err := hb.Unmarshal(data); err != nil {
+		panic(err)
+	}
+	s.state.ProxyState.Update(hb, s.state.Tick)
+	return s.getCommandBatch(hb.UUID)
+}
+
 // FIXME: NextID should be set to K8SIDRangeEnd once HAKeeper state is
 // set to HAKeeperBootstrapping.
 func (s *stateMachine) handleInitialClusterRequestCmd(cmd []byte) sm.Result {
@@ -619,6 +642,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handlePatchCNStore(cmd), nil
 	case pb.RemoveCNStore:
 		return s.handleDeleteCNCmd(parseDeleteCNStoreCmd(cmd).StoreID), nil
+	case pb.ProxyHeartbeatUpdate:
+		return s.handleProxyHeartbeat(cmd), nil
 	default:
 		panic(moerr.NewInvalidInputNoCtx("unknown haKeeper cmd '%v'", cmd))
 	}
@@ -631,6 +656,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		TNState:            s.state.TNState,
 		LogState:           s.state.LogState,
 		CNState:            s.state.CNState,
+		ProxyState:         s.state.ProxyState,
 		State:              s.state.State,
 		TaskSchedulerState: s.state.TaskSchedulerState,
 		TaskTableUser:      s.state.TaskTableUser,
@@ -655,9 +681,10 @@ func (s *stateMachine) handleScheduleCommandQuery(uuid string) *pb.CommandBatch 
 func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails {
 	cfg.Fill()
 	cd := &pb.ClusterDetails{
-		CNStores:  make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
-		TNStores:  make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
-		LogStores: make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
+		CNStores:    make([]pb.CNStore, 0, len(s.state.CNState.Stores)),
+		TNStores:    make([]pb.TNStore, 0, len(s.state.TNState.Stores)),
+		LogStores:   make([]pb.LogStore, 0, len(s.state.LogState.Stores)),
+		ProxyStores: make([]pb.ProxyStore, 0, len(s.state.ProxyState.Stores)),
 	}
 	for uuid, info := range s.state.CNState.Stores {
 		state := pb.NormalState
@@ -694,6 +721,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			LockServiceAddress:   info.LockServiceAddress,
 			CtlAddress:           info.CtlAddress,
 			ConfigData:           info.ConfigData,
+			QueryAddress:         info.QueryAddress,
 		}
 		cd.TNStores = append(cd.TNStores, n)
 	}
@@ -711,6 +739,14 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			ConfigData:     info.ConfigData,
 		}
 		cd.LogStores = append(cd.LogStores, n)
+	}
+	for uuid, info := range s.state.ProxyState.Stores {
+		cd.ProxyStores = append(cd.ProxyStores, pb.ProxyStore{
+			UUID:          uuid,
+			Tick:          info.Tick,
+			ListenAddress: info.ListenAddress,
+			ConfigData:    info.ConfigData,
+		})
 	}
 	return cd
 }

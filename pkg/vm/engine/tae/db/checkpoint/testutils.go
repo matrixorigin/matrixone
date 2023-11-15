@@ -32,7 +32,7 @@ type TestRunner interface {
 
 	CleanPenddingCheckpoint()
 	ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error
-	ForceIncrementalCheckpoint(end types.TS) error
+	ForceIncrementalCheckpoint(end types.TS, truncate bool) error
 	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
 	MaxLSNInRange(end types.TS) uint64
 
@@ -82,7 +82,7 @@ func (r *runner) CleanPenddingCheckpoint() {
 
 func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error {
 	if r.GetPenddingIncrementalCount() == 0 {
-		err := r.ForceIncrementalCheckpoint(end)
+		err := r.ForceIncrementalCheckpoint(end, false)
 		if err != nil {
 			return err
 		}
@@ -142,7 +142,7 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time
 	return r.ForceFlushWithInterval(ts, ctx, forceDuration, r.options.forceFlushCheckInterval)
 }
 
-func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
+func (r *runner) ForceIncrementalCheckpoint(end types.TS, truncate bool) error {
 	prev := r.MaxCheckpoint()
 	if prev != nil && !prev.IsFinished() {
 		return moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
@@ -159,10 +159,28 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	if err := r.doIncrementalCheckpoint(entry); err != nil {
 		return err
 	}
-	if err := r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
+	var lsn, lsnToTruncate uint64
+	if truncate {
+		lsn = r.source.GetMaxLSN(entry.start, entry.end)
+		if lsn > r.options.reservedWALEntryCount {
+			lsnToTruncate = lsn - r.options.reservedWALEntryCount
+		}
+		entry.ckpLSN = lsn
+		entry.truncateLSN = lsnToTruncate
+	}
+	if err := r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
 		return err
 	}
 	entry.SetState(ST_Finished)
+	if truncate {
+		e, err := r.wal.RangeCheckpoint(1, lsnToTruncate)
+		if err != nil {
+			panic(err)
+		}
+		if err = e.WaitDone(); err != nil {
+			panic(err)
+		}
+	}
 	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
 	return nil
 }

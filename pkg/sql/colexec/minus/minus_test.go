@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -73,25 +74,26 @@ func TestMinus(t *testing.T) {
 		},
 	)
 
-	err := Prepare(c.proc, c.arg)
+	err := c.arg.Prepare(c.proc)
 	require.NoError(t, err)
 	cnt := 0
-	var end process.ExecStatus
+	var end vm.CallResult
 	for {
-		end, err = Call(0, c.proc, c.arg, false, false)
-		if end == process.ExecStop {
+		end, err = c.arg.Call(c.proc)
+		if end.Status == vm.ExecStop {
 			break
 		}
 		require.NoError(t, err)
-		result := c.proc.InputBatch()
+		result := end.Batch
 		if result != nil && !result.IsEmpty() {
 			cnt += result.RowCount()
 			require.Equal(t, 3, len(result.Vecs))
-			c.proc.InputBatch().Clean(c.proc.Mp())
 		}
 	}
-	c.arg.Free(c.proc, false)
 	require.Equal(t, 1, cnt) // 1 row
+	c.proc.Reg.MergeReceivers[0].Ch <- nil
+	c.proc.Reg.MergeReceivers[1].Ch <- nil
+	c.arg.Free(c.proc, false, nil)
 	c.proc.FreeVectors()
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
@@ -124,6 +126,11 @@ func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.
 	proc.Reg.MergeReceivers[0].Ch <- nil
 	proc.Reg.MergeReceivers[1].Ch <- nil
 	arg := new(Argument)
+	arg.info = &vm.OperatorInfo{
+		Idx:     0,
+		IsFirst: false,
+		IsLast:  false,
+	}
 	return minusTestCase{
 		proc:   proc,
 		arg:    arg,

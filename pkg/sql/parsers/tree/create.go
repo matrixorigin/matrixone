@@ -736,6 +736,10 @@ func (it IndexType) ToString() string {
 		return "bsi"
 	case INDEX_TYPE_ZONEMAP:
 		return "zonemap"
+	case INDEX_TYPE_IVFFLAT:
+		return "ivfflat"
+	case INDEX_TYPE_INVALID:
+		return ""
 	default:
 		return "Unknown IndexType"
 	}
@@ -748,6 +752,7 @@ const (
 	INDEX_TYPE_RTREE
 	INDEX_TYPE_BSI
 	INDEX_TYPE_ZONEMAP
+	INDEX_TYPE_IVFFLAT
 )
 
 type VisibleType int
@@ -771,17 +776,24 @@ func (vt VisibleType) ToString() string {
 
 type IndexOption struct {
 	NodeFormatter
-	KeyBlockSize             uint64
-	IType                    IndexType
-	ParserName               string
-	Comment                  string
-	Visible                  VisibleType
-	EngineAttribute          string
-	SecondaryEngineAttribute string
+	KeyBlockSize                uint64
+	IType                       IndexType
+	ParserName                  string
+	Comment                     string
+	Visible                     VisibleType
+	EngineAttribute             string
+	SecondaryEngineAttribute    string
+	AlgoParamList               int64
+	AlgoParamVectorSimilarityFn string
 }
 
 // Must follow the following sequence when test
 func (node *IndexOption) Format(ctx *FmtCtx) {
+	if node.KeyBlockSize != 0 || node.ParserName != "" ||
+		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
+		node.AlgoParamList != 0 || node.AlgoParamVectorSimilarityFn != "" {
+		ctx.WriteByte(' ')
+	}
 	if node.KeyBlockSize != 0 {
 		ctx.WriteString("KEY_BLOCK_SIZE ")
 		ctx.WriteString(strconv.FormatUint(node.KeyBlockSize, 10))
@@ -795,6 +807,16 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.Comment != "" {
 		ctx.WriteString("comment ")
 		ctx.WriteString(node.Comment)
+		ctx.WriteByte(' ')
+	}
+	if node.AlgoParamList != 0 {
+		ctx.WriteString("LISTS ")
+		ctx.WriteString(strconv.FormatInt(node.AlgoParamList, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.AlgoParamVectorSimilarityFn != "" {
+		ctx.WriteString("SIMILARITY_FUNCTION ")
+		ctx.WriteString(node.AlgoParamVectorSimilarityFn)
 		ctx.WriteByte(' ')
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {
@@ -1980,7 +2002,7 @@ const (
 type CreateIndex struct {
 	statementImpl
 	Name        Identifier
-	Table       TableName
+	Table       *TableName
 	IndexCat    IndexCategory
 	IfNotExists bool
 	KeyParts    []*KeyPart
@@ -2019,7 +2041,6 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(")")
 	if node.IndexOption != nil {
-		ctx.WriteByte(' ')
 		node.IndexOption.Format(ctx)
 	}
 }
@@ -2027,7 +2048,7 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 func (node *CreateIndex) GetStatementType() string { return "Create Index" }
 func (node *CreateIndex) GetQueryType() string     { return QueryTypeDDL }
 
-func NewCreateIndex(n Identifier, t TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
+func NewCreateIndex(n Identifier, t *TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
 	return &CreateIndex{
 		Name:        n,
 		Table:       t,

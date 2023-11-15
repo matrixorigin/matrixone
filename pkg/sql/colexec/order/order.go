@@ -17,60 +17,17 @@ package order
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const maxBatchSizeToSort = 64 * mpool.MB
-
-type Argument struct {
-	ctr *container
-
-	OrderBySpec []*plan.OrderBySpec
-}
-
-type container struct {
-	batWaitForSort *batch.Batch
-
-	desc      []bool // ds[i] == true: the attrs[i] are in descending order
-	nullsLast []bool
-
-	sortExprExecutor []colexec.ExpressionExecutor
-	sortVectors      []*vector.Vector
-	resultOrderList  []int64
-	flatFn           []func(v, w *vector.Vector) error // method to flat const vector
-}
-
-func (arg *Argument) Free(proc *process.Process, _ bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		for i := range ctr.sortExprExecutor {
-			if ctr.sortExprExecutor[i] != nil {
-				ctr.sortExprExecutor[i].Free()
-			}
-		}
-		if ctr.batWaitForSort != nil {
-			ctr.batWaitForSort.Clean(proc.Mp())
-			ctr.batWaitForSort = nil
-		}
-		ctr.resultOrderList = nil
-	}
-}
-
 func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enoughToSend bool, err error) {
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return false, nil
-	}
-
 	s1, s2 := 0, bat.Size()
 	if ctr.batWaitForSort != nil {
 		s1 = ctr.batWaitForSort.Size()
@@ -91,42 +48,44 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 			oldVec.Free(proc.Mp())
 		}
 	}
-
-	// XXX flat const vector here.
-	if ctr.batWaitForSort != nil {
-		if ctr.flatFn == nil {
-			ctr.flatFn = make([]func(v, w *vector.Vector) error, bat.VectorCount())
+	if ctr.batWaitForSort == nil {
+		ctr.batWaitForSort, err = bat.Dup(proc.Mp())
+		if err != nil {
+			return false, err
 		}
+	} else {
+		// XXX flat const vector here.
+		if ctr.batWaitForSort != nil {
+			if ctr.flatFn == nil {
+				ctr.flatFn = make([]func(v, w *vector.Vector) error, bat.VectorCount())
+			}
 
-		for i := 0; i < ctr.batWaitForSort.VectorCount(); i++ {
-			typ := *ctr.batWaitForSort.Vecs[i].GetType()
-			if ctr.batWaitForSort.Vecs[i].IsConst() {
-				if ctr.flatFn[i] == nil {
-					ctr.flatFn[i] = vector.GetUnionAllFunction(typ, proc.Mp())
-				}
+			for i := 0; i < ctr.batWaitForSort.VectorCount(); i++ {
+				typ := *ctr.batWaitForSort.Vecs[i].GetType()
+				if ctr.batWaitForSort.Vecs[i].IsConst() {
+					if ctr.flatFn[i] == nil {
+						ctr.flatFn[i] = vector.GetUnionAllFunction(typ, proc.Mp())
+					}
 
-				v := ctr.batWaitForSort.Vecs[i]
-				ctr.batWaitForSort.Vecs[i] = vector.NewVec(typ)
-				err = ctr.flatFn[i](ctr.batWaitForSort.Vecs[i], v)
-				v.Free(proc.Mp())
-				if err != nil {
-					return false, err
+					v := ctr.batWaitForSort.Vecs[i]
+					ctr.batWaitForSort.Vecs[i] = proc.GetVector(typ)
+					err = ctr.flatFn[i](ctr.batWaitForSort.Vecs[i], v)
+					v.Free(proc.Mp())
+					if err != nil {
+						return false, err
+					}
 				}
 			}
 		}
-	}
-
-	ctr.batWaitForSort, err = ctr.batWaitForSort.Append(proc.Ctx, proc.Mp(), bat)
-	if err != nil {
-		return false, err
-	}
-	if ctr.batWaitForSort != bat {
-		proc.PutBatch(bat)
+		ctr.batWaitForSort, err = ctr.batWaitForSort.Append(proc.Ctx, proc.Mp(), bat)
+		if err != nil {
+			return false, err
+		}
 	}
 	return all >= maxBatchSizeToSort, nil
 }
 
-func (ctr *container) sortAndSend(proc *process.Process) (err error) {
+func (ctr *container) sortAndSend(proc *process.Process, result *vm.CallResult) (err error) {
 	if ctr.batWaitForSort != nil {
 		for i := range ctr.sortExprExecutor {
 			ctr.sortVectors[i], err = ctr.sortExprExecutor[i].Eval(proc, []*batch.Batch{ctr.batWaitForSort})
@@ -197,14 +156,18 @@ func (ctr *container) sortAndSend(proc *process.Process) (err error) {
 			return err
 		}
 	}
-	proc.SetInputBatch(ctr.batWaitForSort)
+	if ctr.rbat != nil {
+		proc.PutBatch(ctr.rbat)
+		ctr.rbat = nil
+	}
+	ctr.rbat = ctr.batWaitForSort
+	result.Batch = ctr.batWaitForSort
 	ctr.batWaitForSort = nil
-
 	return nil
 }
 
-func String(arg any, buf *bytes.Buffer) {
-	ap := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	ap := arg
 	buf.WriteString("τ([")
 	for i, f := range ap.OrderBySpec {
 		if i > 0 {
@@ -215,10 +178,11 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	ctr := ap.ctr
+	ctr.state = vm.Build
 	{
 		ctr.desc = make([]bool, len(ap.OrderBySpec))
 		ctr.nullsLast = make([]bool, len(ap.OrderBySpec))
@@ -247,22 +211,54 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ctr := arg.(*Argument).ctr
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	ctr := arg.ctr
+	if ctr.state == vm.Build {
+		for {
+			result, err := arg.children[0].Call(proc)
+			if err != nil {
+				result.Status = vm.ExecStop
+				return result, err
+			}
+			if result.Batch == nil {
+				ctr.state = vm.Eval
+				break
+			}
+			if result.Batch.IsEmpty() {
+				continue
+			}
 
-	bat := proc.InputBatch()
-	if bat == nil {
-		return process.ExecStop, ctr.sortAndSend(proc)
+			enoughToSend, err := ctr.appendBatch(proc, result.Batch)
+			if err != nil {
+				result.Status = vm.ExecStop
+				return result, err
+			}
+
+			if enoughToSend {
+				err := ctr.sortAndSend(proc, &result)
+				if err != nil {
+					result.Status = vm.ExecStop
+					return result, err
+				}
+				return result, nil
+			}
+		}
 	}
 
-	enoughToSend, err := ctr.appendBatch(proc, bat)
-	if err != nil {
-		return process.ExecNext, err
-	}
-	if enoughToSend {
-		return process.ExecNext, ctr.sortAndSend(proc)
+	result := vm.NewCallResult()
+	if ctr.state == vm.Eval {
+		err := ctr.sortAndSend(proc, &result)
+		if err != nil {
+			result.Status = vm.ExecStop
+			return result, err
+		}
+		ctr.state = vm.End
+		return result, nil
 	}
 
-	proc.SetInputBatch(batch.EmptyBatch)
-	return process.ExecNext, nil
+	if ctr.state == vm.End {
+		return result, nil
+	}
+
+	panic("bug")
 }

@@ -25,6 +25,11 @@ import (
 var DefaultAllocator *mpool.MPool
 var MutMemAllocator *mpool.MPool
 var SmallAllocator *mpool.MPool
+var LogtailAllocator *mpool.MPool
+var CheckpointAllocator *mpool.MPool
+var MergeAllocator *mpool.MPool
+var WorkspaceAllocator *mpool.MPool
+var DebugAllocator *mpool.MPool
 
 // init with zero fixed pool, for test.
 func init() {
@@ -49,6 +54,31 @@ func InitTAEMPool() {
 
 		mpool.DeleteMPool(SmallAllocator)
 		if SmallAllocator, err = mpool.NewMPool("tae_small", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(LogtailAllocator)
+		if LogtailAllocator, err = mpool.NewMPool("tae_logtail", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(CheckpointAllocator)
+		if CheckpointAllocator, err = mpool.NewMPool("tae_checkpoint", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(MergeAllocator)
+		if MergeAllocator, err = mpool.NewMPool("tae_merge", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(WorkspaceAllocator)
+		if WorkspaceAllocator, err = mpool.NewMPool("tae_workspace", 0, mpool.NoFixed); err != nil {
+			panic(err)
+		}
+
+		mpool.DeleteMPool(DebugAllocator)
+		if DebugAllocator, err = mpool.NewMPool("tae_debug", 0, mpool.NoFixed); err != nil {
 			panic(err)
 		}
 	}

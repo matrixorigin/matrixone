@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -54,11 +55,15 @@ func TestDeleteChain1(t *testing.T) {
 	txn1.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), types.TS{})
 	n1 := chain.AddNodeLocked(txn1, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	assert.Equal(t, 1, chain.Depth())
+	mockPK := containers.MakeVector(types.New(types.T_uint8, 0, 0), common.DefaultAllocator)
+	for i := 0; i < 33; i++ {
+		mockPK.Append(uint8(i), false)
+	}
 
 	// 1. Txn1 delete from 1 to 10 -- PASS
 	err := chain.PrepareRangeDelete(1, 10, txn1.GetStartTS())
 	assert.Nil(t, err)
-	n1.RangeDeleteLocked(1, 10, nil)
+	n1.RangeDeleteLocked(1, 10, mockPK.Window(1, 10), common.DefaultAllocator)
 	assert.Equal(t, uint32(10), n1.GetCardinalityLocked())
 	t.Log(n1.mask.String())
 
@@ -75,7 +80,7 @@ func TestDeleteChain1(t *testing.T) {
 	err = chain.PrepareRangeDelete(20, 30, txn2.GetStartTS())
 	assert.Nil(t, err)
 	n2 := chain.AddNodeLocked(txn2, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
-	n2.RangeDeleteLocked(20, 30, nil)
+	n2.RangeDeleteLocked(20, 30, mockPK.Window(20, 11), common.DefaultAllocator)
 	assert.Equal(t, uint32(11), n2.GetCardinalityLocked())
 	t.Log(n2.mask.String())
 
@@ -120,7 +125,7 @@ func TestDeleteChain1(t *testing.T) {
 	err = chain.PrepareRangeDelete(31, 33, txn3.GetStartTS())
 	assert.Nil(t, err)
 	n3 := chain.AddNodeLocked(txn3, handle.DeleteType(handle.DT_Normal))
-	n3.RangeDeleteLocked(31, 33, nil)
+	n3.RangeDeleteLocked(31, 33, mockPK.Window(31, 4), common.DefaultAllocator)
 
 	collected, err = chain.CollectDeletesLocked(txn3, nil)
 	assert.NoError(t, err)
@@ -153,12 +158,16 @@ func TestDeleteChain2(t *testing.T) {
 	seg := objectio.NewSegmentid()
 	controller := NewMVCCHandle(catalog.NewStandaloneBlock(nil, objectio.NewBlockid(seg, 0, 0), types.TS{}))
 	chain := NewDeleteChain(nil, controller)
+	mockPK := containers.MakeVector(types.New(types.T_uint8, 0, 0), common.DefaultAllocator)
+	for i := 0; i < 13; i++ {
+		mockPK.Append(uint8(i), false)
+	}
 
 	txn1 := mockTxn()
 	n1 := chain.AddNodeLocked(txn1, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	err := chain.PrepareRangeDelete(1, 4, txn1.GetStartTS())
 	assert.Nil(t, err)
-	n1.RangeDeleteLocked(1, 4, nil)
+	n1.RangeDeleteLocked(1, 4, mockPK.Window(1, 4), common.DefaultAllocator)
 	commitTxn(txn1)
 	err = n1.PrepareCommit()
 	assert.Nil(t, err)
@@ -170,14 +179,14 @@ func TestDeleteChain2(t *testing.T) {
 	n2 := chain.AddNodeLocked(txn2, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	err = chain.PrepareRangeDelete(5, 8, txn2.GetStartTS())
 	assert.Nil(t, err)
-	n2.RangeDeleteLocked(5, 8, nil)
+	n2.RangeDeleteLocked(5, 8, mockPK.Window(5, 4), common.DefaultAllocator)
 	t.Log(chain.StringLocked())
 
 	txn3 := mockTxn()
 	n3 := chain.AddNodeLocked(txn3, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	err = chain.PrepareRangeDelete(9, 12, txn3.GetStartTS())
 	assert.Nil(t, err)
-	n3.RangeDeleteLocked(9, 12, nil)
+	n3.RangeDeleteLocked(9, 12, mockPK.Window(9, 4), common.DefaultAllocator)
 	commitTxn(txn3)
 	err = n3.PrepareCommit()
 	assert.Nil(t, err)

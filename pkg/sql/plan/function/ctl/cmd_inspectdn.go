@@ -22,7 +22,7 @@ import (
 )
 
 func handleInspectTN() handleFunc {
-	return getTNHandlerFunc(
+	return GetTNHandlerFunc(
 		pb.CmdMethod_Inspect,
 		func(_ string) ([]uint64, error) {
 			return nil, nil
@@ -40,6 +40,6 @@ func handleInspectTN() handleFunc {
 		func(data []byte) (interface{}, error) {
 			resp := &db.InspectResp{}
 			types.Decode(data, resp)
-			return resp.GetResponse(), nil
+			return resp, nil
 		})
 }

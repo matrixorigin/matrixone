@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1333,4 +1334,138 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	si = motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
+}
+
+func Test_getExplainOption(t *testing.T) {
+	ctx := context.TODO()
+	var option *explain.ExplainOptions
+	var err error
+
+	// verbose
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "verbose", Value: "true"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Verbose, true)
+
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "verbose", Value: "NULL"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Verbose, true)
+
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "verbose", Value: "false"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Verbose, false)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "verbose", Value: "???"}})
+	require.NotNil(t, err)
+
+	// analyze
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "analyze", Value: "true"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Analyze, true)
+
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "analyze", Value: "NULL"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Analyze, true)
+
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "analyze", Value: "false"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Analyze, false)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "analyze", Value: "???"}})
+	require.NotNil(t, err)
+
+	// format
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "text"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Format, explain.EXPLAIN_FORMAT_TEXT)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "json"}})
+	require.NotNil(t, err)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "dot"}})
+	require.NotNil(t, err)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "???"}})
+	require.NotNil(t, err)
+
+	// other
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "???", Value: "???"}})
+	require.NotNil(t, err)
+}
+
+func Test_getStmtExecutor(t *testing.T) {
+	var err error
+	stmts := []tree.Statement{
+		&tree.Select{},
+		&tree.ValuesStatement{},
+		&tree.ShowCreateTable{},
+		&tree.ShowCreateDatabase{},
+		&tree.ShowTables{},
+		&tree.ShowSequences{},
+		&tree.ShowDatabases{},
+		&tree.ShowColumns{},
+		&tree.ShowProcessList{},
+		&tree.ShowStatus{},
+		&tree.ShowTableStatus{},
+		&tree.ShowGrants{},
+		&tree.ShowIndex{},
+		&tree.ShowCreateView{},
+		&tree.ShowTarget{},
+		&tree.ExplainFor{},
+		&tree.ExplainStmt{},
+		&tree.ShowVariables{},
+		&tree.ShowErrors{},
+		&tree.ShowWarnings{},
+		&tree.AnalyzeStmt{},
+		&tree.ExplainAnalyze{},
+		&InternalCmdFieldList{},
+		&tree.BeginTransaction{},
+		&tree.CommitTransaction{},
+		&tree.RollbackTransaction{},
+		&tree.SetRole{},
+		&tree.Use{},
+		//&tree.MoDump{},
+		&tree.DropDatabase{},
+		&tree.PrepareStmt{},
+		&tree.PrepareString{},
+		&tree.Deallocate{},
+		&tree.SetVar{},
+		&tree.Delete{},
+		&tree.Update{},
+		&tree.CreatePublication{},
+		&tree.AlterPublication{},
+		&tree.DropPublication{},
+		&tree.CreateAccount{},
+		&tree.DropAccount{},
+		&tree.AlterAccount{},
+		&tree.CreateUser{},
+		&tree.DropUser{},
+		&tree.AlterUser{},
+		&tree.CreateRole{},
+		&tree.DropRole{},
+		&tree.Grant{},
+		&tree.Revoke{},
+		&tree.CreateTable{},
+		&tree.DropTable{},
+		&tree.CreateDatabase{},
+		&tree.CreateIndex{},
+		&tree.DropIndex{},
+		&tree.CreateSequence{},
+		&tree.DropSequence{},
+		&tree.CreateView{},
+		&tree.AlterView{},
+		&tree.AlterTable{},
+		&tree.DropView{},
+		&tree.Insert{},
+		&tree.Replace{},
+		&tree.Load{},
+		&tree.SetDefaultRole{},
+		&tree.SetPassword{},
+		&tree.TruncateTable{},
+		&tree.Execute{},
+	}
+
+	for _, stmt := range stmts {
+		_, err = getStmtExecutor(nil, nil, &baseStmtExecutor{}, stmt)
+		require.Nil(t, err)
+	}
 }

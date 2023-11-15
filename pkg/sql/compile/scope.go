@@ -67,8 +67,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
+			getLogger().Error("panic in scope run",
+				zap.String("sql", c.sql),
+				zap.String("error", err.Error()))
 		}
-		p.Cleanup(s.Proc, err != nil)
+		p.Cleanup(s.Proc, err != nil, err)
 	}()
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -107,12 +110,23 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
 	var wg sync.WaitGroup
+
+	errChan := make(chan error, len(s.PreScopes))
 	for i := range s.PreScopes {
-		scope := s.PreScopes[i]
 		wg.Add(1)
+		scope := s.PreScopes[i]
 		ants.Submit(func() {
+			defer func() {
+				if e := recover(); e != nil {
+					err := moerr.ConvertPanicError(c.ctx, e)
+					getLogger().Error("panic in merge run run",
+						zap.String("sql", c.sql),
+						zap.String("error", err.Error()))
+					errChan <- err
+				}
+				wg.Done()
+			}()
 			switch scope.Magic {
 			case Normal:
 				errChan <- scope.Run(c)
@@ -125,7 +139,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 			case Pushdown:
 				errChan <- scope.PushdownRun()
 			}
-			wg.Done()
 		})
 	}
 	defer wg.Wait()
@@ -141,11 +154,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 		select {
 		case <-s.Proc.Ctx.Done():
 		default:
-			p.Cleanup(s.Proc, true)
+			p.Cleanup(s.Proc, true, err)
 			return err
 		}
 	}
-	p.Cleanup(s.Proc, false)
+	p.Cleanup(s.Proc, false, nil)
 
 	// receive and check error from pre-scopes and remote scopes.
 	preScopeCount := len(s.PreScopes)
@@ -503,8 +516,6 @@ func (s *Scope) JoinRun(c *Compile) error {
 			probeScope := c.newJoinProbeScope(s, nil)
 			s.PreScopes = append(s.PreScopes, probeScope)
 		}
-		// this is for shuffle join probe scope
-		s.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, shuffleJoinProbeChannelBufferSize)
 		return s.MergeRun(c)
 	}
 
@@ -694,10 +705,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
-						Aggs:      arg.Aggs,
-						Exprs:     arg.Exprs,
-						Types:     arg.Types,
-						MultiAggs: arg.MultiAggs,
+						Aggs:           arg.Aggs,
+						Exprs:          arg.Exprs,
+						Types:          arg.Types,
+						MultiAggs:      arg.MultiAggs,
+						PartialResults: arg.PartialResults,
 					},
 				})
 			}

@@ -66,6 +66,22 @@ func Ln(v float64) (float64, error) {
 	}
 }
 
+func Log2(v float64) (float64, error) {
+	if v <= 0 {
+		return 0, moerr.NewInvalidArgNoCtx("log2", v)
+	} else {
+		return math.Log2(v), nil
+	}
+}
+
+func Lg(v float64) (float64, error) {
+	if v <= 0 {
+		return 0, moerr.NewInvalidArgNoCtx("log10", v)
+	} else {
+		return math.Log10(v), nil
+	}
+}
+
 func Sin(v float64) (float64, error) {
 	return math.Sin(v), nil
 }

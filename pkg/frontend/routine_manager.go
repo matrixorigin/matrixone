@@ -145,7 +145,11 @@ func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uin
 
 	tempRoutineMap := make(map[int64]map[*Routine]uint64, len(ar.accountId2Routine))
 	for account, rountine := range ar.accountId2Routine {
-		tempRoutineMap[account] = rountine
+		tempRountines := make(map[*Routine]uint64, len(rountine))
+		for rt, version := range rountine {
+			tempRountines[rt] = version
+		}
+		tempRoutineMap[account] = tempRountines
 	}
 	return tempRoutineMap
 }
@@ -240,8 +244,12 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
 	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm, nil)
-	ses.SetRequestContext(routine.getCancelRoutineCtx())
-	ses.SetConnectContext(routine.getCancelRoutineCtx())
+	cancelCtx := routine.getCancelRoutineCtx()
+	if rm.baseService != nil {
+		cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, rm.baseService.ID())
+	}
+	ses.SetRequestContext(cancelCtx)
+	ses.SetConnectContext(cancelCtx)
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
@@ -351,7 +359,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}()
 	var err error
 	var isTlsHeader bool
-	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler")
+	ctx, span := trace.Start(rm.getCtx(), "RoutineManager.Handler",
+		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 	connectionInfo := getConnectionInfo(rs)
 	routine := rm.getRoutine(rs)

@@ -1103,24 +1103,24 @@ func getCompositeFilterFuncByExpr(
 		return EvalSelectedOnFixedSizeColumnFactory(val.Dval)
 	case *plan.Const_Timeval:
 		if isSorted {
-			return EvalSelectedOnOrderedSortedColumnFactory(val.Timeval)
+			return EvalSelectedOnOrderedSortedColumnFactory(types.Time(val.Timeval))
 		}
-		return EvalSelectedOnFixedSizeColumnFactory(val.Timeval)
+		return EvalSelectedOnFixedSizeColumnFactory(types.Time(val.Timeval))
 	case *plan.Const_Timestampval:
 		if isSorted {
-			return EvalSelectedOnOrderedSortedColumnFactory(val.Timestampval)
+			return EvalSelectedOnOrderedSortedColumnFactory(types.Timestamp(val.Timestampval))
 		}
-		return EvalSelectedOnFixedSizeColumnFactory(val.Timestampval)
+		return EvalSelectedOnFixedSizeColumnFactory(types.Timestamp(val.Timestampval))
 	case *plan.Const_Dateval:
 		if isSorted {
-			return EvalSelectedOnOrderedSortedColumnFactory(val.Dateval)
+			return EvalSelectedOnOrderedSortedColumnFactory(types.Date(val.Dateval))
 		}
-		return EvalSelectedOnFixedSizeColumnFactory(val.Dateval)
+		return EvalSelectedOnFixedSizeColumnFactory(types.Date(val.Dateval))
 	case *plan.Const_Datetimeval:
 		if isSorted {
-			return EvalSelectedOnOrderedSortedColumnFactory(val.Datetimeval)
+			return EvalSelectedOnOrderedSortedColumnFactory(types.Datetime(val.Datetimeval))
 		}
-		return EvalSelectedOnFixedSizeColumnFactory(val.Datetimeval)
+		return EvalSelectedOnFixedSizeColumnFactory(types.Datetime(val.Datetimeval))
 	case *plan.Const_Decimal64Val:
 		v := types.Decimal64(val.Decimal64Val.A)
 		if isSorted {
@@ -1286,4 +1286,15 @@ func extractPKValueFromEqualExprs(
 		}
 	}
 	return
+}
+
+// ListTnService gets all tn service in the cluster
+func ListTnService(appendFn func(service *metadata.TNService)) {
+	mc := clusterservice.GetMOCluster()
+	mc.GetTNService(clusterservice.NewSelector(), func(tn metadata.TNService) bool {
+		if appendFn != nil {
+			appendFn(&tn)
+		}
+		return true
+	})
 }

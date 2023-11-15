@@ -46,7 +46,7 @@ var (
 	}
 )
 
-func NewAggSum(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+func NewAggSum(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
 	case types.T_uint8:
 		return newGenericSum[uint8, uint64](overloadID, inputTypes[0], outputType, dist)
@@ -71,15 +71,15 @@ func NewAggSum(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 	case types.T_decimal64:
 		aggPriv := &sAggDecimal64Sum{}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	case types.T_decimal128:
 		aggPriv := &sAggDecimal128Sum{}
 		if dist {
-			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 		}
-		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for sum", inputTypes[0])
 }
@@ -87,15 +87,18 @@ func NewAggSum(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 func newGenericSum[T1 numeric, T2 maxScaleNumeric](overloadID int64, typ types.Type, otyp types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := &sAggSum[T1, T2]{}
 	if dist {
-		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryDistAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 	}
-	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	return agg.NewUnaryAgg(overloadID, aggPriv, false, typ, otyp, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil), nil
 }
 
 type sAggSum[Input numeric, Output numeric] struct{}
 type sAggDecimal64Sum struct{}
 type sAggDecimal128Sum struct{}
 
+func (s *sAggSum[Input, Output]) Dup() agg.AggStruct {
+	return &sAggSum[Input, Output]{}
+}
 func (s *sAggSum[Input, Output]) Grows(_ int)         {}
 func (s *sAggSum[Input, Output]) Free(_ *mpool.MPool) {}
 func (s *sAggSum[Input, Output]) Fill(groupNumber int64, value Input, lastResult Output, count int64, isEmpty bool, isNull bool) (Output, bool, error) {
@@ -119,6 +122,9 @@ func (s *sAggSum[Input, Output]) Eval(lastResult []Output) ([]Output, error) {
 func (s *sAggSum[Input, Output]) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggSum[Input, Output]) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggDecimal64Sum) Dup() agg.AggStruct {
+	return &sAggDecimal64Sum{}
+}
 func (s *sAggDecimal64Sum) Grows(_ int)         {}
 func (s *sAggDecimal64Sum) Free(_ *mpool.MPool) {}
 func (s *sAggDecimal64Sum) Fill(groupNumber int64, value types.Decimal64, lastResult types.Decimal64, count int64, isEmpty bool, isNull bool) (types.Decimal64, bool, error) {
@@ -181,6 +187,9 @@ func (s *sAggDecimal64Sum) Eval(lastResult []types.Decimal64) ([]types.Decimal64
 func (s *sAggDecimal64Sum) MarshalBinary() ([]byte, error) { return nil, nil }
 func (s *sAggDecimal64Sum) UnmarshalBinary([]byte) error   { return nil }
 
+func (s *sAggDecimal128Sum) Dup() agg.AggStruct {
+	return &sAggDecimal128Sum{}
+}
 func (s *sAggDecimal128Sum) Grows(_ int)         {}
 func (s *sAggDecimal128Sum) Free(_ *mpool.MPool) {}
 func (s *sAggDecimal128Sum) Fill(groupNumber int64, value types.Decimal128, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {

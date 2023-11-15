@@ -34,14 +34,14 @@ const (
 var NewAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error)
 
 // NewAggWithConfig generate the aggregation related struct from the function overload id and deliver a config information.
-var NewAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error)
+var NewAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any, partialresult any) (Agg[any], error)
 
 // IsWinOrderFun check if the function is a window function.
 var IsWinOrderFun func(overloadID int64) bool
 
 func InitAggFramework(
 	newAgg func(overloadID int64, isDistinct bool, inputTypes []types.Type) (Agg[any], error),
-	newAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (Agg[any], error),
+	newAggWithConfig func(overloadID int64, isDistinct bool, inputTypes []types.Type, config any, partialresult any) (Agg[any], error),
 	isWinOrderFun func(overloadID int64) bool) {
 
 	NewAgg = newAgg
@@ -101,6 +101,8 @@ type Agg[T any] interface {
 
 	IsDistinct() bool
 
+	Dup(m *mpool.MPool) Agg[any]
+
 	// WildAggReAlloc reallocate for agg structure from memory pool.
 	// todo: remove this method.
 	WildAggReAlloc(m *mpool.MPool) error
@@ -109,6 +111,8 @@ type Agg[T any] interface {
 type AggStruct interface {
 	encoding.BinaryMarshaler
 	encoding.BinaryUnmarshaler
+
+	Dup() AggStruct
 }
 
 // UnaryAgg generic aggregation function with one input vector and without distinct
@@ -132,6 +136,8 @@ type UnaryAgg[T1, T2 any] struct {
 	outputType types.Type
 	// inputTypes is input type of agg.
 	inputTypes []types.Type
+
+	partialresult any
 
 	// grows add more n groups into agg.
 	grows func(int)
@@ -176,6 +182,8 @@ type UnaryDistAgg[T1, T2 any] struct {
 	outputType types.Type
 	// inputTypes is input type of agg.
 	inputTypes []types.Type
+
+	partialresult any
 
 	// grows add more n groups into agg.
 	grows func(int)
