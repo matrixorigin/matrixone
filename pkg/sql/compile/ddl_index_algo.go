@@ -221,9 +221,9 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid)
 
-	clusterCentersSQL := fmt.Sprintf("%s SELECT 1, ROW_NUMBER() OVER () AS row_num, cast(value as VARCHAR) FROM "+
-		"(SELECT cluster_centers(`%s` spherical_kmeans '%d,%s') AS centers FROM %s ) AS subquery "+
-		"CROSS JOIN UNNEST(subquery.centers) AS u;",
+	clusterCentersSQL := fmt.Sprintf("%s SELECT 1, ROW_NUMBER() OVER (), cast(value as VARCHAR) FROM "+
+		"(SELECT cluster_centers(`%s` spherical_kmeans '%d,%s') AS `__mo_index_centroids` FROM %s ) AS `__mo_index_subquery` "+
+		"CROSS JOIN UNNEST(`__mo_index_subquery`.`__mo_index_centroids`) AS u;",
 		insertSQL,
 		indexColumnName,
 		centroidParamsLists,
@@ -322,18 +322,21 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk)
 
-	mappingSQL := fmt.Sprintf("%s SELECT sub.centroid_version_fk, sub.centroid_id_fk, sub.table_pk FROM "+
-		"(SELECT  c.`%s` as centroid_version_fk,  c.`%s` as centroid_id_fk,%s as table_pk, "+
-		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(c.%s, normalize_l2(%s.%s))) as rn "+
-		"FROM %s CROSS JOIN `%s` c) sub WHERE sub.rn = 1;",
+	mappingSQL := fmt.Sprintf("%s SELECT sub.`__mo_index_centroid_version_fk`, sub.`__mo_index_centroid_id_fk`, sub.`__mo_index_table_pk` FROM "+
+		"(SELECT  `%s`.`%s` as `__mo_index_centroid_version_fk`,  `%s`.`%s` as `__mo_index_centroid_id_fk`,%s as `__mo_index_table_pk`, "+
+		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, normalize_l2(%s.%s))) as `__mo_index_rn` "+
+		"FROM %s CROSS JOIN `%s`) sub WHERE sub.`__mo_index_rn` = 1;",
 		insertSQL,
 
+		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		originalTblPkCols,
 
 		originalTblPkCols,
 		algoParamsDistFn,
+		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		originalTableDef.Name,
 		indexColumnName,
