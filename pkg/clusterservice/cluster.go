@@ -264,7 +264,6 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		PipelineServiceAddress: cn.ServiceAddress,
 		SQLAddress:             cn.SQLAddress,
 		LockServiceAddress:     cn.LockServiceAddress,
-		CtlAddress:             cn.CtlAddress,
 		WorkState:              cn.WorkState,
 		Labels:                 cn.Labels,
 		QueryAddress:           cn.QueryAddress,
@@ -277,7 +276,6 @@ func newTNService(tn logpb.TNStore) metadata.TNService {
 		TxnServiceAddress:     tn.ServiceAddress,
 		LogTailServiceAddress: tn.LogtailServerAddress,
 		LockServiceAddress:    tn.LockServiceAddress,
-		CtlAddress:            tn.CtlAddress,
 		QueryAddress:          tn.QueryAddress,
 	}
 	v.Shards = make([]metadata.TNShard, 0, len(tn.Shards))
