@@ -760,7 +760,30 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 }
 
 func shouldReturnMinimalStats(node *plan.Node) bool {
-	return false
+	if node.NodeType != plan.Node_TABLE_SCAN {
+		return false
+	}
+	if len(node.FilterList) == 0 {
+		return false
+	}
+	if node.TableDef.Pkey == nil {
+		return false
+	}
+	equalCol := make([]int32, 0)
+	for _, expr := range node.FilterList {
+		equiCond, _ := expr.Expr.(*plan.Expr_F)
+		if equiCond.F.Func.GetObjName() != "=" {
+			continue
+		}
+		leftcol, ok := equiCond.F.Args[0].Expr.(*plan.Expr_Col)
+		if !ok {
+			continue
+		}
+		if HasColExpr(equiCond.F.Args[1], -1) == -1 {
+			equalCol = append(equalCol, leftcol.Col.ColPos)
+		}
+	}
+	return containsAllPKs(equalCol, node.TableDef)
 }
 
 func needStats(tableDef *TableDef) bool {
