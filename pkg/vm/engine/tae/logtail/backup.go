@@ -337,7 +337,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
 			name := metaLoc.Name().String()
 
-			if isABlk && !deltaLoc.IsEmpty() && !deltaLoc.Name().Equal(metaLoc.Name()) {
+			if isABlk && !deltaLoc.IsEmpty() {
 				objectsData[name].data[metaLoc.ID()].tombstone = objectsData[deltaLoc.Name().String()].data[metaLoc.ID()]
 			}
 		}
