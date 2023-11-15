@@ -255,7 +255,7 @@ func updateBlockMeta(blkMeta, blkMetaTxn *containers.Batch, row int, blockID typ
 		false)
 	blkMeta.GetVectorByName(catalog.BlockMeta_SegmentID).Update(
 		row,
-		blockID.Segment(),
+		*blockID.Segment(),
 		false)
 	blkMeta.GetVectorByName(catalog.BlockMeta_MetaLoc).Update(
 		row,
