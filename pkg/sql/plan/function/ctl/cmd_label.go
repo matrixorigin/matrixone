@@ -159,10 +159,10 @@ func handleSyncCommit(
 		qs.Release(resp)
 	}
 
-	for _, id := range addrs {
+	for _, addr := range addrs {
 		req := qs.NewRequest(querypb.CmdMethod_SyncCommit)
 		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: maxCommitTS}
-		resp, err := qs.SendMessage(ctx, id, req)
+		resp, err := qs.SendMessage(ctx, addr, req)
 		if err != nil {
 			return Result{}, err
 		}
