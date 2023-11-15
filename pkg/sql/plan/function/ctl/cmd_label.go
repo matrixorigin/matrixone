@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"regexp"
@@ -112,18 +112,18 @@ func parseCNLabel(param string) (cnLabel, error) {
 func handleSetLabel(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error) {
+	sender requestSender) (Result, error) {
 	cluster := clusterservice.GetMOCluster()
 	c, err := parseCNLabel(parameter)
 	if err != nil {
-		return pb.CtlResult{}, err
+		return Result{}, err
 	}
 	kvs := make(map[string][]string)
 	kvs[c.key] = c.values
 	if err := cluster.DebugUpdateCNLabel(c.uuid, kvs); err != nil {
-		return pb.CtlResult{}, err
+		return Result{}, err
 	}
-	return pb.CtlResult{
+	return Result{
 		Method: pb.CmdMethod_Label.String(),
 		Data:   "OK",
 	}, nil
@@ -133,27 +133,24 @@ func handleSyncCommit(
 	proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error) {
-	cs := ctlservice.GetCtlService()
+	sender requestSender) (Result, error) {
+	cs := proc.QueryService
 	mc := clusterservice.GetMOCluster()
 	var services []string
 	mc.GetCNService(
 		clusterservice.NewSelector(),
 		func(c metadata.CNService) bool {
-			services = append(services, c.ServiceID)
+			services = append(services, c.QueryAddress)
 			return true
 		})
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	maxCommitTS := timestamp.Timestamp{}
 	for _, id := range services {
-		resp, err := cs.SendCtlMessage(
-			ctx,
-			metadata.ServiceType_CN,
-			id,
-			cs.NewRequest(pb.CmdMethod_GetCommit))
+		req := cs.NewRequest(querypb.CmdMethod_GetCommit)
+		resp, err := cs.SendMessage(ctx, id, req)
 		if err != nil {
-			return pb.CtlResult{}, err
+			return Result{}, err
 		}
 		if maxCommitTS.Less(resp.GetCommit.CurrentCommitTS) {
 			maxCommitTS = resp.GetCommit.CurrentCommitTS
@@ -162,20 +159,16 @@ func handleSyncCommit(
 	}
 
 	for _, id := range services {
-		req := cs.NewRequest(pb.CmdMethod_SyncCommit)
-		req.SycnCommit.LatestCommitTS = maxCommitTS
-		resp, err := cs.SendCtlMessage(
-			ctx,
-			metadata.ServiceType_CN,
-			id,
-			req)
+		req := cs.NewRequest(querypb.CmdMethod_SyncCommit)
+		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: maxCommitTS}
+		resp, err := cs.SendMessage(ctx, id, req)
 		if err != nil {
-			return pb.CtlResult{}, err
+			return Result{}, err
 		}
 		cs.Release(resp)
 	}
 
-	return pb.CtlResult{
+	return Result{
 		Method: pb.CmdMethod_SyncCommit.String(),
 		Data: fmt.Sprintf("sync %d cn services's commit ts to %s",
 			len(services),
