@@ -34,6 +34,9 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskCkpEntryPendingRow(),
 			c.initTaskMergeRow(),
 			c.initTaskMergeTransferPageRow(),
+			c.initTaskGCkpCollectUsageRow(),
+			c.initTaskICkpCollectUsageRow(),
+			c.initTaskCkpCollectUsageRow(),
 		)...)
 
 	if err != nil {
@@ -60,6 +63,32 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 		c.getHistogram(
 			"Flush Table Tail Duration",
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="flush_table_tail"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initTaskGCkpCollectUsageRow() dashboard.Option {
+	return dashboard.Row(
+		"Global Checkpoint Collects Storage Usage Duration",
+		c.getHistogram(
+			"GCKP Collect Usage Duration",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="gckp_collect_usage"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			12,
+			axis.Unit("s"),
+			axis.Min(0)),
+	)
+}
+
+func (c *DashboardCreator) initTaskICkpCollectUsageRow() dashboard.Option {
+	return dashboard.Row(
+		"Incremental Checkpoint Collects Storage Usage Duration",
+		c.getHistogram(
+			"ICKP Collect Usage Duration",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="ickp_collect_uage"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			12,
 			axis.Unit("s"),
@@ -98,5 +127,21 @@ func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 			4,
 			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="merged_size"`)+`[$interval])) by (`+c.by+`, type)`,
 			"{{ "+c.by+"-type }}"),
+	)
+}
+
+func (c *DashboardCreator) initTaskCkpCollectUsageRow() dashboard.Option {
+	return dashboard.Row(
+		"Task Checkpoint Collects Usage Row",
+		c.withGraph(
+			"Global Checkpoint Load Object Count",
+			6,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="gckp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
+			"{{"+c.by+"-type }}"),
+		c.withGraph(
+			"Incremental Checkpoint Load Object Count",
+			6,
+			`sum(increase(`+c.getMetricWithFilter("mo_task_execute_results_total", `type="ickp_load_object"`)+`[$interval])) by (`+c.by+`, type)`,
+			"{{"+c.by+"-type }}"),
 	)
 }
