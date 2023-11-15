@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -93,17 +94,14 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 }
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
-	logutil.Infof("backup file: %v", names)
 	backupTime := names[0]
 	trimInfo := names[1]
 	names = names[1:]
-	logutil.Infof("backup1 file: %v", names)
 	files := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]map[uint16]bool)
 	for i, name := range names {
-		logutil.Infof("backup1 file: %v", name)
 		if len(name) == 0 {
 			continue
 		}
@@ -120,7 +118,13 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes)
+		var locations []objectio.Location
+		var data *logtail.CheckpointData
+		if i == 0 {
+			locations, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil)
+		} else {
+			locations, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes)
+		}
 		if err != nil {
 			return err
 		}
@@ -178,7 +182,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	}
 	taeFileList = append(taeFileList, sizeList...)
 	if trimInfo != "" {
-		logutil.Infof("ckpStr file: %v", trimInfo)
 		ckpStr := strings.Split(trimInfo, ":")
 		if len(ckpStr) != 5 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))

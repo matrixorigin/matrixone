@@ -783,10 +783,12 @@ func LoadCheckpointEntriesFromKey(
 			data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		if !metaLoc.IsEmpty() {
 			locations = append(locations, metaLoc)
-			if len((*softDeletes)[metaLoc.Name().String()]) == 0 {
-				(*softDeletes)[metaLoc.Name().String()] = make(map[uint16]bool)
+			if softDeletes != nil {
+				if len((*softDeletes)[metaLoc.Name().String()]) == 0 {
+					(*softDeletes)[metaLoc.Name().String()] = make(map[uint16]bool)
+				}
+				(*softDeletes)[metaLoc.Name().String()][metaLoc.ID()] = true
 			}
-			(*softDeletes)[metaLoc.Name().String()][metaLoc.ID()] = true
 			logutil.Infof("softDeletes %s, %d", metaLoc.Name().String(), metaLoc.ID())
 		}
 		if !deltaLoc.IsEmpty() {
