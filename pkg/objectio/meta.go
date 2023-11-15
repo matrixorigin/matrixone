@@ -272,11 +272,11 @@ func (bh BlockHeader) Appendable() bool {
 }
 
 func (bh BlockHeader) SetSortKey(idx uint16) {
-	copy(bh[startIDOff:startIDOff+startIDLen], types.EncodeUint16(&idx))
+	copy(bh[sortKeyOff:sortKeyOff+sortKeyLen], types.EncodeUint16(&idx))
 }
 
 func (bh BlockHeader) SortKey() uint16 {
-	return types.DecodeUint16(bh[startIDOff : startIDOff+startIDLen])
+	return types.DecodeUint16(bh[sortKeyOff : sortKeyOff+sortKeyLen])
 }
 
 func (bh BlockHeader) IsEmpty() bool {
