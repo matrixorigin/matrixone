@@ -26,10 +26,10 @@ import (
 func Test_ObjectStats(t *testing.T) {
 	// test nil object stats and input data
 	require.NotNil(t, SetObjectStatsObjectName(nil, []byte("nil object stats")))
-	require.NotNil(t, SetObjectStatsObjectName(newObjectStats(), nil))
+	require.NotNil(t, SetObjectStatsObjectName(NewObjectStats(), nil))
 
 	// test setter and getter methods
-	stats := newObjectStats()
+	stats := NewObjectStats()
 	require.True(t, stats.IsZero())
 
 	objName := BuildObjectName(&types.Uuid{0x1f, 0x2f}, 0)

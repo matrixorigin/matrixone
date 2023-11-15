@@ -114,7 +114,7 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 }
 
 func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta) *ObjectStats {
-	ss := newObjectStats()
+	ss := NewObjectStats()
 	SetObjectStatsObjectName(ss, w.name)
 	SetObjectStatsExtent(ss, Header(w.buffer.vector.Entries[0].Data).Extent())
 	SetObjectStatsRowCnt(ss, w.totalRow)

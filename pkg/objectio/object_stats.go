@@ -47,7 +47,7 @@ var ZeroObjectStats ObjectStats
 // +--------------------------------------------------------------------+
 type ObjectStats [ObjectStatsLen]byte
 
-func newObjectStats() *ObjectStats {
+func NewObjectStats() *ObjectStats {
 	return new(ObjectStats)
 }
 
@@ -61,7 +61,7 @@ func (des *ObjectStats) UnMarshal(data []byte) {
 
 // Clone deep copies the stats and returns its pointer
 func (des *ObjectStats) Clone() *ObjectStats {
-	copied := newObjectStats()
+	copied := NewObjectStats()
 	copy(copied[:], des[:])
 	return copied
 }
