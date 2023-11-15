@@ -198,10 +198,13 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		s.logger.Fatal("commit with empty tn shards")
 	}
 
-	if len(request.Txn.LockTables) > 0 &&
-		!s.allocator.Valid(request.Txn.LockTables) {
-		response.TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
-		return nil
+	if len(request.Txn.LockTables) > 0 {
+		invalidBinds := s.allocator.Valid(request.Txn.LockTables)
+		if len(invalidBinds) > 0 {
+			response.CommitResponse.InvalidLockTables = invalidBinds
+			response.TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
+			return nil
+		}
 	}
 
 	txnID := request.Txn.ID

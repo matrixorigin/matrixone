@@ -114,17 +114,19 @@ func (entry *flushTableTailEntry) addTransferPages() {
 // PrepareCommit check deletes between start ts and commit ts
 func (entry *flushTableTailEntry) PrepareCommit() error {
 	found := false
+	nconflictCnt := 0
 	for _, blk := range entry.delSrcMetas {
-		exist, isPersist := blk.GetBlockData().HasDeleteIntentsPreparedIn(entry.txn.GetStartTS().Next(), types.MaxTs())
+		exist, _ := blk.GetBlockData().HasDeleteIntentsPreparedIn(entry.txn.GetStartTS().Next(), types.MaxTs())
 		if exist {
 			found = true
-			logutil.Infof("[FlushTabletail] task %d has write-write conflict on nblk %s, isPersist[%v]", entry.taskID, blk.ID.String(), isPersist)
+			nconflictCnt++
 			if blk.HasDropCommitted() {
 				panic(fmt.Sprintf("[FlushTabletail] task %d has write-write conflict on nblk %s, but it has been dropped", entry.taskID, blk.ID.String()))
 			}
 		}
 	}
-
+	logutil.Infof("[FlushTabletail] task %d has write-write conflict on %d nblk", entry.taskID, nconflictCnt)
+	var aconflictCnt, totalTrans int
 	// transfer deletes in (startts .. committs] for ablocks
 	delTbls := make([]*model.TransDels, len(entry.createdBlkHandles))
 	for i, blk := range entry.ablksMetas {
@@ -134,7 +136,13 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			continue
 		}
 		dataBlock := blk.GetBlockData()
-		bat, err := dataBlock.CollectDeleteInRange(entry.txn.GetContext(), entry.txn.GetStartTS().Next(), entry.txn.GetPrepareTS(), false)
+		bat, err := dataBlock.CollectDeleteInRange(
+			entry.txn.GetContext(),
+			entry.txn.GetStartTS().Next(),
+			entry.txn.GetPrepareTS(),
+			false,
+			common.MergeAllocator,
+		)
 		if err != nil {
 			return err
 		}
@@ -145,6 +153,8 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
 
 		count := len(rowid)
+		totalTrans += count
+		aconflictCnt++
 		for i := 0; i < count; i++ {
 			row := rowid[i].GetRowOffset()
 			destpos, ok := mapping[int(row)]
@@ -155,14 +165,16 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 				delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 			}
 			delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
-			if err = entry.createdBlkHandles[destpos.Idx].RangeDelete(uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact); err != nil {
+			if err = entry.createdBlkHandles[destpos.Idx].RangeDelete(
+				uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+			); err != nil {
 				return err
 			}
 		}
 		found = true
 		entry.nextRoundDirties = append(entry.nextRoundDirties, blk)
-		logutil.Infof("[FlushTabletail] task %d has write-write conflict on ablk %s trans cnt %d ", entry.taskID, blk.ID.String(), count)
 	}
+	logutil.Infof("[FlushTabletail] task %d has write-write conflict on %d ablk, total trans cnt %d ", entry.taskID, aconflictCnt, totalTrans)
 	for i, delTbl := range delTbls {
 		if delTbl != nil {
 			destid := entry.createdBlkHandles[i].ID()

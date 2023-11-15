@@ -133,12 +133,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.TransferTableTTL = time.Second * 90
 	}
 
-	if o.CacheCfg == nil {
-		o.CacheCfg = &CacheCfg{
-			IndexCapacity: DefaultIndexCacheSize,
-		}
-	}
-
 	if o.StorageCfg == nil {
 		o.StorageCfg = &StorageCfg{
 			BlockMaxRows:     DefaultBlockMaxRows,

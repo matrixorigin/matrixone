@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -194,7 +195,7 @@ func GetColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 
 func ForEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers.ColumnView) error) {
 	ForEachBlock(rel, func(blk handle.Block) (err error) {
-		view, err := blk.GetColumnDataById(context.Background(), colIdx)
+		view, err := blk.GetColumnDataById(context.Background(), colIdx, common.DefaultAllocator)
 		if view == nil {
 			logutil.Warnf("blk %v", blk.String())
 			return
@@ -378,9 +379,9 @@ func MockCNDeleteInS3(
 	deleteRows []uint32,
 ) (location objectio.Location, err error) {
 	pkDef := schema.GetPrimaryKey()
-	view, err := blk.GetColumnDataById(context.Background(), txn, schema, pkDef.Idx)
-	pkVec := containers.MakeVector(pkDef.Type)
-	rowIDVec := containers.MakeVector(types.T_Rowid.ToType())
+	view, err := blk.GetColumnDataById(context.Background(), txn, schema, pkDef.Idx, common.DefaultAllocator)
+	pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	blkID := &blk.GetMeta().(*catalog.BlockEntry).ID
 	if err != nil {
 		return
