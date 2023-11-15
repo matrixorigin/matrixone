@@ -2659,15 +2659,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				ses.AddSeqValues(proc)
 			}
 			ses.SetSeqLastValue(proc)
-
-			if ses.GetExportConfig().needExportToFile() {
-				resp := mce.setResponse(i, len(cws), ses.GetExportConfig().Rows)
-				if err2 := mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-					err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-					logStatementStatus(requestCtx, ses, stmt, fail, err)
-					return err
-				}
-			}
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update, *tree.Replace,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
@@ -3312,6 +3303,18 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.Select:
 		if ep.needExportToFile() {
 
+			columns, err = cw.GetColumns()
+			if err != nil {
+				logError(ses, ses.GetDebugString(),
+					"Failed to get columns from computation handler",
+					zap.Error(err))
+				return
+			}
+			for _, c := range columns {
+				mysqlc := c.(Column)
+				mrs.AddColumn(mysqlc)
+			}
+
 			// open new file
 			ep.DefaultBufSize = pu.SV.ExportDataDefaultFlushSize
 			initExportFileParam(ep, mrs)
@@ -3346,7 +3349,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 
 			/*
-				Step 4: Serialize the execution plan by json
+			   Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				_ = cwft.RecordExecPlan(requestCtx)
