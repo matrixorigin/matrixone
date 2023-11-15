@@ -55,7 +55,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	beginIdx := 0
 	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
 	// todo will do not lock table now.
-	isDeleteWithoutFilters := stmt.Where == nil && len(tblInfo.tableDefs) == 1
+	isDeleteWithoutFilters := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
 	needLockTable := isDeleteWithoutFilters
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)
