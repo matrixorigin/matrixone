@@ -30,6 +30,13 @@ const (
 	MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
 )
 
+// Trim is used for before comparing AlgoType and AlgoTableType. Reason why they are strings
+// 1. Default secondary index algo type is "". It was hard to represent "" as ENUM in protobuf.
+// 2. AlgoTableType will be serialized and stored as JSON string in mo_indexes. So AlgoTableType is string.
+func Trim(str string) string {
+	return strings.ToLower(strings.TrimSpace(str))
+}
+
 // IsNullIndexAlgo is used to skip printing the default "" index algo in the restoreDDL and buildShowCreateTable
 func IsNullIndexAlgo(algo string) bool {
 	_algo := strings.ToLower(strings.TrimSpace(algo))
@@ -58,7 +65,7 @@ const (
 )
 
 // IndexParamsToStringList used by buildShowCreateTable and restoreDDL
-// Eg:- "LIST 10 op_type 'vector_l2_ops'"
+// Eg:- "LIST = 10 op_type 'vector_l2_ops'"
 func IndexParamsToStringList(indexParams string) (string, error) {
 	result, err := IndexParamsStringToMap(indexParams)
 	if err != nil {
@@ -67,14 +74,14 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	res := ""
 	if val, ok := result[IndexAlgoParamLists]; ok {
-		res += fmt.Sprintf(" %s %s", IndexAlgoParamLists, val)
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamLists, val)
 	}
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
 		if opType == IndexAlgoParamOpType_ip ||
 			opType == IndexAlgoParamOpType_l2 ||
 			opType == IndexAlgoParamOpType_cos {
-			res += fmt.Sprintf(" %s '%s'", IndexAlgoParamOpType, opType)
+			res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, opType)
 		} else {
 			return "", moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s', '%s', '%s'",
 				IndexAlgoParamOpType_ip, IndexAlgoParamOpType_l2, IndexAlgoParamOpType_cos)
