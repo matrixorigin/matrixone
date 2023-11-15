@@ -45,7 +45,7 @@ type objectWriterV1 struct {
 	name              ObjectName
 	compressBuf       []byte
 	bloomFilter       []byte
-	objStats          []*ObjectStats
+	objStats          []ObjectStats
 	pkColIdx          uint16
 }
 
@@ -113,7 +113,7 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
-func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) *ObjectStats {
+func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) ObjectStats {
 	ss := NewObjectStats()
 	SetObjectStatsObjectName(ss, w.name)
 	SetObjectStatsExtent(ss, Header(w.buffer.vector.Entries[0].Data).Extent())
@@ -124,7 +124,7 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.pkColIdx].ZoneMap())
 	}
 
-	return ss
+	return *ss
 }
 
 // DescribeObject generates two object stats:
@@ -138,8 +138,8 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 // if an object only has deletes, only the tombstone object stats valid.
 //
 // if an object has both inserts and deletes, both stats are valid.
-func (w *objectWriterV1) DescribeObject() ([]*ObjectStats, error) {
-	stats := make([]*ObjectStats, 2)
+func (w *objectWriterV1) DescribeObject() ([]ObjectStats, error) {
+	stats := make([]ObjectStats, 2)
 	if len(w.blocks[SchemaData]) != 0 {
 		stats[SchemaData] = describeObjectHelper(w, w.colmeta, SchemaData)
 	}

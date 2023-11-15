@@ -23,7 +23,7 @@ import (
 )
 
 type ObjectDescriber interface {
-	DescribeObject() ([]*ObjectStats, error)
+	DescribeObject() ([]ObjectStats, error)
 }
 
 const ObjectStatsLen = ObjectNameLen + ExtentLen + rowCntLen + blkCntLen + ZoneMapSize
