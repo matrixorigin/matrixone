@@ -118,8 +118,7 @@ message CNService {
   string PipelineServiceAddress = 3;
   // SQLAddress is used to provide SQL input.
   string SQLAddress             = 4;
-  // CtlAddress is used to handle ctl request.
-  string CtlAddress             = 5;
+  reserved 5;
   // Labels are labels on CN service.
   map<string, LabelList> Labels = 6 [(gogoproto.nullable) = false];
   // WorkState is the work state of CN service.
@@ -138,8 +137,7 @@ message TNService {
   string LogTailServiceAddress  = 3;
   // LockServiceAddress lock service address for lock table allocator
   string LockServiceAddress     = 4;
-  // CtlAddress is used to handle ctl request.
-  string CtlAddress             = 5;
+  reserved 5;
   // Shards TN shards on service
   repeated TNShard Shards       = 6 [(gogoproto.nullable) = false];
   // Labels labels on service

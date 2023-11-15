@@ -1999,8 +1999,11 @@ func (data *CheckpointData) ReadFrom(
 
 // LoadSpecifiedCkpBatch loads a specified checkpoint data batch
 func LoadSpecifiedCkpBatch(
-	ctx context.Context, location objectio.Location,
-	fs fileservice.FileService, version uint32, batchIdx uint16,
+	ctx context.Context,
+	location objectio.Location,
+	version uint32,
+	batchIdx uint16,
+	fs fileservice.FileService,
 ) (data *CheckpointData, err error) {
 	data = NewCheckpointData(common.CheckpointAllocator)
 	defer func() {
