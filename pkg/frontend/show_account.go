@@ -186,14 +186,18 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 		}
 
 		storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
-		accIDVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID)
-		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
+		accIDVec := vector.MustFixedCol[uint64](
+			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
+		)
+		sizeVec := vector.MustFixedCol[uint64](
+			storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector(),
+		)
 
 		size := uint64(0)
-		length := accIDVec.Length()
+		length := len(accIDVec)
 		for i := 0; i < length; i++ {
-			result[int32(accIDVec.Get(i).(uint64))] += sizeVec.Get(i).(uint64)
-			size += sizeVec.Get(i).(uint64)
+			result[int32(accIDVec[i])] += sizeVec[i]
+			size += sizeVec[i]
 		}
 
 		ckpData.Close()
