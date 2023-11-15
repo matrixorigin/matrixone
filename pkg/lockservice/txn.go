@@ -128,6 +128,9 @@ func (txn *activeTxn) close(
 			// LockTable, it is a bug.
 			panic(err)
 		}
+		if l == nil {
+			continue
+		}
 
 		logTxnUnlockTable(
 			serviceID,
@@ -178,20 +181,30 @@ func (txn *activeTxn) abort(
 func (txn *activeTxn) cancelBlocks() {
 	for _, w := range txn.blockedWaiters {
 		w.notify(notifyValue{err: ErrTxnNotFound})
+		w.close()
 	}
 }
 
-func (txn *activeTxn) clearBlocked(txnID []byte) {
-	txn.blockedWaiters = txn.blockedWaiters[:0]
+func (txn *activeTxn) clearBlocked(w *waiter) {
+	newBlockedWaiters := txn.blockedWaiters[:0]
+	for _, v := range txn.blockedWaiters {
+		if v != w {
+			newBlockedWaiters = append(newBlockedWaiters, v)
+		} else {
+			w.close()
+		}
+	}
+	txn.blockedWaiters = newBlockedWaiters
 }
 
-func (txn *activeTxn) setBlocked(txnID []byte, w *waiter) {
+func (txn *activeTxn) setBlocked(w *waiter) {
 	if w == nil {
 		panic("invalid waiter")
 	}
 	if !w.casStatus(ready, blocking) {
 		panic(fmt.Sprintf("invalid waiter status %d, %s", w.getStatus(), w))
 	}
+	w.ref()
 	txn.blockedWaiters = append(txn.blockedWaiters, w)
 }
 
@@ -247,6 +260,10 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 			// the remote LockTable, it is a bug.
 			panic(err)
 		}
+		if l == nil {
+			continue
+		}
+
 		locks := lockKeys[idx]
 		hasDeadLock := false
 		locks.iter(func(lockKey []byte) bool {

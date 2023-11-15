@@ -87,24 +87,26 @@ type Pipeline struct {
 }
 
 // Cleanup do memory release work for whole pipeline.
-func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool) {
+// we deliver the error because some operator may need to know what the error it is.
+func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, err error) {
 	// should cancel the context before clean the pipeline to avoid more batch inputting while cleaning.
 	proc.Cancel()
 
 	// clean all the coming batches.
-	if pipelineFailed {
-		bat := proc.InputBatch()
-		if bat != nil {
-			cnt := bat.GetCnt()
-			for cnt > 0 {
-				cnt--
-				bat.Clean(proc.Mp())
-			}
-		}
-		proc.SetInputBatch(nil)
-	}
+	// if pipelineFailed {
+	// 	bat := proc.InputBatch()
+	// 	if bat != nil {
+	// 		cnt := bat.GetCnt()
+	// 		for cnt > 0 {
+	// 			cnt--
+	// 			bat.Clean(proc.Mp())
+	// 		}
+	// 	}
+	// 	proc.SetInputBatch(nil)
+	// }
+
 	// clean operator hold memory.
 	for i := range p.instructions {
-		p.instructions[i].Arg.Free(proc, pipelineFailed)
+		p.instructions[i].Arg.Free(proc, pipelineFailed, err)
 	}
 }

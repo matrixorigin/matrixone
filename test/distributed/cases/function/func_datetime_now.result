@@ -29,3 +29,14 @@ set @ts_after=now();
 select timestampdiff(microsecond, @ts, @ts_after) > 1000000 checked;
 checked
 true
+drop table if exists t1;
+create table t1(a timestamp,b int auto_increment);
+insert into t1(a) select current_timestamp () from mo_catalog.mo_sessions limit 1;
+select sleep(1);
+sleep(1)
+0
+insert into t1(a) select current_timestamp () from mo_catalog.mo_sessions limit 1;
+select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;
+t1.a = t2.a
+false
+drop table t1;

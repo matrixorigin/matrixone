@@ -43,7 +43,7 @@ jobs:
         uses: guguducken/milestone-add-action@check_mill_exist
         with:
           action-token: ${{ secrets.TOKEN_ACTION }}
-          milestone: "1.0.0"
+          milestone: "1.1.0"
 
   check-bvt-issue:
     if: github.event_name == 'issues' && github.event.action == 'closed'
@@ -180,7 +180,11 @@ jobs:
           locale
 
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e optimistic 2>&1
+          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
+          cat mo.yml
+          echo "============================"
+          
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -e optimistic 2>&1
       - name: Generate UT and BVT Coverage File
         if: ${{ always() && !cancelled() }}
         timeout-minutes: 10

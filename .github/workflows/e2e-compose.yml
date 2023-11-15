@@ -3,7 +3,7 @@ name: MatrixOne Compose Test
 on:
   pull_request:
     types: [ opened, synchronize, reopened ]
-    branches: [ main,'[0-9]+.[0-9]+.[0-9]+*' ]
+    branches: [ main,'[0-9]+.[0-9]+*' ]
 
   workflow_dispatch:
 
@@ -82,7 +82,11 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e pessimistic_transaction 2>&1
+          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
+          cat mo.yml
+          echo "============================="
+          
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e pessimistic_transaction 2>&1
 
       - name: export log
         if: ${{ failure() }}
@@ -171,7 +175,11 @@ jobs:
           export LC_ALL="C.UTF-8"
           locale
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e optimistic 2>&1
+          sed -i 's/  port: [0-9]*/  port: 12345/g' mo.yml
+          cat mo.yml
+          echo "============================="
+
+          ./run.sh -n -g -o -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e optimistic 2>&1
       - name: export log
         if: ${{ failure() }}
         run: |

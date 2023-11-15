@@ -244,33 +244,17 @@ type Session struct {
 
 	buf *buffer.Buffer
 
-	//clear this part for every statement
-	stmtProfile struct {
-		// sqlSourceType denotes where the sql
-		sqlSourceType string
-		txnId         uuid.UUID
-		stmtId        uuid.UUID
-		// stmtType
-		stmtType string
-		// queryType
-		queryType string
-		// queryStart is the time when the query starts.
-		queryStart time.Time
-		//the sql from user may have multiple statements
-		//sqlOfStmt is the text part of one statement in the sql
-		sqlOfStmt string
-	}
+	stmtProfile process.StmtProfile
+	// queryEnd is the time when the query ends
+	queryEnd time.Time
+	// queryInProgress indicates whether the query is in progress
+	queryInProgress atomic.Bool
+	// queryInExecute indicates whether the query is in execute
+	queryInExecute atomic.Bool
 }
 
 func (ses *Session) ClearStmtProfile() {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.stmtProfile.sqlSourceType = ""
-	ses.stmtProfile.txnId = uuid.UUID{}
-	ses.stmtProfile.stmtId = uuid.UUID{}
-	ses.stmtProfile.stmtType = ""
-	ses.stmtProfile.queryType = ""
-	ses.stmtProfile.sqlOfStmt = ""
+	ses.stmtProfile.Clear()
 }
 
 func (ses *Session) GetSessionStart() time.Time {
@@ -280,83 +264,87 @@ func (ses *Session) GetSessionStart() time.Time {
 }
 
 func (ses *Session) SetTxnId(id []byte) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	copy(ses.stmtProfile.txnId[:], id)
+	ses.stmtProfile.SetTxnId(id)
 }
 
 func (ses *Session) GetTxnId() uuid.UUID {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.stmtProfile.txnId
+	return ses.stmtProfile.GetTxnId()
 }
 
 func (ses *Session) SetStmtId(id uuid.UUID) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	copy(ses.stmtProfile.stmtId[:], id[:])
+	ses.stmtProfile.SetStmtId(id)
 }
 
 func (ses *Session) GetStmtId() uuid.UUID {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.stmtProfile.stmtId
+	return ses.stmtProfile.GetStmtId()
 }
 
 func (ses *Session) SetStmtType(st string) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.stmtProfile.stmtType = st
+	ses.stmtProfile.SetStmtType(st)
 }
 
 func (ses *Session) GetStmtType() string {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.stmtProfile.stmtType
+	return ses.stmtProfile.GetStmtType()
 }
 
 func (ses *Session) SetQueryType(qt string) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.stmtProfile.queryType = qt
+	ses.stmtProfile.SetQueryType(qt)
 }
 
 func (ses *Session) GetQueryType() string {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.stmtProfile.queryType
+	return ses.stmtProfile.GetQueryType()
 }
 
 func (ses *Session) SetSqlSourceType(st string) {
-	ses.stmtProfile.sqlSourceType = st
+	ses.stmtProfile.SetSqlSourceType(st)
 }
 
 func (ses *Session) GetSqlSourceType() string {
-	return ses.stmtProfile.sqlSourceType
+	return ses.stmtProfile.GetSqlSourceType()
 }
 
 func (ses *Session) SetQueryStart(t time.Time) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.stmtProfile.queryStart = t
+	ses.stmtProfile.SetQueryStart(t)
 }
 
 func (ses *Session) GetQueryStart() time.Time {
+	return ses.stmtProfile.GetQueryStart()
+}
+
+func (ses *Session) SetQueryEnd(t time.Time) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.stmtProfile.queryStart
+	ses.queryEnd = t
+}
+
+func (ses *Session) GetQueryEnd() time.Time {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.queryEnd
+}
+
+func (ses *Session) SetQueryInProgress(b bool) {
+	ses.queryInProgress.Store(b)
+}
+
+func (ses *Session) GetQueryInProgress() bool {
+	return ses.queryInProgress.Load()
+}
+
+func (ses *Session) SetQueryInExecute(b bool) {
+	ses.queryInExecute.Store(b)
+}
+
+func (ses *Session) GetQueryInExecute() bool {
+	return ses.queryInExecute.Load()
 }
 
 func (ses *Session) SetSqlOfStmt(sot string) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.stmtProfile.sqlOfStmt = sot
+	ses.stmtProfile.SetSqlOfStmt(sot)
 }
 
 func (ses *Session) GetSqlOfStmt() string {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.stmtProfile.sqlOfStmt
+	return ses.stmtProfile.GetSqlOfStmt()
 }
 
 func (ses *Session) IsDerivedStmt() bool {
@@ -460,6 +448,15 @@ func (ses *Session) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.autoIncrCacheManager
+}
+
+// SetTStmt do set the Session.tStmt
+// 1. init-set at RecordStatement, which means the statement is started.
+// 2. reset at logStatementStringStatus, which means the statement is finished.
+func (ses *Session) SetTStmt(stmt *motrace.StatementInfo) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.tStmt = stmt
 }
 
 const saveQueryIdCnt = 10
@@ -586,7 +583,9 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		pu.LockService,
 		pu.QueryService,
 		pu.HAKeeperClient,
+		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
+	ses.proc.SetStmtProfile(&ses.stmtProfile)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Close()
@@ -2184,6 +2183,36 @@ func (ses *Session) StatusSession() *status.Session {
 	)
 
 	accountName, userName, roleName = getUserProfile(ses.GetTenantInfo())
+	//if the query is processing, the end time is invalid.
+	//we can not clear the session info under this condition.
+	if !ses.GetQueryInProgress() {
+		endAt := ses.GetQueryEnd()
+		//if the current time is more than 3 second after the query end time, the session is timeout.
+		//we clear the session statement info
+		//for issue 11976
+		if time.Since(endAt) > 3*time.Second {
+			return &status.Session{
+				NodeID:        ses.getRoutineManager().baseService.ID(),
+				ConnID:        ses.GetConnectionID(),
+				SessionID:     ses.GetUUIDString(),
+				Account:       accountName,
+				User:          userName,
+				Host:          ses.getRoutineManager().baseService.SQLAddress(),
+				DB:            ses.GetDatabaseName(),
+				SessionStart:  ses.GetSessionStart(),
+				Command:       "",
+				Info:          "",
+				TxnID:         uuid2Str(ses.GetTxnId()),
+				StatementID:   "",
+				StatementType: "",
+				QueryType:     "",
+				SQLSourceType: "",
+				QueryStart:    time.Time{},
+				ClientHost:    ses.GetMysqlProtocol().Peer(),
+				Role:          roleName,
+			}
+		}
+	}
 	return &status.Session{
 		NodeID:        ses.getRoutineManager().baseService.ID(),
 		ConnID:        ses.GetConnectionID(),
@@ -2195,7 +2224,7 @@ func (ses *Session) StatusSession() *status.Session {
 		SessionStart:  ses.GetSessionStart(),
 		Command:       ses.GetCmd().String(),
 		Info:          ses.GetSqlOfStmt(),
-		TxnID:         ses.GetTxnId().String(),
+		TxnID:         uuid2Str(ses.GetTxnId()),
 		StatementID:   ses.GetStmtId().String(),
 		StatementType: ses.GetStmtType(),
 		QueryType:     ses.GetQueryType(),
@@ -2204,6 +2233,13 @@ func (ses *Session) StatusSession() *status.Session {
 		ClientHost:    ses.GetMysqlProtocol().Peer(),
 		Role:          roleName,
 	}
+}
+
+func uuid2Str(uid uuid.UUID) string {
+	if bytes.Equal(uid[:], dumpUUID[:]) {
+		return ""
+	}
+	return strings.ReplaceAll(uid.String(), "-", "")
 }
 
 func (ses *Session) SetSessionRoutineStatus(status string) error {

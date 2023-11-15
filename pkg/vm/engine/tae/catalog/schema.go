@@ -572,6 +572,9 @@ func (s *Schema) ReadFromBatch(bat *containers.Batch, offset int, targetTid uint
 		def.Hidden = i82bool(isHidden)
 		isClusterBy := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsClusterBy)).Get(offset).(int8)
 		def.ClusterBy = i82bool(isClusterBy)
+		if def.ClusterBy {
+			def.SortKey = true
+		}
 		isAutoIncrement := bat.GetVectorByName((pkgcatalog.SystemColAttr_IsAutoIncrement)).Get(offset).(int8)
 		def.AutoIncrement = i82bool(isAutoIncrement)
 		def.Comment = string(bat.GetVectorByName((pkgcatalog.SystemColAttr_Comment)).Get(offset).([]byte))

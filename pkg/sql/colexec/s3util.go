@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -169,7 +170,9 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 		writer.isClusterBy = true
 		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 			// the serialized clusterby col is located in the last of the bat.vecs
-			writer.sortIndex = len(tableDef.Cols) - 1
+			// When INSERT, the TableDef columns list in the table contains a rowid column, but the inserted data
+			// does not have a rowid column, so it needs to be excluded. Therefore, is `len(tableDef.Cols) - 2`
+			writer.sortIndex = len(tableDef.Cols) - 2
 		} else {
 			for idx, colDef := range tableDef.Cols {
 				if colDef.Name == tableDef.ClusterBy.Name {
@@ -260,7 +263,7 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 //	}
 //}
 
-func (w *S3Writer) Output(proc *process.Process) error {
+func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	bat := batch.NewWithSize(len(w.blockInfoBat.Attrs))
 	bat.SetAttributes(w.blockInfoBat.Attrs)
 
@@ -273,7 +276,7 @@ func (w *S3Writer) Output(proc *process.Process) error {
 	}
 	bat.SetRowCount(w.blockInfoBat.RowCount())
 	w.ResetBlockInfoBat(proc)
-	proc.SetInputBatch(bat)
+	result.Batch = bat
 	return nil
 }
 
@@ -283,13 +286,13 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	if proc != nil && proc.Ctx != nil {
 		isMoLogger, ok := proc.Ctx.Value(defines.IsMoLogger{}).(bool)
 		if ok && isMoLogger {
-			logutil.Info("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
+			logutil.Debug("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
 			S3SizeThreshold = TagS3SizeForMOLogger
 		}
 	}
 
 	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db_holder.MOLoggerUser {
-		logutil.Info("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
+		logutil.Debug("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
 		S3SizeThreshold = TagS3SizeForMOLogger
 	}
 	if w.batSize >= S3SizeThreshold {
@@ -476,6 +479,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[string](), getStrCols(w.Bats, pos), nulls)
 			//TODO: check if we need T_array here? T_json is missing here.
+			// Update Oct 20 2023: I don't think it is necessary to add T_array here. Keeping this comment,
+			// in case anything fails in vector S3 flush in future.
 		}
 		if _, err := w.generateWriter(proc); err != nil {
 			return err

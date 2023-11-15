@@ -1,0 +1,41 @@
+set global enable_privilege_cache = off;
+drop database if exists db;
+show column_number from db.t1;
+invalid database db
+show column_number from t1 from db;
+invalid database db
+show column_number from db.t1 from db;
+invalid database db
+show columns from db.t1;
+invalid database db
+show columns from t1 from db;
+invalid database db
+show columns from db.t1 from db;
+invalid database db
+show create database db;
+invalid database db
+show create table db.t1;
+invalid database db
+show create view db.v1;
+invalid database db
+show index from db.t1;
+invalid database db
+show index from t1 from db;
+invalid database db
+show index from db.t1 from db;
+invalid database db
+show sequences from db;
+invalid database db
+show table_number from db;
+invalid database db
+show tables from db;
+invalid database db
+show table status from db;
+invalid database db
+show table_values from t1 from db;
+invalid database db
+use db;
+invalid database db
+select * from db.t1;
+invalid database db
+set global enable_privilege_cache = on;

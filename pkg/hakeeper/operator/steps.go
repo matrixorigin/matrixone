@@ -26,10 +26,17 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+type ClusterState struct {
+	LogState   pb.LogState
+	TNState    pb.TNState
+	CNState    pb.CNState
+	ProxyState pb.ProxyState
+}
+
 type OpStep interface {
 	fmt.Stringer
 
-	IsFinish(state pb.LogState, tnState pb.TNState, cnState pb.CNState) bool
+	IsFinish(state ClusterState) bool
 }
 
 type Replica struct {
@@ -48,11 +55,11 @@ func (a AddLogService) String() string {
 	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
-func (a AddLogService) IsFinish(state pb.LogState, _ pb.TNState, _ pb.CNState) bool {
-	if _, ok := state.Shards[a.ShardID]; !ok {
+func (a AddLogService) IsFinish(state ClusterState) bool {
+	if _, ok := state.LogState.Shards[a.ShardID]; !ok {
 		return true
 	}
-	if _, ok := state.Shards[a.ShardID].Replicas[a.ReplicaID]; ok {
+	if _, ok := state.LogState.Shards[a.ShardID].Replicas[a.ReplicaID]; ok {
 		return true
 	}
 
@@ -68,8 +75,8 @@ func (a RemoveLogService) String() string {
 	return fmt.Sprintf("removing %v:%v(at epoch %v) on log store %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
-func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.TNState, _ pb.CNState) bool {
-	if shard, ok := state.Shards[a.ShardID]; ok {
+func (a RemoveLogService) IsFinish(state ClusterState) bool {
+	if shard, ok := state.LogState.Shards[a.ShardID]; ok {
 		if _, ok := shard.Replicas[a.ReplicaID]; ok {
 			return false
 		}
@@ -86,11 +93,11 @@ func (a StartLogService) String() string {
 	return fmt.Sprintf("starting %v:%v on %s", a.ShardID, a.ReplicaID, a.UUID)
 }
 
-func (a StartLogService) IsFinish(state pb.LogState, _ pb.TNState, _ pb.CNState) bool {
-	if _, ok := state.Stores[a.UUID]; !ok {
+func (a StartLogService) IsFinish(state ClusterState) bool {
+	if _, ok := state.LogState.Stores[a.UUID]; !ok {
 		return true
 	}
-	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
+	for _, replicaInfo := range state.LogState.Stores[a.UUID].Replicas {
 		if replicaInfo.ShardID == a.ShardID {
 			return true
 		}
@@ -107,8 +114,8 @@ func (a StopLogService) String() string {
 	return fmt.Sprintf("stopping %v on %s", a.ShardID, a.UUID)
 }
 
-func (a StopLogService) IsFinish(state pb.LogState, _ pb.TNState, _ pb.CNState) bool {
-	if store, ok := state.Stores[a.UUID]; ok {
+func (a StopLogService) IsFinish(state ClusterState) bool {
+	if store, ok := state.LogState.Stores[a.UUID]; ok {
 		for _, replicaInfo := range store.Replicas {
 			if replicaInfo.ShardID == a.ShardID {
 				return false
@@ -127,8 +134,8 @@ func (a KillLogZombie) String() string {
 	return fmt.Sprintf("killing zombie on %s", a.UUID)
 }
 
-func (a KillLogZombie) IsFinish(state pb.LogState, _ pb.TNState, _ pb.CNState) bool {
-	if store, ok := state.Stores[a.UUID]; ok {
+func (a KillLogZombie) IsFinish(state ClusterState) bool {
+	if store, ok := state.LogState.Stores[a.UUID]; ok {
 		for _, replicaInfo := range store.Replicas {
 			if replicaInfo.ShardID == a.ShardID {
 				return false
@@ -151,8 +158,8 @@ func (a AddTnReplica) String() string {
 	)
 }
 
-func (a AddTnReplica) IsFinish(_ pb.LogState, state pb.TNState, _ pb.CNState) bool {
-	for _, info := range state.Stores[a.StoreID].Shards {
+func (a AddTnReplica) IsFinish(state ClusterState) bool {
+	for _, info := range state.TNState.Stores[a.StoreID].Shards {
 		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
 			return true
 		}
@@ -172,8 +179,8 @@ func (a RemoveTnReplica) String() string {
 	)
 }
 
-func (a RemoveTnReplica) IsFinish(_ pb.LogState, state pb.TNState, _ pb.CNState) bool {
-	for _, info := range state.Stores[a.StoreID].Shards {
+func (a RemoveTnReplica) IsFinish(state ClusterState) bool {
+	for _, info := range state.TNState.Stores[a.StoreID].Shards {
 		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
 			return false
 		}
@@ -190,8 +197,8 @@ func (a StopTnStore) String() string {
 	return fmt.Sprintf("stopping tn store %s", a.StoreID)
 }
 
-func (a StopTnStore) IsFinish(_ pb.LogState, state pb.TNState, _ pb.CNState) bool {
-	if _, ok := state.Stores[a.StoreID]; ok {
+func (a StopTnStore) IsFinish(state ClusterState) bool {
+	if _, ok := state.TNState.Stores[a.StoreID]; ok {
 		return false
 	}
 	return true
@@ -206,8 +213,8 @@ func (a StopLogStore) String() string {
 	return fmt.Sprintf("stopping log store %s", a.StoreID)
 }
 
-func (a StopLogStore) IsFinish(state pb.LogState, _ pb.TNState, _ pb.CNState) bool {
-	if _, ok := state.Stores[a.StoreID]; ok {
+func (a StopLogStore) IsFinish(state ClusterState) bool {
+	if _, ok := state.LogState.Stores[a.StoreID]; ok {
 		return false
 	}
 	return true
@@ -223,16 +230,16 @@ func (a CreateTaskService) String() string {
 	return fmt.Sprintf("create task service on %s(%s)", a.StoreID, a.StoreType)
 }
 
-func (a CreateTaskService) IsFinish(logState pb.LogState, tnState pb.TNState, cnState pb.CNState) bool {
-	if state, ok := logState.Stores[a.StoreID]; ok {
+func (a CreateTaskService) IsFinish(state ClusterState) bool {
+	if state, ok := state.LogState.Stores[a.StoreID]; ok {
 		return state.GetTaskServiceCreated()
 	}
 
-	if state, ok := tnState.Stores[a.StoreID]; ok {
+	if state, ok := state.TNState.Stores[a.StoreID]; ok {
 		return state.GetTaskServiceCreated()
 	}
 
-	if state, ok := cnState.Stores[a.StoreID]; ok {
+	if state, ok := state.CNState.Stores[a.StoreID]; ok {
 		return state.GetTaskServiceCreated()
 	}
 
@@ -247,8 +254,8 @@ func (a DeleteCNStore) String() string {
 	return fmt.Sprintf("deleting cn store %s", a.StoreID)
 }
 
-func (a DeleteCNStore) IsFinish(_ pb.LogState, _ pb.TNState, state pb.CNState) bool {
-	if _, ok := state.Stores[a.StoreID]; ok {
+func (a DeleteCNStore) IsFinish(state ClusterState) bool {
+	if _, ok := state.CNState.Stores[a.StoreID]; ok {
 		return false
 	}
 	return true
@@ -263,9 +270,24 @@ func (a JoinGossipCluster) String() string {
 	return fmt.Sprintf("join gossip cluster for %s", a.StoreID)
 }
 
-func (a JoinGossipCluster) IsFinish(_ pb.LogState, _ pb.TNState, state pb.CNState) bool {
-	if state, ok := state.Stores[a.StoreID]; ok {
+func (a JoinGossipCluster) IsFinish(state ClusterState) bool {
+	if state, ok := state.CNState.Stores[a.StoreID]; ok {
 		return state.GetGossipJoined()
+	}
+	return true
+}
+
+type DeleteProxyStore struct {
+	StoreID string
+}
+
+func (a DeleteProxyStore) String() string {
+	return fmt.Sprintf("deleting proxy store %s", a.StoreID)
+}
+
+func (a DeleteProxyStore) IsFinish(state ClusterState) bool {
+	if _, ok := state.ProxyState.Stores[a.StoreID]; ok {
+		return false
 	}
 	return true
 }

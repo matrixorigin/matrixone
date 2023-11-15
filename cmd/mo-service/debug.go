@@ -40,8 +40,6 @@ var (
 	heapProfilePathFlag        = flag.String("heap-profile", "", "write heap profile to the specified file")
 	fileServiceProfilePathFlag = flag.String("file-service-profile", "", "write file service profile to the specified file")
 	httpListenAddr             = flag.String("debug-http", "", "http server listen address")
-
-	globalCounterSet = new(perfcounter.CounterSet)
 )
 
 func startCPUProfile() func() {
@@ -289,7 +287,10 @@ func init() {
 	http.Handle("/debug/fs/", fileservice.FSProfileHandler)
 
 	// global performance counter
-	http.Handle("/debug/perfcounter/", globalCounterSet)
+	v, ok := perfcounter.Named.Load(perfcounter.NameForGlobal)
+	if ok {
+		http.Handle("/debug/perfcounter/", v.(*perfcounter.CounterSet))
+	}
 
 	// fgprof
 	http.Handle("/debug/fgprof/", fgprof.Handler())

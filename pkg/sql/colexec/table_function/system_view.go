@@ -15,21 +15,27 @@
 package table_function
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 const (
@@ -82,7 +88,7 @@ func moLocksPrepare(proc *process.Process, arg *Argument) error {
 	return nil
 }
 
-func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func moLocksCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
 
@@ -101,7 +107,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 			}
 
 			tp := plan2.MoLocksColTypes[idx]
-			bat.Vecs[i] = vector.NewVec(tp)
+			bat.Vecs[i] = proc.GetVector(tp)
 		}
 		bat.Attrs = arg.Attrs
 
@@ -162,14 +168,14 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 
 				if hLen == 0 && wLen == 0 {
 					//one record
-					if err := fillRecord(proc, bat, record); err != nil {
+					if err := fillLockRecord(proc, arg.Attrs, bat, record); err != nil {
 						return false, err
 					}
 				} else if hLen == 0 && wLen != 0 {
 					//wLen records
 					for j := 0; j < wLen; j++ {
 						record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[j].GetTxnID()))
-						if err := fillRecord(proc, bat, record); err != nil {
+						if err := fillLockRecord(proc, arg.Attrs, bat, record); err != nil {
 							return false, err
 						}
 					}
@@ -177,7 +183,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 					//hLen records
 					for j := 0; j < hLen; j++ {
 						record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
-						if err := fillRecord(proc, bat, record); err != nil {
+						if err := fillLockRecord(proc, arg.Attrs, bat, record); err != nil {
 							return false, err
 						}
 					}
@@ -187,7 +193,7 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 						for k := 0; k < wLen; k++ {
 							record[plan2.MoLocksColTypeTxnId] = []byte(hex.EncodeToString(hList[j].GetTxnID()))
 							record[plan2.MoLocksColTypeLockWait] = []byte(hex.EncodeToString(wList[k].GetTxnID()))
-							if err := fillRecord(proc, bat, record); err != nil {
+							if err := fillLockRecord(proc, arg.Attrs, bat, record); err != nil {
 								return false, err
 							}
 						}
@@ -197,21 +203,22 @@ func moLocksCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 		arg.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		return true, nil
 	default:
 		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
 	}
 }
 
-func fillRecord(proc *process.Process, bat *batch.Batch, record [][]byte) error {
-	for colIdx, colData := range record {
-		if err := vector.AppendBytes(bat.Vecs[colIdx], colData, false, proc.GetMPool()); err != nil {
+func fillLockRecord(proc *process.Process, attrs []string, bat *batch.Batch, record [][]byte) error {
+	for colIdx, attr := range attrs {
+		realColIdx := plan2.MoLocksColName2Index[strings.ToLower(attr)]
+		if err := vector.AppendBytes(bat.Vecs[colIdx], record[realColIdx], false, proc.GetMPool()); err != nil {
 			return err
 		}
 	}
@@ -223,7 +230,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 	var err error
 	var nodes []string
 
-	disttae.SelectForSuperTenant(clusterservice.NewSelector(), "root", nil,
+	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
 		func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
 		})
@@ -242,7 +249,7 @@ func getLocks(proc *process.Process) ([]*query.GetLockInfoResponse, error) {
 		}
 	}
 
-	err = queryservice.RequestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
 	return rsps, err
 }
 
@@ -257,7 +264,7 @@ func moConfigurationsPrepare(proc *process.Process, arg *Argument) error {
 	return nil
 }
 
-func moConfigurationsCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func moConfigurationsCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
 
@@ -281,7 +288,7 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument) (bool, er
 			}
 
 			tp := plan2.MoConfigColTypes[idx]
-			bat.Vecs[i] = vector.NewVec(tp)
+			bat.Vecs[i] = proc.GetVector(tp)
 		}
 		bat.Attrs = arg.Attrs
 
@@ -317,13 +324,30 @@ func moConfigurationsCall(_ int, proc *process.Process, arg *Argument) (bool, er
 			}
 		}
 
+		// fill batch for proxy
+		for _, proxyStore := range details.GetProxyStores() {
+			if proxyStore.GetConfigData() != nil {
+				err = fillMapToBatch(
+					"proxy",
+					proxyStore.GetUUID(),
+					arg.Attrs,
+					proxyStore.GetConfigData().GetContent(),
+					bat,
+					mp,
+				)
+				if err != nil {
+					return false, err
+				}
+			}
+		}
+
 		bat.SetRowCount(bat.Vecs[0].Length())
-		proc.SetInputBatch(bat)
+		result.Batch = bat
 		arg.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		return true, nil
 	default:
 		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
@@ -364,4 +388,360 @@ func fillMapToBatch(nodeType, nodeId string, attrs []string, kvs map[string]*log
 		}
 	}
 	return err
+}
+
+func moTransactionsPrepare(proc *process.Process, arg *Argument) error {
+	arg.ctr.state = dataProducing
+	if len(arg.Args) > 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "moTransactions: no argument is required")
+	}
+	for i := range arg.Attrs {
+		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	}
+	return nil
+}
+
+func getRangeContent(li *query.TxnLockInfo) ([]byte, []byte) {
+	keys := li.GetRows()
+	llen := len(keys)
+	if llen >= 2 {
+		return keys[0], keys[1]
+	} else if llen >= 1 {
+		return keys[0], []byte{}
+	} else {
+		return []byte{}, []byte{}
+	}
+}
+
+func getPointContent(li *query.TxnLockInfo) []byte {
+	keys := li.GetRows()
+	llen := len(keys)
+	if llen >= 1 {
+		return keys[0]
+	}
+	return []byte{}
+}
+
+func moTransactionsCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
+	switch arg.ctr.state {
+	case dataProducing:
+
+		rsps, err := getTxns(proc)
+		if err != nil {
+			return false, err
+		}
+
+		//alloc batch
+		bat := batch.NewWithSize(len(arg.Attrs))
+		for i, col := range arg.Attrs {
+			col = strings.ToLower(col)
+			idx, ok := plan2.MoTransactionsColName2Index[col]
+			if !ok {
+				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", col)
+			}
+
+			tp := plan2.MoTransactionsColTypes[idx]
+			bat.Vecs[i] = proc.GetVector(tp)
+		}
+		bat.Attrs = arg.Attrs
+		for _, rsp := range rsps {
+			if rsp == nil || len(rsp.TxnInfoList) == 0 {
+				continue
+			}
+
+			for _, txn := range rsp.TxnInfoList {
+				if txn == nil {
+					continue
+				}
+
+				cnId := rsp.GetCnId()
+				txnId := ""
+				if txn.GetMeta() != nil {
+					txnId = hex.EncodeToString(txn.GetMeta().GetID())
+				}
+				createTs := txn.GetCreateAt().Format(time.RFC3339Nano)
+				snapshotTs := ""
+				if txn.GetMeta() != nil {
+					snapshotTs = txn.GetMeta().GetSnapshotTS().DebugString()
+				}
+				preparedTs := ""
+				if txn.GetMeta() != nil {
+					preparedTs = txn.GetMeta().GetPreparedTS().DebugString()
+				}
+				commitTs := ""
+				if txn.GetMeta() != nil {
+					commitTs = txn.GetMeta().GetCommitTS().DebugString()
+				}
+				txnMode := ""
+				if txn.GetMeta() != nil {
+					txnMode = txn.GetMeta().GetMode().String()
+				}
+				isolation := ""
+				if txn.GetMeta() != nil {
+					isolation = txn.GetMeta().GetIsolation().String()
+				}
+				userTxn := strconv.FormatBool(txn.GetUserTxn())
+				txnStatus := ""
+				if txn.GetMeta() != nil {
+					txnStatus = txn.GetMeta().GetStatus().String()
+				}
+
+				waitLocksCnt := len(txn.GetWaitLocks())
+				record := make([][]byte, len(plan2.MoTransactionsColNames))
+				record[plan2.MoTransactionsColTypeCnId] = []byte(cnId)
+				record[plan2.MoTransactionsColTypeTxnId] = []byte(txnId)
+				record[plan2.MoTransactionsColTypeCreateTs] = []byte(createTs)
+				record[plan2.MoTransactionsColTypeSnapshotTs] = []byte(snapshotTs)
+				record[plan2.MoTransactionsColTypePreparedTs] = []byte(preparedTs)
+				record[plan2.MoTransactionsColTypeCommitTs] = []byte(commitTs)
+				record[plan2.MoTransactionsColTypeTxnMode] = []byte(txnMode)
+				record[plan2.MoTransactionsColTypeIsolation] = []byte(isolation)
+				record[plan2.MoTransactionsColTypeUserTxn] = []byte(userTxn)
+				record[plan2.MoTransactionsColTypeTxnStatus] = []byte(txnStatus)
+
+				if waitLocksCnt == 0 {
+					//one record
+					record[plan2.MoTransactionsColTypeTableId] = []byte{}
+					record[plan2.MoTransactionsColTypeLockKey] = []byte{}
+					record[plan2.MoTransactionsColTypeLockContent] = []byte{}
+					record[plan2.MoTransactionsColTypeLockMode] = []byte{}
+
+					if err := fillTxnRecord(proc, arg.Attrs, bat, record); err != nil {
+						return false, err
+					}
+				} else {
+					//multiple records
+
+					for _, lock := range txn.GetWaitLocks() {
+						options := lock.GetOptions()
+						if options == nil {
+							continue
+						}
+
+						//table id
+						tableId := fmt.Sprintf("%d", lock.GetTableId())
+						record[plan2.MoTransactionsColTypeTableId] = []byte(tableId)
+
+						//lock key
+						lockKey := "point"
+						if options.GetGranularity() == pblock.Granularity_Range {
+							lockKey = "range"
+						}
+						record[plan2.MoTransactionsColTypeLockKey] = []byte(lockKey)
+
+						//lock content
+						lockContent := ""
+						if options.GetGranularity() == pblock.Granularity_Range {
+							//first range
+							k1, k2 := getRangeContent(lock)
+							lockContent = hex.EncodeToString(k1) + "," + hex.EncodeToString(k2)
+						} else {
+							lockContent = hex.EncodeToString(getPointContent(lock))
+						}
+						record[plan2.MoTransactionsColTypeLockContent] = []byte(lockContent)
+
+						//lock mode
+						lockMode := options.GetMode().String()
+						record[plan2.MoTransactionsColTypeLockMode] = []byte(lockMode)
+
+						if err := fillTxnRecord(proc, arg.Attrs, bat, record); err != nil {
+							return false, err
+						}
+					}
+				}
+
+			}
+		}
+
+		bat.SetRowCount(bat.Vecs[0].Length())
+		result.Batch = bat
+		arg.ctr.state = dataFinished
+		return false, nil
+
+	case dataFinished:
+		return true, nil
+	default:
+		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+	}
+}
+
+func fillTxnRecord(proc *process.Process, attrs []string, bat *batch.Batch, record [][]byte) error {
+	for colIdx, attr := range attrs {
+		realColIdx := plan2.MoTransactionsColName2Index[strings.ToLower(attr)]
+		if err := vector.AppendBytes(bat.Vecs[colIdx], record[realColIdx], false, proc.GetMPool()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// getTxns get txn info from all cn
+func getTxns(proc *process.Process) ([]*query.GetTxnInfoResponse, error) {
+	var err error
+	var nodes []string
+
+	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
+		func(s *metadata.CNService) {
+			nodes = append(nodes, s.QueryAddress)
+		})
+
+	genRequest := func() *query.Request {
+		req := proc.QueryService.NewRequest(query.CmdMethod_GetTxnInfo)
+		req.GetTxnInfoRequest = &query.GetTxnInfoRequest{}
+		return req
+	}
+
+	rsps := make([]*query.GetTxnInfoResponse, 0)
+
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp != nil && rsp.GetTxnInfoResponse != nil {
+			rsps = append(rsps, rsp.GetTxnInfoResponse)
+		}
+	}
+
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	return rsps, err
+}
+
+func moCachePrepare(proc *process.Process, arg *Argument) error {
+	arg.ctr.state = dataProducing
+	if len(arg.Args) > 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "moCache: no argument is required")
+	}
+	for i := range arg.Attrs {
+		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	}
+	return nil
+}
+
+func moCacheCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
+	switch arg.ctr.state {
+	case dataProducing:
+
+		rsps, err := getCacheStats(proc)
+		if err != nil {
+			return false, err
+		}
+
+		//alloc batch
+		bat := batch.NewWithSize(len(arg.Attrs))
+		for i, col := range arg.Attrs {
+			col = strings.ToLower(col)
+			idx, ok := plan2.MoCacheColName2Index[col]
+			if !ok {
+				return false, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", col)
+			}
+
+			tp := plan2.MoCacheColTypes[idx]
+			bat.Vecs[i] = proc.GetVector(tp)
+		}
+		bat.Attrs = arg.Attrs
+		for _, rsp := range rsps {
+			if rsp == nil || len(rsp.CacheInfoList) == 0 {
+				continue
+			}
+
+			for _, cache := range rsp.CacheInfoList {
+				if cache == nil {
+					continue
+				}
+
+				if err = fillCacheRecord(proc, arg.Attrs, bat, cache); err != nil {
+					return false, err
+				}
+			}
+		}
+
+		bat.SetRowCount(bat.Vecs[0].Length())
+		result.Batch = bat
+		arg.ctr.state = dataFinished
+		return false, nil
+
+	case dataFinished:
+		result.Batch = nil
+		return true, nil
+	default:
+		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)
+	}
+}
+
+func fillCacheRecord(proc *process.Process, attrs []string, bat *batch.Batch, cache *query.CacheInfo) error {
+	var err error
+	for colIdx, attr := range attrs {
+		switch plan2.MoCacheColType(plan2.MoCacheColName2Index[strings.ToLower(attr)]) {
+		case plan2.MoCacheColTypeNodeType:
+			if err = vector.AppendBytes(bat.Vecs[colIdx], []byte(cache.GetNodeType()), false, proc.GetMPool()); err != nil {
+				return err
+			}
+		case plan2.MoCacheColTypeNodeId:
+			if err = vector.AppendBytes(bat.Vecs[colIdx], []byte(cache.GetNodeId()), false, proc.GetMPool()); err != nil {
+				return err
+			}
+		case plan2.MoCacheColTypeType:
+			if err = vector.AppendBytes(bat.Vecs[colIdx], []byte(cache.GetCacheType()), false, proc.GetMPool()); err != nil {
+				return err
+			}
+		case plan2.MoCacheColTypeUsed:
+			if err = vector.AppendFixed(bat.Vecs[colIdx], cache.GetUsed(), false, proc.GetMPool()); err != nil {
+				return err
+			}
+		case plan2.MoCacheColTypeFree:
+			if err = vector.AppendFixed(bat.Vecs[colIdx], cache.GetFree(), false, proc.GetMPool()); err != nil {
+				return err
+			}
+		case plan2.MoCacheColTypeHitRatio:
+			if err = vector.AppendFixed(bat.Vecs[colIdx], cache.GetHitRatio(), false, proc.GetMPool()); err != nil {
+				return err
+			}
+		}
+	}
+
+	return err
+}
+
+// getCacheStats get txn info from all cn, tn
+func getCacheStats(proc *process.Process) ([]*query.GetCacheInfoResponse, error) {
+	var err error
+	var nodes []string
+
+	selectSuperTenant(clusterservice.NewSelector(), "root", nil,
+		func(s *metadata.CNService) {
+			nodes = append(nodes, s.QueryAddress)
+		})
+
+	listTnService(func(s *metadata.TNService) {
+		nodes = append(nodes, s.QueryAddress)
+	})
+
+	genRequest := func() *query.Request {
+		req := proc.QueryService.NewRequest(query.CmdMethod_GetCacheInfo)
+		req.GetCacheInfoRequest = &query.GetCacheInfoRequest{}
+		return req
+	}
+
+	rsps := make([]*query.GetCacheInfoResponse, 0)
+
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp != nil && rsp.GetCacheInfoResponse != nil {
+			rsps = append(rsps, rsp.GetCacheInfoResponse)
+		}
+	}
+
+	err = requestMultipleCn(proc.Ctx, nodes, proc.QueryService, genRequest, handleValidResponse, nil)
+	return rsps, err
+}
+
+var selectSuperTenant = func(selector clusterservice.Selector,
+	username string,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService)) {
+	disttae.SelectForSuperTenant(selector, username, filter, appendFn)
+}
+
+var listTnService = func(appendFn func(service *metadata.TNService)) {
+	disttae.ListTnService(appendFn)
+}
+
+var requestMultipleCn = func(ctx context.Context, nodes []string, qs queryservice.QueryService, genRequest func() *query.Request, handleValidResponse func(string, *query.Response), handleInvalidResponse func(string)) error {
+	return queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
 }

@@ -41,5 +41,6 @@
 
 | Type | Version | Name                           |
 | ---- | ------- | ------------------------------ |
+| 3005 | 2       | TxnCommand_DeleteNode          |
 | 3010 | 3       | TxnCommand_Table               |
 | 3013 | 1       | TxnCommand_PersistedDeleteNode |

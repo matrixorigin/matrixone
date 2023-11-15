@@ -119,16 +119,13 @@ func (t *MOTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 	}
 
 	enable := t.provider.IsEnable()
-	// The enable state of kind, which falls within [SpanKindS3FSVis, SpanKindLocalFSVis],
-	// is managed by 'mo_ctl'
-	switch cfg.Kind {
-	case trace.SpanKindS3FSVis:
-		return enable && trace.MOCtledSpanEnableConfig.EnableS3FSSpan.Load()
-	case trace.SpanKindLocalFSVis:
-		return enable && trace.MOCtledSpanEnableConfig.EnableLocalFSSpan.Load()
-	default:
-		return enable
+
+	// check if is this span kind controlled by mo_ctl.
+	if has, state, _ := trace.IsMOCtledSpan(cfg.Kind); has {
+		return enable && state
 	}
+
+	return enable
 }
 
 var _ trace.Span = (*MOHungSpan)(nil)
@@ -291,19 +288,9 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	for _, fn := range s.onEnd {
 		fn()
 	}
-	deadline, hasDeadline := s.ctx.Deadline()
-	s.Duration = s.EndTime.Sub(s.StartTime)
-	// check need record
-	if hasDeadline {
-		if s.EndTime.After(deadline) {
-			s.needRecord = true
-			err = s.ctx.Err()
-		}
-	} else {
-		if s.NeedRecord(s.Duration) {
-			s.needRecord = true
-		}
-	}
+
+	s.needRecord, err = s.NeedRecord()
+
 	if !s.needRecord {
 		freeMOSpan(s)
 		return
@@ -343,6 +330,26 @@ func (s *MOSpan) doProfileRuntime(ctx context.Context, name string, debug int) {
 	} else {
 		s.AddExtraFields(zap.String(name, filepath))
 	}
+}
+
+func (s *MOSpan) NeedRecord() (bool, error) {
+	// if the span kind falls in mo_ctl controlled spans, we
+	// hope it ignores the long time threshold set by the tracer and deadline restrictions.
+	// but the threshold set by mo ctl need to be considered
+	if has, state, threshold := trace.IsMOCtledSpan(s.Kind); has {
+		return state && (s.Duration >= threshold), nil
+	}
+	// the default logic that before mo_ctl controlled spans have been introduced
+	deadline, hasDeadline := s.ctx.Deadline()
+	s.Duration = s.EndTime.Sub(s.StartTime)
+	if hasDeadline {
+		if s.EndTime.After(deadline) {
+			return true, s.ctx.Err()
+		}
+	} else {
+		return s.Duration >= s.LongTimeThreshold, nil
+	}
+	return false, nil
 }
 
 // doProfile is sync op.

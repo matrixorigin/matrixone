@@ -378,13 +378,25 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		_, err = store.addCNStoreHeartbeat(ctx, cmd)
 		assert.NoError(t, err)
 
-		// waiting the background taskSchedule operation
-		// schedule task we created to CN node
-		time.Sleep(time.Millisecond * 200)
+		ticker := time.NewTicker(time.Millisecond * 100)
+		defer ticker.Stop()
+		timeout := time.NewTimer(time.Second * 10)
+		defer timeout.Stop()
 
-		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
-		assert.NoError(t, err)
-		assert.Equal(t, 1, len(tasks))
+		for {
+			select {
+			case <-ticker.C:
+				tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
+				assert.NoError(t, err)
+				if len(tasks) == 1 {
+					return
+				}
+
+			case <-timeout.C:
+				panic("task schedule timeout")
+			}
+		}
+
 	}
 
 	runHakeeperTaskServiceTest(t, fn)
@@ -487,6 +499,12 @@ func TestAddHeartbeat(t *testing.T) {
 		}
 		tnMsg.Shards = append(tnMsg.Shards, pb.TNShardInfo{ShardID: 2, ReplicaID: 3})
 		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
+		assert.NoError(t, err)
+
+		proxyMsg := pb.ProxyHeartbeat{
+			UUID: store.id(),
+		}
+		_, err = store.addProxyHeartbeat(ctx, proxyMsg)
 		assert.NoError(t, err)
 	}
 	runStoreTest(t, fn)

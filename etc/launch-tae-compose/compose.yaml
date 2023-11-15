@@ -104,7 +104,7 @@ services:
           - "logservice"
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2023-11-01T18-37-25Z
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -118,10 +118,10 @@ services:
       - launch
       - launch-multi-cn
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9001' || exit 1
       interval: 1s
       timeout: 5s
-      retries: 3
+      retries: 10
     networks:
       monet:
 
@@ -130,7 +130,7 @@ services:
   # mc client: https://github.com/minio/mc/blob/master/docs/minio-client-complete-guide.md
   # mc anonymous set: https://min.io/docs/minio/linux/reference/minio-mc/mc-anonymous-set.html
   createbuckets:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2023-10-30T18-43-32Z
     depends_on:
       minio:
         condition: service_healthy

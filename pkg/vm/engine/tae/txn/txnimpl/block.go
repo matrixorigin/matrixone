@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -189,8 +190,21 @@ func (blk *txnBlock) getDBID() uint64 {
 	return blk.entry.GetSegment().GetTable().GetDB().ID
 }
 
-func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, nil, dt)
+func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
+	schema := blk.table.GetLocalSchema()
+	pkDef := schema.GetPrimaryKey()
+	pkVec := makeWorkspaceVector(pkDef.Type)
+	defer pkVec.Close()
+	for row := start; row <= end; row++ {
+		pkVal, _, err := blk.entry.GetBlockData().GetValue(
+			blk.table.store.GetContext(), blk.Txn, schema, int(row), pkDef.Idx, mp,
+		)
+		if err != nil {
+			return err
+		}
+		pkVec.Append(pkVal, false)
+	}
+	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, pkVec, dt)
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaLoc objectio.Location) {
@@ -219,43 +233,51 @@ func (blk *txnBlock) Rows() int {
 	return blk.entry.GetBlockData().Rows()
 }
 
-func (blk *txnBlock) GetColumnDataByName(ctx context.Context, attr string) (*containers.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataByName(
+	ctx context.Context, attr string, mp *mpool.MPool,
+) (*containers.ColumnView, error) {
 	schema := blk.table.GetLocalSchema()
 	colIdx := schema.GetColIdx(attr)
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx)
+		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx, mp)
 	}
-	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, colIdx)
+	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, colIdx, mp)
 }
 
-func (blk *txnBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (*containers.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByNames(
+	ctx context.Context, attrs []string, mp *mpool.MPool,
+) (*containers.BlockView, error) {
 	schema := blk.table.GetLocalSchema()
 	attrIds := make([]int, len(attrs))
 	for i, attr := range attrs {
 		attrIds[i] = schema.GetColIdx(attr)
 	}
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds)
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds, mp)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, attrIds)
+	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, attrIds, mp)
 }
 
 func (blk *txnBlock) GetDeltaPersistedTS() types.TS {
 	return blk.entry.GetDeltaPersistedTS()
 }
 
-func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*containers.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataById(
+	ctx context.Context, colIdx int, mp *mpool.MPool,
+) (*containers.ColumnView, error) {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx)
+		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx, mp)
 	}
-	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdx)
+	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdx, mp)
 }
 
-func (blk *txnBlock) GetColumnDataByIds(ctx context.Context, colIdxes []int) (*containers.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByIds(
+	ctx context.Context, colIdxes []int, mp *mpool.MPool,
+) (*containers.BlockView, error) {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes)
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes, mp)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdxes)
+	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdxes, mp)
 }
 
 func (blk *txnBlock) Prefetch(idxes []int) error {
@@ -279,8 +301,10 @@ func (blk *txnBlock) GetSegment() (seg handle.Segment) {
 	return
 }
 
-func (blk *txnBlock) GetByFilter(ctx context.Context, filter *handle.Filter) (offset uint32, err error) {
-	return blk.entry.GetBlockData().GetByFilter(ctx, blk.table.store.txn, filter)
+func (blk *txnBlock) GetByFilter(
+	ctx context.Context, filter *handle.Filter, mp *mpool.MPool,
+) (offset uint32, err error) {
+	return blk.entry.GetBlockData().GetByFilter(ctx, blk.table.store.txn, filter, mp)
 }
 
 // newRelationBlockItOnSnap make a iterator on txn 's segments of snapshot, exclude segment of workspace

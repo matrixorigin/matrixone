@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,7 +55,7 @@ func getUserId(proc *process.Process) *vector.Vector {
 	return vector.NewConstFixed(types.T_uint32.ToType(), proc.SessionInfo.UserId, 1, proc.Mp())
 }
 
-func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func currentAccountCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	switch arg.ctr.state {
 	case dataProducing:
 		rbat := batch.NewWithSize(len(arg.Attrs))
@@ -78,12 +79,12 @@ func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 			}
 		}
 		rbat.SetRowCount(1)
-		proc.SetInputBatch(rbat)
+		result.Batch = rbat
 		arg.ctr.state = dataFinished
 		return false, nil
 
 	case dataFinished:
-		proc.SetInputBatch(nil)
+		result.Batch = nil
 		return true, nil
 	default:
 		return false, moerr.NewInternalError(proc.Ctx, "unknown state %v", arg.ctr.state)

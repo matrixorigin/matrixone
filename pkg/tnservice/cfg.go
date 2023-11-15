@@ -49,7 +49,7 @@ var (
 	defaultFlushInterval         = time.Second * 60
 	defaultScanInterval          = time.Second * 5
 	defaultIncrementalInterval   = time.Minute
-	defaultGlobalMinCount        = int64(60)
+	defaultGlobalMinCount        = int64(40)
 	defaultMinCount              = int64(100)
 	defaultReservedWALEntryCount = uint64(5000)
 
@@ -162,6 +162,13 @@ type Config struct {
 	LockService lockservice.Config `toml:"lockservice"`
 
 	Ctl ctlservice.Config `toml:"ctl"`
+
+	// IsStandalone indicates whether the tn is in standalone cluster not an independent process.
+	// For the tn does not boost an independent queryservice in standalone mode.
+	// cn,tn shares the same queryservice in standalone mode.
+	// Under distributed deploy mode, cn,tn are independent os process.
+	// they have their own queryservice.
+	InStandalone bool
 }
 
 func (c *Config) Validate() error {

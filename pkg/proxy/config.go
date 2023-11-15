@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
@@ -34,6 +36,10 @@ var (
 	defaultRebalanceInterval = 30 * time.Second
 	// The default value of rebalnce tolerance.
 	defaultRebalanceTolerance = 0.3
+	// The default value of heartbeat interval.
+	defaultHeartbeatInterval = time.Second * 3
+	// The default value of heartbeat timeout.
+	defaultHeartbeatTimeout = time.Second * 3
 )
 
 // Config is the configuration of proxy server.
@@ -71,6 +77,10 @@ type Config struct {
 	HAKeeper struct {
 		// ClientConfig is HAKeeper client configuration.
 		ClientConfig logservice.HAKeeperClientConfig
+		// HeartbeatInterval heartbeat interval to send message to HAKeeper. Default is 1s.
+		HeartbeatInterval toml.Duration `toml:"hakeeper-heartbeat-interval"`
+		// HeartbeatTimeout heartbeat request timeout. Default is 3s.
+		HeartbeatTimeout toml.Duration `toml:"hakeeper-heartbeat-timeout"`
 	}
 	// Cluster is the configuration of MO Cluster.
 	Cluster struct {
@@ -131,10 +141,9 @@ func WithTLSKeyFile(f string) Option {
 }
 
 // WithConfigData saves the data from the config file
-func WithConfigData(data []byte) Option {
+func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	return func(s *Server) {
-		s.configData = make([]byte, len(data))
-		copy(s.configData, data)
+		s.configData = util.NewConfigData(data)
 	}
 }
 
@@ -157,6 +166,12 @@ func (c *Config) FillDefault() {
 			c.Plugin.Timeout = time.Second
 		}
 	}
+	if c.HAKeeper.HeartbeatInterval.Duration == 0 {
+		c.HAKeeper.HeartbeatInterval.Duration = defaultHeartbeatInterval
+	}
+	if c.HAKeeper.HeartbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeartbeatTimeout.Duration = defaultHeartbeatTimeout
+	}
 }
 
 // Validate validates the configuration of proxy server.
@@ -171,4 +186,9 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func dumpProxyConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
+	defCfg := Config{}
+	return util.DumpConfig(cfg, defCfg)
 }

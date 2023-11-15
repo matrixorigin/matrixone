@@ -16,10 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"fmt"
 	"hash/crc32"
 	"runtime"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -38,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -57,6 +60,7 @@ type cnInformation struct {
 	lockService  lockservice.LockService
 	queryService queryservice.QueryService
 	hakeeper     logservice.CNHAKeeperClient
+	udfService   udf.Service
 	aicm         *defines.AutoIncrCacheManager
 }
 
@@ -200,6 +204,7 @@ func newMessageReceiverOnServer(
 	lockService lockservice.LockService,
 	queryService queryservice.QueryService,
 	hakeeper logservice.CNHAKeeperClient,
+	udfService udf.Service,
 	txnClient client.TxnClient,
 	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
 
@@ -219,6 +224,7 @@ func newMessageReceiverOnServer(
 		lockService:  lockService,
 		queryService: queryService,
 		hakeeper:     hakeeper,
+		udfService:   udfService,
 		aicm:         aicm,
 	}
 
@@ -274,6 +280,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		cnInfo.lockService,
 		cnInfo.queryService,
 		cnInfo.hakeeper,
+		cnInfo.udfService,
 		cnInfo.aicm)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
@@ -409,6 +416,9 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	if err != nil {
 		return processHelper{}, err
 	}
+	if len(procInfo.GetAnalysisNodeList()) == 0 {
+		panic(fmt.Sprintf("empty plan: %s", procInfo.Sql))
+	}
 
 	result := processHelper{
 		id:               procInfo.Id,
@@ -435,17 +445,19 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	defer getCancel()
 	var opProc *process.Process
 	var ok bool
-	opUuid := receiver.messageUuid
 outter:
 	for {
 		select {
 		case <-getCtx.Done():
+			colexec.Srv.GetProcByUuid(uid, true)
 			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
+
 		case <-receiver.ctx.Done():
-			logutil.Errorf("receiver conctx done during get dispatch process")
+			colexec.Srv.GetProcByUuid(uid, true)
 			return nil, nil
+
 		default:
-			if opProc, ok = colexec.Srv.GetProcByUuid(opUuid); !ok {
+			if opProc, ok = colexec.Srv.GetProcByUuid(uid, false); !ok {
 				runtime.Gosched()
 			} else {
 				break outter

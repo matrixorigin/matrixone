@@ -20,17 +20,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	Build = iota
-	Eval
-)
+var _ vm.Operator = new(Argument)
 
 type container struct {
 	n     int // result vector number
-	state int
+	state vm.CtrState
 	sels  []int64
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
@@ -44,9 +42,20 @@ type Argument struct {
 	Limit int64
 	ctr   *container
 	Fs    []*plan.OrderBySpec
+
+	info     *vm.OperatorInfo
+	children []vm.Operator
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.children = append(arg.children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()

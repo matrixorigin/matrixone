@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/ratelimit"
 	"go.uber.org/zap"
 )
@@ -207,6 +208,11 @@ func (client *txnClient) New(
 	ctx context.Context,
 	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// we take a token from the limiter to control the number of transactions created per second.
 	_, task := gotrace.NewTask(context.TODO(), "transaction.New")
 	defer task.End()
@@ -223,7 +229,7 @@ func (client *txnClient) New(
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
 	if client.lockService != nil {
-		txnMeta.LockService = client.lockService.GetConfig().ServiceID
+		txnMeta.LockService = client.lockService.GetServiceID()
 	}
 
 	options = append(options,
@@ -329,6 +335,11 @@ func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
 func (client *txnClient) determineTxnSnapshot(
 	ctx context.Context,
 	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// always use the current ts as txn's snapshot ts is enableSacrificingFreshness
 	if !client.enableSacrificingFreshness {
 		// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
@@ -385,7 +396,11 @@ func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 
 func (client *txnClient) openTxn(op *txnOperator) error {
 	client.mu.Lock()
-	defer client.mu.Unlock()
+	defer func() {
+		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		client.mu.Unlock()
+	}()
 
 	if client.mu.state == normal {
 		if !op.isUserTxn() ||
@@ -403,10 +418,16 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 
 func (client *txnClient) closeTxn(txn txn.TxnMeta) {
 	client.mu.Lock()
-	defer client.mu.Unlock()
+	defer func() {
+		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		client.mu.Unlock()
+	}()
 
 	key := cutil.UnsafeBytesToString(txn.ID)
 	if op, ok := client.mu.activeTxns[key]; ok {
+		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.createAt).Seconds())
+
 		delete(client.mu.activeTxns, key)
 		client.removeFromLeakCheck(txn.ID)
 		if !op.isUserTxn() {
@@ -466,13 +487,18 @@ func (client *txnClient) Resume() {
 func (client *txnClient) AbortAllRunningTxn() {
 	client.mu.Lock()
 	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
-	for key, op := range client.mu.activeTxns {
+	for _, op := range client.mu.activeTxns {
 		ops = append(ops, op)
-		delete(client.mu.activeTxns, key)
 	}
 	waitOps := append(([]*txnOperator)(nil), client.mu.waitActiveTxns...)
 	client.mu.waitActiveTxns = client.mu.waitActiveTxns[:0]
 	client.mu.Unlock()
+
+	if client.timestampWaiter != nil {
+		// Cancel all waiters, means that all waiters do not need to wait for
+		// the newer timestamp from logtail consumer.
+		client.timestampWaiter.Cancel()
+	}
 
 	for _, op := range ops {
 		tempWorkspace := op.workspace
@@ -510,18 +536,23 @@ func (client *txnClient) removeFromLeakCheck(id []byte) {
 }
 
 func (client *txnClient) IterTxns(fn func(TxnOverview) bool) {
+	ops := client.getAllTxnOperators()
+
+	for _, op := range ops {
+		if !fn(op.GetOverview()) {
+			return
+		}
+	}
+}
+
+func (client *txnClient) getAllTxnOperators() []*txnOperator {
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 
+	ops := make([]*txnOperator, 0, len(client.mu.activeTxns)+len(client.mu.waitActiveTxns))
 	for _, op := range client.mu.activeTxns {
-		if !fn(op.GetOverview()) {
-			return
-		}
+		ops = append(ops, op)
 	}
-
-	for _, op := range client.mu.waitActiveTxns {
-		if !fn(op.GetOverview()) {
-			return
-		}
-	}
+	ops = append(ops, client.mu.waitActiveTxns...)
+	return ops
 }

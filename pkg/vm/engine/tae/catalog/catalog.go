@@ -50,6 +50,8 @@ const (
 	SnapshotAttr_BlockMaxRow     = "block_max_row"
 	SnapshotAttr_SegmentMaxBlock = "segment_max_block"
 	SnapshotAttr_SchemaExtra     = "schema_extra"
+	AccountIDDbNameTblName       = "account_id_db_name_tbl_name"
+	AccountIDDbName              = "account_id_db_name"
 )
 
 type DataFactory interface {
@@ -65,8 +67,7 @@ type Catalog struct {
 	entries   map[uint64]*common.GenericDLNode[*DBEntry]
 	nameNodes map[string]*nodeList[*DBEntry]
 	link      *common.GenericSortedDList[*DBEntry]
-
-	nodesMu sync.RWMutex
+	nodesMu   sync.RWMutex
 }
 
 func genDBFullName(tenantID uint32, name string) string {
@@ -262,7 +263,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	catalog.OnReplayDBID(dbid)
 	db, _ := catalog.GetDatabaseByID(dbid)
 	if db != nil {
-		dbCreatedAt := db.GetCreatedAt()
+		dbCreatedAt := db.GetCreatedAtLocked()
 		if !dbCreatedAt.Equal(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s",
 				txnNode.End.ToString(), dbCreatedAt.ToString()))
@@ -309,7 +310,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	prev := db.MVCCChain.GetLatestNodeLocked()
 	un := &MVCCNode[*EmptyMVCCNode]{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: db.GetCreatedAt(),
+			CreatedAt: db.GetCreatedAtLocked(),
 			DeletedAt: txnNode.End,
 		},
 		TxnMVCCNode: txnNode,
@@ -421,7 +422,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	}
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
-		tblCreatedAt := tbl.GetCreatedAt()
+		tblCreatedAt := tbl.GetCreatedAtLocked()
 		if tblCreatedAt.Greater(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
@@ -585,7 +586,7 @@ func (catalog *Catalog) onReplayCreateSegment(
 	}
 	seg, _ := rel.GetSegmentByID(segid)
 	if seg != nil {
-		segCreatedAt := seg.GetCreatedAt()
+		segCreatedAt := seg.GetCreatedAtLocked()
 		if !segCreatedAt.Equal(txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), segCreatedAt.ToString()))
 		}
@@ -684,6 +685,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 			blk.location = un.BaseNode.MetaLoc
 		}
 		blk.blkData.TryUpgrade()
+		blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
 		return
 	}
 	blk = NewReplayBlockEntry()
@@ -697,6 +699,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	} else {
 		blk.blkData.TryUpgrade()
 	}
+	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
 	if observer != nil {
 		observer.OnTimeStamp(prepareTS)
 	}
@@ -798,8 +801,14 @@ func (catalog *Catalog) onReplayCreateBlock(
 	}
 	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
-	blk.blkData = dataFactory.MakeBlockFactory()(blk)
+	if blk.blkData == nil {
+		blk.blkData = dataFactory.MakeBlockFactory()(blk)
+	} else {
+		blk.blkData.TryUpgrade()
+	}
+	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
 }
+
 func (catalog *Catalog) onReplayDeleteBlock(
 	dbid, tid uint64,
 	segid *types.Segmentid,
@@ -850,6 +859,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 	blk.Insert(un)
 	blk.location = un.BaseNode.MetaLoc
 	blk.blkData.TryUpgrade()
+	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
 }
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)

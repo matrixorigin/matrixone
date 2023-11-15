@@ -94,6 +94,10 @@ type TxnOperator interface {
 	// the w-w conflict.
 	// If ts is empty, it will use the latest commit timestamp which is received from DN.
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
+	// SnapshotTS returns the snapshot timestamp of the transaction.
+	SnapshotTS() timestamp.Timestamp
+	// Status returns the current transaction status.
+	Status() txn.TxnStatus
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
 	// operation information.
 	ApplySnapshot(data []byte) error
@@ -174,6 +178,9 @@ type TimestampWaiter interface {
 	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and tn is
 	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
 	NotifyLatestCommitTS(appliedTS timestamp.Timestamp)
+	// Cancel cancels all waiters in timestamp waiter. They will not wait for the newer
+	// timestamp anymore.
+	Cancel()
 	// Close close the timestamp waiter
 	Close()
 }

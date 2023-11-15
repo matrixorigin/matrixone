@@ -20,14 +20,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var _ vm.Operator = new(Argument)
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
@@ -93,9 +95,20 @@ type Argument struct {
 	ShuffleType         int32
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
+
+	info     *vm.OperatorInfo
+	Children []vm.Operator
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
+	arg.info = info
+}
+
+func (arg *Argument) AppendChild(child vm.Operator) {
+	arg.Children = append(arg.Children, child)
+}
+
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.ctr != nil {
 		if arg.ctr.isRemote {
 			if !arg.ctr.prepared {
@@ -112,7 +125,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 					message.Uuid = r.uuid[:]
 				}
 				if pipelineFailed {
-					err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
 					message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
 				}
 				r.cs.Write(timeoutCtx, message)

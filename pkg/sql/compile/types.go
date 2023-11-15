@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -101,7 +102,7 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic magicType
 
-	// IsEnd means the pipeline is join
+	// IsJoin means the pipeline is join
 	IsJoin bool
 
 	// IsEnd means the pipeline is end
@@ -110,7 +111,7 @@ type Scope struct {
 	// IsRemote means the pipeline is remote
 	IsRemote bool
 
-	// IsRemote means the pipeline is load
+	// IsLoad means the pipeline is load
 	IsLoad bool
 
 	Plan *plan.Plan
@@ -129,8 +130,9 @@ type Scope struct {
 
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 
-	BuildIdx   int
-	ShuffleCnt int
+	BuildIdx       int
+	ShuffleCnt     int
+	PartialResults []any
 }
 
 // scopeContext contextual information to assist in the generation of pipeline.Pipeline.
@@ -216,11 +218,8 @@ type Compile struct {
 	cnLabel map[string]string
 
 	buildPlanFunc func() (*plan2.Plan, error)
-
-	// [tag-11768] a hack for resolving mpool leak bug temporarily.
-	tag11768 bool
-
-	fuzzy *fuzzyCheck
+	startAt       time.Time
+	fuzzy         *fuzzyCheck
 }
 
 type runtimeFilterReceiver struct {

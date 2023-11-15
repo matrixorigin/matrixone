@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/mocks"
@@ -34,7 +35,7 @@ func TestSort1(t *testing.T) {
 	// sort not null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10, false, nil)
-		vec2 := containers.MakeVector(vecType)
+		vec2 := containers.MakeVector(vecType, common.DefaultAllocator)
 		for i := 0; i < 10; i++ {
 			vec2.Append(vec.Get(i), vec.IsNull(i))
 		}
@@ -50,7 +51,7 @@ func TestSort1(t *testing.T) {
 		vec := containers.MockVector(vecType, 10, false, nil)
 		vec.Update(rand.Intn(10), nil, true)
 		vec.Update(rand.Intn(10), nil, true)
-		vec2 := containers.MakeVector(vecType)
+		vec2 := containers.MakeVector(vecType, common.DefaultAllocator)
 		for i := 0; i < 10; i++ {
 			vec2.Append(vec.Get(i), vec.IsNull(i))
 		}
@@ -84,11 +85,11 @@ func TestMerge1(t *testing.T) {
 		vec2 := containers.MockVector(vecType, 5, false, nil)
 		vecs = []containers.Vector{vec2}
 		_, _ = SortBlockColumns(vecs, 0, mocks.GetTestVectorPool())
-		vec3 := containers.MakeVector(vecType)
+		vec3 := containers.MakeVector(vecType, common.DefaultAllocator)
 		for i := 0; i < 5; i++ {
 			vec3.Append(vec.Get(i), vec.IsNull(i))
 		}
-		vec4 := containers.MakeVector(vecType)
+		vec4 := containers.MakeVector(vecType, common.DefaultAllocator)
 		for i := 0; i < 5; i++ {
 			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}
@@ -121,11 +122,11 @@ func TestMerge1(t *testing.T) {
 		vecs = []containers.Vector{vec2}
 		_, _ = SortBlockColumns(vecs, 0, mocks.GetTestVectorPool())
 
-		vec3 := containers.MakeVector(vecType)
+		vec3 := containers.MakeVector(vecType, common.DefaultAllocator)
 		for i := 0; i < 5; i++ {
 			vec3.Append(vec.Get(i), vec.IsNull(i))
 		}
-		vec4 := containers.MakeVector(vecType)
+		vec4 := containers.MakeVector(vecType, common.DefaultAllocator)
 		for i := 0; i < 5; i++ {
 			vec4.Append(vec2.Get(i), vec2.IsNull(i))
 		}

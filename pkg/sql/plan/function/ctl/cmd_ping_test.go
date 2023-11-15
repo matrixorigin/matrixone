@@ -32,11 +32,11 @@ import (
 func TestCmdPingTNWithEmptyTN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime()
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"",
-		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
+		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return nil, nil
 		})
 	require.NoError(t, err)
@@ -49,11 +49,11 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 
 	shardID := uint64(1)
 	ctx := context.Background()
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"",
-		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
+		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
 					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: shardID}),
@@ -70,11 +70,11 @@ func TestCmdPingTNWithSingleTN(t *testing.T) {
 func TestCmdPingTNWithMultiTN(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"",
-		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
+		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
 					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 1}),
@@ -94,11 +94,11 @@ func TestCmdPingTNWithMultiTN(t *testing.T) {
 func TestCmdPingTNWithParameter(t *testing.T) {
 	ctx := context.Background()
 	initTestRuntime(1, 2)
-	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil)
+	proc := process.New(ctx, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	result, err := handlePing()(proc,
 		tn,
 		"1",
-		func(ctx context.Context, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
+		func(ctx context.Context, proc *process.Process, cr []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			return []txn.CNOpResponse{
 				{
 					Payload: protoc.MustMarshal(&pb.TNPingResponse{ShardID: 1}),

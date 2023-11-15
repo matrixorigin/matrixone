@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -149,17 +150,19 @@ func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	return
 }
 
-func (n *anode) FillBlockView(view *containers.BlockView, colIdxes []int) (err error) {
+func (n *anode) FillBlockView(
+	view *containers.BlockView, colIdxes []int, mp *mpool.MPool,
+) (err error) {
 	for _, colIdx := range colIdxes {
 		orig := n.data.Vecs[colIdx]
-		view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
+		view.SetData(colIdx, orig.CloneWindow(0, orig.Length(), mp))
 	}
 	view.DeleteMask = n.data.Deletes
 	return
 }
-func (n *anode) FillColumnView(view *containers.ColumnView) (err error) {
+func (n *anode) FillColumnView(view *containers.ColumnView, mp *mpool.MPool) (err error) {
 	orig := n.data.Vecs[view.ColIdx]
-	view.SetData(orig.CloneWindow(0, orig.Length()))
+	view.SetData(orig.CloneWindow(0, orig.Length(), mp))
 	view.DeleteMask = n.data.Deletes
 	return
 }
@@ -221,16 +224,18 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 }
 
 func (n *anode) GetColumnDataByIds(
-	colIdxes []int,
+	colIdxes []int, mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	view = containers.NewBlockView()
-	err = n.FillBlockView(view, colIdxes)
+	err = n.FillBlockView(view, colIdxes, mp)
 	return
 }
 
-func (n *anode) GetColumnDataById(ctx context.Context, colIdx int) (view *containers.ColumnView, err error) {
+func (n *anode) GetColumnDataById(
+	ctx context.Context, colIdx int, mp *mpool.MPool,
+) (view *containers.ColumnView, err error) {
 	view = containers.NewColumnView(colIdx)
-	err = n.FillColumnView(view)
+	err = n.FillColumnView(view, mp)
 	return
 }
 

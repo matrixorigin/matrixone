@@ -167,6 +167,50 @@ func TestCommitWithLockTables(t *testing.T) {
 	})
 }
 
+func TestCommitWithLockTablesChanged(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		lockservice.RunLockServicesForTest(
+			zap.DebugLevel,
+			[]string{"s1"},
+			time.Second,
+			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
+				s := ls[0]
+
+				_, err := s.Lock(ctx, 1, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
+				assert.NoError(t, err)
+				_, err = s.Lock(ctx, 2, [][]byte{[]byte("k1")}, tc.txnID, lock.LockOptions{})
+				assert.NoError(t, err)
+
+				ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
+					sr.Responses[0].TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
+					sr.Responses[0].CommitResponse = &txn.TxnCommitResponse{
+						InvalidLockTables: []uint64{1},
+					}
+					return sr, nil
+				})
+
+				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+				tc.option.lockService = s
+				tc.AddLockTable(lock.LockTable{Table: 1})
+				tc.AddLockTable(lock.LockTable{Table: 2})
+				tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
+				err = tc.Commit(ctx)
+				assert.Error(t, err)
+
+				// table 1 will be removed
+				bind, err := s.GetLockTableBind(1)
+				require.NoError(t, err)
+				require.Equal(t, lock.LockTable{}, bind)
+
+				// table 2 will be kept
+				bind, err = s.GetLockTableBind(2)
+				require.NoError(t, err)
+				require.NotEqual(t, lock.LockTable{}, bind)
+			},
+			nil)
+	})
+}
+
 func TestContextWithoutDeadlineWillPanic(t *testing.T) {
 	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
 		defer func() {
@@ -450,7 +494,7 @@ func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 func TestRollbackMultiTimes(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		require.NoError(t, tc.Rollback(ctx))
-		require.Error(t, tc.Rollback(ctx))
+		require.NoError(t, tc.Rollback(ctx))
 	})
 }
 

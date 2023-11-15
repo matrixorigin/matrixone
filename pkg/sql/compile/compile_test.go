@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -123,7 +124,7 @@ func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
 		tc.proc.TxnOperator = txnOperator
-		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil, false)
+		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil, time.Now())
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
@@ -143,7 +144,7 @@ func TestCompileWithFaults(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
-	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil, false)
+	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil, time.Now())
 	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
@@ -168,6 +169,28 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 		proc: proc,
 		pn:   pn,
 		stmt: stmts[0],
+	}
+}
+
+func TestCompileShouldReturnCtxError(t *testing.T) {
+	{
+		c := Compile{proc: &process.Process{}}
+		ctx, cancel := context.WithTimeout(context.TODO(), 100*time.Millisecond)
+		c.proc.Ctx = ctx
+		time.Sleep(time.Second)
+		require.True(t, c.shouldReturnCtxErr())
+		cancel()
+		require.True(t, c.shouldReturnCtxErr())
+	}
+
+	{
+		c := Compile{proc: &process.Process{}}
+		ctx, cancel := context.WithTimeout(context.TODO(), 500*time.Millisecond)
+		c.proc.Ctx = ctx
+		cancel()
+		require.False(t, c.shouldReturnCtxErr())
+		time.Sleep(time.Second)
+		require.False(t, c.shouldReturnCtxErr())
 	}
 }
 

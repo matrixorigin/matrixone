@@ -46,6 +46,7 @@ func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	return nil
 }
 func (store *NoopTxnStore) GetContext() context.Context          { return nil }
+func (store *NoopTxnStore) SetContext(context.Context)           {}
 func (store *NoopTxnStore) PrepareRollback() error               { return nil }
 func (store *NoopTxnStore) PrePrepare(ctx context.Context) error { return nil }
 func (store *NoopTxnStore) PrepareCommit() error                 { return nil }
@@ -117,22 +118,32 @@ func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (e
 func (store *NoopTxnStore) UpdateDeltaLoc(id *common.ID, un objectio.Location) (err error) {
 	return
 }
-func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)                { return }
-func (store *NoopTxnStore) SoftDeleteSegment(id *common.ID) (err error)              { return }
-func (store *NoopTxnStore) BatchDedup(uint64, uint64, containers.Vector) (err error) { return }
+func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)   { return }
+func (store *NoopTxnStore) SoftDeleteSegment(id *common.ID) (err error) { return }
+func (store *NoopTxnStore) BatchDedup(
+	uint64, uint64, containers.Vector,
+) (err error) {
+	return
+}
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
-func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32, containers.Vector, handle.DeleteType) (err error) {
+func (store *NoopTxnStore) RangeDelete(
+	*common.ID, uint32, uint32, containers.Vector, handle.DeleteType,
+) (err error) {
 	return
 }
 func (store *NoopTxnStore) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Location) (ok bool, err error) {
 	return
 }
-func (store *NoopTxnStore) GetByFilter(context.Context, uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (store *NoopTxnStore) GetByFilter(
+	context.Context, uint64, uint64, *handle.Filter,
+) (id *common.ID, offset uint32, err error) {
 	return
 }
-func (store *NoopTxnStore) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error) {
+func (store *NoopTxnStore) GetValue(
+	*common.ID, uint32, uint16,
+) (v any, isNull bool, err error) {
 	return
 }
 

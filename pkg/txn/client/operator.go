@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -51,12 +52,13 @@ var (
 		moerr.ErrTxnNotActive: {},
 	}
 	commitTxnErrors = map[uint16]struct{}{
-		moerr.ErrTAECommit:    {},
-		moerr.ErrTAERollback:  {},
-		moerr.ErrTAEPrepare:   {},
-		moerr.ErrRpcError:     {},
-		moerr.ErrTxnNotFound:  {},
-		moerr.ErrTxnNotActive: {},
+		moerr.ErrTAECommit:            {},
+		moerr.ErrTAERollback:          {},
+		moerr.ErrTAEPrepare:           {},
+		moerr.ErrRpcError:             {},
+		moerr.ErrTxnNotFound:          {},
+		moerr.ErrTxnNotActive:         {},
+		moerr.ErrLockTableBindChanged: {},
 	}
 	rollbackTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERollback:  {},
@@ -181,6 +183,7 @@ type txnOperator struct {
 	timestampWaiter TimestampWaiter
 	clock           clock.Clock
 	createAt        time.Time
+	commitAt        time.Time
 }
 
 func newTxnOperator(
@@ -198,6 +201,12 @@ func newTxnOperator(
 	}
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
+
+	if tc.option.user {
+		v2.TxnUserCounter.Inc()
+	} else {
+		v2.TxnInternalCounter.Inc()
+	}
 	return tc
 }
 
@@ -234,6 +243,11 @@ func (tc *txnOperator) setWaitActive(v bool) {
 }
 
 func (tc *txnOperator) waitActive(ctx context.Context) error {
+	start := time.Now()
+	defer func() {
+		v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if tc.waiter == nil {
 		return nil
 	}
@@ -284,6 +298,18 @@ func (tc *txnOperator) TxnRef() *txn.TxnMeta {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return &tc.mu.txn
+}
+
+func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.txn.SnapshotTS
+}
+
+func (tc *txnOperator) Status() txn.TxnStatus {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.mu.txn.Status
 }
 
 func (tc *txnOperator) Snapshot() ([]byte, error) {
@@ -410,10 +436,17 @@ func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*r
 func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	_, task := gotrace.NewTask(context.TODO(), "transaction.WriteAndCommit")
 	defer task.End()
+	util.LogTxnWrite(tc.getTxnMeta(false))
+	util.LogTxnCommit(tc.getTxnMeta(false))
 	return tc.doWrite(ctx, requests, true)
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
+	tc.commitAt = time.Now()
+	defer func() {
+		v2.TxnCNCommitDurationHistogram.Observe(time.Since(tc.commitAt).Seconds())
+	}()
+
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
 	defer task.End()
 	util.LogTxnCommit(tc.getTxnMeta(false))
@@ -436,6 +469,8 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
+	v2.TxnRollbackCounter.Inc()
+
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Rollback")
 	defer task.End()
 	txnMeta := tc.getTxnMeta(false)
@@ -450,8 +485,8 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	if err := tc.checkStatus(true); err != nil {
-		return err
+	if tc.mu.closed {
+		return nil
 	}
 
 	defer func() {
@@ -576,6 +611,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 
 	var txnReqs []*txn.TxnRequest
 	if payload != nil {
+		v2.TxnCNCommitCounter.Inc()
 		for i := range payload {
 			payload[i].Txn = tc.getTxnMeta(true)
 			txnReqs = append(txnReqs, &payload[i])
@@ -790,6 +826,11 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 			return err
 		}
 
+		// commit failed, refresh invalid lock tables
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			tc.option.lockService.ForceRefreshLockTableBinds(resp.CommitResponse.InvalidLockTables...)
+		}
+
 		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
 		if ok && v.(bool) {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
@@ -911,10 +952,16 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
+	if !tc.commitAt.IsZero() {
+		v2.TxnCNCommitResponseDurationHistogram.Observe(float64(time.Since(tc.commitAt).Seconds()))
+	}
+
 	// rc mode need to see the committed value, so wait logtail applied
 	if tc.mu.txn.IsRCIsolation() &&
 		tc.timestampWaiter != nil {
+		start := time.Now()
 		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+		v2.TxnCNCommitWaitLogtailDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
 			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
 				util.TxnField(tc.mu.txn),

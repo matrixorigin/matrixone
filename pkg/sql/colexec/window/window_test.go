@@ -20,8 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -86,38 +86,35 @@ func init() {
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
 	for _, tc := range tcs {
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestWindow(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
-		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
-		}
-		tc.proc.Reg.InputBatch = nil
-		_, err = Call(0, tc.proc, tc.arg, false, false)
+
+		_, err = tc.arg.Call(tc.proc)
 		require.NoError(t, err)
 	}
 }
@@ -140,6 +137,11 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 			WinSpecList: exprs,
 			Types:       ts,
 			Aggs:        aggs,
+			info: &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 }
@@ -156,6 +158,13 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
-}
+// func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+// 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+// }
+
+// func cleanResult(result *vm.CallResult, proc *process.Process) {
+// 	if result.Batch != nil {
+// 		result.Batch.Clean(proc.Mp())
+// 		result.Batch = nil
+// 	}
+// }

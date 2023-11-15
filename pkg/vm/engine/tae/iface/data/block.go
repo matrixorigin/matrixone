@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -73,8 +74,12 @@ type Block interface {
 	PrepareCompact() bool
 
 	Rows() int
-	GetColumnDataById(ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*containers.ColumnView, error)
-	GetColumnDataByIds(ctx context.Context, txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*containers.BlockView, error)
+	GetColumnDataById(
+		ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int, mp *mpool.MPool,
+	) (*containers.ColumnView, error)
+	GetColumnDataByIds(
+		ctx context.Context, txn txnif.AsyncTxn, readSchema any, colIdxes []int, mp *mpool.MPool,
+	) (*containers.BlockView, error)
 	Prefetch(idxes []uint16) error
 	GetMeta() any
 
@@ -83,7 +88,7 @@ type Block interface {
 	TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.Location) (node txnif.DeleteNode, ok bool, err error)
 
 	GetTotalChanges() int
-	CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (*containers.BlockView, error)
+	CollectChangesInRange(ctx context.Context, startTs, endTs types.TS, mp *mpool.MPool) (*containers.BlockView, error)
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) (bool, bool)
@@ -104,14 +109,23 @@ type Block interface {
 		pksZM index.ZM,
 		rowmask *roaring.Bitmap,
 		precommit bool,
-		bf objectio.BloomFilter) error
+		bf objectio.BloomFilter,
+		mp *mpool.MPool,
+	) error
 	//TODO::
 	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,
 	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
-	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
-	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
-	Foreach(ctx context.Context, readSchema any, colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error
+	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter, mp *mpool.MPool) (uint32, error)
+	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, row, col int, mp *mpool.MPool) (any, bool, error)
+	Foreach(
+		ctx context.Context,
+		readSchema any,
+		colIdx int,
+		op func(v any, isNull bool, row int) error,
+		sels []uint32,
+		mp *mpool.MPool,
+	) error
 	PPString(level common.PPLevel, depth int, prefix string) string
 	EstimateMemSize() int
 	GetRuntime() *dbutils.Runtime
@@ -119,8 +133,8 @@ type Block interface {
 	Init() error
 	TryUpgrade() error
 	GCInMemeoryDeletesByTS(types.TS)
-	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error)
-	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool) (*containers.Batch, error)
+	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
+	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS

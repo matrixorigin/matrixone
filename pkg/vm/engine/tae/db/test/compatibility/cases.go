@@ -17,11 +17,14 @@ package compatibility
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -62,6 +65,14 @@ func init() {
 	))
 	TestCaseRegister(
 		MakeTestCase(testAppend, "prepare-5", "test-5", "prepare-5=>test-5"),
+	)
+
+	PrepareCaseRegister(MakePrepareCase(
+		prepareLSNCheck, "prepare-6", "prepare lsn check",
+		schemaCfg{10, 2, 18, 13}, 10*3+1, quickOpt,
+	))
+	TestCaseRegister(
+		MakeTestCase(testLSNCheck, "prepare-6", "test-6", "prepare-6=>test-6"),
 	)
 }
 
@@ -287,6 +298,28 @@ func prepareDelete(tc PrepareCase, t *testing.T) {
 	}
 }
 
+func prepareLSNCheck(tc PrepareCase, t *testing.T) {
+	tae := tc.GetEngine(t)
+	defer tae.Close()
+
+	bat := tc.GetBatch(t)
+	defer bat.Close()
+	bats := bat.Split(3)
+
+	// incremental ckp
+	tae.CreateRelAndAppend(bats[0], true)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+
+	// force incremental ckp
+	tae.DoAppend(bats[1])
+	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	err := tae.DB.ForceCheckpoint(context.Background(), ts, time.Minute)
+	assert.NoError(t, err)
+}
+
 func test1(tc TestCase, t *testing.T) {
 	pc := GetPrepareCase(tc.dependsOn)
 	tae := tc.GetEngine(t)
@@ -465,5 +498,26 @@ func testDelete(tc TestCase, t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.CheckRowsByScan(bat.Length(), true)
+
+	for i := 0; i < bat.Length(); i++ {
+		txn, rel = tae.GetRelation()
+		v := testutil.GetSingleSortKeyValue(bats[i], schema, 0)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	tae.CheckCollectDeleteInRange()
+
+	tae.CheckRowsByScan(0, true)
+	tae.CompactBlocks(false)
+
+	tae.CheckRowsByScan(0, true)
 	tae.CheckReadCNCheckpoint()
+}
+
+func testLSNCheck(tc TestCase, t *testing.T) {
+	tae := initTestEngine(tc, t)
+	tae.Close()
 }

@@ -504,12 +504,15 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	outBytes := ses.GetMysqlProtocol().CalculateOutTrafficBytes()
 	if status == success {
-		motrace.EndStatement(ctx, nil, ses.sentRows.Load(), outBytes)
 		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		err = nil // make sure: it is nil for EndStatement
 	} else {
-		motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes)
 		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
+	// pls make sure: NO ONE use the ses.tStmt after EndStatement
+	motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes)
+	// need just below EndStatement
+	ses.SetTStmt(nil)
 }
 
 var logger *log.MOLogger
@@ -658,4 +661,60 @@ func getUserProfile(account *TenantInfo) (string, string, string) {
 		roleName = moAdminRoleName
 	}
 	return accountName, userName, roleName
+}
+
+// RewriteError rewrites the error info
+func RewriteError(err error, username string) (uint16, string, string) {
+	if err == nil {
+		return moerr.ER_INTERNAL_ERROR, "", ""
+	}
+	var errorCode uint16
+	var sqlState string
+	var msg string
+
+	errMsg := strings.ToLower(err.Error())
+	if needConvertedToAccessDeniedError(errMsg) {
+		failed := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		if len(username) > 0 {
+			tipsFormat := "Access denied for user %s. %s"
+			msg = fmt.Sprintf(tipsFormat, getUserPart(username), err.Error())
+		} else {
+			msg = err.Error()
+		}
+		errorCode = failed.ErrorCode
+		sqlState = failed.SqlStates[0]
+	} else {
+		//Reference To : https://github.com/matrixorigin/matrixone/pull/12396/files#r1374443578
+		switch errImpl := err.(type) {
+		case *moerr.Error:
+			if errImpl.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
+				errorCode = errImpl.MySQLCode()
+			} else {
+				errorCode = errImpl.ErrorCode()
+			}
+			msg = err.Error()
+			sqlState = errImpl.SqlState()
+		default:
+			failed := moerr.MysqlErrorMsgRefer[moerr.ER_INTERNAL_ERROR]
+			msg = err.Error()
+			errorCode = failed.ErrorCode
+			sqlState = failed.SqlStates[0]
+		}
+
+	}
+	return errorCode, sqlState, msg
+}
+
+func needConvertedToAccessDeniedError(errMsg string) bool {
+	if strings.Contains(errMsg, "check password failed") ||
+		/*
+			following two cases are suggested by the peers from the mo cloud team.
+			we keep the consensus with them.
+		*/
+		strings.Contains(errMsg, "suspended") ||
+		strings.Contains(errMsg, "source address") &&
+			strings.Contains(errMsg, "is not authorized") {
+		return true
+	}
+	return false
 }

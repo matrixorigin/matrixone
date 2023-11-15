@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -34,8 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -161,10 +162,122 @@ const (
 	ExecHasMore
 )
 
+// StmtProfile will be clear for every statement
+type StmtProfile struct {
+	mu sync.Mutex
+	// sqlSourceType denotes where the sql
+	sqlSourceType string
+	txnId         uuid.UUID
+	stmtId        uuid.UUID
+	// stmtType
+	stmtType string
+	// queryType
+	queryType string
+	// queryStart is the time when the query starts.
+	queryStart time.Time
+	//the sql from user may have multiple statements
+	//sqlOfStmt is the text part of one statement in the sql
+	sqlOfStmt string
+}
+
+func (sp *StmtProfile) Clear() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.sqlSourceType = ""
+	sp.txnId = uuid.UUID{}
+	sp.stmtId = uuid.UUID{}
+	sp.stmtType = ""
+	sp.queryType = ""
+	sp.sqlOfStmt = ""
+}
+
+func (sp *StmtProfile) SetSqlOfStmt(sot string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.sqlOfStmt = sot
+}
+
+func (sp *StmtProfile) GetSqlOfStmt() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.sqlOfStmt
+}
+
+func (sp *StmtProfile) SetQueryStart(t time.Time) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.queryStart = t
+}
+
+func (sp *StmtProfile) GetQueryStart() time.Time {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.queryStart
+}
+
+func (sp *StmtProfile) SetSqlSourceType(st string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.sqlSourceType = st
+}
+
+func (sp *StmtProfile) GetSqlSourceType() string {
+	return sp.sqlSourceType
+}
+
+func (sp *StmtProfile) SetQueryType(qt string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.queryType = qt
+}
+
+func (sp *StmtProfile) GetQueryType() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.queryType
+}
+
+func (sp *StmtProfile) SetStmtType(st string) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.stmtType = st
+}
+
+func (sp *StmtProfile) GetStmtType() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.stmtType
+}
+
+func (sp *StmtProfile) SetTxnId(id []byte) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	copy(sp.txnId[:], id)
+}
+
+func (sp *StmtProfile) GetTxnId() uuid.UUID {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.txnId
+}
+
+func (sp *StmtProfile) SetStmtId(id uuid.UUID) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	copy(sp.stmtId[:], id[:])
+}
+
+func (sp *StmtProfile) GetStmtId() uuid.UUID {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.stmtId
+}
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
+	StmtProfile *StmtProfile
 	// Id, query id.
 	Id  string
 	Reg Register
@@ -212,11 +325,16 @@ type Process struct {
 	QueryService queryservice.QueryService
 
 	Hakeeper logservice.CNHAKeeperClient
+
+	UdfService udf.Service
 }
 
 type vectorPool struct {
 	sync.Mutex
 	vecs map[uint8][]*vector.Vector
+
+	// max vector count limit for each type in pool.
+	Limit int
 }
 
 type sqlHelper interface {
@@ -229,6 +347,17 @@ type WrapCs struct {
 	Uid    uuid.UUID
 	Cs     morpc.ClientSession
 	DoneCh chan struct{}
+}
+
+func (proc *Process) SetStmtProfile(sp *StmtProfile) {
+	proc.StmtProfile = sp
+}
+
+func (proc *Process) GetStmtProfile() *StmtProfile {
+	if proc.StmtProfile != nil {
+		return proc.StmtProfile
+	}
+	return &StmtProfile{}
 }
 
 func (proc *Process) InitSeq() {

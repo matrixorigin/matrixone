@@ -27,11 +27,11 @@ func (s *service) GetWaitingList(
 	if txn == nil {
 		return false, nil, nil
 	}
-	v := txn.toWaitTxn(s.cfg.ServiceID, false)
-	if v.CreatedOn == s.cfg.ServiceID {
+	v := txn.toWaitTxn(s.serviceID, false)
+	if v.CreatedOn == s.serviceID {
 		values := make([]pb.WaitTxn, 0, 1)
 		txn.fetchWhoWaitingMe(
-			s.cfg.ServiceID,
+			s.serviceID,
 			txnID,
 			s.activeTxnHolder,
 			func(w pb.WaitTxn) bool {
@@ -49,10 +49,25 @@ func (s *service) GetWaitingList(
 	return true, waitingList, nil
 }
 
-func (s *service) ForceRefreshLockTableBinds() {
+func (s *service) ForceRefreshLockTableBinds(targets ...uint64) {
+	contains := func(id uint64) bool {
+		if len(targets) == 0 {
+			return true
+		}
+		for _, v := range targets {
+			if v == id {
+				return true
+			}
+		}
+		return false
+	}
+
 	s.tables.Range(func(key, value any) bool {
-		value.(lockTable).close()
-		s.tables.Delete(key)
+		id := key.(uint64)
+		if contains(id) {
+			value.(lockTable).close()
+			s.tables.Delete(key)
+		}
 		return true
 	})
 }
@@ -61,6 +76,9 @@ func (s *service) GetLockTableBind(tableID uint64) (pb.LockTable, error) {
 	l, err := s.getLockTable(tableID)
 	if err != nil {
 		return pb.LockTable{}, err
+	}
+	if l == nil {
+		return pb.LockTable{}, nil
 	}
 	return l.getBind(), nil
 }

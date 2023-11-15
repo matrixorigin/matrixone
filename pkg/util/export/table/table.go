@@ -50,12 +50,16 @@ type ColType int
 const (
 	TSkip ColType = iota
 	TDatetime
+	TUint32
+	TInt32
 	TUint64
 	TInt64
 	TFloat64
 	TJson
 	TText
 	TVarchar
+	TChar
+	TBool
 	TBytes // only used in ColumnField
 	TUuid  // only used in ColumnField
 )
@@ -66,6 +70,10 @@ func (c *ColType) ToType() types.Type {
 		typ := types.T_datetime.ToType()
 		typ.Scale = 6
 		return typ
+	case TUint32:
+		return types.T_uint32.ToType()
+	case TInt32:
+		return types.T_int32.ToType()
 	case TUint64:
 		return types.T_uint64.ToType()
 	case TInt64:
@@ -76,8 +84,13 @@ func (c *ColType) ToType() types.Type {
 		return types.T_json.ToType()
 	case TText:
 		return types.T_text.ToType()
+	case TBool:
+		return types.T_bool.ToType()
 	case TVarchar:
 		return types.T_varchar.ToType()
+		//TODO : Need to see how T_array should be included in this class.
+	case TChar:
+		return types.T_char.ToType()
 		//TODO : Need to see how T_array should be included in this class.
 	case TSkip:
 		fallthrough
@@ -90,6 +103,10 @@ func (c *ColType) String(scale int) string {
 	switch *c {
 	case TDatetime:
 		return "Datetime(6)"
+	case TUint32:
+		return "INT UNSIGNED"
+	case TInt32:
+		return "INT"
 	case TUint64:
 		return "BIGINT UNSIGNED"
 	case TInt64:
@@ -100,11 +117,18 @@ func (c *ColType) String(scale int) string {
 		return "JSON"
 	case TText:
 		return "TEXT"
+	case TBool:
+		return "BOOL"
 	case TVarchar:
 		if scale == 0 {
 			scale = 1024
 		}
 		return fmt.Sprintf("VARCHAR(%d)", scale)
+	case TChar:
+		if scale == 0 {
+			scale = 1024
+		}
+		return fmt.Sprintf("CHAR(%d)", scale)
 	case TSkip:
 		panic("not support SkipType")
 	default:
@@ -211,6 +235,33 @@ func UInt64Column(name, comment string) Column {
 		Name:    name,
 		ColType: TUint64,
 		Default: "0",
+		Comment: comment,
+	}
+}
+
+func Int32Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TInt32,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
+func UInt32Column(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TUint32,
+		Default: "0",
+		Comment: comment,
+	}
+}
+
+func BoolColumn(name, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TBool,
+		Default: "false",
 		Comment: comment,
 	}
 }

@@ -14,7 +14,9 @@
 
 package objectio
 
-import "github.com/matrixorigin/matrixone/pkg/fileservice"
+import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+)
 
 const Magic = 0xFFFFFFFF
 const Version = 1

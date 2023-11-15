@@ -33,7 +33,7 @@ var EMPTY_VECTOR Vector
 
 func init() {
 	EMPTY_VECTOR = &emptyVector{
-		Vector: MakeVector(types.T_int8.ToType()),
+		Vector: MakeVector(types.T_int8.ToType(), common.DefaultAllocator),
 	}
 }
 
@@ -288,7 +288,7 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 		t := types.T_varchar.ToType()
 		buffer = bat.Pool.GetVector(&t)
 	} else {
-		buffer = MakeVector(types.T_varchar.ToType())
+		buffer = MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	}
 	defer buffer.Close()
 	mp := buffer.GetAllocator()
@@ -343,7 +343,7 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 
 func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	var tmpn int64
-	buffer := MakeVector(types.T_varchar.ToType())
+	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer buffer.Close()
 	if tmpn, err = buffer.ReadFrom(r); err != nil {
 		return
@@ -365,7 +365,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 		pos++
 	}
 	for _, vecType := range vecTypes {
-		vec := MakeVector(vecType)
+		vec := MakeVector(vecType, common.DefaultAllocator)
 		if tmpn, err = vec.ReadFrom(r); err != nil {
 			return
 		}
@@ -399,7 +399,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 // in version1, batch.Deletes is roaring.Bitmap
 func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 	var tmpn int64
-	buffer := MakeVector(types.T_varchar.ToType())
+	buffer := MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 	defer buffer.Close()
 	if tmpn, err = buffer.ReadFrom(r); err != nil {
 		return
@@ -421,7 +421,7 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 		pos++
 	}
 	for _, vecType := range vecTypes {
-		vec := MakeVector(vecType)
+		vec := MakeVector(vecType, common.DefaultAllocator)
 		if tmpn, err = vec.ReadFrom(r); err != nil {
 			return
 		}
@@ -542,7 +542,7 @@ func (bs *BatchSplitter) Next() (*Batch, error) {
 		nextOffset = bs.internal.Length()
 		length = nextOffset - bs.offset
 	}
-	bat := bs.internal.Window(bs.offset, length)
+	bat := bs.internal.CloneWindow(bs.offset, length)
 	bs.offset = nextOffset
 	return bat, nil
 }

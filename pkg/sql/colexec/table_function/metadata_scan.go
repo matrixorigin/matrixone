@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,7 +43,7 @@ func metadataScanPrepare(proc *process.Process, arg *Argument) (err error) {
 	return err
 }
 
-func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
+func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallResult) (bool, error) {
 	var (
 		err         error
 		source, col *vector.Vector
@@ -59,7 +61,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		}
 	}()
 
-	bat := proc.InputBatch()
+	bat := result.Batch
 	if bat == nil {
 		return true, nil
 	}
@@ -74,6 +76,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	}
 
 	dbname, tablename, colname, err := handleDatasource(vector.MustStrCol(source), vector.MustStrCol(col))
+	logutil.Infof("db: %s, table: %s, col: %s in metadataScan", dbname, tablename, colname)
 	if err != nil {
 		return false, err
 	}
@@ -81,7 +84,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	db, err := e.Database(proc.Ctx, dbname, proc.TxnOperator)
 	if err != nil {
-		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan: %v", err)
+		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
 	}
 
 	rel, err := db.Relation(proc.Ctx, tablename, nil)
@@ -99,7 +102,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, err
 	}
 
-	proc.SetInputBatch(rbat)
+	result.Batch = rbat
 	return false, nil
 }
 
@@ -141,7 +144,7 @@ func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, err
 		}
 
 		tp := plan2.MetadataScanColTypes[idx]
-		retBat.Vecs[i] = vector.NewVec(tp)
+		retBat.Vecs[i] = proc.GetVector(tp)
 	}
 
 	return retBat, nil
@@ -163,36 +166,14 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 		case plan.MetadataScanInfo_COL_NAME:
 			vector.AppendBytes(opBat.Vecs[i], []byte(info.ColName), false, mp)
 
-		case plan.MetadataScanInfo_BLOCK_ID:
-			var bid types.Blockid
-			if err := bid.Unmarshal(info.BlockId); err != nil {
-				return err
-			}
-			vector.AppendFixed(opBat.Vecs[i], bid, false, mp)
 		case plan.MetadataScanInfo_OBJECT_NAME:
 			vector.AppendBytes(opBat.Vecs[i], []byte(info.ObjectName), false, mp)
-
-		case plan.MetadataScanInfo_ENTRY_STATE:
-			vector.AppendFixed(opBat.Vecs[i], info.EntryState, false, mp)
-
-		case plan.MetadataScanInfo_SORTED:
-			vector.AppendFixed(opBat.Vecs[i], info.Sorted, false, mp)
 
 		case plan.MetadataScanInfo_IS_HIDDEN:
 			vector.AppendFixed(opBat.Vecs[i], info.IsHidden, false, mp)
 
-		case plan.MetadataScanInfo_META_LOC:
-			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.MetaLoc).String()), false, mp)
-
-		case plan.MetadataScanInfo_DELTA_LOC:
-			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.DelLoc).String()), false, mp)
-
-		case plan.MetadataScanInfo_COMMIT_TS:
-			var ts types.TS
-			if err := ts.Unmarshal(info.CommitTs); err != nil {
-				return err
-			}
-			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
+		case plan.MetadataScanInfo_OBJ_LOC:
+			vector.AppendBytes(opBat.Vecs[i], []byte(objectio.Location(info.ObjLoc).String()), false, mp)
 
 		case plan.MetadataScanInfo_CREATE_TS:
 			var ts types.TS
@@ -207,13 +188,6 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 				return err
 			}
 			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
-
-		case plan.MetadataScanInfo_SEG_ID:
-			var sid types.Uuid
-			if err := sid.Unmarshal(info.SegId); err != nil {
-				return err
-			}
-			vector.AppendFixed(opBat.Vecs[i], sid, false, mp)
 
 		case plan.MetadataScanInfo_ROWS_CNT:
 			vector.AppendFixed(opBat.Vecs[i], info.RowCnt, false, mp)

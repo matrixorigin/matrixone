@@ -60,7 +60,7 @@ func (ts Timestamp) String() string {
 	dt := Datetime(int64(ts))
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
-	msec := int64(ts) % microSecsPerSec
+	msec := int64(ts) % MicroSecsPerSec
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d.%06d UTC", y, m, d, hour, minute, sec, msec)
 }
 
@@ -81,11 +81,11 @@ func (ts Timestamp) String2(loc *time.Location, scale int32) string {
 }
 
 func (ts Timestamp) Unix() int64 {
-	return (int64(ts) - unixEpochMicroSecs) / microSecsPerSec
+	return (int64(ts) - unixEpochMicroSecs) / MicroSecsPerSec
 }
 
 func (ts Timestamp) UnixToFloat() float64 {
-	return float64(int64(ts)-unixEpochMicroSecs) / microSecsPerSec
+	return float64(int64(ts)-unixEpochMicroSecs) / MicroSecsPerSec
 }
 
 func (ts Timestamp) UnixToDecimal64() (Decimal64, error) {
@@ -177,7 +177,7 @@ func TimestampToDatetime(loc *time.Location, xs []Timestamp, rs []Datetime) ([]D
 	rsInInt64 := *(*[]int64)(unsafe.Pointer(&rs))
 	locPtr := (*unsafeLoc)(unsafe.Pointer(loc))
 	if len(locPtr.zone) == 1 {
-		offset := int64(locPtr.zone[0].offset) * microSecsPerSec
+		offset := int64(locPtr.zone[0].offset) * MicroSecsPerSec
 		for i, x := range xsInInt64 {
 			rsInInt64[i] = x + offset
 		}
@@ -185,7 +185,7 @@ func TimestampToDatetime(loc *time.Location, xs []Timestamp, rs []Datetime) ([]D
 		for i, x := range xsInInt64 {
 			t := time.UnixMicro(x - unixEpochMicroSecs).In(loc)
 			_, offset := t.Zone()
-			rsInInt64[i] = x + int64(offset)*microSecsPerSec
+			rsInInt64[i] = x + int64(offset)*MicroSecsPerSec
 		}
 	}
 	return rs, nil
@@ -194,14 +194,14 @@ func TimestampToDatetime(loc *time.Location, xs []Timestamp, rs []Datetime) ([]D
 func (ts Timestamp) ToDatetime(loc *time.Location) Datetime {
 	t := time.UnixMicro(int64(ts) - unixEpochMicroSecs).In(loc)
 	_, offset := t.Zone()
-	return Datetime(ts) + Datetime(offset)*microSecsPerSec
+	return Datetime(ts) + Datetime(offset)*MicroSecsPerSec
 }
 
 // FromClockUTC gets the utc time value in Timestamp
 func FromClockUTC(year int32, month, day, hour, minute, sec uint8, msec uint32) Timestamp {
 	days := DateFromCalendar(year, month, day)
-	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(minute)*secsPerMinute + int64(sec)
-	return Timestamp(secs*microSecsPerSec + int64(msec))
+	secs := int64(days)*SecsPerDay + int64(hour)*SecsPerHour + int64(minute)*SecsPerMinute + int64(sec)
+	return Timestamp(secs*MicroSecsPerSec + int64(msec))
 }
 
 // FromClockZone gets the local time value in Timestamp
@@ -219,7 +219,7 @@ func ValidTimestamp(timestamp Timestamp) bool {
 }
 
 func UnixToTimestamp(ts int64) Timestamp {
-	return Timestamp(ts*microSecsPerSec + unixEpochMicroSecs)
+	return Timestamp(ts*MicroSecsPerSec + unixEpochMicroSecs)
 }
 
 func UnixMicroToTimestamp(ts int64) Timestamp {

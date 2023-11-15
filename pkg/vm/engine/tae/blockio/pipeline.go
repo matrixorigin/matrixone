@@ -466,11 +466,11 @@ func (p *IoPipeline) onWait(jobs ...any) {
 func (p *IoPipeline) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
 		logutil.Info(p.stats.selectivityStats.ExportString())
-		logutil.Info(p.sensors.prefetchDepth.String())
-		wdrops := p.stats.prefetchDropStats.SwapW(0)
-		if wdrops > 0 {
-			logutil.Infof("PrefetchDropStats: %d", wdrops)
-		}
+		// logutil.Info(p.sensors.prefetchDepth.String())
+		// wdrops := p.stats.prefetchDropStats.SwapW(0)
+		// if wdrops > 0 {
+		// 	logutil.Infof("PrefetchDropStats: %d", wdrops)
+		// }
 		logutil.Info(objectio.ExportCacheStats())
 	}, nil)
 	hb.Start()

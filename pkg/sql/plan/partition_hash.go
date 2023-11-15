@@ -44,7 +44,7 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 		partitionDef.Type = plan.PartitionType_LINEAR_HASH
 	}
 
-	//step 3: build partition expr
+	// build partition expr
 	err = buildPartitionExpr(ctx, tableDef, partitionBinder, partitionDef, partitionType.Expr)
 	if err != nil {
 		return err

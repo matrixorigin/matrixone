@@ -173,7 +173,7 @@ func (chain *DeleteChain) insertInMaskByRange(start, end uint32) {
 func (chain *DeleteChain) DepthLocked() int { return chain.MVCC.Depth() }
 
 func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
-	node := NewDeleteNode(txn, deleteType)
+	node := NewDeleteNode(txn, deleteType, IOET_WALTxnCommand_DeleteNode_V2)
 	node.AttachTo(chain)
 	return node
 }
@@ -230,6 +230,7 @@ func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
 				row := it.Next()
 				new.persistedMask.Add(uint64(row))
 			}
+			n.Close()
 		}
 		return true
 	})
