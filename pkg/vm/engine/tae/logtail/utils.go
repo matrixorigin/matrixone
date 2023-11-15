@@ -1096,6 +1096,7 @@ func (data *CNCheckpointData) ReadFromData(
 	reader *blockio.BlockReader,
 	version uint32,
 	m *mpool.MPool,
+	isdebug bool,
 ) (dataBats []*batch.Batch, err error) {
 	// if err = data.InitMetaIdx(ctx, version, reader,location,m); err != nil {
 	// 	return
