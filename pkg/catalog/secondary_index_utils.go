@@ -39,19 +39,19 @@ func ToLower(str string) string {
 
 // IsNullIndexAlgo is used to skip printing the default "" index algo in the restoreDDL and buildShowCreateTable
 func IsNullIndexAlgo(algo string) bool {
-	_algo := strings.ToLower(strings.TrimSpace(algo))
+	_algo := ToLower(algo)
 	return _algo == MoIndexDefaultAlgo.ToString()
 }
 
 // IsRegularIndexAlgo are indexes which will be handled by regular index flow, ie the one where
 // we have one hidden table.
 func IsRegularIndexAlgo(algo string) bool {
-	_algo := strings.ToLower(strings.TrimSpace(algo))
+	_algo := ToLower(algo)
 	return _algo == MoIndexDefaultAlgo.ToString() || _algo == MoIndexBTreeAlgo.ToString()
 }
 
 func IsIvfIndexAlgo(algo string) bool {
-	_algo := strings.ToLower(strings.TrimSpace(algo))
+	_algo := ToLower(algo)
 	return _algo == MoIndexIvfFlatAlgo.ToString()
 }
 
@@ -140,7 +140,7 @@ func IndexParamsToMap(def *tree.Index) (map[string]string, error) {
 		}
 
 		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
-			opType := strings.ToLower(strings.TrimSpace(def.IndexOption.AlgoParamVectorOpType))
+			opType := ToLower(def.IndexOption.AlgoParamVectorOpType)
 			if opType == IndexAlgoParamOpType_ip ||
 				opType == IndexAlgoParamOpType_l2 ||
 				opType == IndexAlgoParamOpType_cos {
