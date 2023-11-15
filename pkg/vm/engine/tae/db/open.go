@@ -16,13 +16,13 @@ package db
 
 import (
 	"context"
-	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"path"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -82,7 +82,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
-	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
@@ -93,7 +92,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
-		dbutils.WithRuntimeFilterIndexCache(indexCache),
 		dbutils.WithRuntimeObjectFS(fs),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
@@ -247,14 +245,14 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	db.GCManager.Start()
 
-	go TaeMetricsTask(ctx, db.Runtime)
+	go TaeMetricsTask(ctx)
 
 	// For debug or test
 	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
 	return
 }
 
-func TaeMetricsTask(ctx context.Context, rt *dbutils.Runtime) {
+func TaeMetricsTask(ctx context.Context) {
 	logutil.Info("tae metrics task started")
 	defer logutil.Info("tae metrics task exit")
 
@@ -264,23 +262,40 @@ func TaeMetricsTask(ctx context.Context, rt *dbutils.Runtime) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			transferPageSubTask()
-			mpoolAllocatorSubTask(rt)
+			mpoolAllocatorSubTask()
 		}
 	}
 
 }
 
-func mpoolAllocatorSubTask(rt *dbutils.Runtime) {
+func mpoolAllocatorSubTask() {
 	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))
-	v2.MemTAEMutableAllocatorGauge.Set(float64(common.MutMemAllocator.CurrNB()))
-	v2.MemTAESmallAllocatorGauge.Set(float64(common.SmallAllocator.CurrNB()))
-	v2.MemTAEVectorPoolSmallGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().CurrNB()))
-	v2.MemTAEVectorPoolTransientGauge.Set(0)
-}
+	v2.MemTAEDefaultHighWaterMarkGauge.Set(float64(common.DefaultAllocator.Stats().HighWaterMark.Load()))
 
-func transferPageSubTask() {
-	length := utils.TransferPageCounter.Load()
-	mb_size := length * (4 + 24) * 3 / 2 / (1024 * 1024)
-	logutil.Info(fmt.Sprintf("current transfer page length = %d, mb_size = %d", length, mb_size))
+	v2.MemTAEMutableAllocatorGauge.Set(float64(common.MutMemAllocator.CurrNB()))
+	v2.MemTAEMutableHighWaterMarkGauge.Set(float64(common.MutMemAllocator.Stats().HighWaterMark.Load()))
+
+	v2.MemTAESmallAllocatorGauge.Set(float64(common.SmallAllocator.CurrNB()))
+	v2.MemTAESmallHighWaterMarkGauge.Set(float64(common.SmallAllocator.Stats().HighWaterMark.Load()))
+
+	v2.MemTAEVectorPoolDefaultAllocatorGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().CurrNB()))
+	v2.MemTAEVectorPoolDefaultHighWaterMarkGauge.Set(float64(containers.GetDefaultVectorPoolALLocator().Stats().HighWaterMark.Load()))
+
+	v2.MemTAELogtailAllocatorGauge.Set(float64(common.LogtailAllocator.CurrNB()))
+	v2.MemTAELogtailHighWaterMarkGauge.Set(float64(common.LogtailAllocator.Stats().HighWaterMark.Load()))
+
+	v2.MemTAECheckpointAllocatorGauge.Set(float64(common.CheckpointAllocator.CurrNB()))
+	v2.MemTAECheckpointHighWaterMarkGauge.Set(float64(common.CheckpointAllocator.Stats().HighWaterMark.Load()))
+
+	v2.MemTAEMergeAllocatorGauge.Set(float64(common.MergeAllocator.CurrNB()))
+	v2.MemTAEMergeHighWaterMarkGauge.Set(float64(common.MergeAllocator.Stats().HighWaterMark.Load()))
+
+	v2.MemTAEWorkSpaceAllocatorGauge.Set(float64(common.WorkspaceAllocator.CurrNB()))
+	v2.MemTAEWorkSpaceHighWaterMarkGauge.Set(float64(common.WorkspaceAllocator.Stats().HighWaterMark.Load()))
+
+	v2.MemTAEDebugAllocatorGauge.Set(float64(common.DebugAllocator.CurrNB()))
+	v2.MemTAEDebugHighWaterMarkGauge.Set(float64(common.DebugAllocator.Stats().HighWaterMark.Load()))
+
+	v2.MemGlobalStatsAllocatedGauge.Set(float64(mpool.GlobalStats().NumCurrBytes.Load()))
+	v2.MemGlobalStatsHighWaterMarkGauge.Set(float64(mpool.GlobalStats().HighWaterMark.Load()))
 }
