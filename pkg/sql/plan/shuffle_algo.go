@@ -139,9 +139,9 @@ func (s *ShuffleRange) Eval(k int) {
 					break
 				}
 				if head.value <= next.value {
-					s.Overlap += 0.25 * float64(next.size)
+					s.Overlap += (next.tree.key - next.value) / (head.tree.key - head.value) * float64(head.tree.size)
 				} else {
-					s.Overlap += next.tree.key - head.value
+					s.Overlap += (next.tree.key - head.value) / (head.tree.key - head.value) * float64(head.tree.size)
 				}
 				head.tree = head.tree.Merge(next.tree)
 				head.size += next.size
