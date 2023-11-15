@@ -354,10 +354,12 @@ func ReWriteCheckpointAndBlockFromKey(
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	logutil.Infof("checkpoint11 %v has %v objects", ts.ToString(), len(objectsData))
 	if !isCkpChange {
 		return loc, tnLocation, data, files, nil
 	}
 
+	logutil.Infof("checkpoint %v has %v objects", ts.ToString(), len(objectsData))
 	backupPool := dbutils.MakeDefaultSmallPool("backup-vector-pool")
 	defer backupPool.Destory()
 
