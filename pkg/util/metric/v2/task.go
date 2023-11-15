@@ -25,7 +25,7 @@ var (
 			Subsystem: "task",
 			Name:      "short_duration_seconds",
 			Help:      "Bucketed histogram of short tn task execute duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 
 	TaskFlushTableTailDurationHistogram   = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
