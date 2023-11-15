@@ -1608,16 +1608,16 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			return nil, nil, err
 		}
 
-		// 2.c columns: centroid, id, version
+		// 2.c columns: version, id, centroid, PRIMARY KEY (version,id)
 		// TODO: check if we need to keep centroid as PK?
 		tableDefs[1].Cols[0] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &Type{
-				Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
-				Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
+			Typ: &plan.Type{
+				Id:    int32(types.T_int64),
+				Width: 0,
+				Scale: 0,
 			},
-			//Primary: true,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -1639,13 +1639,13 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			},
 		}
 		tableDefs[1].Cols[2] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &plan.Type{
-				Id:    int32(types.T_int64),
-				Width: 0,
-				Scale: 0,
+			Typ: &Type{
+				Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
+				Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 			},
+			//Primary: true,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -1654,9 +1654,10 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 
 		// 2.d PK def
-		//tableDefs[1].Pkey = &PrimaryKeyDef{
-		//	Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid},
-		//}
+		tableDefs[1].Pkey = &PrimaryKeyDef{
+			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id},
+		}
 	}
 
 	// 3. create ivf-flat `entries` table
@@ -1678,9 +1679,9 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			return nil, nil, err
 		}
 
-		// 3.c columns: centroid_id, centroid_version, origin_pk FOREIGN KEY (centroid_id, centroid_version) REFERENCES clusters(centroid_id, centroid_version)
+		// 3.c columns: version, id, origin_pk, PRIMARY KEY (version, id)
 		tableDefs[2].Cols[0] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 			Alg:  plan.CompressType_Lz4,
 			Typ: &plan.Type{
 				Id:    int32(types.T_int64),
@@ -1694,7 +1695,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			},
 		}
 		tableDefs[2].Cols[1] = &ColDef{
-			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 			Alg:  plan.CompressType_Lz4,
 			Typ: &plan.Type{
 				Id:    int32(types.T_int64),
@@ -2465,6 +2466,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTableIndex := new(plan.AlterTableAlterIndex)
 			constraintName := string(opt.Name)
 			alterTableIndex.IndexName = constraintName
+
+			// TODO: Fix here
 
 			if opt.Visibility == tree.VISIBLE_TYPE_VISIBLE {
 				alterTableIndex.Visible = true

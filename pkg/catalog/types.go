@@ -242,13 +242,13 @@ const (
 	SystemSI_IVFFLAT_TblCol_Metadata_val = "__mo_index_val"
 
 	// IVF_FLAT Centroids - Column names
-	SystemSI_IVFFLAT_TblCol_Centroids_centroid = "__mo_index_centroid"
-	SystemSI_IVFFLAT_TblCol_Centroids_id       = "__mo_index_centroid_id"
 	SystemSI_IVFFLAT_TblCol_Centroids_version  = "__mo_index_centroid_version"
+	SystemSI_IVFFLAT_TblCol_Centroids_id       = "__mo_index_centroid_id"
+	SystemSI_IVFFLAT_TblCol_Centroids_centroid = "__mo_index_centroid"
 
 	// IVF_FLAT Entries - Column names
-	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_version = "__mo_index_centroid_fk_version"
+	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 )
 
