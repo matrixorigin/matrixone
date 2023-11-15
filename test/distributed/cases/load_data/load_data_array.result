@@ -8,7 +8,6 @@ select * from vec_table;
 a    b    c
 1    [1, 2, 3]    [4, 5, 6]
 select * from vec_table into outfile '$resources/into_outfile/array_out.csv';
-a    b    c
 delete from vec_table;
 load data infile '$resources/into_outfile/array_out.csv' into table vec_table ignore 1 lines;
 select * from vec_table;
