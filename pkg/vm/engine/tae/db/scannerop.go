@@ -130,6 +130,7 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 		executor:      merge.NewMergeExecutor(db.Runtime),
 	}
 
+	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
 	op.BlockFn = op.onBlock
 	op.SegmentFn = op.onSegment
@@ -190,6 +191,12 @@ func (s *MergeTaskBuilder) PostExecute() error {
 	s.executor.PrintStats()
 	return nil
 }
+func (s *MergeTaskBuilder) onDataBase(dbEntry *catalog.DBEntry) (err error) {
+	if s.executor.MemAvailBytes() < 100*1024*1024 {
+		return moerr.GetOkStopCurrRecur()
+	}
+	return
+}
 
 func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if s.suspend.Load() {
@@ -198,7 +205,7 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	}
 	s.suspendCnt.Store(0)
 	if !tableEntry.IsActive() {
-		err = moerr.GetOkStopCurrRecur()
+		return moerr.GetOkStopCurrRecur()
 	}
 	s.resetForTable(tableEntry)
 	return
