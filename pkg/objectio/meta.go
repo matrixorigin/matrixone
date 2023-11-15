@@ -154,9 +154,13 @@ const (
 	maxSeqOff          = metaColCntOff + metaColCntLen
 	maxSeqLen          = 2
 	startIDOff         = maxSeqOff + maxSeqLen
-	StartIDLen         = 2
-	headerDummyOff     = startIDOff + StartIDLen
-	headerDummyLen     = 33
+	startIDLen         = 2
+	appendableOff      = startIDOff + startIDLen
+	appendableLen      = 1
+	sortKeyOff         = appendableOff + appendableLen
+	sortKeyLen         = 2
+	headerDummyOff     = sortKeyOff + sortKeyLen
+	headerDummyLen     = 30
 	headerLen          = headerDummyOff + headerDummyLen
 )
 
@@ -228,11 +232,11 @@ func (bh BlockHeader) SetMaxSeqnum(seqnum uint16) {
 }
 
 func (bh BlockHeader) StartID() uint16 {
-	return types.DecodeUint16(bh[startIDOff : startIDOff+StartIDLen])
+	return types.DecodeUint16(bh[startIDOff : startIDOff+startIDLen])
 }
 
 func (bh BlockHeader) SetStartID(id uint16) {
-	copy(bh[startIDOff:startIDOff+StartIDLen], types.EncodeUint16(&id))
+	copy(bh[startIDOff:startIDOff+startIDLen], types.EncodeUint16(&id))
 }
 
 func (bh BlockHeader) MetaLocation() Extent {
@@ -257,6 +261,22 @@ func (bh BlockHeader) BFExtent() Extent {
 
 func (bh BlockHeader) SetBFExtent(location Extent) {
 	copy(bh[bloomFilterOff:bloomFilterOff+bloomFilterLen], location)
+}
+
+func (bh BlockHeader) SetAppendable(appendable bool) {
+	copy(bh[appendableOff:appendableOff+appendableLen], types.EncodeBool(&appendable))
+}
+
+func (bh BlockHeader) Appendable() bool {
+	return types.DecodeBool(bh[appendableOff : appendableOff+appendableLen])
+}
+
+func (bh BlockHeader) SetSortKey(idx uint16) {
+	copy(bh[startIDOff:startIDOff+startIDLen], types.EncodeUint16(&idx))
+}
+
+func (bh BlockHeader) SortKey() uint16 {
+	return types.DecodeUint16(bh[startIDOff : startIDOff+startIDLen])
 }
 
 func (bh BlockHeader) IsEmpty() bool {
