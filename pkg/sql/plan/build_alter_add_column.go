@@ -370,7 +370,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			}
 		} else if !indexInfo.Unique {
 			// handle secondary index
-			switch catalog.Trim(indexInfo.IndexAlgo) {
+			switch catalog.ToLower(indexInfo.IndexAlgo) {
 			case catalog.MoIndexDefaultAlgo.ToString(), catalog.MoIndexBTreeAlgo.ToString():
 				// regular secondary index
 				if len(indexInfo.Parts) == 1 &&

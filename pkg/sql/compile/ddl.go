@@ -344,7 +344,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
 						multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
 					}
-					multiTableIndexes[catalog.Trim(indexDef.IndexAlgo)][catalog.Trim(indexDef.IndexAlgoTableType)] = indexDef
+					multiTableIndexes[catalog.ToLower(indexDef.IndexAlgo)][catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 				}
 				if err != nil {
 					return err
@@ -352,7 +352,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			}
 
 			for indexAlgoType, indexDefs := range multiTableIndexes {
-				switch indexAlgoType { // no need for catalog.Trim() here
+				switch indexAlgoType { // no need for catalog.ToLower() here
 				case catalog.MoIndexIvfFlatAlgo.ToString():
 					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, indexInfo)
 				}
@@ -1026,7 +1026,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 
 	for indexAlgoType, indexDefs := range multiTableIndexes {
-		switch catalog.Trim(indexAlgoType) {
+		switch catalog.ToLower(indexAlgoType) {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, originalTableDef, indexInfo)
 		}
