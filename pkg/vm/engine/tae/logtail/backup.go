@@ -474,6 +474,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 				sortData := containers.ToTNBatch(dataBlocks[0].data)
 				if dataBlocks[0].pk > -1 {
+					logutil.Infof("sortBlockColumns len is %d, locatio %s", sortData.Vecs[0].Length(), dataBlocks[0].location.String())
 					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(dataBlocks[0].pk), backupPool)
 					if err != nil {
 						return nil, nil, nil, nil, err
