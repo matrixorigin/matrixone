@@ -145,7 +145,7 @@ func (txn *activeTxn) close(
 					txn,
 					table)
 				l.unlock(txn, cs, commitTS)
-				if n > 1 {
+				if n > parallelUnlockTables {
 					wg.Done()
 				}
 			}

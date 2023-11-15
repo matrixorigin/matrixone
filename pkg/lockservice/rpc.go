@@ -189,6 +189,7 @@ func NewServer(
 		cfg:      &cfg,
 		address:  address,
 		handlers: make(map[pb.Method]RequestHandleFunc),
+		requests: make(chan requestCtx, 10240),
 		stopper: stopper.NewStopper("lock-service-rpc-server",
 			stopper.WithLogger(getLogger().RawLogger())),
 	}
