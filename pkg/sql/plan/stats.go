@@ -771,7 +771,10 @@ func shouldReturnMinimalStats(node *plan.Node) bool {
 	}
 	equalCol := make([]int32, 0)
 	for _, expr := range node.FilterList {
-		equiCond, _ := expr.Expr.(*plan.Expr_F)
+		equiCond, ok := expr.Expr.(*plan.Expr_F)
+		if !ok {
+			continue
+		}
 		if equiCond.F.Func.GetObjName() != "=" {
 			continue
 		}
