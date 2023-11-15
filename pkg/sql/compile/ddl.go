@@ -397,6 +397,31 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					break
 				}
 			}
+		case *plan.AlterTable_Action_AlterReindex:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
+			tableAlterIndex := act.AlterReindex
+			constraintName := tableAlterIndex.IndexName
+			for i, indexdef := range tableDef.Indexes {
+				if indexdef.IndexName == constraintName {
+					alterIndex = indexdef
+
+					// Update AlgoParamLists in indexDef and tableDef
+					newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
+					if err != nil {
+						return err
+					}
+					newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+
+					alterIndex.IndexAlgoParams = newAlgoParams
+					tableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+
+					// update the hidden tables;
+					//TODO: fix it.
+
+					break
+				}
+			}
 		case *plan.AlterTable_Action_AlterComment:
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateComment)
 			comment = act.AlterComment.NewComment

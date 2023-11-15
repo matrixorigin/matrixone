@@ -1117,6 +1117,13 @@ message AlterTableAlterIndex {
 	bool visible = 4;
 }
 
+message AlterTableAlterReIndex {
+	string db_name = 1;
+	string table_name = 2;
+	string index_name = 3;
+	int64 index_algo_param_list = 4;
+}
+
 message AlterTableComment {
 	string new_comment = 1;
 }
@@ -1155,6 +1162,7 @@ message AlterTable {
 			AlterTableName alter_name = 6;
 			AlterAddCol add_col = 7;
 			AlterDropCol drop_col = 8;
+			AlterTableAlterReIndex alter_reindex = 9;
 		};
 	}
 	string database			      = 1;

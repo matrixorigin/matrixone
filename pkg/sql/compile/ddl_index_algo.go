@@ -212,8 +212,6 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 	+-------------------------------------+-------------+---------+
 
 	*/
-	//TODO: fix null json scenario.
-
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
 		qryDatabase,
 		indexDef.IndexTableName,

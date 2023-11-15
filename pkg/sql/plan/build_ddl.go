@@ -2466,8 +2466,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			constraintName := string(opt.Name)
 			alterTableIndex.IndexName = constraintName
 
-			// TODO: Fix here
-
 			if opt.Visibility == tree.VISIBLE_TYPE_VISIBLE {
 				alterTableIndex.Visible = true
 			} else {
@@ -2483,11 +2481,39 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 			}
 			if name_not_found {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't ALTER '%s'; check that column/key exists", constraintName)
 			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterIndex{
 					AlterIndex: alterTableIndex,
+				},
+			}
+
+		case *tree.AlterOptionAlterReIndex:
+			alterTableReIndex := new(plan.AlterTableAlterReIndex)
+			constraintName := string(opt.Name)
+			alterTableReIndex.IndexName = constraintName
+
+			if opt.AlgoParamList == 0 {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be > 0.")
+			} else {
+				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+			}
+
+			name_not_found := true
+			// check index
+			for _, indexdef := range tableDef.Indexes {
+				if constraintName == indexdef.IndexName {
+					name_not_found = false
+					break
+				}
+			}
+			if name_not_found {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't REINDEX '%s'; check that column/key exists", constraintName)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterReindex{
+					AlterReindex: alterTableReIndex,
 				},
 			}
 
