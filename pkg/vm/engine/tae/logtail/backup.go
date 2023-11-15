@@ -369,10 +369,12 @@ func ReWriteCheckpointAndBlockFromKey(
 		if !objectData.isChange && !objectData.isCnBatch {
 			continue
 		}
+		logutil.Infof("object %v, isChange %v, isCnBatch %v", fileName, objectData.isChange, objectData.isCnBatch)
 		dataBlocks := make([]*blockData, 0)
 		var blocks []objectio.BlockObject
 		var extent objectio.Extent
 		for _, block := range objectData.data {
+			logutil.Infof("object %v, id is %d", fileName, block.num)
 			dataBlocks = append(dataBlocks, block)
 		}
 		sort.Slice(dataBlocks, func(i, j int) bool {
@@ -389,6 +391,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				return nil, nil, nil, nil, err
 			}
 			for _, block := range dataBlocks {
+				logutil.Infof("write object %v, id is %d", fileName, block.num)
 				if block.pk > -1 {
 					writer.SetPrimaryKey(uint16(block.pk))
 				}
@@ -408,14 +411,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			blocks, extent, err = writer.Sync(ctx)
 			if err != nil {
 				if !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-					err = fs.Delete(ctx, fileName)
-					if err != nil {
-						return nil, nil, nil, nil, err
-					}
-					blocks, extent, err = writer.Sync(ctx)
-					if err != nil {
-						return nil, nil, nil, nil, err
-					}
+					return nil, nil, nil, nil, err
 				}
 				err = fs.Delete(ctx, fileName)
 				if err != nil {
@@ -426,6 +422,7 @@ func ReWriteCheckpointAndBlockFromKey(
 					return nil, nil, nil, nil, err
 				}
 			}
+			logutil.Infof("write object %v, blocks is %v", fileName, blocks)
 		}
 
 		if objectData.isCnBatch && objectData.data[0] != nil && objectData.data[0].blockType != objectio.SchemaTombstone {
