@@ -21,10 +21,11 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
 type Converter interface {
-	Convert(context.Context, RawObject) (string, error)
+	Convert(context.Context, ie.InternalExecResult) (string, error)
 }
 
 type SQLConverter struct {
@@ -39,10 +40,41 @@ func newSQLConverter(dbName, tableName string) Converter {
 	}
 }
 
-func (c *SQLConverter) Convert(ctx context.Context, obj RawObject) (string, error) {
-	fields, values, err := c.fieldValueSQL(ctx, obj)
-	if err != nil {
-		return "", err
+func (c *SQLConverter) Convert(ctx context.Context, obj ie.InternalExecResult) (string, error) {
+
+	columnCount := int(obj.ColumnCount())
+	rowCount := int(obj.RowCount())
+
+	var fields, values string
+	var colNames []string
+
+	for i := 0; i < columnCount; i++ {
+		name, _, _, err := obj.Column(ctx, uint64(i))
+		if err != nil {
+			return "", err // Handle the error appropriately
+		}
+		fields += name
+		if i < columnCount-1 {
+			fields += ", "
+		}
+		colNames = append(colNames, name)
+	}
+	for i := 0; i < rowCount; i++ {
+		var rowValues string
+		for j := 0; j < columnCount; j++ {
+			val, err := obj.StringValueByName(ctx, uint64(i), colNames[j])
+			if err != nil {
+				return "", err // Handle the error appropriately
+			}
+			rowValues += val
+			if j < columnCount-1 {
+				rowValues += ", "
+			}
+		}
+		if values != "" {
+			values += ", "
+		}
+		values += fmt.Sprintf("(%s)", rowValues)
 	}
 	s := fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES(%s)",
 		c.dbName, c.tableName, fields, values)

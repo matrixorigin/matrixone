@@ -179,6 +179,7 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 	// Continuously listen for messages
 
 	var buffered_messages []*kafka.Message
+	const buffer_limit = 10
 	for {
 		select {
 		case <-ctx.Done():
@@ -208,9 +209,9 @@ func (k *KafkaMoConnector) Start(ctx context.Context) error {
 			switch e := ev.(type) {
 			case *kafka.Message:
 				buffered_messages = append(buffered_messages, e)
-				if len(buffered_messages) >= 10 {
-					res =: k.queryResult(buffered_messages)
-					k.insertRow(insertSQL)
+				if len(buffered_messages) >= buffer_limit {
+					k.insertRow(buffered_messages)
+					buffered_messages = nil
 				}
 
 			case kafka.Error:
@@ -254,23 +255,25 @@ func (k *KafkaMoConnector) Close() error {
 	return nil
 }
 
-func (k *KafkaMoConnector) insertRow(sql string) {
+func (k *KafkaMoConnector) insertRow(msgs []*kafka.Message) {
 	opts := ie.SessionOverrideOptions{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	err := k.ie.Exec(ctx, sql, opts)
+	res := k.queryResult(k.options["sql"], msgs)
+	sql, err := k.converter.Convert(ctx, res)
+	if err != nil {
+		k.logger.Error("failed to get sql", zap.String("SQL", sql), zap.Error(err))
+	}
+	err = k.ie.Exec(ctx, sql, opts)
 	if err != nil {
 		k.logger.Error("failed to insert row", zap.String("SQL", sql), zap.Error(err))
 	}
 }
 
-type STREAMKEY struct{}
-
-func (k *KafkaMoConnector) queryResult(msgs []*kafka.Message) ie.InternalExecResult  {
+func (k *KafkaMoConnector) queryResult(sql string, msgs []*kafka.Message) ie.InternalExecResult {
 	// todo : get the sql from the user input
-	sql := "select * from `test`.test_stream_2"
 	opts := ie.SessionOverrideOptions{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	ctx = context.WithValue(ctx, "msgs", msgs)
 	defer cancel()
 	res := k.ie.Query(ctx, sql, opts)
