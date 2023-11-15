@@ -29,6 +29,11 @@ import (
 type sPool struct {
 	proc *process.Process
 
+	// need reordering or not.
+	// if true, output method should reorder the result as the order of [groupList, sampleList, other columns].
+	needReorder       bool
+	extraColumnsIndex []int
+
 	// sample type.
 	// same as the Type attribute of sample.Argument.
 	typ int
@@ -50,19 +55,21 @@ type sPool struct {
 
 func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
 	return &sPool{
-		proc:     proc,
-		typ:      sampleByRow,
-		capacity: capacity,
-		columns:  make(sampleColumnList, sampleColumnCount),
+		proc:        proc,
+		needReorder: true,
+		typ:         sampleByRow,
+		capacity:    capacity,
+		columns:     make(sampleColumnList, sampleColumnCount),
 	}
 }
 
 func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCount int) *sPool {
 	return &sPool{
-		proc:     proc,
-		typ:      sampleByPercent,
-		percents: int(per * 100),
-		columns:  make(sampleColumnList, sampleColumnCount),
+		proc:        proc,
+		needReorder: true,
+		typ:         sampleByPercent,
+		percents:    int(per * 100),
+		columns:     make(sampleColumnList, sampleColumnCount),
 	}
 }
 
@@ -103,7 +110,51 @@ func (s *sPool) growMulPool(target int, colNumber int) {
 	}
 }
 
-func (s *sPool) SampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *batch.Batch) error {
+func (s *sPool) Sample(groupIndex int, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) error {
+	if s.needReorder && s.extraColumnsIndex == nil {
+		offset := len(inputBatch.Vecs)
+		s.extraColumnsIndex = make([]int, len(sampleVectors)+len(groupVectors))
+
+		index := 0
+		for _, vec1 := range groupVectors {
+			get := false
+			for j, vec2 := range inputBatch.Vecs {
+				if vec1 == vec2 {
+					s.extraColumnsIndex[index] = j
+					get = true
+					break
+				}
+			}
+			if !get {
+				s.extraColumnsIndex[index] = offset
+				offset++
+			}
+			index++
+		}
+		for _, vec1 := range sampleVectors {
+			get := false
+			for j, vec2 := range inputBatch.Vecs {
+				if vec1 == vec2 {
+					s.extraColumnsIndex[index] = j
+					get = true
+					break
+				}
+			}
+			if !get {
+				s.extraColumnsIndex[index] = offset
+				offset++
+			}
+			index++
+		}
+	}
+
+	if len(sampleVectors) > 1 {
+		return s.sampleFromColumns(groupIndex, sampleVectors, inputBatch)
+	}
+	return s.sampleFromColumn(groupIndex, sampleVectors[0], inputBatch)
+}
+
+func (s *sPool) sampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *batch.Batch) error {
 	if groupIndex == 0 {
 		return nil
 	}
@@ -121,7 +172,7 @@ func (s *sPool) SampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *
 	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 }
 
-func (s *sPool) SampleFromColumns(groupIndex int, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
 	if groupIndex == 0 {
 		return
 	}
@@ -139,7 +190,14 @@ func (s *sPool) SampleFromColumns(groupIndex int, sampleVectors []*vector.Vector
 	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 }
 
-func (s *sPool) BatchSampleFromColumn(length int, groupList []uint64, sampleVec *vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) BatchSample(length int, groupList []uint64, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, bat *batch.Batch) (err error) {
+	if len(sampleVectors) > 1 {
+		return s.batchSampleFromColumns(length, groupList, sampleVectors, bat)
+	}
+	return s.batchSampleFromColumn(length, groupList, sampleVectors[0], bat)
+}
+
+func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec *vector.Vector, bat *batch.Batch) (err error) {
 	s.updateReused1(sampleVec)
 
 	mp := s.proc.Mp()
@@ -182,7 +240,7 @@ func (s *sPool) BatchSampleFromColumn(length int, groupList []uint64, sampleVec 
 	return nil
 }
 
-func (s *sPool) BatchSampleFromColumns(length int, groupList []uint64, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) batchSampleFromColumns(length int, groupList []uint64, sampleVectors []*vector.Vector, bat *batch.Batch) (err error) {
 	s.updateReused2(sampleVectors)
 
 	mp := s.proc.Mp()
@@ -304,9 +362,26 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 	}
 
 	// If a middle result is empty, cannot return nil directly. It will cause the pipeline closed early.
-	if !end && bat == nil {
-		return batch.EmptyBatch, nil
+	if bat == nil {
+		if !end {
+			return batch.EmptyBatch, nil
+		}
+	} else {
+		if s.needReorder {
+			vv := make([]*vector.Vector, 0, len(bat.Vecs))
+			for _, index := range s.extraColumnsIndex {
+				vv = append(vv, bat.Vecs[index])
+				bat.Vecs[index] = nil
+			}
+			for _, vec := range bat.Vecs {
+				if vec != nil {
+					vv = append(vv, vec)
+				}
+			}
+			bat.Vecs = vv
+		}
 	}
+
 	return bat, nil
 }
 

@@ -44,7 +44,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		isGroupBy:     len(arg.GroupExprs) != 0,
 		isMultiSample: len(arg.SampleExprs) > 1,
 		tempBatch1:    make([]*batch.Batch, 1),
-		tempVectors:   make([]*vector.Vector, len(arg.SampleExprs)),
+		sampleVectors: make([]*vector.Vector, len(arg.SampleExprs)),
 	}
 
 	switch arg.Type {
@@ -111,13 +111,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, lastErr
 	}
 
+	var err error
 	if !bat.IsEmpty() {
-		var err error
-
 		ctr.tempBatch1[0] = bat
 		// evaluate the sample columns.
 		for i, executor := range ctr.sampleExecutors {
-			ctr.tempVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
+			ctr.sampleVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
 			if err != nil {
 				return result, err
 			}
@@ -131,25 +130,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 			}
-			if err = ctr.hashAndSample(bat, arg.IBucket, arg.NBucket, proc.Mp()); err != nil {
-				return result, err
-			}
+
+			err = ctr.hashAndSample(bat, arg.IBucket, arg.NBucket, proc.Mp())
 		} else {
-			if ctr.isMultiSample {
-				err = ctr.samplePool.SampleFromColumns(1, ctr.tempVectors, bat)
-				if err != nil {
-					return result, err
-				}
-			} else {
-				err = ctr.samplePool.SampleFromColumn(1, ctr.tempVectors[0], bat)
-				if err != nil {
-					return result, err
-				}
-			}
+			err = ctr.samplePool.Sample(1, ctr.sampleVectors, nil, bat)
+		}
+
+		if err != nil {
+			return result, err
 		}
 	}
 
-	var err error
 	result.Batch, err = ctr.samplePool.Output(false)
 	return result, err
 }
@@ -178,39 +169,20 @@ func (ctr *container) hashAndSample(bat *batch.Batch, ib, nb int, mp *mpool.MPoo
 		iterator = ctr.strHashMap.NewIterator()
 	}
 
-	if ctr.isMultiSample {
-		for i := 0; i < count; i += hashmap.UnitLimit {
-			n := count - i
-			if n > hashmap.UnitLimit {
-				n = hashmap.UnitLimit
-			}
-
-			groupList, _, err = iterator.Insert(i, n, ctr.groupVectors)
-			if err != nil {
-				return err
-			}
-			err = ctr.samplePool.BatchSampleFromColumns(n, groupList, ctr.tempVectors, bat)
-			if err != nil {
-				return err
-			}
+	for i := 0; i < count; i += hashmap.UnitLimit {
+		n := count - i
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
 		}
-	} else {
-		for i := 0; i < count; i += hashmap.UnitLimit {
-			n := count - i
-			if n > hashmap.UnitLimit {
-				n = hashmap.UnitLimit
-			}
 
-			groupList, _, err = iterator.Insert(i, n, ctr.groupVectors)
-			if err != nil {
-				return err
-			}
-			err = ctr.samplePool.BatchSampleFromColumn(n, groupList, ctr.tempVectors[0], bat)
-			if err != nil {
-				return err
-			}
+		groupList, _, err = iterator.Insert(i, n, ctr.groupVectors)
+		if err != nil {
+			return err
+		}
+		err = ctr.samplePool.BatchSample(n, groupList, ctr.sampleVectors, ctr.groupVectors, bat)
+		if err != nil {
+			return err
 		}
 	}
-
 	return
 }

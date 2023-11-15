@@ -71,7 +71,7 @@ type container struct {
 	// executor for sample(expression, number)'s expression.
 	sampleExecutors []colexec.ExpressionExecutor
 	tempBatch1      []*batch.Batch
-	tempVectors     []*vector.Vector
+	sampleVectors   []*vector.Vector
 
 	// hash map related.
 	intHashMap *hashmap.IntHashMap
