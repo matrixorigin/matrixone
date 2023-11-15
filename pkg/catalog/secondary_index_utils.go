@@ -30,9 +30,9 @@ const (
 	MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
 )
 
-// Trim is used for before comparing AlgoType and AlgoTableType. Reason why they are strings
+// Trim is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
 // 1. Default secondary index algo type is "". It was hard to represent "" as ENUM in protobuf.
-// 2. AlgoTableType will be serialized and stored as JSON string in mo_indexes. So AlgoTableType is string.
+// 2. IndexAlgoParamOpType is serialized and stored in the mo_indexes as JSON string.
 func Trim(str string) string {
 	return strings.ToLower(strings.TrimSpace(str))
 }
@@ -78,6 +78,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 	}
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
+		opType = Trim(opType)
 		if opType == IndexAlgoParamOpType_ip ||
 			opType == IndexAlgoParamOpType_l2 ||
 			opType == IndexAlgoParamOpType_cos {

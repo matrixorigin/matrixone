@@ -254,7 +254,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile,
 	if err != nil {
 		return err
 	}
-	algoParamsDistFn := params[catalog.IndexAlgoParamOpType]
+	algoParamsDistFn := catalog.Trim(params[catalog.IndexAlgoParamOpType])
 	ops := make(map[string]string)
 	ops[catalog.IndexAlgoParamOpType_ip] = "inner_product"
 	ops[catalog.IndexAlgoParamOpType_l2] = "l2_distance"
