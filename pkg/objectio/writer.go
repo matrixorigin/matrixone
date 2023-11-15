@@ -113,12 +113,12 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	return writer, nil
 }
 
-func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta) *ObjectStats {
+func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaType) *ObjectStats {
 	ss := NewObjectStats()
 	SetObjectStatsObjectName(ss, w.name)
 	SetObjectStatsExtent(ss, Header(w.buffer.vector.Entries[0].Data).Extent())
 	SetObjectStatsRowCnt(ss, w.totalRow)
-	SetObjectStatsBlkCnt(ss, uint32(len(w.blocks)))
+	SetObjectStatsBlkCnt(ss, uint32(len(w.blocks[idx])))
 
 	if len(colmeta) > int(w.pkColIdx) {
 		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.pkColIdx].ZoneMap())
@@ -141,11 +141,11 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta) *ObjectStats 
 func (w *objectWriterV1) DescribeObject() ([]*ObjectStats, error) {
 	stats := make([]*ObjectStats, 2)
 	if len(w.blocks[SchemaData]) != 0 {
-		stats[SchemaData] = describeObjectHelper(w, w.colmeta)
+		stats[SchemaData] = describeObjectHelper(w, w.colmeta, SchemaData)
 	}
 
 	if len(w.blocks[SchemaTombstone]) != 0 {
-		stats[SchemaTombstone] = describeObjectHelper(w, w.tombstonesColmeta)
+		stats[SchemaTombstone] = describeObjectHelper(w, w.tombstonesColmeta, SchemaTombstone)
 	}
 
 	return stats, nil

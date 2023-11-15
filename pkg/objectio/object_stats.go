@@ -108,9 +108,9 @@ func (des *ObjectStats) Rows() uint32 {
 
 func (des *ObjectStats) String() string {
 	return fmt.Sprintf("[object stats]: objName: %s; extent: %v; "+
-		"blkCnt: %d; sortKey zoneMap: %v",
-		des.ObjectName().String(), des.Extent().String(), des.BlkCnt(),
-		des.SortKeyZoneMap())
+		"rowCnt: %d; blkCnt: %d; sortKey zoneMap: %v",
+		des.ObjectName().String(), des.Extent().String(),
+		des.Rows(), des.BlkCnt(), des.SortKeyZoneMap())
 }
 
 func setHelper(stats *ObjectStats, offset int, data []byte) error {
