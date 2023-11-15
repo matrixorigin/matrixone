@@ -16,7 +16,6 @@ package model
 
 import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common/utils"
 	"sync"
 	"time"
 
@@ -90,7 +89,6 @@ func (table *TransferTable[T]) executeTTL(items []*common.PinnedItem[T]) {
 	}
 
 	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
-	utils.TransferPageCounter.Add(-int64(cnt))
 }
 
 func (table *TransferTable[T]) RunTTL(now time.Time) {
@@ -114,9 +112,7 @@ func (table *TransferTable[T]) AddPage(page T) (dup bool) {
 	}
 	table.pages[id] = pinned
 
-	cnt := page.Length()
-	utils.TransferPageCounter.Add(int64(cnt))
-	v2.TaskMergeTransferPageLengthGauge.Add(float64(cnt))
+	v2.TaskMergeTransferPageLengthGauge.Add(float64(page.Length()))
 	return
 }
 
@@ -134,7 +130,6 @@ func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
 	}
 
 	cnt := table.pages[*id].Val.Length()
-	utils.TransferPageCounter.Add(-int64(cnt))
 	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
 	return
 }
