@@ -89,6 +89,7 @@ var (
 	TxnCommitQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("commit")
 	TxnWaitActiveQueueSizeGauge = txnQueueSizeGauge.WithLabelValues("wait-active")
 	TxnActiveQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("active")
+	TxnLockRPCQueueSizeGauge    = txnQueueSizeGauge.WithLabelValues("lock-rpc")
 
 	txnCNCommittedLocationQuantityGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -109,7 +110,7 @@ var (
 			Subsystem: "txn",
 			Name:      "commit_duration_seconds",
 			Help:      "Bucketed histogram of txn commit duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 	TxnCNCommitDurationHistogram            = txnCommitDurationHistogram.WithLabelValues("cn")
 	TxnCNSendCommitDurationHistogram        = txnCommitDurationHistogram.WithLabelValues("cn-send")
@@ -123,7 +124,7 @@ var (
 			Subsystem: "txn",
 			Name:      "life_duration_seconds",
 			Help:      "Bucketed histogram of txn life cycle duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		})
 
 	TxnLifeCycleStatementsTotalHistogram = prometheus.NewHistogram(
@@ -135,13 +136,22 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
 		})
 
+	TxnUnlockTableTotalHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "unlock_table_total",
+			Help:      "Size of txn unlock tables count.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 4),
+		})
+
 	txnCreateDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "create_duration_seconds",
 			Help:      "Bucketed histogram of txn create txn duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 	TxnCreateTotalDurationHistogram       = txnCreateDurationHistogram.WithLabelValues("total")
 	TxnDetermineSnapshotDurationHistogram = txnCreateDurationHistogram.WithLabelValues("determine-snapshot")
@@ -153,7 +163,7 @@ var (
 			Subsystem: "txn",
 			Name:      "statement_duration_seconds",
 			Help:      "Bucketed histogram of txn statement duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 	TxnStatementBuildPlanDurationHistogram      = txnStatementDurationHistogram.WithLabelValues("build-plan")
 	TxnStatementExecuteDurationHistogram        = txnStatementDurationHistogram.WithLabelValues("execute")
@@ -166,7 +176,7 @@ var (
 			Subsystem: "txn",
 			Name:      "lock_duration_seconds",
 			Help:      "Bucketed histogram of acquire lock duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 	TxnAcquireLockDurationHistogram     = txnLockDurationHistogram.WithLabelValues("acquire")
 	TxnAcquireLockWaitDurationHistogram = txnLockDurationHistogram.WithLabelValues("acquire-wait")
@@ -178,7 +188,7 @@ var (
 			Subsystem: "txn",
 			Name:      "unlock_duration_seconds",
 			Help:      "Bucketed histogram of release lock duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 	TxnUnlockDurationHistogram             = txnUnlockDurationHistogram.WithLabelValues("total")
 	TxnUnlockBtreeGetLockDurationHistogram = txnUnlockDurationHistogram.WithLabelValues("btree-get-lock")
@@ -199,7 +209,7 @@ var (
 			Subsystem: "txn",
 			Name:      "ranges_duration_seconds",
 			Help:      "Bucketed histogram of txn table ranges duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		})
 
 	TxnTableRangeSizeHistogram = prometheus.NewHistogram(
@@ -217,7 +227,7 @@ var (
 			Subsystem: "txn",
 			Name:      "tn_side_duration_seconds",
 			Help:      "Bucketed histogram of txn duration on tn side.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"step"})
 
 	TxnOnPrepareWALDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal")
@@ -231,7 +241,7 @@ var (
 			Subsystem: "txn",
 			Name:      "show_accounts_duration_seconds",
 			Help:      "Bucketed histogram of show accounts duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		})
 
 	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
@@ -240,7 +250,7 @@ var (
 			Subsystem: "txn",
 			Name:      "mpool_duration_seconds",
 			Help:      "Bucketed histogram of txn mpool duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"type"})
 	TxnMpoolNewDurationHistogram    = txnMpoolDurationHistogram.WithLabelValues("new")
 	TxnMpoolAllocDurationHistogram  = txnMpoolDurationHistogram.WithLabelValues("alloc")
