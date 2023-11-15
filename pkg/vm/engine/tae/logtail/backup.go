@@ -307,6 +307,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	blkMetaInsertMetaLoc := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc)
 	blkMetaInsertDeltaLoc := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc)
 	blkMetaInsertEntryState := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_EntryState)
+	blkMetaInsertBlkID := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_ID)
 	blkCNMetaInsertCommitTs := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_CommitTs)
 
 	for i := 0; i < blkCNMetaInsert.Length(); i++ {
@@ -336,6 +337,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			addBlockToObjectData(metaLoc, isABlk, true, i,
 				blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
 			name := metaLoc.Name().String()
+			isCkpChange = true
 
 			if isABlk && !deltaLoc.IsEmpty() {
 				objectsData[name].data[metaLoc.ID()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
@@ -346,11 +348,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	for i := 0; i < blkMetaInsert.Length(); i++ {
 		metaLoc := objectio.Location(blkMetaInsertMetaLoc.Get(i).([]byte))
 		deltaLoc := objectio.Location(blkMetaInsertDeltaLoc.Get(i).([]byte))
-		blkID := types.Blockid{}
-		err = blkID.Unmarshal(blkMetaInsertDeltaLoc.Get(i).([]byte))
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
+		blkID := blkMetaInsertBlkID.Get(i).(types.Blockid)
 		isABlk := blkMetaInsertEntryState.Get(i).(bool)
 		if isABlk {
 			panic(any(fmt.Sprintf("The inserted block is an ablock: %v-%d", metaLoc.String(), i)))
