@@ -17,10 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -166,8 +167,11 @@ func requestStorageUsage(ses *Session) (resp interface{}, err error) {
 	return result.Data.([]interface{})[0], nil
 }
 
-func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
-	usage *db.StorageUsageResp) (map[int32]uint64, error) {
+func handleStorageUsageResponse(
+	ctx context.Context,
+	usage *db.StorageUsageResp,
+	fs fileservice.FileService,
+) (map[int32]uint64, error) {
 	result := make(map[int32]uint64, 0)
 	for idx := range usage.CkpEntries {
 		version := usage.CkpEntries[idx].Version
@@ -181,20 +185,25 @@ func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
 			return map[int32]uint64{}, nil
 		}
 
-		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, fs, version, logtail.SEGStorageUsageIDX)
+		ckpData, err := logtail.LoadSpecifiedCkpBatch(
+			ctx, location, version, logtail.SEGStorageUsageIDX, fs,
+		)
 		if err != nil {
 			return nil, err
 		}
 
 		storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
-		accIDVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID)
-		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
+		accIDVec := vector.MustFixedCol[uint64](
+			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
+		)
+		sizeVec := vector.MustFixedCol[uint64](
+			storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector(),
+		)
 
 		size := uint64(0)
-		length := accIDVec.Length()
-		for i := 0; i < length; i++ {
-			result[int32(accIDVec.Get(i).(uint64))] += sizeVec.Get(i).(uint64)
-			size += sizeVec.Get(i).(uint64)
+		for i := 0; i < len(accIDVec); i++ {
+			result[int32(accIDVec[i])] += sizeVec[i]
+			size += sizeVec[i]
 		}
 
 		ckpData.Close()
@@ -223,7 +232,7 @@ func getAllAccountsStorageUsage(ctx context.Context, ses *Session) (map[int32]ui
 	}
 
 	// step 2: handling these pulled data
-	return handleStorageUsageResponse(ctx, fs, response.(*db.StorageUsageResp))
+	return handleStorageUsageResponse(ctx, response.(*db.StorageUsageResp), fs)
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {

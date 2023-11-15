@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -85,15 +86,18 @@ func (node *persistedNode) GetColumnDataWindow(
 	from uint32,
 	to uint32,
 	col int,
+	mp *mpool.MPool,
 ) (vec containers.Vector, err error) {
 	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(context.Background(), readSchema, col); err != nil {
+	if data, err = node.block.LoadPersistedColumnData(
+		context.Background(), readSchema, col, mp,
+	); err != nil {
 		return
 	}
 	if to-from == uint32(data.Length()) {
 		vec = data
 	} else {
-		vec = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+		vec = data.CloneWindow(int(from), int(to-from), mp)
 		data.Close()
 	}
 	return
@@ -102,12 +106,17 @@ func (node *persistedNode) GetColumnDataWindow(
 func (node *persistedNode) Foreach(
 	ctx context.Context,
 	readSchema *catalog.Schema,
-	colIdx int, op func(v any, isNull bool, row int) error, sel []uint32) (err error) {
+	colIdx int,
+	op func(v any, isNull bool, row int) error,
+	sel []uint32,
+	mp *mpool.MPool,
+) (err error) {
 	var data containers.Vector
 	if data, err = node.block.LoadPersistedColumnData(
 		ctx,
 		readSchema,
 		colIdx,
+		mp,
 	); err != nil {
 		return
 	}
@@ -123,7 +132,7 @@ func (node *persistedNode) Foreach(
 }
 
 func (node *persistedNode) GetDataWindow(
-	readSchema *catalog.Schema, colIdxes []int, from, to uint32,
+	readSchema *catalog.Schema, colIdxes []int, from, to uint32, mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
 	panic("to be implemented")
 }
@@ -155,6 +164,7 @@ func (node *persistedNode) GetRowByFilter(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	filter *handle.Filter,
+	mp *mpool.MPool,
 ) (row uint32, err error) {
 	ok, err := node.ContainsKey(ctx, filter.Val)
 	if err != nil {
@@ -166,7 +176,7 @@ func (node *persistedNode) GetRowByFilter(
 	}
 	// Note: sort key do not change
 	schema := node.block.meta.GetSchema()
-	sortKey, err := node.block.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx())
+	sortKey, err := node.block.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx(), mp)
 	if err != nil {
 		return
 	}
@@ -197,7 +207,7 @@ func (node *persistedNode) GetRowByFilter(
 
 	// Load persisted deletes
 	view := containers.NewColumnView(0)
-	if err = node.block.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
+	if err = node.block.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
 		return
 	}
 
@@ -222,7 +232,7 @@ func (node *persistedNode) GetRowByFilter(
 }
 
 func (node *persistedNode) CollectAppendInRange(
-	start, end types.TS, withAborted bool,
+	start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (bat *containers.BatchWithVersion, err error) {
 	// logtail should have sent metaloc
 	return nil, nil
