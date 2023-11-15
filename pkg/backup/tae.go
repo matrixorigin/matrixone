@@ -101,6 +101,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]map[uint16]bool)
 	for i, name := range names {
+		logutil.Infof("backup1 file: %v", name)
 		if len(name) == 0 {
 			continue
 		}
@@ -175,6 +176,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	}
 	taeFileList = append(taeFileList, sizeList...)
 	if trimInfo != "" {
+		logutil.Infof("ckpStr file: %v", trimInfo)
 		ckpStr := strings.Split(trimInfo, ":")
 		if len(ckpStr) != 5 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
