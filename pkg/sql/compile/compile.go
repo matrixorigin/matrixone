@@ -217,6 +217,9 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.ConvertPanicError(ctx, e)
+			getLogger().Error("panic in compile",
+				zap.String("sql", c.sql),
+				zap.String("error", err.Error()))
 		}
 	}()
 
@@ -483,6 +486,7 @@ func (c *Compile) runOnce() error {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
 					getLogger().Error("panic in run",
+						zap.String("sql", c.sql),
 						zap.String("error", err.Error()))
 					errC <- err
 				}
@@ -1204,10 +1208,20 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
-					Op:  vm.Dispatch,
-					Arg: constructDispatchLocal(false, false, false, regs),
-				})
+				if c.anal.qry.LoadTag {
+					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
+					arg.FuncId = dispatch.ShuffleToAllFunc
+					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+					dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
+						Op:  vm.Dispatch,
+						Arg: arg,
+					})
+				} else {
+					dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
+						Op:  vm.Dispatch,
+						Arg: constructDispatchLocal(false, false, false, regs),
+					})
+				}
 				for i := range scopes {
 					insertArg, err := constructInsert(n, c.e, c.proc)
 					if err != nil {
@@ -1701,7 +1715,10 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	arg.FuncId = dispatch.SendToAnyLocalFunc
+	//arg.FuncId = dispatch.SendToAnyLocalFunc
+	//use shuffle instead of SendToAnyLocalFunc
+	arg.FuncId = dispatch.ShuffleToAllFunc
+	arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
@@ -3076,6 +3093,9 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
+	if len(qry.Nodes) == 0 {
+		panic("empty plan")
+	}
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
 		anals[i] = buffer.Alloc[process.AnalyzeInfo](c.proc.SessionInfo.Buf)

@@ -226,16 +226,16 @@ func NewCatalogLogtailRespBuilder(ctx context.Context, scope Scope, ckp string, 
 	}
 	switch scope {
 	case ScopeDatabases:
-		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema)
-		b.delBatch = makeRespBatchFromSchema(DBDelSchema)
-		b.specailDeleteBatch = makeRespBatchFromSchema(DBSpecialDeleteSchema)
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema, common.LogtailAllocator)
+		b.delBatch = makeRespBatchFromSchema(DBDelSchema, common.LogtailAllocator)
+		b.specailDeleteBatch = makeRespBatchFromSchema(DBSpecialDeleteSchema, common.LogtailAllocator)
 	case ScopeTables:
-		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema)
-		b.delBatch = makeRespBatchFromSchema(TblDelSchema)
-		b.specailDeleteBatch = makeRespBatchFromSchema(TBLSpecialDeleteSchema)
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema, common.LogtailAllocator)
+		b.delBatch = makeRespBatchFromSchema(TblDelSchema, common.LogtailAllocator)
+		b.specailDeleteBatch = makeRespBatchFromSchema(TBLSpecialDeleteSchema, common.LogtailAllocator)
 	case ScopeColumns:
-		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
-		b.delBatch = makeRespBatchFromSchema(ColumnDelSchema)
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema, common.LogtailAllocator)
+		b.delBatch = makeRespBatchFromSchema(ColumnDelSchema, common.LogtailAllocator)
 	}
 	b.DatabaseFn = b.VisitDB
 	b.TableFn = b.VisitTbl
@@ -466,10 +466,10 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.tname = tbl.GetLastestSchema().Name
 
 	b.dataInsBatches = make(map[uint32]*containers.Batch)
-	b.dataDelBatch = makeRespBatchFromSchema(DelSchema)
-	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema)
-	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema)
-	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema)
+	b.dataDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
+	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
+	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
+	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	return b
 }
 
@@ -599,7 +599,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 // visitBlkData collects logtail in memory
 func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
-	insBatch, err := block.CollectAppendInRange(b.start, b.end, false)
+	insBatch, err := block.CollectAppendInRange(b.start, b.end, false, common.LogtailAllocator)
 	if err != nil {
 		return
 	}
@@ -614,13 +614,16 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.B
 			// insBatch is freed, don't use anymore
 		}
 	}
-	delBatch, err := block.CollectDeleteInRange(ctx, b.start, b.end, false)
+	delBatch, err := block.CollectDeleteInRange(ctx, b.start, b.end, false, common.LogtailAllocator)
 	if err != nil {
 		return
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
 		if len(b.dataDelBatch.Vecs) == 2 {
-			b.dataDelBatch.AddVector(delBatch.Attrs[2], containers.MakeVector(*delBatch.Vecs[2].GetType()))
+			b.dataDelBatch.AddVector(
+				delBatch.Attrs[2],
+				containers.MakeVector(*delBatch.Vecs[2].GetType(), common.LogtailAllocator),
+			)
 		}
 		b.dataDelBatch.Extend(delBatch)
 		// delBatch is freed, don't use anymore
@@ -890,7 +893,7 @@ func LoadCheckpointEntries(
 func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32) ([]objectio.Location, *CheckpointData, error) {
 	locations := make([]objectio.Location, 0)
 	locations = append(locations, location)
-	data := NewCheckpointData()
+	data := NewCheckpointData(common.CheckpointAllocator)
 	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, nil, err
