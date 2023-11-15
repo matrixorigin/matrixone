@@ -675,12 +675,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	case plan.Node_FILTER:
 		//filters which can not push down to scan nodes. hard to estimate selectivity
-		node.Stats.Cost = childStats.Outcnt
+		node.Stats.Outcnt = childStats.Outcnt * 0.05
+		node.Stats.Cost = childStats.Cost
 		node.Stats.Selectivity = 0.05
-		node.Stats.Outcnt = childStats.Outcnt * node.Stats.Selectivity
-		if node.Stats.Outcnt < 1 {
-			node.Stats.Outcnt = 1
-		}
+
 	default:
 		if len(node.Children) > 0 && childStats != nil {
 			node.Stats.Outcnt = childStats.Outcnt
@@ -760,33 +758,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 }
 
 func shouldReturnMinimalStats(node *plan.Node) bool {
-	if node.NodeType != plan.Node_TABLE_SCAN {
-		return false
-	}
-	if len(node.FilterList) == 0 {
-		return false
-	}
-	if node.TableDef.Pkey == nil {
-		return false
-	}
-	equalCol := make([]int32, 0)
-	for _, expr := range node.FilterList {
-		equiCond, ok := expr.Expr.(*plan.Expr_F)
-		if !ok {
-			continue
-		}
-		if equiCond.F.Func.GetObjName() != "=" {
-			continue
-		}
-		leftcol, ok := equiCond.F.Args[0].Expr.(*plan.Expr_Col)
-		if !ok {
-			continue
-		}
-		if HasColExpr(equiCond.F.Args[1], -1) == -1 {
-			equalCol = append(equalCol, leftcol.Col.ColPos)
-		}
-	}
-	return containsAllPKs(equalCol, node.TableDef)
+	return false
 }
 
 func needStats(tableDef *TableDef) bool {
