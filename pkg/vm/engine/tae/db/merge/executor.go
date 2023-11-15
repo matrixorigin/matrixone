@@ -17,9 +17,10 @@ package merge
 import (
 	"bytes"
 	"fmt"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"sync"
 	"sync/atomic"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -142,6 +143,8 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 	e.tableName = entry.GetLastestSchema().Name
 	hasDelSeg := len(delSegs) > 0
 
+	originalDelCnt := len(delSegs)
+
 	hasMergeObjects := false
 
 	objectList := policy.Revise(0, int64(e.memAvailBytes()))
@@ -196,7 +199,11 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
 	entry.Stats.AddMerge(osize, len(msegs), blkCnt)
-	logMergeTask(e.tableName, task.ID(), delSegs, msegs, blkCnt, osize, esize)
+	var delPrint []*catalog.SegmentEntry
+	if delSegs != nil {
+		delPrint = delSegs[:originalDelCnt]
+	}
+	logMergeTask(e.tableName, task.ID(), delPrint, msegs, blkCnt, osize, esize)
 }
 
 func (e *MergeExecutor) memAvailBytes() int {
