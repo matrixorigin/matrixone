@@ -75,14 +75,14 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	return nil
 }
 
-func (s *Scope) handleIvfIndexMetaTable(c *Compile,
+func (s *Scope) handleIvfIndexMetaTable(c executor.TxnExecutor,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
 	// -1. check if table contains any data
 	indexColumnName := indexDef.Parts[0]
 	countTotalSql := fmt.Sprintf("select count(%s) from `%s`.`%s`;", indexColumnName, qryDatabase, originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql)
+	rs, err := c.Exec(countTotalSql)
 	if err != nil {
 		return err
 	}
@@ -98,14 +98,14 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile,
 
 	// 0. create table
 	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[0], indexDef, qryDatabase)
-	err = c.runSql(createSQL)
+	_, err = c.Exec(createSQL)
 	if err != nil {
 		return err
 	}
 
 	// 1. insert version
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` values('version', '1');", qryDatabase, indexDef.IndexTableName)
-	err = c.runSql(insertSQL)
+	_, err = c.Exec(insertSQL)
 	if err != nil {
 		return err
 	}
@@ -113,13 +113,13 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile,
 	return nil
 }
 
-func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
+func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
 	// 0. create table
 	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[1], indexDef, qryDatabase)
-	err := c.runSql(createSQL)
+	_, err := c.Exec(createSQL)
 	if err != nil {
 		return err
 	}
@@ -139,7 +139,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 	// 2.1 Number of records in the table
 	indexColumnName := indexDef.Parts[0]
 	countTotalSql := fmt.Sprintf("select count(%s) from `%s`.`%s`;", indexColumnName, qryDatabase, originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql)
+	rs, err := c.Exec(countTotalSql)
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 		centroidParamsDistFn,
 		sampledSQL,
 	)
-	err = c.runSql(clusterCentersSQL)
+	_, err = c.Exec(clusterCentersSQL)
 	if err != nil {
 		return err
 	}
@@ -236,13 +236,13 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile,
 	return nil
 }
 
-func (s *Scope) handleIvfIndexEntriesTable(c *Compile,
+func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable, centroidsTableName string) error {
 
 	// 1. create table
 	createSQL := genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDef, qryDatabase)
-	err := c.runSql(createSQL)
+	_, err := c.Exec(createSQL)
 	if err != nil {
 		return err
 	}
@@ -343,7 +343,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile,
 		centroidsTableName,
 	)
 
-	err = c.runSql(mappingSQL)
+	_, err = c.Exec(mappingSQL)
 	if err != nil {
 		return err
 	}

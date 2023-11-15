@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"math"
 	"strings"
 
@@ -1109,25 +1110,30 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
 	}
 
-	// 1. handle meta table
-	err := s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef, indexInfo)
-	if err != nil {
-		return err
-	}
+	return c.runTxn(func(txn executor.TxnExecutor) error {
 
-	// 2. handle centroids table
-	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef, indexInfo)
-	if err != nil {
-		return err
-	}
+		// 1. handle meta table
+		err := s.handleIvfIndexMetaTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef, indexInfo)
+		if err != nil {
+			return err
+		}
 
-	// 3. handle entries table
-	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef, indexInfo,
-		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
-	if err != nil {
-		return err
-	}
-	return nil
+		// 2. handle centroids table
+		err = s.handleIvfIndexCentroidsTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef, indexInfo)
+		if err != nil {
+			return err
+		}
+
+		// 3. handle entries table
+		err = s.handleIvfIndexEntriesTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef, indexInfo,
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
 }
 
 func (s *Scope) DropIndex(c *Compile) error {

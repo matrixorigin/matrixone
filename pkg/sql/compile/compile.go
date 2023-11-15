@@ -3871,6 +3871,23 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
+func (c *Compile) runTxn(execFunc func(executor.TxnExecutor) error) error {
+	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		//TODO: verify these options
+		WithDisableIncrStatement().
+		WithTxn(c.proc.TxnOperator).
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.SessionInfo.TimeZone).
+		//WithMinCommittedTS(b.now()).
+		WithWaitCommittedLogApplied()
+	return exec.ExecTxn(c.proc.Ctx, execFunc, opts)
+}
+
 func evalRowsetData(proc *process.Process,
 	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor) error {
 	var bats []*batch.Batch
