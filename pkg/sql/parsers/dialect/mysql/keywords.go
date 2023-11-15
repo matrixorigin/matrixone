@@ -258,6 +258,7 @@ func init() {
 		"list":                       LIST,
 		"lists":                      LISTS,
 		"op_type":                    OP_TYPE,
+		"reindex":                    REINDEX,
 		"limit":                      LIMIT,
 		"linear":                     LINEAR,
 		"lines":                      LINES,

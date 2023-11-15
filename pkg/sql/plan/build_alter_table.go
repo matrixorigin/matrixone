@@ -110,6 +110,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			}
 		case *tree.AlterOptionAlterIndex:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+		case *tree.AlterOptionAlterReIndex:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterTableName:
@@ -634,6 +636,8 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 				algorithm = plan.AlterTable_INPLACE
 			}
 		case *tree.AlterOptionAlterIndex:
+			algorithm = plan.AlterTable_INPLACE
+		case *tree.AlterOptionAlterReIndex:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE

@@ -344,7 +344,7 @@ import (
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
 
 
 // Alter
@@ -2968,6 +2968,13 @@ alter_table_alter:
             Name: tree.Identifier($2.Compare()),
         }
     }
+| REINDEX ident LISTS equal_opt INTEGRAL
+      {
+          $$ = &tree.AlterOptionAlterReIndex{
+              AlgoParamList: int64($5.(int64)),
+              Name: tree.Identifier($2.Compare()),
+          }
+      }
 |   CHECK ident enforce
     {
         $$ = &tree.AlterOptionAlterCheck{
@@ -10520,6 +10527,7 @@ non_reserved_keyword:
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
+|   REINDEX
 |   KEYS
 |   LANGUAGE
 |   LESS
