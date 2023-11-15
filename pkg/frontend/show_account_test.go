@@ -208,7 +208,7 @@ func Test_ShowAccounts(t *testing.T) {
 		Version:  9,
 	})
 
-	usage, err := handleStorageUsageResponse(ctx, objFs.Service, resp)
+	usage, err := handleStorageUsageResponse(ctx, resp, objFs.Service)
 	require.Nil(t, err)
 
 	require.Equal(t, len(usage), len(accIds))
