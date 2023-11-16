@@ -99,6 +99,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 		index.SetZMSum(zm, columnData.GetDownstreamVector())
+		logutil.Infof("WriteBatch: name: %v, blockID: %d, seqnum: %d, zm: %v", w.nameStr, block.GetID(), seqnums[i], zm)
 		// Update column meta zonemap
 		w.writer.UpdateBlockZM(objectio.SchemaData, int(block.GetID()), seqnums[i], zm)
 		// update object zonemap
@@ -139,6 +140,7 @@ func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObj
 		}
 		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
+		logutil.Infof("WriteTombstoneBatch: name: %v, blockID: %d, seqnum: %d, zm: %v", w.nameStr, block.GetID(), seqnums[i], zm)
 		w.writer.UpdateBlockZM(objectio.SchemaTombstone, int(block.GetID()), seqnums[i], zm)
 	}
 	return block, nil
