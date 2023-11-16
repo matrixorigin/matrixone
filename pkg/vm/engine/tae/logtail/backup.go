@@ -207,8 +207,10 @@ func trimObjectsData(
 				}
 				(*objectsData)[name].data[id].pk = pk
 			}
-			test := containers.ToTNBatch(bat)
-			bat = containers.ToCNBatch(test)
+			if bat.Vecs[0].Length() > 0 {
+				test := containers.ToTNBatch(bat)
+				bat = containers.ToCNBatch(test)
+			}
 			(*objectsData)[name].data[id].data = bat
 		}
 		(*objectsData)[name].isChange = isChange
