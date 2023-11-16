@@ -44,9 +44,6 @@ type sPool struct {
 	// 1000 means 10.00%, 1234 means 12.34%
 	percents int
 
-	// merge sample related.
-	nGroup, nSample int
-
 	// pools for each group to do sample by only one column.
 	sPools []singlePool
 	// pools for each group to do sample by multi columns.
