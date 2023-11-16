@@ -29,10 +29,10 @@ import (
 type sPool struct {
 	proc *process.Process
 
-	// need reordering or not.
-	// if true, output method should reorder the result as the order of [groupList, sampleList, other columns].
-	needReorder       bool
-	extraColumnsIndex []int
+	// requireReorder indicates whether the pool should do reorder for input batch's vectors before sample.
+	// if true, vectors will be reordered as [groupList, sampleList, other columns].
+	requireReorder bool
+	otherPartIndex []int
 
 	// sample type.
 	// same as the Type attribute of sample.Argument.
@@ -54,6 +54,8 @@ type sPool struct {
 
 	// reused memory for sample vectors.
 	columns sampleColumnList
+	// reused memory to do real sample. there is no need to free it because all its memory is from outer batch and vectors.
+	reOrderedInput *batch.Batch
 }
 
 type sPoolType int
@@ -65,21 +67,21 @@ const (
 
 func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
 	return &sPool{
-		proc:        proc,
-		needReorder: true,
-		typ:         rowSamplePool,
-		capacity:    capacity,
-		columns:     make(sampleColumnList, sampleColumnCount),
+		proc:           proc,
+		requireReorder: true,
+		typ:            rowSamplePool,
+		capacity:       capacity,
+		columns:        make(sampleColumnList, sampleColumnCount),
 	}
 }
 
 func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCount int) *sPool {
 	return &sPool{
-		proc:        proc,
-		needReorder: true,
-		typ:         percentSamplePool,
-		percents:    int(per * 100),
-		columns:     make(sampleColumnList, sampleColumnCount),
+		proc:           proc,
+		requireReorder: true,
+		typ:            percentSamplePool,
+		percents:       int(per * 100),
+		columns:        make(sampleColumnList, sampleColumnCount),
 	}
 }
 
@@ -120,53 +122,66 @@ func (s *sPool) growMulPool(target int, colNumber int) {
 	}
 }
 
-func (s *sPool) updateReOrderList(
-	sampleVectors, groupVectors []*vector.Vector, inputBatch *batch.Batch) {
-	if s.needReorder && s.extraColumnsIndex == nil {
-		offset := len(inputBatch.Vecs)
-		s.extraColumnsIndex = make([]int, len(sampleVectors)+len(groupVectors))
+func (s *sPool) vectorReOrder(
+	sampleVectors, groupVectors []*vector.Vector, inputBatch *batch.Batch) *batch.Batch {
+	if !s.requireReorder {
+		return inputBatch
+	}
 
-		index := 0
+	// get a reorder list at first time.
+	if s.otherPartIndex == nil {
+		offset := len(inputBatch.Vecs)
+		got := make([]bool, len(inputBatch.Vecs))
+
 		for _, vec1 := range groupVectors {
-			get := false
 			for j, vec2 := range inputBatch.Vecs {
 				if vec1 == vec2 {
-					s.extraColumnsIndex[index] = j
-					get = true
+					got[j] = true
 					break
 				}
 			}
-			if !get {
-				s.extraColumnsIndex[index] = offset
-				offset++
-			}
-			index++
 		}
 		for _, vec1 := range sampleVectors {
-			get := false
 			for j, vec2 := range inputBatch.Vecs {
 				if vec1 == vec2 {
-					s.extraColumnsIndex[index] = j
-					get = true
+					got[j] = true
 					break
 				}
 			}
-			if !get {
-				s.extraColumnsIndex[index] = offset
-				offset++
+		}
+
+		s.reOrderedInput = batch.NewWithSize(offset)
+		s.otherPartIndex = make([]int, 0, len(inputBatch.Vecs))
+		for i, g := range got {
+			if !g {
+				s.otherPartIndex = append(s.otherPartIndex, i)
 			}
-			index++
 		}
 	}
+
+	// reorder vectors.
+	s.reOrderedInput.Vecs = s.reOrderedInput.Vecs[:0]
+	for _, vec := range groupVectors {
+		s.reOrderedInput.Vecs = append(s.reOrderedInput.Vecs, vec)
+	}
+	for _, vec := range sampleVectors {
+		s.reOrderedInput.Vecs = append(s.reOrderedInput.Vecs, vec)
+	}
+	for _, index := range s.otherPartIndex {
+		s.reOrderedInput.Vecs = append(s.reOrderedInput.Vecs, inputBatch.Vecs[index])
+	}
+	s.reOrderedInput.SetRowCount(inputBatch.RowCount())
+
+	return s.reOrderedInput
 }
 
 func (s *sPool) Sample(groupIndex int, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) error {
-	s.updateReOrderList(sampleVectors, groupVectors, inputBatch)
+	s.reOrderedInput = s.vectorReOrder(sampleVectors, groupVectors, inputBatch)
 
 	if len(sampleVectors) > 1 {
-		return s.sampleFromColumns(groupIndex, sampleVectors, inputBatch)
+		return s.sampleFromColumns(groupIndex, sampleVectors, s.reOrderedInput)
 	}
-	return s.sampleFromColumn(groupIndex, sampleVectors[0], inputBatch)
+	return s.sampleFromColumn(groupIndex, sampleVectors[0], s.reOrderedInput)
 }
 
 func (s *sPool) sampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *batch.Batch) error {
@@ -206,12 +221,12 @@ func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector
 }
 
 func (s *sPool) BatchSample(length int, groupList []uint64, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) (err error) {
-	s.updateReOrderList(sampleVectors, groupVectors, inputBatch)
+	s.reOrderedInput = s.vectorReOrder(sampleVectors, groupVectors, inputBatch)
 
 	if len(sampleVectors) > 1 {
-		return s.batchSampleFromColumns(length, groupList, sampleVectors, inputBatch)
+		return s.batchSampleFromColumns(length, groupList, sampleVectors, s.reOrderedInput)
 	}
-	return s.batchSampleFromColumn(length, groupList, sampleVectors[0], inputBatch)
+	return s.batchSampleFromColumn(length, groupList, sampleVectors[0], s.reOrderedInput)
 }
 
 func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec *vector.Vector, bat *batch.Batch) (err error) {
@@ -379,26 +394,9 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 	}
 
 	// If a middle result is empty, cannot return nil directly. It will cause the pipeline closed early.
-	if bat == nil {
-		if !end {
-			return batch.EmptyBatch, nil
-		}
-	} else {
-		if s.needReorder {
-			vv := make([]*vector.Vector, 0, len(bat.Vecs))
-			for _, index := range s.extraColumnsIndex {
-				vv = append(vv, bat.Vecs[index])
-				bat.Vecs[index] = nil
-			}
-			for _, vec := range bat.Vecs {
-				if vec != nil {
-					vv = append(vv, vec)
-				}
-			}
-			bat.Vecs = vv
-		}
+	if bat == nil && !end {
+		return batch.EmptyBatch, nil
 	}
-
 	return bat, nil
 }
 
