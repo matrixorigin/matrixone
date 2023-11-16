@@ -29,6 +29,21 @@ var (
 	}
 )
 
+func NewUpdatePolicyReq(did, tid uint64, minRowQ, maxObjOnerune, maxRowsMerged int) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_UpdatePolicy,
+		Operation: &AlterTableReq_UpdatePolicy{
+			&AlterTablePolicy{
+				MinRowsQuailifed: uint32(minRowQ),
+				MaxObjOnerun:     uint32(maxObjOnerune),
+				MaxRowsMergedObj: uint32(maxRowsMerged),
+			},
+		},
+	}
+}
+
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,

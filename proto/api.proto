@@ -275,6 +275,13 @@ enum AlterKind {
     RenameTable      = 3;
     UpdateComment    = 4;
     UpdateConstraint = 5;
+    UpdatePolicy     = 6;
+}
+
+message AlterTablePolicy {
+    uint32 min_rows_quailifed = 1;
+    uint32 max_obj_onerun = 2;
+    uint32 max_rows_merged_obj = 3; 
 }
 
 message AlterTableConstraint {
@@ -312,6 +319,7 @@ message AlterTableReq {
         AlterTableRenameTable rename_table = 6;
         AlterTableComment update_comment   = 7;
         AlterTableConstraint update_cstr   = 8;
+        AlterTablePolicy update_policy     = 9;
     }
 }
 
@@ -322,6 +330,10 @@ message SchemaExtra {
     bool column_changed = 3; 
     // sending mo_tables deletes by this.
     string old_name = 4;
+
+    uint32 min_rows_quailifed = 5;
+    uint32 max_obj_onerun = 6;
+    uint32 max_rows_merged_obj = 7;
 }
 
 // Int64Map mainly used in unit test

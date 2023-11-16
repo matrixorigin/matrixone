@@ -166,7 +166,7 @@ func (c *objStatArg) String() string {
 func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
-		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl.ID).(*merge.BasicPolicyConfig)
+		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl).(*merge.BasicPolicyConfig)
 		b.WriteString(c.tbl.ObjectStatsString(c.verbose))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
@@ -362,13 +362,15 @@ func (c *compactPolicyArg) String() string {
 
 func (c *compactPolicyArg) Run() error {
 	if c.tbl == nil {
-		// reset all
-		c.ctx.db.MergeHandle.ConfigPolicy(0, nil)
-		// set runtime global config
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
+		if c.maxMergeObjN == 0 && c.minRowsQualified == 0 {
+			merge.StopMerge.Store(true)
+		} else {
+			merge.StopMerge.Store(false)
+		}
 	} else {
-		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl.ID, &merge.BasicPolicyConfig{
+		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
 			MergeMaxOneRun: int(c.maxMergeObjN),
 			ObjectMinRows:  int(c.minRowsQualified),
 		})
@@ -539,8 +541,9 @@ func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.Ta
 		if err != nil {
 			return nil, err
 		}
+		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
 		txn.Commit(context.Background())
-		return tblHdl.GetMeta().(*catalog.TableEntry), nil
+		return tbl, nil
 	} else {
 		dbHdl, err := txn.GetDatabase(parts[0])
 		if err != nil {
@@ -550,7 +553,8 @@ func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.Ta
 		if err != nil {
 			return nil, err
 		}
+		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
 		txn.Commit(context.Background())
-		return tblHdl.GetMeta().(*catalog.TableEntry), nil
+		return tbl, nil
 	}
 }
