@@ -185,7 +185,7 @@ func trimObjectsData(
 				}
 				blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
 				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 2)).ZoneMap().Clone()
-				logutil.Infof("blockMeta ssss ts %v", ts.ToString())
+				logutil.Infof("blockMeta ssss ts %v, zm is %v -- %v", ts.ToString(), zm.String(), zm)
 				if !zm.Contains(ts) {
 					//(*objectsData)[name].data[id].pk = pk
 					//(*objectsData)[name].data[id].data = bat
@@ -414,7 +414,6 @@ func ReWriteCheckpointAndBlockFromKey(
 		var blocks []objectio.BlockObject
 		var extent objectio.Extent
 		for _, block := range objectData.data {
-			logutil.Infof("object %v, id is %d", fileName, block.num)
 			dataBlocks = append(dataBlocks, block)
 		}
 		sort.Slice(dataBlocks, func(i, j int) bool {
