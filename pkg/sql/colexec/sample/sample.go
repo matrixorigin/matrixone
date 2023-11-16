@@ -30,6 +30,8 @@ import (
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	switch arg.Type {
+	case sampleN:
+		buf.WriteString(fmt.Sprintf("merge sample %d rows ", arg.Rows))
 	case sampleByRow:
 		buf.WriteString(fmt.Sprintf(" sample %d rows ", arg.Rows))
 	case sampleByPercent:
@@ -52,6 +54,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs))
 	case sampleByPercent:
 		arg.ctr.samplePool = newSamplePoolByPercent(proc, arg.Percents, len(arg.SampleExprs))
+	case sampleN:
+		arg.ctr.samplePool = newSamplePoolMergeN(proc, arg.Rows, len(arg.GroupExprs), len(arg.SampleExprs))
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown sample type %d", arg.Type))
 	}
@@ -122,20 +126,19 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 
-		if ctr.isGroupBy {
-			// evaluate the group by columns.
-			for i, executor := range ctr.groupExecutors {
-				ctr.groupVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
-				if err != nil {
-					return result, err
-				}
+		// evaluate the group by columns.
+		for i, executor := range ctr.groupExecutors {
+			ctr.groupVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
+			if err != nil {
+				return result, err
 			}
+		}
 
+		if ctr.isGroupBy {
 			err = ctr.hashAndSample(bat, arg.IBucket, arg.NBucket, proc.Mp())
 		} else {
 			err = ctr.samplePool.Sample(1, ctr.sampleVectors, nil, bat)
 		}
-
 		if err != nil {
 			return result, err
 		}

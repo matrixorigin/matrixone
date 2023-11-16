@@ -28,6 +28,7 @@ import (
 const (
 	sampleByRow = iota
 	sampleByPercent
+	sampleN
 )
 
 var _ vm.Operator = new(Argument)
@@ -76,6 +77,15 @@ type container struct {
 	// hash map related.
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
+}
+
+func NewMergeSampleN(rows int) *Argument {
+	return &Argument{
+		Type:    sampleN,
+		Rows:    rows,
+		IBucket: 0,
+		NBucket: 0,
+	}
 }
 
 func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr) *Argument {
@@ -175,6 +185,9 @@ func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 	if arg.Type == sampleByPercent {
 		in.SampleFunc.SampleType = pipeline.SampleFunc_Percent
 	}
+	if arg.Type == sampleN {
+		in.SampleFunc.SampleType = pipeline.SampleFunc_ByN
+	}
 }
 
 func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
@@ -182,7 +195,9 @@ func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
 	g := opr.GetAgg()
 	if s.SampleType == pipeline.SampleFunc_Rows {
 		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
-	} else {
+	} else if s.SampleType == pipeline.SampleFunc_Percent {
 		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
+	} else {
+		return NewMergeSampleN(int(s.SampleRows))
 	}
 }

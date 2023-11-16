@@ -44,6 +44,9 @@ type sPool struct {
 	// 1000 means 10.00%, 1234 means 12.34%
 	percents int
 
+	// merge sample related.
+	nGroup, nSample int
+
 	// pools for each group to do sample by only one column.
 	sPools []singlePool
 	// pools for each group to do sample by multi columns.
@@ -51,6 +54,17 @@ type sPool struct {
 
 	// reused memory for sample vectors.
 	columns sampleColumnList
+}
+
+func newSamplePoolMergeN(proc *process.Process, capacity int, groupColumnCount, sampleColumnCount int) *sPool {
+	return &sPool{
+		proc:        proc,
+		needReorder: false,
+		typ:         sampleByRow,
+		capacity:    capacity,
+		nGroup:      groupColumnCount,
+		nSample:     sampleColumnCount,
+	}
 }
 
 func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
@@ -110,7 +124,8 @@ func (s *sPool) growMulPool(target int, colNumber int) {
 	}
 }
 
-func (s *sPool) Sample(groupIndex int, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) error {
+func (s *sPool) updateReOrderList(
+	sampleVectors, groupVectors []*vector.Vector, inputBatch *batch.Batch) {
 	if s.needReorder && s.extraColumnsIndex == nil {
 		offset := len(inputBatch.Vecs)
 		s.extraColumnsIndex = make([]int, len(sampleVectors)+len(groupVectors))
@@ -147,6 +162,10 @@ func (s *sPool) Sample(groupIndex int, sampleVectors []*vector.Vector, groupVect
 			index++
 		}
 	}
+}
+
+func (s *sPool) Sample(groupIndex int, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) error {
+	s.updateReOrderList(sampleVectors, groupVectors, inputBatch)
 
 	if len(sampleVectors) > 1 {
 		return s.sampleFromColumns(groupIndex, sampleVectors, inputBatch)
@@ -165,7 +184,7 @@ func (s *sPool) sampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *
 
 	switch s.typ {
 	case sampleByRow:
-		return s.sPools[groupIndex].add(s.proc, s.columns[0], bat)
+		return s.sPools[groupIndex].addByRow(s.proc, s.columns[0], bat)
 	case sampleByPercent:
 		return s.sPools[groupIndex].addByPercent(s.proc, s.columns[0], bat, s.percents)
 	}
@@ -183,18 +202,20 @@ func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector
 
 	switch s.typ {
 	case sampleByRow:
-		return s.mPools[groupIndex].add(s.proc, s.columns, bat)
+		return s.mPools[groupIndex].addByRow(s.proc, s.columns, bat)
 	case sampleByPercent:
 		return s.mPools[groupIndex].addByPercent(s.proc, s.columns, bat, s.percents)
 	}
 	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 }
 
-func (s *sPool) BatchSample(length int, groupList []uint64, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, bat *batch.Batch) (err error) {
+func (s *sPool) BatchSample(length int, groupList []uint64, sampleVectors []*vector.Vector, groupVectors []*vector.Vector, inputBatch *batch.Batch) (err error) {
+	s.updateReOrderList(sampleVectors, groupVectors, inputBatch)
+
 	if len(sampleVectors) > 1 {
-		return s.batchSampleFromColumns(length, groupList, sampleVectors, bat)
+		return s.batchSampleFromColumns(length, groupList, sampleVectors, inputBatch)
 	}
-	return s.batchSampleFromColumn(length, groupList, sampleVectors[0], bat)
+	return s.batchSampleFromColumn(length, groupList, sampleVectors[0], inputBatch)
 }
 
 func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec *vector.Vector, bat *batch.Batch) (err error) {
@@ -398,7 +419,7 @@ type singlePool struct {
 	bat *batch.Batch
 }
 
-func (sp *singlePool) add(proc *process.Process, column sampleColumn, bat *batch.Batch) error {
+func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *batch.Batch) error {
 	k := bat.RowCount()
 	mp := proc.Mp()
 
@@ -661,7 +682,7 @@ func (p *multiPool) appendOneRow(proc *process.Process, mp *mpool.MPool, columns
 	return nil
 }
 
-func (p *multiPool) add(proc *process.Process, columns sampleColumnList, bat *batch.Batch) (err error) {
+func (p *multiPool) addByRow(proc *process.Process, columns sampleColumnList, bat *batch.Batch) (err error) {
 	k := bat.RowCount()
 	var i = 0
 	if !p.full {
