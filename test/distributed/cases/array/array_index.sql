@@ -48,7 +48,7 @@ show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 
-alter table tbl alter reindex idx1 lists=3;
+alter table tbl alter reindex idx1 ivfflat lists=3;
 show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
