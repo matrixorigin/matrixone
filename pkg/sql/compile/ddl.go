@@ -1169,6 +1169,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 
 		// 4.c handle entries table
 		err = s.handleIvfIndexEntriesTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
 		if err != nil {
 			return err

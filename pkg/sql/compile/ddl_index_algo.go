@@ -83,9 +83,16 @@ func (s *Scope) handleIvfIndexMetaTable(c executor.TxnExecutor, indexDef *plan.I
 		INSERT INTO meta (`key`, `value`) VALUES ('version', '1')
 		ON DUPLICATE KEY UPDATE `value` = CAST(CAST(`value` AS UNSIGNED) + 1 AS CHAR);
 	*/
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` values('version', '1')"+
-		"ON DUPLICATE KEY UPDATE `value` = CAST(CAST(`value` AS UNSIGNED) + 1 AS CHAR);",
-		qryDatabase, indexDef.IndexTableName)
+	//TODO: How to update the version number when it overflows?
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '1')"+
+		"ON DUPLICATE KEY UPDATE `%s` = CAST(CAST(`%s` AS UNSIGNED) + 1 AS CHAR);",
+		qryDatabase,
+		indexDef.IndexTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	)
 
 	_, err := c.Exec(insertSQL)
 	if err != nil {
@@ -175,7 +182,9 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 	return nil
 }
 
-func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, centroidsTableName string) error {
+func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+	metadataTableName string,
+	centroidsTableName string) error {
 
 	// 2. algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
@@ -213,6 +222,22 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk)
 
+	// 4.a centroids table with latest version
+	filteredCentroidsTableSql := fmt.Sprintf("(select * from "+
+		"`%s`.`%s` where `%s` = "+
+		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
+		qryDatabase,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+
+		centroidsTableName,
+	)
+
 	mappingSQL := fmt.Sprintf("%s "+
 		"SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`, `__mo_index_entries_tbl`.`__mo_index_centroid_id_fk`, `__mo_index_entries_tbl`.`__mo_index_table_pk` FROM "+
 		"("+
@@ -222,7 +247,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 		"%s as `__mo_index_table_pk`, "+
 		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, normalize_l2(%s.%s))) as `__mo_index_rn` "+
 		"FROM "+
-		" `%s` CROSS JOIN `%s` "+
+		" `%s` CROSS JOIN %s "+
 		") `__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;",
 		insertSQL,
 
@@ -241,7 +266,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 		indexColumnName,
 
 		originalTableDef.Name,
-		centroidsTableName,
+		filteredCentroidsTableSql,
 	)
 
 	_, err = c.Exec(mappingSQL)

@@ -352,12 +352,15 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		return nil
 	}
 	newindexDef := &plan.IndexDef{
-		IdxId:          indexDef.IdxId,
-		IndexName:      indexDef.IndexName,
-		Unique:         indexDef.Unique,
-		TableExist:     indexDef.TableExist,
-		IndexTableName: indexDef.IndexTableName,
-		Comment:        indexDef.Comment,
+		IdxId:              indexDef.IdxId,
+		IndexName:          indexDef.IndexName,
+		Unique:             indexDef.Unique,
+		TableExist:         indexDef.TableExist,
+		IndexTableName:     indexDef.IndexTableName,
+		Comment:            indexDef.Comment,
+		IndexAlgo:          indexDef.IndexAlgo,
+		IndexAlgoTableType: indexDef.IndexAlgoTableType,
+		IndexAlgoParams:    indexDef.IndexAlgoParams,
 	}
 
 	newParts := make([]string, len(indexDef.Parts))
