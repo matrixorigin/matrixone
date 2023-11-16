@@ -53,6 +53,9 @@ type FileService interface {
 	// Stat returns infomations about a file
 	// returns ErrFileNotFound if requested file not found
 	StatFile(ctx context.Context, filePath string) (*DirEntry, error)
+
+	// PrefetchFile prefetches a file
+	PrefetchFile(ctx context.Context, filePath string) error
 }
 
 type IOVector struct {

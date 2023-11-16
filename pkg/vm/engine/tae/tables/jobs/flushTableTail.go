@@ -166,11 +166,12 @@ func (task *flushTableTailTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err
 		blks = fmt.Sprintf("%s%s,", blks, blk.ID.ShortStringEx())
 	}
 	enc.AddString("a-blks", blks)
-	delsrc := ""
-	for _, del := range task.delSrcMetas {
-		delsrc = fmt.Sprintf("%s%s,", delsrc, del.ID.ShortStringEx())
-	}
-	enc.AddString("deletes-src", delsrc)
+	// delsrc := ""
+	// for _, del := range task.delSrcMetas {
+	// 	delsrc = fmt.Sprintf("%s%s,", delsrc, del.ID.ShortStringEx())
+	// }
+	// enc.AddString("deletes-src", delsrc)
+	enc.AddInt("delete-blk-ndv", len(task.delSrcMetas))
 
 	toblks := ""
 	for _, blk := range task.createdBlkHandles {
@@ -609,6 +610,7 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 			blk,
 			data,
 			deletes,
+			true,
 		)
 		if err = task.rt.Scheduler.Schedule(ablockTask); err != nil {
 			return

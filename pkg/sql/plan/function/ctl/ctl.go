@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
@@ -97,7 +96,7 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	if err != nil {
 		return err
 	}
-	if command == strings.ToUpper(pb.CmdMethod_Inspect.String()) {
+	if command == InspectMethod {
 		obj := res.Data.([]any)[0].(*db.InspectResp)
 		err = rs.AppendBytes([]byte(obj.ConsoleString()), false)
 		return err

@@ -290,8 +290,6 @@ func (c *Config) defaultFileServiceDataDir(name string) string {
 
 func (c *Config) createFileService(
 	ctx context.Context,
-	st metadata.ServiceType,
-	defaultName string,
 	serviceType metadata.ServiceType,
 	nodeUUID string,
 ) (*fileservice.FileServices, error) {
@@ -380,7 +378,7 @@ func (c *Config) createFileService(
 		// set shared fs perf counter as node perf counter
 		if service.Name() == defines.SharedFileServiceName {
 			perfcounter.Named.Store(
-				perfcounter.NameForNode(st.String(), nodeUUID),
+				perfcounter.NameForNode(serviceType.String(), nodeUUID),
 				counterSet,
 			)
 		}
@@ -393,15 +391,9 @@ func (c *Config) createFileService(
 
 	// create FileServices
 	fs, err := fileservice.NewFileServices(
-		defaultName,
+		"",
 		services...,
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	// validate default name
-	_, err = fileservice.Get[fileservice.FileService](fs, defaultName)
 	if err != nil {
 		return nil, err
 	}
