@@ -14,6 +14,8 @@
 
 package plan
 
+import "math"
+
 type shuffleHeap struct {
 	left    *shuffleHeap
 	right   *shuffleHeap
@@ -36,8 +38,10 @@ type ShuffleRange struct {
 	tree    *shuffleHeap
 	Result  []float64
 	size    int
+	max     float64
 	min     float64
 	Overlap float64
+	Uniform float64
 }
 
 func (t *shuffleHeap) Merge(s *shuffleHeap) *shuffleHeap {
@@ -95,6 +99,7 @@ func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nul
 			nulls:  int(nullCount),
 		}
 		s.min = zmmin
+		s.max = zmmax
 	} else {
 		s.tree = s.tree.Merge(&shuffleHeap{
 			height: 1,
@@ -105,6 +110,9 @@ func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nul
 		})
 		if s.min > zmmin {
 			s.min = zmmin
+		}
+		if s.max < zmmax {
+			s.max = zmmax
 		}
 	}
 
@@ -138,10 +146,13 @@ func (s *ShuffleRange) Eval(k int) {
 				if head.tree.value >= next.tree.key {
 					break
 				}
-				if head.value <= next.value {
-					s.Overlap += (next.tree.key - next.value) / (head.tree.key - head.value) * float64(head.tree.size)
-				} else {
-					s.Overlap += (next.tree.key - head.value) / (head.tree.key - head.value) * float64(head.tree.size)
+				if head.tree.key != head.value {
+					if head.value <= next.value {
+						s.Overlap += float64(head.size) * float64(next.size) * (next.tree.key - next.value) / (head.tree.key - head.value)
+					} else {
+						s.Overlap += float64(head.size) * float64(next.size) * (next.tree.key - head.value) * (next.tree.key - head.value) / (head.tree.key - head.value) / (next.tree.key - next.value)
+						head.value = next.value
+					}
 				}
 				head.tree = head.tree.Merge(next.tree)
 				head.size += next.size
@@ -150,7 +161,8 @@ func (s *ShuffleRange) Eval(k int) {
 
 		}
 	}
-	s.Overlap /= float64(s.size)
+	s.Overlap /= float64(s.size) * float64(s.size)
+	s.Overlap = math.Sqrt(s.Overlap)
 
 	step := float64(s.size) / float64(k)
 	if float64(nulls) >= step {
@@ -158,6 +170,7 @@ func (s *ShuffleRange) Eval(k int) {
 	}
 	last := step
 	k -= 2
+	s.Uniform = float64(s.size) / (s.max - s.min)
 	for {
 		if head == nil {
 			for k >= 0 {
@@ -167,20 +180,12 @@ func (s *ShuffleRange) Eval(k int) {
 			break
 		}
 		size := float64(head.size)
-		if last > size {
-			last -= size
-			head = head.next
-			continue
-		}
 		var valuetree *shuffleHeap
 		var speed float64
 		now := head.tree.key
-		for last <= size {
+		for {
 			if valuetree == nil || (head.tree != nil && valuetree.key < head.tree.key) {
 				if head.tree == nil {
-					s.Result[k] = now - 0.1
-					k--
-					last = step
 					break
 				}
 				head.tree, node = head.tree.Pop()
@@ -232,6 +237,9 @@ func (s *ShuffleRange) Eval(k int) {
 					continue
 				}
 				speed += float64(node.size) / (node.key - node.value)
+				if s.Uniform < speed {
+					s.Uniform = speed
+				}
 				node.left = nil
 				node.right = nil
 				node.height = 1
@@ -267,9 +275,9 @@ func (s *ShuffleRange) Eval(k int) {
 		if k < 0 {
 			break
 		}
-		last -= size
 		head = head.next
 	}
+	s.Uniform = float64(s.size) / (s.max - s.min) / s.Uniform
 }
 
 func (s *ShuffleRange) ReEval(k1 int, k2 int) []float64 {

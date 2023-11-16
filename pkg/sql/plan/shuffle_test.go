@@ -143,13 +143,13 @@ func TestShuffleRange(t *testing.T) {
 	testcase[0].max = append(testcase[0].max, 10000)
 	for i := 1; i < 100000; i++ {
 		testcase[0].min = append(testcase[0].min, testcase[0].max[i-1]+float64(rand.Int()%10000))
-		testcase[0].max = append(testcase[0].max, testcase[0].min[i]+float64(rand.Int()%10000))
+		testcase[0].max = append(testcase[0].max, testcase[0].min[i]+float64(rand.Int()%10000+100))
 	}
 	testcase[0].min = append(testcase[0].min, testcase[0].max[99999]/2)
 	testcase[0].max = append(testcase[0].max, testcase[0].min[100000]+10000)
 	for i := 100001; i <= 200000; i++ {
 		testcase[0].min = append(testcase[0].min, testcase[0].max[i-1]+float64(rand.Int()%10000))
-		testcase[0].max = append(testcase[0].max, testcase[0].min[i]+float64(rand.Int()%10000))
+		testcase[0].max = append(testcase[0].max, testcase[0].min[i]+float64(rand.Int()%10000+100))
 	}
 
 	leng := len(testcase)
@@ -157,10 +157,10 @@ func TestShuffleRange(t *testing.T) {
 	for i := 0; i < leng; i++ {
 		shufflerange := NewShuffleRange()
 		for j := 0; j < len(testcase[i].min); j++ {
-			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 1000000, 1)
+			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 1000, 1)
 		}
 
 		shufflerange.Eval(testcase[i].bucket)
-		fmt.Println(shufflerange.Overlap)
+		fmt.Println(shufflerange.Overlap, shufflerange.Uniform)
 	}
 }
