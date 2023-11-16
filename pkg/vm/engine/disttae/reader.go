@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -303,6 +304,11 @@ func (r *blockReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
@@ -536,6 +542,11 @@ func (r *blockMergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	//prefetch deletes for r.blks
 	if err := r.prefetchDeletes(); err != nil {
 		return nil, err
@@ -568,6 +579,11 @@ func (r *mergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if len(r.rds) == 0 {
 		return nil, nil
 	}
