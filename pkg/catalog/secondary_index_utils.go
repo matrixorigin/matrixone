@@ -65,8 +65,11 @@ const (
 	IndexAlgoParamOpType_cos = "vector_cosine_ops"
 )
 
+/* 1. ToString Functions */
+
 // IndexParamsToStringList used by buildShowCreateTable and restoreDDL
 // Eg:- "LIST = 10 op_type 'vector_l2_ops'"
+// NOTE: don't set default values here as it is used by SHOW and RESTORE DDL.
 func IndexParamsToStringList(indexParams string) (string, error) {
 	result, err := IndexParamsStringToMap(indexParams)
 	if err != nil {
@@ -80,14 +83,14 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
 		opType = ToLower(opType)
-		if opType == IndexAlgoParamOpType_ip ||
-			opType == IndexAlgoParamOpType_l2 ||
-			opType == IndexAlgoParamOpType_cos {
-			res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, opType)
-		} else {
+		if opType != IndexAlgoParamOpType_ip &&
+			opType != IndexAlgoParamOpType_l2 &&
+			opType != IndexAlgoParamOpType_cos {
 			return "", moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s', '%s', '%s'",
 				IndexAlgoParamOpType_ip, IndexAlgoParamOpType_l2, IndexAlgoParamOpType_cos)
+
 		}
+		res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, opType)
 	}
 
 	return res, nil
@@ -97,7 +100,7 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 // Eg:- {"lists":"10","op_type":"vector_l2_ops"}
 func IndexParamsToJsonString(def *tree.Index) (string, error) {
 
-	res, err := IndexParamsToMap(def)
+	res, err := indexParamsToMap(def)
 	if err != nil {
 		return "", err
 	}
@@ -109,6 +112,7 @@ func IndexParamsToJsonString(def *tree.Index) (string, error) {
 	return IndexParamsMapToJsonString(res)
 }
 
+// IndexParamsMapToJsonString used by AlterTableInPlace and CreateIndexDef
 func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 	str, err := json.Marshal(res)
 	if err != nil {
@@ -116,6 +120,8 @@ func IndexParamsMapToJsonString(res map[string]string) (string, error) {
 	}
 	return string(str), nil
 }
+
+/* 2. ToMap Functions */
 
 // IndexParamsStringToMap used by buildShowCreateTable and restoreDDL
 func IndexParamsStringToMap(indexParams string) (map[string]string, error) {
@@ -127,14 +133,16 @@ func IndexParamsStringToMap(indexParams string) (map[string]string, error) {
 	return result, nil
 }
 
-func IndexParamsToMap(def *tree.Index) (map[string]string, error) {
+func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 	res := make(map[string]string)
 
 	switch def.KeyType {
 	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
 		// do nothing
 	case tree.INDEX_TYPE_IVFFLAT:
-		if def.IndexOption.AlgoParamList != 0 {
+		if def.IndexOption.AlgoParamList < 0 {
+			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be >= 0")
+		} else if def.IndexOption.AlgoParamList > 0 {
 			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
 		} else {
 			res[IndexAlgoParamLists] = "1" // set lists = 1 as default
@@ -142,14 +150,13 @@ func IndexParamsToMap(def *tree.Index) (map[string]string, error) {
 
 		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
 			opType := ToLower(def.IndexOption.AlgoParamVectorOpType)
-			if opType == IndexAlgoParamOpType_ip ||
-				opType == IndexAlgoParamOpType_l2 ||
-				opType == IndexAlgoParamOpType_cos {
-				res[IndexAlgoParamOpType] = def.IndexOption.AlgoParamVectorOpType
-			} else {
+			if opType != IndexAlgoParamOpType_ip &&
+				opType != IndexAlgoParamOpType_l2 &&
+				opType != IndexAlgoParamOpType_cos {
 				return nil, moerr.NewInternalErrorNoCtx("invalid op_type. not of type '%s', '%s', '%s'",
 					IndexAlgoParamOpType_ip, IndexAlgoParamOpType_l2, IndexAlgoParamOpType_cos)
 			}
+			res[IndexAlgoParamOpType] = def.IndexOption.AlgoParamVectorOpType
 		} else {
 			res[IndexAlgoParamOpType] = IndexAlgoParamOpType_l2 // set l2 as default
 		}

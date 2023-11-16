@@ -1629,7 +1629,6 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
 				Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 			},
-			//Primary: true,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,

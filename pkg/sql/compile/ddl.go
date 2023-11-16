@@ -1068,9 +1068,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
 	indexTableDef := indexInfo.GetTableDef()
 
-	// IVF -> meta 		-> indexDef
-	// 	   -> centroids -> indexDef
-	// 	   -> entries 	-> indexDef
+	// IVF -> meta 		-> indexDef[0]
+	// 	   -> centroids -> indexDef[1]
+	// 	   -> entries 	-> indexDef[2]
 	multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
 	for _, indexDef := range indexTableDef.Indexes {
 

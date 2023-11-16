@@ -151,7 +151,7 @@ func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *p
 	}
 
 	if indexTableDef.Pkey != nil && indexTableDef.Pkey.Names != nil {
-		pkStr := fmt.Sprintf(", primary key ( %s )", partsToColsStr(indexTableDef.Pkey.Names))
+		pkStr := fmt.Sprintf(", primary key ( %s ) ", partsToColsStr(indexTableDef.Pkey.Names))
 		sql += pkStr
 	}
 
