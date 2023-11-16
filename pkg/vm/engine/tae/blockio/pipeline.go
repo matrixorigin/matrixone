@@ -178,12 +178,11 @@ func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			res = &tasks.JobResult{}
-			objectMeta, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
+			_, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
 			if err != nil {
 				res.Err = err
 				return
 			}
-			res.Res = objectMeta
 			return
 		},
 	)

@@ -29,7 +29,6 @@ create table t2 (a json,b int);
 delete from t1;
 insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
 select * from t1 into outfile '$resources/json/export_1.csv' fields enclosed by '"' force_quote(a);
-a	b
 load data infile '$resources/json/export_1.csv' into table t1 ignore 1 lines;
 load data infile '$resources/json/export_1.csv' into table t2 ignore 1 lines;
 select * from t1;
@@ -43,7 +42,6 @@ a	b
 {"t1": "a"}	1
 {"t1": "b"}	2
 select * from t1 into outfile '$resources/json/export_2.csv' fields terminated by '\t';
-a	b
 load data  infile '$resources/json/export_2.csv' into table t1 fields terminated by '\t' ignore 1 lines;
 load data  infile '$resources/json/export_2.csv' into table t2 fields terminated by '\t' ignore 1 lines;
 select * from t1;

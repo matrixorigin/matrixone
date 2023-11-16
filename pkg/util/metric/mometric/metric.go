@@ -147,7 +147,7 @@ func startCrossServicesMetricsTask(ctx context.Context) {
 		logutil.Info("cross service metrics task started")
 		defer logutil.Info("cross service metrics task exiting")
 
-		timer := time.NewTimer(time.Second * 5)
+		timer := time.NewTicker(time.Second * 5)
 		for {
 			select {
 			case <-ctx.Done():
@@ -161,6 +161,9 @@ func startCrossServicesMetricsTask(ctx context.Context) {
 
 func mpoolRelatedMetrics() {
 	v2.MemTotalCrossPoolFreeCounter.Add(float64(mpool.TotalCrossPoolFreeCounter()))
+
+	v2.MemGlobalStatsAllocatedGauge.Set(float64(mpool.GlobalStats().NumCurrBytes.Load()))
+	v2.MemGlobalStatsHighWaterMarkGauge.Set(float64(mpool.GlobalStats().HighWaterMark.Load()))
 }
 
 func IsEnable() bool {
