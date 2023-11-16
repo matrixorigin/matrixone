@@ -15,6 +15,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"sort"
 )
@@ -152,8 +153,8 @@ func trimObjectsData(
 					return isCkpChange, err
 				}
 				blockMeta := meta.MustTombstoneMeta().GetBlockMeta(uint32(block.location.ID()))
-				zm := blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 3))
-				if !zm.ZoneMap().Contains(ts) {
+				zm := index.DecodeZM(blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 3)))
+				if !zm.Contains(ts) {
 					(*objectsData)[name].data[id].data = bat
 					continue
 				}
@@ -183,8 +184,8 @@ func trimObjectsData(
 					return isCkpChange, err
 				}
 				blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
-				zm := blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 2))
-				if !zm.ZoneMap().Contains(ts) {
+				zm := index.DecodeZM(blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 2)))
+				if !zm.Contains(ts) {
 					(*objectsData)[name].data[id].pk = pk
 					(*objectsData)[name].data[id].data = bat
 					continue
