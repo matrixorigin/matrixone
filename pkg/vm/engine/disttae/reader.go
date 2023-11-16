@@ -70,6 +70,9 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// record the column selectivity
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
+	if chit > ctotal {
+		logutil.Warnf("tableDef.Name:%s, len(cols):%d, len(tableDef.Cols):%d, cols:%s, tableDef.Cols:%s", mixin.tableDef.Name, chit, ctotal, cols, mixin.tableDef.Cols)
+	}
 	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
 	blockio.RecordColumnSelectivity(chit, ctotal)
 
