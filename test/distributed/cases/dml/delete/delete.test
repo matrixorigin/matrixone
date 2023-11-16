@@ -217,3 +217,15 @@ delete from t2 where b in (c in (select 1) and d in (select 1));
 select * from t2;
 
 drop database if exists `delete`;
+
+drop database if exists db1;
+create database db1;
+use db1;
+drop table if exists t7;
+create table t7(a int primary key, b int unique key, c varchar(20) unique key);
+insert into t7 select result, result, "a"||result from generate_series(1,2000000) g;
+select count(*) from t7;
+delete from t7;
+select * from t7;
+drop table if exists t7;
+drop database if exists db1;
