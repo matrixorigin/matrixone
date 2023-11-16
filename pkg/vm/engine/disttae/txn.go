@@ -525,14 +525,15 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		}
 		//TODO::do parallel compaction for table
 		tbl := rel.(*txnTable)
-		createdBlks, err := tbl.mergeCompaction(blks)
+		createdBlks, stats, err := tbl.mergeCompaction(blks)
 		if err != nil {
 			return err
 		}
 		if len(createdBlks) > 0 {
-			bat := batch.NewWithSize(1)
-			bat.Attrs = []string{catalog.BlockMeta_BlockInfo}
+			bat := batch.NewWithSize(2)
+			bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+			bat.SetVector(1, vector.NewVec(types.T_text.ToType()))
 			for _, blkInfo := range createdBlks {
 				vector.AppendBytes(
 					bat.GetVector(0),
@@ -540,6 +541,18 @@ func (txn *Transaction) mergeCompactionLocked() error {
 					false,
 					tbl.db.txn.proc.GetMPool())
 			}
+
+			// append the object stats to bat
+			for idx := 0; idx < len(stats); idx++ {
+				if stats[idx].IsZero() {
+					continue
+				}
+				if err = vector.AppendBytes(bat.Vecs[1], stats[idx].Marshal(),
+					false, tbl.db.txn.proc.GetMPool()); err != nil {
+					return err
+				}
+			}
+
 			bat.SetRowCount(len(createdBlks))
 			defer func() {
 				bat.Clean(tbl.db.txn.proc.GetMPool())
