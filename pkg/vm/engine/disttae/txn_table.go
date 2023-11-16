@@ -429,6 +429,10 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 				OriginSize:   int64(colMeta.Location().OriginSize()),
 				ZoneMap:      colMeta.ZoneMap(),
 			})
+			if tbl.tableName == "table_func_metadata_scan.t" {
+				logutil.Infof("table metadata scan: colName: %s, originSize: %s",
+					col.Name, colMeta.Location().OriginSize())
+			}
 		}
 		return nil
 	}
