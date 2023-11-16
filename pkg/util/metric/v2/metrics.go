@@ -38,6 +38,8 @@ func init() {
 
 func initMemMetrics() {
 	registry.MustRegister(memMPoolAllocatedSizeGauge)
+	registry.MustRegister(MemTotalCrossPoolFreeCounter)
+	registry.MustRegister(memMPoolHighWaterMarkGauge)
 }
 
 func initTaskMetrics() {
@@ -65,6 +67,7 @@ func initFileServiceMetrics() {
 
 func initLogtailMetrics() {
 	registry.MustRegister(LogtailLoadCheckpointCounter)
+	registry.MustRegister(logtailReceivedCounter)
 
 	registry.MustRegister(logTailQueueSizeGauge)
 
@@ -101,6 +104,8 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnLockWaitersTotalHistogram)
 	registry.MustRegister(TxnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
+	registry.MustRegister(TxnUnlockTableTotalHistogram)
+	registry.MustRegister(txnReaderDurationHistogram)
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(txnCNCommittedLocationQuantityGauge)

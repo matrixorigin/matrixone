@@ -26,6 +26,19 @@ var (
 			Name:      "load_checkpoint_total",
 			Help:      "Total number of load checkpoint handled.",
 		})
+
+	logtailReceivedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "logtail",
+			Name:      "received_total",
+			Help:      "Total number of received logtail.",
+		}, []string{"type"})
+	LogtailTotalReceivedCounter       = logtailReceivedCounter.WithLabelValues("total")
+	LogtailSubscribeReceivedCounter   = logtailReceivedCounter.WithLabelValues("subscribe")
+	LogtailUnsubscribeReceivedCounter = logtailReceivedCounter.WithLabelValues("unsubscribe")
+	LogtailUpdateReceivedCounter      = logtailReceivedCounter.WithLabelValues("update")
+	LogtailHeartbeatReceivedCounter   = logtailReceivedCounter.WithLabelValues("heartbeat")
 )
 
 var (
@@ -57,7 +70,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "apply_duration_seconds",
 			Help:      "Bucketed histogram of apply log tail into mem-table duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		}, []string{"step"})
 	LogTailApplyDurationHistogram              = logTailApplyDurationHistogram.WithLabelValues("apply")
 	LogTailApplyLatencyDurationHistogram       = logTailApplyDurationHistogram.WithLabelValues("apply-latency")
@@ -70,7 +83,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "append_duration_seconds",
 			Help:      "Bucketed histogram of append log tail into logservice duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		})
 
 	logTailSendDurationHistogram = prometheus.NewHistogramVec(
@@ -79,7 +92,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "send_duration_seconds",
 			Help:      "Bucketed histogram of send logtail log duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 10),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 10),
 		}, []string{"step"})
 	LogtailSendTotalHistogram   = logTailSendDurationHistogram.WithLabelValues("total")
 	LogtailSendLatencyHistogram = logTailSendDurationHistogram.WithLabelValues("latency")
@@ -91,7 +104,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "load_checkpoint_duration_seconds",
 			Help:      "Bucketed histogram of load check point duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		})
 
 	LogTailCollectDurationHistogram = prometheus.NewHistogram(
@@ -100,7 +113,7 @@ var (
 			Subsystem: "logtail",
 			Name:      "collect_duration_seconds",
 			Help:      "Bucketed histogram of logtail collecting duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0005, 2.0, 20),
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
 		})
 )
 
