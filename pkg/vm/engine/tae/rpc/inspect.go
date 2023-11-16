@@ -503,7 +503,8 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntr
 		return nil, err
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
-	sentry, err := tbl.GetSegmentByID(&uid)
+	objid := bid.Object()
+	sentry, err := tbl.GetSegmentByID(objid)
 	if err != nil {
 		return nil, err
 	}

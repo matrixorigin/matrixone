@@ -311,7 +311,7 @@ type TxnStore interface {
 		visitAppend func(bat any),
 		visitDelete func(ctx context.Context, deletes DeleteNode))
 	GetTransactionType() TxnType
-	UpdateSegmentStats(*common.ID, objectio.ObjectStats) error
+	UpdateSegmentStats(*common.ID, *objectio.ObjectStats) error
 }
 
 type TxnType int8

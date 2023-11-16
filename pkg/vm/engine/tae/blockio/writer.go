@@ -167,7 +167,14 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 		common.OperandField(w.writer.GetMaxSeqnum()))
 	return blocks, blocks[0].BlockHeader().MetaLocation(), err
 }
-func (w *BlockWriter) Stats() objectio.ObjectStats { return w.writer.Stat() }
+func (w *BlockWriter) Stats() (objectio.ObjectStats, error) {
+	stats, err := w.writer.DescribeObject()
+	if !stats[objectio.SchemaData].IsZero() {
+		return stats[objectio.SchemaData], err
+	} else {
+		return stats[objectio.SchemaTombstone], err
+	}
+}
 func (w *BlockWriter) GetName() objectio.ObjectName {
 	return w.name
 }

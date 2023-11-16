@@ -52,11 +52,7 @@ const (
 	SnapshotAttr_SchemaExtra     = "schema_extra"
 	AccountIDDbNameTblName       = "account_id_db_name_tbl_name"
 	AccountIDDbName              = "account_id_db_name"
-	ObjectAttr_Name              = "name"
-	ObjectAttr_OriginSize        = "origin_size"
-	ObjectAttr_CompressedSize    = "compressed_size"
-	ObjectAttr_ZoneMap           = "zone_map"
-	ObjectAttr_BlockNumber       = "block_number"
+	ObjectAttr_ObjectStats       = "object_stats"
 	ObjectAttr_State             = "state"
 	EntryNode_CreateAt           = "create_at"
 	EntryNode_DeleteAt           = "delete_at"
@@ -559,7 +555,7 @@ func (catalog *Catalog) OnReplaySegmentBatch(objectInfo *containers.Batch, dataF
 		dbid := objectInfo.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := objectInfo.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		objectNode := ReadObjectInfoTuple(objectInfo, i)
-		sid := objectNode.Name.ObjectId()
+		sid := objectNode.ObjectName().ObjectId()
 		txnNode := txnbase.ReadTuple(objectInfo, i)
 		entryNode := ReadEntryNodeTuple(objectInfo, i)
 		state := objectInfo.GetVectorByName(ObjectAttr_State).Get(i).(bool)

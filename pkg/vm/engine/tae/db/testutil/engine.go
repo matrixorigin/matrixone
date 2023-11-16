@@ -728,7 +728,7 @@ func (e *TestEngine) CheckObjectInfo() {
 		if !blk.GetMetaLoc().IsEmpty() {
 			err := se.LoadObjectInfo()
 			assert.NoError(e.t, err)
-			assert.Equal(e.t, se.Stat.GetSortKeyZonemap(), info1.ZoneMap)
+			assert.Equal(e.t, se.Stat.GetSortKeyZonemap(), info1.SortKeyZoneMap())
 		} else {
 			assert.True(e.t, info1.IsEmpty())
 		}

@@ -41,7 +41,6 @@ type SegmentReader interface {
 	GetRelation() Relation
 
 	BatchDedup(pks containers.Vector) error
-	UpdateStats(objectio.ObjectStats) error
 }
 
 type SegmentWriter interface {
@@ -61,6 +60,7 @@ type SegmentWriter interface {
 	CreateNonAppendableBlock(*objectio.CreateBlockOpt) (Block, error)
 
 	SoftDeleteBlock(id types.Blockid) (err error)
+	UpdateStats(objectio.ObjectStats) error
 }
 
 type Segment interface {

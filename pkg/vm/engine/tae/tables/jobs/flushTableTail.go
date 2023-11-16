@@ -564,8 +564,11 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 			return err
 		}
 	}
-
-	toSegmentHandle.UpdateStats(writer.Stats())
+	stats, err := writer.Stats()
+	if err != nil {
+		return
+	}
+	toSegmentHandle.UpdateStats(stats)
 
 	segmentsToDelete := make(map[types.Objectid]handle.Segment)
 	// soft delete all ablks

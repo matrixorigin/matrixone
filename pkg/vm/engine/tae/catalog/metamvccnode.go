@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type MetadataMVCCNode struct {
@@ -93,144 +92,80 @@ func (e *MetadataMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64
 }
 
 type ObjectMVCCNode struct {
-	objectio.ObjectStats
-	Name           objectio.ObjectName
-	OriginSize     uint32
-	CompressedSize uint32
-	ZoneMap        index.ZM
-	BlockNumber    uint16
+	*objectio.ObjectStats
 }
 
 func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
-	return &ObjectMVCCNode{}
+	return &ObjectMVCCNode{
+		ObjectStats: objectio.NewObjectStats(),
+	}
 }
 
-// TODO
 func NewObjectInfoWithMetaLocation(metalocation objectio.Location) *ObjectMVCCNode {
-	return &ObjectMVCCNode{
-		Name: metalocation.Name(),
-	}
+	obj := NewEmptyObjectMVCCNode()
+	objectio.SetObjectStatsObjectName(obj.ObjectStats, metalocation.Name())
+	return obj
 }
 
 func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
 	return &ObjectMVCCNode{
-		Name:           stats.ObjectName(),
-		OriginSize:     stats.OriginSize(),
-		CompressedSize: stats.CompSize(),
-		ZoneMap:        stats.DataSortKeyZoneMap(),
-		BlockNumber:    uint16(stats.BlkCnt()),
+		ObjectStats: stats.Clone(),
 	}
 }
 
 func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
-		Name:           e.Name,
-		OriginSize:     e.OriginSize,
-		CompressedSize: e.CompressedSize,
-		ZoneMap:        e.ZoneMap,
-		BlockNumber:    e.BlockNumber,
+		ObjectStats: e.ObjectStats.Clone(),
 	}
 }
 func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
-		Name:           e.Name,
-		OriginSize:     e.OriginSize,
-		CompressedSize: e.CompressedSize,
-		ZoneMap:        e.ZoneMap,
-		BlockNumber:    e.BlockNumber,
+		ObjectStats: e.ObjectStats.Clone(),
 	}
 }
 func (e *ObjectMVCCNode) String() string {
 	if e == nil || e.IsEmpty() {
 		return "empty"
 	}
-	return fmt.Sprintf("[BlkCnt:%d,Size:%d/%d,%v", e.BlockNumber, e.OriginSize, e.CompressedSize, e.ZoneMap)
+	return e.ObjectStats.String()
 }
 func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
-	e.Name = vun.Name
-	e.OriginSize = vun.OriginSize
-	e.CompressedSize = vun.CompressedSize
-	e.ZoneMap = vun.ZoneMap
-	e.BlockNumber = vun.BlockNumber
+	e.ObjectStats = vun.ObjectStats.Clone()
 }
 func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
-	var sn int64
-	if sn, err = objectio.WriteBytes(e.Name, w); err != nil {
+	var sn int
+	if sn, err = w.Write(e.ObjectStats[:]); err != nil {
 		return
 	}
-	n += sn
-	if _, err = w.Write(types.EncodeUint32(&e.OriginSize)); err != nil {
-		return
-	}
-	n += 4
-	if _, err = w.Write(types.EncodeUint32(&e.CompressedSize)); err != nil {
-		return
-	}
-	n += 4
-	if sn, err = objectio.WriteBytes(e.ZoneMap, w); err != nil {
-		return
-	}
-	n += sn
-	if _, err = w.Write(types.EncodeUint16(&e.BlockNumber)); err != nil {
-		return
-	}
-	n += 2
+	n += int64(sn)
 	return
 }
 func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
-	var sn int64
-	if e.Name, sn, err = objectio.ReadBytes(r); err != nil {
+	var sn int
+	if sn, err = r.Read(e.ObjectStats[:]); err != nil {
 		return
 	}
-	n += sn
-	var sn2 int
-	if sn2, err = r.Read(types.EncodeUint32(&e.OriginSize)); err != nil {
-		return
-	}
-	n += int64(sn2)
-	if sn2, err = r.Read(types.EncodeUint32(&e.CompressedSize)); err != nil {
-		return
-	}
-	n += int64(sn2)
-	if e.ZoneMap, sn, err = objectio.ReadBytes(r); err != nil {
-		return
-	}
-	n += sn
-	if sn2, err = r.Read(types.EncodeUint16(&e.BlockNumber)); err != nil {
-		return
-	}
-	n += int64(sn2)
+	n += int64(sn)
 	return
 }
 
 func (e *ObjectMVCCNode) IsEmpty() bool {
-	return e.OriginSize == 0
+	return e.OriginSize() == 0
 }
 
 func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
 	// for segment without metalocation, object mvcc node is empty.
+
 	if e == nil || e.IsEmpty() {
-		batch.GetVectorByName(ObjectAttr_Name).Append([]byte(sid[:]), false) // when replay, sid is get from object name
-		batch.GetVectorByName(ObjectAttr_OriginSize).Append(nil, true)
-		batch.GetVectorByName(ObjectAttr_CompressedSize).Append(nil, true)
-		batch.GetVectorByName(ObjectAttr_ZoneMap).Append(nil, true)
-		batch.GetVectorByName(ObjectAttr_BlockNumber).Append(nil, true)
-		return
+		objectio.SetObjectStatsObjectName(e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
 	}
-	batch.GetVectorByName(ObjectAttr_Name).Append([]byte(e.Name), false)
-	batch.GetVectorByName(ObjectAttr_OriginSize).Append(e.OriginSize, false)
-	batch.GetVectorByName(ObjectAttr_CompressedSize).Append(e.CompressedSize, false)
-	batch.GetVectorByName(ObjectAttr_ZoneMap).Append([]byte(e.ZoneMap), false)
-	batch.GetVectorByName(ObjectAttr_BlockNumber).Append(e.BlockNumber, false)
+	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
 
 func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
+	buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(row).([]byte)
 	e = &ObjectMVCCNode{
-		Name:           bat.GetVectorByName(ObjectAttr_Name).Get(row).([]byte),
-		OriginSize:     bat.GetVectorByName(ObjectAttr_OriginSize).Get(row).(uint32),
-		CompressedSize: bat.GetVectorByName(ObjectAttr_CompressedSize).Get(row).(uint32),
-		ZoneMap:        bat.GetVectorByName(ObjectAttr_ZoneMap).Get(row).([]byte),
-		BlockNumber:    bat.GetVectorByName(ObjectAttr_BlockNumber).Get(row).(uint16),
+		ObjectStats: (*objectio.ObjectStats)(buf),
 	}
 	return
 }

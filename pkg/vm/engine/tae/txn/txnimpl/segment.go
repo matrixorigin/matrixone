@@ -254,5 +254,5 @@ func (seg *txnSegment) CreateBlock(is1PC bool) (blk handle.Block, err error) {
 
 func (seg *txnSegment) UpdateStats(stats objectio.ObjectStats) error {
 	id := seg.entry.AsCommonID()
-	return seg.Txn.GetStore().UpdateSegmentStats(id, stats)
+	return seg.Txn.GetStore().UpdateSegmentStats(id, &stats)
 }

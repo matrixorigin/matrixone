@@ -2580,7 +2580,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	if len(mvccNodes) == 0 {
 		return nil
 	}
-	delStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_Name).Length()
+	delStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
 	// segDelBat := collector.data.bats[SEGDeleteIDX]
 	// segDelTxn := collector.data.bats[SEGDeleteTxnIDX]
 	// segInsBat := collector.data.bats[SEGInsertIDX]
@@ -2656,7 +2656,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		// 	segNode.TxnMVCCNode.AppendTuple(segInsTxn)
 		// }
 	}
-	delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_Name).Length()
+	delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
 	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	return nil
 }

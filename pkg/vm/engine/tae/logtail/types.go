@@ -42,11 +42,7 @@ const (
 	SegmentAttr_SegNode                         = catalog.SegmentAttr_SegNode
 	SnapshotAttr_BlockMaxRow                    = catalog.SnapshotAttr_BlockMaxRow
 	SnapshotAttr_SegmentMaxBlock                = catalog.SnapshotAttr_SegmentMaxBlock
-	ObjectAttr_Name                             = catalog.ObjectAttr_Name
-	ObjectAttr_OriginSize                       = catalog.ObjectAttr_OriginSize
-	ObjectAttr_CompressedSize                   = catalog.ObjectAttr_CompressedSize
-	ObjectAttr_ZoneMap                          = catalog.ObjectAttr_ZoneMap
-	ObjectAttr_BlockNumber                      = catalog.ObjectAttr_BlockNumber
+	ObjectAttr_ObjectStats                      = catalog.ObjectAttr_ObjectStats
 	ObjectAttr_State                            = catalog.ObjectAttr_State
 	EntryNode_CreateAt                          = catalog.EntryNode_CreateAt
 	EntryNode_DeleteAt                          = catalog.EntryNode_DeleteAt
@@ -299,11 +295,7 @@ var (
 		types.T_TS.ToType(),
 	}
 	ObjectInfoAttr = []string{
-		ObjectAttr_Name,
-		ObjectAttr_OriginSize,
-		ObjectAttr_CompressedSize,
-		ObjectAttr_ZoneMap,
-		ObjectAttr_BlockNumber,
+		ObjectAttr_ObjectStats,
 		ObjectAttr_State, // entry_state, true for appendable
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
@@ -315,10 +307,6 @@ var (
 	}
 	ObjectInfoTypes = []types.Type{
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_uint32, 0, 0),
-		types.New(types.T_uint32, 0, 0),
-		types.New(types.T_varchar, types.MaxVarcharLen, 0),
-		types.New(types.T_uint16, 0, 0),
 		types.New(types.T_bool, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
