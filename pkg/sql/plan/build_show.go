@@ -987,8 +987,29 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"where `tcl`.`att_database` = '%s' AND " +
 		"`tcl`.`att_relname` = '%s' AND " +
 		"`idx`.`column_name` NOT LIKE '%s' " +
-		// This is used instead of DISTINCT(`idx`.`name`) to handle IVF-FLAT or multi table indexes
-		// NOTE: Add all the table column names to the GROUP BY clause
+		// Below `GROUP BY` is used instead of DISTINCT(`idx`.`name`) to handle IVF-FLAT or multi table indexes scenarios.
+		// NOTE: We need to add all the table column names to the GROUP BY clause
+		//
+		// Without `GROUP BY`, we will printing the same index multiple times for IVFFLAT index.
+		// (there are multiple entries in mo_indexes for the same index, with differing algo_table_type and index_table_name).
+		// mysql> show index from tbl;
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| Table | Non_unique | Key_name | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment | Index_params                            | Visible | Expression |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//| tbl   |          0 | PRIMARY  |            1 | id          | A         |           0 | NULL     | NULL   |      |            |         |               |                                         | YES     | NULL       |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//
+		// With `GROUP BY`, we print
+		// mysql> show index from tbl;
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| Table | Non_unique | Key_name | Seq_in_index | Column_name | Collation | Cardinality | Sub_part | Packed | Null | Index_type | Comment | Index_comment | Index_params                            | Visible | Expression |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
+		//| tbl   |          0 | PRIMARY  |            1 | id          | A         |           0 | NULL     | NULL   |      |            |         |               |                                         | YES     | NULL       |
+		//| tbl   |          1 | idx1     |            1 | embedding   | A         |           0 | NULL     | NULL   | YES  | ivfflat    |         |               | {"lists":"2","op_type":"vector_l2_ops"} | YES     | NULL       |
+		//+-------+------------+----------+--------------+-------------+-----------+-------------+----------+--------+------+------------+---------+---------------+-----------------------------------------+---------+------------+
 		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
 		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
 		"`idx`.`algo_params`, `idx`.`is_visible`" +
