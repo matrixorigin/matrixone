@@ -426,9 +426,16 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						return err
 					}
 
-					// 3. Update IndexDef and TableDef
+					// 3.a Update IndexDef and TableDef
 					alterIndex.IndexAlgoParams = newAlgoParams
 					tableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+
+					// 3.b Update mo_catalog.mo_indexes
+					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, tableDef.TblId, indexDef.IndexName)
+					err = c.runSql(updateSql)
+					if err != nil {
+						return err
+					}
 
 					// 4. Add to multiTableIndexes
 					if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
