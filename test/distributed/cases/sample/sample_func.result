@@ -47,10 +47,10 @@ c3
 0
 /* 5. sample 3 rows from table by column c3 where c1 = 1, expected to get 3 rows (0),(1),(2) */
 select c1, c2, sample(c3, 3 rows) from s_t1 where c1 = 1 order by c3;
-c1 c2 c3
-1  1  0
-1  1  1
-1  1  2
+c1    c2    c3
+1    1    0
+1    1    1
+1    1    2
 /* 6. sample 100 percent from table by column c3, expected to get all rows except null rows */
 select sample(c3, 100 percent) from s_t1 order by c3;
 c3

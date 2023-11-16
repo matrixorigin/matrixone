@@ -359,7 +359,7 @@ message SampleFunc {
   enum SampleType {
     Rows = 0;
     Percent = 1;
-    ByN = 2;
+    MergeRows = 2;
   }
   SampleType sample_type = 1;
   int32 sample_rows = 2;

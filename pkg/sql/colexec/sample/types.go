@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -28,7 +29,7 @@ import (
 const (
 	sampleByRow = iota
 	sampleByPercent
-	sampleN
+	mergeSampleByRow
 )
 
 var _ vm.Operator = new(Argument)
@@ -61,9 +62,6 @@ type container struct {
 	isGroupBy     bool
 	isMultiSample bool
 
-	// key width for group-by columns. it determines which hash function to use.
-	keyWidth int
-
 	// executor for group-by columns.
 	groupExecutors       []colexec.ExpressionExecutor
 	groupVectors         []*vector.Vector
@@ -75,16 +73,48 @@ type container struct {
 	sampleVectors   []*vector.Vector
 
 	// hash map related.
-	intHashMap *hashmap.IntHashMap
-	strHashMap *hashmap.StrHashMap
+	useIntHashMap bool
+	intHashMap    *hashmap.IntHashMap
+	strHashMap    *hashmap.StrHashMap
 }
 
-func NewMergeSampleN(rows int) *Argument {
+func NewMergeSample(rowSampleArg *Argument) *Argument {
+	if rowSampleArg.Type != sampleByRow {
+		panic("invalid sample type to merge")
+	}
+
+	newGroupExpr := make([]*plan.Expr, len(rowSampleArg.GroupExprs))
+	newSampleExpr := make([]*plan.Expr, len(rowSampleArg.SampleExprs))
+	for i, expr := range rowSampleArg.GroupExprs {
+		newGroupExpr[i] = &plan.Expr{
+			Expr: &planpb.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+				},
+			},
+			Typ: expr.Typ,
+		}
+	}
+	for i, expr := range rowSampleArg.SampleExprs {
+		newSampleExpr[i] = &plan.Expr{
+			Expr: &planpb.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i + len(rowSampleArg.GroupExprs)),
+				},
+			},
+			Typ: expr.Typ,
+		}
+	}
+
 	return &Argument{
-		Type:    sampleN,
-		Rows:    rows,
-		IBucket: 0,
-		NBucket: 0,
+		Type:        mergeSampleByRow,
+		Rows:        rowSampleArg.Rows,
+		IBucket:     0,
+		NBucket:     0,
+		GroupExprs:  newGroupExpr,
+		SampleExprs: newSampleExpr,
 	}
 }
 
@@ -157,14 +187,17 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 				executor.Free()
 			}
 		}
-		for _, p := range arg.ctr.samplePool.sPools {
-			if p.bat != nil {
-				proc.PutBatch(p.bat)
+
+		if arg.ctr.samplePool != nil {
+			for _, p := range arg.ctr.samplePool.sPools {
+				if p.bat != nil {
+					proc.PutBatch(p.bat)
+				}
 			}
-		}
-		for _, p := range arg.ctr.samplePool.mPools {
-			if p.bat != nil {
-				proc.PutBatch(p.bat)
+			for _, p := range arg.ctr.samplePool.mPools {
+				if p.bat != nil {
+					proc.PutBatch(p.bat)
+				}
 			}
 		}
 	}
@@ -185,8 +218,8 @@ func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 	if arg.Type == sampleByPercent {
 		in.SampleFunc.SampleType = pipeline.SampleFunc_Percent
 	}
-	if arg.Type == sampleN {
-		in.SampleFunc.SampleType = pipeline.SampleFunc_ByN
+	if arg.Type == mergeSampleByRow {
+		in.SampleFunc.SampleType = pipeline.SampleFunc_MergeRows
 	}
 }
 
@@ -198,6 +231,6 @@ func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
 	} else if s.SampleType == pipeline.SampleFunc_Percent {
 		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
 	} else {
-		return NewMergeSampleN(int(s.SampleRows))
+		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
 	}
 }

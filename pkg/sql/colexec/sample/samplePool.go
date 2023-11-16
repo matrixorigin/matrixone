@@ -56,17 +56,6 @@ type sPool struct {
 	columns sampleColumnList
 }
 
-func newSamplePoolMergeN(proc *process.Process, capacity int, groupColumnCount, sampleColumnCount int) *sPool {
-	return &sPool{
-		proc:        proc,
-		needReorder: false,
-		typ:         sampleByRow,
-		capacity:    capacity,
-		nGroup:      groupColumnCount,
-		nSample:     sampleColumnCount,
-	}
-}
-
 func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
 	return &sPool{
 		proc:        proc,

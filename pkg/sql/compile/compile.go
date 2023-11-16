@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -2497,11 +2498,8 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 			Op:      vm.Sample,
 			Idx:     c.anal.curr,
 			IsFirst: c.anal.isFirst,
-			Arg:     constructSample(n),
+			Arg:     sample.NewMergeSample(constructSample(n)),
 		})
-	}
-	// should do nothing if sample by percent.
-	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
 	}
 	return []*Scope{rs}
 }

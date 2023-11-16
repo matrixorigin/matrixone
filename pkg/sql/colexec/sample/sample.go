@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,7 +31,7 @@ import (
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	switch arg.Type {
-	case sampleN:
+	case mergeSampleByRow:
 		buf.WriteString(fmt.Sprintf("merge sample %d rows ", arg.Rows))
 	case sampleByRow:
 		buf.WriteString(fmt.Sprintf(" sample %d rows ", arg.Rows))
@@ -54,8 +55,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs))
 	case sampleByPercent:
 		arg.ctr.samplePool = newSamplePoolByPercent(proc, arg.Percents, len(arg.SampleExprs))
-	case sampleN:
-		arg.ctr.samplePool = newSamplePoolMergeN(proc, arg.Rows, len(arg.GroupExprs), len(arg.SampleExprs))
+	case mergeSampleByRow:
+		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs))
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown sample type %d", arg.Type))
 	}
@@ -67,30 +68,20 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	}
 
 	// group by columns related.
-	arg.ctr.keyWidth = 0
 	arg.ctr.groupVectorsNullable = false
 	if arg.ctr.isGroupBy {
 		arg.ctr.groupExecutors = make([]colexec.ExpressionExecutor, len(arg.GroupExprs))
-		for i, expr := range arg.GroupExprs {
+		for i := range arg.GroupExprs {
 			arg.ctr.groupExecutors[i], err = colexec.NewExpressionExecutor(proc, arg.GroupExprs[i])
 			if err != nil {
 				return err
 			}
-
-			width := types.T(expr.Typ.Id).TypeLen()
-			arg.ctr.groupVectorsNullable = arg.ctr.groupVectorsNullable || (!expr.Typ.NotNullable)
-			if types.T(expr.Typ.Id).FixedLength() < 0 {
-				width = 128
-				if expr.Typ.Width != 0 {
-					width = int(expr.Typ.Width)
-				}
-			}
-			if arg.ctr.groupVectorsNullable {
-				width++
-			}
-			arg.ctr.keyWidth += width
 		}
 		arg.ctr.groupVectors = make([]*vector.Vector, len(arg.GroupExprs))
+
+		keyWidth, groupKeyNullable := getGroupKeyWidth(arg.GroupExprs)
+		arg.ctr.useIntHashMap = keyWidth <= 8
+		arg.ctr.groupVectorsNullable = groupKeyNullable
 	}
 
 	return nil
@@ -117,21 +108,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var err error
 	if !bat.IsEmpty() {
-		ctr.tempBatch1[0] = bat
-		// evaluate the sample columns.
-		for i, executor := range ctr.sampleExecutors {
-			ctr.sampleVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
-			if err != nil {
-				return result, err
-			}
-		}
-
-		// evaluate the group by columns.
-		for i, executor := range ctr.groupExecutors {
-			ctr.groupVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
-			if err != nil {
-				return result, err
-			}
+		if err = ctr.evaluateSampleAndGroupByColumns(proc, bat); err != nil {
+			return result, err
 		}
 
 		if ctr.isGroupBy {
@@ -148,13 +126,53 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, err
 }
 
+func getGroupKeyWidth(exprList []*plan.Expr) (keyWidth int, groupKeyNullable bool) {
+	keyWidth = 0
+	groupKeyNullable = false
+
+	for _, expr := range exprList {
+		width := types.T(expr.Typ.Id).TypeLen()
+		groupKeyNullable = groupKeyNullable || (!expr.Typ.NotNullable)
+		if types.T(expr.Typ.Id).FixedLength() < 0 {
+			width = 128
+			if expr.Typ.Width != 0 {
+				width = int(expr.Typ.Width)
+			}
+		}
+		if groupKeyNullable {
+			width++
+		}
+		keyWidth += width
+	}
+	return keyWidth, groupKeyNullable
+}
+
+func (ctr *container) evaluateSampleAndGroupByColumns(proc *process.Process, bat *batch.Batch) (err error) {
+	ctr.tempBatch1[0] = bat
+	// evaluate the sample columns.
+	for i, executor := range ctr.sampleExecutors {
+		ctr.sampleVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
+		if err != nil {
+			return err
+		}
+	}
+
+	// evaluate the group by columns.
+	for i, executor := range ctr.groupExecutors {
+		ctr.groupVectors[i], err = executor.Eval(proc, ctr.tempBatch1)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ctr *container) hashAndSample(bat *batch.Batch, ib, nb int, mp *mpool.MPool) (err error) {
 	var iterator hashmap.Iterator
 	var groupList []uint64
 	count := bat.RowCount()
 
-	useIntHashMap := ctr.keyWidth <= 8
-	if useIntHashMap {
+	if ctr.useIntHashMap {
 		if ctr.intHashMap == nil {
 			ctr.intHashMap, err = hashmap.NewIntHashMap(ctr.groupVectorsNullable, uint64(ib), uint64(nb), mp)
 			if err != nil {
