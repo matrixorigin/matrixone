@@ -338,9 +338,9 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 		}
 		var vec containers.Vector
 		if bats[0].Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i])
+			vec = containers.MakeVector(colTypes[i], common.DefaultAllocator)
 		} else {
-			vec = containers.ToTNVector(bats[0].Vecs[i])
+			vec = containers.ToTNVector(bats[0].Vecs[i], common.DefaultAllocator)
 		}
 		bat.AddVector(colNames[i], vec)
 	}

@@ -16,8 +16,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"math"
 	"sort"
-	"time"
 )
 
 type fileData struct {
@@ -36,7 +36,7 @@ type blockData struct {
 	blockType objectio.DataMetaType
 	location  objectio.Location
 	data      *batch.Batch
-	pk        int32
+	sortKey   uint16
 	isABlock  bool
 	commitTs  types.TS
 	blockId   types.Blockid
@@ -69,7 +69,7 @@ func getCheckpointData(
 	location objectio.Location,
 	version uint32,
 ) (*CheckpointData, error) {
-	data := NewCheckpointData()
+	data := NewCheckpointData(common.CheckpointAllocator)
 	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, err
@@ -178,8 +178,10 @@ func trimObjectsData(
 					bat.Shrink(deleteRow)
 				}
 			} else {
-				pk := int32(-1)
-				pk = meta.MustDataMeta().BlockHeader().PkIdxID()
+				sortKey := uint16(math.MaxUint16)
+				if meta.MustDataMeta().BlockHeader().Appendable() {
+					sortKey = meta.MustDataMeta().BlockHeader().SortKey()
+				}
 				bat, err = blockio.LoadOneBlock(ctx, fs, block.location, objectio.SchemaData)
 				if err != nil {
 					return isCkpChange, err
@@ -187,7 +189,7 @@ func trimObjectsData(
 				blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
 				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 2)).ZoneMap()
 				if zm.IsInited() && !zm.Contains(ts) {
-					(*objectsData)[name].data[id].pk = pk
+					(*objectsData)[name].data[id].sortKey = sortKey
 					formatData(bat)
 					(*objectsData)[name].data[id].data = bat
 					continue
@@ -206,7 +208,7 @@ func trimObjectsData(
 						break
 					}
 				}
-				(*objectsData)[name].data[id].pk = pk
+				(*objectsData)[name].data[id].sortKey = sortKey
 			}
 			formatData(bat)
 			(*objectsData)[name].data[id].data = bat
@@ -298,7 +300,7 @@ func formatData(data *batch.Batch) {
 			att := fmt.Sprintf("col_%d", i)
 			data.Attrs = append(data.Attrs, att)
 		}
-		tmp := containers.ToTNBatch(data)
+		tmp := containers.ToTNBatch(data, common.DefaultAllocator)
 		data = containers.ToCNBatch(tmp)
 	}
 }
@@ -448,8 +450,8 @@ func ReWriteCheckpointAndBlockFromKey(
 				return nil, nil, nil, nil, err
 			}
 			for _, block := range dataBlocks {
-				if block.pk > -1 {
-					writer.SetPrimaryKey(uint16(block.pk))
+				if block.sortKey != math.MaxUint16 {
+					writer.SetPrimaryKey(block.sortKey)
 				}
 				if block.blockType == objectio.SchemaData {
 					_, err = writer.WriteBatch(block.data)
@@ -507,9 +509,9 @@ func ReWriteCheckpointAndBlockFromKey(
 				if objectData.data[0].tombstone != nil {
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
 				}
-				sortData := containers.ToTNBatch(dataBlocks[0].data)
-				if dataBlocks[0].pk > -1 {
-					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(dataBlocks[0].pk), backupPool)
+				sortData := containers.ToTNBatch(dataBlocks[0].data, common.DefaultAllocator)
+				if dataBlocks[0].sortKey != math.MaxUint16 {
+					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(dataBlocks[0].sortKey), backupPool)
 					if err != nil {
 						return nil, nil, nil, nil, err
 					}
@@ -528,8 +530,8 @@ func ReWriteCheckpointAndBlockFromKey(
 				if err != nil {
 					return nil, nil, nil, nil, err
 				}
-				if dataBlocks[0].pk > -1 {
-					writer.SetPrimaryKey(uint16(dataBlocks[0].pk))
+				if dataBlocks[0].sortKey != math.MaxUint16 {
+					writer.SetPrimaryKey(dataBlocks[0].sortKey)
 				}
 				_, err = writer.WriteBatch(dataBlocks[0].data)
 				if err != nil {
@@ -613,8 +615,8 @@ func ReWriteCheckpointAndBlockFromKey(
 	phaseNumber = 5
 	// Transfer the object file that needs to be deleted to insert
 	if len(insertBatch) > 0 {
-		blkMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertIDX])
-		blkMetaTxn := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertTxnIDX])
+		blkMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertIDX], common.CheckpointAllocator)
+		blkMetaTxn := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertTxnIDX], common.CheckpointAllocator)
 		for i := 0; i < blkMetaInsert.Length(); i++ {
 			tid := data.bats[BLKMetaInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 			appendValToBatch(data.bats[BLKMetaInsertIDX], blkMeta, i)

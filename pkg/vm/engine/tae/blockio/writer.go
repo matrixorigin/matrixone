@@ -135,7 +135,7 @@ func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObj
 		return nil, err
 	}
 	for i, vec := range batch.Vecs {
-		columnData := containers.ToTNVector(vec)
+		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
 		// Build ZM
 		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {

@@ -418,10 +418,8 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	metaExtents := make([]Extent, len(w.blocks))
 	for i := range w.blocks {
 		colMetaCount := uint16(0)
-		pk := int32(-1)
 		if len(w.blocks[i]) > 0 {
 			colMetaCount = w.blocks[i][0].meta.GetMetaColumnCount()
-			pk = w.blocks[i][0].pk
 		}
 		objectMetas[i] = BuildObjectMeta(colMetaCount)
 		// prepare bloom filter
