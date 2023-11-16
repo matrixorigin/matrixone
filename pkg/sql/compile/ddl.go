@@ -561,7 +561,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case api.AlterKind_DropColumn:
 			req = api.NewRemoveColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
-			//TODO: fix it
 		default:
 		}
 		tmp, err := req.Marshal()
@@ -1086,8 +1085,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 	}
 
-	// build and update constraint def
-	//TODO: see if we need change here.
+	// build and update constraint def (no need to handle IVF related logic here)
 	defs, err := planDefsToExeDefs(indexTableDef)
 	if err != nil {
 		return err
@@ -1138,23 +1136,13 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 
 	return c.runTxn(func(txn executor.TxnExecutor) error {
 
-		// 2. dynamic check - verify if table has data
-		{
-			indexColumnName := indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].Parts[0]
-			countTotalSql := fmt.Sprintf("select count(%s) from `%s`.`%s`;", indexColumnName, qryDatabase, originalTableDef.Name)
-			rs, err := txn.Exec(countTotalSql)
-			if err != nil {
-				return err
-			}
-			var totalCnt int64
-			rs.ReadRows(func(cols []*vector.Vector) bool {
-				totalCnt = executor.GetFixedRows[int64](cols[0])[0]
-				return false
-			})
-			rs.Close()
-			if totalCnt == 0 {
-				return moerr.NewInternalErrorNoCtx("table should have some data")
-			}
+		// 2. dynamic check - verify if table has data.
+		totalCnt, err := s.handleCount(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+		if err != nil {
+			return err
+		}
+		if totalCnt == 0 {
+			return moerr.NewInternalErrorNoCtx("table should have some data")
 		}
 
 		// 3. create hidden tables
@@ -1166,33 +1154,34 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 			tables[2] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase)
 
 			for _, createTableSql := range tables {
-				_, err := c.runSqlWithResult(createTableSql)
+				_, err = c.runSqlWithResult(createTableSql)
 				if err != nil {
 					return err
 				}
 			}
 		}
 
-		// 4.a handle meta table
-		err := s.handleIvfIndexMetaTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
+		// 4.a populate meta table
+		err = s.handleIvfIndexMetaTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
 		if err != nil {
 			return err
 		}
 
-		// 4.b delete old entries in "centroids" and "entries" table
+		// 4.b delete old entries in "centroids" and "entries" table for the current version
 		err = s.handleIvfIndexDeleteOldEntries(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
 
-		// 4.c handle centroids table
+		// 4.c populate centroids table
 		err = s.handleIvfIndexCentroidsTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
+			totalCnt,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
 		if err != nil {
 			return err
 		}
 
-		// 4.d handle entries table
+		// 4.d populate entries table
 		err = s.handleIvfIndexEntriesTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)

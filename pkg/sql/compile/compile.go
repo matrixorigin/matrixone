@@ -3878,13 +3878,11 @@ func (c *Compile) runTxn(execFunc func(executor.TxnExecutor) error) error {
 	}
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
-		//TODO: verify these options
 		WithDisableIncrStatement().
 		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db).
-		WithTimeZone(c.proc.SessionInfo.TimeZone)
-	//WithMinCommittedTS(b.now()).
-	//WithWaitCommittedLogApplied()
+		WithTimeZone(c.proc.SessionInfo.TimeZone).
+		WithWaitCommittedLogApplied() //TODO: verify these options @ZhangXu
 	return exec.ExecTxn(c.proc.Ctx, execFunc, opts)
 }
 
