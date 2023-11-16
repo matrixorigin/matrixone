@@ -210,7 +210,7 @@ const (
 	ErrTxnCannotRetry             uint16 = 20630
 	ErrTxnNeedRetryWithDefChanged uint16 = 20631
 	ErrTxnStale                   uint16 = 20632
-	ErrWaiterCanceled             uint16 = 20633
+	ErrWaiterPaused               uint16 = 20633
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -406,7 +406,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnCannotRetry:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn s3 writes can not retry in rc mode"},
 	ErrTxnNeedRetryWithDefChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode, def changed"},
 	ErrTxnStale:                   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn is stale: timestamp is too small"},
-	ErrWaiterCanceled:             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "waiter is canceled"},
+	ErrWaiterPaused:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "waiter is paused"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
