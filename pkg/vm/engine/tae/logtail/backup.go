@@ -143,21 +143,10 @@ func trimObjectsData(
 			var bat *batch.Batch
 			var err error
 			commitTs := types.TS{}
-			meta, err := objectio.FastLoadObjectMeta(ctx, &block.location, false, fs)
-			if err != nil {
-				return isCkpChange, err
-			}
 			if block.blockType == objectio.SchemaTombstone {
 				bat, err = blockio.LoadOneBlock(ctx, fs, block.location, objectio.SchemaTombstone)
 				if err != nil {
 					return isCkpChange, err
-				}
-				blockMeta := meta.MustTombstoneMeta().GetBlockMeta(uint32(block.location.ID()))
-				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 3)).ZoneMap()
-				if zm.IsInited() && !zm.Contains(ts) {
-					formatData(bat)
-					(*objectsData)[name].data[id].data = bat
-					continue
 				}
 				deleteRow := make([]int64, 0)
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
@@ -178,6 +167,10 @@ func trimObjectsData(
 					bat.Shrink(deleteRow)
 				}
 			} else {
+				meta, err := objectio.FastLoadObjectMeta(ctx, &block.location, false, fs)
+				if err != nil {
+					return isCkpChange, err
+				}
 				sortKey := uint16(math.MaxUint16)
 				if meta.MustDataMeta().BlockHeader().Appendable() {
 					sortKey = meta.MustDataMeta().BlockHeader().SortKey()
@@ -185,14 +178,6 @@ func trimObjectsData(
 				bat, err = blockio.LoadOneBlock(ctx, fs, block.location, objectio.SchemaData)
 				if err != nil {
 					return isCkpChange, err
-				}
-				blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
-				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 2)).ZoneMap()
-				if zm.IsInited() && !zm.Contains(ts) {
-					(*objectsData)[name].data[id].sortKey = sortKey
-					formatData(bat)
-					(*objectsData)[name].data[id].data = bat
-					continue
 				}
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
 					err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
