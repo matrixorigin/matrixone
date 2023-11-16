@@ -18,14 +18,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"os"
@@ -91,17 +95,19 @@ func BackupData(ctx context.Context, srcFs, dstFs fileservice.FileService, dir s
 
 func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names []string) error {
 	backupTime := names[0]
+	trimInfo := names[1]
 	names = names[1:]
 	files := make(map[string]*fileservice.DirEntry, 0)
 	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
-	for _, name := range names {
+	softDeletes := make(map[string]map[uint16]bool)
+	for i, name := range names {
 		if len(name) == 0 {
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 {
-			return moerr.NewInternalError(ctx, "invalid checkpoint string")
+		if len(ckpStr) != 2 && i > 0 {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		metaLoc := ckpStr[0]
 		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
@@ -112,10 +118,17 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		if err != nil {
 			return err
 		}
-		locations, data, err := logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version))
+		var locations []objectio.Location
+		var data *logtail.CheckpointData
+		if i == 0 {
+			locations, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), nil)
+		} else {
+			locations, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, srcFs, key, uint32(version), &softDeletes)
+		}
 		if err != nil {
 			return err
 		}
+		defer data.Close()
 		table.UpdateTable(data)
 		gcFiles := table.SoftGC()
 		mergeGCFile(gcFiles, gcFileMap)
@@ -168,6 +181,59 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 		return err
 	}
 	taeFileList = append(taeFileList, sizeList...)
+	if trimInfo != "" {
+		ckpStr := strings.Split(trimInfo, ":")
+		if len(ckpStr) != 5 {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
+		}
+		cnLoc := ckpStr[0]
+		mergeEnd := ckpStr[2]
+		tnLoc := ckpStr[3]
+		mergeStart := ckpStr[4]
+		version, err := strconv.ParseUint(ckpStr[1], 10, 32)
+		if err != nil {
+			return err
+		}
+		cnLocation, err := blockio.EncodeLocationFromString(cnLoc)
+		if err != nil {
+			return err
+		}
+		tnLocation, err := blockio.EncodeLocationFromString(tnLoc)
+		if err != nil {
+			return err
+		}
+		end := types.StringToTS(mergeEnd)
+		start := types.StringToTS(mergeStart)
+		var checkpointFiles []string
+		cnLocation, tnLocation, _, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, srcFs, dstFs,
+			cnLocation, tnLocation, uint32(version), start, softDeletes)
+		for _, name := range checkpointFiles {
+			logutil.Infof("checkpoint file: %s", name)
+			dentry, err := dstFs.StatFile(ctx, name)
+			if err != nil {
+				return err
+			}
+			taeFileList = append(taeFileList, &taeFile{
+				path: dentry.Name,
+				size: dentry.Size,
+			})
+		}
+		if err != nil {
+			return err
+		}
+		file, err := checkpoint.MergeCkpMeta(ctx, dstFs, cnLocation, tnLocation, start, end)
+		if err != nil {
+			return err
+		}
+		dentry, err := dstFs.StatFile(ctx, file)
+		if err != nil {
+			return err
+		}
+		taeFileList = append(taeFileList, &taeFile{
+			path: "ckp/" + dentry.Name,
+			size: dentry.Size,
+		})
+	}
 	//save tae files size
 	err = saveTaeFilesList(ctx, dstFs, taeFileList, backupTime)
 	if err != nil {

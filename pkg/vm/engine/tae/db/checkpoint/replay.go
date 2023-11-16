@@ -15,7 +15,9 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sort"
 	"sync"
 	"time"
@@ -294,4 +296,73 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		common.AnyField("read cost", readDuration))
 	r.source.Init(maxTs)
 	return
+}
+
+func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, tnLocation objectio.Location, startTs, ts types.TS) (string, error) {
+	dirs, err := fs.List(ctx, CheckpointDir)
+	if err != nil {
+		return "", err
+	}
+	if len(dirs) == 0 {
+		return "", nil
+	}
+	metaFiles := make([]*metaFile, 0)
+	for i, dir := range dirs {
+		start, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
+		metaFiles = append(metaFiles, &metaFile{
+			start: start,
+			end:   end,
+			index: i,
+		})
+	}
+	sort.Slice(metaFiles, func(i, j int) bool {
+		return metaFiles[i].end.Less(metaFiles[j].end)
+	})
+	targetIdx := metaFiles[len(metaFiles)-1].index
+	dir := dirs[targetIdx]
+	reader, err := blockio.NewFileReader(fs, CheckpointDir+dir.Name)
+	if err != nil {
+		return "", err
+	}
+	bats, err := reader.LoadAllColumns(ctx, nil, common.DefaultAllocator)
+	if err != nil {
+		return "", err
+	}
+	bat := containers.NewBatch()
+	defer bat.Close()
+	colNames := CheckpointSchema.Attrs()
+	colTypes := CheckpointSchema.Types()
+	for i := range bats[0].Vecs {
+		if len(bats) == 0 {
+			continue
+		}
+		var vec containers.Vector
+		if bats[0].Vecs[i].Length() == 0 {
+			vec = containers.MakeVector(colTypes[i])
+		} else {
+			vec = containers.ToTNVector(bats[0].Vecs[i])
+		}
+		bat.AddVector(colNames[i], vec)
+	}
+	last := bat.Vecs[0].Length() - 1
+	bat.GetVectorByName(CheckpointAttr_StartTS).Append(startTs, false)
+	bat.GetVectorByName(CheckpointAttr_EndTS).Append(ts, false)
+	bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
+	bat.GetVectorByName(CheckpointAttr_EntryType).Append(true, false)
+	bat.GetVectorByName(CheckpointAttr_Version).Append(bat.GetVectorByName(CheckpointAttr_Version).Get(last), false)
+	bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(tnLocation), false)
+	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(last), false)
+	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(last), false)
+	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, startTs, ts)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
+	if err != nil {
+		return "", err
+	}
+	if _, err = writer.Write(containers.ToCNBatch(bat)); err != nil {
+		return "", err
+	}
+
+	// TODO: checkpoint entry should maintain the location
+	_, err = writer.WriteEnd(ctx)
+	return name, err
 }

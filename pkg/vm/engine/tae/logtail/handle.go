@@ -812,7 +812,7 @@ func LoadCheckpointEntries(
 	var err error
 	for i, data := range datas {
 		var bat []*batch.Batch
-		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
+		bat, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp, i>0)
 		closeCBs = append(closeCBs, data.GetCloseCB(versions[i], mp))
 		if err != nil {
 			for j := range closeCBs {
@@ -888,47 +888,4 @@ func LoadCheckpointEntries(
 		}
 	}
 	return entries, closeCBs, nil
-}
-
-func LoadCheckpointEntriesFromKey(ctx context.Context, fs fileservice.FileService, location objectio.Location, version uint32) ([]objectio.Location, *CheckpointData, error) {
-	locations := make([]objectio.Location, 0)
-	locations = append(locations, location)
-	data := NewCheckpointData(common.CheckpointAllocator)
-	reader, err := blockio.NewObjectReader(fs, location)
-	if err != nil {
-		return nil, nil, err
-	}
-	err = data.readMetaBatch(ctx, version, reader, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	err = data.readAll(ctx, version, fs)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	for _, location = range data.locations {
-		locations = append(locations, location)
-	}
-	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
-		deltaLoc := objectio.Location(data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
-		metaLoc := objectio.Location(data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		if !metaLoc.IsEmpty() {
-			locations = append(locations, metaLoc)
-		}
-		if !deltaLoc.IsEmpty() {
-			locations = append(locations, deltaLoc)
-		}
-	}
-	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
-		deltaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
-		metaLoc := objectio.Location(data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
-		if !metaLoc.IsEmpty() {
-			locations = append(locations, metaLoc)
-		}
-		if !deltaLoc.IsEmpty() {
-			locations = append(locations, deltaLoc)
-		}
-	}
-	return locations, data, nil
 }
