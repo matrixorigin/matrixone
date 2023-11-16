@@ -18,19 +18,14 @@ import (
 	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func handleCNGC(proc *process.Process,
-	service serviceType,
-	parameter string,
-	sender requestSender) (pb.CtlResult, error) {
-	logger := runtime.ProcessLevelRuntime().Logger()
+func handleCNGC(*process.Process, serviceType, string, requestSender) (Result, error) {
 	debug.FreeOSMemory()
-	logger.Info("force free memory completed")
-	return pb.CtlResult{
-		Method: pb.CmdMethod_ForceGC.String(),
+	runtime.ProcessLevelRuntime().Logger().Info("force free memory completed")
+	return Result{
+		Method: ForceGCMethod,
 		Data:   "OK",
 	}, nil
 }

@@ -25,7 +25,6 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -485,8 +484,6 @@ func TestApp1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := new(options.Options)
-	opts.CacheCfg = new(options.CacheCfg)
-	opts.CacheCfg.IndexCapacity = mpool.GB
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 	mgr := db.TxnMgr

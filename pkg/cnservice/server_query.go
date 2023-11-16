@@ -44,6 +44,8 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetLockInfo, s.handleGetLockInfo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetTxnInfo, s.handleGetTxnInfo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_SyncCommit, s.handleSyncCommit, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetCommit, s.handleGetCommit, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -144,6 +146,17 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 
 	resp.GetTxnInfoResponse.CnId = s.metadata.UUID
 	resp.GetTxnInfoResponse.TxnInfoList = txns
+	return nil
+}
+
+func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp *query.Response) error {
+	s._txnClient.SyncLatestCommitTS(req.SycnCommit.LatestCommitTS)
+	return nil
+}
+
+func (s *service) handleGetCommit(ctx context.Context, req *query.Request, resp *query.Response) error {
+	resp.GetCommit = new(query.GetCommitResponse)
+	resp.GetCommit.CurrentCommitTS = s._txnClient.GetLatestCommitTS()
 	return nil
 }
 

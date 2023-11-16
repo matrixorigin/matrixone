@@ -26,10 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/spf13/cobra"
 )
 
@@ -170,6 +172,81 @@ func (c *objStatArg) Run() error {
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
 	}
+	return nil
+}
+
+type manualyIgnoreArg struct {
+	ctx *inspectContext
+	id  uint64
+}
+
+func (c *manualyIgnoreArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	c.id, _ = cmd.Flags().GetUint64("tid")
+	return nil
+}
+
+func (c *manualyIgnoreArg) String() string {
+	return fmt.Sprintf("ignore ckp table: %v", c.id)
+}
+
+func (c *manualyIgnoreArg) Run() error {
+	logtail.TempF.Add(c.id)
+	return nil
+}
+
+type infoArg struct {
+	ctx *inspectContext
+	tbl *catalog.TableEntry
+	blk *catalog.BlockEntry
+}
+
+func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	address, _ := cmd.Flags().GetString("target")
+	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
+	if err != nil {
+		return err
+	}
+	if c.tbl == nil {
+		return moerr.NewInvalidInputNoCtx("need table target")
+	}
+
+	baddress, _ := cmd.Flags().GetString("blk")
+	c.blk, err = parseBlkTarget(baddress, c.tbl)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *infoArg) String() string {
+	t := "*"
+	if c.tbl != nil {
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+	}
+
+	if c.blk != nil {
+		t = fmt.Sprintf("%s %s", t, c.blk.ID.String())
+	}
+
+	return fmt.Sprintf("info: %v", t)
+}
+
+func (c *infoArg) Run() error {
+	b := &bytes.Buffer{}
+	if c.tbl != nil {
+		b.WriteString(fmt.Sprintf("last_merge: %v\n", c.tbl.Stats.GetLastMerge().String()))
+		b.WriteString(fmt.Sprintf("last_flush: %v\n", c.tbl.Stats.GetLastFlush().ToString()))
+	}
+	if c.blk != nil {
+		b.WriteRune('\n')
+		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetDeltaPersistedTS().ToString()))
+		b.WriteString(fmt.Sprintf("delchain: %v\n", c.blk.GetBlockData().DeletesInfo()))
+	}
+	c.ctx.resp.Payload = b.Bytes()
 	return nil
 }
 
@@ -359,9 +436,10 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 		Run:   RunFactory(&compactPolicyArg{}),
 	}
 	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	policyCmd.Flags().Int32P("maxMergeObjN", "o", common.DefaultMaxMergeObjN, "max number of objects merged for one")
-	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "object with a few rows will be picked up to merge")
+	policyCmd.Flags().Int32P("maxMergeObjN", "o", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
+	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "objects which are less than minRowsQualified will be picked up to merge")
 	policyCmd.Flags().Int32P("notLoadMoreThan", "l", common.DefaultNotLoadMoreThan, "not load metadata if table has too much objects. Only works for rawlog table")
+	policyCmd.Flags().MarkHidden("notLoadMoreThan")
 	rootCmd.AddCommand(policyCmd)
 
 	mmCmd := &cobra.Command{
@@ -374,12 +452,64 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	mmCmd.Flags().StringSliceP("objects", "o", nil, "format: object_id_0000,object_id_0000")
 	rootCmd.AddCommand(mmCmd)
 
+	infoCmd := &cobra.Command{
+		Use:   "info",
+		Short: "get dedicated debug info",
+		Run:   RunFactory(&infoArg{}),
+	}
+
+	infoCmd.Flags().StringP("target", "t", "*", "format: table-id")
+	infoCmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
+
+	rootCmd.AddCommand(infoCmd)
+
+	miCmd := &cobra.Command{
+		Use:   "ckpignore",
+		Short: "manually ignore table when checking checkpoint entry",
+		Run:   RunFactory(&manualyIgnoreArg{}),
+	}
+
+	miCmd.Flags().Uint64P("tid", "t", 0, "format: table-id")
+	rootCmd.AddCommand(miCmd)
+
 	return rootCmd
 }
 
 func RunInspect(ctx context.Context, inspectCtx *inspectContext) {
 	rootCmd := initCommand(ctx, inspectCtx)
 	rootCmd.Execute()
+}
+
+func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntry, error) {
+	if address == "" {
+		return nil, nil
+	}
+	parts := strings.Split(address, "_")
+	if len(parts) != 3 {
+		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid db.table: %q", address))
+	}
+	uid, err := types.ParseUuid(parts[0])
+	if err != nil {
+		return nil, err
+	}
+	fn, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	bn, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return nil, err
+	}
+	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
+	sentry, err := tbl.GetSegmentByID(&uid)
+	if err != nil {
+		return nil, err
+	}
+	bentry, err := sentry.GetBlockEntryByID(bid)
+	if err != nil {
+		return nil, err
+	}
+	return bentry, nil
 }
 
 func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {

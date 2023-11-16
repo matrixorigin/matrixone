@@ -311,7 +311,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 func TestMergeTaskExecutorFactory(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	t.Logf("tmpDir: %s/%s", t.TempDir(), t.Name())
-	fs := testutil.NewFS()
+	fs := testutil.NewSharedFS()
 	targetDate := "2021-01-01"
 	ts, err := time.Parse("2006-01-02 15:04:05", targetDate+" 00:00:00")
 	require.Nil(t, err)
@@ -454,7 +454,7 @@ func TestNewMergeService(t *testing.T) {
 
 func Test_newETLReader(t *testing.T) {
 	ctx := trace.Generate(context.TODO())
-	fs := testutil.NewFS()
+	fs := testutil.NewETLFS()
 	mp := getdummyMpool()
 	require.NotNil(t, mp)
 

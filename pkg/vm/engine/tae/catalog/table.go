@@ -320,6 +320,10 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 			_, _ = w.WriteString("    ")
 			_, _ = w.WriteString(segment.Stat.String(composeSortKey))
 		}
+		if w.Len() > 8*1024*1024 {
+			w.WriteString("\n...(truncated for too long, more than 8 MB)")
+			break
+		}
 	}
 	if level > common.PPL0 && cnt > 0 {
 		w.WriteByte('\n')
