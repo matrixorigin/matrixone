@@ -17,7 +17,6 @@ package ctl
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"time"
@@ -25,7 +24,7 @@ import (
 
 func handleBackup() handleFunc {
 	return GetTNHandlerFunc(
-		pb.CmdMethod_Backup,
+		api.OpCode_OpBackup,
 		func(_ string) ([]uint64, error) {
 			return nil, nil
 		},
@@ -38,12 +37,12 @@ func handleBackup() handleFunc {
 					return nil, err
 				}
 			}
-			payload, err := types.Encode((&db.Checkpoint{
+			payload, err := types.Encode(&db.Checkpoint{
 				FlushDuration: flushDuration,
-			}))
+			})
 			return payload, err
 		},
-		func(data []byte) (interface{}, error) {
+		func(data []byte) (any, error) {
 			resp := &api.SyncLogTailResp{}
 			types.Decode(data, resp)
 			return resp.CkpLocation, nil

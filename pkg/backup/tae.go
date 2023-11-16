@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
@@ -36,7 +36,7 @@ import (
 
 func getFileNames(ctx context.Context, retBytes [][][]byte) ([]string, error) {
 	var err error
-	cr := pb.CtlResult{}
+	cr := ctl.Result{}
 	err = json.Unmarshal(retBytes[0][0], &cr)
 	if err != nil {
 		return nil, err

@@ -84,12 +84,28 @@ func TestGetTimestampWithNotified(t *testing.T) {
 
 func TestNotifyWaiters(t *testing.T) {
 	tw := &timestampWaiter{}
+	tw.mu.cancelC = make(chan struct{}, 1)
 	var values []*waiter
-	values = append(values, tw.addToWait(newTestTimestamp(1)))
-	values = append(values, tw.addToWait(newTestTimestamp(6)))
-	values = append(values, tw.addToWait(newTestTimestamp(3)))
-	values = append(values, tw.addToWait(newTestTimestamp(2)))
-	values = append(values, tw.addToWait(newTestTimestamp(5)))
+
+	w, err := tw.addToWait(newTestTimestamp(1))
+	assert.NoError(t, err)
+	values = append(values, w)
+
+	w, err = tw.addToWait(newTestTimestamp(6))
+	assert.NoError(t, err)
+	values = append(values, w)
+
+	w, err = tw.addToWait(newTestTimestamp(3))
+	assert.NoError(t, err)
+	values = append(values, w)
+
+	w, err = tw.addToWait(newTestTimestamp(2))
+	assert.NoError(t, err)
+	values = append(values, w)
+
+	w, err = tw.addToWait(newTestTimestamp(5))
+	assert.NoError(t, err)
+	values = append(values, w)
 
 	var wg sync.WaitGroup
 	for _, w := range values {
@@ -109,11 +125,13 @@ func TestNotifyWaiters(t *testing.T) {
 	assert.Equal(t, 0, len(tw.mu.waiters))
 }
 
-func TestCancelWaiters(t *testing.T) {
+func TestRemoveWaiters(t *testing.T) {
 	tw := &timestampWaiter{}
+	tw.mu.cancelC = make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
-		w := tw.addToWait(newTestTimestamp(int64(i)))
+		w, err := tw.addToWait(newTestTimestamp(int64(i)))
+		assert.NoError(t, err)
 		wg.Add(1)
 		go func(w *waiter) {
 			defer wg.Done()
@@ -121,7 +139,7 @@ func TestCancelWaiters(t *testing.T) {
 			assert.Error(t, w.wait(context.Background()))
 		}(w)
 	}
-	tw.cancelWaiters()
+	tw.Pause()
 	wg.Wait()
 	assert.Equal(t, 0, len(tw.mu.waiters))
 }
@@ -138,7 +156,7 @@ func TestGetTimestampWithCanceled(t *testing.T) {
 			go func() {
 				// If it is not canceled, it will hang here util context timeout.
 				_, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
-				require.Equal(t, moerr.NewWaiterCanceledNoCtx(), err)
+				require.Equal(t, moerr.NewWaiterPausedNoCtx(), err)
 				c <- struct{}{}
 			}()
 			// we could only cancel the waiters that are already in the queue.
@@ -152,7 +170,7 @@ func TestGetTimestampWithCanceled(t *testing.T) {
 				tw.mu.Unlock()
 				time.Sleep(time.Millisecond * 10)
 			}
-			tw.Cancel()
+			tw.Pause()
 			<-c
 		},
 	)
