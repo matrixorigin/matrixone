@@ -71,8 +71,11 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	// record the column selectivity
 	chit, ctotal := len(cols), len(mixin.tableDef.Cols)
 	v2.TaskSelColumnTotal.Add(float64(ctotal))
-	v2.TaskSelColumnHit.Add(float64(ctotal - chit))
-	blockio.RecordColumnSelectivity(chit, ctotal)
+	// TAG FOR bug:12797  need remove this tag after bug fixed
+	if ctotal > chit {
+		v2.TaskSelColumnHit.Add(float64(ctotal - chit))
+		blockio.RecordColumnSelectivity(chit, ctotal)
+	}
 
 	mixin.columns.seqnums = make([]uint16, len(cols))
 	mixin.columns.colTypes = make([]types.Type, len(cols))
