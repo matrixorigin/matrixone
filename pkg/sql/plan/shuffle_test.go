@@ -16,7 +16,6 @@ package plan
 
 import (
 	"bytes"
-	"fmt"
 	"math/rand"
 	"testing"
 	"unsafe"
@@ -124,7 +123,7 @@ func TestStringToUint64(t *testing.T) {
 	require.Equal(t, bytes.Compare(s6, s7), compareUint64(u6, u7))
 }
 
-type ShuffleFloatTestCase struct {
+type ShuffleRangeTestCase struct {
 	min           []float64
 	max           []float64
 	expectoverlap float64
@@ -132,8 +131,8 @@ type ShuffleFloatTestCase struct {
 }
 
 func TestShuffleRange(t *testing.T) {
-	testcase := make([]ShuffleFloatTestCase, 0)
-	testcase = append(testcase, ShuffleFloatTestCase{
+	testcase := make([]ShuffleRangeTestCase, 0)
+	testcase = append(testcase, ShuffleRangeTestCase{
 		min:           []float64{},
 		max:           []float64{},
 		expectoverlap: 0,
@@ -161,6 +160,14 @@ func TestShuffleRange(t *testing.T) {
 		}
 
 		shufflerange.Eval(testcase[i].bucket)
-		fmt.Println(shufflerange.Overlap, shufflerange.Uniform)
 	}
+}
+
+func TestRangeShuffleSlice(t *testing.T) {
+	require.Equal(t, GetRangeShuffleIndexSignedSlice([]int64{1, 3, 5, 7, 9}, 5), uint64(3))
+	require.Equal(t, GetRangeShuffleIndexSignedSlice([]int64{1, 2, 3, 100}, 101), uint64(4))
+	require.Equal(t, GetRangeShuffleIndexSignedSlice([]int64{-20, -1, 0, 1, 5}, -99), uint64(0))
+	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{100, 200, 300}, 150), uint64(1))
+	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{10001, 10002, 10003, 10004, 10005, 10006}, 10006), uint64(6))
+	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{30, 50, 60, 90, 120}, 61), uint64(3))
 }

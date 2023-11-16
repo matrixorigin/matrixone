@@ -105,7 +105,7 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 	panic("unsupported shuffle type!")
 }
 
-func GetRangeShuffleIndexForZMSlice(val []int64, zm objectio.ZoneMap) uint64 {
+func GetRangeShuffleIndexForZMSignedSlice(val []int64, zm objectio.ZoneMap) uint64 {
 	switch zm.GetType() {
 	case types.T_int64:
 		return GetRangeShuffleIndexSignedSlice(val, types.DecodeInt64(zm.GetMinBuf()))
@@ -113,6 +113,12 @@ func GetRangeShuffleIndexForZMSlice(val []int64, zm objectio.ZoneMap) uint64 {
 		return GetRangeShuffleIndexSignedSlice(val, int64(types.DecodeInt32(zm.GetMinBuf())))
 	case types.T_int16:
 		return GetRangeShuffleIndexSignedSlice(val, int64(types.DecodeInt16(zm.GetMinBuf())))
+	}
+	panic("unsupported shuffle type!")
+}
+
+func GetRangeShuffleIndexForZMUnsignedSlice(val []uint64, zm objectio.ZoneMap) uint64 {
+	switch zm.GetType() {
 	case types.T_uint64:
 		return GetRangeShuffleIndexUnsignedSlice(val, types.DecodeUint64(zm.GetMinBuf()))
 	case types.T_uint32:
@@ -156,39 +162,43 @@ func GetRangeShuffleIndexUnsigned(minVal, maxVal, currentVal uint64, upplerLimit
 }
 
 func GetRangeShuffleIndexSignedSlice(val []int64, currentVal int64) uint64 {
-	if currentVal <= val[0] {
+	if currentVal < val[0] {
 		return 0
 	}
 	left := 0
 	right := len(val) - 1
 	for left < right {
 		mid := (left + right) >> 1
-		if currentVal <= val[mid] {
+		if currentVal >= val[mid] {
 			left = mid + 1
 		} else {
 			right = mid
 		}
 	}
-	return uint64(right + 1)
+	if currentVal >= val[right] {
+		right += 1
+	}
+	return uint64(right)
 }
 
-func GetRangeShuffleIndexUnsignedSlice(val []int64, currentVal uint64) uint64 {
-	sign := int64(1)
-	sign <<= 63
-	if currentVal <= uint64(val[0]^sign) {
+func GetRangeShuffleIndexUnsignedSlice(val []uint64, currentVal uint64) uint64 {
+	if currentVal < val[0] {
 		return 0
 	}
 	left := 0
 	right := len(val) - 1
 	for left < right {
 		mid := (left + right) >> 1
-		if currentVal <= uint64(val[mid]^sign) {
+		if currentVal >= val[mid] {
 			left = mid + 1
 		} else {
 			right = mid
 		}
 	}
-	return uint64(right + 1)
+	if currentVal >= val[right] {
+		right += 1
+	}
+	return uint64(right)
 }
 
 func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
