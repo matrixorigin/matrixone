@@ -17,7 +17,7 @@ package ctl
 import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -28,10 +28,10 @@ import (
 // whichDN: used to decide which DNs to send the debug request to, nil returned means send all dns.
 // payload: used to get debug command request payload
 // repsonseUnmarshaler: used to unmarshal response
-func GetTNHandlerFunc(method pb.CmdMethod,
+func GetTNHandlerFunc(method api.OpCode,
 	whichTN func(parameter string) ([]uint64, error),
 	payload func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error),
-	repsonseUnmarshaler func([]byte) (interface{}, error)) handleFunc {
+	repsonseUnmarshaler func([]byte) (any, error)) handleFunc {
 	return func(proc *process.Process,
 		service serviceType,
 		parameter string,
@@ -83,7 +83,7 @@ func GetTNHandlerFunc(method pb.CmdMethod,
 			return Result{}, err
 		}
 
-		results := make([]interface{}, 0, len(requests))
+		results := make([]any, 0, len(requests))
 		if len(requests) > 0 {
 			responses, err := sender(proc.Ctx, proc, requests)
 			if err != nil {
@@ -101,6 +101,11 @@ func GetTNHandlerFunc(method pb.CmdMethod,
 				results = append(results, r)
 			}
 		}
-		return Result{Method: method.String(), Data: results}, nil
+		// remove "Op" prefix
+		methodName, ok := api.OpMethodName[method]
+		if !ok {
+			return Result{Method: method.String(), Data: results}, nil
+		}
+		return Result{Method: methodName, Data: results}, nil
 	}
 }
