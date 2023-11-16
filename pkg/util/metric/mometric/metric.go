@@ -17,13 +17,14 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -117,7 +118,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	if metric.EnableExportToProm() {
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
 		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
+		mux.Handle("/metrics", promhttp.HandlerFor(v2.GetPrometheusGatherer(), promhttp.HandlerOpts{}))
 		addr := fmt.Sprintf(":%d", SV.StatusPort)
 		statusSvr = &statusServer{Server: &http.Server{Addr: addr, Handler: mux}}
 		statusSvr.Add(1)
@@ -206,7 +207,7 @@ func StopMetricSync() {
 }
 
 func mustRegiterToProm(collector prom.Collector) {
-	if err := prom.Register(collector); err != nil {
+	if err := v2.GetPrometheusRegistry().Register(collector); err != nil {
 		// err is either registering a collector more than once or metrics have duplicate description.
 		// in any case, we respect the existing collectors in the prom registry
 		logutil.Debugf("[Metric] register to prom register: %v", err)
