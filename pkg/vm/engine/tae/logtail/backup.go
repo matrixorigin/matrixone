@@ -479,10 +479,10 @@ func ReWriteCheckpointAndBlockFromKey(
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
 				}
 				dataBlocks[0].data.Attrs = make([]string, 0)
-				/*for i := range dataBlocks[0].data.Vecs {
+				for i := range dataBlocks[0].data.Vecs {
 					att := fmt.Sprintf("col_%d", i)
 					dataBlocks[0].data.Attrs = append(dataBlocks[0].data.Attrs, att)
-				}*/
+				}
 				sortData := containers.ToTNBatch(dataBlocks[0].data)
 				if dataBlocks[0].pk > -1 {
 					logutil.Infof("sortBlockColumns len is %d, locatio %s", sortData.Vecs[0].Length(), dataBlocks[0].location.String())
