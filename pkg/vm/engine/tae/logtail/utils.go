@@ -2590,6 +2590,13 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		if node.IsAborted() {
 			continue
 		}
+		if node.BaseNode.ObjectStats.IsZero() {
+			stats, err := entry.LoadObjectInfoWithTxnTS(node.Start)
+			if err != nil {
+				return err
+			}
+			node.BaseNode.ObjectStats = stats
+		}
 		visitObject(collector.data.bats[ObjectInfoIDX], entry, node)
 		// segNode := node
 		// if segNode.HasDropCommitted() {

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
@@ -44,7 +45,8 @@ type SegmentEntry struct {
 	//link.head and tail is nil when new a segmentEntry object.
 	link *common.GenericSortedDList[*BlockEntry]
 	*SegmentNode
-	segData data.Segment
+	segData    data.Segment
+	objectInfo *objectio.ObjectStats
 }
 
 type SegStat struct {
@@ -262,6 +264,34 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
 	return e
+}
+
+func (entry *SegmentEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (*objectio.ObjectStats, error) {
+	stats := objectio.NewObjectStats()
+	blk := entry.MakeBlockIt(false).Get().GetPayload()
+	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
+		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: startTS},
+	})
+	if node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
+		objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectNameWithObjectID(&entry.ID))
+		return stats, nil
+	}
+	if !entry.objectInfo.IsZero() {
+		return entry.objectInfo, nil
+	}
+	metaLoc := node.BaseNode.MetaLoc
+
+	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, blk.blkData.GetFs().Service)
+	if err != nil {
+		return nil, err
+	}
+	objectio.SetObjectStatsObjectName(stats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(stats, metaLoc.Extent())
+	objectDataMeta := objMeta.MustDataMeta()
+	objectio.SetObjectStatsRowCnt(stats, objectDataMeta.BlockHeader().Rows())
+	objectio.SetObjectStatsBlkCnt(stats, objectDataMeta.BlockCount())
+	objectio.SetObjectStatsSortKeyZoneMap(stats, index.ZM(objectDataMeta.MustGetColumn(0).ZoneMap()))
+	return stats, nil
 }
 
 // for test
