@@ -669,6 +669,10 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 	}, nil
 }
 
+func (l *LocalFS) PrefetchFile(ctx context.Context, filePath string) error {
+	return nil
+}
+
 func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	if err := ctx.Err(); err != nil {
 		return err
