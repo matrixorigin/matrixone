@@ -254,6 +254,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			oldBMeta,
 			data,
 			deletes,
+			true,
 		)
 		if err = task.rt.Scheduler.Schedule(ablockTask); err != nil {
 			return
@@ -373,7 +374,8 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		newBlkData.GetFs(),
 		newMeta,
 		preparer.Columns,
-		nil)
+		nil,
+		false)
 	if err = task.rt.Scheduler.Schedule(ioTask); err != nil {
 		return
 	}
