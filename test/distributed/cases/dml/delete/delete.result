@@ -409,7 +409,7 @@ insert into t7 select result, result, "a"||result from generate_series(1,2000000
 select count(*) from t7;
 count(*)
 2000000
-delete from t7 where 1 = 1;
+delete from t7;
 select * from t7;
 a    b    c
 drop table if exists t1;

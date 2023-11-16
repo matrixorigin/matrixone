@@ -300,7 +300,7 @@ drop table if exists t7;
 create table t7(a int primary key, b int unique key, c varchar(20) unique key);
 insert into t7 select result, result, "a"||result from generate_series(1,2000000) g;
 select count(*) from t7;
-delete from t7 where 1 = 1;
+delete from t7;
 select * from t7;
 
 drop table if exists t1;

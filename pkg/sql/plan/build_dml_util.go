@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -2310,7 +2311,7 @@ func appendDeleteUniqueTablePlanWithoutFilters(
 		TableDef:    uniqueTableDef,
 		ProjectList: scanNodeProject,
 	}, bindCtx)
-
+	logutil.Warnf("tableDef.Name:%s, len(tableDef.Cols):%d, tableDef.Cols:%s,len(scanNodeProject):%d", uniqueTableDef.Name, len(uniqueTableDef.Cols), uniqueTableDef.Cols, len(scanNodeProject))
 	return lastNodeId, nil
 }
 
