@@ -16,16 +16,7 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,9 +24,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -308,6 +309,11 @@ func (r *blockReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil
@@ -542,6 +548,11 @@ func (r *blockMergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnBlockMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	//prefetch deletes for r.blks
 	if err := r.prefetchDeletes(); err != nil {
 		return nil, err
@@ -582,6 +593,11 @@ func (r *mergeReader) Read(
 	mp *mpool.MPool,
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
 	if len(r.rds) == 0 {
 		return nil, nil
 	}

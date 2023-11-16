@@ -64,6 +64,7 @@ func initFileServiceMetrics() {
 
 func initLogtailMetrics() {
 	registry.MustRegister(LogtailLoadCheckpointCounter)
+	registry.MustRegister(logtailReceivedCounter)
 
 	registry.MustRegister(logTailQueueSizeGauge)
 
@@ -101,6 +102,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnTableRangeSizeHistogram)
 	registry.MustRegister(txnMpoolDurationHistogram)
 	registry.MustRegister(TxnUnlockTableTotalHistogram)
+	registry.MustRegister(txnReaderDurationHistogram)
 
 	registry.MustRegister(TxnRangesLoadedObjectMetaTotalCounter)
 	registry.MustRegister(TxnRangesLoadedObjectHistogram)
