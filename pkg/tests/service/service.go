@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
@@ -1331,7 +1330,7 @@ func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 		cfg := c.tn.cfgs[i]
 		opt := c.tn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			defines.LocalFileServiceName,
+			"",
 			fileservices.getTNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
@@ -1391,7 +1390,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		cfg := c.cn.cfgs[i]
 		opt := c.cn.opts[i]
 		fs, err := fileservice.NewFileServices(
-			defines.LocalFileServiceName,
+			"",
 			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 			fileservices.getETLFileService(),

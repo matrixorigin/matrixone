@@ -106,7 +106,7 @@ func TestStartWithReplicas(t *testing.T) {
 			return nil, err
 		}
 		return fileservice.NewFileServices(
-			defines.LocalFileServiceName,
+			"",
 			s3fs,
 			localFS,
 		)
