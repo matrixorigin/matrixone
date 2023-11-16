@@ -1527,7 +1527,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
 		}
 		if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("IVFFLAT only supports VECFXX column types"))
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "IVFFLAT only supports VECFXX column types")
 		}
 
 	}

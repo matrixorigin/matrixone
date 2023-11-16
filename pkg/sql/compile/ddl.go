@@ -422,6 +422,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					}
 
 					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
+					if err != nil {
+						return err
+					}
 
 					// 3. Update IndexDef and TableDef
 					alterIndex.IndexAlgoParams = newAlgoParams
@@ -1172,6 +1175,9 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+		if err != nil {
+			return err
+		}
 
 		// 4.c populate centroids table
 		err = s.handleIvfIndexCentroidsTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
