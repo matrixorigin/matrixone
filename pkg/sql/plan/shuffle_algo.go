@@ -280,20 +280,39 @@ func (s *ShuffleRange) Eval(k int) {
 	s.Uniform = float64(s.size) / (s.max - s.min) / s.Uniform
 }
 
-func ShuffleRangeReEval(ranges []float64, k2 int, nullCnt int64, tableCnt int64) []float64 {
+func ShuffleRangeReEvalUnsigned(ranges []float64, k2 int, nullCnt int64, tableCnt int64) []uint64 {
 	k1 := len(ranges)
 	if k2 > k1/2 {
 		return nil
 	}
-	result := make([]float64, k2-1)
+	result := make([]uint64, k2-1)
 	if tableCnt/int64(k2) <= nullCnt {
-		result[0] = ranges[0]
+		result[0] = uint64(ranges[0])
 		for i := 1; i <= k2-2; i++ {
-			result[i] = ranges[(i)*(k1-1)/(k2-1)]
+			result[i] = uint64(ranges[(i)*(k1-1)/(k2-1)])
 		}
 	} else {
 		for i := 0; i <= k2-2; i++ {
-			result[i] = ranges[(i+1)*k1/k2-1]
+			result[i] = uint64(ranges[(i+1)*k1/k2-1])
+		}
+	}
+	return result
+}
+
+func ShuffleRangeReEvalSigned(ranges []float64, k2 int, nullCnt int64, tableCnt int64) []int64 {
+	k1 := len(ranges)
+	if k2 > k1/2 {
+		return nil
+	}
+	result := make([]int64, k2-1)
+	if tableCnt/int64(k2) <= nullCnt {
+		result[0] = int64(ranges[0])
+		for i := 1; i <= k2-2; i++ {
+			result[i] = int64(ranges[(i)*(k1-1)/(k2-1)])
+		}
+	} else {
+		for i := 0; i <= k2-2; i++ {
+			result[i] = int64(ranges[(i+1)*k1/k2-1])
 		}
 	}
 	return result
