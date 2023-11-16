@@ -108,10 +108,16 @@ func (oq *outputQueue) flush() error {
 		return nil
 	}
 	if oq.ep.needExportToFile() {
+		rsLen := oq.rowIdx
 		if err := exportDataToCSVFile(oq); err != nil {
 			logError(oq.ses, oq.ses.GetDebugString(),
 				"Error occurred while exporting to CSV file",
 				zap.Error(err))
+			return err
+		}
+		resp := oq.ses.SetNewResponse(OkResponse, rsLen, int(COM_QUERY), "", 0, 1)
+		if err2 := oq.ses.GetMysqlProtocol().SendResponse(oq.ses.GetRequestContext(), resp); err2 != nil {
+			err := moerr.NewInternalError(oq.ses.GetRequestContext(), "routine send response failed. error:%v ", err2)
 			return err
 		}
 	} else {
