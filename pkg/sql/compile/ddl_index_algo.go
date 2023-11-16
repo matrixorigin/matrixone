@@ -80,18 +80,19 @@ func (s *Scope) handleIvfIndexMetaTable(c executor.TxnExecutor, indexDef *plan.I
 	/*
 		CREATE TABLE meta ( `key` VARCHAR(255), `value` VARCHAR(255), PRIMARY KEY (`key`));
 
-		INSERT INTO meta (`key`, `value`) VALUES ('version', '1')
-		ON DUPLICATE KEY UPDATE `value` = CAST(CAST(`value` AS UNSIGNED) + 1 AS CHAR);
+		INSERT INTO meta (`key`, `value`) VALUES ('version', '1') ON DUPLICATE KEY UPDATE `value` = CAST( (CAST(`value` AS UNSIGNED) + 1)%10 AS CHAR);
 	*/
-	//TODO: How to update the version number when it overflows?
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '1')"+
-		"ON DUPLICATE KEY UPDATE `%s` = CAST(CAST(`%s` AS UNSIGNED) + 1 AS CHAR);",
+
+	maxVersions := 3
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) values('version', '0')"+
+		"ON DUPLICATE KEY UPDATE `%s` = CAST( (CAST(`%s` AS UNSIGNED) + 1)%% %d  AS CHAR);",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		maxVersions,
 	)
 
 	_, err := c.Exec(insertSQL)
@@ -100,6 +101,42 @@ func (s *Scope) handleIvfIndexMetaTable(c executor.TxnExecutor, indexDef *plan.I
 	}
 
 	return nil
+}
+
+func (s *Scope) handleIvfIndexDeleteOldEntries(c executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+	metadataTableName string,
+	centroidsTableName string,
+	entriesTableName string) error {
+
+	deleteCentroidsSQL := fmt.Sprintf("	delete from `%s`.`%s` where `%s` = (select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version') ",
+		qryDatabase,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+	_, err := c.Exec(deleteCentroidsSQL)
+	if err != nil {
+		return err
+	}
+
+	deleteEntriesSQL := fmt.Sprintf("delete from `%s`.`%s` where `%s` = (select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version') ",
+		qryDatabase,
+		entriesTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	)
+	_, err = c.Exec(deleteEntriesSQL)
+	if err != nil {
+		return err
+	}
+	return nil
+
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, metaTableName string) error {

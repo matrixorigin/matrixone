@@ -1678,7 +1678,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			return nil, nil, err
 		}
 
-		// 3.c columns: version, id, origin_pk
+		// 3.c columns: version, id, origin_pk, PRIMARY KEY (version,origin_pk)
 		tableDefs[2].Cols[0] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 			Alg:  plan.CompressType_Lz4,
@@ -1716,6 +1716,12 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				Expr:         nil,
 				OriginString: "",
 			},
+		}
+
+		// 3.d PK def
+		tableDefs[2].Pkey = &PrimaryKeyDef{
+			Names: []string{catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk},
 		}
 	}
 

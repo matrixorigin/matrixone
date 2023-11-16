@@ -402,30 +402,49 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterReindex
 			constraintName := tableAlterIndex.IndexName
-			indexDefs := make(map[string]*plan.IndexDef)
-			for i, indexdef := range tableDef.Indexes {
-				if indexdef.IndexName == constraintName {
-					alterIndex = indexdef
+			multiTableIndexes := make(map[string]map[string]*plan.IndexDef)
 
-					// Update AlgoParamLists in indexDef and tableDef
+			for i, indexDef := range tableDef.Indexes {
+				if indexDef.IndexName == constraintName {
+					alterIndex = indexDef
+
+					// 1. Get old AlgoParams
 					newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
 					if err != nil {
 						return err
 					}
-					newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+
+					// 2. Validate AlgoParams in AlterReindex and generate new AlgoParams
+					if tableAlterIndex.IndexAlgoParamList == 0 {
+						return moerr.NewInvalidInputNoCtx("index algo param list cannot be 0")
+					} else {
+						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+					}
+
 					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
 
+					// 3. Update IndexDef and TableDef
 					alterIndex.IndexAlgoParams = newAlgoParams
 					tableDef.Indexes[i].IndexAlgoParams = newAlgoParams
 
-					indexDefs[alterIndex.IndexAlgoTableType] = alterIndex
+					// 4. Add to multiTableIndexes
+					if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
+						multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
+					}
+					multiTableIndexes[indexDef.IndexAlgo][indexDef.IndexAlgoTableType] = alterIndex
 				}
 			}
 
 			// update the hidden tables
-			err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, nil)
-			if err != nil {
-				return err
+			for indexAlgoType, indexDefs := range multiTableIndexes {
+				switch catalog.ToLower(indexAlgoType) {
+				case catalog.MoIndexIvfFlatAlgo.ToString():
+					err = s.handleVectorIvfFlatIndex(c, indexDefs, qry.Database, tableDef, nil)
+				}
+
+				if err != nil {
+					return err
+				}
 			}
 		case *plan.AlterTable_Action_AlterComment:
 			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateComment)
@@ -1160,14 +1179,20 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 			return err
 		}
 
-		// 4.b handle centroids table
+		// 4.b delete old entries in "centroids" and "entries" table
+		err = s.handleIvfIndexDeleteOldEntries(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
+
+		// 4.c handle centroids table
 		err = s.handleIvfIndexCentroidsTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
 		if err != nil {
 			return err
 		}
 
-		// 4.c handle entries table
+		// 4.d handle entries table
 		err = s.handleIvfIndexEntriesTable(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
