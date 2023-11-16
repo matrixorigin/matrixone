@@ -207,7 +207,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	if tableDef.Indexes != nil {
+
+		// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
+		// other multi-table indexes.
+		indexNames := make(map[string]bool)
+
 		for _, indexdef := range tableDef.Indexes {
+			if _, ok := indexNames[indexdef.IndexName]; ok {
+				continue
+			} else {
+				indexNames[indexdef.IndexName] = true
+			}
+
 			var indexStr string
 			if indexdef.Unique {
 				indexStr = "UNIQUE KEY "
