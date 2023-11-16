@@ -875,3 +875,72 @@ func TestS3RestoreFromCache(t *testing.T) {
 	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
 
 }
+
+func TestS3PrefetchFile(t *testing.T) {
+	ctx := context.Background()
+	var pcSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
+
+	config, err := loadS3TestConfig()
+	assert.Nil(t, err)
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
+	}
+
+	t.Setenv("AWS_REGION", config.Region)
+	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
+
+	cacheDir := t.TempDir()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:          "s3",
+			Endpoint:      config.Endpoint,
+			Bucket:        config.Bucket,
+			KeyPrefix:     time.Now().Format("2006-01-02.15:04:05.000000"),
+			AssumeRoleARN: config.RoleARN,
+		},
+		CacheConfig{
+			DiskPath: ptrTo(cacheDir),
+		},
+		nil,
+		false,
+	)
+	assert.Nil(t, err)
+
+	// write file
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: 3,
+				Data: []byte("foo"),
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), pcSet.FileService.Cache.Disk.WriteFile.Load())
+
+	// preload
+	err = fs.PrefetchFile(ctx, "foo/bar")
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.WriteFile.Load())
+
+	// read
+	vec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: 3,
+			},
+		},
+	}
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
+	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.Hit.Load())
+
+}
