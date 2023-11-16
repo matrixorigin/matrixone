@@ -42,7 +42,7 @@ func (s *taeStorage) Read(
 			s.taeHandler.HandleGetLogTail,
 		)
 	default:
-		panic(moerr.NewInfoNoCtx("op is not supported"))
+		return nil, moerr.NewNotSupported(ctx, "known read op: %s", op)
 	}
 
 }
