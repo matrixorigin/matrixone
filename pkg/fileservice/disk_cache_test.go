@@ -222,7 +222,9 @@ func TestDiskCacheFileCache(t *testing.T) {
 
 	data, err := io.ReadAll(newIOEntriesReader(ctx, vector.Entries))
 	assert.Nil(t, err)
-	err = cache.SetFile(ctx, vector.FilePath, data)
+	err = cache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	})
 	assert.Nil(t, err)
 
 	readVector := &IOVector{
