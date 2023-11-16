@@ -15,8 +15,10 @@
 package statistic
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewStatsArray(t *testing.T) {
@@ -324,4 +326,17 @@ func TestStatsArray_InitIfEmpty(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func BenchmarkStatsInfo(b *testing.B) {
+	s := StatsInfo{}
+	s.ParseStartTime = time.Now()
+	s.ParseDuration = time.Since(s.ParseStartTime)
+	s.PlanStart()
+	s.PlanEnd()
+	s.CompileStart()
+	s.CompileEnd()
+	s.ExecutionStart()
+	s.ExecutionEnd()
+
 }

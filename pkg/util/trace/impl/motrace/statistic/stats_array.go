@@ -215,9 +215,10 @@ type statsInfoKey struct{}
 
 // statistic info of sql
 type StatsInfo struct {
-	ParseDuration   time.Duration `json:"ParseDuration"`
-	PlanDuration    time.Duration `json:"PlanDuration"`
-	CompileDuration time.Duration `json:"CompileDuration"`
+	ParseDuration     time.Duration `json:"ParseDuration"`
+	PlanDuration      time.Duration `json:"PlanDuration"`
+	CompileDuration   time.Duration `json:"CompileDuration"`
+	ExecutionDuration time.Duration `json:"ExecutionDuration"`
 
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
@@ -226,9 +227,11 @@ type StatsInfo struct {
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
-	ParseStartTime   time.Time `json:"ParseStartTime"`
-	PlanStartTime    time.Time `json:"PlanStartTime"`
-	CompileStartTime time.Time `json:"CompileStartTime"`
+	ParseStartTime     time.Time `json:"ParseStartTime"`
+	PlanStartTime      time.Time `json:"PlanStartTime"`
+	CompileStartTime   time.Time `json:"CompileStartTime"`
+	ExecutionStartTime time.Time `json:"ExecutionStartTime"`
+	ExecutionEndTime   time.Time `json:"ExecutionEndTime"`
 }
 
 func (stats *StatsInfo) CompileStart() {
@@ -260,6 +263,21 @@ func (stats *StatsInfo) PlanEnd() {
 		return
 	}
 	stats.PlanDuration = time.Since(stats.PlanStartTime)
+}
+
+func (stats *StatsInfo) ExecutionStart() {
+	if stats == nil {
+		return
+	}
+	stats.ExecutionStartTime = time.Now()
+}
+
+func (stats *StatsInfo) ExecutionEnd() {
+	if stats == nil {
+		return
+	}
+	stats.ExecutionEndTime = time.Now()
+	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
 }
 
 // reset StatsInfo into zero state
