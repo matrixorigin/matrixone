@@ -208,6 +208,11 @@ func trimObjectsData(
 				(*objectsData)[name].data[id].pk = pk
 			}
 			if bat.Vecs[0].Length() > 0 {
+				bat.Attrs = make([]string, 0)
+				for i := range bat.Vecs {
+					att := fmt.Sprintf("col_%d", i)
+					bat.Attrs = append(bat.Attrs, att)
+				}
 				test := containers.ToTNBatch(bat)
 				bat = containers.ToCNBatch(test)
 			}
@@ -475,8 +480,8 @@ func ReWriteCheckpointAndBlockFromKey(
 				}
 				dataBlocks[0].data.Attrs = make([]string, 0)
 				for i := range dataBlocks[0].data.Vecs {
-					att := fmt.Sprintf("col_%d", i)
-					dataBlocks[0].data.Attrs = append(dataBlocks[0].data.Attrs, att)
+					//att := fmt.Sprintf("col_%d", i)
+					//dataBlocks[0].data.Attrs = append(dataBlocks[0].data.Attrs, att)
 				}
 				sortData := containers.ToTNBatch(dataBlocks[0].data)
 				if dataBlocks[0].pk > -1 {
