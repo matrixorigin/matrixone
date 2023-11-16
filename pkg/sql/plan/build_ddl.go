@@ -2485,10 +2485,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			constraintName := string(opt.Name)
 			alterTableReIndex.IndexName = constraintName
 
-			if opt.AlgoParamList == 0 {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be > 0.")
-			} else {
+			switch opt.KeyType {
+			case tree.INDEX_TYPE_IVFFLAT:
+				if opt.AlgoParamList <= 0 {
+					return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be > 0.")
+				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
+			default:
+				return nil, moerr.NewInternalError(ctx.GetContext(), "unsupported index type: %v", opt.KeyType)
 			}
 
 			name_not_found := true

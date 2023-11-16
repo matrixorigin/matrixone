@@ -225,12 +225,17 @@ func (node *AlterOptionAlterIndex) Format(ctx *FmtCtx) {
 type AlterOptionAlterReIndex struct {
 	alterOptionImpl
 	Name          Identifier
+	KeyType       IndexType
 	AlgoParamList int64
 }
 
 func (node *AlterOptionAlterReIndex) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter reindex ")
 	node.Name.Format(ctx)
+	if node.KeyType != INDEX_TYPE_INVALID {
+		ctx.WriteString(" ")
+		ctx.WriteString(node.KeyType.ToString())
+	}
 	if node.AlgoParamList != 0 {
 		ctx.WriteString(fmt.Sprintf(" lists = %d", node.AlgoParamList))
 	}

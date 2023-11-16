@@ -414,13 +414,17 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						return err
 					}
 
-					// 2. Validate AlgoParams in AlterReindex and generate new AlgoParams
-					if tableAlterIndex.IndexAlgoParamList == 0 {
-						return moerr.NewInvalidInputNoCtx("index algo param list cannot be 0")
-					} else {
+					// 2.a update AlgoParams for the index to be re-indexed
+					// NOTE: this will throw error if the algo type is not supported for reindex.
+					// So Step 4. will not be executed if error is thrown here.
+					switch catalog.ToLower(alterIndex.IndexAlgo) {
+					case catalog.MoIndexIvfFlatAlgo.ToString():
 						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
+					default:
+						return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
 					}
 
+					// 2.b generate new AlgoParams string
 					newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
 					if err != nil {
 						return err
@@ -431,18 +435,22 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					tableDef.Indexes[i].IndexAlgoParams = newAlgoParams
 
 					// 3.b Update mo_catalog.mo_indexes
-					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, tableDef.TblId, indexDef.IndexName)
+					updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, tableDef.TblId, alterIndex.IndexName)
 					err = c.runSql(updateSql)
 					if err != nil {
 						return err
 					}
 
 					// 4. Add to multiTableIndexes
-					if _, ok := multiTableIndexes[indexDef.IndexAlgo]; !ok {
-						multiTableIndexes[indexDef.IndexAlgo] = make(map[string]*plan.IndexDef)
+					if _, ok := multiTableIndexes[alterIndex.IndexAlgo]; !ok {
+						multiTableIndexes[alterIndex.IndexAlgo] = make(map[string]*plan.IndexDef)
 					}
-					multiTableIndexes[indexDef.IndexAlgo][indexDef.IndexAlgoTableType] = alterIndex
+					multiTableIndexes[alterIndex.IndexAlgo][alterIndex.IndexAlgoTableType] = alterIndex
 				}
+			}
+
+			if len(multiTableIndexes) == 0 {
+				return moerr.NewInternalError(c.ctx, "invalid index algo type for alter reindex")
 			}
 
 			// update the hidden tables

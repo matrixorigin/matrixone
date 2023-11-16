@@ -2968,10 +2968,11 @@ alter_table_alter:
             Name: tree.Identifier($2.Compare()),
         }
     }
-| REINDEX ident LISTS equal_opt INTEGRAL
+| REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
       {
           $$ = &tree.AlterOptionAlterReIndex{
-              AlgoParamList: int64($5.(int64)),
+	      KeyType : tree.INDEX_TYPE_IVFFLAT,
+              AlgoParamList: int64($6.(int64)),
               Name: tree.Identifier($2.Compare()),
           }
       }
