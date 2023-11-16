@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -100,7 +99,7 @@ func TestCanHandleSelfCmd(t *testing.T) {
 	ret, err := handleTraceSpan(a1.proc, a1.service, a1.parameter, a1.sender)
 	require.Nil(t, err)
 	require.Equal(t, ret, Result{
-		Method: pb.CmdMethod_TraceSpan.String(),
+		Method: TraceSpanMethod,
 		Data:   fmt.Sprintf("%s:[s3 local] enabled, [] failed; ", uuid),
 	})
 

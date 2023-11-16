@@ -29,6 +29,41 @@ enum OpCode {
     Nop          = 0;
     OpGetLogTail = 1000;
     OpPreCommit  = 1001;
+
+    // Debug
+    OpPing          = 2000;
+    OpFlush         = 2001;
+    OpCheckpoint    = 2003;
+    OpInspect       = 2004;
+    OpAddFaultPoint = 2005;
+    OpBackup        = 2006;
+    OpTraceSpan     = 2007;
+    OpStorageUsage  = 2008;
+}
+
+// TNPingRequest ping request
+message TNPingRequest {
+    option (gogoproto.sizer) = true;
+    option (gogoproto.protosizer) = false;
+    string parameter = 1;
+}
+
+// TNPingResponse ping response
+message TNPingResponse {
+    option (gogoproto.sizer) = true;
+    option (gogoproto.protosizer) = false;
+    string storeID        = 1;
+    string serviceAddress = 2;
+    uint64 shardID        = 3;
+    uint64 replicaID      = 4;
+    uint64 logShardID     = 5;
+}
+
+// TNStringResponse string type response
+message TNStringResponse {
+    option (gogoproto.sizer) = true;
+    option (gogoproto.protosizer) = false;
+    string returnStr = 1;
 }
 
 message Vector {
