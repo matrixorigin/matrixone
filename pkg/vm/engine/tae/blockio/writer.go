@@ -130,7 +130,6 @@ func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObj
 	if err != nil {
 		return nil, err
 	}
-	seqnums := w.writer.GetSeqnums()
 	for i, vec := range batch.Vecs {
 		columnData := containers.ToTNVector(vec)
 		// Build ZM
@@ -140,8 +139,8 @@ func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObj
 		}
 		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
-		logutil.Infof("WriteTombstoneBatch: name: %v, blockID: %d, seqnum: %d, zm: %v", w.nameStr, block.GetID(), seqnums[i], zm)
-		w.writer.UpdateBlockZM(objectio.SchemaTombstone, 0, seqnums[i], zm)
+		logutil.Infof("WriteTombstoneBatch: name: %v, blockID: %d, seqnum: %d, zm: %v", w.nameStr, block.GetID(), i, zm)
+		w.writer.UpdateBlockZM(objectio.SchemaTombstone, 0, i, zm)
 	}
 	return block, nil
 }
