@@ -21,7 +21,6 @@ const (
 	TxnService PortSlot = iota
 	LogtailService
 	LockService
-	CtlService
 	QueryService
 	MaxService
 )
@@ -35,8 +34,6 @@ func (s PortSlot) String() string {
 		return "Logtail service"
 	case LockService:
 		return "Lock service"
-	case CtlService:
-		return "Ctl service"
 	case QueryService:
 		return "Query service"
 	default:
@@ -98,20 +95,6 @@ func (s *store) lockServiceListenAddr() string {
 		return s.addressMgr.ListenAddress(int(LockService))
 	}
 	return s.cfg.LockService.ListenAddress
-}
-
-func (s *store) ctlServiceServiceAddr() string {
-	if s.newPortStrategy() {
-		return s.addressMgr.ServiceAddress(int(CtlService))
-	}
-	return s.cfg.Ctl.Address.ServiceAddress
-}
-
-func (s *store) ctlServiceListenAddr() string {
-	if s.newPortStrategy() {
-		return s.addressMgr.ListenAddress(int(CtlService))
-	}
-	return s.cfg.Ctl.Address.ListenAddress
 }
 
 func (s *store) queryServiceServiceAddr() string {

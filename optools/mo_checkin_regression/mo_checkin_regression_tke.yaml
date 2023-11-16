@@ -5,6 +5,7 @@ metadata:
   namespace: nsformocheckin
 spec:
   dn:
+    exportToPrometheus: true
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression: "true"
     overlay:
@@ -54,6 +55,7 @@ spec:
         memory: 16Gi
   imageRepository: ccr.ccs.tencentyun.com/matrixone-dev/matrixone
   logService:
+    exportToPrometheus: true
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression-log: "true"
     overlay:
@@ -93,6 +95,7 @@ spec:
       enableStmtMerge = true
       enableMetricToProm = true
   tp:
+    exportToPrometheus: true
     cacheVolume:
       size: 100Gi
       storageClassName: cbs-hssd
