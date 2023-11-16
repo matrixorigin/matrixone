@@ -152,11 +152,12 @@ func trimObjectsData(
 					return isCkpChange, err
 				}
 				blockMeta := meta.MustTombstoneMeta().GetBlockMeta(uint32(block.location.ID()))
-				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 3)).ZoneMap().Clone()
-				logutil.Infof("blockMeta1111 ssss ts %v", ts.ToString())
-				if !zm.Contains(ts) {
-					//(*objectsData)[name].data[id].data = bat
-					//continue
+				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 3)).ZoneMap()
+				logutil.Infof("blockMeta1111 ssss ts %v, file %v", ts.ToString(), block.location.String())
+				if zm.IsInited() && !zm.Contains(ts) {
+					formatData(bat)
+					(*objectsData)[name].data[id].data = bat
+					continue
 				}
 				deleteRow := make([]int64, 0)
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
@@ -184,12 +185,13 @@ func trimObjectsData(
 					return isCkpChange, err
 				}
 				blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
-				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 2)).ZoneMap().Clone()
-				logutil.Infof("blockMeta ssss ts %v, zm is %v -- %v", ts.ToString(), zm.String(), zm)
-				if !zm.Contains(ts) {
-					//(*objectsData)[name].data[id].pk = pk
-					//(*objectsData)[name].data[id].data = bat
-					//continue
+				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 2)).ZoneMap()
+				logutil.Infof("blockMeta ssss ts %v, zm is %v -- %v, blc %v", ts.ToString(), zm.String(), zm, block.location.String())
+				if zm.IsInited() && !zm.Contains(ts) {
+					(*objectsData)[name].data[id].pk = pk
+					formatData(bat)
+					(*objectsData)[name].data[id].data = bat
+					continue
 				}
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
 					err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
