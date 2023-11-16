@@ -207,6 +207,7 @@ func trimObjectsData(
 				}
 				(*objectsData)[name].data[id].pk = pk
 			}
+			formatData(bat)
 			(*objectsData)[name].data[id].data = bat
 		}
 		(*objectsData)[name].isChange = isChange
@@ -285,6 +286,19 @@ func appendValToBatch(src, dst *containers.Batch, row int) {
 		} else {
 			dst.Vecs[v].Append(val, false)
 		}
+	}
+}
+
+// Need to format the loaded batch, otherwise panic may occur when WriteBatch.
+func formatData(data *batch.Batch) {
+	if data.Vecs[0].Length() > 0 {
+		data.Attrs = make([]string, 0)
+		for i := range data.Vecs {
+			att := fmt.Sprintf("col_%d", i)
+			data.Attrs = append(data.Attrs, att)
+		}
+		tmp := containers.ToTNBatch(data)
+		data = containers.ToCNBatch(tmp)
 	}
 }
 
@@ -418,15 +432,6 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 			for _, block := range dataBlocks {
 				logutil.Infof("write object %v, id is %d", fileName, block.num)
-				if block.data.Vecs[0].Length() > 0 {
-					block.data.Attrs = make([]string, 0)
-					for i := range block.data.Vecs {
-						att := fmt.Sprintf("col_%d", i)
-						block.data.Attrs = append(block.data.Attrs, att)
-					}
-					test := containers.ToTNBatch(block.data)
-					block.data = containers.ToCNBatch(test)
-				}
 				if block.pk > -1 {
 					writer.SetPrimaryKey(uint16(block.pk))
 				}
@@ -488,11 +493,6 @@ func ReWriteCheckpointAndBlockFromKey(
 				if objectData.data[0].tombstone != nil {
 					logutil.Infof("datas len is %d, objectData.data[0].tombstone.data %d", dataBlocks[0].data.Vecs[0].Length(), objectData.data[0].tombstone.data.Vecs[0].Length())
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
-				}
-				dataBlocks[0].data.Attrs = make([]string, 0)
-				for i := range dataBlocks[0].data.Vecs {
-					att := fmt.Sprintf("col_%d", i)
-					dataBlocks[0].data.Attrs = append(dataBlocks[0].data.Attrs, att)
 				}
 				sortData := containers.ToTNBatch(dataBlocks[0].data)
 				if dataBlocks[0].pk > -1 {
@@ -620,18 +620,6 @@ func ReWriteCheckpointAndBlockFromKey(
 					insertBatch[tid].insertBlocks[b].apply = true
 					logutil.Infof("rewrite BLKCNMetaInsertIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), deleteRow)
 					appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-					/*for v, vec := range data.bats[BLKCNMetaInsertIDX].Vecs {
-						if !blk.location.IsEmpty() && data.bats[BLKCNMetaInsertIDX].Attrs[v] == catalog.BlockMeta_DeltaLoc {
-							blkMeta.Vecs[v].Append(nil, true)
-							continue
-						}
-						val := vec.Get(deleteRow)
-						if val == nil {
-							blkMeta.Vecs[v].Append(val, true)
-						} else {
-							blkMeta.Vecs[v].Append(val, false)
-						}
-					}*/
 					logutil.Infof("rewrite BLKMetaDeleteTxnIDX %s, row is %d", insertBatch[tid].insertBlocks[b].location.String(), deleteRow)
 					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
 
