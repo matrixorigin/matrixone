@@ -76,10 +76,19 @@ count(*)
 select count(*) from (select sample(c2, 2 rows) from s_t1 group by c1 limit 2);
 count(*)
 2
+/* 10. with alias */
+select sample(c3, 3 rows) as k from s_t1 where c1 = 2;
+k
+0
+0
 /* data prepare for sample from multi columns */
 drop table if exists s_t2;
 create table s_t2 (cc1 int, cc2 int);
 insert into s_t2 values (1, 1), (null, 2), (3, null), (null, null);
+/* expected failed case */
+/* 1. multi sample with alias */
+select sample(cc1, cc2, 1 rows) as k from s_t2;
+SQL syntax error: sample multi columns cannot have alias
 /* expected succeed case */
 /* 1. sample 2 rows from table by column cc1, cc2, expected to get 3 rows because we should sample 2 not-null value for each column */
 select count(*) from (select sample(cc1, cc2, 2 rows) from s_t2);

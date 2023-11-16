@@ -2828,7 +2828,6 @@ func appendSelectList(
 			oldLen := len(selectList)
 			columns, isStar := expr.GetColumns()
 			if isStar {
-				// do unfold star work.
 				if selectList, sampleList, err = appendSelectList(builder, ctx, selectList, sampleList, tree.SelectExpr{Expr: tree.UnqualifiedStar{}}); err != nil {
 					return nil, nil, err
 				}
@@ -2839,7 +2838,18 @@ func appendSelectList(
 					}
 				}
 			}
-			ctx.sampleFunc.SetStartOffset(oldLen, len(selectList)-oldLen)
+
+			// deal with alias.
+			sampleCount := len(selectList) - oldLen
+			if selectExpr.As != nil && !selectExpr.As.Empty() {
+				if sampleCount != 1 {
+					return nil, nil, moerr.NewSyntaxError(builder.GetContext(), "sample multi columns cannot have alias")
+				}
+				ctx.headings[len(ctx.headings)-1] = selectExpr.As.Origin()
+				selectList[len(selectList)-1].As = selectExpr.As
+			}
+
+			ctx.sampleFunc.SetStartOffset(oldLen, sampleCount)
 			sampleList = append(sampleList, selectList[oldLen:]...)
 
 		case *tree.UnresolvedName:

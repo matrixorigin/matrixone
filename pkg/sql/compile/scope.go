@@ -717,18 +717,13 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 		case vm.Sample:
 			flg = true
 			arg := in.Arg.(*sample.Argument)
-			// if sample by percent, there is no need to do sample again after merge the data.
-			if arg.IsByPercent() {
-				s.Instructions = s.Instructions[i:]
-			} else {
-				s.Instructions = append(make(vm.Instructions, 1, len(s.Instructions)-i+1), s.Instructions[i:]...)
-			}
-
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.Merge,
 				Idx: s.Instructions[0].Idx,
 				Arg: &merge.Argument{},
 			}
+
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Sample,
