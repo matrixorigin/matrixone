@@ -726,9 +726,9 @@ func (e *TestEngine) CheckObjectInfo() {
 		blk := se.MakeBlockIt(false).Get().GetPayload()
 		info1 := se.GetInMemoryObjectInfo()
 		if !blk.GetMetaLoc().IsEmpty() {
-			err := se.LoadObjectInfo()
+			stats, err := se.LoadObjectInfoWithTxnTS(blk.GetLatestCommittedNode().Start)
 			assert.NoError(e.t, err)
-			assert.Equal(e.t, se.Stat.GetSortKeyZonemap(), info1.SortKeyZoneMap())
+			assert.Equal(e.t, stats, info1.ObjectStats, "load %v, get %v", stats, info1.ObjectStats)
 		} else {
 			assert.True(e.t, info1.IsEmpty())
 		}
