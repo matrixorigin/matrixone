@@ -854,8 +854,8 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			message := cnclient.AcquireMessage()
 			{
 				message.Id = streamSender.ID()
-				message.Cmd = pbpipeline.PrepareDoneNotifyMessage
-				message.Sid = pbpipeline.Last
+				message.Cmd = pbpipeline.Method_PrepareDoneNotifyMessage
+				message.Sid = pbpipeline.Status_Last
 				message.Uuid = info.Uuid[:]
 			}
 			if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
@@ -918,9 +918,9 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 		}
 
 		switch m.GetSid() {
-		case pbpipeline.WaitingNext:
+		case pbpipeline.Status_WaitingNext:
 			continue
-		case pbpipeline.Last:
+		case pbpipeline.Status_Last:
 			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}

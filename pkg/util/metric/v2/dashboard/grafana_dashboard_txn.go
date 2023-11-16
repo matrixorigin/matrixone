@@ -33,11 +33,13 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnOverviewRow(),
 			c.initTxnDurationRow(),
 			c.initTxnCommitDurationRow(),
-			c.initTxnLockWaitersRow(),
 			c.initTxnLockDurationRow(),
+			c.initTxnUnlockTablesRow(),
+			c.initTxnLockWaitersRow(),
 			c.initTxnStatementDurationRow(),
 			c.initTxnStatementsCountRow(),
 			c.initTxnTableRangesRow(),
+			c.initTxnReaderDurationRow(),
 			c.initTxnMpoolRow(),
 			c.initTxnOnPrepareWALRow(),
 			c.initTxnBeforeCommitRow(),
@@ -123,11 +125,13 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 				`sum(` + c.getMetricWithFilter("mo_txn_queue_size", `type="active"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_txn_queue_size", `type="wait-active"`) + `)`,
 				`sum(` + c.getMetricWithFilter("mo_txn_queue_size", `type="commit"`) + `)`,
+				`sum(` + c.getMetricWithFilter("mo_txn_queue_size", `type="lock-rpc"`) + `)`,
 			},
 			[]string{
 				"active",
 				"wait-active",
 				"commit",
+				"lock-rpc",
 			}),
 	)
 }
@@ -370,6 +374,42 @@ func (c *DashboardCreator) initTxnMpoolRow() dashboard.Option {
 				"delete",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3},
+			axis.Unit("s"),
+			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initTxnUnlockTablesRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn unlock tables",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_txn_unlock_table_total_bucket`, ``),
+			},
+			[]string{
+				"tables",
+			},
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			[]float32{3, 3, 3, 3})...,
+	)
+}
+
+func (c *DashboardCreator) initTxnReaderDurationRow() dashboard.Option {
+	return dashboard.Row(
+		"Txn reader duration",
+		c.getMultiHistogram(
+			[]string{
+				c.getMetricWithFilter(`mo_txn_reader_duration_seconds_bucket`, `type="block-reader"`),
+				c.getMetricWithFilter(`mo_txn_reader_duration_seconds_bucket`, `type="merge-reader"`),
+				c.getMetricWithFilter(`mo_txn_reader_duration_seconds_bucket`, `type="block-merge-reader"`),
+			},
+			[]string{
+				"block-reader",
+				"merge-reader",
+				"block-merge-reader",
+			},
+			[]float64{0.80, 0.90, 0.95, 0.99},
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,

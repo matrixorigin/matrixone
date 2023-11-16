@@ -60,4 +60,10 @@ type requestSender = func(context.Context, *process.Process, []txn.CNOpRequest) 
 type handleFunc func(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error)
+	sender requestSender) (Result, error)
+
+// Result ctl result
+type Result struct {
+	Method string `json:"method"`
+	Data   any    `json:"result"`
+}

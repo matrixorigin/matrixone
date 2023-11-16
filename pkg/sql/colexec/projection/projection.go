@@ -16,7 +16,6 @@ package projection
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -64,7 +63,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	arg.buf = batch.NewWithSize(len(arg.Es))
-
+	// keep shuffleIDX unchanged
+	arg.buf.ShuffleIDX = bat.ShuffleIDX
 	// do projection.
 	for i := range arg.ctr.projExecutors {
 		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})

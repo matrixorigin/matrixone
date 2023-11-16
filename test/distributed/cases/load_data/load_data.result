@@ -20,7 +20,6 @@ null    null    null    null    null    null    null    null
 null    null    null    null    null    null    null    null
 127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
 select * from t1 into outfile '$resources/into_outfile/outfile_integer_numbers_1.csv';
-col1    col2    col3    col4    col5    col6    col7    col8
 delete from t1;
 load data infile '$resources/into_outfile/outfile_integer_numbers_1.csv' into table t1 ignore 1 lines;
 select * from t1;
@@ -77,7 +76,6 @@ null    null    null    null
 "    "    "    "
 ""    ""    ""    ""
 select * from t2 into outfile '$resources/into_outfile/outfile_char_varchar_1.csv';
-col1    col2    col3    col4
 delete from t2;
 load data infile '$resources/into_outfile/outfile_char_varchar_1.csv' into table t2 ignore 1 lines;
 select * from t2;
@@ -198,7 +196,6 @@ null    null    null    null
 1.0123457    1.0123456789    1.01    1.01235
 1.0E-10    1.0E-10    0.00    0.00000
 select * from t3 into outfile '$resources/into_outfile/outfile_float_2.csv';
-col1    col2    col3    col4
 delete from t3;
 load data infile '$resources/into_outfile/outfile_float_2.csv' into table t3 ignore 1 lines;
 select * from t3;
@@ -244,7 +241,6 @@ null    null    null    true
 null    null    null    null
 null    null    null    null
 select * from t4 into outfile '$resources/into_outfile/outfile_time_date_2.csv';
-col1    col2    col3    col4
 delete from t4;
 load data infile '$resources/into_outfile/outfile_time_date_2.csv' into table t4 ignore 1 lines;
 select * from t4;

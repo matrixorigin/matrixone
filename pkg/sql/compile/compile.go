@@ -1219,10 +1219,20 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
-				dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
-					Op:  vm.Dispatch,
-					Arg: constructDispatchLocal(false, false, false, regs),
-				})
+				if c.anal.qry.LoadTag {
+					_, arg := constructDispatchLocalAndRemote(0, scopes, c.addr)
+					arg.FuncId = dispatch.ShuffleToAllFunc
+					arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
+					dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
+						Op:  vm.Dispatch,
+						Arg: arg,
+					})
+				} else {
+					dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
+						Op:  vm.Dispatch,
+						Arg: constructDispatchLocal(false, false, false, regs),
+					})
+				}
 				for i := range scopes {
 					insertArg, err := constructInsert(n, c.e, c.proc)
 					if err != nil {
@@ -1716,7 +1726,10 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 		Arg:     extern,
 	})
 	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
-	arg.FuncId = dispatch.SendToAnyLocalFunc
+	//arg.FuncId = dispatch.SendToAnyLocalFunc
+	//use shuffle instead of SendToAnyLocalFunc
+	arg.FuncId = dispatch.ShuffleToAllFunc
+	arg.ShuffleType = plan2.ShuffleToLocalMatchedReg
 	scope.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,

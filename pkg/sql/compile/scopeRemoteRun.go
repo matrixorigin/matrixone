@@ -145,7 +145,7 @@ func CnServerMessageHandler(
 // cnMessageHandle deal the received message at cn-server.
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
-	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
+	case pipeline.Method_PrepareDoneNotifyMessage: // notify the dispatch executor
 		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
 		if err != nil || opProc == nil {
 			return err
@@ -175,7 +175,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		}
 		return nil
 
-	case pipeline.PipelineMessage:
+	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
 
 		// decode and rewrite the scope.
@@ -370,7 +370,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return err
 	}
 	defer sender.close()
-	err = sender.send(sData, pData, pipeline.PipelineMessage)
+	err = sender.send(sData, pData, pipeline.Method_PipelineMessage)
 	if err != nil {
 		lastArg.Free(s.Proc, true, err)
 		return err

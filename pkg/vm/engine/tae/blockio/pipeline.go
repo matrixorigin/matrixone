@@ -178,12 +178,11 @@ func prefetchMetaJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			res = &tasks.JobResult{}
-			objectMeta, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
+			_, err := objectio.FastLoadObjectMeta(ctx, &params.key, true, params.fs)
 			if err != nil {
 				res.Err = err
 				return
 			}
-			res.Res = objectMeta
 			return
 		},
 	)
@@ -466,11 +465,11 @@ func (p *IoPipeline) onWait(jobs ...any) {
 func (p *IoPipeline) crontask(ctx context.Context) {
 	hb := w.NewHeartBeaterWithFunc(time.Second*10, func() {
 		logutil.Info(p.stats.selectivityStats.ExportString())
-		logutil.Info(p.sensors.prefetchDepth.String())
-		wdrops := p.stats.prefetchDropStats.SwapW(0)
-		if wdrops > 0 {
-			logutil.Infof("PrefetchDropStats: %d", wdrops)
-		}
+		// logutil.Info(p.sensors.prefetchDepth.String())
+		// wdrops := p.stats.prefetchDropStats.SwapW(0)
+		// if wdrops > 0 {
+		// 	logutil.Infof("PrefetchDropStats: %d", wdrops)
+		// }
 		logutil.Info(objectio.ExportCacheStats())
 	}, nil)
 	hb.Start()
