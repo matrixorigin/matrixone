@@ -90,7 +90,7 @@ func TestMergeBlock(t *testing.T) {
 	blkInfo3.SetMetaLocation(loc3)
 
 	batch1 := &batch.Batch{
-		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo},
+		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
 			testutil.MakeTextVector([]string{
@@ -98,6 +98,7 @@ func TestMergeBlock(t *testing.T) {
 				string(catalog.EncodeBlockInfo(blkInfo2)),
 				string(catalog.EncodeBlockInfo(blkInfo3))},
 				nil),
+			testutil.MakeTextVector([]string{string(objectio.ZeroObjectStats[:])}, nil),
 		},
 		Cnt: 1,
 	}
@@ -124,14 +125,15 @@ func TestMergeBlock(t *testing.T) {
 		result := argument1.Tbl.(*mockRelation).result
 		// check attr names
 		require.True(t, reflect.DeepEqual(
-			[]string{catalog.BlockMeta_BlockInfo},
+			[]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats},
 			result.Attrs,
 		))
 		// check vector
-		require.Equal(t, 1, len(result.Vecs))
-		for i, vec := range result.Vecs {
-			require.Equal(t, 3, vec.Length(), fmt.Sprintf("column number: %d", i))
-		}
+		require.Equal(t, 2, len(result.Vecs))
+		//for i, vec := range result.Vecs {
+		require.Equal(t, 3, result.Vecs[0].Length(), fmt.Sprintf("column number: %d", 0))
+		require.Equal(t, 1, result.Vecs[1].Length(), fmt.Sprintf("column number: %d", 1))
+		//}
 	}
 	// Check UniqueTables
 	//for j := range argument1.Unique_tbls {
