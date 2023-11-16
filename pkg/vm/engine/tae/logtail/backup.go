@@ -15,7 +15,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"sort"
 )
@@ -156,8 +155,8 @@ func trimObjectsData(
 				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 3)).ZoneMap().Clone()
 				logutil.Infof("blockMeta1111 ssss ts %v", ts.ToString())
 				if !zm.Contains(ts) {
-					(*objectsData)[name].data[id].data = bat
-					continue
+					//(*objectsData)[name].data[id].data = bat
+					//continue
 				}
 				deleteRow := make([]int64, 0)
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
@@ -188,9 +187,9 @@ func trimObjectsData(
 				zm := blockMeta.MustGetColumn(uint16(len(bat.Vecs) - 2)).ZoneMap().Clone()
 				logutil.Infof("blockMeta ssss ts %v", ts.ToString())
 				if !zm.Contains(ts) {
-					(*objectsData)[name].data[id].pk = pk
-					(*objectsData)[name].data[id].data = bat
-					continue
+					//(*objectsData)[name].data[id].pk = pk
+					//(*objectsData)[name].data[id].data = bat
+					//continue
 				}
 				for v := 0; v < bat.Vecs[0].Length(); v++ {
 					err = commitTs.Unmarshal(bat.Vecs[len(bat.Vecs)-2].GetRawBytesAt(v))
@@ -208,6 +207,8 @@ func trimObjectsData(
 				}
 				(*objectsData)[name].data[id].pk = pk
 			}
+			test := containers.ToTNBatch(bat)
+			bat = containers.ToCNBatch(test)
 			(*objectsData)[name].data[id].data = bat
 		}
 		(*objectsData)[name].isChange = isChange
