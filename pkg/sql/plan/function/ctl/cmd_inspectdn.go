@@ -16,17 +16,15 @@ package ctl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func handleInspectTN() handleFunc {
 	return GetTNHandlerFunc(
-		pb.CmdMethod_Inspect,
-		func(_ string) ([]uint64, error) {
-			return nil, nil
-		},
+		api.OpCode_OpInspect,
+		func(string) ([]uint64, error) { return nil, nil },
 		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			return types.Encode(&db.InspectTN{
 				AccessInfo: db.AccessInfo{
@@ -37,7 +35,7 @@ func handleInspectTN() handleFunc {
 				Operation: parameter,
 			})
 		},
-		func(data []byte) (interface{}, error) {
+		func(data []byte) (any, error) {
 			resp := &db.InspectResp{}
 			types.Decode(data, resp)
 			return resp, nil

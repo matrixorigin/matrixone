@@ -110,36 +110,34 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
-func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) (int, uint16, error) {
+func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) error {
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	proc := tbl.db.txn.proc
 	tableDef := tbl.getTableDef()
 	var (
-		accurateObjNum = 0
-		init           bool
-		err            error
-		part           *logtailreplay.PartitionState
-		meta           objectio.ObjectDataMeta
-		objMeta        objectio.ObjectMeta
-		tableCnt       float64
+		init    bool
+		err     error
+		part    *logtailreplay.PartitionState
+		meta    objectio.ObjectDataMeta
+		objMeta objectio.ObjectMeta
 	)
 	fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
-		return 0, 0, err
+		return err
 	}
 	if part, err = tbl.getPartitionState(ctx); err != nil {
-		return 0, 0, err
+		return err
 	}
-	var blkNum uint16
+
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 			return err
 		}
 		meta = objMeta.MustDataMeta()
-		accurateObjNum++
-		blkNum += obj.BlkCnt
-		tableCnt += float64(meta.BlockHeader().Rows())
+		info.AccurateObjectNumber++
+		info.BlockNumber += int(obj.BlkCnt)
+		info.TableCnt += float64(meta.BlockHeader().Rows())
 		if !init {
 			init = true
 			for idx, col := range tableDef.Cols[:lenCols] {
@@ -184,25 +182,24 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 		return nil
 	}
 	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
-		return 0, 0, err
+		return err
 	}
 
-	info.TableCnt += tableCnt
-	return accurateObjNum, blkNum, nil
+	return nil
 }
 
-func adjustNDV(accurateObjNum int, info *plan2.InfoFromZoneMap, tbl *txnTable) {
+func adjustNDV(info *plan2.InfoFromZoneMap, tbl *txnTable) {
 	tableDef := tbl.getTableDef()
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 
-	if accurateObjNum > 1 {
+	if info.AccurateObjectNumber > 1 {
 		for idx := range tableDef.Cols[:lenCols] {
 			rate := info.ColumnNDVs[idx] / info.TableCnt
 			if rate > 1 {
 				rate = 1
 			}
 			if rate < 0.1 {
-				info.ColumnNDVs[idx] /= math.Pow(float64(accurateObjNum), (1 - rate))
+				info.ColumnNDVs[idx] /= math.Pow(float64(info.AccurateObjectNumber), (1 - rate))
 			}
 			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
 			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {
@@ -217,37 +214,38 @@ func adjustNDV(accurateObjNum int, info *plan2.InfoFromZoneMap, tbl *txnTable) {
 }
 
 // calculate and update the stats for scan node.
-func UpdateStats(ctx context.Context, tbl *txnTable, s *plan2.StatsInfoMap) bool {
+func UpdateStats(ctx context.Context, tbl *txnTable, s *plan2.StatsInfoMap, approxNumObjects int) bool {
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
-	accurateNumObjs, blkNum, err := updateInfoFromZoneMap(info, ctx, tbl)
-	if err != nil || accurateNumObjs == 0 {
+	info.ApproxObjectNumber = approxNumObjects
+	err := updateInfoFromZoneMap(info, ctx, tbl)
+	if err != nil || info.ApproxObjectNumber == 0 {
 		return false
 	}
-	adjustNDV(accurateNumObjs, info, tbl)
-	plan2.UpdateStatsInfoMap(info, accurateNumObjs, blkNum, tbl.getTableDef(), s)
+	adjustNDV(info, tbl)
+	plan2.UpdateStatsInfoMap(info, tbl.getTableDef(), s)
 	return true
 }
 
 // calculate and update the stats for scan node.
-func UpdateStatsForPartitionTable(ctx context.Context, baseTable *txnTable, partitionTables []any, s *plan2.StatsInfoMap) bool {
+func UpdateStatsForPartitionTable(ctx context.Context, baseTable *txnTable, partitionTables []any, s *plan2.StatsInfoMap, approxNumObjects int) bool {
 	if len(partitionTables) == 0 {
 		return false
 	}
 	lenCols := len(baseTable.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
-	accurateNumObjs := 0
-	var blkNum uint16
+	info.ApproxObjectNumber = approxNumObjects
 	for _, partitionTable := range partitionTables {
 		ptable := partitionTable.(*txnTable)
-		partNumObjs, blkCnt, err := updateInfoFromZoneMap(info, ctx, ptable)
+		err := updateInfoFromZoneMap(info, ctx, ptable)
 		if err != nil {
 			return false
 		}
-		blkNum += blkCnt
-		accurateNumObjs += partNumObjs
 	}
-	adjustNDV(accurateNumObjs, info, baseTable)
-	plan2.UpdateStatsInfoMap(info, accurateNumObjs, blkNum, baseTable.getTableDef(), s)
+	if info.ApproxObjectNumber == 0 {
+		return false
+	}
+	adjustNDV(info, baseTable)
+	plan2.UpdateStatsInfoMap(info, baseTable.getTableDef(), s)
 	return true
 }

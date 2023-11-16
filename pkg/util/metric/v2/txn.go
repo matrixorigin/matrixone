@@ -89,6 +89,7 @@ var (
 	TxnCommitQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("commit")
 	TxnWaitActiveQueueSizeGauge = txnQueueSizeGauge.WithLabelValues("wait-active")
 	TxnActiveQueueSizeGauge     = txnQueueSizeGauge.WithLabelValues("active")
+	TxnLockRPCQueueSizeGauge    = txnQueueSizeGauge.WithLabelValues("lock-rpc")
 
 	txnCNCommittedLocationQuantityGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -133,6 +134,15 @@ var (
 			Name:      "life_statements_total",
 			Help:      "Bucketed histogram of statement total in a txn.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 10),
+		})
+
+	TxnUnlockTableTotalHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "unlock_table_total",
+			Help:      "Size of txn unlock tables count.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 4),
 		})
 
 	txnCreateDurationHistogram = prometheus.NewHistogramVec(
@@ -246,4 +256,16 @@ var (
 	TxnMpoolAllocDurationHistogram  = txnMpoolDurationHistogram.WithLabelValues("alloc")
 	TxnMpoolFreeDurationHistogram   = txnMpoolDurationHistogram.WithLabelValues("free")
 	TxnMpoolDeleteDurationHistogram = txnMpoolDurationHistogram.WithLabelValues("delete")
+
+	txnReaderDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "reader_duration_seconds",
+			Help:      "Bucketed histogram of reader read duration.",
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+		}, []string{"type"})
+	TxnBlockReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("block-reader")
+	TxnMergeReaderDurationHistogram      = txnReaderDurationHistogram.WithLabelValues("merge-reader")
+	TxnBlockMergeReaderDurationHistogram = txnReaderDurationHistogram.WithLabelValues("block-merge-reader")
 )

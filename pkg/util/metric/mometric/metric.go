@@ -147,7 +147,7 @@ func startCrossServicesMetricsTask(ctx context.Context) {
 		logutil.Info("cross service metrics task started")
 		defer logutil.Info("cross service metrics task exiting")
 
-		timer := time.NewTimer(time.Second * 5)
+		timer := time.NewTicker(time.Second * 5)
 		for {
 			select {
 			case <-ctx.Done():
