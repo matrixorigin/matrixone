@@ -3017,8 +3017,6 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 					false,
 					collector.data.allocator,
 				)
-				logutil.Infof("metaNode.BaseNode.DeltaLoc not null : %v ,metaNode.BaseNode.MetaLoc: %v ，stat is %v, entry.ID is %v: %v-%v... %v",
-					metaNode.BaseNode.DeltaLoc.String(), metaNode.BaseNode.MetaLoc.String(), entry.IsAppendable(), entry.ID.String(), metaNode.GetStart().ToString(), metaNode.GetEnd().ToString(), entry.GetSegment().GetTable().String())
 				metaNode.TxnMVCCNode.AppendTuple(blkMetaDelTxnBat)
 				is_sorted := false
 				if !entry.IsAppendable() && entry.GetSchema().HasSortKey() {
@@ -3143,8 +3141,6 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 					false,
 					collector.data.allocator,
 				)
-				logutil.Infof("metaNode.BaseNode.DeltaLoc null : %v, metaNode.BaseNode.MetaLoc: %v, stat is %v, entry.ID is %v: %v-%v...%v",
-					metaNode.BaseNode.DeltaLoc.String(), metaNode.BaseNode.MetaLoc.String(), entry.IsAppendable(), entry.ID.String(), metaNode.GetStart().ToString(), metaNode.GetEnd().ToString(), entry.GetSegment().GetTable().String())
 
 				vector.AppendFixed(blkMetaInsMemTruncVec, metaNode.Start, false, collector.data.allocator)
 

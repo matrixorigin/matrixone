@@ -285,7 +285,7 @@ func formatData(data *batch.Batch) {
 			att := fmt.Sprintf("col_%d", i)
 			data.Attrs = append(data.Attrs, att)
 		}
-		tmp := containers.ToTNBatch(data, common.DefaultAllocator)
+		tmp := containers.ToTNBatch(data, common.CheckpointAllocator)
 		data = containers.ToCNBatch(tmp)
 	}
 }
@@ -317,7 +317,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	data.FormatData(common.DefaultAllocator)
+	data.FormatData(common.CheckpointAllocator)
 
 	phaseNumber = 2
 	// Analyze checkpoint to get the object file
@@ -494,7 +494,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if objectData.data[0].tombstone != nil {
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
 				}
-				sortData := containers.ToTNBatch(dataBlocks[0].data, common.DefaultAllocator)
+				sortData := containers.ToTNBatch(dataBlocks[0].data, common.CheckpointAllocator)
 				if dataBlocks[0].sortKey != math.MaxUint16 {
 					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(dataBlocks[0].sortKey), backupPool)
 					if err != nil {
