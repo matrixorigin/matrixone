@@ -153,7 +153,7 @@ func trimObjectsData(
 					return isCkpChange, err
 				}
 				blockMeta := meta.MustTombstoneMeta().GetBlockMeta(uint32(block.location.ID()))
-				zm := index.DecodeZM(blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 3)))
+				zm := index.DecodeZM(blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 3)).ZoneMap())
 				if !zm.Contains(ts) {
 					(*objectsData)[name].data[id].data = bat
 					continue
@@ -184,7 +184,7 @@ func trimObjectsData(
 					return isCkpChange, err
 				}
 				blockMeta := meta.MustDataMeta().GetBlockMeta(uint32(block.location.ID()))
-				zm := index.DecodeZM(blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 2)))
+				zm := index.DecodeZM(blockMeta.ColumnMeta(uint16(len(bat.Vecs) - 2)).ZoneMap())
 				if !zm.Contains(ts) {
 					(*objectsData)[name].data[id].pk = pk
 					(*objectsData)[name].data[id].data = bat
