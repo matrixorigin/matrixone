@@ -206,7 +206,8 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
 	n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
-
+	n.Stats.HashmapStats.Ranges = shouldUseShuffleRange(s.ShuffleRangeMap[colName])
+	n.Stats.HashmapStats.Nullcnt = s.NullCntMap[colName]
 }
 
 // to determine if join need to go shuffle
@@ -374,16 +375,13 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 			return
 		}
 		switch types.T(n.TableDef.Cols[firstColID].Typ.Id) {
-		case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+		case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
 			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
 			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstColName])
-		case types.T_char, types.T_varchar, types.T_text:
-			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-			n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
-			n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstColName])
-			n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstColName])
+			n.Stats.HashmapStats.Ranges = shouldUseShuffleRange(s.ShuffleRangeMap[firstColName])
+			n.Stats.HashmapStats.Nullcnt = s.NullCntMap[firstColName]
 		}
 	}
 }
@@ -430,4 +428,14 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 			}
 		}
 	}
+}
+
+func shouldUseShuffleRange(s *ShuffleRange) []float64 {
+	if s == nil {
+		return nil
+	}
+	if s.Uniform < 0.1 {
+		return nil
+	}
+	return s.Result
 }

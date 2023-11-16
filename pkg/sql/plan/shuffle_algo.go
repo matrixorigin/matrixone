@@ -280,20 +280,20 @@ func (s *ShuffleRange) Eval(k int) {
 	s.Uniform = float64(s.size) / (s.max - s.min) / s.Uniform
 }
 
-func (s *ShuffleRange) ReEval(k1 int, k2 int) []float64 {
-	if k1 <= k2 {
-		return s.Result
+func ShuffleRangeReEval(ranges []float64, k2 int, nullCnt int64, tableCnt int64) []float64 {
+	k1 := len(ranges)
+	if k2 > k1/2 {
+		return nil
 	}
 	result := make([]float64, k2-1)
-	if s.Result[0] < s.min {
-		result[0] = s.Result[0]
+	if tableCnt/int64(k2) <= nullCnt {
+		result[0] = ranges[0]
 		for i := 1; i <= k2-2; i++ {
-			result[i] = s.Result[(i-1)*(k1-1)/(k2-1)+1]
+			result[i] = ranges[(i)*(k1-1)/(k2-1)]
 		}
-
 	} else {
 		for i := 0; i <= k2-2; i++ {
-			result[i] = s.Result[i*k1/k2]
+			result[i] = ranges[(i+1)*k1/k2-1]
 		}
 	}
 	return result
