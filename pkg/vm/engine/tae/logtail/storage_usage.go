@@ -166,7 +166,9 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 	}
 
 	for idx := range locations {
-		incrData, err := LoadSpecifiedCkpBatch(ctx, locations[idx], fs, versions[idx], SEGStorageUsageIDX)
+		incrData, err := LoadSpecifiedCkpBatch(
+			ctx, locations[idx], versions[idx], SEGStorageUsageIDX, fs,
+		)
 		if err != nil {
 			logutil.Warn(fmt.Sprintf("[storage usage]: load increment checkpoint failed: %v", err))
 			return nil

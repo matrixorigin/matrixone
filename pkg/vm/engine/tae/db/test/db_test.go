@@ -1534,7 +1534,6 @@ func TestAutoCompactABlk2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := new(options.Options)
-	opts.CacheCfg = new(options.CacheCfg)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
@@ -1844,7 +1843,6 @@ func TestUnload1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := new(options.Options)
-	opts.CacheCfg = new(options.CacheCfg)
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 
@@ -1889,7 +1887,6 @@ func TestUnload2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := new(options.Options)
-	opts.CacheCfg = new(options.CacheCfg)
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
 
@@ -6914,7 +6911,6 @@ func TestAppendAndGC(t *testing.T) {
 	ctx := context.Background()
 
 	opts := new(options.Options)
-	opts.CacheCfg = new(options.CacheCfg)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)

@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/tidwall/btree"
 )
+
+type TempFilter struct {
+	sync.RWMutex
+	m map[uint64]bool
+}
+
+type TempFKey struct{}
+
+func (f *TempFilter) Add(id uint64) {
+	f.Lock()
+	defer f.Unlock()
+	f.m[id] = true
+}
+
+func (f *TempFilter) Check(id uint64) (skip bool) {
+	f.Lock()
+	defer f.Unlock()
+	if _, ok := f.m[id]; ok {
+		delete(f.m, id)
+		return true
+	}
+	return false
+}
+
+var TempF *TempFilter
+
+func init() {
+	TempF = &TempFilter{
+		m: make(map[uint64]bool),
+	}
+}
 
 type Collector interface {
 	String() string
@@ -154,7 +186,8 @@ func (d *dirtyCollector) Run() {
 func (d *dirtyCollector) ScanInRangePruned(from, to types.TS) (
 	tree *DirtyTreeEntry) {
 	tree, _ = d.ScanInRange(from, to)
-	if err := d.tryCompactTree(d.interceptor, tree.tree, from, to); err != nil {
+	ctx := context.WithValue(context.Background(), TempFKey{}, 42)
+	if err := d.tryCompactTree(ctx, d.interceptor, tree.tree, from, to); err != nil {
 		panic(err)
 	}
 	return
@@ -317,7 +350,7 @@ func (d *dirtyCollector) cleanupStorage() {
 			toDeletes = append(toDeletes, entry)
 			return true
 		}
-		if err := d.tryCompactTree(d.interceptor, entry.tree, entry.start, entry.end); err != nil {
+		if err := d.tryCompactTree(context.Background(), d.interceptor, entry.tree, entry.start, entry.end); err != nil {
 			logutil.Warnf("error: interceptor on dirty tree: %v", err)
 		}
 		if entry.tree.IsEmpty() {
@@ -340,6 +373,7 @@ func (d *dirtyCollector) cleanupStorage() {
 
 // iter the tree and call interceptor to process block. flushed block, empty seg and table will be removed from the tree
 func (d *dirtyCollector) tryCompactTree(
+	ctx context.Context,
 	interceptor DirtyEntryInterceptor,
 	tree *model.Tree, from, to types.TS) (err error) {
 	var (
@@ -379,6 +413,12 @@ func (d *dirtyCollector) tryCompactTree(
 			continue
 		}
 		tbl.Stats.RUnlock()
+
+		if x := ctx.Value(TempFKey{}); x != nil && TempF.Check(tbl.ID) {
+			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchema().Name)
+			tree.Shrink(id)
+			continue
+		}
 
 		for id, dirtySeg := range dirtyTable.Segs {
 			// remove empty segs

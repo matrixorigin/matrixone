@@ -1061,12 +1061,11 @@ func (tbl *txnTable) tryGetCurrentObjectBF(
 		currBf = prevBF
 		return
 	}
-	currBf, err = blockio.LoadBF(
+	currBf, err = objectio.FastLoadBF(
 		ctx,
 		currLocation,
-		tbl.store.rt.Cache.FilterIndex,
-		tbl.store.rt.Fs.Service,
 		false,
+		tbl.store.rt.Fs.Service,
 	)
 	return
 }
