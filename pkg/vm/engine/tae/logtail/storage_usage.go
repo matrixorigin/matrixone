@@ -80,7 +80,10 @@ func checkSegment(entry *catalog.SegmentEntry, collector *BaseCollector) bool {
 
 	// the incremental ckp should consider the time range.
 	// we only collect the segments which updates happened in [start, end]
-	if !collector.isGlobal && len(entry.ClonePreparedInRange(collector.start, collector.end)) == 0 {
+	entry.RLock()
+	cnt := len(entry.ClonePreparedInRange(collector.start, collector.end))
+	entry.RUnlock()
+	if !collector.isGlobal && cnt == 0 {
 		return false
 	}
 	return true
@@ -163,7 +166,9 @@ func collectUsageDataFromICkp(ctx context.Context, fs fileservice.FileService,
 	}
 
 	for idx := range locations {
-		incrData, err := LoadSpecifiedCkpBatch(ctx, locations[idx], fs, versions[idx], SEGStorageUsageIDX)
+		incrData, err := LoadSpecifiedCkpBatch(
+			ctx, locations[idx], versions[idx], SEGStorageUsageIDX, fs,
+		)
 		if err != nil {
 			logutil.Warn(fmt.Sprintf("[storage usage]: load increment checkpoint failed: %v", err))
 			return nil

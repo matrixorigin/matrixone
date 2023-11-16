@@ -21,8 +21,8 @@ import (
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 	"github.com/stretchr/testify/require"
 )
@@ -113,7 +113,7 @@ func mustGetSnapshot(t *testing.T, cli Client) string {
 	defer mustCloseRows(t, rows)
 	require.True(t, rows.Next())
 
-	var result pb.CtlResult
+	var result ctl.Result
 	value := ""
 	require.NoError(t, rows.Scan(&value))
 	json.MustUnmarshal([]byte(value), &result)

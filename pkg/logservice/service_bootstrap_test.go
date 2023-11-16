@@ -19,6 +19,7 @@ import (
 	"path"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
@@ -40,7 +41,7 @@ func TestGetBackupData(t *testing.T) {
 
 	ctx := context.Background()
 	dir := t.TempDir()
-	name := "hakeeper.bak"
+	name := defines.LocalFileServiceName
 	fs, err := fileservice.NewLocalFS(ctx, name, dir, fileservice.DisabledCacheConfig, nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, fs)
