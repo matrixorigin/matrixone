@@ -83,11 +83,10 @@ func (s *Scope) handleIvfIndexMetaTable(c executor.TxnExecutor, indexDef *plan.I
 		INSERT INTO meta (`key`, `value`) VALUES ('version', '1')
 		ON DUPLICATE KEY UPDATE `value` = CAST(CAST(`value` AS UNSIGNED) + 1 AS CHAR);
 	*/
-	//insertSQL := fmt.Sprintf("insert into `%s`.`%s` values('version', '1')"+
-	//	"ON DUPLICATE KEY UPDATE `value` = CAST(CAST(`value` AS UNSIGNED) + 1 AS CHAR);",
-	//	qryDatabase, indexDef.IndexTableName)
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` values('version', '1')"+
+		"ON DUPLICATE KEY UPDATE `value` = CAST(CAST(`value` AS UNSIGNED) + 1 AS CHAR);",
+		qryDatabase, indexDef.IndexTableName)
 
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` values('version', '1');", qryDatabase, indexDef.IndexTableName)
 	_, err := c.Exec(insertSQL)
 	if err != nil {
 		return err
@@ -131,7 +130,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 		// we will change it to 250 samples per list/k in the future.
 		sampleCnt = int64(50 * centroidParamsLists)
 	}
-	sampledSQL := fmt.Sprintf("(select `%s` from `%s` rand limit %d)", indexColumnName, originalTableDef.Name, sampleCnt)
+	sampledSQL := fmt.Sprintf("(select `%s` from `%s` order by rand() limit %d)", indexColumnName, originalTableDef.Name, sampleCnt)
 
 	// 3. Insert into centroids table
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
