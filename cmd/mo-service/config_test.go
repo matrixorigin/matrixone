@@ -96,7 +96,7 @@ func TestFileServiceFactory(t *testing.T) {
 		Backend: "DISK-ETL",
 	})
 
-	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "A", 0, "")
+	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
 }
