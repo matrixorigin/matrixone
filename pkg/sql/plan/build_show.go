@@ -987,6 +987,11 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"where `tcl`.`att_database` = '%s' AND " +
 		"`tcl`.`att_relname` = '%s' AND " +
 		"`idx`.`column_name` NOT LIKE '%s' " +
+		// This is used instead of DISTINCT(`idx`.`name`) to handle IVF-FLAT or multi table indexes
+		// NOTE: Add all the table column names to the GROUP BY clause
+		"GROUP BY `tcl`.`att_relname`, `idx`.`type`, `idx`.`name`, `idx`.`ordinal_position`, " +
+		"`idx`.`column_name`, `tcl`.`attnotnull`, `idx`.`algo`, `idx`.`comment`, " +
+		"`idx`.`algo_params`, `idx`.`is_visible`" +
 		";"
 	showIndexSql := fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName, catalog.AliasPrefix+"%")
 
