@@ -69,7 +69,7 @@ func getCheckpointData(
 	location objectio.Location,
 	version uint32,
 ) (*CheckpointData, error) {
-	data := NewCheckpointData(common.CheckpointAllocator)
+	data := NewCheckpointData(common.DebugAllocator)
 	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, err
@@ -285,7 +285,7 @@ func formatData(data *batch.Batch) {
 			att := fmt.Sprintf("col_%d", i)
 			data.Attrs = append(data.Attrs, att)
 		}
-		tmp := containers.ToTNBatch(data, common.CheckpointAllocator)
+		tmp := containers.ToTNBatch(data, common.DebugAllocator)
 		data = containers.ToCNBatch(tmp)
 	}
 }
@@ -317,7 +317,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	data.FormatData(common.CheckpointAllocator)
+	data.FormatData(common.DebugAllocator)
 
 	phaseNumber = 2
 	// Analyze checkpoint to get the object file
@@ -494,7 +494,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if objectData.data[0].tombstone != nil {
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
 				}
-				sortData := containers.ToTNBatch(dataBlocks[0].data, common.CheckpointAllocator)
+				sortData := containers.ToTNBatch(dataBlocks[0].data, common.DebugAllocator)
 				if dataBlocks[0].sortKey != math.MaxUint16 {
 					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(dataBlocks[0].sortKey), backupPool)
 					if err != nil {
@@ -600,8 +600,8 @@ func ReWriteCheckpointAndBlockFromKey(
 	phaseNumber = 5
 	// Transfer the object file that needs to be deleted to insert
 	if len(insertBatch) > 0 {
-		blkMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertIDX], common.CheckpointAllocator)
-		blkMetaTxn := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertTxnIDX], common.CheckpointAllocator)
+		blkMeta := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertIDX], common.DebugAllocator)
+		blkMetaTxn := makeRespBatchFromSchema(checkpointDataSchemas_Curr[BLKMetaInsertTxnIDX], common.DebugAllocator)
 		for i := 0; i < blkMetaInsert.Length(); i++ {
 			tid := data.bats[BLKMetaInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 			appendValToBatch(data.bats[BLKMetaInsertIDX], blkMeta, i)
