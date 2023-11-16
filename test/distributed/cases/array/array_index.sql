@@ -46,8 +46,12 @@ create index idx1 using IVFFLAT on tbl(embedding) lists = 2 op_type 'vector_l2_o
 
 show index from tbl;
 show create table tbl;
-select name, type, column_name from mo_catalog.mo_indexes where name="idx1";
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 
+alter table tbl alter reindex idx1 lists=3;
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 
 -- post
 drop database vecdb2;
