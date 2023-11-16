@@ -2304,11 +2304,12 @@ func appendDeleteUniqueTablePlanWithoutFilters(
 			},
 		}
 	}
+	tableDef := DeepCopyTableDef(uniqueTableDef, true)
 	lastNodeId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
 		ObjRef:      uniqueObjRef,
-		TableDef:    uniqueTableDef,
+		TableDef:    tableDef,
 		ProjectList: scanNodeProject,
 	}, bindCtx)
 	logutil.Warnf("tableDef.Name:%s, len(tableDef.Cols):%d, tableDef.Cols:%s,len(scanNodeProject):%d", uniqueTableDef.Name, len(uniqueTableDef.Cols), uniqueTableDef.Cols, len(scanNodeProject))
