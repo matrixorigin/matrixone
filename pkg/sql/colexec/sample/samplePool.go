@@ -36,7 +36,7 @@ type sPool struct {
 
 	// sample type.
 	// same as the Type attribute of sample.Argument.
-	typ int
+	typ sPoolType
 
 	// capacity for each group.
 	capacity int
@@ -56,11 +56,18 @@ type sPool struct {
 	columns sampleColumnList
 }
 
+type sPoolType int
+
+const (
+	rowSamplePool sPoolType = iota
+	percentSamplePool
+)
+
 func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
 	return &sPool{
 		proc:        proc,
 		needReorder: true,
-		typ:         sampleByRow,
+		typ:         rowSamplePool,
 		capacity:    capacity,
 		columns:     make(sampleColumnList, sampleColumnCount),
 	}
@@ -70,7 +77,7 @@ func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCoun
 	return &sPool{
 		proc:        proc,
 		needReorder: true,
-		typ:         sampleByPercent,
+		typ:         percentSamplePool,
 		percents:    int(per * 100),
 		columns:     make(sampleColumnList, sampleColumnCount),
 	}
@@ -172,9 +179,9 @@ func (s *sPool) sampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *
 	s.updateReused1(sampleVec)
 
 	switch s.typ {
-	case sampleByRow:
+	case rowSamplePool:
 		return s.sPools[groupIndex].addByRow(s.proc, s.columns[0], bat)
-	case sampleByPercent:
+	case percentSamplePool:
 		return s.sPools[groupIndex].addByPercent(s.proc, s.columns[0], bat, s.percents)
 	}
 	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
@@ -190,9 +197,9 @@ func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector
 	s.updateReused2(sampleVectors)
 
 	switch s.typ {
-	case sampleByRow:
+	case rowSamplePool:
 		return s.mPools[groupIndex].addByRow(s.proc, s.columns, bat)
-	case sampleByPercent:
+	case percentSamplePool:
 		return s.mPools[groupIndex].addByPercent(s.proc, s.columns, bat, s.percents)
 	}
 	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
@@ -213,7 +220,7 @@ func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec 
 	mp := s.proc.Mp()
 
 	switch s.typ {
-	case sampleByRow:
+	case rowSamplePool:
 		for row, v := range groupList[:length] {
 			if v == 0 {
 				continue
@@ -229,7 +236,7 @@ func (s *sPool) batchSampleFromColumn(length int, groupList []uint64, sampleVec 
 			}
 		}
 
-	case sampleByPercent:
+	case percentSamplePool:
 		for row, v := range groupList[:length] {
 			if v == 0 {
 				continue
@@ -256,7 +263,7 @@ func (s *sPool) batchSampleFromColumns(length int, groupList []uint64, sampleVec
 	mp := s.proc.Mp()
 
 	switch s.typ {
-	case sampleByRow:
+	case rowSamplePool:
 		for row, v := range groupList[:length] {
 			if v == 0 {
 				continue
@@ -271,7 +278,7 @@ func (s *sPool) batchSampleFromColumns(length int, groupList []uint64, sampleVec
 			}
 		}
 
-	case sampleByPercent:
+	case percentSamplePool:
 		for row, v := range groupList[:length] {
 			if v == 0 {
 				continue
@@ -327,7 +334,7 @@ func (s *sPool) updateReused2(columns []*vector.Vector) {
 
 func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 	if !end {
-		if s.typ == sampleByRow {
+		if s.typ == rowSamplePool {
 			return batch.EmptyBatch, nil
 		}
 	}
@@ -404,7 +411,7 @@ type singlePool struct {
 	// free space of pool.
 	space int
 
-	// items in pool.
+	// bat stores the data in pool.
 	bat *batch.Batch
 }
 
@@ -631,7 +638,7 @@ type multiPool struct {
 	// count of rows which has been stored.
 	have int
 
-	// items in pool.
+	// bat stores the data in pool.
 	bat *batch.Batch
 
 	// reused.
@@ -807,7 +814,7 @@ func (p *multiPool) addRowByPercent(proc *process.Process, mp *mpool.MPool, colu
 		return
 	}
 	if percent == 10000 || rand.Intn(10000) < percent {
-		err = p.appendOneRow(proc, proc.Mp(), columns, bat, row)
+		err = p.appendOneRow(proc, mp, columns, bat, row)
 	}
 	return nil
 }
