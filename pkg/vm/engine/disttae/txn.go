@@ -197,9 +197,9 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		blockInfo := s3Writer.GetBlockInfoBat()
 
 		lenVecs := len(blockInfo.Attrs)
-		// only remain the metaLoc col
-		blockInfo.Vecs = blockInfo.Vecs[lenVecs-1:]
-		blockInfo.Attrs = blockInfo.Attrs[lenVecs-1:]
+		// only remain the metaLoc col and object stats
+		blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
+		blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
 		blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
 
 		table := tbl.(*txnTable)
@@ -282,10 +282,11 @@ func (txn *Transaction) WriteFileLocked(
 	txn.hasS3Op.Store(true)
 	newBat := bat
 	if typ == INSERT {
-		//bat.Attrs = {catalog.BlockMeta_BlockInfo}
+		//bat.Attrs = {catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 		newBat = batch.NewWithSize(len(bat.Vecs))
-		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc})
+		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
 		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+		newBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
 
 		blkInfos := vector.MustBytesCol(bat.GetVector(0))
 		for _, blk := range blkInfos {
@@ -296,6 +297,14 @@ func (txn *Transaction) WriteFileLocked(
 				false,
 				txn.proc.Mp())
 		}
+
+		// append the object stats.
+		// could have multiple stats, it depends on how to implement the underlying `ObjectDescriber`.
+		rows := vector.MustBytesCol(bat.GetVector(1))
+		for idx := 0; idx < len(rows); idx++ {
+			vector.AppendBytes(newBat.GetVector(1), rows[idx], false, txn.proc.Mp())
+		}
+
 		newBat.SetRowCount(bat.Vecs[0].Length())
 	}
 	txn.readOnly.Store(false)

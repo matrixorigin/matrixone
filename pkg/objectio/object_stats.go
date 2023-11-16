@@ -35,8 +35,8 @@ const (
 	objectNameOffset = 0
 	extentOffset     = objectNameOffset + ObjectNameLen
 	rowCntOffset     = extentOffset + ExtentLen
-	blkCntOffset     = rowCntOffset + 4
-	zoneMapOffset    = blkCntOffset + 4
+	blkCntOffset     = rowCntOffset + rowCntLen
+	zoneMapOffset    = blkCntOffset + blkCntLen
 )
 
 var ZeroObjectStats ObjectStats

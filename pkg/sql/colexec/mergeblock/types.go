@@ -60,30 +60,37 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	// }
 }
 
-func (arg *Argument) GetMetaLocBat(name string, proc *process.Process) {
+func (arg *Argument) GetMetaLocBat(name []string, proc *process.Process) {
 	// If the target is a partition table
 	if len(arg.PartitionSources) > 0 {
 		// 'i' aligns with partition number
 		for i := range arg.PartitionSources {
-			bat := batch.NewWithSize(1)
-			bat.Attrs = []string{name}
+			bat := batch.NewWithSize(len(name))
+			bat.Attrs = name
 			bat.Cnt = 1
-			bat.Vecs[0] = proc.GetVector(types.New(types.T_text, 0, 0))
+			for idx := 0; idx < len(name); idx++ {
+				bat.Vecs[idx] = proc.GetVector(types.New(types.T_text, 0, 0))
+			}
 			arg.container.mp[i] = bat
 		}
 	} else {
-		bat := batch.NewWithSize(1)
-		bat.Attrs = []string{name}
+		bat := batch.NewWithSize(len(name))
+		bat.Attrs = name
 		bat.Cnt = 1
-		bat.Vecs[0] = proc.GetVector(types.New(types.T_text, 0, 0))
+		for idx := 0; idx < len(name); idx++ {
+			bat.Vecs[idx] = proc.GetVector(types.New(types.T_text, 0, 0))
+		}
 		arg.container.mp[0] = bat
 	}
 }
 
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
-	arg.GetMetaLocBat(bat.Attrs[1], proc)
+	// meta loc and(maybe) object stats
+	arg.GetMetaLocBat(bat.Attrs[1:], proc)
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
 	blockInfos := vector.MustBytesCol(bat.GetVector(1))
+	stats := vector.MustBytesCol(bat.GetVector(2))
+
 	for i := range tblIdx {
 		if tblIdx[i] >= 0 {
 			blkInfo := catalog.DecodeBlockInfo(blockInfos[i])
@@ -100,6 +107,12 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 			arg.affectedRows += uint64(newBat.RowCount())
 			arg.container.mp2[idx] = append(arg.container.mp2[idx], newBat)
 		}
+	}
+
+	// append object stats
+	// could have multiple stats, it depends on how to implement the underlying `ObjectDescriber`.
+	for idx := 0; idx < len(stats); idx++ {
+		vector.AppendBytes(arg.container.mp[0].Vecs[1], stats[idx], false, proc.GetMPool())
 	}
 	for _, b := range arg.container.mp {
 		b.SetRowCount(b.Vecs[0].Length())
