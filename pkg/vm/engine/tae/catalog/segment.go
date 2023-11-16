@@ -173,7 +173,7 @@ func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTx
 	e := &SegmentEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -182,7 +182,7 @@ func NewSegmentEntry(table *TableEntry, id *objectio.ObjectId, txn txnif.AsyncTx
 			SortHint: table.GetDB().catalog.NextSegment(),
 		},
 	}
-	e.CreateWithTxn(txn, &ObjectMVCCNode{})
+	e.CreateWithTxn(txn, &ObjectMVCCNode{objectio.NewObjectStats()})
 	if dataFactory != nil {
 		e.segData = dataFactory(e)
 	}
@@ -193,7 +193,7 @@ func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, en
 	e := &SegmentEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -203,7 +203,7 @@ func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, en
 			SortHint: table.GetDB().catalog.NextSegment(),
 		},
 	}
-	e.CreateWithStartAndEnd(start, end, &ObjectMVCCNode{})
+	e.CreateWithStartAndEnd(start, end, &ObjectMVCCNode{objectio.NewObjectStats()})
 	if dataFactory != nil {
 		e.segData = dataFactory(e)
 	}
@@ -213,7 +213,7 @@ func NewSegmentEntryOnReplay(table *TableEntry, id *objectio.ObjectId, start, en
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
@@ -224,7 +224,7 @@ func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
 		ID: *objectio.NewObjectid(),
 		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -233,14 +233,14 @@ func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 			IsLocal: true,
 		},
 	}
-	e.CreateWithTS(ts, &ObjectMVCCNode{})
+	e.CreateWithTS(ts, &ObjectMVCCNode{objectio.NewObjectStats()})
 	return e
 }
 
 func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewBaseEntry(
-			func() *ObjectMVCCNode { return &ObjectMVCCNode{} }),
+			func() *ObjectMVCCNode { return &ObjectMVCCNode{objectio.NewObjectStats()} }),
 		table:   table,
 		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
@@ -248,7 +248,7 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 			state: ES_Appendable,
 		},
 	}
-	e.CreateWithTS(types.SystemDBTS, &ObjectMVCCNode{})
+	e.CreateWithTS(types.SystemDBTS, &ObjectMVCCNode{objectio.NewObjectStats()})
 	var bid types.Blockid
 	schema := table.GetLastestSchema()
 	if schema.Name == SystemTableSchema.Name {
@@ -276,7 +276,7 @@ func (entry *SegmentEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (*objectio.
 		objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectNameWithObjectID(&entry.ID))
 		return stats, nil
 	}
-	if !entry.objectInfo.IsZero() {
+	if entry.objectInfo != nil && !entry.objectInfo.IsZero() {
 		return entry.objectInfo, nil
 	}
 	metaLoc := node.BaseNode.MetaLoc
@@ -290,7 +290,10 @@ func (entry *SegmentEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (*objectio.
 	objectDataMeta := objMeta.MustDataMeta()
 	objectio.SetObjectStatsRowCnt(stats, objectDataMeta.BlockHeader().Rows())
 	objectio.SetObjectStatsBlkCnt(stats, objectDataMeta.BlockCount())
-	objectio.SetObjectStatsSortKeyZoneMap(stats, index.ZM(objectDataMeta.MustGetColumn(0).ZoneMap()))
+	pk := entry.table.schema.Load().GetPrimaryKey()
+	if !IsFakePkName(pk.Name) {
+		objectio.SetObjectStatsSortKeyZoneMap(stats, objectDataMeta.MustGetColumn(uint16(pk.Idx)).ZoneMap())
+	}
 	return stats, nil
 }
 

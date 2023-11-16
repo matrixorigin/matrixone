@@ -545,6 +545,10 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 	return err
 }
 
+func (w *objectWriterV1) GetDataStats() ObjectStats{
+	return w.objStats[SchemaData]
+}
+
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {
 	var tmpData []byte
 	dataLen := len(buf)

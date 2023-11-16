@@ -98,13 +98,10 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 	task.blocks, _, err = writer.Sync(ctx)
-	if err != nil {
-		return err
-	}
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.Block.Flush.Add(1)
 	})
-	task.stat, err = writer.Stats()
+	task.stat = writer.Stats()
 	return err
 }

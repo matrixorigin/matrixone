@@ -8910,8 +8910,8 @@ func TestObjectInfo(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	schema := catalog.MockSchemaAll(2, 1)
-	schema.BlockMaxRows = 50
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.BlockMaxRows = 10
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 50)
 	defer bat.Close()
@@ -8924,4 +8924,5 @@ func TestObjectInfo(t *testing.T) {
 
 	tae.CheckObjectInfo()
 	t.Logf(tae.Catalog.SimplePPString(3))
+	tae.ForceCheckpoint()
 }
