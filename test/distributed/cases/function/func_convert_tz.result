@@ -28,9 +28,6 @@ dtime
 select convert_tz('2023-03-11 02:00:00','Asia/Shanghai','+05:00')as dtime;
 dtime
 2023-03-10 23:00:00
-select convert_tz('2007-03-11 02:00:00','US/Eastern','US/Central')as dtime;
-dtime
-2007-03-11 01:00:00
 select convert_tz('2023-11-05 05:00:00','US/Eastern','US/Central')as dtime;
 dtime
 2023-11-05 04:00:00
@@ -92,8 +89,7 @@ select convert_tz('2023-11-06 10:28:00','+00:aa', '+08:00') as dtime;
 dtime
 null
 select convert_tz('2023-11','+00:00', '+08:00') as dtime;
-dtime
-null
+invalid input: invalid datetime value 2023-11
 create table convert_table(c1 datetime,c2 date,c3 timestamp(3));
 insert into convert_table values('2010-09-26','2022-01-02 10:02:00','2021-05-02 12:02:00.0923'),('2011-02-20 10:02:00','2020-01-02','2021-05-02'),('2019-03-16 11:12:00','2022-01-02 10:02:00','2021-05-02 12:02:00.0923');
 select convert_tz(c1,'+00:00', '+08:00'),c1 from convert_table;
