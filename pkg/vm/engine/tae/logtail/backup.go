@@ -207,15 +207,6 @@ func trimObjectsData(
 				}
 				(*objectsData)[name].data[id].pk = pk
 			}
-			if bat.Vecs[0].Length() > 0 {
-				bat.Attrs = make([]string, 0)
-				for i := range bat.Vecs {
-					att := fmt.Sprintf("col_%d", i)
-					bat.Attrs = append(bat.Attrs, att)
-				}
-				test := containers.ToTNBatch(bat)
-				bat = containers.ToCNBatch(test)
-			}
 			(*objectsData)[name].data[id].data = bat
 		}
 		(*objectsData)[name].isChange = isChange
@@ -416,6 +407,15 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 			for _, block := range dataBlocks {
 				logutil.Infof("write object %v, id is %d", fileName, block.num)
+				if block.data.Vecs[0].Length() > 0 {
+					block.data.Attrs = make([]string, 0)
+					for i := range block.data.Vecs {
+						att := fmt.Sprintf("col_%d", i)
+						block.data.Attrs = append(block.data.Attrs, att)
+					}
+					test := containers.ToTNBatch(block.data)
+					block.data = containers.ToCNBatch(test)
+				}
 				if block.pk > -1 {
 					writer.SetPrimaryKey(uint16(block.pk))
 				}
@@ -479,10 +479,10 @@ func ReWriteCheckpointAndBlockFromKey(
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
 				}
 				dataBlocks[0].data.Attrs = make([]string, 0)
-				for i := range dataBlocks[0].data.Vecs {
-					//att := fmt.Sprintf("col_%d", i)
-					//dataBlocks[0].data.Attrs = append(dataBlocks[0].data.Attrs, att)
-				}
+				/*for i := range dataBlocks[0].data.Vecs {
+					att := fmt.Sprintf("col_%d", i)
+					dataBlocks[0].data.Attrs = append(dataBlocks[0].data.Attrs, att)
+				}*/
 				sortData := containers.ToTNBatch(dataBlocks[0].data)
 				if dataBlocks[0].pk > -1 {
 					logutil.Infof("sortBlockColumns len is %d, locatio %s", sortData.Vecs[0].Length(), dataBlocks[0].location.String())
