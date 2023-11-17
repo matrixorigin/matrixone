@@ -255,7 +255,7 @@ func (w *S3Writer) ResetBlockInfoBat(proc *process.Process) {
 	blockInfoBat.Attrs = attrs
 	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
 	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
-	blockInfoBat.Vecs[2] = proc.GetVector(types.T_text.ToType())
+	blockInfoBat.Vecs[2] = proc.GetVector(types.T_ObjStats.ToType())
 
 	w.blockInfoBat = blockInfoBat
 }
@@ -669,10 +669,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 
 	// append the object stats to bat
 	for idx := 0; idx < len(stats); idx++ {
-		if stats[idx].IsZero() {
-			continue
-		}
-		if err = vector.AppendBytes(w.blockInfoBat.Vecs[2], stats[idx].Marshal(),
+		if err = vector.AppendFixed[objectio.ObjectStats](w.blockInfoBat.Vecs[2], stats[idx],
 			false, proc.GetMPool()); err != nil {
 			return err
 		}

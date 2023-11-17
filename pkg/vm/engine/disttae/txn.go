@@ -282,27 +282,31 @@ func (txn *Transaction) WriteFileLocked(
 	txn.hasS3Op.Store(true)
 	newBat := bat
 	if typ == INSERT {
-		//bat.Attrs = {catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-		newBat = batch.NewWithSize(len(bat.Vecs))
-		newBat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
-		newBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		newBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
+		vecs := []*vector.Vector{vector.NewVec(types.T_text.ToType())}
 
 		blkInfos := vector.MustBytesCol(bat.GetVector(0))
 		for _, blk := range blkInfos {
 			blkInfo := *catalog.DecodeBlockInfo(blk)
-			vector.AppendBytes(
-				newBat.GetVector(0),
-				[]byte(blkInfo.MetaLocation().String()),
-				false,
-				txn.proc.Mp())
+			vector.AppendBytes(vecs[0], []byte(blkInfo.MetaLocation().String()),
+				false, txn.proc.Mp())
 		}
 
-		// append the object stats.
-		// could have multiple stats, it depends on how to implement the underlying `ObjectDescriber`.
-		rows := vector.MustBytesCol(bat.GetVector(1))
-		for idx := 0; idx < len(rows); idx++ {
-			vector.AppendBytes(newBat.GetVector(1), rows[idx], false, txn.proc.Mp())
+		if len(bat.Attrs) == 2 && bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
+			// append the object stats.
+			// could have multiple stats, it depends on how to implement the underlying `ObjectDescriber`.
+			rows := vector.MustFixedCol[objectio.ObjectStats](bat.GetVector(1))
+			for idx := 0; idx < len(rows); idx++ {
+				vec := vector.NewVec(types.T_binary.ToType())
+				vector.AppendFixed[objectio.ObjectStats](vec, rows[idx], false, txn.proc.Mp())
+				vecs = append(vecs, vec)
+			}
+		}
+
+		newBat = batch.NewWithSize(len(bat.Vecs))
+		newBat.SetAttributes(bat.Attrs)
+
+		for idx := range vecs {
+			newBat.SetVector(int32(idx), vecs[idx])
 		}
 
 		newBat.SetRowCount(bat.Vecs[0].Length())
@@ -533,7 +537,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 			bat := batch.NewWithSize(2)
 			bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-			bat.SetVector(1, vector.NewVec(types.T_text.ToType()))
+			bat.SetVector(1, vector.NewVec(types.T_binary.ToType()))
 			for _, blkInfo := range createdBlks {
 				vector.AppendBytes(
 					bat.GetVector(0),
@@ -547,7 +551,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 				if stats[idx].IsZero() {
 					continue
 				}
-				if err = vector.AppendBytes(bat.Vecs[1], stats[idx].Marshal(),
+				if err = vector.AppendFixed[objectio.ObjectStats](bat.Vecs[1], stats[idx],
 					false, tbl.db.txn.proc.GetMPool()); err != nil {
 					return err
 				}

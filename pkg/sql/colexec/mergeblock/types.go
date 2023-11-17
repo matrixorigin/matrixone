@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -60,25 +61,26 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	// }
 }
 
-func (arg *Argument) GetMetaLocBat(name []string, proc *process.Process) {
+func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	// If the target is a partition table
+	attrs := src.Attrs[1:]
 	if len(arg.PartitionSources) > 0 {
 		// 'i' aligns with partition number
 		for i := range arg.PartitionSources {
-			bat := batch.NewWithSize(len(name))
-			bat.Attrs = name
+			bat := batch.NewWithSize(len(attrs))
+			bat.Attrs = attrs
 			bat.Cnt = 1
-			for idx := 0; idx < len(name); idx++ {
-				bat.Vecs[idx] = proc.GetVector(types.New(types.T_text, 0, 0))
+			for idx := 0; idx < len(attrs); idx++ {
+				bat.Vecs[idx] = proc.GetVector(types.New(src.Vecs[idx+1].GetType().Oid, 0, 0))
 			}
 			arg.container.mp[i] = bat
 		}
 	} else {
-		bat := batch.NewWithSize(len(name))
-		bat.Attrs = name
+		bat := batch.NewWithSize(len(attrs))
+		bat.Attrs = attrs
 		bat.Cnt = 1
-		for idx := 0; idx < len(name); idx++ {
-			bat.Vecs[idx] = proc.GetVector(types.New(types.T_text, 0, 0))
+		for idx := 0; idx < len(attrs); idx++ {
+			bat.Vecs[idx] = proc.GetVector(types.New(src.Vecs[idx+1].GetType().Oid, 0, 0))
 		}
 		arg.container.mp[0] = bat
 	}
@@ -86,10 +88,9 @@ func (arg *Argument) GetMetaLocBat(name []string, proc *process.Process) {
 
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	// meta loc and(maybe) object stats
-	arg.GetMetaLocBat(bat.Attrs[1:], proc)
+	arg.GetMetaLocBat(bat, proc)
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
 	blockInfos := vector.MustBytesCol(bat.GetVector(1))
-	stats := vector.MustBytesCol(bat.GetVector(2))
 
 	for i := range tblIdx {
 		if tblIdx[i] >= 0 {
@@ -109,11 +110,17 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 		}
 	}
 
-	// append object stats
-	// could have multiple stats, it depends on how to implement the underlying `ObjectDescriber`.
-	for idx := 0; idx < len(stats); idx++ {
-		vector.AppendBytes(arg.container.mp[0].Vecs[1], stats[idx], false, proc.GetMPool())
+	// if an old version cn send an old version batch which haven't the object_stats column(vec).
+	// just skip.
+	if len(bat.Attrs) == 3 && bat.Attrs[2] == catalog.ObjectMeta_ObjectStats {
+		stats := vector.MustFixedCol[[objectio.ObjectStatsLen]byte](bat.GetVector(2))
+		// append object stats
+		// could have multiple stats, it depends on how to implement the underlying `ObjectDescriber`.
+		for idx := 0; idx < len(stats); idx++ {
+			vector.AppendFixed(arg.container.mp[0].Vecs[1], stats[idx], false, proc.GetMPool())
+		}
 	}
+
 	for _, b := range arg.container.mp {
 		b.SetRowCount(b.Vecs[0].Length())
 	}
