@@ -311,6 +311,16 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 	}()
 	objectsData := make(map[string]*fileData, 0)
+
+	defer func() {
+		for i := range objectsData {
+			for j := range objectsData[i].data {
+				for z := range objectsData[i].data[j].data.Vecs {
+					objectsData[i].data[j].data.Vecs[z].Free(common.DebugAllocator)
+				}
+			}
+		}
+	}()
 	phaseNumber = 1
 	// Load checkpoint
 	data, err := getCheckpointData(ctx, fs, loc, version)
