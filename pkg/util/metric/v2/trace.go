@@ -27,7 +27,9 @@ var (
 			Help:      "Bucketed histogram of trace collector duration.",
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 2.0, 20),
 		}, []string{"type"})
-	TraceCollectorCollectDurationHistogram  = traceCollectorDurationHistogram.WithLabelValues("collect")
-	TraceCollectorGenerateDurationHistogram = traceCollectorDurationHistogram.WithLabelValues("generate")
-	TraceCollectorExportDurationHistogram   = traceCollectorDurationHistogram.WithLabelValues("export")
+	TraceCollectorCollectDurationHistogram       = traceCollectorDurationHistogram.WithLabelValues("collect")
+	TraceCollectorGenerateAwareDurationHistogram = traceCollectorDurationHistogram.WithLabelValues("generate_awake")
+	TraceCollectorGenerateDelayDurationHistogram = traceCollectorDurationHistogram.WithLabelValues("generate_delay")
+	TraceCollectorGenerateDurationHistogram      = traceCollectorDurationHistogram.WithLabelValues("generate")
+	TraceCollectorExportDurationHistogram        = traceCollectorDurationHistogram.WithLabelValues("export")
 )

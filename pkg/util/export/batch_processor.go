@@ -498,6 +498,10 @@ type exportReq interface {
 // awakeBufferFactory frozen buffer, send GenRequest to awake
 var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
+		start := time.Now()
+		defer func() {
+			v2.TraceCollectorGenerateAwareDurationHistogram.Observe(time.Since(start).Seconds())
+		}()
 		req := holder.getGenerateReq()
 		if req == nil {
 			return
@@ -542,12 +546,16 @@ loop:
 				req.callback(err)
 				v2.TraceCollectorGenerateDurationHistogram.Observe(time.Since(start).Seconds())
 			} else {
+				startDelay := time.Now()
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
 				case <-time.After(time.Second * 10):
 					c.logger.Info("awakeBatch: timeout after 10 seconds")
 				}
+				end := time.Now()
+				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())
+				v2.TraceCollectorGenerateDurationHistogram.Observe(end.Sub(start).Seconds())
 			}
 		case <-c.stopCh:
 			break loop
@@ -569,8 +577,8 @@ loop:
 				c.logger.Warn("export req is nil")
 			} else if err := req.handle(); err != nil {
 				req.callback(err)
-				v2.TraceCollectorExportDurationHistogram.Observe(time.Since(start).Seconds())
 			}
+			v2.TraceCollectorExportDurationHistogram.Observe(time.Since(start).Seconds())
 		case <-c.stopCh:
 			c.mux.Lock()
 			for len(c.awakeBatch) > 0 {

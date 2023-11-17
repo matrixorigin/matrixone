@@ -45,6 +45,8 @@ func (c *DashboardCreator) initTraceDurationRow() dashboard.Option {
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="collect"`),
+				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_awake"`),
+				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate_delay"`),
 				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="generate"`),
 				c.getMetricWithFilter(`mo_trace_collector_duration_seconds_bucket`, `type="export"`),
 			},
