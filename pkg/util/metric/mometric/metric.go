@@ -23,19 +23,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	dto "github.com/prometheus/client_model/go"
@@ -305,9 +302,9 @@ type descExtra struct {
 func newDescExtra(desc *prom.Desc) *descExtra {
 	str := desc.String()[14:] // strip Desc{fqName: "
 	fqName := str[:strings.Index(str, "\"")]
-	str = str[strings.Index(str, "variableLabels: [")+17:] // spot varlbl list
-	str = str[:strings.Index(str, "]")]
-	varLblCnt := len(strings.Split(str, " "))
+	str = str[strings.Index(str, "variableLabels: {")+17:] // spot varlbl list
+	str = str[:strings.Index(str, "}")]
+	varLblCnt := len(strings.Split(str, ","))
 	labels := prom.MakeLabelPairs(desc, make([]string, varLblCnt))
 	return &descExtra{orig: desc, fqName: fqName, labels: labels}
 }
