@@ -203,7 +203,14 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 	if err = r.doIncrementalCheckpoint(entry); err != nil {
 		return
 	}
-	if err = r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
+	var lsn, lsnToTruncate uint64
+	lsn = r.source.GetMaxLSN(entry.start, entry.end)
+	if lsn > r.options.reservedWALEntryCount {
+		lsnToTruncate = lsn - r.options.reservedWALEntryCount
+	}
+	entry.ckpLSN = lsn
+	entry.truncateLSN = lsnToTruncate
+	if err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
 		return
 	}
 	backupTime := time.Now().UTC()
@@ -214,6 +221,13 @@ func (r *runner) ForceCheckpointForBackup(end types.TS) (location string, err er
 		return
 	}
 	entry.SetState(ST_Finished)
+	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate)
+	if err != nil {
+		panic(err)
+	}
+	if err = e.WaitDone(); err != nil {
+		panic(err)
+	}
 	logutil.Infof("checkpoint for backup %s, takes %s", entry.String(), time.Since(now))
 	return location, nil
 }
