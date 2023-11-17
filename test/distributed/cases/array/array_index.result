@@ -73,7 +73,7 @@ tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        
 tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING `ivfflat` (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
@@ -86,7 +86,7 @@ tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        
 tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"3","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING `ivfflat` (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"3","op_type":"vector_l2_ops"}
@@ -99,7 +99,7 @@ tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat  
 tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\n`c` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING `ivfflat` (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\n`c` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
@@ -114,7 +114,7 @@ tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        Y
 tbl    1    idx2    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF64(5) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx2` USING `ivfflat` (`b`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF64(5) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx2` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx2";
 name    type    column_name    algo    algo_table_type    algo_params
 idx2    MULTIPLE    b    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
@@ -147,7 +147,7 @@ tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        Y
 tbl    1    idx7    1    b    A    0    NULL    NULL    YES    ivfflat            {"lists":"1","op_type":"vector_l2_ops"}    YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx7` USING `ivfflat` (`b`) lists = 1  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx7` USING ivfflat (`b`) lists = 1  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx7";
 name    type    column_name    algo    algo_table_type    algo_params
 idx7    MULTIPLE    b    ivfflat    metadata    {"lists":"1","op_type":"vector_l2_ops"}

@@ -227,7 +227,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			}
 			indexStr += fmt.Sprintf("`%s` ", formatStr(indexdef.IndexName))
 			if !catalog.IsNullIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += fmt.Sprintf("USING `%s` ", formatStr(indexdef.IndexAlgo))
+				indexStr += fmt.Sprintf("USING %s ", formatStr(indexdef.IndexAlgo))
 			}
 			indexStr += "("
 			i := 0
