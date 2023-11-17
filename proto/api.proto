@@ -247,6 +247,7 @@ message AlterTablePolicy {
     uint32 min_rows_quailifed = 1;
     uint32 max_obj_onerun = 2;
     uint32 max_rows_merged_obj = 3; 
+    repeated MergeHint hints = 4;
 }
 
 message AlterTableConstraint {
@@ -288,6 +289,14 @@ message AlterTableReq {
     }
 }
 
+
+enum MergeHint {
+    Auto             = 0;
+    NoDeletes        = 1;
+    BigTable         = 2;
+    ContinuousWrite  = 3;
+}
+
 message SchemaExtra {
     uint32 next_col_seqnum = 1;
     // sending mo_columns deletes according to this.
@@ -299,6 +308,7 @@ message SchemaExtra {
     uint32 min_rows_quailifed = 5;
     uint32 max_obj_onerun = 6;
     uint32 max_rows_merged_obj = 7;
+    repeated MergeHint hints = 8;
 }
 
 // Int64Map mainly used in unit test

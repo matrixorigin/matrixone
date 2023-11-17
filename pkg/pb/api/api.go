@@ -17,16 +17,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewUpdatePolicyReq(did, tid uint64, minRowQ, maxObjOnerune, maxRowsMerged int) *AlterTableReq {
+func NewUpdatePolicyReq(minRowQ, maxObjOnerune, maxRowsMerged int, hints ...MergeHint) *AlterTableReq {
 	return &AlterTableReq{
-		DbId:    did,
-		TableId: tid,
-		Kind:    AlterKind_UpdatePolicy,
+		Kind: AlterKind_UpdatePolicy,
 		Operation: &AlterTableReq_UpdatePolicy{
 			&AlterTablePolicy{
 				MinRowsQuailifed: uint32(minRowQ),
 				MaxObjOnerun:     uint32(maxObjOnerune),
 				MaxRowsMergedObj: uint32(maxRowsMerged),
+				Hints:            hints,
 			},
 		},
 	}
