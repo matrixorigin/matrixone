@@ -1703,6 +1703,9 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
+		for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+			rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+		}
 	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
