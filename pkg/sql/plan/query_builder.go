@@ -2074,7 +2074,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var projectionBinder *ProjectionBinder
 	var havingList []*plan.Expr
 	var selectList tree.SelectExprs
-	var sampleList tree.SelectExprs
 	var resultLen int
 	var havingBinder *HavingBinder
 	var lockNode *plan.Node
@@ -2199,7 +2198,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 		}
 		// unfold stars and generate headings
-		selectList, sampleList, err = appendSelectList(builder, ctx, selectList, sampleList, clause.Exprs...)
+		selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...)
 		if err != nil {
 			return 0, err
 		}
@@ -2803,13 +2802,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 func appendSelectList(
 	builder *QueryBuilder,
 	ctx *BindContext,
-	selectList tree.SelectExprs, sampleList tree.SelectExprs, exprs ...tree.SelectExpr) (tree.SelectExprs, tree.SelectExprs, error) {
+	selectList tree.SelectExprs, exprs ...tree.SelectExpr) (tree.SelectExprs, error) {
 	for _, selectExpr := range exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
 			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", builder.compCtx.GetAccountId() == catalog.System_Account)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			for i, name := range names {
 				if ctx.finalSelect && name == moRecursiveLevelCol {
@@ -2822,19 +2821,19 @@ func appendSelectList(
 		case *tree.SampleExpr:
 			var err error
 			if err = ctx.sampleFunc.GenerateSampleFunc(expr); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 
 			oldLen := len(selectList)
 			columns, isStar := expr.GetColumns()
 			if isStar {
-				if selectList, sampleList, err = appendSelectList(builder, ctx, selectList, sampleList, tree.SelectExpr{Expr: tree.UnqualifiedStar{}}); err != nil {
-					return nil, nil, err
+				if selectList, err = appendSelectList(builder, ctx, selectList, tree.SelectExpr{Expr: tree.UnqualifiedStar{}}); err != nil {
+					return nil, err
 				}
 			} else {
 				for _, column := range columns {
-					if selectList, sampleList, err = appendSelectList(builder, ctx, selectList, sampleList, tree.SelectExpr{Expr: column}); err != nil {
-						return nil, nil, err
+					if selectList, err = appendSelectList(builder, ctx, selectList, tree.SelectExpr{Expr: column}); err != nil {
+						return nil, err
 					}
 				}
 			}
@@ -2843,20 +2842,19 @@ func appendSelectList(
 			sampleCount := len(selectList) - oldLen
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				if sampleCount != 1 {
-					return nil, nil, moerr.NewSyntaxError(builder.GetContext(), "sample multi columns cannot have alias")
+					return nil, moerr.NewSyntaxError(builder.GetContext(), "sample multi columns cannot have alias")
 				}
 				ctx.headings[len(ctx.headings)-1] = selectExpr.As.Origin()
 				selectList[len(selectList)-1].As = selectExpr.As
 			}
 
 			ctx.sampleFunc.SetStartOffset(oldLen, sampleCount)
-			sampleList = append(sampleList, selectList[oldLen:]...)
 
 		case *tree.UnresolvedName:
 			if expr.Star {
 				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.Parts[0], builder.compCtx.GetAccountId() == catalog.System_Account)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
 				selectList = append(selectList, cols...)
 				ctx.headings = append(ctx.headings, names...)
@@ -2869,7 +2867,7 @@ func appendSelectList(
 
 				newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
 
 				selectList = append(selectList, tree.SelectExpr{
@@ -2908,7 +2906,7 @@ func appendSelectList(
 
 			newExpr, err := ctx.qualifyColumnNames(expr, NoAlias)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -2917,7 +2915,7 @@ func appendSelectList(
 			})
 		}
 	}
-	return selectList, sampleList, nil
+	return selectList, nil
 }
 
 func bindProjectionList(

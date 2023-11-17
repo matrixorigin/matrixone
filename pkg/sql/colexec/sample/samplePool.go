@@ -158,12 +158,8 @@ func (s *sPool) vectorReOrder(
 
 	// reorder vectors.
 	s.reOrderedInput.Vecs = s.reOrderedInput.Vecs[:0]
-	for _, vec := range groupVectors {
-		s.reOrderedInput.Vecs = append(s.reOrderedInput.Vecs, vec)
-	}
-	for _, vec := range sampleVectors {
-		s.reOrderedInput.Vecs = append(s.reOrderedInput.Vecs, vec)
-	}
+	s.reOrderedInput.Vecs = append(s.reOrderedInput.Vecs, groupVectors...)
+	s.reOrderedInput.Vecs = append(s.reOrderedInput.Vecs, sampleVectors...)
 	for _, index := range s.otherPartIndex {
 		s.reOrderedInput.Vecs = append(s.reOrderedInput.Vecs, inputBatch.Vecs[index])
 	}
@@ -811,7 +807,7 @@ func (p *multiPool) addRowByPercent(proc *process.Process, mp *mpool.MPool, colu
 	if percent == 10000 || rand.Intn(10000) < percent {
 		err = p.appendOneRow(proc, mp, columns, bat, row)
 	}
-	return nil
+	return
 }
 
 type sampleColumn interface {

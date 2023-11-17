@@ -118,13 +118,13 @@ func validSample(ctx *BindContext, builder *QueryBuilder) error {
 	return nil
 }
 
-type SampleClauseCtx struct {
-	hasSampleClause bool
-
-	sRows    bool // if true, sample rows.
-	rows     int32
-	percents float64
-}
+//type SampleClauseCtx struct {
+//	hasSampleClause bool
+//
+//	sRows    bool // if true, sample rows.
+//	rows     int32
+//	percents float64
+//}
 
 func generateSamplePlanNode(ctx *BindContext, childNodeID int32) *plan.Node {
 	sampleNode := &plan.Node{
