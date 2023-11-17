@@ -113,6 +113,10 @@ func (b *TxnLogtailRespBuilder) visitSegment(iseg any) {
 	seg := iseg.(*catalog.SegmentEntry)
 	node := seg.GetLatestNodeLocked()
 	if !node.DeletedAt.Equal(txnif.UncommitTS) {
+		if b.batches[objectInfoBatch] == nil {
+			b.batches[objectInfoBatch] = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
+		}
+		visitObject(b.batches[objectInfoBatch], seg, node)
 		return
 	}
 
