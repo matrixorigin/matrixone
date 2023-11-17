@@ -585,10 +585,13 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 
 	newSchema = node.BaseNode.Schema
 	if isNewNode {
-		// Extra info(except seqnnum) is meaningful to the previous version schema
+		// Extra info(except seqnnum etc.) is meaningful to the previous version schema
 		// reset in new Schema
 		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum: newSchema.Extra.NextColSeqnum,
+			NextColSeqnum:    newSchema.Extra.NextColSeqnum,
+			MinRowsQuailifed: newSchema.Extra.MinRowsQuailifed,
+			MaxObjOnerun:     newSchema.Extra.MaxObjOnerun,
+			MaxRowsMergedObj: newSchema.Extra.MaxRowsMergedObj,
 		}
 	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
