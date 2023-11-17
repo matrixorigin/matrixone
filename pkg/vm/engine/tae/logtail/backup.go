@@ -69,7 +69,7 @@ func getCheckpointData(
 	location objectio.Location,
 	version uint32,
 ) (*CheckpointData, error) {
-	data := NewCheckpointData(common.CheckpointAllocator)
+	data := NewCheckpointData(common.DebugAllocator)
 	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
 		return nil, err
