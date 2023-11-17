@@ -118,7 +118,7 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 	}
 	if len(idxs) > 0 {
 		var views *containers.BlockView
-		views, err = task.compacted.GetColumnDataByIds(ctx, idxs)
+		views, err = task.compacted.GetColumnDataByIds(ctx, idxs, common.MergeAllocator)
 		if err != nil {
 			return
 		}
@@ -233,13 +233,13 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	if oldBMeta.IsAppendable() {
 		// for ablk, flush data and deletes
 		var data *containers.Batch
-		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
+		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator)
 		if errr != nil {
 			return errr
 		}
 		data = dataVer.Batch
 		defer data.Close()
-		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
+		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator)
 		if err != nil {
 			return
 		}
@@ -254,6 +254,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			oldBMeta,
 			data,
 			deletes,
+			true,
 		)
 		if err = task.rt.Scheduler.Schedule(ablockTask); err != nil {
 			return
@@ -283,7 +284,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 	} else {
 		// for nablk, flush deletes
-		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
+		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator)
 		if err != nil {
 			return
 		}
@@ -373,7 +374,8 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		newBlkData.GetFs(),
 		newMeta,
 		preparer.Columns,
-		nil)
+		nil,
+		false)
 	if err = task.rt.Scheduler.Schedule(ioTask); err != nil {
 		return
 	}

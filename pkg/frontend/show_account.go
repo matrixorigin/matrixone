@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,10 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	ctl2 "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -129,10 +131,10 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
-func requestStorageUsage(ses *Session) (resp interface{}, err error) {
+func requestStorageUsage(ses *Session) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
-	responseUnmarshaler := func(payload []byte) (interface{}, error) {
+	responseUnmarshaler := func(payload []byte) (any, error) {
 		usage := &db.StorageUsageResp{}
 		if err := usage.Unmarshal(payload); err != nil {
 			return nil, err
@@ -154,46 +156,57 @@ func requestStorageUsage(ses *Session) (resp interface{}, err error) {
 		ses.proc.UdfService, ses.proc.Aicm,
 	)
 
-	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
-	result, err := handler(proc, "DN", "", ctl2.MoCtlTNCmdSender)
+	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)
+	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `show accounts`")
 	} else if err != nil {
 		return nil, err
 	}
 
-	return result.Data.([]interface{})[0], nil
+	return result.Data.([]any)[0], nil
 }
 
-func handleStorageUsageResponse(ctx context.Context, fs fileservice.FileService,
-	usage *db.StorageUsageResp) (map[int32]uint64, error) {
+func handleStorageUsageResponse(
+	ctx context.Context,
+	usage *db.StorageUsageResp,
+	fs fileservice.FileService,
+) (map[int32]uint64, error) {
 	result := make(map[int32]uint64, 0)
 	for idx := range usage.CkpEntries {
 		version := usage.CkpEntries[idx].Version
 		location := usage.CkpEntries[idx].Location
 
-		_, ckpData, err := logtail.LoadCheckpointEntriesFromKey(ctx, fs, location, version)
+		// storage usage was introduced after `CheckpointVersion9`
+		if version < logtail.CheckpointVersion9 {
+			// exist old version checkpoint which hasn't storage usage data in it,
+			// to avoid inaccurate info leading misunderstand, we chose to return empty result
+			logutil.Info("[storage usage]: found older ckp when handle storage usage response")
+			return map[int32]uint64{}, nil
+		}
+
+		ckpData, err := logtail.LoadSpecifiedCkpBatch(
+			ctx, location, version, logtail.SEGStorageUsageIDX, fs,
+		)
 		if err != nil {
 			return nil, err
 		}
 
 		storageUsageBat := ckpData.GetBatches()[logtail.SEGStorageUsageIDX]
-		accIDVec := storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID)
-		sizeVec := storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize)
-
-		// storage usage was introduced after `CheckpointVersion9`
-		if version < logtail.CheckpointVersion9 {
-			// exist old version checkpoint which hasn't storage usage data in it,
-			// to avoid inaccurate info leading misunderstand, we chose to return empty result
-			return map[int32]uint64{}, nil
-		}
+		accIDVec := vector.MustFixedCol[uint64](
+			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
+		)
+		sizeVec := vector.MustFixedCol[uint64](
+			storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector(),
+		)
 
 		size := uint64(0)
-		length := accIDVec.Length()
-		for i := 0; i < length; i++ {
-			result[int32(accIDVec.Get(i).(uint64))] += sizeVec.Get(i).(uint64)
-			size += sizeVec.Get(i).(uint64)
+		for i := 0; i < len(accIDVec); i++ {
+			result[int32(accIDVec[i])] += sizeVec[i]
+			size += sizeVec[i]
 		}
+
+		ckpData.Close()
 	}
 
 	// [account_id, db_id, table_id, obj_id, table_total_size]
@@ -219,7 +232,7 @@ func getAllAccountsStorageUsage(ctx context.Context, ses *Session) (map[int32]ui
 	}
 
 	// step 2: handling these pulled data
-	return handleStorageUsageResponse(ctx, fs, response.(*db.StorageUsageResp))
+	return handleStorageUsageResponse(ctx, response.(*db.StorageUsageResp), fs)
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {

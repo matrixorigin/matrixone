@@ -26,7 +26,8 @@ import (
 // array is used to avoid potential conflicts with the already existing vector class from vectorized execution engine.
 
 const (
-	MaxArrayDimension = 65536
+	MaxArrayDimension        = 65536
+	DefaultArraysToStringSep = " "
 )
 
 // BytesToArray bytes should be of little-endian format
@@ -46,19 +47,27 @@ func ArrayToString[T RealNumbers](input []T) string {
 			_, _ = io.WriteString(&buffer, ", ")
 		}
 
-		// following the same logic of float32 and float64 from result_set.go
-		_, _ = io.WriteString(&buffer, strconv.FormatFloat(float64(value), 'f', -1, 32))
+		// following the similar logic of float32 and float64 from
+		// - output.go #extractRowFromVector()
+		// - mysql_protocol.go #makeResultSetTextRow() MYSQL_TYPE_FLOAT  & MYSQL_TYPE_DOUBLE
+		// NOTE: vector does not handle NaN and Inf.
+		switch value := any(value).(type) {
+		case float32:
+			_, _ = io.WriteString(&buffer, strconv.FormatFloat(float64(value), 'f', -1, 32))
+		case float64:
+			_, _ = io.WriteString(&buffer, strconv.FormatFloat(value, 'f', -1, 64))
+		}
 	}
 	_, _ = io.WriteString(&buffer, "]")
 	return buffer.String()
 }
 
-func ArraysToString[T RealNumbers](input [][]T) string {
+func ArraysToString[T RealNumbers](input [][]T, sep string) string {
 	strValues := make([]string, len(input))
 	for i, row := range input {
 		strValues[i] = ArrayToString[T](row)
 	}
-	return strings.Join(strValues, " ")
+	return strings.Join(strValues, sep)
 }
 
 func StringToArray[T RealNumbers](str string) ([]T, error) {

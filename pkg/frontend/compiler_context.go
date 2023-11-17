@@ -604,7 +604,11 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 			ptables[i] = ptable
 		}
 	}
-	return table.Stats(ctx, ptables, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
+	s := tcc.GetStatsCache().GetStatsInfoMap(table.GetTableID(ctx), true)
+	if s == nil {
+		return false
+	}
+	return table.Stats(ctx, ptables, s)
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {

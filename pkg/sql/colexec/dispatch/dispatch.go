@@ -17,21 +17,24 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString("dispatch")
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) error {
+	ap := arg
 	ctr := new(container)
 	ap.ctr = ctr
 	ctr.localRegsCnt = len(ap.LocalRegs)
@@ -57,6 +60,8 @@ func Prepare(proc *process.Process, arg any) error {
 		} else {
 			ap.prepareLocal()
 		}
+		ap.ctr.batchCnt = make([]int, ctr.aliveRegCnt)
+		ap.ctr.rowCnt = make([]int, ctr.aliveRegCnt)
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -90,14 +95,36 @@ func Prepare(proc *process.Process, arg any) error {
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	ap := arg.(*Argument)
-	bat := proc.InputBatch()
-	if bat == nil && ap.RecSink {
-		bat = makeEndBatch(proc)
-	} else if bat == nil {
-		return process.ExecStop, nil
+func printShuffleResult(arg *Argument) {
+	if arg.ctr.batchCnt != nil && arg.ctr.rowCnt != nil {
+		logutil.Debugf("shuffle dispatch result: batchcnt %v, rowcnt %v", arg.ctr.batchCnt, arg.ctr.rowCnt)
 	}
+}
+
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	ap := arg
+
+	result, err := arg.Children[0].Call(proc)
+	if err != nil {
+		return result, err
+	}
+	bat := result.Batch
+
+	if result.Batch == nil {
+		if ap.RecSink {
+			bat = makeEndBatch(proc)
+			defer func() {
+				if bat != nil {
+					bat.Clean(proc.Mp())
+				}
+			}()
+		} else {
+			printShuffleResult(ap)
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+	}
+
 	if bat.Last() {
 		if !ap.ctr.hasData {
 			bat.SetEnd()
@@ -105,17 +132,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (p
 			ap.ctr.hasData = false
 		}
 	} else if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		result.Batch = batch.EmptyBatch
+		return result, nil
 	} else {
 		ap.ctr.hasData = true
 	}
+	bat.AddCnt(1)
 	ok, err := ap.ctr.sendFunc(bat, ap, proc)
 	if ok {
-		return process.ExecStop, err
+		result.Status = vm.ExecStop
+		return result, err
 	} else {
-		return process.ExecNext, err
+		// result.Batch = nil
+		return result, err
 	}
 }
 
@@ -124,7 +153,7 @@ func makeEndBatch(proc *process.Process) *batch.Batch {
 	b.Attrs = []string{
 		"recursive_col",
 	}
-	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
 	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
 	batch.SetLength(b, 1)
 	b.SetEnd()

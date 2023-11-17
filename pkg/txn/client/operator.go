@@ -52,12 +52,13 @@ var (
 		moerr.ErrTxnNotActive: {},
 	}
 	commitTxnErrors = map[uint16]struct{}{
-		moerr.ErrTAECommit:    {},
-		moerr.ErrTAERollback:  {},
-		moerr.ErrTAEPrepare:   {},
-		moerr.ErrRpcError:     {},
-		moerr.ErrTxnNotFound:  {},
-		moerr.ErrTxnNotActive: {},
+		moerr.ErrTAECommit:            {},
+		moerr.ErrTAERollback:          {},
+		moerr.ErrTAEPrepare:           {},
+		moerr.ErrRpcError:             {},
+		moerr.ErrTxnNotFound:          {},
+		moerr.ErrTxnNotActive:         {},
+		moerr.ErrLockTableBindChanged: {},
 	}
 	rollbackTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERollback:  {},
@@ -441,8 +442,6 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
-	v2.TxnCNCommitCounter.Inc()
-
 	tc.commitAt = time.Now()
 	defer func() {
 		v2.TxnCNCommitDurationHistogram.Observe(time.Since(tc.commitAt).Seconds())
@@ -486,8 +485,8 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	if err := tc.checkStatus(true); err != nil {
-		return err
+	if tc.mu.closed {
+		return nil
 	}
 
 	defer func() {
@@ -612,6 +611,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 
 	var txnReqs []*txn.TxnRequest
 	if payload != nil {
+		v2.TxnCNCommitCounter.Inc()
 		for i := range payload {
 			payload[i].Txn = tc.getTxnMeta(true)
 			txnReqs = append(txnReqs, &payload[i])
@@ -826,6 +826,11 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 			return err
 		}
 
+		// commit failed, refresh invalid lock tables
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			tc.option.lockService.ForceRefreshLockTableBinds(resp.CommitResponse.InvalidLockTables...)
+		}
+
 		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
 		if ok && v.(bool) {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
@@ -847,10 +852,8 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 		return nil
 	default:
-		util.GetLogger().Fatal("invalid response",
-			zap.String("response", resp.DebugString()))
+		return moerr.NewNotSupportedNoCtx("unknown txn response method: %s", resp.DebugString())
 	}
-	return nil
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) error {
@@ -947,7 +950,9 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) {
-	v2.TxnCNCommitResponseDurationHistogram.Observe(float64(time.Since(tc.commitAt).Seconds()))
+	if !tc.commitAt.IsZero() {
+		v2.TxnCNCommitResponseDurationHistogram.Observe(float64(time.Since(tc.commitAt).Seconds()))
+	}
 
 	// rc mode need to see the committed value, so wait logtail applied
 	if tc.mu.txn.IsRCIsolation() &&

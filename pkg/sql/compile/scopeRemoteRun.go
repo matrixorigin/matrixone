@@ -17,10 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -88,6 +90,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/stream"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -112,6 +115,14 @@ func CnServerMessageHandler(
 	cli client.TxnClient,
 	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
+	defer func() {
+		if e := recover(); e != nil {
+			err := moerr.ConvertPanicError(ctx, e)
+			getLogger().Error("panic in cn message handler",
+				zap.String("error", err.Error()))
+			cs.Close()
+		}
+	}()
 
 	msg, ok := message.(*pipeline.Message)
 	if !ok {
@@ -133,7 +144,7 @@ func CnServerMessageHandler(
 // cnMessageHandle deal the received message at cn-server.
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
-	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
+	case pipeline.Method_PrepareDoneNotifyMessage: // notify the dispatch executor
 		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
 		if err != nil || opProc == nil {
 			return err
@@ -163,7 +174,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		}
 		return nil
 
-	case pipeline.PipelineMessage:
+	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
 
 		// decode and rewrite the scope.
@@ -210,22 +221,41 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 	}
 
-	var isConnector bool
-	var lastArg vm.InstructionArgument
+	var lastArg vm.Operator
+	var oldChild []vm.Operator
 	switch arg := lastInstruction.Arg.(type) {
 	case *connector.Argument:
-		isConnector = true
 		lastArg = arg
+		oldChild = arg.Children
+		arg.Children = nil
+		defer func() {
+			arg.Children = oldChild
+		}()
 	case *dispatch.Argument:
 		lastArg = arg
+		oldChild = arg.Children
+		defer func() {
+			arg.Children = oldChild
+		}()
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
 
+	valueScanOperator := &value_scan.Argument{}
+	info := &vm.OperatorInfo{
+		Idx:     -1,
+		IsFirst: false,
+		IsLast:  false,
+	}
+	lastArg.SetInfo(info)
+	lastArg.AppendChild(valueScanOperator)
 	for {
 		val, err = sender.receiveMessage()
-		if err != nil || val == nil {
+		if err != nil {
 			return err
+		}
+		if val == nil {
+			break
 		}
 
 		m := val.(*pipeline.Message)
@@ -242,7 +272,7 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 				}
 				mergeAnalyseInfo(c.anal, ana)
 			}
-			return nil
+			break
 		}
 		// XXX some order check just for safety ?
 		if sequence != m.Sequence {
@@ -264,23 +294,34 @@ func receiveMessageFromCnServer(c *Compile, s *Scope, sender *messageSenderOnCli
 		}
 
 		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
+		if bat != batch.EmptyBatch {
+			bat.AddCnt(1)
+		}
 		dataBuffer = nil
 		if err != nil {
 			return err
 		}
 		lastAnalyze.Network(bat)
-		s.Proc.SetInputBatch(bat)
-
-		if isConnector {
-			if ok, err := connector.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
-				return err
-			}
-		} else {
-			if ok, err := dispatch.Call(-1, s.Proc, lastArg, false, false); err != nil || ok == process.ExecStop {
-				return err
-			}
+		valueScanOperator.Batchs = append(valueScanOperator.Batchs, bat)
+		result, err := lastArg.Call(s.Proc)
+		if err != nil || result.Status == vm.ExecStop {
+			valueScanOperator.Free(s.Proc, false, err)
+			return err
 		}
+		valueScanOperator.Free(s.Proc, false, err)
 	}
+	// for {
+	// 	ok, err := lastArg.Call(s.Proc)
+	// 	if err != nil {
+	// 		valueScanOperator.Free(s.Proc, false, err)
+	// 		return err
+	// 	}
+	// 	if ok.Status == vm.ExecStop {
+	// 		break
+	// 	}
+	// }
+	// valueScanOperator.Free(s.Proc, false, err)
+	return nil
 }
 
 // remoteRun sends a scope for remote running and receive the results.
@@ -300,9 +341,9 @@ func (s *Scope) remoteRun(c *Compile) error {
 	lastArg := lastInstruction.Arg
 	switch arg := lastArg.(type) {
 	case *connector.Argument:
-		connector.Prepare(s.Proc, arg)
+		arg.Prepare(s.Proc)
 	case *dispatch.Argument:
-		dispatch.Prepare(s.Proc, arg)
+		arg.Prepare(s.Proc)
 	default:
 		return moerr.NewInvalidInput(c.ctx, "last operator should only be connector or dispatcher")
 	}
@@ -315,7 +356,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	s.Instructions = append(s.Instructions, lastInstruction)
 
 	// encode the process related information
-	pData, errEncodeProc := encodeProcessInfo(s.Proc)
+	pData, errEncodeProc := encodeProcessInfo(s.Proc, c.sql)
 	if errEncodeProc != nil {
 		lastArg.Free(s.Proc, true, errEncodeProc)
 		return errEncodeProc
@@ -328,7 +369,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return err
 	}
 	defer sender.close()
-	err = sender.send(sData, pData, pipeline.PipelineMessage)
+	err = sender.send(sData, pData, pipeline.Method_PipelineMessage)
 	if err != nil {
 		lastArg.Free(s.Proc, true, err)
 		return err
@@ -374,10 +415,14 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 }
 
 // encodeProcessInfo get needed information from proc, and do serialization work.
-func encodeProcessInfo(proc *process.Process) ([]byte, error) {
+func encodeProcessInfo(proc *process.Process, sql string) ([]byte, error) {
 	procInfo := &pipeline.ProcessInfo{}
+	if len(proc.AnalInfos) == 0 {
+		getLogger().Error("empty plan", zap.String("sql", sql))
+	}
 	{
 		procInfo.Id = proc.Id
+		procInfo.Sql = sql
 		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
 		procInfo.UnixTime = proc.UnixTime
 		procInfo.AccountId = defines.GetAccountId(proc.Ctx)

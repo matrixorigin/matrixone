@@ -18,11 +18,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -69,6 +68,10 @@ func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.pk = idx
 }
 
+func (w *BlockWriter) SetAppendable() {
+	w.writer.SetAppendable()
+}
+
 // WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
 func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
 	block, err := w.writer.Write(batch)
@@ -90,7 +93,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
 		}
-		columnData := containers.ToTNVector(vec)
+		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
 		// update null count and distinct value
 		w.objMetaBuilder.InspectVector(i, columnData, isPK)
 
@@ -157,6 +160,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 			common.OperandField("[Size=0]"), common.OperandField(w.writer.GetSeqnums()))
 		return blocks, objectio.Extent{}, err
 	}
+
 	logutil.Debug("[WriteEnd]",
 		common.OperationField(w.String(blocks)),
 		common.OperandField(w.writer.GetSeqnums()),

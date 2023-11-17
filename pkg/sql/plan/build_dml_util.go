@@ -109,7 +109,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, isInsertWithoutAutoPkCol)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, isInsertWithoutAutoPkCol, true)
 	return err
 }
 
@@ -188,7 +188,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
 	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, false)
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, false, true)
 
 	return err
 }
@@ -338,7 +338,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols, DeepCopyColDef(col))
 							}
 						}
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true, true, nil, false)
+						_checkInsertPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, false, _checkInsertPKDupForHiddenIndexTable)
 						if err != nil {
 							return err
 						}
@@ -429,16 +430,15 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			for _, fk := range childTableDef.Fkeys {
 				if fk.ForeignTbl == delCtx.tableDef.TblId {
 					// update stmt: update the columns do not contain ref key, skip
+					updateRefColumn := make(map[string]int32)
 					if isUpdate {
-						updateRefColumn := false
 						for _, colId := range fk.ForeignCols {
 							updateName := idNameMap[colId]
-							if _, ok := delCtx.updateColPosMap[updateName]; ok {
-								updateRefColumn = true
-								break
+							if uIdx, ok := delCtx.updateColPosMap[updateName]; ok {
+								updateRefColumn[updateName] = int32(uIdx)
 							}
 						}
-						if !updateRefColumn {
+						if len(updateRefColumn) == 0 {
 							continue
 						}
 					}
@@ -536,6 +536,46 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 
 					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+					// deal with case:  update t1 set a = a.  then do not need to check constraint
+					if isUpdate {
+						var filterExpr, tmpExpr *Expr
+						for updateName, newIdx := range updateRefColumn {
+							oldIdx := nameIdxMap[updateName]
+							tmpExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{{
+								Typ: nameTypMap[updateName],
+								Expr: &plan.Expr_Col{
+									Col: &ColRef{
+										ColPos: oldIdx,
+										Name:   updateName,
+									},
+								},
+							}, {
+								Typ: nameTypMap[updateName],
+								Expr: &plan.Expr_Col{
+									Col: &ColRef{
+										ColPos: newIdx,
+										Name:   updateName,
+									},
+								},
+							}})
+							if err != nil {
+								return nil
+							}
+							if filterExpr == nil {
+								filterExpr = tmpExpr
+							} else {
+								filterExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
+								if err != nil {
+									return nil
+								}
+							}
+						}
+						lastNodeId = builder.appendNode(&plan.Node{
+							NodeType:   plan.Node_FILTER,
+							Children:   []int32{lastNodeId},
+							FilterList: []*Expr{filterExpr},
+						}, bindCtx)
+					}
 
 					switch refAction {
 					case plan.ForeignKeyDef_NO_ACTION, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_SET_DEFAULT:
@@ -784,6 +824,7 @@ func makeInsertPlan(
 	updatePkCol bool,
 	pkFilterExprs []*Expr,
 	isInsertWithoutAutoPkCol bool,
+	checkInsertPkDupForHiddenIndexTable bool,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -859,7 +900,8 @@ func makeInsertPlan(
 					return err
 				}
 
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, true, nil, false)
+				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, false, _checkInsertPkDupForHiddenTable)
 				if err != nil {
 					return err
 				}
@@ -919,7 +961,7 @@ func makeInsertPlan(
 	isUpdate := updateColLength > 0
 
 	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
-	if checkInsertPkDup {
+	if checkInsertPkDup && checkInsertPkDupForHiddenIndexTable {
 		// insert stmt or update pk col, we need check insert pk dup
 		if !isUpdate || (isUpdate && updatePkCol) {
 			if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
@@ -979,7 +1021,7 @@ func makeInsertPlan(
 	}
 
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if CNPrimaryCheck {
+	if CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewTag()
 

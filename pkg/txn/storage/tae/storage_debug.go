@@ -16,14 +16,13 @@ package taestorage
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	moctl "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 )
 
@@ -32,40 +31,40 @@ func (s *taeStorage) Debug(ctx context.Context,
 	opCode uint32,
 	data []byte) ([]byte, error) {
 	switch opCode {
-	case uint32(ctl.CmdMethod_Ping):
+	case uint32(api.OpCode_OpPing):
 		return s.handlePing(data), nil
-	case uint32(ctl.CmdMethod_Flush):
+	case uint32(api.OpCode_OpFlush):
 		_, err := handleRead(
 			ctx, s,
 			txnMeta, data,
 			s.taeHandler.HandleFlushTable,
 		)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.TNStringResponse{
+			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.TNStringResponse{
+		resp := protoc.MustMarshal(&api.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
-	case uint32(ctl.CmdMethod_Checkpoint):
+	case uint32(api.OpCode_OpCheckpoint):
 		_, err := handleRead(
 			ctx, s, txnMeta, data, s.taeHandler.HandleForceCheckpoint,
 		)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.TNStringResponse{
+			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.TNStringResponse{
+		resp := protoc.MustMarshal(&api.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
 
-	case uint32(ctl.CmdMethod_Inspect):
+	case uint32(api.OpCode_OpInspect):
 		resp, err := handleRead(
 			ctx, s, txnMeta, data, s.taeHandler.HandleInspectTN,
 		)
@@ -75,21 +74,21 @@ func (s *taeStorage) Debug(ctx context.Context,
 			})
 		}
 		return resp.Read()
-	case uint32(ctl.CmdMethod_AddFaultPoint):
+	case uint32(api.OpCode_OpAddFaultPoint):
 		_, err := handleRead(
 			ctx, s, txnMeta, data, s.taeHandler.HandleAddFaultPoint,
 		)
 		if err != nil {
-			resp := protoc.MustMarshal(&ctl.TNStringResponse{
+			resp := protoc.MustMarshal(&api.TNStringResponse{
 				ReturnStr: "Failed",
 			})
 			return resp, err
 		}
-		resp := protoc.MustMarshal(&ctl.TNStringResponse{
+		resp := protoc.MustMarshal(&api.TNStringResponse{
 			ReturnStr: "OK",
 		})
 		return resp, err
-	case uint32(ctl.CmdMethod_Backup):
+	case uint32(api.OpCode_OpBackup):
 		resp, err := handleRead(
 			ctx, s, txnMeta, data, s.taeHandler.HandleBackup,
 		)
@@ -99,7 +98,7 @@ func (s *taeStorage) Debug(ctx context.Context,
 			})
 		}
 		return resp.Read()
-	case uint32(ctl.CmdMethod_TraceSpan):
+	case uint32(api.OpCode_OpTraceSpan):
 		handleRead(
 			ctx, s, txnMeta, data, s.taeHandler.HandleTraceSpan,
 		)
@@ -107,10 +106,10 @@ func (s *taeStorage) Debug(ctx context.Context,
 		if err := req.Unmarshal(data); err != nil {
 			return nil, err
 		}
-		ret := moctl.SelfProcess(req.Cmd, req.Spans, req.Threshold)
+		ret := ctl.SelfProcess(req.Cmd, req.Spans, req.Threshold)
 		return []byte(ret), nil
 
-	case uint32(ctl.CmdMethod_StorageUsage):
+	case uint32(api.OpCode_OpStorageUsage):
 		resp, _ := handleRead(ctx, s, txnMeta, data, s.taeHandler.HandleStorageUsage)
 		return resp.Read()
 
@@ -120,10 +119,10 @@ func (s *taeStorage) Debug(ctx context.Context,
 }
 
 func (s *taeStorage) handlePing(data []byte) []byte {
-	req := ctl.TNPingRequest{}
+	req := api.TNPingRequest{}
 	protoc.MustUnmarshal(&req, data)
 
-	return protoc.MustMarshal(&ctl.TNPingResponse{
+	return protoc.MustMarshal(&api.TNPingResponse{
 		ShardID:        s.shard.ShardID,
 		ReplicaID:      s.shard.ReplicaID,
 		LogShardID:     s.shard.LogShardID,

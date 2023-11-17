@@ -19,6 +19,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -132,7 +133,11 @@ func (node *DeleteNode) GetID() *common.ID {
 func (node *DeleteNode) SetDeletes(mask *roaring.Bitmap) {
 	node.mask = mask
 }
-
+func (node *DeleteNode) Close() {
+	for _, vec := range node.rowid2PK {
+		vec.Close()
+	}
+}
 func (node *DeleteNode) IsMerged() bool { return node.nt == NT_Merge }
 func (node *DeleteNode) AttachTo(chain *DeleteChain) {
 	node.chain.Store(chain)
@@ -170,7 +175,9 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
 }
 
-func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vector) {
+func (node *DeleteNode) RangeDeleteLocked(
+	start, end uint32, pk containers.Vector, mp *mpool.MPool,
+) {
 	// logutil.Debugf("RangeDelete BLK-%d Start=%d End=%d",
 	// 	node.chain.mvcc.meta.ID,
 	// 	start,
@@ -179,7 +186,7 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32, pk containers.Vecto
 	if pk != nil && pk.Length() > 0 {
 		begin := start
 		for ; begin < end+1; begin++ {
-			node.rowid2PK[begin] = pk.CloneWindow(int(begin-start), 1)
+			node.rowid2PK[begin] = pk.CloneWindow(int(begin-start), 1, mp)
 		}
 	} else {
 		panic("pk vector is empty")
@@ -279,7 +286,8 @@ func (node *DeleteNode) setPersistedRows() {
 		}
 	}
 	node.mask = roaring.NewBitmap()
-	rowids := containers.ToTNVector(bat.Vecs[0])
+	rowids := containers.ToTNVector(bat.Vecs[0], common.MutMemAllocator)
+	defer rowids.Close()
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
 		offset := rowid.GetRowOffset()
 		node.mask.Add(offset)
@@ -444,7 +452,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 					return
 				}
 				n += int64(sn3)
-				pk := containers.MakeVector(*typ)
+				pk := containers.MakeVector(*typ, common.MutMemAllocator)
 				if sn2, err = pk.ReadFrom(r); err != nil {
 					return
 				}

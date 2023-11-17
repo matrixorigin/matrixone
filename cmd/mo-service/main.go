@@ -27,6 +27,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
@@ -41,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
@@ -97,7 +97,7 @@ func main() {
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
 	if *launchFile != "" {
-		if err := startCluster(ctx, stopper, globalCounterSet, shutdownC); err != nil {
+		if err := startCluster(ctx, stopper, shutdownC); err != nil {
 			panic(err)
 		}
 	} else if *configFile != "" {
@@ -105,7 +105,7 @@ func main() {
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
 			panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
 		}
-		if err := startService(ctx, cfg, stopper, globalCounterSet, shutdownC); err != nil {
+		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
 			panic(err)
 		}
 	} else {
@@ -146,7 +146,6 @@ func startService(
 	ctx context.Context,
 	cfg *Config,
 	stopper *stopper.Stopper,
-	globalCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
 	if err := cfg.validate(); err != nil {
@@ -184,7 +183,7 @@ func startService(
 		}
 	}
 
-	fs, err := cfg.createFileService(ctx, st, defines.LocalFileServiceName, globalCounterSet, st, uuid)
+	fs, err := cfg.createFileService(ctx, st, uuid)
 	if err != nil {
 		return err
 	}
@@ -199,11 +198,11 @@ func startService(
 
 	switch st {
 	case metadata.ServiceType_CN:
-		return startCNService(cfg, stopper, fs, globalCounterSet, gossipNode)
+		return startCNService(cfg, stopper, fs, gossipNode)
 	case metadata.ServiceType_TN:
-		return startTNService(cfg, stopper, fs, globalCounterSet, shutdownC)
+		return startTNService(cfg, stopper, fs, shutdownC)
 	case metadata.ServiceType_LOG:
-		return startLogService(cfg, stopper, fs, globalCounterSet, shutdownC)
+		return startLogService(cfg, stopper, fs, shutdownC)
 	case metadata.ServiceType_PROXY:
 		return startProxyService(cfg, stopper)
 	case metadata.ServiceType_PYTHON_UDF:
@@ -220,7 +219,6 @@ func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	perfCounterSet *perfcounter.CounterSet,
 	gossipNode *gossip.Node,
 ) error {
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitAnyShardReady); err != nil {
@@ -229,7 +227,6 @@ func startCNService(
 	serviceWG.Add(1)
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		defer serviceWG.Done()
-		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getCNServiceConfig()
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
@@ -269,7 +266,6 @@ func startTNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
 	if err := waitClusterCondition(cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
@@ -282,14 +278,12 @@ func startTNService(
 	serviceWG.Add(1)
 	return stopper.RunNamedTask("tn-service", func(ctx context.Context) {
 		defer serviceWG.Done()
-		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		cfg.initMetaCache()
 		c := cfg.getTNServiceConfig()
 		//notify the tn service it is in the standalone cluster
 		c.InStandalone = cfg.IsStandalone
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := tnservice.NewService(
-			perfCounterSet,
 			&c,
 			r,
 			fileService,
@@ -313,7 +307,6 @@ func startLogService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	perfCounterSet *perfcounter.CounterSet,
 	shutdownC chan struct{},
 ) error {
 	lscfg := cfg.getLogServiceConfig()
@@ -331,7 +324,6 @@ func startLogService(
 	serviceWG.Add(1)
 	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
 		defer serviceWG.Done()
-		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
 		if cfg.LogService.BootstrapConfig.BootstrapCluster {
 			logutil.Infof("bootstrapping hakeeper...")
 			if err := s.BootstrapHAKeeper(ctx, cfg.LogService); err != nil {

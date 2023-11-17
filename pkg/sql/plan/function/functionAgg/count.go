@@ -98,6 +98,11 @@ type sAggCount[T allTypes] struct {
 	isCountStar bool
 }
 
+func (s *sAggCount[T]) Dup() agg.AggStruct {
+	return &sAggCount[T]{
+		isCountStar: s.isCountStar,
+	}
+}
 func (s *sAggCount[T]) Grows(_ int)         {}
 func (s *sAggCount[T]) Free(_ *mpool.MPool) {}
 func (s *sAggCount[T]) Fill(groupNumber int64, value T, lastResult int64, count int64, isEmpty bool, isNull bool) (int64, bool, error) {

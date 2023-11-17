@@ -27,7 +27,7 @@ const (
 	HashMapSizeForShuffle           = 160000
 	threshHoldForHybirdShuffle      = 4000000
 	MAXShuffleDOP                   = 64
-	ShuffleThreshHold               = 50000
+	ShuffleThreshHoldOfNDV          = 50000
 	ShuffleTypeThreshHoldLowerLimit = 16
 	ShuffleTypeThreshHoldUpperLimit = 1024
 )
@@ -199,11 +199,10 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		}
 	}
 
-	sc := builder.compCtx.GetStatsCache()
-	if sc == nil {
+	s := getStatsInfoByTableID(tableDef.TblId, builder)
+	if s == nil {
 		return
 	}
-	s := sc.GetStatsInfoMap(tableDef.TblId)
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
 	n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
@@ -253,7 +252,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 
 	//find the highest ndv
 	highestNDV := n.OnList[idx].Ndv
-	if highestNDV < ShuffleThreshHold {
+	if highestNDV < ShuffleThreshHoldOfNDV {
 		return
 	}
 
@@ -314,7 +313,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 			idx = i
 		}
 	}
-	if highestNDV < ShuffleThreshHold {
+	if highestNDV < ShuffleThreshHoldOfNDV {
 		return
 	}
 
@@ -367,12 +366,11 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	if n.TableDef.Pkey != nil {
 		firstColName := n.TableDef.Pkey.Names[0]
 		firstColID := n.TableDef.Name2ColIndex[firstColName]
-		sc := builder.compCtx.GetStatsCache()
-		if sc == nil {
+		s := getStatsInfoByTableID(n.TableDef.TblId, builder)
+		if s == nil {
 			return
 		}
-		s := sc.GetStatsInfoMap(n.TableDef.TblId)
-		if s.NdvMap[firstColName] < ShuffleThreshHold {
+		if s.NdvMap[firstColName] < ShuffleThreshHoldOfNDV {
 			return
 		}
 		switch types.T(n.TableDef.Cols[firstColID].Typ.Id) {

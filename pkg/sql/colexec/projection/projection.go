@@ -16,14 +16,14 @@ package projection
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg any, buf *bytes.Buffer) {
-	n := arg.(*Argument)
+func (arg *Argument) String(buf *bytes.Buffer) {
+	n := arg
 	buf.WriteString("projection(")
 	for i, e := range n.Es {
 		if i > 0 {
@@ -34,58 +34,54 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	ap := arg
 	ap.ctr = new(container)
 	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
 
 	return err
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 
-	bat := proc.InputBatch()
-	if bat == nil {
-		proc.SetInputBatch(nil)
-		return process.ExecStop, nil
-	}
-	if bat.Last() {
-		proc.SetInputBatch(bat)
-		return process.ExecNext, nil
-	}
-	if bat.IsEmpty() {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
-	}
-
-	anal.Input(bat, isFirst)
-	ap := arg.(*Argument)
-	rbat := batch.NewWithSize(len(ap.Es))
-
-	// do projection.
-	for i := range ap.ctr.projExecutors {
-		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
-		if err != nil {
-			return process.ExecNext, err
-		}
-		rbat.Vecs[i] = vec
-	}
-
-	newAlloc, err := colexec.FixProjectionResult(proc, ap.ctr.projExecutors, rbat, bat)
+	result, err := arg.children[0].Call(proc)
 	if err != nil {
-		bat.Clean(proc.Mp())
-		return process.ExecNext, err
+		return result, err
+	}
+	if result.Batch == nil || result.Batch.IsEmpty() || result.Batch.Last() {
+		return result, nil
+	}
+	bat := result.Batch
+	anal.Input(bat, arg.info.IsFirst)
+
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+		arg.buf = nil
+	}
+
+	arg.buf = batch.NewWithSize(len(arg.Es))
+	// keep shuffleIDX unchanged
+	arg.buf.ShuffleIDX = bat.ShuffleIDX
+	// do projection.
+	for i := range arg.ctr.projExecutors {
+		vec, err := arg.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			return result, err
+		}
+		arg.buf.Vecs[i] = vec
+	}
+
+	newAlloc, err := colexec.FixProjectionResult(proc, arg.ctr.projExecutors, arg.buf, bat)
+	if err != nil {
+		return result, err
 	}
 	anal.Alloc(int64(newAlloc))
+	arg.buf.SetRowCount(bat.RowCount())
 
-	rbat.SetRowCount(bat.RowCount())
-
-	proc.PutBatch(bat)
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
-	return process.ExecNext, nil
+	anal.Output(arg.buf, arg.info.IsLast)
+	result.Batch = arg.buf
+	return result, nil
 }

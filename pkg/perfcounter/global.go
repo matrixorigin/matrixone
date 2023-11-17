@@ -12,28 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package catalog
+package perfcounter
 
-import (
-	"fmt"
-	"strings"
-)
+var globalCounterSet = new(CounterSet)
 
-// This class is used by "secondary index" to resolve the "programmatically generated PK" appended to the
-// end of the index key "__mo_index_idx_col".
-
-const (
-	AliasPrefix = "__mo_alias_"
-)
-
-func CreateAlias(column string) string {
-	return fmt.Sprintf("%s%s", AliasPrefix, column)
-}
-
-func ResolveAlias(alias string) string {
-	return strings.TrimPrefix(alias, AliasPrefix)
-}
-
-func IsAlias(column string) bool {
-	return strings.HasPrefix(column, AliasPrefix)
-}
+var NameForGlobal = func() string {
+	// we don't put these codes into init function to avoid initialization order problem
+	name := "global"
+	Named.Store(name, globalCounterSet)
+	return name
+}()
