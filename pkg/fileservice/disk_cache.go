@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -170,6 +171,7 @@ func (d *DiskCache) Read(
 		if err := entry.ReadFromOSFile(file); err != nil {
 			// ignore error
 			numError++
+			logutil.Warn("read disk cache error", zap.Any("error", err))
 			continue
 		}
 
@@ -225,7 +227,9 @@ func (d *DiskCache) Update(
 		}
 
 		diskPath := d.pathForIOEntry(path.File, entry)
-		written, err := d.writeFile(ctx, diskPath, entry.Data)
+		written, err := d.writeFile(ctx, diskPath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(entry.Data)), nil
+		})
 		if err != nil {
 			return err
 		}
@@ -240,7 +244,11 @@ func (d *DiskCache) Update(
 	return nil
 }
 
-func (d *DiskCache) writeFile(ctx context.Context, diskPath string, data []byte) (bool, error) {
+func (d *DiskCache) writeFile(
+	ctx context.Context,
+	diskPath string,
+	openReader func(context.Context) (io.ReadCloser, error),
+) (bool, error) {
 	var numCreate, numStat, numError, numWrite int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
@@ -271,27 +279,42 @@ func (d *DiskCache) writeFile(ctx context.Context, diskPath string, data []byte)
 	err = os.MkdirAll(dir, 0755)
 	if err != nil {
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	f, err := os.CreateTemp(dir, "*")
 	if err != nil {
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	numCreate++
-	n, err := f.Write(data)
+	from, err := openReader(ctx)
+	if err != nil {
+		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
+		return false, nil // ignore error
+	}
+	defer from.Close()
+	var buf []byte
+	put := ioBufferPool.Get(&buf)
+	defer put.Put()
+	n, err := io.CopyBuffer(f, from, buf)
 	if err != nil {
 		f.Close()
 		os.Remove(f.Name())
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	if err := f.Close(); err != nil {
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 	if err := os.Rename(f.Name(), diskPath); err != nil {
 		numError++
+		logutil.Warn("write disk cache error", zap.Any("error", err))
 		return false, nil // ignore error
 	}
 
@@ -323,7 +346,7 @@ func (d *DiskCache) triggerEvict(ctx context.Context, bytesWritten int64) {
 		if newlyWrittenThreshold > 0 && d.evictState.newlyWritten >= newlyWrittenThreshold {
 			if d.evictState.timer.Stop() {
 				// evict immediately
-				logutil.Debug("disk cache: newly written bytes may excceeds eviction target, start immediately",
+				logutil.Info("disk cache: newly written bytes may excceeds eviction target, start immediately",
 					zap.Any("newly-written", d.evictState.newlyWritten),
 					zap.Any("newly-written-threshold", newlyWrittenThreshold),
 				)
@@ -400,8 +423,8 @@ func (d *DiskCache) evict(ctx context.Context) {
 
 	target := int64(float64(d.capacity) * d.evictTarget)
 
-	logutil.Info("disk cache eviction",
-		zap.Any("bytes", sumSize),
+	logutil.Info("disk cache eviction check",
+		zap.Any("used bytes", sumSize),
 		zap.Any("target", target),
 	)
 
@@ -412,9 +435,9 @@ func (d *DiskCache) evict(ctx context.Context) {
 			perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 				set.FileService.Cache.Disk.Evict.Add(numDeleted)
 			}, d.perfCounterSets...)
-			logutil.Debug("disk cache: eviction finished",
-				zap.Any("files", numDeleted),
-				zap.Any("bytes", bytesDeleted),
+			logutil.Info("disk cache eviction finished",
+				zap.Any("deleted files", numDeleted),
+				zap.Any("deleted bytes", bytesDeleted),
 			)
 		}
 	}()
@@ -504,9 +527,13 @@ func (d *DiskCache) startUpdate(path string) (done func()) {
 
 var _ FileCache = new(DiskCache)
 
-func (d *DiskCache) SetFile(ctx context.Context, path string, content []byte) error {
+func (d *DiskCache) SetFile(
+	ctx context.Context,
+	path string,
+	openReader func(context.Context) (io.ReadCloser, error),
+) error {
 	diskPath := d.pathForFile(path)
-	_, err := d.writeFile(ctx, diskPath, content)
+	_, err := d.writeFile(ctx, diskPath, openReader)
 	if err != nil {
 		return err
 	}

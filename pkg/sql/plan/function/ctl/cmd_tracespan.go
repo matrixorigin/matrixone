@@ -17,17 +17,17 @@ package ctl
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -137,7 +137,7 @@ func handleTraceSpan(proc *process.Process,
 	}
 
 	return Result{
-		Method: pb.CmdMethod_TraceSpan.String(),
+		Method: TraceSpanMethod,
 		Data:   data,
 	}, nil
 }
@@ -204,7 +204,7 @@ func send2TNAndWaitResp(proc *process.Process,
 	}
 
 	return GetTNHandlerFunc(
-		pb.CmdMethod_TraceSpan, whichTN, payloadFn, repsonseUnmarshaler,
+		api.OpCode_OpTraceSpan, whichTN, payloadFn, repsonseUnmarshaler,
 	)(proc, service, parameter, sender)
 
 }

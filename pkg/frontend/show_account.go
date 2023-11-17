@@ -30,10 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	ctl2 "github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -131,10 +131,10 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
-func requestStorageUsage(ses *Session) (resp interface{}, err error) {
+func requestStorageUsage(ses *Session) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
-	responseUnmarshaler := func(payload []byte) (interface{}, error) {
+	responseUnmarshaler := func(payload []byte) (any, error) {
 		usage := &db.StorageUsageResp{}
 		if err := usage.Unmarshal(payload); err != nil {
 			return nil, err
@@ -156,15 +156,15 @@ func requestStorageUsage(ses *Session) (resp interface{}, err error) {
 		ses.proc.UdfService, ses.proc.Aicm,
 	)
 
-	handler := ctl2.GetTNHandlerFunc(ctl.CmdMethod_StorageUsage, whichTN, payload, responseUnmarshaler)
-	result, err := handler(proc, "DN", "", ctl2.MoCtlTNCmdSender)
+	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)
+	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `show accounts`")
 	} else if err != nil {
 		return nil, err
 	}
 
-	return result.Data.([]interface{})[0], nil
+	return result.Data.([]any)[0], nil
 }
 
 func handleStorageUsageResponse(

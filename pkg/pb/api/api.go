@@ -17,6 +17,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+var (
+	OpMethodName = map[OpCode]string{
+		OpCode_OpPing:          "Ping",
+		OpCode_OpFlush:         "Flush",
+		OpCode_OpCheckpoint:    "Checkpoint",
+		OpCode_OpInspect:       "Inspect",
+		OpCode_OpAddFaultPoint: "AddFaultPoint",
+		OpCode_OpBackup:        "Backup",
+		OpCode_OpTraceSpan:     "TraceSpan",
+	}
+)
+
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
 		DbId:    did,
