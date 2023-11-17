@@ -205,7 +205,12 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 		sampleCnt = int64(entriesPerList * centroidParamsLists)
 	}
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select `%s` from `%s` order by rand() limit %d)", indexColumnName, originalTableDef.Name, sampleCnt)
+	sampleSQL := fmt.Sprintf("(select `%s` from `%s`.`%s` order by rand() where `%s` is not null limit %d)",
+		indexColumnName,
+		qryDatabase,
+		originalTableDef.Name,
+		indexColumnName,
+		sampleCnt)
 
 	// 3. Insert into centroids table
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
@@ -311,6 +316,14 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 		centroidsTableName,
 	)
 
+	// 5. non-null original table rows
+	nonNullOriginalTableRowsSql := fmt.Sprintf("(select * from `%s`.`%s` where `%s` is not null) as `%s`",
+		qryDatabase,
+		originalTableDef.Name,
+		indexColumnName,
+		originalTableDef.Name,
+	)
+
 	/*
 		Sample SQL:
 		SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`,
@@ -356,7 +369,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 		originalTableDef.Name,
 		indexColumnName,
 
-		originalTableDef.Name,
+		nonNullOriginalTableRowsSql,
 		centroidsTableForCurrentVersionSql,
 	)
 
