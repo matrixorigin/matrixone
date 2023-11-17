@@ -406,7 +406,7 @@ type singlePool struct {
 	// free space of pool.
 	space int
 
-	// bat stores the data in pool.
+	// bat stores the sample data in the pool.
 	bat *batch.Batch
 }
 
@@ -633,7 +633,7 @@ type multiPool struct {
 	// count of rows which has been stored.
 	have int
 
-	// bat stores the data in pool.
+	// bat stores the sample data in the pool.
 	bat *batch.Batch
 
 	// reused.
