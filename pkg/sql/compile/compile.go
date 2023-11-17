@@ -1206,7 +1206,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					})
 					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
 					if c.anal.qry.LoadTag {
-						for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+						for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
 							rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
 						}
 					}
