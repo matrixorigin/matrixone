@@ -307,8 +307,8 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 // | --   | --        | --           | --           | --          |
 // | 6    | 0.6 =~ 1  | 1            | 1            | 1           |
 // | 10   | 1.0       | 1            | 1            | 1           |
-// | 30   | 3.0       | 1            | 1            | 2           |
-// | 40   | 4.0       | 1            | 1            | 2           |
+// | 30   | 3.0       | 1            | 1            | 3           |
+// | 40   | 4.0       | 1            | 1            | 4           |
 
 func (c *MOCollector) calculateDefaultWorker() {
 	var collectorCnt, generatorCnt, exporterCnt int
@@ -316,8 +316,8 @@ func (c *MOCollector) calculateDefaultWorker() {
 	if totalNum < 5 {
 		collectorCnt, generatorCnt, exporterCnt = 1, 1, 3
 	} else {
-		unit := float64(totalNum) / 13.0
-		collectorCnt = int(unit + 0.5)
+		unit := float64(totalNum) / (2.0 + 10.0)
+		collectorCnt = 1
 		generatorCnt = int(unit*2 + 0.5)
 		exporterCnt = int(unit*10 + 0.5)
 	}
