@@ -400,52 +400,40 @@ func TestMOCollector_calculateDefaultWorker(t *testing.T) {
 		wants  want
 	}{
 		{
-			name: "normal_8c",
-			fields: fields{
-				collectorCntP: 10,
-				generatorCntP: 20,
-				exporterCntP:  80,
-			},
-			args: args{
-				numCpu: 8,
-			},
-			wants: want{
-				collectorCnt: 1,
-				generatorCnt: 1,
-				exporterCnt:  3,
-			},
+			name:   "normal_8c",
+			fields: fields{collectorCntP: 10, generatorCntP: 20, exporterCntP: 80},
+			args:   args{numCpu: 8},
+			wants:  want{collectorCnt: 1, generatorCnt: 1, exporterCnt: 1},
 		},
 		{
-			name: "normal_30c",
-			fields: fields{
-				collectorCntP: 10,
-				generatorCntP: 20,
-				exporterCntP:  80,
-			},
-			args: args{
-				numCpu: 30,
-			},
-			wants: want{
-				collectorCnt: 1,
-				generatorCnt: 1,
-				exporterCnt:  3,
-			},
+			name:   "normal_30c",
+			fields: fields{collectorCntP: 10, generatorCntP: 20, exporterCntP: 80},
+			args:   args{numCpu: 30},
+			wants:  want{collectorCnt: 1, generatorCnt: 1, exporterCnt: 2},
 		},
 		{
-			name: "normal_8c_big",
-			fields: fields{
-				collectorCntP: 10,
-				generatorCntP: 800,
-				exporterCntP:  800,
-			},
-			args: args{
-				numCpu: 8,
-			},
-			wants: want{
-				collectorCnt: 1,
-				generatorCnt: 8,
-				exporterCnt:  8,
-			},
+			name:   "normal_8c_big",
+			fields: fields{collectorCntP: 10, generatorCntP: 800, exporterCntP: 800},
+			args:   args{numCpu: 8},
+			wants:  want{collectorCnt: 1, generatorCnt: 8, exporterCnt: 8},
+		},
+		{
+			name:   "normal_1c_100p_400p",
+			fields: fields{collectorCntP: 10, generatorCntP: 100, exporterCntP: 400},
+			args:   args{numCpu: 1},
+			wants:  want{collectorCnt: 1, generatorCnt: 1, exporterCnt: 1},
+		},
+		{
+			name:   "normal_7c_80p_400p_1000p",
+			fields: fields{collectorCntP: 80, generatorCntP: 400, exporterCntP: 1000},
+			args:   args{numCpu: 7},
+			wants:  want{collectorCnt: 1, generatorCnt: 4, exporterCnt: 7},
+		},
+		{
+			name:   "normal_16c_80p_400p_1000p",
+			fields: fields{collectorCntP: 80, generatorCntP: 400, exporterCntP: 800},
+			args:   args{numCpu: 16},
+			wants:  want{collectorCnt: 2, generatorCnt: 8, exporterCnt: 16},
 		},
 	}
 	for _, tt := range tests {

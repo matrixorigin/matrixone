@@ -134,9 +134,9 @@ var (
 	// defaultOBCollectorCntPercent
 	defaultOBCollectorCntPercent = 10
 	// defaultOBGeneratorCntPercent
-	defaultOBGeneratorCntPercent = 20
+	defaultOBGeneratorCntPercent = 400
 	// defaultOBExporterCntPercent
-	defaultOBExporterCntPercent = 80
+	defaultOBExporterCntPercent = 400
 
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30

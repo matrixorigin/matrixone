@@ -302,6 +302,8 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 	return c
 }
 
+const maxPercentValue = 1000
+
 // calculateDefaultWorker
 // totalNum = int( #cpu * 0.1 + 0.5 )
 // default collectorCntP : generatorCntP : exporterCntP = 10 : 20 : 80.
@@ -311,25 +313,46 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 // | #cpu | #totalNum | collectorCnt | generatorCnt | exporterCnt |
 // | --   | --        | --           | --           | --          |
 // | 6    | 0.6 =~ 1  | 1            | 1            | 3           |
-// | 30   | 3.0       | 1            | 1            | 3           |
+// | 30   | 3.0       | 1            | 1            | 2           |
 // | 50   | 5.0       | 1            | 1            | 4           |
 // | 60   | 6.0       | 1            | 2            | 5           |
-
 func (c *MOCollector) calculateDefaultWorker(numCpu int) {
-	var totalNum = int(float64(numCpu)*0.1 + 0.5)
+	var totalNum = math.Ceil(float64(numCpu) * 0.1)
 	unit := float64(totalNum) / (100.0)
 	// set default value if non-set
-	c.collectorCnt = int(unit*float64(c.collectorCntP) + 0.5)
-	c.generatorCnt = int(unit*float64(c.generatorCntP) + 0.5)
-	c.exporterCnt = int(unit*float64(c.exporterCntP) + 0.5)
+	c.collectorCnt = int(math.Round(unit * float64(c.collectorCntP)))
+	c.generatorCnt = int(math.Round(unit * float64(c.generatorCntP)))
+	c.exporterCnt = int(math.Round(unit * float64(c.exporterCntP)))
 	if c.collectorCnt <= 0 {
 		c.collectorCnt = 1
 	}
 	if c.generatorCnt <= 0 {
 		c.generatorCnt = 1
 	}
-	if c.exporterCnt <= 3 {
-		c.exporterCnt = 3
+	if c.exporterCnt <= 0 {
+		c.exporterCnt = 1
+	}
+
+	// check max value < numCpu
+	if c.collectorCnt > numCpu {
+		c.collectorCnt = numCpu
+	}
+	if c.generatorCnt > numCpu {
+		c.generatorCnt = numCpu
+	}
+	if c.exporterCnt > numCpu {
+		c.exporterCnt = numCpu
+	}
+
+	// last check: disable calculation
+	if c.collectorCnt >= maxPercentValue {
+		c.collectorCnt = numCpu
+	}
+	if c.generatorCntP >= maxPercentValue {
+		c.generatorCnt = numCpu
+	}
+	if c.exporterCnt >= maxPercentValue {
+		c.generatorCnt = numCpu
 	}
 	return
 }
