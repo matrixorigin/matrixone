@@ -664,6 +664,15 @@ func (c *OBCollectorConfig) SetDefaultValues() {
 	if c.BufferSize == 0 {
 		c.BufferSize = defaultOBBufferSize
 	}
+	if c.CollectorCntP <= 0 {
+		c.CollectorCntP = defaultOBCollectorCntPercent
+	}
+	if c.GeneratorCntP <= 0 {
+		c.GeneratorCntP = defaultOBGeneratorCntPercent
+	}
+	if c.ExporterCntP <= 0 {
+		c.ExporterCntP = defaultOBExporterCntPercent
+	}
 }
 
 type ParameterUnit struct {
