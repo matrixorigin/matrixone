@@ -49,40 +49,41 @@ func NewStatsCache() *StatsCache {
 }
 
 type StatsInfoMap struct {
-	NdvMap          map[string]float64
-	MinValMap       map[string]float64
-	MaxValMap       map[string]float64
-	DataTypeMap     map[string]types.T
-	NullCntMap      map[string]int64
-	ShuffleRangeMap map[string]*ShuffleRange
-	BlockNumber     uint16
-	ObjectNumber    int //detect if block number changes , update stats info map
-	TableCnt        float64
-	tableName       string
+	NdvMap               map[string]float64
+	MinValMap            map[string]float64
+	MaxValMap            map[string]float64
+	DataTypeMap          map[string]types.T
+	NullCntMap           map[string]int64
+	ShuffleRangeMap      map[string]*ShuffleRange
+	BlockNumber          int
+	AccurateObjectNumber int
+	ApproxObjectNumber   int //detect if block number changes , update stats info map
+	TableCnt             float64
+	tableName            string
 }
 
 func NewStatsInfoMap() *StatsInfoMap {
 	return &StatsInfoMap{
-		NdvMap:          make(map[string]float64),
-		MinValMap:       make(map[string]float64),
-		MaxValMap:       make(map[string]float64),
-		DataTypeMap:     make(map[string]types.T),
-		NullCntMap:      make(map[string]int64),
-		ShuffleRangeMap: make(map[string]*ShuffleRange),
-		BlockNumber:     0,
-		ObjectNumber:    0,
-		TableCnt:        0,
+		NdvMap:             make(map[string]float64),
+		MinValMap:          make(map[string]float64),
+		MaxValMap:          make(map[string]float64),
+		DataTypeMap:        make(map[string]types.T),
+		NullCntMap:         make(map[string]int64),
+		ShuffleRangeMap:    make(map[string]*ShuffleRange),
+		BlockNumber:        0,
+		ApproxObjectNumber: 0,
+		TableCnt:           0,
 	}
 }
 
-func (sc *StatsInfoMap) NeedUpdate(currentObjNum int) bool {
-	if sc.ObjectNumber == 0 {
+func (sc *StatsInfoMap) NeedUpdate(currentApproxObjNum int) bool {
+	if sc.ApproxObjectNumber == 0 || sc.AccurateObjectNumber == 0 {
 		return true
 	}
-	if math.Abs(float64(sc.ObjectNumber-currentObjNum)) >= 100 {
+	if math.Abs(float64(sc.ApproxObjectNumber-currentApproxObjNum)) >= 10 {
 		return true
 	}
-	if float64(currentObjNum)/float64(sc.ObjectNumber) > 1.1 || float64(currentObjNum)/float64(sc.ObjectNumber) < 0.9 {
+	if float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) > 1.05 || float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) < 0.95 {
 		return true
 	}
 	return false
@@ -104,12 +105,15 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64, create bool) *StatsInfoMap
 }
 
 type InfoFromZoneMap struct {
-	ColumnZMs     []objectio.ZoneMap
-	DataTypes     []types.Type
-	ColumnNDVs    []float64
-	NullCnts      []int64
-	ShuffleRanges []*ShuffleRange
-	TableCnt      float64
+	ColumnZMs            []objectio.ZoneMap
+	DataTypes            []types.Type
+	ColumnNDVs           []float64
+	NullCnts             []int64
+	ShuffleRanges        []*ShuffleRange
+	BlockNumber          int
+	AccurateObjectNumber int
+	ApproxObjectNumber   int
+	TableCnt             float64
 }
 
 func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
@@ -123,9 +127,10 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tableDef *plan.TableDef, s *StatsInfoMap) {
-	s.ObjectNumber = numObjs
-	s.BlockNumber = numBlks
+func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *StatsInfoMap) {
+	s.ApproxObjectNumber = info.ApproxObjectNumber
+	s.AccurateObjectNumber = info.AccurateObjectNumber
+	s.BlockNumber = info.BlockNumber
 	s.TableCnt = info.TableCnt
 	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type

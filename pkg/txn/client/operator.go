@@ -852,10 +852,8 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 		return nil
 	default:
-		util.GetLogger().Fatal("invalid response",
-			zap.String("response", resp.DebugString()))
+		return moerr.NewNotSupportedNoCtx("unknown txn response method: %s", resp.DebugString())
 	}
-	return nil
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) error {

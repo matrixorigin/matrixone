@@ -29,6 +29,41 @@ enum OpCode {
     Nop          = 0;
     OpGetLogTail = 1000;
     OpPreCommit  = 1001;
+
+    // Debug
+    OpPing          = 2000;
+    OpFlush         = 2001;
+    OpCheckpoint    = 2003;
+    OpInspect       = 2004;
+    OpAddFaultPoint = 2005;
+    OpBackup        = 2006;
+    OpTraceSpan     = 2007;
+    OpStorageUsage  = 2008;
+}
+
+// TNPingRequest ping request
+message TNPingRequest {
+    option (gogoproto.sizer) = true;
+    option (gogoproto.protosizer) = false;
+    string parameter = 1;
+}
+
+// TNPingResponse ping response
+message TNPingResponse {
+    option (gogoproto.sizer) = true;
+    option (gogoproto.protosizer) = false;
+    string storeID        = 1;
+    string serviceAddress = 2;
+    uint64 shardID        = 3;
+    uint64 replicaID      = 4;
+    uint64 logShardID     = 5;
+}
+
+// TNStringResponse string type response
+message TNStringResponse {
+    option (gogoproto.sizer) = true;
+    option (gogoproto.protosizer) = false;
+    string returnStr = 1;
 }
 
 message Vector {
@@ -240,6 +275,14 @@ enum AlterKind {
     RenameTable      = 3;
     UpdateComment    = 4;
     UpdateConstraint = 5;
+    UpdatePolicy     = 6;
+}
+
+message AlterTablePolicy {
+    uint32 min_rows_quailifed = 1;
+    uint32 max_obj_onerun = 2;
+    uint32 max_rows_merged_obj = 3; 
+    repeated MergeHint hints = 4;
 }
 
 message AlterTableConstraint {
@@ -277,7 +320,16 @@ message AlterTableReq {
         AlterTableRenameTable rename_table = 6;
         AlterTableComment update_comment   = 7;
         AlterTableConstraint update_cstr   = 8;
+        AlterTablePolicy update_policy     = 9;
     }
+}
+
+
+enum MergeHint {
+    Auto             = 0;
+    NoDeletes        = 1;
+    BigTable         = 2;
+    ContinuousWrite  = 3;
 }
 
 message SchemaExtra {
@@ -287,6 +339,11 @@ message SchemaExtra {
     bool column_changed = 3; 
     // sending mo_tables deletes by this.
     string old_name = 4;
+
+    uint32 min_rows_quailifed = 5;
+    uint32 max_obj_onerun = 6;
+    uint32 max_rows_merged_obj = 7;
+    repeated MergeHint hints = 8;
 }
 
 // Int64Map mainly used in unit test

@@ -73,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
@@ -123,6 +124,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Aggs:         t.Aggs,
 			MultiAggs:    t.MultiAggs,
 		}
+	case vm.Sample:
+		t := sourceIns.Arg.(*sample.Argument)
+		res.Arg = t.SimpleDup()
 	case vm.Join:
 		t := sourceIns.Arg.(*join.Argument)
 		res.Arg = &join.Argument{
@@ -1068,6 +1072,16 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	return &limit.Argument{
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
+}
+
+func constructSample(n *plan.Node) *sample.Argument {
+	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy)
+	}
+	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
+		return sample.NewSampleByPercent(n.SampleFunc.Percent, n.AggList, n.GroupBy)
+	}
+	panic("only support sample by rows / percent now.")
 }
 
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {

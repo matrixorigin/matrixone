@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,6 +60,8 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		} else {
 			ap.prepareLocal()
 		}
+		ap.ctr.batchCnt = make([]int, ctr.aliveRegCnt)
+		ap.ctr.rowCnt = make([]int, ctr.aliveRegCnt)
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -92,6 +95,12 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
+func printShuffleResult(arg *Argument) {
+	if arg.ctr.batchCnt != nil && arg.ctr.rowCnt != nil {
+		logutil.Debugf("shuffle dispatch result: batchcnt %v, rowcnt %v", arg.ctr.batchCnt, arg.ctr.rowCnt)
+	}
+}
+
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 
@@ -110,6 +119,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}()
 		} else {
+			printShuffleResult(ap)
 			result.Status = vm.ExecStop
 			return result, nil
 		}
