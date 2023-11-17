@@ -499,7 +499,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if dataBlocks[0].sortKey != math.MaxUint16 {
 					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(dataBlocks[0].sortKey), backupPool)
 					if err != nil {
-						return nil, nil, nil, nil, err
+						return nil, nil, nil, err
 					}
 				}
 				dataBlocks[0].data = containers.ToCNBatch(sortData)
