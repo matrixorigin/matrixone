@@ -122,6 +122,7 @@ func addBlockToObjectData(
 			isABlock:  isABlk,
 			tid:       tid,
 			blockId:   blockID,
+			sortKey:   uint16(math.MaxUint16),
 		}
 		if isCnBatch {
 			(*objectsData)[name].data[location.ID()].deleteRow = []int{row}
@@ -237,7 +238,7 @@ func applyDelete(dataBatch *batch.Batch, deleteBatch *batch.Batch, id string) er
 	return nil
 }
 
-func updateBlockMeta(blkMeta, blkMetaTxn *containers.Batch, row int, blockID types.Blockid, location objectio.Location) {
+func updateBlockMeta(blkMeta, blkMetaTxn *containers.Batch, row int, blockID types.Blockid, location objectio.Location, sort bool) {
 	blkMeta.GetVectorByName(catalog2.AttrRowID).Update(
 		row,
 		objectio.HackBlockid2Rowid(&blockID),
@@ -252,7 +253,7 @@ func updateBlockMeta(blkMeta, blkMetaTxn *containers.Batch, row int, blockID typ
 		false)
 	blkMeta.GetVectorByName(catalog.BlockMeta_Sorted).Update(
 		row,
-		true,
+		sort,
 		false)
 	blkMeta.GetVectorByName(catalog.BlockMeta_SegmentID).Update(
 		row,
@@ -274,6 +275,10 @@ func updateBlockMeta(blkMeta, blkMetaTxn *containers.Batch, row int, blockID typ
 		row,
 		nil,
 		true)
+
+	if !sort {
+		logutil.Infof("block %v is not sorted", blockID.String())
+	}
 }
 
 func appendValToBatch(src, dst *containers.Batch, row int) {
@@ -642,9 +647,15 @@ func ReWriteCheckpointAndBlockFromKey(
 
 					row := blkMeta.Vecs[0].Length() - 1
 					if !blk.location.IsEmpty() {
+						sort := true
+						if insertBatch[tid].insertBlocks[b].data.isABlock &&
+							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
+							sort = false
+						}
 						updateBlockMeta(blkMeta, blkMetaTxn, row,
 							insertBatch[tid].insertBlocks[b].blockId,
-							insertBatch[tid].insertBlocks[b].location)
+							insertBatch[tid].insertBlocks[b].location,
+							sort)
 					}
 				}
 			}
@@ -662,9 +673,15 @@ func ReWriteCheckpointAndBlockFromKey(
 					appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
 					i := blkMeta.Vecs[0].Length() - 1
 					if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
+						sort := true
+						if insertBatch[tid].insertBlocks[b].data.isABlock &&
+							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
+							sort = false
+						}
 						updateBlockMeta(blkMeta, blkMetaTxn, i,
 							insertBatch[tid].insertBlocks[b].blockId,
-							insertBatch[tid].insertBlocks[b].location)
+							insertBatch[tid].insertBlocks[b].location,
+							sort)
 					}
 				}
 			}
