@@ -29,8 +29,6 @@ select cluster_centers(c spherical_kmeans '2,vector_ip_ops') from t1;
 select cluster_centers(c spherical_kmeans '2,vector_cosine_ops') from t1;
 SELECT value FROM  (SELECT cluster_centers(c spherical_kmeans '2,vector_cosine_ops') AS centers FROM t1) AS subquery CROSS JOIN  UNNEST(subquery.centers) AS u;
 
-
-
 -- 3. Create Secondary Index with IVFFLAT.
 drop table if exists tbl;
 create table tbl(id int primary key, embedding vecf32(3));
@@ -43,7 +41,6 @@ insert into tbl values(6, "[100,44,50]");
 insert into tbl values(7, "[120,50,70]");
 insert into tbl values(8, "[130,40,90]");
 create index idx1 using IVFFLAT on tbl(embedding) lists = 2 op_type 'vector_l2_ops';
-
 show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
@@ -60,13 +57,12 @@ show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 
-
 -- 6. [FAILURE] Create IVF index before table has data (results in error)
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf64(5));
 create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
 
--- 7. [FAILURE] Create IVF index on non-vector types, multiple columns, lists=-1
+-- 7. [FAILURE] Create IVF index on non-vector types, multiple columns, lists=-ve, unknown op_type
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf32(3));
 insert into tbl values(1, "[1,2,3]","[1,2,3]");
@@ -89,6 +85,24 @@ create index idx7 using IVFFLAT on tbl(b);
 show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx7";
+
+-- 9. Null & duplicate rows
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[100,44,50]");
+insert into tbl values(8, "[130,40,90]");
+insert into tbl values(9, null);
+insert into tbl values(10, null);
+create index idx8 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx8";
 
 -- post
 drop database vecdb2;

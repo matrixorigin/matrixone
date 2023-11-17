@@ -142,4 +142,26 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx7    MULTIPLE    b    ivfflat    metadata    {"lists":"1","op_type":"vector_l2_ops"}
 idx7    MULTIPLE    b    ivfflat    centroids    {"lists":"1","op_type":"vector_l2_ops"}
 idx7    MULTIPLE    b    ivfflat    entries    {"lists":"1","op_type":"vector_l2_ops"}
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3));
+insert into tbl values(1, "[1,2,3]");
+insert into tbl values(2, "[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]");
+insert into tbl values(5, "[1,3,5]");
+insert into tbl values(6, "[100,44,50]");
+insert into tbl values(7, "[100,44,50]");
+insert into tbl values(8, "[130,40,90]");
+insert into tbl values(9, null);
+insert into tbl values(10, null);
+create index idx8 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
+invalid input: vecfxx column contains nulls.
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx8";
+name    type    column_name    algo    algo_table_type    algo_params
 drop database vecdb2;

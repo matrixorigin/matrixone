@@ -78,18 +78,28 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 func (s *Scope) handleCount(txn executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
-	countTotalSql := fmt.Sprintf("select count(%s) from `%s`.`%s`;", indexColumnName, qryDatabase, originalTableDef.Name)
+	countTotalSql := fmt.Sprintf("select count(`%s`), count(`%s`) from `%s`.`%s`;",
+		indexColumnName,
+		originalTableDef.Pkey.PkeyColName,
+		qryDatabase,
+		originalTableDef.Name)
 	rs, err := txn.Exec(countTotalSql)
 	if err != nil {
 		return 0, err
 	}
 
 	var totalCnt int64
+	var pkeyCnt int64
 	rs.ReadRows(func(cols []*vector.Vector) bool {
 		totalCnt = executor.GetFixedRows[int64](cols[0])[0]
+		pkeyCnt = executor.GetFixedRows[int64](cols[1])[0]
 		return false
 	})
 	rs.Close()
+
+	if totalCnt != pkeyCnt {
+		return 0, moerr.NewInvalidInputNoCtx("vecfxx column contains nulls.")
+	}
 
 	return totalCnt, nil
 }
@@ -205,7 +215,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 		sampleCnt = int64(entriesPerList * centroidParamsLists)
 	}
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select `%s` from `%s`.`%s` order by rand() where `%s` is not null limit %d)",
+	sampleSQL := fmt.Sprintf("(select `%s` from `%s`.`%s` where `%s` is not null order by rand() limit %d)",
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
@@ -317,7 +327,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 	)
 
 	// 5. non-null original table rows
-	nonNullOriginalTableRowsSql := fmt.Sprintf("(select * from `%s`.`%s` where `%s` is not null) as `%s`",
+	nonNullOriginalTableRowsSql := fmt.Sprintf("(select * from `%s`.`%s` where `%s` is not null) `%s`",
 		qryDatabase,
 		originalTableDef.Name,
 		indexColumnName,
@@ -351,7 +361,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 		"%s as `__mo_index_table_pk`, "+
 		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, normalize_l2(%s.%s))) as `__mo_index_rn` "+
 		"FROM "+
-		" `%s` CROSS JOIN %s "+
+		" %s CROSS JOIN %s "+
 		") `__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;",
 		insertSQL,
 
