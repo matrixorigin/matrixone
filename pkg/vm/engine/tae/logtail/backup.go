@@ -508,7 +508,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				if objectData.data[0].tombstone != nil {
 					applyDelete(dataBlocks[0].data, objectData.data[0].tombstone.data, dataBlocks[0].blockId.String())
 				}
-				sortData := containers.ToTNBatch(dataBlocks[0].data, common.CheckpointAllocator)
+				sortData := containers.ToTNBatch(dataBlocks[0].data, common.DebugAllocator)
 				if dataBlocks[0].sortKey != math.MaxUint16 {
 					_, err = mergesort.SortBlockColumns(sortData.Vecs, int(dataBlocks[0].sortKey), backupPool)
 					if err != nil {
