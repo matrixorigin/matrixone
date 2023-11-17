@@ -75,7 +75,6 @@ func (s *service) heartbeat(ctx context.Context) {
 		ServiceAddress:     s.pipelineServiceServiceAddr(),
 		SQLAddress:         s.cfg.SQLAddress,
 		LockServiceAddress: s.lockServiceServiceAddr(),
-		CtlAddress:         s.ctlServiceServiceAddr(),
 		Role:               s.metadata.Role,
 		TaskServiceCreated: s.GetTaskRunner() != nil,
 		QueryAddress:       s.queryServiceServiceAddr(),

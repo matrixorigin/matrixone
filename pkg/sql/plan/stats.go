@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -49,66 +48,71 @@ func NewStatsCache() *StatsCache {
 }
 
 type StatsInfoMap struct {
-	NdvMap          map[string]float64
-	MinValMap       map[string]float64
-	MaxValMap       map[string]float64
-	DataTypeMap     map[string]types.T
-	ShuffleRangeMap map[string]*ShuffleRange
-	BlockNumber     uint16
-	ObjectNumber    int //detect if block number changes , update stats info map
-	TableCnt        float64
-	tableName       string
+	NdvMap               map[string]float64
+	MinValMap            map[string]float64
+	MaxValMap            map[string]float64
+	DataTypeMap          map[string]types.T
+	NullCntMap           map[string]int64
+	ShuffleRangeMap      map[string]*ShuffleRange
+	BlockNumber          int
+	AccurateObjectNumber int
+	ApproxObjectNumber   int //detect if block number changes , update stats info map
+	TableCnt             float64
+	tableName            string
 }
 
 func NewStatsInfoMap() *StatsInfoMap {
 	return &StatsInfoMap{
-		NdvMap:          make(map[string]float64),
-		MinValMap:       make(map[string]float64),
-		MaxValMap:       make(map[string]float64),
-		DataTypeMap:     make(map[string]types.T),
-		ShuffleRangeMap: make(map[string]*ShuffleRange),
-		BlockNumber:     0,
-		ObjectNumber:    0,
-		TableCnt:        0,
+		NdvMap:             make(map[string]float64),
+		MinValMap:          make(map[string]float64),
+		MaxValMap:          make(map[string]float64),
+		DataTypeMap:        make(map[string]types.T),
+		NullCntMap:         make(map[string]int64),
+		ShuffleRangeMap:    make(map[string]*ShuffleRange),
+		BlockNumber:        0,
+		ApproxObjectNumber: 0,
+		TableCnt:           0,
 	}
 }
 
-func (sc *StatsInfoMap) NeedUpdate(currentObjNum int) bool {
-	if sc.ObjectNumber == 0 {
+func (sc *StatsInfoMap) NeedUpdate(currentApproxObjNum int) bool {
+	if sc.ApproxObjectNumber == 0 || sc.AccurateObjectNumber == 0 {
 		return true
 	}
-	if math.Abs(float64(sc.ObjectNumber-currentObjNum)) >= 100 {
+	if math.Abs(float64(sc.ApproxObjectNumber-currentApproxObjNum)) >= 10 {
 		return true
 	}
-	if float64(currentObjNum)/float64(sc.ObjectNumber) > 1.1 || float64(currentObjNum)/float64(sc.ObjectNumber) < 0.9 {
+	if float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) > 1.05 || float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) < 0.95 {
 		return true
 	}
 	return false
 }
 
-func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
+func (sc *StatsCache) GetStatsInfoMap(tableID uint64, create bool) *StatsInfoMap {
 	if sc == nil {
-		return NewStatsInfoMap()
-	}
-	switch tableID {
-	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return NewStatsInfoMap()
+		return nil
 	}
 	if s, ok := (sc.cachePool)[tableID]; ok {
 		return s
-	} else {
+	} else if create {
 		s = NewStatsInfoMap()
 		(sc.cachePool)[tableID] = s
 		return s
+	} else {
+		return nil
 	}
 }
 
 type InfoFromZoneMap struct {
-	ColumnZMs     []objectio.ZoneMap
-	DataTypes     []types.Type
-	ColumnNDVs    []float64
-	ShuffleRanges []*ShuffleRange
-	TableCnt      float64
+	ColumnZMs            []objectio.ZoneMap
+	DataTypes            []types.Type
+	ColumnNDVs           []float64
+	NullCnts             []int64
+	ShuffleRanges        []*ShuffleRange
+	BlockNumber          int
+	AccurateObjectNumber int
+	ApproxObjectNumber   int
+	TableCnt             float64
 }
 
 func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
@@ -116,15 +120,16 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 		ColumnZMs:     make([]objectio.ZoneMap, lenCols),
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
+		NullCnts:      make([]int64, lenCols),
 		ShuffleRanges: make([]*ShuffleRange, lenCols),
 	}
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tableDef *plan.TableDef, s *StatsInfoMap) {
-	logutil.Debugf("need to update statsCache for table %v", tableDef.Name)
-	s.ObjectNumber = numObjs
-	s.BlockNumber = numBlks
+func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *StatsInfoMap) {
+	s.ApproxObjectNumber = info.ApproxObjectNumber
+	s.AccurateObjectNumber = info.AccurateObjectNumber
+	s.BlockNumber = info.BlockNumber
 	s.TableCnt = info.TableCnt
 	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
@@ -133,6 +138,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tabl
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
+		s.NullCntMap[colName] = info.NullCnts[i]
 
 		if !info.ColumnZMs[i].IsInited() {
 			s.MinValMap[colName] = 0
@@ -192,11 +198,10 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 		return true
 	}
 
-	sc := builder.compCtx.GetStatsCache()
-	if sc == nil {
+	s := getStatsInfoByTableID(tableDef.TblId, builder)
+	if s == nil {
 		return false
 	}
-	s := sc.GetStatsInfoMap(tableDef.TblId)
 	var totalNDV float64 = 1
 	for i := range cols {
 		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
@@ -204,7 +209,18 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
 }
 
-func getColStatsInfo(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
+func getStatsInfoByTableID(tableID uint64, builder *QueryBuilder) *StatsInfoMap {
+	if builder == nil {
+		return nil
+	}
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
+		return nil
+	}
+	return sc.GetStatsInfoMap(tableID, false)
+}
+
+func getStatsInfoByCol(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if builder == nil {
 		return nil
 	}
@@ -220,12 +236,11 @@ func getColStatsInfo(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if len(col.Name) == 0 {
 		col.Name = tableDef.Cols[col.ColPos].Name
 	}
-
-	return sc.GetStatsInfoMap(tableDef.TblId)
+	return sc.GetStatsInfoMap(tableDef.TblId, false)
 }
 
 func getColNdv(col *plan.ColRef, builder *QueryBuilder) float64 {
-	s := getColStatsInfo(col, builder)
+	s := getStatsInfoByCol(col, builder)
 	if s == nil {
 		return -1
 	}
@@ -286,7 +301,7 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 	if !ret {
 		return 0.1
 	}
-	s := getColStatsInfo(col, builder)
+	s := getStatsInfoByCol(col, builder)
 	if s == nil {
 		return 0.1
 	}
@@ -711,15 +726,17 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if !needStats(node.TableDef) {
 		return DefaultStats()
 	}
+	if shouldReturnMinimalStats(node) {
+		return DefaultMinimalStats()
+	}
 	if !builder.compCtx.Stats(node.ObjRef) {
 		return DefaultStats()
 	}
 	//get statsInfoMap from statscache
-	sc := builder.compCtx.GetStatsCache()
-	if sc == nil {
+	s := getStatsInfoByTableID(node.TableDef.TblId, builder)
+	if s == nil {
 		return DefaultStats()
 	}
-	s := sc.GetStatsInfoMap(node.TableDef.TblId)
 
 	stats := new(plan.Stats)
 	stats.TableCnt = s.TableCnt
@@ -743,6 +760,10 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 	return stats
+}
+
+func shouldReturnMinimalStats(node *plan.Node) bool {
+	return false
 }
 
 func needStats(tableDef *TableDef) bool {
@@ -776,6 +797,16 @@ func DefaultStats() *plan.Stats {
 	stats.Cost = 1000
 	stats.Outcnt = 1000
 	stats.Selectivity = 1
+	stats.BlockNum = 1
+	return stats
+}
+
+func DefaultMinimalStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 100000
+	stats.Cost = 10
+	stats.Outcnt = 10
+	stats.Selectivity = 0.0001
 	stats.BlockNum = 1
 	return stats
 }

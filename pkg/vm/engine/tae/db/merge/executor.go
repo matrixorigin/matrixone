@@ -69,13 +69,15 @@ func (e *MergeExecutor) RefreshMemInfo() {
 
 func (e *MergeExecutor) PrintStats() {
 	cnt := atomic.LoadInt32(&e.activeMergeBlkCount)
-	if cnt == 0 {
+	if cnt == 0 && e.MemAvailBytes() > 512*const1MBytes {
 		return
 	}
-	mergem := float32(atomic.LoadInt64(&e.activeEstimateBytes)) / const1GBytes
+
 	logutil.Infof(
-		"Mergeblocks avail mem: %dG, active mergeing size: %.2fG, active merging blk cnt: %d",
-		e.memAvail/const1GBytes, mergem, cnt,
+		"Mergeblocks avail mem: %v(%v reserved), active mergeing size: %v, active merging blk cnt: %d",
+		common.HumanReadableBytes(e.memAvail),
+		common.HumanReadableBytes(e.memSpare),
+		common.HumanReadableBytes(int(atomic.LoadInt64(&e.activeEstimateBytes))), cnt,
 	)
 }
 
@@ -106,11 +108,11 @@ func (e *MergeExecutor) OnExecDone(v any) {
 }
 
 func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catalog.SegmentEntry) error {
-	mem := e.memAvailBytes()
+	mem := e.MemAvailBytes()
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	mergedRows, osize, esize := estimateMergeConsume(segs)
+	osize, esize := estimateMergeConsume(segs)
 	if esize > 2*mem/3 {
 		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
 	}
@@ -132,7 +134,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catal
 	} else if err != nil {
 		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
 	}
-	logMergeTask(entry.GetLastestSchema().Name, task.ID(), nil, msegs, len(mergedBlks), mergedRows, osize, esize)
+	logMergeTask(entry.GetLastestSchema().Name, task.ID(), nil, msegs, len(mergedBlks), osize, esize)
 	if err = task.WaitDone(); err != nil {
 		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
 	}
@@ -140,12 +142,14 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, segs []*catal
 }
 
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog.SegmentEntry, policy Policy) {
-	e.tableName = entry.GetLastestSchema().Name
+	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 	hasDelSeg := len(delSegs) > 0
+
+	originalDelCnt := len(delSegs)
 
 	hasMergeObjects := false
 
-	objectList := policy.Revise(0, int64(e.memAvailBytes()))
+	objectList := policy.Revise(0, int64(e.MemAvailBytes()))
 	mergedBlks, msegs := expandObjectList(objectList)
 	blkCnt := len(mergedBlks)
 	if blkCnt > 0 {
@@ -193,14 +197,18 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, delSegs []*catalog
 		return
 	}
 
-	rows, osize, esize := estimateMergeConsume(msegs)
+	osize, esize := estimateMergeConsume(msegs)
 	e.AddActiveTask(task.ID(), blkCnt, esize)
 	task.AddObserver(e)
 	entry.Stats.AddMerge(osize, len(msegs), blkCnt)
-	logMergeTask(e.tableName, task.ID(), delSegs, msegs, blkCnt, rows, osize, esize)
+	var delPrint []*catalog.SegmentEntry
+	if delSegs != nil {
+		delPrint = delSegs[:originalDelCnt]
+	}
+	logMergeTask(e.tableName, task.ID(), delPrint, msegs, blkCnt, osize, esize)
 }
 
-func (e *MergeExecutor) memAvailBytes() int {
+func (e *MergeExecutor) MemAvailBytes() int {
 	merging := int(atomic.LoadInt64(&e.activeEstimateBytes))
 	avail := e.memAvail - e.memSpare - merging
 	if avail < 0 {
@@ -235,13 +243,13 @@ func expandObjectList(segs []*catalog.SegmentEntry) (
 	return
 }
 
-func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEntry, blkn, mergedRows, osize, esize int) {
+func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEntry, blkn, osize, esize int) {
 	v2.TaskMergeScheduledByCounter.Inc()
 	v2.TaskMergedBlocksCounter.Add(float64(blkn))
 	v2.TasKMergedSizeCounter.Add(float64(osize))
 
 	infoBuf := &bytes.Buffer{}
-	infoBuf.WriteString(fmt.Sprintf("merged(%d):", mergedRows))
+	infoBuf.WriteString("merged:")
 	for _, seg := range merges {
 		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.GetRemainingRows(), common.ShortSegId(seg.ID)))
 	}

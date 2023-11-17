@@ -92,11 +92,27 @@ func NewFS() *fileservice.FileServices {
 		panic(err)
 	}
 	fs, err := fileservice.NewFileServices(
-		"local",
+		"",
 		local,
 		s3,
 		etl,
 	)
+	if err != nil {
+		panic(err)
+	}
+	return fs
+}
+
+func NewSharedFS() fileservice.FileService {
+	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	if err != nil {
+		panic(err)
+	}
+	return fs
+}
+
+func NewETLFS() fileservice.FileService {
+	fs, err := fileservice.NewMemoryFS(defines.ETLFileServiceName, fileservice.DisabledCacheConfig, nil)
 	if err != nil {
 		panic(err)
 	}

@@ -78,7 +78,7 @@ func newFS() *fileservice.FileServices {
 		panic(err)
 	}
 	fs, err := fileservice.NewFileServices(
-		"local",
+		"",
 		local,
 		s3,
 		etl,

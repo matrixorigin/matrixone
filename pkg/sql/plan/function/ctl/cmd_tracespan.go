@@ -17,17 +17,17 @@ package ctl
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -89,9 +89,9 @@ func checkParameter(param string, ignoreUUID bool) (args []string, threshold int
 func handleTraceSpan(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error) {
+	sender requestSender) (Result, error) {
 	if service != cn && service != tn {
-		return pb.CtlResult{}, moerr.NewWrongServiceNoCtx("CN or DN", string(service))
+		return Result{}, moerr.NewWrongServiceNoCtx("CN or DN", string(service))
 	}
 
 	if service == tn {
@@ -100,7 +100,7 @@ func handleTraceSpan(proc *process.Process,
 
 	args, threshold, err := checkParameter(parameter, false)
 	if err != nil {
-		return pb.CtlResult{}, err
+		return Result{}, err
 	}
 
 	// the uuids of cn
@@ -136,8 +136,8 @@ func handleTraceSpan(proc *process.Process,
 		data += fmt.Sprintf("%s:%s; ", k, v)
 	}
 
-	return pb.CtlResult{
-		Method: pb.CmdMethod_TraceSpan.String(),
+	return Result{
+		Method: TraceSpanMethod,
 		Data:   data,
 	}, nil
 }
@@ -177,7 +177,7 @@ func transferRequest(proc *process.Process, uuid string, cmd string, spans strin
 func send2TNAndWaitResp(proc *process.Process,
 	service serviceType,
 	parameter string,
-	sender requestSender) (pb.CtlResult, error) {
+	sender requestSender) (Result, error) {
 
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payloadFn := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
@@ -204,7 +204,7 @@ func send2TNAndWaitResp(proc *process.Process,
 	}
 
 	return GetTNHandlerFunc(
-		pb.CmdMethod_TraceSpan, whichTN, payloadFn, repsonseUnmarshaler,
+		api.OpCode_OpTraceSpan, whichTN, payloadFn, repsonseUnmarshaler,
 	)(proc, service, parameter, sender)
 
 }

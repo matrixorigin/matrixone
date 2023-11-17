@@ -44,7 +44,7 @@ func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn 
 type TableEntry struct {
 	*BaseEntryImpl[*TableMVCCNode]
 	*TableNode
-	Stats   *common.TableCompactStat
+	Stats   common.TableCompactStat
 	ID      uint64
 	db      *DBEntry
 	entries map[types.Uuid]*common.GenericDLNode[*SegmentEntry]
@@ -85,7 +85,6 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		TableNode: &TableNode{},
 		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
 		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
-		Stats:     common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
@@ -104,7 +103,6 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		TableNode: &TableNode{},
 		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
 		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
-		Stats:     common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
 	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
@@ -129,7 +127,6 @@ func NewReplayTableEntry() *TableEntry {
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
 		link:    common.NewGenericSortedDList((*SegmentEntry).Less),
 		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
-		Stats:   common.NewTableCompactStat(),
 	}
 	return e
 }
@@ -144,7 +141,6 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		TableNode: node,
 		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
 		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
-		Stats:     common.NewTableCompactStat(),
 	}
 }
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
@@ -336,14 +332,10 @@ func (entry *TableEntry) ObjectStatsString(level common.PPLevel) string {
 		avgRow = rows / cnt
 		avgOsize = osize / cnt
 	}
-	entry.Stats.RLock()
 	summary := fmt.Sprintf(
-		"summary: %d total, %d unknown, avgRow %d, avgOsize %s\n"+
-			"Update History:\n  rows %v\n  dels %v ",
+		"summary: %d total, %d unknown, avgRow %d, avgOsize %s",
 		cnt, cnt-loadedCnt, avgRow, common.HumanReadableBytes(avgOsize),
-		entry.Stats.RowCnt.String(), entry.Stats.RowDel.String(),
 	)
-	entry.Stats.RUnlock()
 	w.WriteString(summary)
 	return w.String()
 }

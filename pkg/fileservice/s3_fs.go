@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"io"
+	"math"
 	"net/http/httptrace"
 	pathpkg "path"
 	"sort"
@@ -243,6 +244,62 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	}, nil
 }
 
+func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
+
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return err
+	}
+
+	// load to disk cache
+	if s.diskCache != nil {
+		if err := s.diskCache.SetFile(
+			ctx, path.File,
+			func(ctx context.Context) (io.ReadCloser, error) {
+				return s.newReadCloser(ctx, filePath)
+			},
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: filePath,
+	})
+	if unlock == nil {
+		wait()
+	}
+
+	key := s.pathToKey(filePath)
+	r, err := s.storage.Read(ctx, key, ptrTo[int64](0), (*int64)(nil))
+	if err != nil {
+		if unlock != nil {
+			unlock()
+		}
+		return nil, err
+	}
+
+	return &readCloser{
+		closeFunc: func() error {
+			// unlock
+			if unlock != nil {
+				unlock()
+			}
+			// close
+			return r.Close()
+		},
+		r: r,
+	}, nil
+}
+
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -324,8 +381,10 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	// write to disk cache
-	if s.diskCache != nil && !vector.CachePolicy.Any(SkipDiskWrites) {
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, content); err != nil {
+	if s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites) {
+		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(content)), nil
+		}); err != nil {
 			return 0, err
 		}
 	}
@@ -376,8 +435,15 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		if err := s.diskCache.Read(ctx, vector); err != nil {
 			return err
 		}
-		// we don't cache IOEntry to disk
-		// disk cache will be set by diskCache.SetFile in S3FS.read and S3FS.write
+		// try to cache IOEntry if not caching the full file
+		if vector.Policy.CacheIOEntry() {
+			defer func() {
+				if err != nil {
+					return
+				}
+				err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+			}()
+		}
 	}
 
 	if s.remoteCache != nil {
@@ -427,31 +493,38 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 		return err
 	}
 
-	// calculate object read range
-	//min := ptrTo(int64(math.MaxInt))
-	//max := ptrTo(int64(0))
-	//for _, entry := range vector.Entries {
-	//	entry := entry
-	//	if entry.done {
-	//		continue
-	//	}
-	//	if entry.Offset < *min {
-	//		min = &entry.Offset
-	//	}
-	//	if entry.Size < 0 {
-	//		entry.Size = 0
-	//		max = nil
-	//	}
-	//	if max != nil {
-	//		if end := entry.Offset + entry.Size; end > *max {
-	//			max = &end
-	//		}
-	//	}
-	//}
+	readFullObject := vector.Policy.CacheFullFile() &&
+		!vector.Policy.Any(SkipDiskCache)
 
-	// just read the whole object
-	min := ptrTo[int64](0)
-	max := (*int64)(nil)
+	var min, max *int64
+	if readFullObject {
+		// full range
+		min = ptrTo[int64](0)
+		max = (*int64)(nil)
+
+	} else {
+		// minimal range
+		min = ptrTo(int64(math.MaxInt))
+		max = ptrTo(int64(0))
+		for _, entry := range vector.Entries {
+			entry := entry
+			if entry.done {
+				continue
+			}
+			if entry.Offset < *min {
+				min = &entry.Offset
+			}
+			if entry.Size < 0 {
+				entry.Size = 0
+				max = nil
+			}
+			if max != nil {
+				if end := entry.Offset + entry.Size; end > *max {
+					max = &end
+				}
+			}
+		}
+	}
 
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
@@ -636,11 +709,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, bytesCounter *atomic.
 	}
 
 	// write to disk cache
-	if contentErr == nil &&
+	if readFullObject &&
+		contentErr == nil &&
 		len(contentBytes) > 0 &&
 		s.diskCache != nil &&
-		!vector.CachePolicy.Any(SkipDiskWrites) {
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, contentBytes); err != nil {
+		!vector.Policy.Any(SkipDiskCacheWrites) {
+		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(contentBytes)), nil
+		}); err != nil {
 			return err
 		}
 	}
