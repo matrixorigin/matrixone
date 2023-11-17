@@ -62,10 +62,10 @@ const (
 	percentSamplePool
 )
 
-func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
+func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int, columnReorder bool) *sPool {
 	return &sPool{
 		proc:           proc,
-		requireReorder: true,
+		requireReorder: columnReorder,
 		typ:            rowSamplePool,
 		capacity:       capacity,
 		columns:        make(sampleColumnList, sampleColumnCount),

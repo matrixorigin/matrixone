@@ -52,11 +52,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	switch arg.Type {
 	case sampleByRow:
-		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs))
+		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs), true)
 	case sampleByPercent:
 		arg.ctr.samplePool = newSamplePoolByPercent(proc, arg.Percents, len(arg.SampleExprs))
 	case mergeSampleByRow:
-		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs))
+		arg.ctr.samplePool = newSamplePoolByRows(proc, arg.Rows, len(arg.SampleExprs), false)
 	default:
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown sample type %d", arg.Type))
 	}
