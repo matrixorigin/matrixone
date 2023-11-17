@@ -532,7 +532,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.Txn.Status = txn.TxnStatus_Aborted
 				}
 			default:
-				panic("should never happen")
+				return moerr.NewNotSupported(ctx, "unknown txn request method: %s", req.Method.String())
 			}
 			return err
 		}
