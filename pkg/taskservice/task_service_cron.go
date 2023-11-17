@@ -308,7 +308,7 @@ func (j *cronJob) doRun() {
 	_, err := j.s.store.UpdateCronTask(ctx, newTask, value)
 	if err != nil {
 		j.s.rt.Logger().Error("trigger cron task failed",
-			zap.String("cron-task", j.task.Metadata.ID),
+			zap.String("cron-task", j.task.DebugString()),
 			zap.Error(err))
 		j.s.addToRetrySchedule(j.task)
 		return

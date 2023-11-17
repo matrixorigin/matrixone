@@ -343,17 +343,27 @@ func (c *pushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 	}
 
 	receiveAt := time.Now()
+	v2.LogtailTotalReceivedCounter.Inc()
 	if res := resp.response.GetSubscribeResponse(); res != nil { // consume subscribe response
+		v2.LogtailSubscribeReceivedCounter.Inc()
 		if err := dispatchSubscribeResponse(ctx, e, res, c.receiver, receiveAt); err != nil {
 			logutil.Errorf("%s dispatch subscribe response failed, err: %s", logTag, err)
 			return err
 		}
 	} else if res := resp.response.GetUpdateResponse(); res != nil { // consume update response
+		if len(res.LogtailList) > 0 {
+			v2.LogtailUpdateReceivedCounter.Inc()
+		} else {
+			v2.LogtailHeartbeatReceivedCounter.Inc()
+		}
+
 		if err := dispatchUpdateResponse(ctx, e, res, c.receiver, receiveAt); err != nil {
 			logutil.Errorf("%s dispatch update response failed, err: %s", logTag, err)
 			return err
 		}
 	} else if unResponse := resp.response.GetUnsubscribeResponse(); unResponse != nil { // consume unsubscribe response
+		v2.LogtailUnsubscribeReceivedCounter.Inc()
+
 		if err := dispatchUnSubscribeResponse(ctx, e, unResponse, c.receiver, receiveAt); err != nil {
 			logutil.Errorf("%s dispatch unsubscribe response failed, err: %s", logTag, err)
 			return err

@@ -20,7 +20,6 @@ type PortSlot int
 const (
 	PipelineService PortSlot = iota
 	LockService
-	CtlService
 	QueryService
 	Gossip
 	CacheService
@@ -34,8 +33,6 @@ func (s PortSlot) String() string {
 		return "Pipeline service"
 	case LockService:
 		return "Lock service"
-	case CtlService:
-		return "Ctl service"
 	case QueryService:
 		return "Query service"
 	case Gossip:
@@ -87,20 +84,6 @@ func (s *service) lockServiceListenAddr() string {
 		return s.addressMgr.ListenAddress(int(LockService))
 	}
 	return s.cfg.LockService.ListenAddress
-}
-
-func (s *service) ctlServiceServiceAddr() string {
-	if s.newPortStrategy() {
-		return s.addressMgr.ServiceAddress(int(CtlService))
-	}
-	return s.cfg.Ctl.Address.ServiceAddress
-}
-
-func (s *service) ctlServiceListenAddr() string {
-	if s.newPortStrategy() {
-		return s.addressMgr.ListenAddress(int(CtlService))
-	}
-	return s.cfg.Ctl.Address.ListenAddress
 }
 
 func (s *service) queryServiceServiceAddr() string {

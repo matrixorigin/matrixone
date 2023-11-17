@@ -17,24 +17,22 @@ package mometric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	dto "github.com/prometheus/client_model/go"
@@ -117,7 +115,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	if metric.EnableExportToProm() {
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
 		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
+		mux.Handle("/metrics", promhttp.HandlerFor(v2.GetPrometheusGatherer(), promhttp.HandlerOpts{}))
 		addr := fmt.Sprintf(":%d", SV.StatusPort)
 		statusSvr = &statusServer{Server: &http.Server{Addr: addr, Handler: mux}}
 		statusSvr.Add(1)
@@ -147,7 +145,7 @@ func startCrossServicesMetricsTask(ctx context.Context) {
 		logutil.Info("cross service metrics task started")
 		defer logutil.Info("cross service metrics task exiting")
 
-		timer := time.NewTimer(time.Second * 5)
+		timer := time.NewTicker(time.Second * 5)
 		for {
 			select {
 			case <-ctx.Done():
@@ -161,6 +159,9 @@ func startCrossServicesMetricsTask(ctx context.Context) {
 
 func mpoolRelatedMetrics() {
 	v2.MemTotalCrossPoolFreeCounter.Add(float64(mpool.TotalCrossPoolFreeCounter()))
+
+	v2.MemGlobalStatsAllocatedGauge.Set(float64(mpool.GlobalStats().NumCurrBytes.Load()))
+	v2.MemGlobalStatsHighWaterMarkGauge.Set(float64(mpool.GlobalStats().HighWaterMark.Load()))
 }
 
 func IsEnable() bool {
@@ -203,7 +204,7 @@ func StopMetricSync() {
 }
 
 func mustRegiterToProm(collector prom.Collector) {
-	if err := prom.Register(collector); err != nil {
+	if err := v2.GetPrometheusRegistry().Register(collector); err != nil {
 		// err is either registering a collector more than once or metrics have duplicate description.
 		// in any case, we respect the existing collectors in the prom registry
 		logutil.Debugf("[Metric] register to prom register: %v", err)
@@ -301,9 +302,9 @@ type descExtra struct {
 func newDescExtra(desc *prom.Desc) *descExtra {
 	str := desc.String()[14:] // strip Desc{fqName: "
 	fqName := str[:strings.Index(str, "\"")]
-	str = str[strings.Index(str, "variableLabels: [")+17:] // spot varlbl list
-	str = str[:strings.Index(str, "]")]
-	varLblCnt := len(strings.Split(str, " "))
+	str = str[strings.Index(str, "variableLabels: {")+17:] // spot varlbl list
+	str = str[:strings.Index(str, "}")]
+	varLblCnt := len(strings.Split(str, ","))
 	labels := prom.MakeLabelPairs(desc, make([]string, varLblCnt))
 	return &descExtra{orig: desc, fqName: fqName, labels: labels}
 }
