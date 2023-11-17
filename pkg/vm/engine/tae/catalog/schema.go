@@ -162,6 +162,12 @@ func (s *Schema) Clone() *Schema {
 // recommended to close schema first and then apply alter table.
 func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 	switch req.Kind {
+	case apipb.AlterKind_UpdatePolicy:
+		p := req.GetUpdatePolicy()
+		s.Extra.MaxRowsMergedObj = p.GetMaxObjOnerun()
+		s.Extra.MinRowsQuailifed = p.GetMinRowsQuailifed()
+		s.Extra.MaxObjOnerun = p.GetMaxObjOnerun()
+		s.Extra.Hints = p.GetHints()
 	case apipb.AlterKind_UpdateConstraint:
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
 	case apipb.AlterKind_UpdateComment:
