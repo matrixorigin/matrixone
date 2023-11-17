@@ -373,21 +373,18 @@ func (p *PartitionState) HandleObject(
 	ctx context.Context,
 	input *api.Batch) {
 	nameVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[2]))
-	sizeVector := vector.MustFixedCol[uint32](mustVectorFromProto(input.Vecs[3]))
-	compressedSizeVector := vector.MustFixedCol[uint32](mustVectorFromProto(input.Vecs[4]))
-	zoneMapVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[5]))
-	blkNumberVector := vector.MustFixedCol[uint16](mustVectorFromProto(input.Vecs[6]))
-	stateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[7]))
-	dbIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[8]))
-	tIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[9]))
-	createAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[10]))
-	deleteAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[11]))
-	startVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[11]))
-	prepareVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[12]))
-	commitVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[13]))
+	stateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
+	dbIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[4]))
+	tIDVector := vector.MustFixedCol[uint64](mustVectorFromProto(input.Vecs[5]))
+	createAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[6]))
+	deleteAtVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
+	startVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[8]))
+	prepareVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
+	commitVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[10]))
 	for i, name := range nameVector {
-		logutil.Infof("lalala blk %v, [%d %d %v %d], state %v, db-%d, t-%d, c@%v, d@%v, %v-%v-%v",
-			name, sizeVector[i], compressedSizeVector[i], zoneMapVector[i], blkNumberVector[i],
+		stats:=objectio.ObjectStats(name)
+		logutil.Infof("lalala blk %v, state %v, db-%d, t-%d, c@%v, d@%v, %v-%v-%v",
+			stats.String(),
 			stateVector[i], dbIDVector[i], tIDVector[i],
 			createAtVector[i].ToString(), deleteAtVector[i].ToString(),
 			startVector[i].ToString(), prepareVector[i].ToString(), commitVector[i].ToString())
