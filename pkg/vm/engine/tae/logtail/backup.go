@@ -296,7 +296,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	loc, tnLocation objectio.Location,
 	version uint32, ts types.TS,
 	softDeletes map[string]map[uint16]bool,
-) (objectio.Location, objectio.Location, *CheckpointData, []string, error) {
+) (objectio.Location, objectio.Location, []string, error) {
 	logutil.Info("[Start]", common.OperationField("ReWrite Checkpoint"),
 		common.OperandField(loc.String()),
 		common.OperandField(ts.ToString()))
@@ -315,9 +315,10 @@ func ReWriteCheckpointAndBlockFromKey(
 	// Load checkpoint
 	data, err := getCheckpointData(ctx, fs, loc, version)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	data.FormatData(common.DebugAllocator)
+	defer data.Close()
 
 	phaseNumber = 2
 	// Analyze checkpoint to get the object file
@@ -398,10 +399,10 @@ func ReWriteCheckpointAndBlockFromKey(
 	// Trim object files based on timestamp
 	isCkpChange, err = trimObjectsData(ctx, fs, ts, &objectsData)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil nil, nil, err
 	}
 	if !isCkpChange {
-		return loc, tnLocation, data, files, nil
+		return loc, tnLocation, files, nil
 	}
 
 	backupPool := dbutils.MakeDefaultSmallPool("backup-vector-pool")
@@ -432,7 +433,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			objectData.isDeleteBatch = false
 			writer, err := blockio.NewBlockWriter(dstFs, fileName)
 			if err != nil {
-				return nil, nil, nil, nil, err
+				return nil, nil, nil, err
 			}
 			for _, block := range dataBlocks {
 				if block.sortKey != math.MaxUint16 {
@@ -441,12 +442,12 @@ func ReWriteCheckpointAndBlockFromKey(
 				if block.blockType == objectio.SchemaData {
 					_, err = writer.WriteBatch(block.data)
 					if err != nil {
-						return nil, nil, nil, nil, err
+						return nil, nil, nil, err
 					}
 				} else if block.blockType == objectio.SchemaTombstone {
 					_, err = writer.WriteTombstoneBatch(block.data)
 					if err != nil {
-						return nil, nil, nil, nil, err
+						return nil, nil, nil, err
 					}
 				}
 			}
@@ -454,15 +455,15 @@ func ReWriteCheckpointAndBlockFromKey(
 			blocks, extent, err = writer.Sync(ctx)
 			if err != nil {
 				if !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-					return nil, nil, nil, nil, err
+					return nil, nil, nil, err
 				}
 				err = fs.Delete(ctx, fileName)
 				if err != nil {
-					return nil, nil, nil, nil, err
+					return nil, nil, nil, err
 				}
 				blocks, extent, err = writer.Sync(ctx)
 				if err != nil {
-					return nil, nil, nil, nil, err
+					return nil, nil, nil, err
 				}
 			}
 		}
@@ -513,14 +514,14 @@ func ReWriteCheckpointAndBlockFromKey(
 
 				writer, err := blockio.NewBlockWriter(dstFs, name.String())
 				if err != nil {
-					return nil, nil, nil, nil, err
+					return nil, nil, nil, err
 				}
 				if dataBlocks[0].sortKey != math.MaxUint16 {
 					writer.SetPrimaryKey(dataBlocks[0].sortKey)
 				}
 				_, err = writer.WriteBatch(dataBlocks[0].data)
 				if err != nil {
-					return nil, nil, nil, nil, err
+					return nil, nil, nil, err
 				}
 				blocks, extent, err = writer.Sync(ctx)
 				if err != nil {
@@ -697,7 +698,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	}
 	cnLocation, dnLocation, checkpointFiles, err := data.WriteTo(dstFs, DefaultCheckpointBlockRows, DefaultCheckpointSize)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	logutil.Info("[Done]",
 		common.AnyField("checkpoint", cnLocation.String()),
@@ -707,7 +708,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	tnLocation = dnLocation
 	files = append(files, checkpointFiles...)
 	files = append(files, cnLocation.Name().String())
-	return loc, tnLocation, data, files, nil
+	return loc, tnLocation, files, nil
 }
 
 func LoadCheckpointEntriesFromKey(
