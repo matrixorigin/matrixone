@@ -315,6 +315,9 @@ func ReWriteCheckpointAndBlockFromKey(
 	defer func() {
 		for i := range objectsData {
 			for j := range objectsData[i].data {
+				if objectsData[i].data[j] == nil {
+					continue
+				}
 				for z := range objectsData[i].data[j].data.Vecs {
 					objectsData[i].data[j].data.Vecs[z].Free(common.DebugAllocator)
 				}
