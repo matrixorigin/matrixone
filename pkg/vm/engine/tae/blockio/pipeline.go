@@ -152,15 +152,12 @@ func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := reader.ReadMultiBlocks(ctx,
-				params.ids, nil)
+			err := reader.GetFs().PrefetchFile(ctx, params.key.Name().String())
 			if err != nil {
 				res.Err = err
 				return
 			}
 			// no further reads
-			res.Res = nil
-			ioVectors.Release()
 			if params.reader == nil {
 				putReader(reader)
 			}
