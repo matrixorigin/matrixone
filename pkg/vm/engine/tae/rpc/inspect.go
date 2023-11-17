@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -166,7 +167,7 @@ func (c *objStatArg) String() string {
 func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
-		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl.ID).(*merge.BasicPolicyConfig)
+		p := c.ctx.db.MergeHandle.GetPolicy(c.tbl).(*merge.BasicPolicyConfig)
 		b.WriteString(c.tbl.ObjectStatsString(c.verbose))
 		b.WriteByte('\n')
 		b.WriteString(fmt.Sprintf("\n%s", p.String()))
@@ -333,6 +334,7 @@ type compactPolicyArg struct {
 	maxMergeObjN     int32
 	minRowsQualified int32
 	notLoadMoreThan  int32
+	hints            []api.MergeHint
 }
 
 func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -346,6 +348,13 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
 	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
 	c.notLoadMoreThan, _ = cmd.Flags().GetInt32("notLoadMoreThan")
+	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
+	for _, h := range hints {
+		if _, ok := api.MergeHint_name[h]; !ok {
+			return moerr.NewInvalidArgNoCtx("unspported hint %v", h)
+		}
+		c.hints = append(c.hints, api.MergeHint(h))
+	}
 	return nil
 }
 
@@ -355,22 +364,25 @@ func (c *compactPolicyArg) String() string {
 		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
 	}
 	return fmt.Sprintf(
-		"(%s) maxMergeObjN: %v, minRowsQualified: %v, notLoadMoreThan: %v",
-		t, c.maxMergeObjN, c.minRowsQualified, c.notLoadMoreThan,
+		"(%s) maxMergeObjN: %v, minRowsQualified: %v, hints: %v",
+		t, c.maxMergeObjN, c.minRowsQualified, c.hints,
 	)
 }
 
 func (c *compactPolicyArg) Run() error {
 	if c.tbl == nil {
-		// reset all
-		c.ctx.db.MergeHandle.ConfigPolicy(0, nil)
-		// set runtime global config
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
+		if c.maxMergeObjN == 0 && c.minRowsQualified == 0 {
+			merge.StopMerge.Store(true)
+		} else {
+			merge.StopMerge.Store(false)
+		}
 	} else {
-		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl.ID, &merge.BasicPolicyConfig{
+		c.ctx.db.MergeHandle.ConfigPolicy(c.tbl, &merge.BasicPolicyConfig{
 			MergeMaxOneRun: int(c.maxMergeObjN),
 			ObjectMinRows:  int(c.minRowsQualified),
+			MergeHints:     c.hints,
 		})
 	}
 	common.RuntimeNotLoadMoreThan.Store(c.notLoadMoreThan)
@@ -436,9 +448,10 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 		Run:   RunFactory(&compactPolicyArg{}),
 	}
 	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	policyCmd.Flags().Int32P("maxMergeObjN", "o", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
+	policyCmd.Flags().Int32P("maxMergeObjN", "r", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
 	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "objects which are less than minRowsQualified will be picked up to merge")
 	policyCmd.Flags().Int32P("notLoadMoreThan", "l", common.DefaultNotLoadMoreThan, "not load metadata if table has too much objects. Only works for rawlog table")
+	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
 	policyCmd.Flags().MarkHidden("notLoadMoreThan")
 	rootCmd.AddCommand(policyCmd)
 
@@ -539,8 +552,9 @@ func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.Ta
 		if err != nil {
 			return nil, err
 		}
+		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
 		txn.Commit(context.Background())
-		return tblHdl.GetMeta().(*catalog.TableEntry), nil
+		return tbl, nil
 	} else {
 		dbHdl, err := txn.GetDatabase(parts[0])
 		if err != nil {
@@ -550,7 +564,8 @@ func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.Ta
 		if err != nil {
 			return nil, err
 		}
+		tbl := tblHdl.GetMeta().(*catalog.TableEntry)
 		txn.Commit(context.Background())
-		return tblHdl.GetMeta().(*catalog.TableEntry), nil
+		return tbl, nil
 	}
 }
