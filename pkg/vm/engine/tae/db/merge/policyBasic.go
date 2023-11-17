@@ -36,10 +36,11 @@ type BasicPolicyConfig struct {
 	ObjectMinRows    int
 	MergeMaxOneRun   int
 	MaxRowsMergedObj int
+	MergeHints       []api.MergeHint
 }
 
 func (c *BasicPolicyConfig) String() string {
-	return fmt.Sprintf("minRowsObj:%d, maxOneRun:%d", c.ObjectMinRows, c.MergeMaxOneRun)
+	return fmt.Sprintf("minRowsObj:%d, maxOneRun:%d, hints: %v", c.ObjectMinRows, c.MergeMaxOneRun, c.MergeHints)
 }
 
 type customConfigProvider struct {
@@ -64,6 +65,7 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 				ObjectMinRows:    int(extra.MinRowsQuailifed),
 				MergeMaxOneRun:   int(extra.MaxObjOnerun),
 				MaxRowsMergedObj: int(extra.MaxRowsMergedObj),
+				MergeHints:       extra.Hints,
 			}
 			o.configs[tbl.ID] = p
 		}
@@ -149,7 +151,7 @@ func (o *Basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c an
 	ctx := context.Background()
 	tblHandle.AlterTable(
 		ctx,
-		api.NewUpdatePolicyReq(0, 0, cfg.ObjectMinRows, cfg.MergeMaxOneRun, cfg.MaxRowsMergedObj),
+		api.NewUpdatePolicyReq(cfg.ObjectMinRows, cfg.MergeMaxOneRun, cfg.MaxRowsMergedObj, cfg.MergeHints...),
 	)
 	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchema().Name, cfg)
 	txn.Commit(ctx)
