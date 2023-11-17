@@ -354,7 +354,6 @@ func (c *MOCollector) calculateDefaultWorker(numCpu int) {
 	if c.exporterCnt >= maxPercentValue {
 		c.generatorCnt = numCpu
 	}
-	return
 }
 
 func WithCollectorCntP(p int) MOCollectorOption {
