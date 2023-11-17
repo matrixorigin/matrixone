@@ -78,7 +78,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		lastNodeId = appendSinkNode(builder, deleteBindCtx, lastNodeId)
 		nextSourceStep := builder.appendStep(lastNodeId)
 		delPlanCtx.sourceStep = nextSourceStep
-		err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx, false)
+		err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx)
 		if err != nil {
 			return nil, err
 		}

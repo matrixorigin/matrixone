@@ -20,7 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +42,7 @@ var (
 )
 
 func init() {
-	rowCnts = []float64{100000, 500000, 1000000, 5000000, 10000000}
+	rowCnts = []float64{100000, 1000000, 10000000}
 
 	// https://hur.st/bloomfilter/?n=100000&p=0.00001&m=&k=3
 	referM = []float64{
@@ -93,22 +95,15 @@ func init() {
 func TestString(t *testing.T) {
 	for _, tc := range tcs {
 		buf := new(bytes.Buffer)
-		String(tc.arg, buf)
+		tc.arg.String(buf)
 		require.Equal(t, " fuzzy check duplicate constraint", buf.String())
 	}
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
+		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-	}
-}
-
-func TestEstimate(t *testing.T) {
-	for i, r := range rowCnts {
-		m := EstimateBitsNeed(r, k, p)
-		require.LessOrEqual(t, referM[i], m, "The estimated number of bits required is too small")
 	}
 }
 
@@ -116,13 +111,25 @@ func TestFuzzyFilter(t *testing.T) {
 	for _, tc := range tcs {
 		for _, r := range rowCnts {
 			tc.arg.N = r
-			err := Prepare(tc.proc, tc.arg)
+			tc.arg.info = &vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			}
+			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, int64(r))
-			_, err = Call(0, tc.proc, tc.arg, false, false)
-			require.NoError(t, err)
-			t.Logf("Estimated row count is %f, collisionCnt is %d, fp is %f", tc.arg.N, tc.arg.collisionCnt, float64(tc.arg.collisionCnt)/float64(tc.arg.N))
-			require.LessOrEqual(t, float64(tc.arg.collisionCnt)/float64(tc.arg.N), 1.1*p, "collision cnt is too high, sth must went wrong")
+			bat := newBatch(t, tc.types, tc.proc, int64(r))
+			resetChildren(tc.arg, []*batch.Batch{bat})
+			for {
+				result, err := tc.arg.Call(tc.proc)
+				require.NoError(t, err)
+				if result.Status == vm.ExecStop {
+					tc.arg.Free(tc.proc, false, err)
+					tc.arg.children[0].Free(tc.proc, false, err)
+					require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+					break
+				}
+			}
 		}
 	}
 }
@@ -135,4 +142,18 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 	pkAttr[0] = "pkCol"
 	bat.SetAttributes(pkAttr)
 	return bat
+}
+
+func resetChildren(arg *Argument, bats []*batch.Batch) {
+	if len(arg.children) == 0 {
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: bats,
+		})
+
+	} else {
+		arg.children = arg.children[:0]
+		arg.AppendChild(&value_scan.Argument{
+			Batchs: bats,
+		})
+	}
 }

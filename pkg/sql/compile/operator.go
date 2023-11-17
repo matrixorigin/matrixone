@@ -481,6 +481,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		res.Arg = arg
 	case vm.FuzzyFilter:
 		t := sourceIns.Arg.(*fuzzyfilter.Argument)
+		arg := new(fuzzyfilter.Argument)
+		*arg = *t
 		res.Arg = t
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))

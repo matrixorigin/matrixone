@@ -16,12 +16,10 @@ package fuzzyfilter
 import (
 	"bytes"
 	// "fmt"
-	"math"
 
-	"github.com/bits-and-blooms/bloom"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -47,91 +45,82 @@ Note:
     on duplicate key update
 */
 
-const (
-	// Probability of false positives
-	p float64 = 0.00001
-	// Number of hash functions
-	k uint = 3
-)
-
-// EstimateBitsNeed return the Number of bits should have in the filter
-// by the formula: p = pow(1 - exp(-k / (m / n)), k)
-//
-//	==> m = - kn / ln(1 - p^(1/k)), use k * (1.001 * n) instead of kn to overcome floating point errors
-func EstimateBitsNeed(n float64, k uint, p float64) float64 {
-	return -float64(k) * math.Ceil(1.001*n) / math.Log(1-math.Pow(p, 1.0/float64(k)))
-}
-
-func String(_ any, buf *bytes.Buffer) {
+func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" fuzzy check duplicate constraint")
 }
 
-func Prepare(proc *process.Process, arg any) (err error) {
-	ap := arg.(*Argument)
-	e := EstimateBitsNeed(ap.N, k, p)
-	m := uint(math.Ceil(e))
-	if float64(m) < e {
-		return moerr.NewInternalErrorNoCtx("Overflow occurred when estimating size of fuzzy filter")
+func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	rowCount := int64(arg.N * 1.1)
+	if rowCount < 10000 {
+		rowCount = 10000
 	}
-	ap.filter = bloom.New(m, k)
+	probability := 0.00001
+	if rowCount < 10000001 {
+		probability = 0.00001
+	} else if rowCount < 100000001 {
+		probability = 0.000001
+	} else if rowCount < 1000000001 {
+		probability = 0.0000005
+	} else {
+		probability = 0.0000001
+	}
+	arg.filter = bloomfilter.New(rowCount, probability)
+
 	return nil
 }
 
-func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (process.ExecStatus, error) {
-	anal := proc.GetAnalyze(idx)
+func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	anal := proc.GetAnalyze(arg.info.Idx)
 	anal.Start()
 	defer anal.Stop()
 
-	ap := arg.(*Argument)
-	bat := proc.InputBatch()
-	anal.Input(bat, isFirst)
+	result, err := arg.children[0].Call(proc)
+	if err != nil {
+		result.Status = vm.ExecStop
+		return result, err
+	}
+	bat := result.Batch
 
 	if bat == nil {
 		// this will happen in such case:create unique index from a table that unique col have no data
-		if ap.rbat == nil {
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
+		if arg.rbat == nil || arg.collisionCnt == 0 {
+			result.Status = vm.ExecStop
+			return result, nil
 		}
 
 		// fmt.Printf("Estimated row count is %f, collisionCnt is %d, fp is %f\n", ap.N, ap.collisionCnt, float64(ap.collisionCnt)/float64(ap.N))
-		ap.rbat.SetRowCount(ap.collisionCnt)
-		if ap.collisionCnt == 0 {
-			// case 1: pass duplicate constraint
-			proc.SetInputBatch(nil)
-			return process.ExecStop, nil
-		} else {
-			// case 2: send collisionKeys to output operator to run background SQL
-			proc.SetInputBatch(ap.rbat)
-			return process.ExecStop, nil
-		}
+		// send collisionKeys to output operator to run background SQL
+		arg.rbat.SetRowCount(arg.rbat.Vecs[0].Length())
+		result.Batch = arg.rbat
+		arg.collisionCnt = 0
+		result.Status = vm.ExecStop
+		return result, nil
 	}
+
+	anal.Input(bat, arg.info.IsFirst)
 
 	rowCnt := bat.RowCount()
 	if rowCnt == 0 {
-		proc.PutBatch(bat)
-		proc.SetInputBatch(batch.EmptyBatch)
-		return process.ExecNext, nil
+		return result, nil
 	}
 
-	if ap.rbat == nil {
-		if err := generateRbat(proc, ap, bat); err != nil {
-			return process.ExecStop, err
+	if arg.rbat == nil {
+		if err := generateRbat(proc, arg, bat); err != nil {
+			result.Status = vm.ExecStop
+			return result, err
 		}
 	}
 
 	pkCol := bat.GetVector(0)
-	for i := 0; i < rowCnt; i++ {
-		var bytes = pkCol.GetRawBytesAt(i)
-		if ap.filter.Test(bytes) {
-			appendCollisionKey(proc, ap, i, bat)
-			ap.collisionCnt++
-		} else {
-			ap.filter.Add(bytes)
+	arg.filter.TestAndAddForVector(pkCol, func(exist bool, i int) {
+		if exist {
+			appendCollisionKey(proc, arg, i, bat)
+			arg.collisionCnt++
 		}
-	}
+	})
 
-	proc.SetInputBatch(batch.EmptyBatch)
-	return process.ExecNext, nil
+	result.Batch = batch.EmptyBatch
+	return result, nil
 }
 
 // appendCollisionKey will append collision key into rbat
@@ -143,7 +132,7 @@ func appendCollisionKey(proc *process.Process, arg *Argument, idx int, bat *batc
 // rbat will contain the keys that have hash collisions
 func generateRbat(proc *process.Process, arg *Argument, bat *batch.Batch) error {
 	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, vector.NewVec(*bat.GetVector(0).GetType()))
+	rbat.SetVector(0, proc.GetVector(*bat.GetVector(0).GetType()))
 	arg.rbat = rbat
 	return nil
 }

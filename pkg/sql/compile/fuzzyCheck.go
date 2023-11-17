@@ -120,6 +120,7 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 
 		for i = 0; i < lastRow; i++ {
 			one.Reset()
+			one.WriteByte('(')
 			// one compound primary key has multiple conditions, use "and" to join them
 			for j = 0; j < len(cAttrs)-1; j++ {
 				one.WriteString(fmt.Sprintf("%s = %s and ", cAttrs[j], pkeys[j][i]))
@@ -127,6 +128,7 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 
 			// the last condition does not need to be followed by "and"
 			one.WriteString(fmt.Sprintf("%s = %s", cAttrs[j], pkeys[j][i]))
+			one.WriteByte(')')
 			one.WriteTo(&all)
 
 			// use or join each compound primary keys
@@ -223,7 +225,7 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 			cAttrs[k] = c.Name
 		}
 		attrs := strings.Join(cAttrs, ", ")
-		duplicateCheckSql = fmt.Sprintf(fuzzyCompoundCheck, attrs, f.db, f.tbl, f.condition, cAttrs[0], attrs)
+		duplicateCheckSql = fmt.Sprintf(fuzzyCompoundCheck, attrs, f.db, f.tbl, f.condition, attrs)
 	}
 
 	res, err := c.runSqlWithResult(duplicateCheckSql)

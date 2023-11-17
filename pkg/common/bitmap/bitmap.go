@@ -63,8 +63,8 @@ func (n *Bitmap) InitWith(other *Bitmap) {
 	n.data = append([]uint64(nil), other.data...)
 }
 
-func (n *Bitmap) InitWithSize(len int) {
-	n.len = int64(len)
+func (n *Bitmap) InitWithSize(len int64) {
+	n.len = len
 	n.emptyFlag.Store(kEmptyFlagEmpty)
 	n.data = make([]uint64, (len+63)/64)
 }
@@ -164,8 +164,8 @@ func (n *Bitmap) Reset() {
 }
 
 // Len returns the number of bits in the Bitmap.
-func (n *Bitmap) Len() int {
-	return int(n.len)
+func (n *Bitmap) Len() int64 {
+	return n.len
 }
 
 // Size return number of bytes in n.data
@@ -343,7 +343,7 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 
 func (n *Bitmap) Filter(sels []int64) *Bitmap {
 	var m Bitmap
-	m.InitWithSize(int(n.len))
+	m.InitWithSize(n.len)
 	for i, sel := range sels {
 		if n.Contains(uint64(sel)) {
 			m.Add(uint64(i))
