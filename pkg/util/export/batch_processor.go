@@ -376,9 +376,9 @@ func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
 		} else if c.maxBufferCnt == 0 {
 			c.maxBufferCnt = int32(runtime.NumCPU())
 		}
-		c.collectorCntP = cfg.CollectorCntP
-		c.generatorCntP = cfg.GeneratorCntP
-		c.exporterCntP = cfg.ExporterCntP
+		c.collectorCntP = cfg.CollectorCntPercent
+		c.generatorCntP = cfg.GeneratorCntPercent
+		c.exporterCntP = cfg.ExporterCntPercent
 	})
 }
 

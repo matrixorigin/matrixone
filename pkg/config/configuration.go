@@ -636,19 +636,19 @@ type OBCollectorConfig struct {
 	BufferSize int64 `toml:"bufferSize"`
 	// Collector Worker
 
-	CollectorCntP int `toml:"collector_cnt_percent"`
-	GeneratorCntP int `toml:"generator_cnt_percent"`
-	ExporterCntP  int `toml:"exporter_cnt_percent"`
+	CollectorCntPercent int `toml:"collector_cnt_percent"`
+	GeneratorCntPercent int `toml:"generator_cnt_percent"`
+	ExporterCntPercent  int `toml:"exporter_cnt_percent"`
 }
 
 func NewOBCollectorConfig() *OBCollectorConfig {
 	cfg := &OBCollectorConfig{
-		ShowStatsInterval: toml.Duration{},
-		BufferCnt:         defaultOBBufferCnt,
-		BufferSize:        defaultOBBufferSize,
-		CollectorCntP:     defaultOBCollectorCntPercent,
-		GeneratorCntP:     defaultOBGeneratorCntPercent,
-		ExporterCntP:      defaultOBExporterCntPercent,
+		ShowStatsInterval:   toml.Duration{},
+		BufferCnt:           defaultOBBufferCnt,
+		BufferSize:          defaultOBBufferSize,
+		CollectorCntPercent: defaultOBCollectorCntPercent,
+		GeneratorCntPercent: defaultOBGeneratorCntPercent,
+		ExporterCntPercent:  defaultOBExporterCntPercent,
 	}
 	cfg.ShowStatsInterval.Duration = defaultOBShowStatsInterval
 	return cfg
@@ -664,14 +664,14 @@ func (c *OBCollectorConfig) SetDefaultValues() {
 	if c.BufferSize == 0 {
 		c.BufferSize = defaultOBBufferSize
 	}
-	if c.CollectorCntP <= 0 {
-		c.CollectorCntP = defaultOBCollectorCntPercent
+	if c.CollectorCntPercent <= 0 {
+		c.CollectorCntPercent = defaultOBCollectorCntPercent
 	}
-	if c.GeneratorCntP <= 0 {
-		c.GeneratorCntP = defaultOBGeneratorCntPercent
+	if c.GeneratorCntPercent <= 0 {
+		c.GeneratorCntPercent = defaultOBGeneratorCntPercent
 	}
-	if c.ExporterCntP <= 0 {
-		c.ExporterCntP = defaultOBExporterCntPercent
+	if c.ExporterCntPercent <= 0 {
+		c.ExporterCntPercent = defaultOBExporterCntPercent
 	}
 }
 
