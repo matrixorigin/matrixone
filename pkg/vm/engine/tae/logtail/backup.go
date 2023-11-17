@@ -38,7 +38,6 @@ type fileData struct {
 	data          map[uint16]*blockData
 	name          objectio.ObjectName
 	isDeleteBatch bool
-	isInsertBatch bool
 	isChange      bool
 	isABlock      bool
 }
@@ -52,21 +51,18 @@ type blockData struct {
 	data      *batch.Batch
 	sortKey   uint16
 	isABlock  bool
-	commitTs  types.TS
 	blockId   types.Blockid
 	tid       uint64
 	tombstone *blockData
 }
 
 type iBlocks struct {
-	fileNum      int
 	insertBlocks []*insertBlock
 }
 
 type insertBlock struct {
 	blockId   objectio.Blockid
 	location  objectio.Location
-	commitTs  types.TS
 	deleteRow int
 	apply     bool
 	data      *blockData
@@ -209,7 +205,7 @@ func trimObjectsData(
 				}
 				(*objectsData)[name].data[id].sortKey = sortKey
 			}
-			formatData(bat)
+			bat = formatData(bat)
 			(*objectsData)[name].data[id].data = bat
 		}
 		(*objectsData)[name].isChange = isChange
@@ -292,7 +288,7 @@ func appendValToBatch(src, dst *containers.Batch, row int) {
 }
 
 // Need to format the loaded batch, otherwise panic may occur when WriteBatch.
-func formatData(data *batch.Batch) {
+func formatData(data *batch.Batch) *batch.Batch {
 	if data.Vecs[0].Length() > 0 {
 		data.Attrs = make([]string, 0)
 		for i := range data.Vecs {
@@ -302,6 +298,7 @@ func formatData(data *batch.Batch) {
 		tmp := containers.ToTNBatch(data, common.CheckpointAllocator)
 		data = containers.ToCNBatch(tmp)
 	}
+	return data
 }
 
 func ReWriteCheckpointAndBlockFromKey(
@@ -395,7 +392,6 @@ func ReWriteCheckpointAndBlockFromKey(
 			addBlockToObjectData(metaLoc, isABlk, true, i,
 				blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
 			name := metaLoc.Name().String()
-			isCkpChange = true
 
 			if isABlk && !deltaLoc.IsEmpty() {
 				objectsData[name].data[metaLoc.ID()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]

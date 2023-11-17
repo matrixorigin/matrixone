@@ -56,7 +56,6 @@ type blockData struct {
 	seqnums     *Seqnums
 	data        [][]byte
 	bloomFilter []byte
-	pk          int32
 }
 
 type WriterType int8
