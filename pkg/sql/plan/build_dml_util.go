@@ -2763,6 +2763,16 @@ func reduceSinkSinkScanNodes(qry *Query) {
 	}
 }
 
+// subPlanPartitionPrune Perform partition pruning on the full table scan of the partitioned table in the insert statement
+func subPlanPartitionPrune(builder *QueryBuilder, qry *Query) {
+	if len(qry.Steps) == 1 {
+		return
+	}
+	for _, rootID := range builder.qry.Steps {
+		builder.partitionPrune(rootID)
+	}
+}
+
 func collectSinkAndSinkScanMeta(
 	qry *Query,
 	sinks map[int32]*sinkMeta,

@@ -251,6 +251,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		query.StmtType = plan.Query_INSERT
 	}
 	reduceSinkSinkScanNodes(query)
+	// perform partition pruning on the partitioned table scan in the insert statement
+	subPlanPartitionPrune(builder, query)
 	ReCalcQueryStats(builder, query)
 	return &Plan{
 		Plan: &plan.Plan_Query{
