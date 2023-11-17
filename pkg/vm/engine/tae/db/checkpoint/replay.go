@@ -324,14 +324,14 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 	if err != nil {
 		return "", err
 	}
-	bats, err := reader.LoadAllColumns(ctx, nil, common.DebugAllocator)
+	bats, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
 	if err != nil {
 		return "", err
 	}
 	defer func() {
 		for i := range bats {
 			for j := range bats[i].Vecs {
-				bats[i].Vecs[j].Free(common.DebugAllocator)
+				bats[i].Vecs[j].Free(common.CheckpointAllocator)
 			}
 		}
 	}()
@@ -345,9 +345,9 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 		}
 		var vec containers.Vector
 		if bats[0].Vecs[i].Length() == 0 {
-			vec = containers.MakeVector(colTypes[i], common.DebugAllocator)
+			vec = containers.MakeVector(colTypes[i], common.CheckpointAllocator)
 		} else {
-			vec = containers.ToTNVector(bats[0].Vecs[i], common.DebugAllocator)
+			vec = containers.ToTNVector(bats[0].Vecs[i], common.CheckpointAllocator)
 		}
 		bat.AddVector(colNames[i], vec)
 	}
