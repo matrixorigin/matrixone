@@ -380,6 +380,8 @@ func IncrementalCheckpointDataFactory(start, end types.TS,
 		collector := NewIncrementalCollector(start, end)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
+		// deal with the left segments
+		collector.fillObjectInfoBatch()
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
 		}
@@ -404,6 +406,8 @@ func GlobalCheckpointDataFactory(
 		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
+		// deal with the left segments
+		collector.fillObjectInfoBatch()
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
 		}
@@ -2391,7 +2395,9 @@ func (data *CheckpointData) GetTNBlkBatchs() (
 		data.bats[BLKTNMetaDeleteIDX],
 		data.bats[BLKTNMetaDeleteTxnIDX]
 }
-
+func (collector *BaseCollector) PostLoop() {
+	collector.fillObjectInfoBatch()
+}
 func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 	if shouldIgnoreDBInLogtail(entry.ID) {
 		return nil

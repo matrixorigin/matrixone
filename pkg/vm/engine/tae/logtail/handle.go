@@ -515,7 +515,6 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 func visitObject(batch *containers.Batch, entry *catalog.SegmentEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) {
 	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
 	batch.GetVectorByName(catalog.AttrCommitTs).Append(node.TxnMVCCNode.End, false)
-	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
 	node.BaseNode.AppendTuple(&entry.ID, batch)
 	node.TxnMVCCNode.AppendTuple(batch)
 	node.EntryMVCCNode.AppendTuple(batch)

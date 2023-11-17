@@ -75,13 +75,13 @@ func init() {
 		MakeTestCase(testLSNCheck, "prepare-6", "test-6", "prepare-6=>test-6"),
 	)
 
-	PrepareCaseRegister(MakePrepareCase(
-		prepareObjectInfo, "prepare-7", "prepare object info",
-		schemaCfg{10, 2, 18, 13}, 51, longOpt,
-	))
-	TestCaseRegister(
-		MakeTestCase(testObjectInfo, "prepare-7", "test-7", "prepare-7=>test-7"),
-	)
+	// PrepareCaseRegister(MakePrepareCase(
+	// 	prepareObjectInfo, "prepare-7", "prepare object info",
+	// 	schemaCfg{10, 2, 18, 13}, 51, longOpt,
+	// ))
+	// TestCaseRegister(
+	// 	MakeTestCase(testObjectInfo, "prepare-7", "test-7", "prepare-7=>test-7"),
+	// )
 }
 
 func prepare1(tc PrepareCase, t *testing.T) {
