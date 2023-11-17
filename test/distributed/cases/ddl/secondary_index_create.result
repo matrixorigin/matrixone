@@ -128,7 +128,7 @@ name    type    column_name
 idx6    MULTIPLE    a
 drop table if exists t1;
 create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
-create index idx7 using BTREE on t1(name) lists = 10;
+create index idx7 using BTREE on t1(name);
 insert into t1 values(1,"Abby", 24);
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression

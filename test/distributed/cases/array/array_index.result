@@ -92,4 +92,17 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"3","op_type":"vector_l2_ops"}
 idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"3","op_type":"vector_l2_ops"}
 idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"3","op_type":"vector_l2_ops"}
+alter table tbl add embedding2 vecf32(3);
+show index from tbl;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
+tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
+show create table tbl;
+Table    Create Table
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\n`embedding2` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING `ivfflat` (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
+name    type    column_name    algo    algo_table_type    algo_params
+idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
+idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"2","op_type":"vector_l2_ops"}
+idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"2","op_type":"vector_l2_ops"}
 drop database vecdb2;

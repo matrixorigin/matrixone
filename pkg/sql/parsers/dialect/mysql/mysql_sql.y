@@ -7362,6 +7362,8 @@ index_def:
             switch t {
  	    case "btree":
             	keyTyp = tree.INDEX_TYPE_BTREE
+	    case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
             case "hash":
             	keyTyp = tree.INDEX_TYPE_HASH
 	    case "rtree":
@@ -7371,7 +7373,7 @@ index_def:
             case "bsi":
                 keyTyp = tree.INDEX_TYPE_BSI
             default:
-                yylex.Error("Invail the type of index")
+                yylex.Error("Invalid the type of index")
                 return 1
             }
         }
@@ -7391,6 +7393,8 @@ index_def:
             switch t {
              case "btree":
 		keyTyp = tree.INDEX_TYPE_BTREE
+	     case "ivfflat":
+		keyTyp = tree.INDEX_TYPE_IVFFLAT
 	     case "hash":
 		keyTyp = tree.INDEX_TYPE_HASH
 	     case "rtree":
@@ -7400,7 +7404,7 @@ index_def:
 	     case "bsi":
 		keyTyp = tree.INDEX_TYPE_BSI
             default:
-                yylex.Error("Invail the type of index")
+                yylex.Error("Invalid type of index")
                 return 1
             }
         }

@@ -48,7 +48,14 @@ show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 
+-- 4. Reindex Secondary Index with IVFFLAT.
 alter table tbl alter reindex idx1 ivfflat lists=3;
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
+
+-- 5. Alter table add column with IVFFLAT.
+alter table tbl add embedding2 vecf32(3);
 show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";

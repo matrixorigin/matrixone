@@ -71,11 +71,10 @@ show index from t1;
 show create table t1;
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx6";
 
--- 1.g Create Secondary Index with BTREE and IVF params (`lists` param will be used by BTREE)
--- 1.e Create Secondary Index with BTREE or "" will result in regular secondary index.
+-- 1.g Create Secondary Index with "using BTREE"
 drop table if exists t1;
 create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
-create index idx7 using BTREE on t1(name) lists = 10;
+create index idx7 using BTREE on t1(name);
 insert into t1 values(1,"Abby", 24);
 show index from t1;
 show create table t1;
