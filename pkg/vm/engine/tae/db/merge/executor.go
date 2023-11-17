@@ -248,10 +248,12 @@ func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEnt
 	v2.TaskMergedBlocksCounter.Add(float64(blkn))
 	v2.TasKMergedSizeCounter.Add(float64(osize))
 
+	rows := 0
 	infoBuf := &bytes.Buffer{}
-	infoBuf.WriteString("merged:")
 	for _, seg := range merges {
-		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", seg.Stat.GetRemainingRows(), common.ShortSegId(seg.ID)))
+		r := seg.Stat.GetRemainingRows()
+		rows += r
+		infoBuf.WriteString(fmt.Sprintf(" %d(%s)", r, common.ShortSegId(seg.ID)))
 	}
 	if len(dels) > 0 {
 		infoBuf.WriteString(" | del:")
@@ -260,8 +262,10 @@ func logMergeTask(name string, taskId uint64, dels, merges []*catalog.SegmentEnt
 		}
 	}
 	logutil.Infof(
-		"[Mergeblocks] Scheduled %v [t%d|bn%d,on%d|%s,%s], %s", name,
-		taskId, len(merges), blkn, common.HumanReadableBytes(osize), common.HumanReadableBytes(esize),
+		"[Mergeblocks] Scheduled %v [t%d|on%d,bn%d|%s,%s], merged(%v): %s", name,
+		taskId, len(merges), blkn,
+		common.HumanReadableBytes(osize), common.HumanReadableBytes(esize),
+		rows,
 		infoBuf.String(),
 	)
 }
