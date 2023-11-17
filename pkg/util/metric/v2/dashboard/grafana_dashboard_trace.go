@@ -52,11 +52,13 @@ func (c *DashboardCreator) initTraceDurationRow() dashboard.Option {
 			},
 			[]string{
 				"collect",
+				"generate_awake",
+				"generate_delay",
 				"generate",
 				"export",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},
-			[]float32{3, 3, 3, 3},
+			[]float32{3, 3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,
 	)
