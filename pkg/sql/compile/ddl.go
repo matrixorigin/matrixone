@@ -1154,16 +1154,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 
 	return c.runTxn(func(txn executor.TxnExecutor) error {
 
-		// 2. dynamic check - verify if table has data.
-		totalCnt, err := s.handleCount(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
-		if err != nil {
-			return err
-		}
-		if totalCnt == 0 {
-			return moerr.NewNotSupported(c.ctx, "table should have some data")
-		}
-
-		// 3. create hidden tables
+		// 2. create hidden tables
 		if indexInfo != nil {
 
 			tables := make([]string, 3)
@@ -1172,11 +1163,20 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 			tables[2] = genCreateIndexTableSqlForIvfIndex(indexInfo.GetIndexTables()[2], indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase)
 
 			for _, createTableSql := range tables {
-				_, err = c.runSqlWithResult(createTableSql)
+				_, err := c.runSqlWithResult(createTableSql)
 				if err != nil {
 					return err
 				}
 			}
+		}
+
+		// 3. if table does not have data, we stop here.
+		totalCnt, err := s.handleCount(txn, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+		if err != nil {
+			return err
+		}
+		if totalCnt == 0 {
+			return nil
 		}
 
 		// 4.a populate meta table

@@ -57,10 +57,13 @@ show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 
--- 6. [FAILURE] Create IVF index before table has data (results in error)
+-- 6.  Create IVF index before table has data (we create the 3 hidden tables alone without populating them)
 drop table if exists tbl;
 create table tbl(a int primary key,b vecf32(3), c vecf64(5));
 create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx2";
 
 -- 7. [FAILURE] Create IVF index on non-vector types, multiple columns, lists=-ve, unknown op_type
 drop table if exists tbl;
@@ -103,6 +106,12 @@ create index idx8 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
 show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx8";
+
+-- 10. Create IVF index within Create Table (this will create empty index hidden tables)
+drop table if exists tbl;
+create table tbl(a int primary key, b vecf32(3), index idx9 using ivfflat (b));
+
+-- 11.
 
 -- post
 drop database vecdb2;
