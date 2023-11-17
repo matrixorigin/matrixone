@@ -330,13 +330,15 @@ func TestStatsArray_InitIfEmpty(t *testing.T) {
 
 func BenchmarkStatsInfo(b *testing.B) {
 	s := StatsInfo{}
-	s.ParseStartTime = time.Now()
-	s.ParseDuration = time.Since(s.ParseStartTime)
-	s.PlanStart()
-	s.PlanEnd()
-	s.CompileStart()
-	s.CompileEnd()
-	s.ExecutionStart()
-	s.ExecutionEnd()
-
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s.ParseStartTime = time.Now()
+		s.ParseDuration = time.Since(s.ParseStartTime)
+		s.PlanStart()
+		s.PlanEnd()
+		s.CompileStart()
+		s.CompileEnd()
+		s.ExecutionStart()
+		s.ExecutionEnd()
+	}
 }
