@@ -265,7 +265,27 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	e.AddEntryLocked(block)
 	return e
 }
+func (entry *SegmentEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[*ObjectMVCCNode]) (needPrefetch bool, blk *BlockEntry) {
+	lastNode := nodes[0]
+	for _, n := range nodes {
+		if n.Start.Greater(lastNode.Start) {
+			lastNode = n
+		}
+	}
+	if !lastNode.BaseNode.ObjectStats.IsZero() {
+		return
+	}
+	blk = entry.MakeBlockIt(false).Get().GetPayload()
+	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
+		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: lastNode.Start},
+	})
+	if node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
+		return
+	}
 
+	needPrefetch = true
+	return
+}
 func (entry *SegmentEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (*objectio.ObjectStats, error) {
 	stats := objectio.NewObjectStats()
 	blk := entry.MakeBlockIt(false).Get().GetPayload()

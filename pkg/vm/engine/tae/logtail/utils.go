@@ -605,6 +605,8 @@ type BaseCollector struct {
 	data *CheckpointData
 	// to identify increment or global
 	isGlobal bool
+	// to prefetch object meta when fill in object info batch
+	segments []*catalog.SegmentEntry
 }
 
 type IncrementalCollector struct {
@@ -619,6 +621,7 @@ func NewIncrementalCollector(start, end types.TS) *IncrementalCollector {
 			start:         start,
 			end:           end,
 			isGlobal:      false,
+			segments:      make([]*catalog.SegmentEntry, 0),
 		},
 	}
 	collector.DatabaseFn = collector.VisitDB
@@ -652,6 +655,7 @@ func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalColl
 			data:          NewCheckpointData(common.CheckpointAllocator),
 			end:           end,
 			isGlobal:      true,
+			segments:      make([]*catalog.SegmentEntry, 0),
 		},
 		versionThershold: versionThresholdTS,
 	}
@@ -2580,91 +2584,62 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	if len(mvccNodes) == 0 {
 		return nil
 	}
-	delStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
-	// segDelBat := collector.data.bats[SEGDeleteIDX]
-	// segDelTxn := collector.data.bats[SEGDeleteTxnIDX]
-	// segInsBat := collector.data.bats[SEGInsertIDX]
-	// segInsTxn := collector.data.bats[SEGInsertTxnIDX]
 
-	for _, node := range mvccNodes {
-		if node.IsAborted() {
-			continue
-		}
-		if node.BaseNode.ObjectStats.IsZero() {
-			stats, err := entry.LoadObjectInfoWithTxnTS(node.Start)
-			if err != nil {
-				return err
-			}
-			node.BaseNode.ObjectStats = stats
-		}
-		visitObject(collector.data.bats[ObjectInfoIDX], entry, node)
-		// segNode := node
-		// if segNode.HasDropCommitted() {
-		// 	vector.AppendFixed(
-		// 		segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
-		// 		objectio.HackObjid2Rowid(&entry.ID),
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	vector.AppendFixed(
-		// 		segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
-		// 		segNode.GetEnd(),
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	vector.AppendFixed(
-		// 		segDelTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
-		// 		entry.GetTable().GetDB().GetID(),
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	vector.AppendFixed(
-		// 		segDelTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
-		// 		entry.GetTable().GetID(),
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	segNode.TxnMVCCNode.AppendTuple(segDelTxn)
-		// } else {
-		// 	vector.AppendFixed(
-		// 		segInsBat.GetVectorByName(SegmentAttr_ID).GetDownstreamVector(),
-		// 		entry.ID,
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	vector.AppendFixed(
-		// 		segInsBat.GetVectorByName(SegmentAttr_CreateAt).GetDownstreamVector(),
-		// 		segNode.GetEnd(),
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	buf := &bytes.Buffer{}
-		// 	if _, err := entry.SegmentNode.WriteTo(buf); err != nil {
-		// 		return err
-		// 	}
-		// 	vector.AppendBytes(
-		// 		segInsBat.GetVectorByName(SegmentAttr_SegNode).GetDownstreamVector(),
-		// 		buf.Bytes(),
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	vector.AppendFixed(
-		// 		segInsTxn.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
-		// 		entry.GetTable().GetDB().GetID(),
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	vector.AppendFixed(
-		// 		segInsTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
-		// 		entry.GetTable().GetID(),
-		// 		false,
-		// 		common.DefaultAllocator,
-		// 	)
-		// 	segNode.TxnMVCCNode.AppendTuple(segInsTxn)
-		// }
+	needPrefetch, blk := entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+	if needPrefetch {
+		blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
 	}
-	delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
-	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
+
+	collector.segments = append(collector.segments, entry)
+	if len(collector.segments) >= 100 {
+		collector.fillObjectInfoBatch()
+		collector.segments = collector.segments[:0]
+	}
+	return nil
+}
+
+func (collector *BaseCollector) fillObjectInfoBatch() error {
+	for _, entry := range collector.segments {
+		entry.RLock()
+		mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
+		entry.RUnlock()
+		if len(mvccNodes) == 0 {
+			return nil
+		}
+		delStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
+		segDelBat := collector.data.bats[SEGDeleteIDX]
+
+		for _, node := range mvccNodes {
+			if node.IsAborted() {
+				continue
+			}
+			if node.BaseNode.ObjectStats.IsZero() {
+				stats, err := entry.LoadObjectInfoWithTxnTS(node.Start)
+				if err != nil {
+					return err
+				}
+				node.BaseNode.ObjectStats = stats
+			}
+			visitObject(collector.data.bats[ObjectInfoIDX], entry, node)
+			segNode := node
+			if segNode.HasDropCommitted() {
+				vector.AppendFixed(
+					segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
+					objectio.HackObjid2Rowid(&entry.ID),
+					false,
+					common.DefaultAllocator,
+				)
+				vector.AppendFixed(
+					segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
+					segNode.GetEnd(),
+					false,
+					common.DefaultAllocator,
+				)
+			}
+		}
+		delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
+		collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
+	}
 	return nil
 }
 
