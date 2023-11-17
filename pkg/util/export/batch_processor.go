@@ -254,6 +254,10 @@ type MOCollector struct {
 	collectorCnt int // WithCollectorCnt
 	generatorCnt int // WithGeneratorCnt
 	exporterCnt  int // WithExporterCnt
+	// num % of (#cpu * 0.1)
+	collectorCntP int // default: 10
+	generatorCntP int // default: 20
+	exporterCntP  int // default: 80
 	// pipeImplHolder hold implement
 	pipeImplHolder *PipeImplHolder
 
@@ -282,9 +286,9 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
-		collectorCnt:   0,
-		generatorCnt:   0,
-		exporterCnt:    0,
+		collectorCntP:  10,
+		generatorCntP:  20,
+		exporterCntP:   80,
 		pipeImplHolder: newPipeImplHolder(),
 		statsInterval:  time.Minute,
 		maxBufferCnt:   int32(runtime.NumCPU()),
@@ -294,54 +298,50 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		opt(c)
 	}
 	// calculate collectorCnt, generatorCnt, exporterCnt
-	c.calculateDefaultWorker()
+	c.calculateDefaultWorker(runtime.NumCPU())
 	return c
 }
 
 // calculateDefaultWorker
-// default strategy: totalNum = #cpu * 0.1
-// If totalNum < 5, then collectorCnt, generatorCnt, exporterCnt = 1,
-// else collectorCnt : generatorCnt : exporterCnt = 1 : 2 : 10.
+// totalNum = int( #cpu * 0.1 + 0.5 )
+// default collectorCntP : generatorCntP : exporterCntP = 10 : 20 : 80.
+// It means collectorCnt = int( $totalNum * $collectorCntP / 100 + 0.5 )
+//
 // For example
 // | #cpu | #totalNum | collectorCnt | generatorCnt | exporterCnt |
 // | --   | --        | --           | --           | --          |
-// | 6    | 0.6 =~ 1  | 1            | 1            | 1           |
-// | 10   | 1.0       | 1            | 1            | 1           |
+// | 6    | 0.6 =~ 1  | 1            | 1            | 3           |
 // | 30   | 3.0       | 1            | 1            | 3           |
-// | 40   | 4.0       | 1            | 1            | 4           |
+// | 50   | 5.0       | 1            | 1            | 4           |
+// | 60   | 6.0       | 1            | 2            | 5           |
 
-func (c *MOCollector) calculateDefaultWorker() {
-	var collectorCnt, generatorCnt, exporterCnt int
-	var totalNum = int(float64(runtime.NumCPU()) * 0.1)
-	if totalNum < 5 {
-		collectorCnt, generatorCnt, exporterCnt = 1, 1, 3
-	} else {
-		unit := float64(totalNum) / (2.0 + 10.0)
-		collectorCnt = 1
-		generatorCnt = int(unit*2 + 0.5)
-		exporterCnt = int(unit*10 + 0.5)
-	}
+func (c *MOCollector) calculateDefaultWorker(numCpu int) {
+	var totalNum = int(float64(numCpu)*0.1 + 0.5)
+	unit := float64(totalNum) / (100.0)
 	// set default value if non-set
-	if c.collectorCnt == 0 {
-		c.collectorCnt = collectorCnt
+	c.collectorCnt = int(unit*float64(c.collectorCntP) + 0.5)
+	c.generatorCnt = int(unit*float64(c.generatorCntP) + 0.5)
+	c.exporterCnt = int(unit*float64(c.exporterCntP) + 0.5)
+	if c.collectorCnt <= 0 {
+		c.collectorCnt = 1
 	}
-	if c.generatorCnt == 0 {
-		c.generatorCnt = generatorCnt
+	if c.generatorCnt <= 0 {
+		c.generatorCnt = 1
 	}
-	if c.exporterCnt == 0 {
-		c.exporterCnt = exporterCnt
+	if c.exporterCnt <= 3 {
+		c.exporterCnt = 3
 	}
 	return
 }
 
-func WithCollectorCnt(cnt int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.collectorCnt = cnt })
+func WithCollectorCntP(p int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.collectorCntP = p })
 }
-func WithGeneratorCnt(cnt int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.generatorCnt = cnt })
+func WithGeneratorCnt(p int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.generatorCntP = p })
 }
-func WithExporterCnt(cnt int) MOCollectorOption {
-	return MOCollectorOption(func(c *MOCollector) { c.exporterCnt = cnt })
+func WithExporterCnt(p int) MOCollectorOption {
+	return MOCollectorOption(func(c *MOCollector) { c.exporterCntP = p })
 }
 
 func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
@@ -353,6 +353,9 @@ func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
 		} else if c.maxBufferCnt == 0 {
 			c.maxBufferCnt = int32(runtime.NumCPU())
 		}
+		c.collectorCntP = cfg.CollectorCntP
+		c.generatorCntP = cfg.GeneratorCntP
+		c.exporterCntP = cfg.ExporterCntP
 	})
 }
 

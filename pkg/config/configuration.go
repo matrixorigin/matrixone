@@ -131,6 +131,13 @@ var (
 	//defaultOBBufferSize, 10 << 20 = 10485760
 	defaultOBBufferSize int64 = 10485760
 
+	// defaultOBCollectorCntPercent
+	defaultOBCollectorCntPercent = 10
+	// defaultOBGeneratorCntPercent
+	defaultOBGeneratorCntPercent = 20
+	// defaultOBExporterCntPercent
+	defaultOBExporterCntPercent = 80
+
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
 
@@ -627,6 +634,11 @@ type OBCollectorConfig struct {
 	// BufferCnt
 	BufferCnt  int32 `toml:"bufferCnt"`
 	BufferSize int64 `toml:"bufferSize"`
+	// Collector Worker
+
+	CollectorCntP int `toml:"collector_cnt_percent"`
+	GeneratorCntP int `toml:"generator_cnt_percent"`
+	ExporterCntP  int `toml:"exporter_cnt_percent"`
 }
 
 func NewOBCollectorConfig() *OBCollectorConfig {
@@ -634,6 +646,9 @@ func NewOBCollectorConfig() *OBCollectorConfig {
 		ShowStatsInterval: toml.Duration{},
 		BufferCnt:         defaultOBBufferCnt,
 		BufferSize:        defaultOBBufferSize,
+		CollectorCntP:     defaultOBCollectorCntPercent,
+		GeneratorCntP:     defaultOBGeneratorCntPercent,
+		ExporterCntP:      defaultOBExporterCntPercent,
 	}
 	cfg.ShowStatsInterval.Duration = defaultOBShowStatsInterval
 	return cfg
