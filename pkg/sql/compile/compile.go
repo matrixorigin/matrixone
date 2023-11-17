@@ -3765,6 +3765,11 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 		}
 		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
 		zm := blkMeta.MustGetColumn(uint16(n.Stats.HashmapStats.ShuffleColIdx)).ZoneMap()
+		if !zm.IsInited() {
+			// a block with all null will send to first CN
+			nodes[0].Data = append(nodes[0].Data, blk)
+			continue
+		}
 		if !init {
 			init = true
 			switch zm.GetType() {
