@@ -1619,6 +1619,7 @@ func (data *CheckpointData) FormatData(mp *mpool.MPool) (err error) {
 	for idx := range data.bats {
 		for i, col := range data.bats[idx].Vecs {
 			vec := col.CloneWindow(0, col.Length(), mp)
+			col.Close()
 			data.bats[idx].Vecs[i] = vec
 		}
 	}
