@@ -4013,7 +4013,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 			int(COM_QUIT),
 			nil,
 		)*/
-		return resp, moerr.NewInternalError(requestCtx, "client send quit")
+		return resp, nil
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
