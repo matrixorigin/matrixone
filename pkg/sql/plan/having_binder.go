@@ -94,7 +94,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
-		newExpr, _ := bindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
+		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)
 		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
 		return &plan.Expr{

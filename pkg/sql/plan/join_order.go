@@ -131,7 +131,7 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 
 func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]any) bool {
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
-		if !SupportedJoinCondition(e.F.Func.GetObj()) {
+		if !IsEqualFunc(e.F.Func.GetObj()) {
 			return false
 		}
 
@@ -153,7 +153,7 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]any) bool {
 func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !SupportedJoinCondition(e.F.Func.GetObj()) {
+			if !IsEqualFunc(e.F.Func.GetObj()) {
 				continue
 			}
 			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
@@ -166,10 +166,11 @@ func IsEquiJoin2(exprs []*plan.Expr) bool {
 	return false
 }
 
-func SupportedJoinCondition(id int64) bool {
+func IsEqualFunc(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL
 }
+
 func HasColExpr(expr *plan.Expr, pos int32) int32 {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:

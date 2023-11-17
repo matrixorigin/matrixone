@@ -1402,6 +1402,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// new optimize rule should be put before
 
 		builder.pushdownRuntimeFilters(rootID)
+		rootID = builder.useUniqueSecondaryIndices(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
 
