@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 	"runtime"
 	"sync"
@@ -281,9 +282,9 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		awakeGenerate:  make(chan generateReq, 16),
 		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
-		collectorCnt:   runtime.NumCPU(),
-		generatorCnt:   runtime.NumCPU(),
-		exporterCnt:    runtime.NumCPU(),
+		collectorCnt:   0,
+		generatorCnt:   0,
+		exporterCnt:    0,
 		pipeImplHolder: newPipeImplHolder(),
 		statsInterval:  time.Minute,
 		maxBufferCnt:   int32(runtime.NumCPU()),
@@ -292,7 +293,44 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 	for _, opt := range opts {
 		opt(c)
 	}
+	// calculate collectorCnt, generatorCnt, exporterCnt
+	c.calculateDefaultWorker()
 	return c
+}
+
+// calculateDefaultWorker
+// default strategy: totalNum = #cpu * 0.1
+// If totalNum < 3, then collectorCnt, generatorCnt, exporterCnt = 1,
+// else collectorCnt : generatorCnt : exporterCnt = 1 : 2 : 3.
+// For example
+// | #cpu | #totalNum | collectorCnt | generatorCnt | exporterCnt |
+// | --   | --        | --           | --           | --          |
+// | 6    | 0.6 =~ 1  | 1            | 1            | 1           |
+// | 10   | 1.0       | 1            | 1            | 1           |
+// | 30   | 3.0       | 1            | 1            | 2           |
+// | 40   | 4.0       | 1            | 1            | 2           |
+
+func (c *MOCollector) calculateDefaultWorker() (collectorCnt, generatorCnt, exporterCnt int) {
+	totalNum := int(float64(runtime.NumCPU()) * 0.1)
+	if totalNum < 3 {
+		collectorCnt, generatorCnt, exporterCnt = 1, 1, 1
+	} else {
+		unit := totalNum / 3
+		collectorCnt = (unit*2 + 1) / 2
+		generatorCnt = (unit*4 + 1) / 2
+		exporterCnt = (unit*6 + 1) / 2
+	}
+	// set default value if non-set
+	if c.collectorCnt == 0 {
+		c.collectorCnt = collectorCnt
+	}
+	if c.generatorCnt == 0 {
+		c.generatorCnt = generatorCnt
+	}
+	if c.exporterCnt == 0 {
+		c.exporterCnt = exporterCnt
+	}
+	return
 }
 
 func WithCollectorCnt(cnt int) MOCollectorOption {
@@ -417,6 +455,7 @@ loop:
 	for {
 		select {
 		case i := <-c.awakeCollect:
+			start := time.Now()
 			c.mux.RLock()
 			if buf, has := c.buffers[i.GetName()]; !has {
 				c.logger.Debug("doCollect: init buffer", zap.Int("idx", idx), zap.String("item", i.GetName()))
@@ -438,6 +477,7 @@ loop:
 				buf.Add(i)
 				c.mux.RUnlock()
 			}
+			v2.TraceCollectorCollectDurationHistogram.Observe(time.Since(start).Seconds())
 		case <-c.stopCh:
 			break loop
 		}
@@ -498,7 +538,9 @@ loop:
 			if req == nil {
 				c.logger.Warn("generate req is nil")
 			} else if exportReq, err := req.handle(buf); err != nil {
+				start := time.Now()
 				req.callback(err)
+				v2.TraceCollectorGenerateDurationHistogram.Observe(time.Since(start).Seconds())
 			} else {
 				select {
 				case c.awakeBatch <- exportReq:
@@ -525,7 +567,9 @@ loop:
 			if req == nil {
 				c.logger.Warn("export req is nil")
 			} else if err := req.handle(); err != nil {
+				start := time.Now()
 				req.callback(err)
+				v2.TraceCollectorExportDurationHistogram.Observe(time.Since(start).Seconds())
 			}
 		case <-c.stopCh:
 			c.mux.Lock()
