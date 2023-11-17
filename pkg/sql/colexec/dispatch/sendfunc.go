@@ -209,6 +209,9 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 			return true, nil
 		}
 	}
+
+	ap.ctr.batchCnt[bat.ShuffleIDX]++
+	ap.ctr.rowCnt[bat.ShuffleIDX] += bat.RowCount()
 	if ap.ShuffleType == plan2.ShuffleToRegIndex {
 		return false, sendBatToIndex(ap, proc, bat, uint32(bat.ShuffleIDX))
 	} else if ap.ShuffleType == plan2.ShuffleToLocalMatchedReg {

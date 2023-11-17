@@ -76,6 +76,9 @@ type container struct {
 
 	remoteToIdx map[uuid.UUID]int
 	hasData     bool
+
+	batchCnt []int
+	rowCnt   []int
 }
 
 type Argument struct {

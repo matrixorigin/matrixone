@@ -1205,6 +1205,11 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 						Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 					})
 					scopes[i].Proc = process.NewFromProc(c.proc, c.ctx, 1)
+					if c.anal.qry.LoadTag {
+						for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
+							rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+						}
+					}
 					regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
 				}
 
@@ -1698,6 +1703,9 @@ func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternPara
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = c.constructLoadMergeScope()
+		for _, rr := range ss[i].Proc.Reg.MergeReceivers {
+			rr.Ch = make(chan *batch.Batch, shuffleChannelBufferSize)
+		}
 	}
 	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
 	for i := 0; i < len(fileList); i++ {
