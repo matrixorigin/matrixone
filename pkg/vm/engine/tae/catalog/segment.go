@@ -275,7 +275,11 @@ func (entry *SegmentEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode
 	if !lastNode.BaseNode.ObjectStats.IsZero() {
 		return
 	}
-	blk = entry.MakeBlockIt(false).Get().GetPayload()
+	blk = entry.GetFirstBlkEntry()
+	// for gc in test
+	if blk == nil {
+		return false, nil
+	}
 	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: lastNode.Start},
 	})
@@ -288,7 +292,11 @@ func (entry *SegmentEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode
 }
 func (entry *SegmentEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (*objectio.ObjectStats, error) {
 	stats := objectio.NewObjectStats()
-	blk := entry.MakeBlockIt(false).Get().GetPayload()
+	blk := entry.GetFirstBlkEntry()
+	// for gc in test
+	if blk == nil {
+		return nil, nil
+	}
 	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: startTS},
 	})

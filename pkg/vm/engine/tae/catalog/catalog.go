@@ -544,7 +544,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		if node == nil {
 			seg.Insert(un)
 		} else {
-			node.Update(un)
+			node.BaseNode.Update(un.BaseNode)
 		}
 	}
 }
@@ -606,6 +606,8 @@ func (catalog *Catalog) onReplayCheckpointSegment(
 	node := seg.SearchNode(un)
 	if node == nil {
 		seg.Insert(un)
+	} else {
+		node.BaseNode.Update(un.BaseNode)
 	}
 }
 
@@ -647,44 +649,12 @@ func (catalog *Catalog) replaySegmentByBlock(
 		if node == nil {
 			node = seg.GetLatestNodeLocked().CloneData()
 			node.Start = start
+			node.Prepare = end
 			node.End = end
 			seg.Insert(node)
-		}
-		node.DeletedAt = end
-	}
-	// metalocation
-	if !metaLocation.IsEmpty() {
-		node := seg.SearchNode(
-			&MVCCNode[*ObjectMVCCNode]{
-				TxnMVCCNode: &txnbase.TxnMVCCNode{
-					Start: start,
-				},
-			},
-		)
-		if node == nil {
-			node = seg.GetLatestNodeLocked().CloneData()
-			node.Start = start
-			node.End = end
-			seg.Insert(node)
-			node.BaseNode = NewObjectInfoWithMetaLocation(metaLocation)
+			node.DeletedAt = end
 		}
 	}
-	// apply commit
-	node := seg.SearchNode(
-		&MVCCNode[*ObjectMVCCNode]{
-			TxnMVCCNode: &txnbase.TxnMVCCNode{
-				Start: start,
-			},
-		},
-	)
-	if needApplyCommit {
-		node.Txn = txn
-		err := node.ApplyCommit()
-		if err != nil {
-			panic(err)
-		}
-	}
-	// TODO: Next Object Idx
 }
 func (catalog *Catalog) onReplayUpdateBlock(
 	cmd *EntryCommand[*MetadataMVCCNode, *BlockNode],
@@ -705,7 +675,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 		cmd.ID.BlockID,
 		cmd.node.state,
 		cmd.mvccNode.Start,
-		cmd.mvccNode.End,
+		cmd.mvccNode.Prepare,
 		cmd.mvccNode.BaseNode.MetaLoc,
 		true,
 		cmd.mvccNode.CreatedAt.Equal(txnif.UncommitTS),

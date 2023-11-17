@@ -154,8 +154,6 @@ func (e *ObjectMVCCNode) IsEmpty() bool {
 }
 
 func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
-	// for segment without metalocation, object mvcc node is empty.
-
 	if e == nil || e.IsEmpty() {
 		objectio.SetObjectStatsObjectName(e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
 	}

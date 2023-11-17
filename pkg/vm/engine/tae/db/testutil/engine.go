@@ -724,15 +724,12 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 func (e *TestEngine) CheckObjectInfo() {
 	p := &catalog.LoopProcessor{}
 	p.SegmentFn = func(se *catalog.SegmentEntry) error {
-		blk := se.MakeBlockIt(false).Get().GetPayload()
-		info1 := se.GetInMemoryObjectInfo()
-		if !blk.GetMetaLoc().IsEmpty() {
-			stats, err := se.LoadObjectInfoWithTxnTS(blk.GetLatestCommittedNode().Start)
+		se.LoopChain(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+			stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
 			assert.NoError(e.t, err)
-			assert.Equal(e.t, stats, info1.ObjectStats, "load %v, get %v", stats, info1.ObjectStats)
-		} else {
-			assert.True(e.t, info1.IsEmpty())
-		}
+			assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats, node.BaseNode.ObjectStats)
+			return true
+		})
 		return nil
 	}
 	err := e.Catalog.RecurLoop(p)

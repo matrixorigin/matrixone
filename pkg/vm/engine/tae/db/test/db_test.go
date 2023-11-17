@@ -8900,4 +8900,3 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	assert.Equal(t, 1, len(entries))
 
 }
-
