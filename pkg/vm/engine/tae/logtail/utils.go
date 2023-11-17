@@ -637,7 +637,7 @@ func NewBackupCollector(start, end types.TS) *IncrementalCollector {
 	collector := &IncrementalCollector{
 		BaseCollector: &BaseCollector{
 			LoopProcessor: new(catalog.LoopProcessor),
-			data:          NewCheckpointData(common.DebugAllocator),
+			data:          NewCheckpointData(common.CheckpointAllocator),
 			start:         start,
 			end:           end,
 		},
