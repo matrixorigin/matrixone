@@ -527,6 +527,7 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 		if r, ok := req.(*bufferGenerateReq); ok {
 			r.b.discardBuffer(r.buffer)
 		}
+		v2.TraceCollectorGenerateAwareDiscardDurationHistogram.Observe(time.Since(start).Seconds())
 	}
 }
 
@@ -553,6 +554,7 @@ loop:
 				case <-c.stopCh:
 				case <-time.After(time.Second * 10):
 					c.logger.Info("awakeBatch: timeout after 10 seconds")
+					v2.TraceCollectorGenerateDiscardDurationHistogram.Observe(time.Since(start).Seconds())
 				}
 				end := time.Now()
 				v2.TraceCollectorGenerateDelayDurationHistogram.Observe(end.Sub(startDelay).Seconds())
