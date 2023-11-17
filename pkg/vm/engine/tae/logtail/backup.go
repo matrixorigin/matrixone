@@ -648,7 +648,8 @@ func ReWriteCheckpointAndBlockFromKey(
 					row := blkMeta.Vecs[0].Length() - 1
 					if !blk.location.IsEmpty() {
 						sort := true
-						if insertBatch[tid].insertBlocks[b].data.isABlock &&
+						if insertBatch[tid].insertBlocks[b].data != nil &&
+							insertBatch[tid].insertBlocks[b].data.isABlock &&
 							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
 							sort = false
 						}
@@ -674,7 +675,8 @@ func ReWriteCheckpointAndBlockFromKey(
 					i := blkMeta.Vecs[0].Length() - 1
 					if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
 						sort := true
-						if insertBatch[tid].insertBlocks[b].data.isABlock &&
+						if insertBatch[tid].insertBlocks[b].data != nil &&
+							insertBatch[tid].insertBlocks[b].data.isABlock &&
 							insertBatch[tid].insertBlocks[b].data.sortKey == math.MaxUint16 {
 							sort = false
 						}
