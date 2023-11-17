@@ -52,11 +52,12 @@ type collectorOpts struct {
 }
 
 func defaultCollectorOpts() collectorOpts {
+	var defaultSqlWorkerNum = int(float64(runtime.NumCPU())*0.1 + 0.5)
 	return collectorOpts{
 		metricThreshold: 1000,
 		sampleThreshold: 4096,
 		flushInterval:   15 * time.Second,
-		sqlWorkerNum:    runtime.NumCPU(),
+		sqlWorkerNum:    defaultSqlWorkerNum,
 	}
 }
 

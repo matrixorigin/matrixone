@@ -300,8 +300,8 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 
 // calculateDefaultWorker
 // default strategy: totalNum = #cpu * 0.1
-// If totalNum < 3, then collectorCnt, generatorCnt, exporterCnt = 1,
-// else collectorCnt : generatorCnt : exporterCnt = 1 : 2 : 3.
+// If totalNum < 5, then collectorCnt, generatorCnt, exporterCnt = 1,
+// else collectorCnt : generatorCnt : exporterCnt = 1 : 2 : 10.
 // For example
 // | #cpu | #totalNum | collectorCnt | generatorCnt | exporterCnt |
 // | --   | --        | --           | --           | --          |
@@ -310,15 +310,16 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 // | 30   | 3.0       | 1            | 1            | 2           |
 // | 40   | 4.0       | 1            | 1            | 2           |
 
-func (c *MOCollector) calculateDefaultWorker() (collectorCnt, generatorCnt, exporterCnt int) {
-	totalNum := int(float64(runtime.NumCPU()) * 0.1)
-	if totalNum < 3 {
-		collectorCnt, generatorCnt, exporterCnt = 1, 1, 1
+func (c *MOCollector) calculateDefaultWorker() {
+	var collectorCnt, generatorCnt, exporterCnt int
+	var totalNum = int(float64(runtime.NumCPU()) * 0.1)
+	if totalNum < 5 {
+		collectorCnt, generatorCnt, exporterCnt = 1, 1, 3
 	} else {
-		unit := totalNum / 3
-		collectorCnt = (unit*2 + 1) / 2
-		generatorCnt = (unit*4 + 1) / 2
-		exporterCnt = (unit*6 + 1) / 2
+		unit := float64(totalNum) / 13.0
+		collectorCnt = int(unit + 0.5)
+		generatorCnt = int(unit*2 + 0.5)
+		exporterCnt = int(unit*10 + 0.5)
 	}
 	// set default value if non-set
 	if c.collectorCnt == 0 {

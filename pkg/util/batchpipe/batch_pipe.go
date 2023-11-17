@@ -172,12 +172,8 @@ func (x PipeWithItemNameFormatter) ApplyTo(o *baseBatchPipeOpts) {
 }
 
 func defaultBaseBatchPipeOpts() baseBatchPipeOpts {
-	var defaultBatchWorkerNum = 1
-	if num := int(float64(runtime.NumCPU()) * 0.1); num > defaultBatchWorkerNum {
-		defaultBatchWorkerNum = num
-	}
 	return baseBatchPipeOpts{
-		BatchWorkerNum:  defaultBatchWorkerNum,
+		BatchWorkerNum:  runtime.NumCPU(),
 		BufferWorkerNum: 1,
 		// default use T.GetName()
 		ItemNameFormatter: func(T HasName) string { return T.GetName() },
