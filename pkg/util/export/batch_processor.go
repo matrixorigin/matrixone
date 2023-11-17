@@ -535,10 +535,10 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeGenerate:
+			start := time.Now()
 			if req == nil {
 				c.logger.Warn("generate req is nil")
 			} else if exportReq, err := req.handle(buf); err != nil {
-				start := time.Now()
 				req.callback(err)
 				v2.TraceCollectorGenerateDurationHistogram.Observe(time.Since(start).Seconds())
 			} else {
@@ -564,10 +564,10 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeBatch:
+			start := time.Now()
 			if req == nil {
 				c.logger.Warn("export req is nil")
 			} else if err := req.handle(); err != nil {
-				start := time.Now()
 				req.callback(err)
 				v2.TraceCollectorExportDurationHistogram.Observe(time.Since(start).Seconds())
 			}
