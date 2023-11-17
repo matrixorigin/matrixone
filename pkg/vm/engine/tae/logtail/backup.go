@@ -399,7 +399,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	// Trim object files based on timestamp
 	isCkpChange, err = trimObjectsData(ctx, fs, ts, &objectsData)
 	if err != nil {
-		return nil nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !isCkpChange {
 		return loc, tnLocation, files, nil
