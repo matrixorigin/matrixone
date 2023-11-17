@@ -876,7 +876,7 @@ var (
 			input: "load data infile {'filepath'='data.txt', 'compression'='BZIP2', 'format'='jsonline', 'jsondata'='object'} into table db.a",
 		},
 		{
-			input: "load data inline format='jsonline', data='[1,2,3,4]' , jsontype = 'array'  into table t1;",
+			input: "load data inline format='jsonline', data='[1,2,3,4]', jsontype='array' into table t1",
 		},
 		{
 			input:  "show tables from test01 where tables_in_test01 like '%t2%'",

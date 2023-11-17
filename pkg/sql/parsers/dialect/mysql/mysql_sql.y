@@ -6524,7 +6524,7 @@ infile_or_s3_params:
     {
         $$ = $1
     }
-|   infile_or_s3_params ',' infile_or_s3_params
+|   infile_or_s3_params ',' infile_or_s3_param
     {
         $$ = append($1, $3...)
     }
