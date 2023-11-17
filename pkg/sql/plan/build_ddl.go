@@ -1502,7 +1502,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	// 0. Validate: We only support 1 column of either VECF32 or VECF64 type
 	{
 		if len(indexInfo.KeyParts) != 1 {
-			return nil, nil, moerr.NewInternalErrorNoCtx("don't support multi column  IVF vector index")
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "don't support multi column  IVF vector index")
 		}
 
 		name := indexInfo.KeyParts[0].ColName.Parts[0]
@@ -1730,7 +1730,10 @@ func CreateIndexDef(indexInfo *tree.Index,
 	indexDef.IndexAlgo = indexInfo.KeyType.ToString()
 	indexDef.IndexAlgoTableType = indexAlgoTableType
 	if indexInfo.IndexOption != nil {
+		// Copy Comment as it is
 		indexDef.Comment = indexInfo.IndexOption.Comment
+
+		// Create params JSON string and set it
 		params, err := catalog.IndexParamsToJsonString(indexInfo)
 		if err != nil {
 			return nil, err

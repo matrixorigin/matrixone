@@ -55,10 +55,31 @@ show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 
 -- 5. Alter table add column with IVFFLAT.
-alter table tbl add embedding2 vecf32(3);
+alter table tbl add c vecf32(3);
 show index from tbl;
 show create table tbl;
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
+
+
+-- 6. [FAILURE] Create IVF index before table has data (results in error)
+drop table if exists tbl;
+create table tbl(a int primary key,b vecf32(3), c vecf64(5));
+create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
+
+-- 7. [FAILURE] Create IVF index on non-vector types, multiple columns, lists=-1
+drop table if exists tbl;
+create table tbl(a int primary key,b vecf32(3), c vecf32(3));
+insert into tbl values(1, "[1,2,3]","[1,2,3]");
+insert into tbl values(2, "[1,2,4]","[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]","[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]","[1,2,5]");
+create index idx3 using IVFFLAT on tbl(a) lists = 2 op_type 'vector_l2_ops';
+create index idx4 using IVFFLAT on tbl(b,c) lists = 2 op_type 'vector_l2_ops';
+create index idx5 using IVFFLAT on tbl(b) lists = -1;
+create index idx6 using IVFFLAT on tbl(b) op_type 'vector_l1_ops';
+
+
+
 
 -- post
 drop database vecdb2;

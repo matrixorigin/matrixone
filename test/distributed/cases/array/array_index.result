@@ -92,17 +92,35 @@ name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"3","op_type":"vector_l2_ops"}
 idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"3","op_type":"vector_l2_ops"}
 idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"3","op_type":"vector_l2_ops"}
-alter table tbl add embedding2 vecf32(3);
+alter table tbl add c vecf32(3);
 show index from tbl;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 tbl    1    idx1    1    embedding    A    0    NULL    NULL    YES    ivfflat            {"lists":"2","op_type":"vector_l2_ops"}    YES    NULL
 tbl    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    NULL
 show create table tbl;
 Table    Create Table
-tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\n`embedding2` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING `ivfflat` (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
+tbl    CREATE TABLE `tbl` (\n`id` INT NOT NULL,\n`embedding` VECF32(3) DEFAULT NULL,\n`c` VECF32(3) DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx1` USING `ivfflat` (`embedding`) lists = 2  op_type 'vector_l2_ops' \n)
 select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx1";
 name    type    column_name    algo    algo_table_type    algo_params
 idx1    MULTIPLE    embedding    ivfflat    metadata    {"lists":"2","op_type":"vector_l2_ops"}
 idx1    MULTIPLE    embedding    ivfflat    centroids    {"lists":"2","op_type":"vector_l2_ops"}
 idx1    MULTIPLE    embedding    ivfflat    entries    {"lists":"2","op_type":"vector_l2_ops"}
+drop table if exists tbl;
+create table tbl(a int primary key,b vecf32(3), c vecf64(5));
+create index idx2 using IVFFLAT on tbl(b) lists = 2 op_type 'vector_l2_ops';
+not supported: table should have some data
+drop table if exists tbl;
+create table tbl(a int primary key,b vecf32(3), c vecf32(3));
+insert into tbl values(1, "[1,2,3]","[1,2,3]");
+insert into tbl values(2, "[1,2,4]","[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]","[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]","[1,2,5]");
+create index idx3 using IVFFLAT on tbl(a) lists = 2 op_type 'vector_l2_ops';
+not supported: IVFFLAT only supports VECFXX column types
+create index idx4 using IVFFLAT on tbl(b,c) lists = 2 op_type 'vector_l2_ops';
+not supported: don't support multi column  IVF vector index
+create index idx5 using IVFFLAT on tbl(b) lists = -1;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " -1;";
+create index idx6 using IVFFLAT on tbl(b) op_type 'vector_l1_ops';
+internal error: invalid op_type. not of type 'vector_ip_ops', 'vector_l2_ops', 'vector_cosine_ops'
 drop database vecdb2;

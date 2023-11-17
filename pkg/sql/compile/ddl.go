@@ -1160,7 +1160,7 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 			return err
 		}
 		if totalCnt == 0 {
-			return moerr.NewInternalErrorNoCtx("table should have some data")
+			return moerr.NewNotSupported(c.ctx, "table should have some data")
 		}
 
 		// 3. create hidden tables
