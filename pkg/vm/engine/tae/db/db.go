@@ -119,8 +119,6 @@ func (db *DB) ForceCheckpointForBackup(
 	if location, err = db.BGCheckpointRunner.ForceCheckpointForBackup(ts); err != nil {
 		return
 	}
-	lsn := db.BGCheckpointRunner.MaxLSNInRange(ts)
-	_, err = db.Wal.RangeCheckpoint(1, lsn)
 	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
 	return
 }
