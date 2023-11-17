@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -910,13 +911,15 @@ func TestS3PrefetchFile(t *testing.T) {
 	)
 	assert.Nil(t, err)
 
+	data := bytes.Repeat([]byte("abcd"), 2<<20)
+
 	// write file
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo/bar",
 		Entries: []IOEntry{
 			{
-				Size: 3,
-				Data: []byte("foo"),
+				Size: int64(len(data)),
+				Data: data,
 			},
 		},
 		Policy: SkipDiskCache | SkipMemoryCache,
@@ -928,19 +931,26 @@ func TestS3PrefetchFile(t *testing.T) {
 	err = fs.PrefetchFile(ctx, "foo/bar")
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.WriteFile.Load())
+	err = fs.PrefetchFile(ctx, "foo/bar")
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.WriteFile.Load())
 
 	// read
-	vec := &IOVector{
-		FilePath: "foo/bar",
-		Entries: []IOEntry{
-			{
-				Size: 3,
+	lastHit := int64(0)
+	for i := 1; i < len(data); i += len(data) / 1000 {
+		vec := &IOVector{
+			FilePath: "foo/bar",
+			Entries: []IOEntry{
+				{
+					Size: int64(i),
+				},
 			},
-		},
+		}
+		err = fs.Read(ctx, vec)
+		assert.Nil(t, err)
+		assert.Equal(t, data[:i], vec.Entries[0].Data)
+		assert.Equal(t, lastHit+1, pcSet.FileService.Cache.Disk.Hit.Load())
+		lastHit++
 	}
-	err = fs.Read(ctx, vec)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
-	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.Hit.Load())
 
 }
