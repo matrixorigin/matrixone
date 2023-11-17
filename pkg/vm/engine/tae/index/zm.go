@@ -17,7 +17,6 @@ package index
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"sort"
 	"strings"
@@ -292,7 +291,6 @@ func (zm ZM) FastContainsAny(keys *vector.Vector) (ok bool) {
 // Optimize me later
 func (zm ZM) containsBytes(k []byte) bool {
 	t := types.T(zm[63])
-	logutil.Infof("zm containsBytes t %v", t.String())
 	return compute.Compare(k, zm.GetMinBuf(), t, 0, 0) >= 0 &&
 		compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) <= 0
 }
@@ -308,11 +306,9 @@ func (zm ZM) containsString(k []byte) bool {
 // TODO: remove me later
 func (zm ZM) Contains(k any) bool {
 	if !zm.IsInited() {
-		logutil.Infof("zm is not inited")
 		return false
 	}
 	if zm.IsString() {
-		logutil.Infof("zm is string")
 		return zm.containsString(k.([]byte))
 	}
 

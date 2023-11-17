@@ -696,10 +696,8 @@ func (data *CheckpointData) ApplyReplayTo(
 	ins, tnins, del, tndel = data.GetSegBatchs()
 	c.OnReplaySegmentBatch(ins, tnins, del, tndel, dataFactory)
 	ins, tnins, del, tndel = data.GetTNBlkBatchs()
-	logutil.Infof("ApplyReplayTo ins1, data.GetTNBlkBatchs()")
 	c.OnReplayBlockBatch(ins, tnins, del, tndel, dataFactory)
 	ins, tnins, del, tndel = data.GetBlkBatchs()
-	logutil.Infof("ApplyReplayTo ins2")
 	c.OnReplayBlockBatch(ins, tnins, del, tndel, dataFactory)
 	return
 }
@@ -3186,7 +3184,6 @@ func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (er
 		return nil
 	}
 	entry.RUnlock()
-	logutil.Infof("backup block VisitBlkForBackup %v", entry.ID)
 	collector.visitBlockEntry(entry)
 	return nil
 }

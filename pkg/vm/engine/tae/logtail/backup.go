@@ -780,7 +780,6 @@ func LoadCheckpointEntriesFromKey(
 				}
 				(*softDeletes)[metaLoc.Name().String()][metaLoc.ID()] = true
 			}
-			logutil.Infof("softDeletes %s, %d", metaLoc.Name().String(), metaLoc.ID())
 		}
 		if !deltaLoc.IsEmpty() {
 			locations = append(locations, deltaLoc)
