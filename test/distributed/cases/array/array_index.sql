@@ -78,8 +78,17 @@ create index idx4 using IVFFLAT on tbl(b,c) lists = 2 op_type 'vector_l2_ops';
 create index idx5 using IVFFLAT on tbl(b) lists = -1;
 create index idx6 using IVFFLAT on tbl(b) op_type 'vector_l1_ops';
 
-
-
+-- 8. [Default] Create IVF index without any params
+drop table if exists tbl;
+create table tbl(a int primary key,b vecf32(3), c vecf32(3));
+insert into tbl values(1, "[1,2,3]","[1,2,3]");
+insert into tbl values(2, "[1,2,4]","[1,2,4]");
+insert into tbl values(3, "[1,2.4,4]","[1,2.4,4]");
+insert into tbl values(4, "[1,2,5]","[1,2,5]");
+create index idx7 using IVFFLAT on tbl(b);
+show index from tbl;
+show create table tbl;
+select name, type, column_name, algo, algo_table_type,algo_params from mo_catalog.mo_indexes where name="idx7";
 
 -- post
 drop database vecdb2;
