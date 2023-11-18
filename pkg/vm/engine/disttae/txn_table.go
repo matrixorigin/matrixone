@@ -1761,6 +1761,7 @@ func (tbl *txnTable) newReader(
 	blockReaders = distributeBlocksToBlockReaders(
 		blockReaders,
 		readerNumber-1,
+		len(dirtyBlks),
 		objInfos,
 		steps)
 	for i := range blockReaders {
