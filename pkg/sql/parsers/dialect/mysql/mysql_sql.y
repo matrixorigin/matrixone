@@ -456,6 +456,9 @@ import (
 // python udf
 %token <str> HANDLER
 
+// Sample Related.
+%token <str> PERCENT SAMPLE
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
@@ -587,6 +590,7 @@ import (
 %type <funcExpr> function_call_nonkeyword
 %type <funcExpr> function_call_aggregate
 %type <funcExpr> function_call_window
+%type <expr> sample_function_expr
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam
@@ -8043,6 +8047,10 @@ simple_expr:
     {
         $$ = $1
     }
+|   sample_function_expr
+    {
+	$$ = $1
+    }
 
 function_call_window:
 	RANK '(' ')' window_spec
@@ -8068,6 +8076,36 @@ function_call_window:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             WindowSpec: $4,
         }
+    }
+
+sample_function_expr:
+    SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
+    {
+    	v := int($5.(int64))
+    	val, err := tree.NewSampleRowsFuncExpression(v, $3)
+    	if err != nil {
+    	    yylex.Error(err.Error())
+    	    return 1
+    	}
+    	$$ = val
+    }
+|   SAMPLE '(' expression_list ',' INTEGRAL PERCENT')'
+    {
+        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), $3)
+        if err != nil {
+            yylex.Error(err.Error())
+            return 1
+        }
+        $$ = val
+    }
+|   SAMPLE '(' expression_list ',' FLOAT PERCENT')'
+    {
+        val, err := tree.NewSamplePercentFuncExpression2($5.(float64), $3)
+        if err != nil {
+            yylex.Error(err.Error())
+            return 1
+        }
+        $$ = val
     }
 
 else_opt:
