@@ -283,6 +283,7 @@ func (txn *Transaction) WriteFileLocked(
 	newBat := bat
 	if typ == INSERT {
 		vecs := []*vector.Vector{vector.NewVec(types.T_text.ToType())}
+		attrs := []string{catalog.BlockMeta_MetaLoc}
 
 		blkInfos := vector.MustBytesCol(bat.GetVector(0))
 		for _, blk := range blkInfos {
@@ -293,17 +294,15 @@ func (txn *Transaction) WriteFileLocked(
 
 		if len(bat.Attrs) == 2 && bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
 			// append the object stats.
-			// could have multiple stats, it depends on how to implement the underlying `ObjectDescriber`.
-			rows := vector.MustFixedCol[objectio.ObjectStats](bat.GetVector(1))
-			for idx := 0; idx < len(rows); idx++ {
-				vec := vector.NewVec(types.T_binary.ToType())
-				vector.AppendFixed[objectio.ObjectStats](vec, rows[idx], false, txn.proc.Mp())
-				vecs = append(vecs, vec)
-			}
+			vec := vector.NewConstBytes(types.T_binary.ToType(),
+				bat.GetVector(1).GetRawBytesAt(0), 1, txn.proc.Mp())
+			vecs = append(vecs, vec)
+			attrs = append(attrs, catalog.ObjectMeta_ObjectStats)
+
 		}
 
 		newBat = batch.NewWithSize(len(bat.Vecs))
-		newBat.SetAttributes(bat.Attrs)
+		newBat.SetAttributes(attrs)
 
 		for idx := range vecs {
 			newBat.SetVector(int32(idx), vecs[idx])
@@ -537,7 +536,8 @@ func (txn *Transaction) mergeCompactionLocked() error {
 			bat := batch.NewWithSize(2)
 			bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-			bat.SetVector(1, vector.NewVec(types.T_binary.ToType()))
+			bat.SetVector(1, vector.NewConstBytes(types.T_binary.ToType(),
+				objectio.ZeroObjectStats.Marshal(), 1, tbl.db.txn.proc.GetMPool()))
 			for _, blkInfo := range createdBlks {
 				vector.AppendBytes(
 					bat.GetVector(0),
@@ -551,8 +551,8 @@ func (txn *Transaction) mergeCompactionLocked() error {
 				if stats[idx].IsZero() {
 					continue
 				}
-				if err = vector.AppendFixed[objectio.ObjectStats](bat.Vecs[1], stats[idx],
-					false, tbl.db.txn.proc.GetMPool()); err != nil {
+				if err = vector.SetConstBytes(bat.Vecs[1], stats[idx].Marshal(),
+					1, tbl.db.txn.proc.GetMPool()); err != nil {
 					return err
 				}
 			}

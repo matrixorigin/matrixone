@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -92,13 +91,15 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
 	blockInfos := vector.MustBytesCol(bat.GetVector(1))
 
-	for i := range tblIdx {
+	onlyData := true
+	for i := range tblIdx { // append s3 writer returned blk info
 		if tblIdx[i] >= 0 {
 			blkInfo := catalog.DecodeBlockInfo(blockInfos[i])
 			arg.affectedRows += uint64(blkInfo.MetaLocation().Rows())
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0],
 				blockInfos[i], false, proc.GetMPool())
-		} else {
+			onlyData = false
+		} else { // append data
 			idx := int(-(tblIdx[i] + 1))
 			newBat := &batch.Batch{}
 			if err := newBat.UnmarshalBinary(blockInfos[i]); err != nil {
@@ -110,14 +111,13 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 		}
 	}
 
+	// append object stats
 	// if an old version cn send an old version batch which haven't the object_stats column(vec).
 	// just skip.
-	if len(bat.Attrs) == 3 && bat.Attrs[2] == catalog.ObjectMeta_ObjectStats {
-		stats := vector.MustFixedCol[[objectio.ObjectStatsLen]byte](bat.GetVector(2))
-		// append object stats
-		// could have multiple stats, it depends on how to implement the underlying `ObjectDescriber`.
-		for idx := 0; idx < len(stats); idx++ {
-			vector.AppendFixed(arg.container.mp[0].Vecs[1], stats[idx], false, proc.GetMPool())
+	if len(bat.Attrs) == 3 && bat.Attrs[2] == catalog.ObjectMeta_ObjectStats &&
+		!onlyData {
+		for _, tarBat := range arg.container.mp {
+			vector.SetConstBytes(tarBat.Vecs[1], bat.Vecs[2].GetBytesAt(0), 1, proc.GetMPool())
 		}
 	}
 
