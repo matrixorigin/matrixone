@@ -663,15 +663,22 @@ func (tbl *txnTable) rangesOnePart(
 		dirtyBlks[bid] = struct{}{}
 	}
 
-	insertedS3Blks, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
+	objectStatsList, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
 	if err != nil {
 		return err
 	}
-	for _, blk := range insertedS3Blks {
-		if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
-			dirtyBlks[blk.BlockID] = struct{}{}
+
+	if !tbl.db.txn.deletedBlocks.isEmpty() {
+		for idx := range objectStatsList {
+			blks := catalog.UnfoldBlkInfoFromObjStats(objectStatsList[idx])
+			for _, blk := range blks {
+				if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
+					dirtyBlks[blk.BlockID] = struct{}{}
+				}
+			}
 		}
 	}
+
 	for _, entry := range tbl.writes {
 		if entry.typ == INSERT {
 			continue
@@ -697,6 +704,7 @@ func (tbl *txnTable) rangesOnePart(
 		vecs        []*vector.Vector
 		skipObj     bool
 		auxIdCnt    int32
+		s3BlkCnt    uint32
 	)
 
 	defer func() {
@@ -713,7 +721,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if done, err := tbl.tryFastRanges(
-		state, exprs, insertedS3Blks, dirtyBlks, ranges, fs,
+		state, exprs, objectStatsList, dirtyBlks, ranges, fs,
 	); err != nil {
 		return err
 	} else if done {
@@ -735,72 +743,144 @@ func (tbl *txnTable) rangesOnePart(
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
 	hasDeletes := len(dirtyBlks) > 0
-	for _, blk := range insertedS3Blks {
-		// if expr is monotonic, we need evaluating expr for each block
-		if auxIdCnt > 0 {
-			location := blk.MetaLocation()
 
-			// check whether the block belongs to a new object
-			// yes:
-			//     1. load object meta
-			//     2. eval expr on object meta
-			//     3. if the expr is false, skip eval expr on the blocks of the same object
-			// no:
-			//     1. check whether the object is skipped
-			//     2. if skipped, skip this block
-			//     3. if not skipped, eval expr on the block
-			if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
-				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
-					return
-				}
-				objDataMeta = objMeta.MustDataMeta()
-				skipObj = false
-				// here we only eval expr on the object meta if it has more than 2 blocks
-				if objDataMeta.BlockCount() > 2 {
-					for _, expr := range exprs {
-						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
-							skipObj = true
-							break
-						}
+	for _, objStats := range objectStatsList {
+		s3BlkCnt += objStats.BlkCnt()
+		// for a new object :
+		//     1. load object meta
+		//     2. eval expr on object meta
+		//     3. if the expr is false, skip eval expr on the blocks of the same object
+		skipObj = false
+		if auxIdCnt > 0 {
+			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
+			location := objStats.ObjectLocation()
+			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+				return
+			}
+			objDataMeta = objMeta.MustDataMeta()
+			// here we only eval expr on the object meta if it has more than 2 blocks
+			if objDataMeta.BlockCount() > 2 {
+				for _, expr := range exprs {
+					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
+						skipObj = true
+						break
 					}
 				}
 			}
+		}
 
-			if skipObj {
-				continue
-			}
+		if skipObj {
+			continue
+		}
 
-			var skipBlk bool
+		// for each blk in the object:
+		//     1. check whether the object is skipped
+		//     2. if skipped, skip this block
+		//     3. if not skipped, eval expr on the block
 
-			// eval filter expr on the block
-			blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-			for _, expr := range exprs {
-				if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
-					skipBlk = true
-					break
+		iter := catalog.NewStatsBlkIter(objStats)
+		for iter.Next() {
+			blk := iter.Entry()
+			skipBlk := false
+
+			if auxIdCnt > 0 {
+				// eval filter expr on the block
+				blkMeta := objDataMeta.GetBlockMeta(uint32(iter.Sequence()))
+				for _, expr := range exprs {
+					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
+						skipBlk = true
+						break
+					}
+				}
+
+				// if the block is not needed, skip it
+				if skipBlk {
+					continue
 				}
 			}
 
-			// if the block is not needed, skip it
-			if skipBlk {
+			if hasDeletes {
+				if _, ok := dirtyBlks[blk.BlockID]; !ok {
+					blk.CanRemote = true
+				}
+				blk.PartitionNum = -1
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
 				continue
 			}
+			// store the block in ranges
+			blk.CanRemote = true
+			blk.PartitionNum = -1
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
 		}
 
-		if hasDeletes {
-			if _, ok := dirtyBlks[blk.BlockID]; !ok {
-				blk.CanRemote = true
-			}
-			blk.PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-			continue
-		}
-		// store the block in ranges
-		blk.CanRemote = true
-		blk.PartitionNum = -1
-		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
+
+	//for _, blk := range insertedS3Blks {
+	//	// if expr is monotonic, we need evaluating expr for each block
+	//	if auxIdCnt > 0 {
+	//		location := blk.MetaLocation()
+	//
+	//		// check whether the block belongs to a new object
+	//		// yes:
+	//		//     1. load object meta
+	//		//     2. eval expr on object meta
+	//		//     3. if the expr is false, skip eval expr on the blocks of the same object
+	//		// no:
+	//		//     1. check whether the object is skipped
+	//		//     2. if skipped, skip this block
+	//		//     3. if not skipped, eval expr on the block
+	//		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
+	//			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
+	//			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
+	//				return
+	//			}
+	//			objDataMeta = objMeta.MustDataMeta()
+	//			skipObj = false
+	//			// here we only eval expr on the object meta if it has more than 2 blocks
+	//			if objDataMeta.BlockCount() > 2 {
+	//				for _, expr := range exprs {
+	//					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
+	//						skipObj = true
+	//						break
+	//					}
+	//				}
+	//			}
+	//		}
+	//
+	//		if skipObj {
+	//			continue
+	//		}
+	//
+	//		var skipBlk bool
+	//
+	//		// eval filter expr on the block
+	//		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
+	//		for _, expr := range exprs {
+	//			if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
+	//				skipBlk = true
+	//				break
+	//			}
+	//		}
+	//
+	//		// if the block is not needed, skip it
+	//		if skipBlk {
+	//			continue
+	//		}
+	//	}
+	//
+	//	if hasDeletes {
+	//		if _, ok := dirtyBlks[blk.BlockID]; !ok {
+	//			blk.CanRemote = true
+	//		}
+	//		blk.PartitionNum = -1
+	//		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+	//		continue
+	//	}
+	//	// store the block in ranges
+	//	blk.CanRemote = true
+	//	blk.PartitionNum = -1
+	//	*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+	//}
 
 	//filter objects
 	var cnt uint32
@@ -895,7 +975,7 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}
 
-	bhit, btotal := len(*ranges)-1, len(insertedS3Blks)+int(cnt)
+	bhit, btotal := len(*ranges)-1, int(s3BlkCnt)+int(cnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
@@ -905,7 +985,7 @@ func (tbl *txnTable) rangesOnePart(
 func (tbl *txnTable) tryFastRanges(
 	state *logtailreplay.PartitionState,
 	exprs []*plan.Expr,
-	insertedS3Blocks []catalog.BlockInfo,
+	objStatsList []objectio.ObjectStats,
 	//snapshotObjs []logtailreplay.ObjectEntry,
 	dirtyBlks map[types.Blockid]struct{},
 	ranges *[][]byte,
@@ -934,81 +1014,84 @@ func (tbl *txnTable) tryFastRanges(
 		meta objectio.ObjectDataMeta
 		bf   objectio.BloomFilter
 		// bfIdx   index.StaticFilter
-		skipObj bool
+		skipObj  bool
+		s3BlkCnt uint32
 	)
-	//TODO::remove
-	for _, blk := range insertedS3Blocks {
-		location := blk.MetaLocation()
-		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			var objMeta objectio.ObjectMeta
-			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
-			if objMeta, err = objectio.FastLoadObjectMeta(
-				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
-			); err != nil {
-				return
-			}
 
-			// reset bloom filter to nil for each object
-			bf = nil
-			// bfIdx = index.NewEmptyBinaryFuseFilter()
+	for _, stats := range objStatsList {
+		s3BlkCnt += stats.BlkCnt()
 
-			// check whether the object is skipped by zone map
-			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			meta = objMeta.MustDataMeta()
-			pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-			if skipObj = !pkZM.ContainsKey(val); skipObj {
-				continue
-			}
-
-			// check whether the object is skipped by bloom filter
-			if bf, err = objectio.LoadBFWithMeta(
-				tbl.proc.Load().Ctx, meta, location, fs,
-			); err != nil {
-				return
-			}
-
-			// TODO: use object bf first
-			// if err = index.DecodeBloomFilter(bfIdx, bf.GetObjectBloomFilter()); err != nil {
-			// 	return
-			// }
-			// var exist bool
-			// if exist, err = bfIdx.MayContainsKey(val); err != nil {
-			// 	return
-			// } else {
-			// 	skipObj = !exist
-			// }
+		location := stats.ObjectLocation()
+		var objMeta objectio.ObjectMeta
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
+		if objMeta, err = objectio.FastLoadObjectMeta(
+			tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
+		); err != nil {
+			return
 		}
 
-		if skipObj {
+		// reset bloom filter to nil for each object
+		bf = nil
+		// bfIdx = index.NewEmptyBinaryFuseFilter()
+
+		// check whether the object is skipped by zone map
+		// If object zone map doesn't contains the pk value, we need to check bloom filter
+		meta = objMeta.MustDataMeta()
+		pkZM := meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+		if skipObj = !pkZM.ContainsKey(val); skipObj {
 			continue
 		}
 
-		blkBf := bf.GetBloomFilter(uint32(location.ID()))
-		blkBfIdx := index.NewEmptyBinaryFuseFilter()
-		if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+		// check whether the object is skipped by bloom filter
+		if bf, err = objectio.LoadBFWithMeta(
+			tbl.proc.Load().Ctx, meta, location, fs,
+		); err != nil {
 			return
-		}
-		var exist bool
-		if exist, err = blkBfIdx.MayContainsKey(val); err != nil {
-			return
-		} else {
-			if !exist {
-				continue
-			}
 		}
 
-		if hasDeletes {
-			if _, ok := dirtyBlks[blk.BlockID]; !ok {
-				blk.CanRemote = true
+		// TODO: use object bf first
+		// if err = index.DecodeBloomFilter(bfIdx, bf.GetObjectBloomFilter()); err != nil {
+		// 	return
+		// }
+		// var exist bool
+		// if exist, err = bfIdx.MayContainsKey(val); err != nil {
+		// 	return
+		// } else {
+		// 	skipObj = !exist
+		// }
+
+		iter := catalog.NewStatsBlkIter(stats)
+		for iter.Next() {
+			blk := iter.Entry()
+
+			blkBf := bf.GetBloomFilter(uint32(iter.Sequence()))
+			blkBfIdx := index.NewEmptyBinaryFuseFilter()
+			if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+				return
 			}
+			var exist bool
+			if exist, err = blkBfIdx.MayContainsKey(val); err != nil {
+				return
+			} else {
+				if !exist {
+					continue
+				}
+			}
+
+			if hasDeletes {
+				if _, ok := dirtyBlks[blk.BlockID]; !ok {
+					blk.CanRemote = true
+				}
+				blk.PartitionNum = -1
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+				continue
+			}
+
+			blk.CanRemote = true
 			blk.PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-			continue
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
 		}
 
-		blk.CanRemote = true
-		blk.PartitionNum = -1
-		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
 
 	//filter objects and blocks.
@@ -1101,7 +1184,7 @@ func (tbl *txnTable) tryFastRanges(
 	}
 
 	done = true
-	bhit, btotal := len(*ranges)-1, len(insertedS3Blocks)+int(cnt)
+	bhit, btotal := len(*ranges)-1, int(s3BlkCnt)+int(cnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)

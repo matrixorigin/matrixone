@@ -403,6 +403,60 @@ func DecodeBlockInfo(buf []byte) *BlockInfo {
 	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
 }
 
+// UnfoldBlkInfoFromObjStats constructs a block info list from the given object stats.
+// for now, the constructed block info only contains valid block id.
+func UnfoldBlkInfoFromObjStats(stats objectio.ObjectStats) (blks []BlockInfo) {
+	if stats.IsZero() {
+		return blks
+	}
+
+	blkCnt := uint16(stats.BlkCnt())
+	for idx := uint16(0); idx < blkCnt; idx++ {
+		blks = append(blks, BlockInfo{
+			BlockID: *objectio.BuildObjectBlockid(stats.ObjectName(), idx),
+		})
+	}
+
+	return blks
+}
+
+type StatsBlkIter struct {
+	name   objectio.ObjectName
+	blkCnt uint16
+	cur    int
+}
+
+func NewStatsBlkIter(stats objectio.ObjectStats) *StatsBlkIter {
+	return &StatsBlkIter{
+		name:   stats.ObjectName(),
+		blkCnt: uint16(stats.BlkCnt()),
+		cur:    -1,
+	}
+}
+
+func (i *StatsBlkIter) Next() bool {
+	i.cur++
+	return i.cur < int(i.blkCnt)
+}
+
+func (i *StatsBlkIter) Entry() *BlockInfo {
+	if i.cur == -1 {
+		i.cur = 0
+	}
+
+	blk := &BlockInfo{
+		BlockID: *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
+	}
+	return blk
+}
+
+func (i *StatsBlkIter) Sequence() uint16 {
+	if i.cur == -1 {
+		i.cur = 0
+	}
+	return uint16(i.cur)
+}
+
 // used for memengine and tae
 // tae and memengine do not make the catalog into a table
 // for its convenience, a conversion interface is provided to ensure easy use.

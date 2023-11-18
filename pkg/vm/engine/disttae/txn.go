@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -31,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -597,10 +595,10 @@ func (txn *Transaction) mergeCompactionLocked() error {
 }
 
 func (txn *Transaction) getInsertedBlocksForTable(
-	databaseId uint64,
-	tableId uint64) (blks []catalog.BlockInfo, err error) {
+	databaseId uint64, tableId uint64) (statsList []objectio.ObjectStats, err error) {
 	txn.Lock()
 	defer txn.Unlock()
+	var stats objectio.ObjectStats
 	for _, entry := range txn.writes {
 		if entry.databaseId != databaseId ||
 			entry.tableId != tableId {
@@ -609,30 +607,32 @@ func (txn *Transaction) getInsertedBlocksForTable(
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
-		if entry.typ != INSERT ||
-			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
+		if entry.typ != INSERT || len(entry.bat.Attrs) < 2 ||
+			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
-		metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
-		for _, metaLoc := range metaLocs {
-			location, err := blockio.EncodeLocationFromString(metaLoc)
-			if err != nil {
-				return nil, err
-			}
-			sid := location.Name().SegmentId()
-			blkid := objectio.NewBlockid(
-				&sid,
-				location.Name().Num(),
-				location.ID())
-			pos, ok := txn.cnBlkId_Pos[*blkid]
-			if !ok {
-				panic(fmt.Sprintf("blkid %s not found", blkid.String()))
-			}
-			blks = append(blks, pos.blkInfo)
-		}
+		stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
+		statsList = append(statsList, stats)
+		//metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
+		//for _, metaLoc := range metaLocs {
+		//	location, err := blockio.EncodeLocationFromString(metaLoc)
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//	sid := location.Name().SegmentId()
+		//	blkid := objectio.NewBlockid(
+		//		&sid,
+		//		location.Name().Num(),
+		//		location.ID())
+		//	pos, ok := txn.cnBlkId_Pos[*blkid]
+		//	if !ok {
+		//		panic(fmt.Sprintf("blkid %s not found", blkid.String()))
+		//	}
+		//	blks = append(blks, pos.blkInfo)
+		//}
 
 	}
-	return blks, nil
+	return statsList, nil
 
 }
 
