@@ -327,7 +327,9 @@ func (s *Scope) handleIvfIndexEntriesTable(c executor.TxnExecutor, indexDef *pla
 	)
 
 	// 5. non-null original table rows
-	nonNullOriginalTableRowsSql := fmt.Sprintf("(select * from `%s`.`%s` where `%s` is not null) `%s`",
+	nonNullOriginalTableRowsSql := fmt.Sprintf("(select %s, %s from `%s`.`%s` where `%s` is not null) `%s`",
+		originalTblPkCols,
+		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
 		indexColumnName,
