@@ -574,6 +574,7 @@ type blockReader struct {
 	steps       []int
 	currentStep int
 
+	bigScan bool
 	// block list to scan
 	blks []*catalog.BlockInfo
 	//buffer for block's deletes
