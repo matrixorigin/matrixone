@@ -41,8 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
-const BigScanBlocksThreshold = 1500
-
 // -----------------------------------------------------------------
 // ------------------------ withFilterMixin ------------------------
 // -----------------------------------------------------------------

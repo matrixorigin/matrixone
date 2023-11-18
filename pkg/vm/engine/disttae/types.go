@@ -49,6 +49,7 @@ import (
 const (
 	PREFETCH_THRESHOLD = 512
 	PREFETCH_ROUNDS    = 32
+	BIGSCAN_THRESHOLD  = 1024
 )
 
 const (
