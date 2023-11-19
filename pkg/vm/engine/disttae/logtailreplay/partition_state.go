@@ -352,6 +352,8 @@ func (p *PartitionState) HandleLogtailEntry(
 		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
 		} else if IsSegTable(entry.TableName) {
+			// TODO
+		}else if IsObjTable(entry.TableName) {
 			p.HandleObject(ctx, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
@@ -382,7 +384,7 @@ func (p *PartitionState) HandleObject(
 	prepareVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
 	commitVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[10]))
 	for i, name := range nameVector {
-		stats:=objectio.ObjectStats(name)
+		stats := objectio.ObjectStats(name)
 		logutil.Infof("lalala blk %v, state %v, db-%d, t-%d, c@%v, d@%v, %v-%v-%v",
 			stats.String(),
 			stateVector[i], dbIDVector[i], tIDVector[i],
