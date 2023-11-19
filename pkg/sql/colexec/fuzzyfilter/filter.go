@@ -54,7 +54,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	if rowCount < 10000 {
 		rowCount = 10000
 	}
-	probability := 0.00001
+	var probability float64
 	if rowCount < 10000001 {
 		probability = 0.00001
 	} else if rowCount < 100000001 {

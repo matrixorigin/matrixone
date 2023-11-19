@@ -986,7 +986,7 @@ func makeInsertPlan(
 	//  case 2: the only primary key is auto increment type
 
 	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
-	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDup && checkInsertPkDupForHiddenIndexTable {
+	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable {
 		needCheck := true
 		useFuzzyFilter := false
 		if isUpdate {
