@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -29,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -381,10 +382,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	defer func() {
 		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-
-	if strings.Contains(c.sql, "generate_series") {
-		fmt.Printf("%s\n", DebugShowScopes(c.scope))
-	}
 
 	var span trace.Span
 	var cc *Compile // compile structure for rerun.

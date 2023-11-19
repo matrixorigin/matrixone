@@ -19,6 +19,7 @@ import (
 	"math/rand"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 )
 
 var constLogValue float64
@@ -31,6 +32,10 @@ func init() {
 type BloomFilter struct {
 	bitmap   *bitmap.Bitmap
 	hashSeed []uint64
+
+	keys   [][]byte
+	states [][3]uint64
+	vals   [][]uint64
 }
 
 func New(rowCount int64, probability float64) *BloomFilter {
@@ -42,9 +47,20 @@ func New(rowCount int64, probability float64) *BloomFilter {
 	bits := &bitmap.Bitmap{}
 	bits.InitWithSize(bitSize)
 
+	vals := make([][]uint64, hashmap.UnitLimit)
+	keys := make([][]byte, hashmap.UnitLimit)
+	states := make([][3]uint64, hashmap.UnitLimit)
+	for j := 0; j < hashmap.UnitLimit; j++ {
+		vals[j] = make([]uint64, seedCount*3)
+	}
+
 	return &BloomFilter{
 		bitmap:   bits,
 		hashSeed: hashSeed,
+
+		keys:   keys,
+		states: states,
+		vals:   vals,
 	}
 }
 

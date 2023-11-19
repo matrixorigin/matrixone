@@ -23,62 +23,97 @@ import (
 func (bf *BloomFilter) Clean() {
 	bf.bitmap.Reset()
 	bf.hashSeed = nil
+	bf.keys = nil
+	bf.states = nil
+	bf.vals = nil
 }
 
-func (bf *BloomFilter) TestAndAddForVector(v *vector.Vector, callBack func(exits bool, idx int)) {
-	length := v.Length()
-	keys := make([][]byte, hashmap.UnitLimit)
-	states := make([][3]uint64, hashmap.UnitLimit)
-	bitSize := uint64(bf.bitmap.Len())
-	var val1, val2, val3 uint64
-
-	for i := 0; i < length; i += hashmap.UnitLimit {
-		n := length - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		exitsArr := make([]bool, n)
-		for j := 0; j < n; j++ {
-			keys[j] = keys[j][:0]
-			exitsArr[j] = true
-		}
-		encodeHashKeys(keys, v, i, n)
-
-		for _, seed := range bf.hashSeed {
-			hashtable.BytesBatchGenHashStatesWithSeed(&keys[0], &states[0], n, seed)
-			for j := 0; j < n; j++ {
-				val1 = states[j][0]
-				if val1 > bitSize {
-					val1 = val1 % bitSize
-				}
-				if exitsArr[j] {
-					exitsArr[j] = bf.bitmap.Contains(val1)
-				}
-				bf.bitmap.Add(val1)
-
-				val2 = states[j][1]
-				if val2 > bitSize {
-					val2 = val2 % bitSize
-				}
-				if exitsArr[j] {
-					exitsArr[j] = bf.bitmap.Contains(val2)
-				}
-				bf.bitmap.Add(val2)
-
-				val3 = states[j][2]
-				if val3 > bitSize {
-					val3 = val3 % bitSize
-				}
-				if exitsArr[j] {
-					exitsArr[j] = bf.bitmap.Contains(val3)
-				}
-				bf.bitmap.Add(val3)
+func (bf *BloomFilter) Test(v *vector.Vector, callBack func(bool, int)) {
+	valLength := len(bf.hashSeed) * 3
+	var exits bool
+	var vals []uint64
+	bf.getValue(v, func(idx int, beginIdx int) {
+		exits = true
+		vals = bf.vals[idx]
+		for j := 0; j < valLength; j++ {
+			exits = bf.bitmap.Contains(vals[j])
+			if !exits {
+				break
 			}
 		}
+		callBack(exits, beginIdx+idx)
+	})
+}
 
-		for j := 0; j < n; j++ {
-			callBack(exitsArr[j], i+j)
+func (bf *BloomFilter) Add(v *vector.Vector) {
+	valLength := len(bf.hashSeed) * 3
+	var vals []uint64
+	bf.getValue(v, func(idx int, _ int) {
+		vals = bf.vals[idx]
+		for j := 0; j < valLength; j++ {
+			bf.bitmap.Add(vals[j])
+		}
+	})
+}
+
+func (bf *BloomFilter) TestAndAdd(v *vector.Vector, callBack func(bool, int)) {
+	valLength := len(bf.hashSeed) * 3
+	var exits bool
+	var vals []uint64
+	bf.getValue(v, func(idx int, beginIdx int) {
+		exits = true
+		vals = bf.vals[idx]
+		for j := 0; j < valLength; j++ {
+			if exits {
+				exits = bf.bitmap.Contains(vals[j])
+			}
+			bf.bitmap.Add(vals[j])
+		}
+		callBack(exits, beginIdx+idx)
+	})
+}
+
+func (bf *BloomFilter) getValue(v *vector.Vector, callBack func(int, int)) {
+	length := v.Length()
+	bitSize := uint64(bf.bitmap.Len())
+	lastSeed := len(bf.hashSeed) - 1
+	step := hashmap.UnitLimit
+	var i, j, n, k, idx int
+
+	getIdxVal := func(v uint64) uint64 {
+		if v >= bitSize {
+			return v % bitSize
+		}
+		return v
+	}
+
+	for i = 0; i < length; i += step {
+		n = length - i
+		if n > step {
+			n = step
 		}
 
+		for j = 0; j < n; j++ {
+			bf.keys[j] = bf.keys[j][:0]
+		}
+		encodeHashKeys(bf.keys, v, i, n)
+
+		for k = 0; k < lastSeed; k++ {
+			hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[k])
+			idx = k * 3
+			for j = 0; j < n; j++ {
+				bf.vals[j][idx] = getIdxVal(bf.states[j][0])
+				bf.vals[j][idx+1] = getIdxVal(bf.states[j][1])
+				bf.vals[j][idx+2] = getIdxVal(bf.states[j][2])
+			}
+		}
+		hashtable.BytesBatchGenHashStatesWithSeed(&bf.keys[0], &bf.states[0], n, bf.hashSeed[lastSeed])
+		idx = lastSeed * 3
+		for j = 0; j < n; j++ {
+			bf.vals[j][idx] = getIdxVal(bf.states[j][0])
+			bf.vals[j][idx+1] = getIdxVal(bf.states[j][1])
+			bf.vals[j][idx+2] = getIdxVal(bf.states[j][2])
+			callBack(j, i)
+		}
 	}
 }

@@ -986,9 +986,18 @@ func makeInsertPlan(
 	//  case 2: the only primary key is auto increment type
 
 	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
-	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable {
+	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDup && checkInsertPkDupForHiddenIndexTable {
+		needCheck := true
+		useFuzzyFilter := false
+		if isUpdate {
+			needCheck = updatePkCol
+			useFuzzyFilter = false
+		} else {
+			useFuzzyFilter = CNPrimaryCheck
+		}
+
 		// insert stmt or update pk col, we need check insert pk dup
-		if (checkInsertPkDup && !CNPrimaryCheck) || (isUpdate && updatePkCol) {
+		if needCheck && !useFuzzyFilter {
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			pkColExpr := &plan.Expr{
 				Typ: pkTyp,
@@ -1040,7 +1049,9 @@ func makeInsertPlan(
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
 			builder.appendStep(lastNodeId)
-		} else if !isUpdate {
+		}
+
+		if needCheck && useFuzzyFilter {
 			// sink_scan
 			sinkScanNode := &Node{
 				NodeType:   plan.Node_SINK_SCAN,

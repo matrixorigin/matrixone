@@ -112,7 +112,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	pkCol := bat.GetVector(0)
-	arg.filter.TestAndAddForVector(pkCol, func(exist bool, i int) {
+	arg.filter.TestAndAdd(pkCol, func(exist bool, i int) {
 		if exist {
 			appendCollisionKey(proc, arg, i, bat)
 			arg.collisionCnt++
