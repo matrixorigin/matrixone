@@ -777,15 +777,14 @@ func (tbl *txnTable) rangesOnePart(
 		//     1. check whether the object is skipped
 		//     2. if skipped, skip this block
 		//     3. if not skipped, eval expr on the block
-
-		iter := catalog.NewStatsBlkIter(objStats)
-		for iter.Next() {
-			blk := iter.Entry()
+		blks := catalog.UnfoldBlkInfoFromObjStats(objStats)
+		//iter := catalog.NewStatsBlkIter(objStats)
+		for idx := 0; idx < len(blks); idx++ {
 			skipBlk := false
 
 			if auxIdCnt > 0 {
 				// eval filter expr on the block
-				blkMeta := objDataMeta.GetBlockMeta(uint32(iter.Sequence()))
+				blkMeta := objDataMeta.GetBlockMeta(uint32(idx))
 				for _, expr := range exprs {
 					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 						skipBlk = true
@@ -800,17 +799,17 @@ func (tbl *txnTable) rangesOnePart(
 			}
 
 			if hasDeletes {
-				if _, ok := dirtyBlks[blk.BlockID]; !ok {
-					blk.CanRemote = true
+				if _, ok := dirtyBlks[blks[idx].BlockID]; !ok {
+					blks[idx].CanRemote = true
 				}
-				blk.PartitionNum = -1
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+				blks[idx].PartitionNum = -1
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(blks[idx]))
 				continue
 			}
 			// store the block in ranges
-			blk.CanRemote = true
-			blk.PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+			blks[idx].CanRemote = true
+			blks[idx].PartitionNum = -1
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blks[idx]))
 		}
 
 	}
@@ -1060,11 +1059,10 @@ func (tbl *txnTable) tryFastRanges(
 		// 	skipObj = !exist
 		// }
 
-		iter := catalog.NewStatsBlkIter(stats)
-		for iter.Next() {
-			blk := iter.Entry()
-
-			blkBf := bf.GetBloomFilter(uint32(iter.Sequence()))
+		blks := catalog.UnfoldBlkInfoFromObjStats(stats)
+		//iter := catalog.NewStatsBlkIter(stats)
+		for idx := 0; idx < len(stats); idx++ {
+			blkBf := bf.GetBloomFilter(uint32(idx))
 			blkBfIdx := index.NewEmptyBinaryFuseFilter()
 			if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 				return
@@ -1079,17 +1077,17 @@ func (tbl *txnTable) tryFastRanges(
 			}
 
 			if hasDeletes {
-				if _, ok := dirtyBlks[blk.BlockID]; !ok {
-					blk.CanRemote = true
+				if _, ok := dirtyBlks[blks[idx].BlockID]; !ok {
+					blks[idx].CanRemote = true
 				}
-				blk.PartitionNum = -1
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+				blks[idx].PartitionNum = -1
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(blks[idx]))
 				continue
 			}
 
-			blk.CanRemote = true
-			blk.PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+			blks[idx].CanRemote = true
+			blks[idx].PartitionNum = -1
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blks[idx]))
 		}
 
 	}
