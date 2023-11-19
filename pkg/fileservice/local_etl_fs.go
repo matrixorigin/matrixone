@@ -369,6 +369,10 @@ func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, 
 	}, nil
 }
 
+func (l *LocalETLFS) PrefetchFile(ctx context.Context, filePath string) error {
+	return nil
+}
+
 func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
 	select {
 	case <-ctx.Done():
