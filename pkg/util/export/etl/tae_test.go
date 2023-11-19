@@ -57,7 +57,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	fs := testutil.NewFS()
+	fs := testutil.NewSharedFS()
 
 	filepath := path.Join(t.TempDir(), "file.tae")
 	writer := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
@@ -151,7 +151,7 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	fs := testutil.NewFS()
+	fs := testutil.NewSharedFS()
 
 	type fields struct {
 		ctx context.Context
@@ -276,7 +276,7 @@ func TestTaeReadFile(t *testing.T) {
 	mp, err := mpool.NewMPool("TestTaeReadFile", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	fs := testutil.NewFS()
+	fs := testutil.NewETLFS()
 
 	entrys, err := fs.List(context.TODO(), "etl:/")
 	require.Nil(t, err)
@@ -331,7 +331,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 	mp, err := mpool.NewMPool("TestTaeReadFile", 0, mpool.NoFixed)
 	require.Nil(t, err)
 	ctx := context.TODO()
-	fs := testutil.NewFS()
+	fs := testutil.NewETLFS()
 
 	folder := "/sys/logs/2023/01/11/rawlog"
 	entrys, err := fs.List(context.TODO(), "etl:"+folder)
@@ -396,7 +396,7 @@ func TestTAEWriter_writeEmpty(t *testing.T) {
 	cfg := table.FilePathCfg{NodeUUID: "uuid", NodeType: "type", Extension: table.TaeExtension}
 	ctx := context.TODO()
 	tbl := motrace.SingleStatementTable
-	fs := testutil.NewFS()
+	fs := testutil.NewSharedFS()
 	filePath := cfg.LogsFilePathFactory("sys", tbl, time.Now())
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)
@@ -436,7 +436,7 @@ func TestTAEWriter_WriteStrings(t *testing.T) {
 	cfg := table.FilePathCfg{NodeUUID: "uuid", NodeType: "type", Extension: table.TaeExtension}
 	ctx := context.TODO()
 	tbl := dummyAllTypeTable
-	fs := testutil.NewFS()
+	fs := testutil.NewSharedFS()
 	filePath := cfg.LogsFilePathFactory("sys", tbl, time.Now())
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.Nil(t, err)

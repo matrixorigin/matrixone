@@ -145,3 +145,18 @@ func (f *FileServices) StatFile(ctx context.Context, filePath string) (*DirEntry
 	}
 	return fs.StatFile(ctx, filePath)
 }
+
+func (f *FileServices) PrefetchFile(ctx context.Context, filePath string) error {
+	path, err := ParsePathAtService(filePath, "")
+	if err != nil {
+		return err
+	}
+	if path.Service == "" {
+		path.Service = f.defaultName
+	}
+	fs, err := Get[FileService](f, path.Service)
+	if err != nil {
+		return err
+	}
+	return fs.PrefetchFile(ctx, filePath)
+}
