@@ -3603,7 +3603,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	ses.txnCompileCtx.SetProcess(ses.proc)
 	ses.proc.SessionInfo = proc.SessionInfo
 
-	statsInfo := statistic.StatsInfo{}
+	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),

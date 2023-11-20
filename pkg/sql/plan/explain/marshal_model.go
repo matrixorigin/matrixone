@@ -15,19 +15,22 @@
 package explain
 
 import (
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strconv"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type ExplainData struct {
-	Steps   []Step `json:"steps"`
-	Code    uint16 `json:"code"`
-	Message string `json:"message"`
-	Success bool   `json:"success"`
-	Uuid    string `json:"uuid"`
+	Steps        []Step `json:"steps"`
+	Code         uint16 `json:"code"`
+	Message      string `json:"message"`
+	Success      bool   `json:"success"`
+	Uuid         string `json:"uuid"`
+	NewPlanStats statistic.StatsInfo
 }
 
 type Step struct {
