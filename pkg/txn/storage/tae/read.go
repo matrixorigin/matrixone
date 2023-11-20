@@ -32,54 +32,30 @@ func (s *taeStorage) Read(
 	txnMeta txn.TxnMeta,
 	op uint32,
 	payload []byte) (res storage.ReadResult, err error) {
-
 	switch op {
-
 	case uint32(apipb.OpCode_OpGetLogTail):
-		return handleRead(
-			ctx, s,
-			txnMeta, payload,
-			s.taeHandler.HandleGetLogTail,
-		)
+		return handleRead(ctx, txnMeta, payload, s.taeHandler.HandleGetLogTail)
 	default:
 		return nil, moerr.NewNotSupported(ctx, "known read op: %v", op)
 	}
-
 }
 
-func handleRead[
-	Req any, PReq interface {
-		// anonymous constraint
-		encoding.BinaryUnmarshaler
-		// make Req convertible to its pointer type
-		*Req
-	},
-	Resp any, PResp interface {
-		// anonymous constraint
-		encoding.BinaryMarshaler
-		// make Resp convertible to its pointer type
-		*Resp
-	},
-](
+type marshaller[T any] interface {
+	*T
+	encoding.BinaryMarshaler
+}
+
+type unmarshaler[T any] interface {
+	*T
+	encoding.BinaryUnmarshaler
+}
+
+func handleRead[PReq unmarshaler[Req], PResp marshaller[Resp], Req, Resp any](
 	ctx context.Context,
-	s *taeStorage,
 	txnMeta txn.TxnMeta,
 	payload []byte,
-	fn func(
-		ctx context.Context,
-		meta txn.TxnMeta,
-		preq PReq,
-		presp PResp,
-	) (
-		// for logtail
-		cb func(),
-		err error,
-	),
-) (
-	res storage.ReadResult,
-	err error,
-) {
-
+	fn func(context.Context, txn.TxnMeta, PReq, PResp) (func(), error),
+) (res storage.ReadResult, err error) {
 	var preq PReq = new(Req)
 	if len(payload) != 0 {
 		if err := preq.UnmarshalBinary(payload); err != nil {
