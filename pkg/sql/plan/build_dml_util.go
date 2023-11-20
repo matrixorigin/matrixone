@@ -1335,6 +1335,7 @@ func makeInsertPlan(
 					lastNodeId = builder.appendNode(scanNode, bindCtx)
 					scanNode.BlockFilterList = blockFilterList
 
+					// Perform partition pruning on the full table scan of the partitioned table in the insert statement
 					if scanTableDef.Partition != nil && partitionExpr != nil {
 						builder.partitionPrune(lastNodeId)
 					}
@@ -2807,16 +2808,6 @@ func reduceSinkSinkScanNodes(qry *Query) {
 			}
 		}
 		qry.Steps = newSteps
-	}
-}
-
-// subPlanPartitionPrune Perform partition pruning on the full table scan of the partitioned table in the insert statement
-func subPlanPartitionPrune(builder *QueryBuilder, qry *Query) {
-	if len(qry.Steps) == 1 {
-		return
-	}
-	for _, rootID := range builder.qry.Steps {
-		builder.partitionPrune(rootID)
 	}
 }
 
