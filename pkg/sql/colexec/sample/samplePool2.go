@@ -68,11 +68,20 @@ func (pd *poolData) appendInvalidRow(proc *process.Process, mp *mpool.MPool, bat
 	return nil
 }
 
-func (pd *poolData) output() *batch.Batch {
-	if pd.invalidBatch != nil {
-		return pd.invalidBatch
+func (pd *poolData) replaceValidRow(mp *mpool.MPool, bat *batch.Batch, row1, row2 int) error {
+	return batRowReplace(mp, pd.validBatch, bat, row1, row2)
+}
+
+// output1 returns the result of poolData and set the source pointer to be nil.
+func (pd *poolData) output() (bat *batch.Batch) {
+	if pd.validBatch != nil {
+		bat = pd.validBatch
+		pd.validBatch = nil
+	} else {
+		bat = pd.invalidBatch
+		pd.invalidBatch = nil
 	}
-	return pd.validBatch
+	return bat
 }
 
 func (pd *poolData) clean(mp *mpool.MPool) {
