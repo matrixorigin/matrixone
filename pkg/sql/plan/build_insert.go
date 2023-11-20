@@ -80,12 +80,14 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	var pkFilterExprs []*Expr
 
-	partitionPruneAble := false
+	//partitionPruneAble := false
+	var newPartitionExpr *Expr
 	if CNPrimaryCheck && len(pkPosInValues) > 0 {
 		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
 		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
 		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
-		partitionPruneAble, _ = remapPartitionExpr(builder, tableDef, pkPosInValues)
+		//partitionPruneAble, newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
+		_, newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
@@ -249,7 +251,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, isInsertWithoutAutoPkCol)
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, newPartitionExpr, isInsertWithoutAutoPkCol)
 		if err != nil {
 			return nil, err
 		}
@@ -257,9 +259,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	reduceSinkSinkScanNodes(query)
 	// perform partition pruning on the partitioned table scan in the insert statement
-	if partitionPruneAble {
-		subPlanPartitionPrune(builder, query)
-	}
+	//if partitionPruneAble {
+	//	subPlanPartitionPrune(builder, query)
+	//}
 
 	ReCalcQueryStats(builder, query)
 	return &Plan{
@@ -484,8 +486,9 @@ func remapPartitionExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues
 	if tableDef.Partition == nil {
 		return false, nil
 	} else {
-		res := remapPartExprColRef(tableDef.Partition.PartitionExpression, pkPosInValues, tableDef)
-		return res, nil
+		partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
+		res := remapPartExprColRef(partitionExpr, pkPosInValues, tableDef)
+		return res, partitionExpr
 	}
 }
 
