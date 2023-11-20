@@ -251,6 +251,15 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		return err
 	}
 
+	unlock, wait := s.ioLocks.Lock(IOLockKey{
+		File: filePath,
+	})
+	if unlock != nil {
+		defer unlock()
+	} else {
+		wait()
+	}
+
 	// load to disk cache
 	if s.diskCache != nil {
 		if err := s.diskCache.SetFile(
@@ -271,33 +280,13 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 		return nil, err
 	}
 
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: filePath,
-	})
-	if unlock == nil {
-		wait()
-	}
-
 	key := s.pathToKey(filePath)
 	r, err := s.storage.Read(ctx, key, ptrTo[int64](0), (*int64)(nil))
 	if err != nil {
-		if unlock != nil {
-			unlock()
-		}
 		return nil, err
 	}
 
-	return &readCloser{
-		closeFunc: func() error {
-			// unlock
-			if unlock != nil {
-				unlock()
-			}
-			// close
-			return r.Close()
-		},
-		r: r,
-	}, nil
+	return r, nil
 }
 
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
