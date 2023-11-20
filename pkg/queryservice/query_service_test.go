@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -79,10 +80,6 @@ func TestQueryService(t *testing.T) {
 
 	t.Run("sys tenant", func(t *testing.T) {
 		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
-			sm := NewSessionManager()
-			sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
-			sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
-			sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := svc.NewRequest(pb.CmdMethod_ShowProcessList)
@@ -100,10 +97,6 @@ func TestQueryService(t *testing.T) {
 
 	t.Run("common tenant", func(t *testing.T) {
 		runTestWithQueryService(t, cn, func(svc QueryService, addr string) {
-			sm := NewSessionManager()
-			sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
-			sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
-			sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := svc.NewRequest(pb.CmdMethod_ShowProcessList)
@@ -179,8 +172,32 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(svc Qu
 		}}, nil))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
+	sm := NewSessionManager()
+	sm.AddSession(&mockSession{id: "s1", tenant: "t1"})
+	sm.AddSession(&mockSession{id: "s2", tenant: "t2"})
+	sm.AddSession(&mockSession{id: "s3", tenant: "t3"})
+
 	qs, err := NewQueryService(cn.ServiceID, address, morpc.Config{})
 	assert.NoError(t, err)
+	qs.AddHandleFunc(pb.CmdMethod_ShowProcessList, func(ctx context.Context, req *pb.Request, resp *pb.Response) error {
+		if req.ShowProcessListRequest == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		var ss []Session
+		if req.ShowProcessListRequest.SysTenant {
+			ss = sm.GetAllSessions()
+		} else {
+			ss = sm.GetSessionsByTenant(req.ShowProcessListRequest.Tenant)
+		}
+		sessions := make([]*status.Session, 0, len(ss))
+		for _, ses := range ss {
+			sessions = append(sessions, ses.StatusSession())
+		}
+		resp.ShowProcessListResponse = &pb.ShowProcessListResponse{
+			Sessions: sessions,
+		}
+		return nil
+	}, false)
 	qs.AddHandleFunc(pb.CmdMethod_KillConn, func(ctx context.Context, request *pb.Request, response *pb.Response) error {
 		response.KillConnResponse = &pb.KillConnResponse{Success: true}
 		return nil
