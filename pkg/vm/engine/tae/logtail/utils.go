@@ -2734,7 +2734,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 				if err != nil {
 					return err
 				}
-				node.BaseNode.ObjectStats = stats
+				seg.SearchNode(node).BaseNode.ObjectStats = stats
 
 			}
 		}
@@ -2749,7 +2749,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 			if err != nil {
 				return err
 			}
-			node.BaseNode.ObjectStats = stats
+			seg.SearchNode(node).BaseNode.ObjectStats = stats
 
 		}
 	}
