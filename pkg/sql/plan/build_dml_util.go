@@ -503,7 +503,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								if _, exists := childTablePkMap[childColumnName]; exists {
 									updatePk = true
 								}
-								condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+								condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 								if err != nil {
 									return err
 								}
@@ -541,7 +541,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						var filterExpr, tmpExpr *Expr
 						for updateName, newIdx := range updateRefColumn {
 							oldIdx := nameIdxMap[updateName]
-							tmpExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{{
+							tmpExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{{
 								Typ: nameTypMap[updateName],
 								Expr: &plan.Expr_Col{
 									Col: &ColRef{
@@ -564,7 +564,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							if filterExpr == nil {
 								filterExpr = tmpExpr
 							} else {
-								filterExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
+								filterExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
 								if err != nil {
 									return nil
 								}
@@ -605,11 +605,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							},
 						}
 						errExpr := makePlan2StringConstExprWithType("Cannot delete or update a parent row: a foreign key constraint fails")
-						isEmptyExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
+						isEmptyExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
 						if err != nil {
 							return err
 						}
-						assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, errExpr})
+						assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, errExpr})
 						if err != nil {
 							return err
 						}
@@ -935,11 +935,11 @@ func makeInsertPlan(
 					},
 				},
 			}
-			nullCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*Expr{colExpr})
+			nullCheckExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*Expr{colExpr})
 			if err != nil {
 				return err
 			}
-			filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{nullCheckExpr, errExpr})
+			filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{nullCheckExpr, errExpr})
 			if err != nil {
 				return err
 			}
@@ -990,7 +990,7 @@ func makeInsertPlan(
 					},
 				}
 
-				eqCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(1), countColExpr})
+				eqCheckExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(1), countColExpr})
 				if err != nil {
 					return err
 				}
@@ -1004,7 +1004,7 @@ func makeInsertPlan(
 				if err != nil {
 					return err
 				}
-				filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
 				if err != nil {
 					return err
 				}
@@ -1092,7 +1092,7 @@ func makeInsertPlan(
 						},
 					},
 				}
-				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{pkColExpr, rightExpr})
+				condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{pkColExpr, rightExpr})
 				if err != nil {
 					return err
 				}
@@ -1204,7 +1204,7 @@ func makeInsertPlan(
 				lastNodeId = builder.appendNode(aggNode, bindCtx)
 
 				// append filter node
-				filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "not_in_rows", []*Expr{
+				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "not_in_rows", []*Expr{
 					{
 						Typ: rowIdExpr.Typ,
 						Expr: &plan.Expr_Col{
@@ -1246,7 +1246,7 @@ func makeInsertPlan(
 				}, bindCtx)
 
 				// append assert node
-				isEmptyExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
+				isEmptyExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
 				if err != nil {
 					return err
 				}
@@ -1261,7 +1261,7 @@ func makeInsertPlan(
 				if err != nil {
 					return err
 				}
-				assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+				assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
 				if err != nil {
 					return err
 				}
@@ -1372,7 +1372,7 @@ func makeInsertPlan(
 							},
 						},
 					}
-					condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{rightExpr, leftExpr})
+					condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{rightExpr, leftExpr})
 					if err != nil {
 						return err
 					}
@@ -1412,7 +1412,7 @@ func makeInsertPlan(
 					},
 				}
 
-				isEmptyExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
+				isEmptyExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
 				if err != nil {
 					return err
 				}
@@ -1428,7 +1428,7 @@ func makeInsertPlan(
 					return err
 				}
 
-				assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+				assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
 				if err != nil {
 					return err
 				}
@@ -1714,7 +1714,7 @@ func appendSinkNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, lastNode
 }
 
 func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr) (int32, error) {
-	aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "starcount", []*Expr{colExpr})
+	aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "starcount", []*Expr{colExpr})
 	if err != nil {
 		return -1, err
 	}
@@ -1838,7 +1838,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 							},
 						},
 					}
-					condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*Expr{colExpr})
+					condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*Expr{colExpr})
 					if err != nil {
 						return -1, err
 					}
@@ -1892,7 +1892,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 						},
 					},
 				}
-				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+				condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 				if err != nil {
 					return -1, err
 				}
@@ -2289,16 +2289,16 @@ func appendDeleteUniqueTablePlan(
 			}
 		}
 		if isUK {
-			leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 		} else {
-			leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
+			leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 		}
 		if err != nil {
 			return -1, err
 		}
 	}
 
-	condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 	if err != nil {
 		return -1, err
 	}
@@ -2420,7 +2420,7 @@ func makePreUpdateDeletePlan(
 					},
 				},
 			}
-			aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{baseExpr})
+			aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "any_value", []*Expr{baseExpr})
 			if err != nil {
 				return -1, err
 			}
@@ -2459,7 +2459,7 @@ func makePreUpdateDeletePlan(
 				},
 			},
 		}
-		nullCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*Expr{rowIdExpr})
+		nullCheckExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*Expr{rowIdExpr})
 		if err != nil {
 			return -1, err
 		}
@@ -2534,7 +2534,7 @@ func makePreUpdateDeletePlan(
 					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(colIdx)}},
 				}
 			}
-			cpPkExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "serial", pkColExpr)
+			cpPkExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", pkColExpr)
 			if err != nil {
 				return -1, err
 			}
