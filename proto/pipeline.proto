@@ -206,6 +206,7 @@ message Join {
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
   bool hash_on_pk = 10;
+  bool is_shuffle =11;
 }
 
 message AntiJoin{
@@ -217,6 +218,7 @@ message AntiJoin{
   repeated plan.Expr left_cond = 6;
   repeated plan.Expr right_cond = 7;
   bool hash_on_pk = 8;
+  bool is_shuffle =9;
 }
 
 message LeftJoin {
@@ -230,6 +232,7 @@ message LeftJoin {
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
   bool hash_on_pk = 10;
+  bool is_shuffle =11;
 }
 
 message RightJoin {
@@ -244,6 +247,7 @@ message RightJoin {
   repeated plan.Expr right_cond = 9;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 10;
   bool hash_on_pk = 11;
+  bool is_shuffle =12;
 }
 
 message RightSemiJoin {
@@ -256,6 +260,7 @@ message RightSemiJoin {
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
   bool hash_on_pk = 9;
+  bool is_shuffle =10;
 }
 
 message RightAntiJoin {
@@ -268,6 +273,7 @@ message RightAntiJoin {
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
   bool hash_on_pk = 9;
+  bool is_shuffle =10;
 }
 
 message SemiJoin {
@@ -280,6 +286,7 @@ message SemiJoin {
   repeated plan.Expr right_cond = 7;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 8;
   bool hash_on_pk = 9;
+  bool is_shuffle =10;
 }
 
 message SingleJoin {
@@ -293,6 +300,7 @@ message SingleJoin {
   repeated plan.Expr right_cond = 8;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 9;
   bool hash_on_pk = 10;
+  bool is_shuffle =11;
 }
 
 message MarkJoin {
@@ -305,12 +313,14 @@ message MarkJoin {
   repeated plan.Expr right_cond = 7;
   repeated plan.Expr on_list = 8;
   bool hash_on_pk = 9;
+  bool is_shuffle =10;
 }
 
 message Product {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
   repeated plan.Type  types = 3;
+  bool is_shuffle =4;
 }
 
 message TableFunction {

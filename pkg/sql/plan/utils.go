@@ -49,17 +49,17 @@ func GetBindings(expr *plan.Expr) []int32 {
 	return bindings
 }
 
-func doGetBindings(expr *plan.Expr) map[int32]any {
-	res := make(map[int32]any)
+func doGetBindings(expr *plan.Expr) map[int32]emptyType {
+	res := make(map[int32]emptyType)
 
 	switch expr := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		res[expr.Col.RelPos] = nil
+		res[expr.Col.RelPos] = emptyStruct
 
 	case *plan.Expr_F:
 		for _, child := range expr.F.Args {
 			for id := range doGetBindings(child) {
-				res[id] = nil
+				res[id] = emptyStruct
 			}
 		}
 	}
@@ -189,7 +189,7 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]any, markTag int32) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]emptyType, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -366,9 +366,9 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 		leftExpr, _ := combinePlanConjunction(ctx, leftOnlyConds)
 		rightExpr, _ := combinePlanConjunction(ctx, rightOnlyConds)
 
-		leftExpr, _ = bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{leftExpr, rightExpr})
+		leftExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{leftExpr, rightExpr})
 
-		expr, _ = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, leftExpr})
+		expr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, leftExpr})
 	}
 
 	return expr
@@ -454,7 +454,7 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 			left := walkThroughDNF(ctx, exprImpl.F.Args[0], keywords)
 			right := walkThroughDNF(ctx, exprImpl.F.Args[1], keywords)
 			if left != nil && right != nil {
-				retExpr, _ = bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{left, right})
+				retExpr, _ = BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{left, right})
 				return retExpr
 			}
 		} else if exprImpl.F.Func.ObjName == "and" {
@@ -465,7 +465,7 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 			} else if right == nil {
 				return left
 			} else {
-				retExpr, _ = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{left, right})
+				retExpr, _ = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{left, right})
 				return retExpr
 			}
 		} else {
@@ -754,7 +754,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 	expr = exprs[0]
 
 	for i := 1; i < len(exprs); i++ {
-		expr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, exprs[i]})
+		expr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{expr, exprs[i]})
 
 		if err != nil {
 			break
@@ -826,10 +826,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	}
 }
 
-func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]any) {
+func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]emptyType) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = nil
+		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = emptyStruct
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -1156,13 +1156,13 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process, varAndP
 
 func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, rightExprs []*plan.Expr, idx int) (*plan.Expr, error) {
 	if idx == len(leftExprs)-1 {
-		return bindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{
+		return BindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{
 			leftExprs[idx],
 			rightExprs[idx],
 		})
 	}
 
-	expr, err := bindFuncExprImplByPlanExpr(ctx, nonEqOp, []*plan.Expr{
+	expr, err := BindFuncExprImplByPlanExpr(ctx, nonEqOp, []*plan.Expr{
 		DeepCopyExpr(leftExprs[idx]),
 		DeepCopyExpr(rightExprs[idx]),
 	})
@@ -1170,7 +1170,7 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 		return nil, err
 	}
 
-	eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+	eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
 		leftExprs[idx],
 		rightExprs[idx],
 	})
@@ -1183,12 +1183,12 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 		return nil, err
 	}
 
-	tailExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{eqExpr, tailExpr})
+	tailExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{eqExpr, tailExpr})
 	if err != nil {
 		return nil, err
 	}
 
-	return bindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{expr, tailExpr})
+	return BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{expr, tailExpr})
 }
 
 // checkNoNeedCast
@@ -1536,14 +1536,14 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 					},
 				},
 			}
-			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
 			if err != nil {
 				return nil, err
 			}
 			if condIdx == 0 {
 				condExpr = eqExpr
 			} else {
-				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				condExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -1554,7 +1554,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 		if i == 0 {
 			checkExpr = condExpr
 		} else {
-			checkExpr, err = bindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
+			checkExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
 			if err != nil {
 				return nil, err
 			}
@@ -1595,14 +1595,14 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 					},
 				},
 			}
-			eqExpr, err := bindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
+			eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
 			if err != nil {
 				return nil, err
 			}
 			if condIdx == 0 {
 				condExpr = eqExpr
 			} else {
-				condExpr, err = bindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
+				condExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
 				if err != nil {
 					return nil, err
 				}
