@@ -109,7 +109,7 @@ type InfoFromZoneMap struct {
 	ColumnNDVs           []float64
 	NullCnts             []int64
 	ShuffleRanges        []*ShuffleRange
-	BlockNumber          int
+	BlockNumber          uint32
 	AccurateObjectNumber int
 	ApproxObjectNumber   int
 	TableCnt             float64

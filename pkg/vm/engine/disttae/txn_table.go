@@ -138,6 +138,10 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		return 0, err
 	}
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+		if obj.Rows() != 0 {
+			rows += int64(obj.Rows())
+			return nil
+		}
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(
