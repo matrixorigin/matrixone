@@ -1409,10 +1409,3 @@ func (i *StatsBlkIter) Entry() *catalog.BlockInfo {
 	}
 	return blk
 }
-
-func (i *StatsBlkIter) Sequence() uint16 {
-	if i.cur == -1 {
-		i.cur = 0
-	}
-	return uint16(i.cur)
-}
