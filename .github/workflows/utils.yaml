@@ -2,9 +2,7 @@
 name: MatrixOne Utils CI
 
 on:
-  pull_request_target:
-    types: [ opened, synchronize, reopened ]
-    branches: [ main,'[0-9]+.[0-9]+*' ]
+  workflow_call:
   
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}

@@ -2,10 +2,7 @@
 name: MatrixOne CI
 
 on:
-  pull_request:
-    types: [ opened, synchronize, reopened ]
-    branches: [ main,'[0-9]+.[0-9]+*' ]
-  workflow_dispatch:
+  workflow_call:
   
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
@@ -23,13 +20,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
       - name: Set up Go
         uses: ./.github/actions/setup_env        
-      - name: Set env
-        run: |
-          echo "endpoint=${{ secrets.S3ENDPOINT }}" >> $GITHUB_ENV
-          echo "region=${{ secrets.S3REGION }}" >> $GITHUB_ENV
-          echo "apikey=${{ secrets.S3APIKEY }}" >> $GITHUB_ENV
-          echo "apisecret=${{ secrets.S3APISECRET }}" >> $GITHUB_ENV
-          echo "bucket=${{ secrets.S3BUCKET }}" >> $GITHUB_ENV
       - name: Unit Testing
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
