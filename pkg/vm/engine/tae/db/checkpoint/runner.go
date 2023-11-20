@@ -630,6 +630,27 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 	return
 }
 
+func (r *runner) tryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	success = r.tryAddNewIncrementalCheckpointEntry(entry)
+	if !success {
+		return
+	}
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	it := r.storage.entries.Iter()
+	for it.Next() {
+		e := it.Item()
+		e.ckpLSN = 0
+		e.truncateLSN = 0
+	}
+	it2 := r.storage.entries.Iter()
+	for it2.Next() {
+		e := it2.Item()
+		logutil.Infof("tryAddNewBackupCheckpointEntry is %d", e.ckpLSN)
+	}
+	return
+}
+
 func (r *runner) tryScheduleIncrementalCheckpoint(start, end types.TS) {
 	// ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	_, count := r.source.ScanInRange(start, end)

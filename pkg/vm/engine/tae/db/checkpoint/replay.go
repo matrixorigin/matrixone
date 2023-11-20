@@ -93,10 +93,15 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
 	t0 := time.Now()
-	var isCheckpointVersion1 bool
+	var CheckpointVersion int
 	// in version 1, checkpoint metadata doesn't contain 'version'.
-	if len(bats[0].Vecs) < CheckpointSchemaColumnCountV1 {
-		isCheckpointVersion1 = true
+	vecLen := len(bats[0].Vecs)
+	if vecLen < CheckpointSchemaColumnCountV1 {
+		CheckpointVersion = 1
+	} else if vecLen < CheckpointSchemaColumnCountV2 {
+		CheckpointVersion = 2
+	} else {
+		CheckpointVersion = 3
 	}
 	for i := range bats[0].Vecs {
 		if len(bats) == 0 {
@@ -128,13 +133,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
 		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
 		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
-		isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
 		typ := ET_Global
-		if isIncremental {
-			typ = ET_Incremental
+		if CheckpointVersion > 2 {
+			typ = EntryType(bat.GetVectorByName(CheckpointAttr_Type).Get(i).(int8))
+		} else {
+			isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
+			if isIncremental {
+				typ = ET_Incremental
+			}
 		}
 		var version uint32
-		if isCheckpointVersion1 {
+		if CheckpointVersion == 1 {
 			version = logtail.CheckpointVersion1
 		} else {
 			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
@@ -225,11 +234,13 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		if checkpointEntry == nil {
 			continue
 		}
-		if !checkpointEntry.IsIncremental() {
+		if checkpointEntry.GetType() == ET_Global {
 			globalIdx = i
 			r.tryAddNewGlobalCheckpointEntry(checkpointEntry)
-		} else {
+		} else if checkpointEntry.GetType() == ET_Incremental {
 			r.tryAddNewIncrementalCheckpointEntry(checkpointEntry)
+		} else if checkpointEntry.GetType() == ET_Backup {
+			r.tryAddNewBackupCheckpointEntry(checkpointEntry)
 		}
 	}
 	maxGlobal := r.MaxGlobalCheckpoint()
@@ -360,6 +371,7 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 	bat.GetVectorByName(CheckpointAttr_AllLocations).Append([]byte(tnLocation), false)
 	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(last), false)
+	bat.GetVectorByName(CheckpointAttr_Type).Append(ET_Backup, false)
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, startTs, ts)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
