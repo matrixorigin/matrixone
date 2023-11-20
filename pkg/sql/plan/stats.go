@@ -54,7 +54,7 @@ type StatsInfoMap struct {
 	DataTypeMap     map[string]types.T
 	NullCntMap      map[string]int64
 	ShuffleRangeMap map[string]*ShuffleRange
-	BlockNumber     uint16
+	BlockNumber     uint32
 	ObjectNumber    int //detect if block number changes , update stats info map
 	TableCnt        float64
 	tableName       string
@@ -122,7 +122,7 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint16, tableDef *plan.TableDef, s *StatsInfoMap) {
+func UpdateStatsInfoMap(info *InfoFromZoneMap, numObjs int, numBlks uint32, tableDef *plan.TableDef, s *StatsInfoMap) {
 	s.ObjectNumber = numObjs
 	s.BlockNumber = numBlks
 	s.TableCnt = info.TableCnt

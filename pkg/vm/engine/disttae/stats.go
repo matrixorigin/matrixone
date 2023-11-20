@@ -110,7 +110,7 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
-func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) (int, uint16, error) {
+func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) (int, uint32, error) {
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	proc := tbl.db.txn.proc
 	tableDef := tbl.getTableDef()
@@ -130,7 +130,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return 0, 0, err
 	}
-	var blkNum uint16
+	var blkNum uint32
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
@@ -138,7 +138,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 		}
 		meta = objMeta.MustDataMeta()
 		accurateObjNum++
-		blkNum += obj.BlkCnt
+		blkNum += obj.BlkCnt()
 		tableCnt += float64(meta.BlockHeader().Rows())
 		if !init {
 			init = true
@@ -237,7 +237,7 @@ func UpdateStatsForPartitionTable(ctx context.Context, baseTable *txnTable, part
 	lenCols := len(baseTable.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 	accurateNumObjs := 0
-	var blkNum uint16
+	var blkNum uint32
 	for _, partitionTable := range partitionTables {
 		ptable := partitionTable.(*txnTable)
 		partNumObjs, blkCnt, err := updateInfoFromZoneMap(info, ctx, ptable)
