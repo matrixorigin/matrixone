@@ -96,6 +96,14 @@ func (c *DashboardCreator) Create() error {
 		return err
 	}
 
+	if err := c.initRuntimeDashboard(); err != nil {
+		return err
+	}
+
+	if err := c.initTraceDashboard(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -218,7 +226,7 @@ func (c *DashboardCreator) getHistogramWithExtraBy(
 		legend := fmt.Sprintf("P%.2f%%", percent*100)
 		if len(extraBy) > 0 {
 			query = fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, %s))", percent, metric, extraBy)
-			legend = fmt.Sprintf("{{ name }}(P%.2f%%)", percent*100)
+			legend = fmt.Sprintf("{{ "+extraBy+" }}(P%.2f%%)", percent*100)
 		}
 		queries = append(queries, query)
 		legends = append(legends, legend)
