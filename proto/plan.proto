@@ -540,6 +540,11 @@ message WindowSpec {
 	string name = 5;
 }
 
+message SampleFuncSpec {
+	int32 Rows = 1;
+	double Percent = 2;
+}
+
 message FrameClause {
 	enum FrameType {
 		ROWS = 0;
@@ -788,6 +793,9 @@ message Node {
 
 	FillType fill_type = 49;
 	repeated Expr fill_val = 50;
+
+	// sample function related.
+	SampleFuncSpec sample_func = 51;
 }
 
 message ExternScan {

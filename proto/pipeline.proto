@@ -357,6 +357,18 @@ message StreamScan {
   int64 limit = 3;
 }
 
+message SampleFunc {
+  enum SampleType {
+    Rows = 0;
+    Percent = 1;
+    MergeRows = 2;
+  }
+  SampleType sample_type = 1;
+  int32 sample_rows = 2;
+  double sample_percent = 3;
+  repeated plan.Expr sample_columns = 4;
+}
+
 message Instruction{
   // Op specified the operator code of an instruction.
   int32 op = 1;
@@ -399,6 +411,7 @@ message Instruction{
   Merge merge = 34;
   StreamScan stream_scan = 35;
   PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
+  SampleFunc sample_func = 37;
 }
 
 message AnalysisList {

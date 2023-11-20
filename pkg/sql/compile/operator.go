@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
@@ -121,6 +123,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Aggs:         t.Aggs,
 			MultiAggs:    t.MultiAggs,
 		}
+	case vm.Sample:
+		t := sourceIns.Arg.(*sample.Argument)
+		res.Arg = t.SimpleDup()
 	case vm.Join:
 		t := sourceIns.Arg.(*join.Argument)
 		res.Arg = &join.Argument{
@@ -1059,6 +1064,16 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
+func constructSample(n *plan.Node) *sample.Argument {
+	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy)
+	}
+	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
+		return sample.NewSampleByPercent(n.SampleFunc.Percent, n.AggList, n.GroupBy)
+	}
+	panic("only support sample by rows / percent now.")
+}
+
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
 	aggs := make([]agg.Aggregate, len(n.AggList))
 	var cfg []byte
@@ -1767,7 +1782,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
+	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
 		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
@@ -1782,7 +1797,7 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
+			if !plan2.IsEqualFunc(e.F.Func.GetObj()) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}
