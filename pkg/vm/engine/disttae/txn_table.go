@@ -663,20 +663,18 @@ func (tbl *txnTable) rangesOnePart(
 		dirtyBlks[bid] = struct{}{}
 	}
 
-	objectStatsList, err := tbl.db.txn.getInsertedBlocksForTable(tbl.db.databaseId, tbl.tableId)
+	objectStatsList, err := tbl.db.txn.getInsertedObjectListForTable(tbl.db.databaseId, tbl.tableId)
 	if err != nil {
 		return err
 	}
 
 	if !tbl.db.txn.deletedBlocks.isEmpty() {
-		for idx := range objectStatsList {
-			blks := catalog.UnfoldBlkInfoFromObjStats(objectStatsList[idx])
-			for _, blk := range blks {
-				if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
-					dirtyBlks[blk.BlockID] = struct{}{}
-				}
+		catalog.ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+			if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
+				dirtyBlks[blk.BlockID] = struct{}{}
 			}
-		}
+			return true
+		}, objectStatsList...)
 	}
 
 	for _, entry := range tbl.writes {
@@ -777,14 +775,13 @@ func (tbl *txnTable) rangesOnePart(
 		//     1. check whether the object is skipped
 		//     2. if skipped, skip this block
 		//     3. if not skipped, eval expr on the block
-		blks := catalog.UnfoldBlkInfoFromObjStats(objStats)
-		//iter := catalog.NewStatsBlkIter(objStats)
-		for idx := 0; idx < len(blks); idx++ {
+
+		catalog.ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
 			skipBlk := false
 
 			if auxIdCnt > 0 {
 				// eval filter expr on the block
-				blkMeta := objDataMeta.GetBlockMeta(uint32(idx))
+				blkMeta := objDataMeta.GetBlockMeta(uint32(blk.BlockID.Sequence()))
 				for _, expr := range exprs {
 					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 						skipBlk = true
@@ -794,92 +791,27 @@ func (tbl *txnTable) rangesOnePart(
 
 				// if the block is not needed, skip it
 				if skipBlk {
-					continue
+					return true
 				}
 			}
 
 			if hasDeletes {
-				if _, ok := dirtyBlks[blks[idx].BlockID]; !ok {
-					blks[idx].CanRemote = true
+				if _, ok := dirtyBlks[blk.BlockID]; !ok {
+					blk.CanRemote = true
 				}
-				blks[idx].PartitionNum = -1
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(blks[idx]))
-				continue
+				blk.PartitionNum = -1
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+				return true
 			}
 			// store the block in ranges
-			blks[idx].CanRemote = true
-			blks[idx].PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blks[idx]))
-		}
+			blk.CanRemote = true
+			blk.PartitionNum = -1
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
 
+			return true
+
+		}, objStats)
 	}
-
-	//for _, blk := range insertedS3Blks {
-	//	// if expr is monotonic, we need evaluating expr for each block
-	//	if auxIdCnt > 0 {
-	//		location := blk.MetaLocation()
-	//
-	//		// check whether the block belongs to a new object
-	//		// yes:
-	//		//     1. load object meta
-	//		//     2. eval expr on object meta
-	//		//     3. if the expr is false, skip eval expr on the blocks of the same object
-	//		// no:
-	//		//     1. check whether the object is skipped
-	//		//     2. if skipped, skip this block
-	//		//     3. if not skipped, eval expr on the block
-	//		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-	//			v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
-	//			if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
-	//				return
-	//			}
-	//			objDataMeta = objMeta.MustDataMeta()
-	//			skipObj = false
-	//			// here we only eval expr on the object meta if it has more than 2 blocks
-	//			if objDataMeta.BlockCount() > 2 {
-	//				for _, expr := range exprs {
-	//					if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objDataMeta, columnMap, zms, vecs) {
-	//						skipObj = true
-	//						break
-	//					}
-	//				}
-	//			}
-	//		}
-	//
-	//		if skipObj {
-	//			continue
-	//		}
-	//
-	//		var skipBlk bool
-	//
-	//		// eval filter expr on the block
-	//		blkMeta := objDataMeta.GetBlockMeta(uint32(location.ID()))
-	//		for _, expr := range exprs {
-	//			if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
-	//				skipBlk = true
-	//				break
-	//			}
-	//		}
-	//
-	//		// if the block is not needed, skip it
-	//		if skipBlk {
-	//			continue
-	//		}
-	//	}
-	//
-	//	if hasDeletes {
-	//		if _, ok := dirtyBlks[blk.BlockID]; !ok {
-	//			blk.CanRemote = true
-	//		}
-	//		blk.PartitionNum = -1
-	//		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-	//		continue
-	//	}
-	//	// store the block in ranges
-	//	blk.CanRemote = true
-	//	blk.PartitionNum = -1
-	//	*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-	//}
 
 	//filter objects
 	var cnt uint32
@@ -1059,37 +991,39 @@ func (tbl *txnTable) tryFastRanges(
 		// 	skipObj = !exist
 		// }
 
-		blks := catalog.UnfoldBlkInfoFromObjStats(stats)
-		//iter := catalog.NewStatsBlkIter(stats)
-		for idx := 0; idx < len(stats); idx++ {
-			blkBf := bf.GetBloomFilter(uint32(idx))
+		catalog.ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
+			blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
 			blkBfIdx := index.NewEmptyBinaryFuseFilter()
 			if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
-				return
+				return false
 			}
 			var exist bool
 			if exist, err = blkBfIdx.MayContainsKey(val); err != nil {
-				return
+				return false
 			} else {
 				if !exist {
-					continue
+					return true
 				}
 			}
 
 			if hasDeletes {
-				if _, ok := dirtyBlks[blks[idx].BlockID]; !ok {
-					blks[idx].CanRemote = true
+				if _, ok := dirtyBlks[blk.BlockID]; !ok {
+					blk.CanRemote = true
 				}
-				blks[idx].PartitionNum = -1
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(blks[idx]))
-				continue
+				blk.PartitionNum = -1
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+				return true
 			}
 
-			blks[idx].CanRemote = true
-			blks[idx].PartitionNum = -1
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blks[idx]))
-		}
+			blk.CanRemote = true
+			blk.PartitionNum = -1
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(*blk))
+			return true
+		}, stats)
 
+		if err != nil {
+			return
+		}
 	}
 
 	//filter objects and blocks.

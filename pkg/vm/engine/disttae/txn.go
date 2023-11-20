@@ -594,7 +594,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 	return nil
 }
 
-func (txn *Transaction) getInsertedBlocksForTable(
+func (txn *Transaction) getInsertedObjectListForTable(
 	databaseId uint64, tableId uint64) (statsList []objectio.ObjectStats, err error) {
 	txn.Lock()
 	defer txn.Unlock()
@@ -613,23 +613,6 @@ func (txn *Transaction) getInsertedBlocksForTable(
 		}
 		stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
 		statsList = append(statsList, stats)
-		//metaLocs := vector.MustStrCol(entry.bat.Vecs[0])
-		//for _, metaLoc := range metaLocs {
-		//	location, err := blockio.EncodeLocationFromString(metaLoc)
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//	sid := location.Name().SegmentId()
-		//	blkid := objectio.NewBlockid(
-		//		&sid,
-		//		location.Name().Num(),
-		//		location.ID())
-		//	pos, ok := txn.cnBlkId_Pos[*blkid]
-		//	if !ok {
-		//		panic(fmt.Sprintf("blkid %s not found", blkid.String()))
-		//	}
-		//	blks = append(blks, pos.blkInfo)
-		//}
 
 	}
 	return statsList, nil

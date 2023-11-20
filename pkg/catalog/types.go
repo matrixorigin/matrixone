@@ -406,7 +406,9 @@ func DecodeBlockInfo(buf []byte) *BlockInfo {
 }
 
 // UnfoldBlkInfoFromObjStats constructs a block info list from the given object stats.
-func UnfoldBlkInfoFromObjStats(stats objectio.ObjectStats) (blks []BlockInfo) {
+// this unfolds all block info at one operation, if an object contains a great many of blocks,
+// this operation is memory sensitive, we recommend another way, StatsBlkIter or ForEach.
+func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []BlockInfo) {
 	if stats.IsZero() {
 		return blks
 	}
@@ -433,52 +435,88 @@ func UnfoldBlkInfoFromObjStats(stats objectio.ObjectStats) (blks []BlockInfo) {
 	return blks
 }
 
-//type StatsBlkIter struct {
-//	name   objectio.ObjectName
-//	extent objectio.Extent
-//	blkCnt uint16
-//	cur    int
-//	acc    uint32
-//}
-//
-//func NewStatsBlkIter(stats objectio.ObjectStats) *StatsBlkIter {
-//	return &StatsBlkIter{
-//		name:   stats.ObjectName(),
-//		blkCnt: uint16(stats.BlkCnt()),
-//		extent: stats.Extent(),
-//		cur:    -1,
-//		acc:    0,
-//	}
-//}
-//
-//func (i *StatsBlkIter) Next() bool {
-//	i.cur++
-//	return i.cur < int(i.blkCnt)
-//}
-//
-//func (i *StatsBlkIter) Entry() *BlockInfo {
-//	if i.cur == -1 {
-//		i.cur = 0
-//	}
-//
-//	rows := options.DefaultBlockMaxRows
-//	if i.cur == int(i.blkCnt - 1) {
-//		rows =
-//	}
-//	blk := &BlockInfo{
-//		BlockID: *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
-//		SegmentID: i.name.SegmentId(),
-//		MetaLoc: objectio.BuildLocation(i.name, i.extent, , i.cur),
-//	}
-//	return blk
-//}
-//
-//func (i *StatsBlkIter) Sequence() uint16 {
-//	if i.cur == -1 {
-//		i.cur = 0
-//	}
-//	return uint16(i.cur)
-//}
+// ForeachBlkInObjStatsList receives an object stats list,
+// and visits each blk of these object stats by OnBlock,
+// until the onBlock returns false or all blks have been enumerated.
+// when onBlock returns a false,
+// the nextStats argument decides whether continue onBlock on the next stats or exit foreach completely.
+func ForeachBlkInObjStatsList(
+	nextStats bool,
+	onBlock func(blk *BlockInfo) bool, statsList ...objectio.ObjectStats) {
+	stop := false
+	statsCnt := len(statsList)
+
+	for idx := 0; idx < statsCnt && !stop; idx++ {
+		iter := NewStatsBlkIter(&statsList[idx])
+		for iter.Next() {
+			blk := iter.Entry()
+			if !onBlock(blk) {
+				stop = true
+				break
+			}
+		}
+
+		if stop && nextStats {
+			stop = false
+		}
+	}
+}
+
+type StatsBlkIter struct {
+	name       objectio.ObjectName
+	extent     objectio.Extent
+	blkCnt     uint16
+	totalRows  uint32
+	cur        int
+	accRows    uint32
+	curBlkRows uint32
+}
+
+func NewStatsBlkIter(stats *objectio.ObjectStats) *StatsBlkIter {
+	return &StatsBlkIter{
+		name:       stats.ObjectName(),
+		blkCnt:     uint16(stats.BlkCnt()),
+		extent:     stats.Extent(),
+		cur:        -1,
+		accRows:    0,
+		totalRows:  stats.Rows(),
+		curBlkRows: BlockMaxRows,
+	}
+}
+
+func (i *StatsBlkIter) Next() bool {
+	if i.cur >= 0 {
+		i.accRows += i.curBlkRows
+	}
+	i.cur++
+	return i.cur < int(i.blkCnt)
+}
+
+func (i *StatsBlkIter) Entry() *BlockInfo {
+	if i.cur == -1 {
+		i.cur = 0
+	}
+
+	// assume that all blks have BlockMaxRows, except the last one
+	if i.cur == int(i.blkCnt-1) {
+		i.curBlkRows = i.totalRows - i.accRows
+	}
+
+	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
+	blk := &BlockInfo{
+		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
+		SegmentID: i.name.SegmentId(),
+		MetaLoc:   ObjectLocation(loc),
+	}
+	return blk
+}
+
+func (i *StatsBlkIter) Sequence() uint16 {
+	if i.cur == -1 {
+		i.cur = 0
+	}
+	return uint16(i.cur)
+}
 
 // used for memengine and tae
 // tae and memengine do not make the catalog into a table
