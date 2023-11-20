@@ -669,7 +669,7 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if !tbl.db.txn.deletedBlocks.isEmpty() {
-		catalog.ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+		ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
 			if tbl.db.txn.deletedBlocks.isDeleted(&blk.BlockID) {
 				dirtyBlks[blk.BlockID] = struct{}{}
 			}
@@ -776,7 +776,7 @@ func (tbl *txnTable) rangesOnePart(
 		//     2. if skipped, skip this block
 		//     3. if not skipped, eval expr on the block
 
-		catalog.ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
+		ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
 			skipBlk := false
 
 			if auxIdCnt > 0 {
@@ -991,7 +991,7 @@ func (tbl *txnTable) tryFastRanges(
 		// 	skipObj = !exist
 		// }
 
-		catalog.ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
+		ForeachBlkInObjStatsList(false, func(blk *catalog.BlockInfo) bool {
 			blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
 			blkBfIdx := index.NewEmptyBinaryFuseFilter()
 			if err = index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
