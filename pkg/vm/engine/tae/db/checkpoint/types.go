@@ -99,7 +99,7 @@ const (
 	CheckpointAttr_Type          = "type"
 
 	CheckpointSchemaColumnCountV1 = 5 // start, end, loc, type, ver
-	CheckpointSchemaColumnCountV2 = 8
+	CheckpointSchemaColumnCountV2 = 9
 )
 
 var (
