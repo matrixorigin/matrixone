@@ -723,7 +723,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
 		if exprf, ok := expr.Expr.(*plan.Expr_F); ok {
-			if SupportedJoinCondition(exprf.F.Func.GetObj()) {
+			if IsEqualFunc(exprf.F.Func.GetObj()) {
 				leftcol, leftok := exprf.F.Args[0].Expr.(*plan.Expr_Col)
 				rightcol, rightok := exprf.F.Args[1].Expr.(*plan.Expr_Col)
 				if leftok && rightok {
@@ -915,4 +915,130 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 		node.Stats.HashmapStats.HashOnPK = true
 	}
 
+}
+
+func (builder *QueryBuilder) useUniqueSecondaryIndices(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+
+	for i, childID := range node.Children {
+		node.Children[i] = builder.useUniqueSecondaryIndices(childID)
+	}
+
+	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
+		return nodeID
+	}
+
+	colName2Idx := make(map[string]int)
+
+	for i, idxDef := range node.TableDef.Indexes {
+		if len(idxDef.Parts) == 1 {
+			colName2Idx[idxDef.Parts[0]] = i
+		}
+	}
+
+	for i, expr := range node.FilterList {
+		fn, ok := expr.Expr.(*plan.Expr_F)
+		if !ok {
+			continue
+		}
+
+		if !IsEqualFunc(fn.F.Func.Obj) {
+			continue
+		}
+
+		col, ok := fn.F.Args[0].Expr.(*plan.Expr_Col)
+		if !ok {
+			continue
+		}
+
+		if _, ok := fn.F.Args[1].Expr.(*plan.Expr_C); !ok {
+			continue
+		}
+
+		idx, ok := colName2Idx[col.Col.Name]
+		if !ok {
+			continue
+		}
+
+		idxTag := builder.genNewTag()
+		rfTag := builder.genNewTag()
+
+		origCol := fn.F.Args[0]
+		idxCol := &plan.Expr{
+			Typ: DeepCopyType(origCol.Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag,
+					ColPos: 0,
+				},
+			},
+		}
+		fn.F.Args[0] = idxCol
+
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, node.TableDef.Indexes[idx].IndexTableName)
+		idxTableNodeID := builder.appendNode(&plan.Node{
+			NodeType:        plan.Node_TABLE_SCAN,
+			ObjRef:          idxObjRef,
+			TableDef:        idxTableDef,
+			FilterList:      []*plan.Expr{expr},
+			BlockFilterList: []*plan.Expr{DeepCopyExpr(expr)},
+			BindingTags:     []int32{idxTag},
+		}, builder.ctxByNode[nodeID])
+
+		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
+		pkExpr := &plan.Expr{
+			Typ: DeepCopyType(node.TableDef.Cols[pkIdx].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: node.BindingTags[0],
+					ColPos: pkIdx,
+				},
+			},
+		}
+
+		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
+		node.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{
+			{
+				Tag:  rfTag,
+				Expr: pkExpr,
+			},
+		}
+
+		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			DeepCopyExpr(pkExpr),
+			{
+				Typ: DeepCopyType(pkExpr.Typ),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag,
+						ColPos: 1,
+					},
+				},
+			},
+		})
+		joinNodeID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{nodeID, idxTableNodeID},
+			OnList:   []*plan.Expr{joinCond},
+			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
+				{
+					Tag: rfTag,
+					Expr: &plan.Expr{
+						Typ: DeepCopyType(pkExpr.Typ),
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: 0,
+								ColPos: 0,
+							},
+						},
+					},
+				},
+			},
+		}, builder.ctxByNode[nodeID])
+
+		nodeID = joinNodeID
+		break
+	}
+
+	return nodeID
 }
