@@ -98,6 +98,8 @@ const (
 	LockOp
 
 	Shuffle
+
+	Sample
 )
 
 // Instruction contains relational algebra
@@ -179,6 +181,8 @@ func (ins *Instruction) IsBrokenNode() bool {
 	case Offset, MergeOffset:
 		return true
 	case Group, MergeGroup:
+		return true
+	case Sample:
 		return true
 	case Top, MergeTop:
 		return true

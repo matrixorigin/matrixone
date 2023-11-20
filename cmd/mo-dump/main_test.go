@@ -19,12 +19,13 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -295,5 +296,108 @@ func Test_checkFieldDelimiter(t *testing.T) {
 			}
 			assert.Equalf(t, tt.want, got, "checkFieldDelimiter(%v, %v)", tt.args.ctx, tt.args.s)
 		})
+	}
+}
+
+func TestGetDatabases(t *testing.T) {
+	// create mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	rows := sqlmock.NewRows([]string{"Database"}).
+		AddRow("db1").
+		AddRow("db2").
+		AddRow("db3")
+
+	mock.ExpectQuery("show databases").WillReturnRows(rows)
+
+	conn = db
+	databases, err := getDatabases(ctx)
+
+	// check the results
+	assert.NoError(t, err)
+	expected := []string{"db1", "db2", "db3"}
+	if len(databases) != len(expected) {
+		t.Errorf("Unexpected number of databases. Expected: %d, Got: %d", len(expected), len(databases))
+	}
+
+	for i, db := range databases {
+		if db != expected[i] {
+			t.Errorf("Unexpected database name at index %d. Expected: %s, Got: %s", i, expected[i], db)
+		}
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Unfulfilled expectations: %s", err)
+	}
+}
+
+func TestGetCreateDB(t *testing.T) {
+	// create mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock database: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+
+	rows := sqlmock.NewRows([]string{"Database", "Create"}).
+		AddRow("db1", "CREATE DATABASE db1").
+		AddRow("db2", "CREATE DATABASE db2").
+		AddRow("db3", "CREATE DATABASE db3")
+
+	mock.ExpectQuery("show create database").WillReturnRows(rows)
+	conn = db
+
+	// check the results
+	createDB, err := getCreateDB(ctx, "db1")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	expectedCreateDB := "CREATE DATABASE db1"
+	if createDB != expectedCreateDB {
+		t.Errorf("Unexpected create database statement. Expected: %s, Got: %s", expectedCreateDB, createDB)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Unfulfilled expectations: %s", err)
+	}
+}
+
+func TestGetCreateTable(t *testing.T) {
+	// create mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock database: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"Table", "Create"}).
+		AddRow("table1", "CREATE TABLE table1 (id INT, name VARCHAR(255))").
+		AddRow("table2", "CREATE TABLE table2 (id INT, age INT)")
+
+	mock.ExpectQuery("show create table").WillReturnRows(rows)
+	conn = db
+
+	// check the results
+	createTable, err := getCreateTable("db1", "table1")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	expectedCreateTable := "CREATE TABLE table1 (id INT, name VARCHAR(255))"
+	if createTable != expectedCreateTable {
+		t.Errorf("Unexpected create table statement. Expected: %s, Got: %s", expectedCreateTable, createTable)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("Unfulfilled expectations: %s", err)
 	}
 }
