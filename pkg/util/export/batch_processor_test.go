@@ -378,3 +378,75 @@ func TestMOCollector_DiscardableCollect(t *testing.T) {
 	require.True(t, time.Since(now) > discardCollectTimeout)
 	t.Logf("DiscardableCollect accept")
 }
+
+func TestMOCollector_calculateDefaultWorker(t *testing.T) {
+	type fields struct {
+		collectorCntP int
+		generatorCntP int
+		exporterCntP  int
+	}
+	type args struct {
+		numCpu int
+	}
+	type want struct {
+		collectorCnt int
+		generatorCnt int
+		exporterCnt  int
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		wants  want
+	}{
+		{
+			name:   "normal_8c",
+			fields: fields{collectorCntP: 10, generatorCntP: 20, exporterCntP: 80},
+			args:   args{numCpu: 8},
+			wants:  want{collectorCnt: 1, generatorCnt: 1, exporterCnt: 1},
+		},
+		{
+			name:   "normal_30c",
+			fields: fields{collectorCntP: 10, generatorCntP: 20, exporterCntP: 80},
+			args:   args{numCpu: 30},
+			wants:  want{collectorCnt: 1, generatorCnt: 1, exporterCnt: 2},
+		},
+		{
+			name:   "normal_8c_big",
+			fields: fields{collectorCntP: 10, generatorCntP: 800, exporterCntP: 800},
+			args:   args{numCpu: 8},
+			wants:  want{collectorCnt: 1, generatorCnt: 8, exporterCnt: 8},
+		},
+		{
+			name:   "normal_1c_100p_400p",
+			fields: fields{collectorCntP: 10, generatorCntP: 100, exporterCntP: 400},
+			args:   args{numCpu: 1},
+			wants:  want{collectorCnt: 1, generatorCnt: 1, exporterCnt: 1},
+		},
+		{
+			name:   "normal_7c_80p_400p_1000p",
+			fields: fields{collectorCntP: 80, generatorCntP: 400, exporterCntP: 1000},
+			args:   args{numCpu: 7},
+			wants:  want{collectorCnt: 1, generatorCnt: 4, exporterCnt: 7},
+		},
+		{
+			name:   "normal_16c_80p_400p_1000p",
+			fields: fields{collectorCntP: 80, generatorCntP: 400, exporterCntP: 800},
+			args:   args{numCpu: 16},
+			wants:  want{collectorCnt: 2, generatorCnt: 8, exporterCnt: 16},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &MOCollector{
+				collectorCntP: tt.fields.collectorCntP,
+				generatorCntP: tt.fields.generatorCntP,
+				exporterCntP:  tt.fields.exporterCntP,
+			}
+			c.calculateDefaultWorker(tt.args.numCpu)
+			require.Equal(t, tt.wants.collectorCnt, c.collectorCnt)
+			require.Equal(t, tt.wants.generatorCnt, c.generatorCnt)
+			require.Equal(t, tt.wants.exporterCnt, c.exporterCnt)
+		})
+	}
+}

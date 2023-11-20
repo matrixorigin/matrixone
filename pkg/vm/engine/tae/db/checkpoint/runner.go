@@ -510,7 +510,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 		return
 	}
 	defer data.Close()
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}
@@ -533,6 +533,25 @@ func checkpointMetaInfoFactory(entries []*CheckpointEntry) []*logtail.CkpLocVers
 	return ret
 }
 
+func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
+	factory := logtail.BackupCheckpointDataFactory(entry.start, entry.end)
+	data, err := factory(r.catalog)
+	if err != nil {
+		return
+	}
+	defer data.Close()
+	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	if err != nil {
+		return
+	}
+	entry.SetLocation(cnLocation, tnLocation)
+	location = fmt.Sprintf("%s:%d:%s:%s:%s", cnLocation.String(), entry.GetVersion(), entry.end.ToString(), tnLocation.String(), entry.start.ToString())
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
+	})
+	return
+}
+
 func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration) (entry *CheckpointEntry, err error) {
 	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
 	entry.ckpLSN = ckpLSN
@@ -545,7 +564,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, in
 	}
 	defer data.Close()
 
-	cnLocation, tnLocation, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
 		return
 	}
@@ -608,6 +627,24 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 	r.storage.entries.Set(entry)
 
 	success = true
+	return
+}
+
+// Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
+func (r *runner) tryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	entry.entryType = ET_Incremental
+	success = r.tryAddNewIncrementalCheckpointEntry(entry)
+	if !success {
+		return
+	}
+	r.storage.Lock()
+	defer r.storage.Unlock()
+	it := r.storage.entries.Iter()
+	for it.Next() {
+		e := it.Item()
+		e.ckpLSN = 0
+		e.truncateLSN = 0
+	}
 	return
 }
 

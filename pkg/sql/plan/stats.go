@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -371,7 +372,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], builder)
 		case "like":
 			return 0.2
-		case "in":
+		case "in", "startswith":
 			// use ndv map,do not need nodeID
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10 {
@@ -775,10 +776,7 @@ func needStats(tableDef *TableDef) bool {
 	case "sys_async_task", "sys_cron_task":
 		return false
 	}
-	if strings.HasPrefix(tableDef.Name, "mo_") || strings.HasPrefix(tableDef.Name, "__mo_") {
-		return false
-	}
-	return true
+	return !strings.HasPrefix(tableDef.Name, "mo_")
 }
 
 func DefaultHugeStats() *plan.Stats {

@@ -261,7 +261,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		outerPred, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{outerPred})
+		outerPred, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{outerPred})
 		if err != nil {
 			return 0, nil, err
 		}
@@ -278,7 +278,7 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 
 	for i, pred := range joinPreds {
 		if !pred.Typ.NotNullable {
-			joinPreds[i], err = bindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
+			joinPreds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "istrue", []*plan.Expr{pred})
 			if err != nil {
 				return
 			}
@@ -314,7 +314,7 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	}
 
 	if negate {
-		markExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{markExpr})
+		markExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{markExpr})
 	}
 
 	return
@@ -343,7 +343,7 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 		childList := childImpl.List.List
 		switch op {
 		case "=":
-			leftExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+			leftExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
 				childList[0],
 				getProjectExpr(0, ctx, strip),
 			})
@@ -352,7 +352,7 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 			}
 
 			for i := 1; i < len(childList); i++ {
-				rightExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+				rightExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
 					childList[i],
 					getProjectExpr(i, ctx, strip),
 				})
@@ -360,7 +360,7 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 					return nil, err
 				}
 
-				leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{leftExpr, rightExpr})
+				leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{leftExpr, rightExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -369,7 +369,7 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 			return leftExpr, nil
 
 		case "<>":
-			leftExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+			leftExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
 				childList[0],
 				getProjectExpr(0, ctx, strip),
 			})
@@ -378,7 +378,7 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 			}
 
 			for i := 1; i < len(childList); i++ {
-				rightExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+				rightExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
 					childList[i],
 					getProjectExpr(i, ctx, strip),
 				})
@@ -386,7 +386,7 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 					return nil, err
 				}
 
-				leftExpr, err = bindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{leftExpr, rightExpr})
+				leftExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{leftExpr, rightExpr})
 				if err != nil {
 					return nil, err
 				}
@@ -409,7 +409,7 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 		}
 
 	default:
-		return bindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
+		return BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
 			child,
 			getProjectExpr(0, ctx, strip),
 		})
