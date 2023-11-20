@@ -23,7 +23,6 @@ import (
 )
 
 // Write implements storage.TxnTAEStorage
-
 func (s *taeStorage) Write(
 	ctx context.Context,
 	txnMeta txn.TxnMeta,

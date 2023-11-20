@@ -26,7 +26,6 @@ import (
 )
 
 // Read implements storage.TxnTAEStorage
-
 func (s *taeStorage) Read(
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
@@ -66,7 +65,7 @@ func handleRead[PReq unmarshaler[Req], PResp marshaller[Resp], Req, Resp any](
 	var presp PResp = new(Resp)
 	defer logReq("read", preq, txnMeta, presp, &err)()
 	defer func() {
-		if closer, ok := (any)(presp).(io.Closer); ok {
+		if closer, ok := any(presp).(io.Closer); ok {
 			_ = closer.Close()
 		}
 	}()
