@@ -43,12 +43,12 @@ type container struct {
 }
 
 type Argument struct {
-	ctr    *container
-	Typs   []types.Type
-	Result []colexec.ResultPos
-
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	ctr       *container
+	Typs      []types.Type
+	Result    []colexec.ResultPos
+	IsShuffle bool
+	info      *vm.OperatorInfo
+	children  []vm.Operator
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
