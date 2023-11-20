@@ -373,7 +373,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
-%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD
+%token <str> LOAD INLINE INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT DISCARD JSONTYPE
 
 // MODump
 %token <str> MODUMP
@@ -497,6 +497,7 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+%type <str> json_type_opt
 
 // case statement
 %type <statement> case_stmt
@@ -6482,13 +6483,16 @@ load_param_opt:
             },
         }
     }
-|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING
+|   INLINE  FORMAT '=' STRING ','  DATA '=' STRING  json_type_opt
     {
         $$ = &tree.ExternParam{
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.INLINE,
                 Format: $4,
                 Data: $8,
+            },
+            ExParam:tree.ExParam{
+                JsonData:$9,
             },
         }
     }
@@ -6516,6 +6520,15 @@ load_param_opt:
                 StageName: tree.Identifier($3.Compare()),
             },
         }
+    }
+
+json_type_opt:
+    {
+        $$ = ""
+    }
+|    ',' JSONTYPE '=' STRING 
+    {
+        $$ = $4
     }
 
 infile_or_s3_params:
