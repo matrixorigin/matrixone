@@ -28,6 +28,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
 		groupByAst:     make(map[string]int32),
 		aggregateByAst: make(map[string]int32),
+		sampleByAst:    make(map[string]int32),
 		projectByExpr:  make(map[string]int32),
 		windowByAst:    make(map[string]int32),
 		timeByAst:      make(map[string]int32),

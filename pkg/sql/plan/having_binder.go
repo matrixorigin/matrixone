@@ -69,6 +69,18 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
+	if colPos, ok := b.ctx.sampleByAst[astStr]; ok {
+		return &plan.Expr{
+			Typ: b.ctx.sampleFunc.columns[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.sampleTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
@@ -130,7 +142,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
-			expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function.Distinct))
+			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
 		}
 	}
 	b.insideAgg = false
