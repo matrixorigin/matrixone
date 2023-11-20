@@ -1803,3 +1803,30 @@ func TestSetFunction2(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 }
+
+func BenchmarkUnmarshal(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int8.ToType())
+	AppendAny(vec, int8(42), false, mp)
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		err := vec.UnmarshalBinary(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkToTypedSlice(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int8.ToType())
+	AppendAny(vec, int8(42), false, mp)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		toTypedSlice[int8](&vec.col)
+	}
+}
