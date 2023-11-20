@@ -30,7 +30,7 @@ type ObjectsIter interface {
 
 type objectsIter struct {
 	ts          types.TS
-	iter        *btree.IterG[ObjectIndexByCreateTSEntry]
+	iter        btree.IterG[ObjectIndexByCreateTSEntry]
 	firstCalled bool
 }
 
@@ -101,7 +101,7 @@ type BlocksIter interface {
 }
 
 type dirtyBlocksIter struct {
-	iter        *btree.IterG[types.Blockid]
+	iter        btree.IterG[types.Blockid]
 	firstCalled bool
 }
 
