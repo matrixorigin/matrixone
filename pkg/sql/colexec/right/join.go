@@ -16,8 +16,8 @@ package right
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -137,10 +137,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		}
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
-		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(bat.RowCount())
 		analyze.Alloc(ctr.mp.Size())
 	}
+	ctr.matched = &bitmap.Bitmap{}
+	ctr.matched.InitWithSize(bat.RowCount())
 	return nil
 }
 
