@@ -82,6 +82,19 @@ func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCoun
 	}
 }
 
+func (s *sPool) Free() {
+	for _, sp := range s.sPools {
+		if sp.bat != nil {
+			s.proc.PutBatch(sp.bat)
+		}
+	}
+	for _, mp := range s.mPools {
+		if mp.bat != nil {
+			s.proc.PutBatch(mp.bat)
+		}
+	}
+}
+
 func (s *sPool) growSiPool(target int) {
 	if target <= len(s.sPools) {
 		return
