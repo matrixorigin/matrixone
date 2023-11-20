@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -99,6 +100,9 @@ func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions,
 		step.GraphData = *graphData
 
 		expdata.Steps = append(expdata.Steps, *step)
+	}
+	if stats := statistic.StatsInfoFromContext(ctx); stats != nil {
+		expdata.NewPlanStats = *stats
 	}
 	return expdata
 }
