@@ -15,6 +15,7 @@
 package elkans
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
@@ -139,18 +140,23 @@ func (km *ElkanClusterer) Normalize() {
 }
 
 // InitCentroids initializes the centroids using initialization algorithms like random or kmeans++.
-// Right now, we don't support kmeans++ since it is very slow for large scale clustering.
-func (km *ElkanClusterer) InitCentroids() {
+func (km *ElkanClusterer) InitCentroids() error {
 	var initializer Initializer
 	switch km.initType {
 	case kmeans.Random:
 		initializer = NewRandomInitializer()
 	case kmeans.KmeansPlusPlus:
+		// NOTE: Do not use Kmeans++ for large datasets, it is very slow. Use it with sampling only.
+		// The sampling rule could be sampleCnt = 50 * k.
+		if km.vectorCnt > km.clusterCnt*catalog.KmeansSamplePerCentroid {
+			return moerr.NewInternalErrorNoCtx("kmeans++ is not supported for large scale clustering")
+		}
 		initializer = NewKMeansPlusPlusInitializer(km.distFn)
 	default:
 		initializer = NewRandomInitializer()
 	}
 	km.centroids = initializer.InitCentroids(km.vectorList, km.clusterCnt)
+	return nil
 }
 
 // Cluster returns the final centroids and the error if any.
@@ -161,8 +167,12 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 		return moarray.ToMoArrays[float64](km.vectorList), nil
 	}
 
-	km.InitCentroids() // step 0.1
-	km.initBounds()    // step 0.2
+	err := km.InitCentroids() // step 0.1
+	if err != nil {
+		return nil, err
+	}
+
+	km.initBounds() // step 0.2
 
 	res, err := km.elkansCluster()
 	if err != nil {

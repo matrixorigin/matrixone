@@ -209,11 +209,10 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 
 	// 2. Sampling SQL Logic
 	var sampleCnt = totalCnt
-	entriesPerList := 50
-	if sampleCnt > int64(entriesPerList*centroidParamsLists) {
+	if sampleCnt > int64(centroidParamsLists*catalog.KmeansSamplePerCentroid) {
 		//NOTE: this is the sampling rule. Every list (ie cluster) will have 50 samples.
 		// we will change it to 250 samples per list in the future.
-		sampleCnt = int64(entriesPerList * centroidParamsLists)
+		sampleCnt = int64(centroidParamsLists * catalog.KmeansSamplePerCentroid)
 	}
 	indexColumnName := indexDef.Parts[0]
 	sampleSQL := fmt.Sprintf("(select `%s` from `%s`.`%s` where `%s` is not null order by rand() limit %d)",

@@ -65,6 +65,10 @@ const (
 	IndexAlgoParamOpType_cos = "vector_cosine_ops"
 )
 
+const (
+	KmeansSamplePerCentroid = 50
+)
+
 /* 1. ToString Functions */
 
 // IndexParamsToStringList used by buildShowCreateTable and restoreDDL

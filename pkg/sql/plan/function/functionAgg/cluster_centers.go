@@ -196,7 +196,7 @@ func (s *sAggClusterCenters) Eval(lastResult [][]byte) ([][]byte, error) {
 		vecf64List := s.bytesListToVecF64List(arrGroup)
 
 		// 2. run kmeans
-		clusterer, err := elkans.NewKMeans(vecf64List, int(s.clusterCnt), defaultKmeansMaxIteration, defaultKmeansDeltaThreshold, s.distType, defaultKmeansInitType)
+		clusterer, err := elkans.NewKMeans(vecf64List, int(s.clusterCnt), defaultKmeansMaxIteration, defaultKmeansDeltaThreshold, s.distType, s.initType)
 		if err != nil {
 			return nil, err
 		}

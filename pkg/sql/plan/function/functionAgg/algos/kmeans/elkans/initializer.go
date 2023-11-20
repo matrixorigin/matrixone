@@ -49,8 +49,10 @@ func (r *Random) InitCentroids(vectors []*mat.VecDense, k int) (centroids []*mat
 // KMeansPlusPlus initializes the centroids using kmeans++ algorithm.
 // Complexity: O(k*n*k); n = number of vectors, k = number of clusters
 // Ref Paper: https://theory.stanford.edu/~sergei/papers/kMeansPP-soda.pdf
-// NOTE: Do not use Kmeans++ for large datasets, it is very slow. Use it with sampling.
-// The sampling rule could be sampleCnt = 50 * k.
+// The reason why we have kmeans++ is that it is more stable than random initialization.
+// For example, we have 3 clusters.
+// Using random, we could get 3 centroids: 1&2 which are close to each other and part of cluster 1. 3 is in the middle of 2&3.
+// Using kmeans++, we are sure that 3 centroids are farther away from each other.
 type KMeansPlusPlus struct {
 	rand   rand.Rand
 	distFn kmeans.DistanceFunction

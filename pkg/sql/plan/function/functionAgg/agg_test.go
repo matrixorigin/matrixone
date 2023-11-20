@@ -776,6 +776,7 @@ func TestClusterCenters(t *testing.T) {
 		require.Equal(t, s1.arrType, s2.arrType)
 		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
 		require.Equal(t, s1.distType, s2.distType)
+		require.Equal(t, s1.initType, s2.initType)
 		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
 		require.Equal(t, s1.groupedData, s2.groupedData)
 	}

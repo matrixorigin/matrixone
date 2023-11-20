@@ -59,17 +59,18 @@ func Benchmark_kmeans(b *testing.B) {
 
 	})
 
-	b.Run("Spherical_Elkan_Kmeans++", func(b *testing.B) {
-		b.ResetTimer()
-		kmeansPlusPlus, _ := NewKMeans(data, k,
-			500, 0.01,
-			kmeans.L2Distance, kmeans.KmeansPlusPlus)
-		_, err := kmeansPlusPlus.Cluster()
-		if err != nil {
-			panic(err)
-		}
-		b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
-	})
+	// Will not work for large datasets without sampling
+	//b.Run("Spherical_Elkan_Kmeans++", func(b *testing.B) {
+	//	b.ResetTimer()
+	//	kmeansPlusPlus, _ := NewKMeans(data, k,
+	//		500, 0.01,
+	//		kmeans.L2Distance, kmeans.KmeansPlusPlus)
+	//	_, err := kmeansPlusPlus.Cluster()
+	//	if err != nil {
+	//		panic(err)
+	//	}
+	//	b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
+	//})
 
 }
 
