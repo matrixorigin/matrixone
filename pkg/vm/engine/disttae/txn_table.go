@@ -875,7 +875,7 @@ func (tbl *txnTable) rangesOnePart(
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 				CommitTs:   obj.CommitTS,
-				SegmentID:  obj.SegmentID,
+				SegmentID:  *obj.ObjectShortName().Segmentid(),
 			}
 			if obj.HasDeltaLoc {
 				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
@@ -1080,7 +1080,7 @@ func (tbl *txnTable) tryFastRanges(
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 				CommitTs:   obj.CommitTS,
-				SegmentID:  obj.SegmentID,
+				SegmentID:  *obj.ObjectShortName().Segmentid(),
 			}
 			if obj.HasDeltaLoc {
 				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
@@ -1927,7 +1927,7 @@ func (tbl *txnTable) updateDeleteInfo(
 						Sorted:     obj.Sorted,
 						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 						CommitTs:   obj.CommitTS,
-						SegmentID:  obj.SegmentID,
+						SegmentID:  *obj.ObjectShortName().Segmentid(),
 					}
 					if obj.HasDeltaLoc {
 						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
