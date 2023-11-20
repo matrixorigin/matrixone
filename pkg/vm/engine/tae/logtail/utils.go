@@ -380,10 +380,28 @@ func IncrementalCheckpointDataFactory(start, end types.TS,
 		collector := NewIncrementalCollector(start, end)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
-		// deal with the left segments
-		collector.fillObjectInfoBatch()
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
+		}
+		if err != nil {
+			return
+		}
+		if collector.isPrefetch {
+			// deal with the left segments
+			err = collector.loadObjectInfo()
+			if err != nil {
+				return
+			}
+			p := &catalog.LoopProcessor{}
+			p.SegmentFn = collector.VisitSeg
+			err = c.RecurLoop(p)
+
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+				err = nil
+			}
+			if err != nil {
+				return
+			}
 		}
 
 		if collectUsage {
@@ -419,10 +437,29 @@ func GlobalCheckpointDataFactory(
 		collector := NewGlobalCollector(end, versionInterval)
 		defer collector.Close()
 		err = c.RecurLoop(collector)
-		// deal with the left segments
-		collector.fillObjectInfoBatch()
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			err = nil
+		}
+
+		if err != nil {
+			return
+		}
+		if collector.isPrefetch {
+			// deal with the left segments
+			err = collector.loadObjectInfo()
+			if err != nil {
+				return
+			}
+			p := &catalog.LoopProcessor{}
+			p.SegmentFn = collector.VisitSeg
+			err = c.RecurLoop(p)
+
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+				err = nil
+			}
+			if err != nil {
+				return
+			}
 		}
 
 		FillUsageBatOfGlobal(c, collector, fs, ckpMetas)
@@ -623,7 +660,10 @@ type BaseCollector struct {
 	// to identify increment or global
 	isGlobal bool
 	// to prefetch object meta when fill in object info batch
-	segments []*catalog.SegmentEntry
+
+	// true for prefech object meta
+	isPrefetch bool
+	segments   []*catalog.SegmentEntry
 }
 
 type IncrementalCollector struct {
@@ -2460,8 +2500,19 @@ func (data *CheckpointData) GetTNBlkBatchs() (
 		data.bats[BLKTNMetaDeleteIDX],
 		data.bats[BLKTNMetaDeleteTxnIDX]
 }
-func (collector *BaseCollector) PostLoop() {
-	collector.fillObjectInfoBatch()
+func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
+	if collector.isPrefetch {
+		collector.isPrefetch = false
+	} else {
+		return nil
+	}
+	err := collector.loadObjectInfo()
+	if err != nil {
+		return err
+	}
+	p := &catalog.LoopProcessor{}
+	p.SegmentFn = collector.VisitSeg
+	return c.RecurLoop(p)
 }
 func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 	if shouldIgnoreDBInLogtail(entry.ID) {
@@ -2656,61 +2707,116 @@ func (collector *BaseCollector) visitSegmentEntry(entry *catalog.SegmentEntry) e
 		return nil
 	}
 
-	needPrefetch, blk := entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
-	if needPrefetch {
-		blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
+	needPrefetch, _ := entry.NeedPrefetchObjectMetaForObjectInfo(mvccNodes)
+
+	if collector.isPrefetch {
+		if needPrefetch {
+			collector.segments = append(collector.segments, entry)
+		}
+	} else {
+		if needPrefetch {
+			collector.isPrefetch = true
+			logutil.Infof("checkpoint %v->%v, when try visit object, object %v need to load stats",
+				collector.start.ToString(),
+				collector.end.ToString(),
+				entry.ID.String())
+			if collector.data.bats[ObjectInfoIDX] != nil {
+				collector.data.bats[ObjectInfoIDX].Close()
+			}
+			if collector.segments == nil {
+				collector.segments = make([]*catalog.SegmentEntry, 0)
+			}
+			collector.segments = append(collector.segments, entry)
+		} else {
+			err := collector.fillObjectInfoBatch(entry, mvccNodes)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
-	collector.segments = append(collector.segments, entry)
-	if len(collector.segments) >= 100 {
-		collector.fillObjectInfoBatch()
-		collector.segments = collector.segments[:0]
-	}
 	return nil
 }
+func (collector *BaseCollector) loadObjectInfo() error {
+	logutil.Infof("checkpoint %v->%v, start to load object meta, total %d objects",
+		collector.start.ToString(),
+		collector.end.ToString(),
+		len(collector.segments))
+	t0 := time.Now()
+	batchCnt := 100
+	i := 0
+	for idx := 1; idx <= len(collector.segments); idx++ {
 
-func (collector *BaseCollector) fillObjectInfoBatch() error {
-	for _, entry := range collector.segments {
-		entry.RLock()
-		mvccNodes := entry.ClonePreparedInRange(collector.start, collector.end)
-		entry.RUnlock()
-		if len(mvccNodes) == 0 {
-			return nil
-		}
-		delStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
-		segDelBat := collector.data.bats[SEGDeleteIDX]
+		seg := collector.segments[idx]
+		blk := seg.GetFirstBlkEntry()
+		blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
 
-		for _, node := range mvccNodes {
-			if node.IsAborted() {
-				continue
-			}
-			if node.BaseNode.ObjectStats.IsZero() {
-				stats, err := entry.LoadObjectInfoWithTxnTS(node.Start)
+		for idx%batchCnt == 0 && i < idx {
+			seg := collector.segments[blkMetaInsBatch]
+			seg.RLock()
+			mvccNodes := seg.ClonePreparedInRange(collector.start, collector.end)
+			seg.RUnlock()
+			for _, node := range mvccNodes {
+				stats, err := seg.LoadObjectInfoWithTxnTS(node.Start)
 				if err != nil {
 					return err
 				}
 				node.BaseNode.ObjectStats = stats
-			}
-			visitObject(collector.data.bats[ObjectInfoIDX], entry, node)
-			segNode := node
-			if segNode.HasDropCommitted() {
-				vector.AppendFixed(
-					segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
-					objectio.HackObjid2Rowid(&entry.ID),
-					false,
-					common.DefaultAllocator,
-				)
-				vector.AppendFixed(
-					segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
-					segNode.GetEnd(),
-					false,
-					common.DefaultAllocator,
-				)
+
 			}
 		}
-		delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
-		collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	}
+	for ; i < len(collector.segments); i++ {
+		seg := collector.segments[i]
+		seg.RLock()
+		mvccNodes := seg.ClonePreparedInRange(collector.start, collector.end)
+		seg.RUnlock()
+		for _, node := range mvccNodes {
+			stats, err := seg.LoadObjectInfoWithTxnTS(node.Start)
+			if err != nil {
+				return err
+			}
+			node.BaseNode.ObjectStats = stats
+
+		}
+	}
+	logutil.Infof("checkpoint %v->%v, load %d object meta takes %v",
+		collector.start.ToString(),
+		collector.end.ToString(),
+		len(collector.segments),
+		time.Since(t0))
+	return nil
+}
+func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.SegmentEntry, mvccNodes []*catalog.MVCCNode[*catalog.ObjectMVCCNode]) error {
+	if len(mvccNodes) == 0 {
+		return nil
+	}
+	delStart := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
+	segDelBat := collector.data.bats[SEGDeleteIDX]
+
+	for _, node := range mvccNodes {
+		if node.IsAborted() {
+			continue
+		}
+		visitObject(collector.data.bats[ObjectInfoIDX], entry, node)
+		segNode := node
+		if segNode.HasDropCommitted() {
+			vector.AppendFixed(
+				segDelBat.GetVectorByName(catalog.AttrRowID).GetDownstreamVector(),
+				objectio.HackObjid2Rowid(&entry.ID),
+				false,
+				common.DefaultAllocator,
+			)
+			vector.AppendFixed(
+				segDelBat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector(),
+				segNode.GetEnd(),
+				false,
+				common.DefaultAllocator,
+			)
+		}
+	}
+	delEnd := collector.data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
+	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	return nil
 }
 

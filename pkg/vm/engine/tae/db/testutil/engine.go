@@ -602,7 +602,7 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	}
 	err := c.RecurLoop(p)
 	assert.NoError(t, err)
-	collector.PostLoop()
+	collector.PostLoop(c)
 	data2 := collector.OrphanData()
 	bats := data2.GetBatches()
 	ins2 := bats[logtail.BLKMetaInsertIDX]
