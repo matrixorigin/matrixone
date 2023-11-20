@@ -6452,6 +6452,16 @@ create_table_stmt:
             ClusterByOption: $11,
         }
     }
+|   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt stream_option_list_opt
+    {
+        $$ = &tree.CreateTable {
+            IsDynamicTable: true,
+            IfNotExists: $4,
+            Table: *$5,
+            AsSource: $7,
+            Options: $8,
+        }
+    }
 load_param_opt_2:
     load_param_opt tail_param_opt
     {

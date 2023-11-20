@@ -735,6 +735,9 @@ var (
 	}, {
 		input: "create table t (a int, b char, primary key idx (a, b))",
 	}, {
+		input:  "create dynamic table t as select a from t1",
+		output: "create dynamic table t as select a from t1",
+	}, {
 		input:  "create external table t (a int) infile 'data.txt'",
 		output: "create external table t (a int) infile 'data.txt'",
 	}, {

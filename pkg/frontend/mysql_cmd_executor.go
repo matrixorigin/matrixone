@@ -3426,7 +3426,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 
 			/*
-				Step 4: Serialize the execution plan by json
+				Step 4: Serialize the execution plan by json`
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				_ = cwft.RecordExecPlan(requestCtx)
