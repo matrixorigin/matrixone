@@ -264,6 +264,10 @@ func createCkpAndWriteDown(t *testing.T, ctx context.Context, tae *db.DB, cnt in
 		logtail.FillUsageBatOfIncremental(tae.Catalog, collector, tae.Runtime.Fs.Service)
 
 		tae.Catalog.RecurLoop(collector)
+		err := collector.PostLoop(tae.Catalog)
+		if err != nil {
+			panic(err)
+		}
 		incrCkpData := collector.OrphanData()
 		defer incrCkpData.Close()
 

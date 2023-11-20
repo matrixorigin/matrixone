@@ -386,23 +386,7 @@ func IncrementalCheckpointDataFactory(start, end types.TS,
 		if err != nil {
 			return
 		}
-		if collector.isPrefetch {
-			// deal with the left segments
-			err = collector.loadObjectInfo()
-			if err != nil {
-				return
-			}
-			p := &catalog.LoopProcessor{}
-			p.SegmentFn = collector.VisitSeg
-			err = c.RecurLoop(p)
-
-			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				err = nil
-			}
-			if err != nil {
-				return
-			}
-		}
+		err = collector.PostLoop(c)
 
 		if collectUsage {
 			// collecting usage only happened when do ckp
@@ -444,23 +428,7 @@ func GlobalCheckpointDataFactory(
 		if err != nil {
 			return
 		}
-		if collector.isPrefetch {
-			// deal with the left segments
-			err = collector.loadObjectInfo()
-			if err != nil {
-				return
-			}
-			p := &catalog.LoopProcessor{}
-			p.SegmentFn = collector.VisitSeg
-			err = c.RecurLoop(p)
-
-			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				err = nil
-			}
-			if err != nil {
-				return
-			}
-		}
+		err = collector.PostLoop(c)
 
 		FillUsageBatOfGlobal(c, collector, fs, ckpMetas)
 
@@ -2506,13 +2474,18 @@ func (collector *BaseCollector) PostLoop(c *catalog.Catalog) error {
 	} else {
 		return nil
 	}
+	collector.data.bats[ObjectInfoIDX] = makeRespBatchFromSchema(ObjectInfoSchema, common.CheckpointAllocator)
 	err := collector.loadObjectInfo()
 	if err != nil {
 		return err
 	}
 	p := &catalog.LoopProcessor{}
 	p.SegmentFn = collector.VisitSeg
-	return c.RecurLoop(p)
+	err = c.RecurLoop(p)
+	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+		err = nil
+	}
+	return err
 }
 func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 	if shouldIgnoreDBInLogtail(entry.ID) {
@@ -2747,7 +2720,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 	i := 0
 	for idx := 1; idx <= len(collector.segments); idx++ {
 
-		seg := collector.segments[idx]
+		seg := collector.segments[idx-1]
 		blk := seg.GetFirstBlkEntry()
 		blockio.PrefetchMeta(blk.GetBlockData().GetFs().Service, blk.GetMetaLoc())
 
