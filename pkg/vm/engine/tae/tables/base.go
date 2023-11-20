@@ -84,16 +84,16 @@ func (blk *baseBlock) GetRuntime() *dbutils.Runtime {
 	return blk.rt
 }
 
-func (blk *baseBlock) EstimateMemSize() int {
+func (blk *baseBlock) EstimateMemSize() (int, int) {
 	node := blk.PinNode()
 	defer node.Unref()
 	blk.RLock()
 	defer blk.RUnlock()
-	size := blk.mvcc.EstimateMemSizeLocked()
+	asize, dsize := blk.mvcc.EstimateMemSizeLocked()
 	if !node.IsPersisted() {
-		size += node.MustMNode().EstimateMemSize()
+		asize += node.MustMNode().EstimateMemSize()
 	}
-	return size
+	return asize, dsize
 }
 
 func (blk *baseBlock) PinNode() *Node {
