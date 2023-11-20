@@ -87,14 +87,6 @@ const (
 	CheckpointDir     = "ckp/"
 )
 
-type CKPType uint8
-
-const (
-	CKPType_Global CKPType = iota
-	CKPType_Incremental
-	CKPType_Backup
-)
-
 const (
 	CheckpointAttr_StartTS       = "start_ts"
 	CheckpointAttr_EndTS         = "end_ts"
