@@ -16,6 +16,8 @@ package plan
 
 import "math"
 
+const DefaultEvalSize = 1024
+
 type shuffleHeap struct {
 	left    *shuffleHeap
 	right   *shuffleHeap
@@ -118,8 +120,9 @@ func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nul
 
 }
 
-func (s *ShuffleRange) Eval(k int) {
-	if k <= 1 || s.size == 0 {
+func (s *ShuffleRange) Eval() {
+	k := DefaultEvalSize
+	if s.size == 0 {
 		return
 	}
 	var head *shuffleList

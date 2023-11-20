@@ -127,7 +127,6 @@ type ShuffleRangeTestCase struct {
 	min           []float64
 	max           []float64
 	expectoverlap float64
-	bucket        int
 }
 
 func TestShuffleRange(t *testing.T) {
@@ -136,7 +135,6 @@ func TestShuffleRange(t *testing.T) {
 		min:           []float64{},
 		max:           []float64{},
 		expectoverlap: 0,
-		bucket:        1024,
 	})
 	testcase[0].min = append(testcase[0].min, 0)
 	testcase[0].max = append(testcase[0].max, 10000)
@@ -159,7 +157,7 @@ func TestShuffleRange(t *testing.T) {
 			shufflerange.Update(testcase[i].min[j], testcase[i].max[j], 1000, 1)
 		}
 
-		shufflerange.Eval(testcase[i].bucket)
+		shufflerange.Eval()
 	}
 }
 

@@ -501,7 +501,7 @@ func shouldUseShuffleRange(s *ShuffleRange) []float64 {
 	if s == nil {
 		return nil
 	}
-	if s.Uniform < 0.1 {
+	if s.Uniform > 0.3 {
 		return nil
 	}
 	return s.Result
