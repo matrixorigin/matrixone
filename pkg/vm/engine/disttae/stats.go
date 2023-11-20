@@ -136,7 +136,7 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 		}
 		meta = objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
-		info.BlockNumber += obj.BlkCnt()
+		info.BlockNumber += int(obj.BlkCnt())
 		info.TableCnt += float64(meta.BlockHeader().Rows())
 		if !init {
 			init = true

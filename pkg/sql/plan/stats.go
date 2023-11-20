@@ -54,7 +54,7 @@ type StatsInfoMap struct {
 	DataTypeMap          map[string]types.T
 	NullCntMap           map[string]int64
 	ShuffleRangeMap      map[string]*ShuffleRange
-	BlockNumber          uint32
+	BlockNumber          int
 	AccurateObjectNumber int
 	ApproxObjectNumber   int //detect if block number changes , update stats info map
 	TableCnt             float64
@@ -109,7 +109,7 @@ type InfoFromZoneMap struct {
 	ColumnNDVs           []float64
 	NullCnts             []int64
 	ShuffleRanges        []*ShuffleRange
-	BlockNumber          uint32
+	BlockNumber          int
 	AccurateObjectNumber int
 	ApproxObjectNumber   int
 	TableCnt             float64
