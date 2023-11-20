@@ -80,14 +80,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	var pkFilterExprs []*Expr
 
-	//partitionPruneAble := false
 	var newPartitionExpr *Expr
 	if CNPrimaryCheck && len(pkPosInValues) > 0 {
 		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
 		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
 		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
-		//partitionPruneAble, newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
-		_, newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
+		newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
@@ -258,11 +256,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		query.StmtType = plan.Query_INSERT
 	}
 	reduceSinkSinkScanNodes(query)
-	// perform partition pruning on the partitioned table scan in the insert statement
-	//if partitionPruneAble {
-	//	subPlanPartitionPrune(builder, query)
-	//}
-
 	ReCalcQueryStats(builder, query)
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -478,17 +471,19 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 }
 
 // remapPartitionExpr Remap partition expression column references
-func remapPartitionExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues map[int]int) (bool, *Expr) {
+func remapPartitionExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues map[int]int) *Expr {
 	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
-		return false, nil
+		return nil
 	}
 
 	if tableDef.Partition == nil {
-		return false, nil
+		return nil
 	} else {
 		partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
-		res := remapPartExprColRef(partitionExpr, pkPosInValues, tableDef)
-		return res, partitionExpr
+		if remapPartExprColRef(partitionExpr, pkPosInValues, tableDef) {
+			return partitionExpr
+		}
+		return nil
 	}
 }
 

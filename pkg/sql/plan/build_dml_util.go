@@ -1335,7 +1335,9 @@ func makeInsertPlan(
 					lastNodeId = builder.appendNode(scanNode, bindCtx)
 					scanNode.BlockFilterList = blockFilterList
 
-					builder.partitionPrune(lastNodeId)
+					if scanTableDef.Partition != nil && partitionExpr != nil {
+						builder.partitionPrune(lastNodeId)
+					}
 				} else {
 					lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 					scanTableDef := DeepCopyTableDef(tableDef, false)
