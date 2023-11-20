@@ -151,9 +151,9 @@ type ExecInfo struct {
 	CnNumbers  int
 }
 
-///////////////////////////////
-// Data structures for refactor
-///////////////////////////////
+type emptyType struct{}
+
+var emptyStruct = emptyType{}
 
 type QueryBuilder struct {
 	qry     *plan.Query
@@ -178,7 +178,7 @@ type CTERef struct {
 	defaultDatabase string
 	isRecursive     bool
 	ast             *tree.CTE
-	maskedCTEs      map[string]any
+	maskedCTEs      map[string]emptyType
 }
 
 type aliasItem struct {
@@ -190,7 +190,7 @@ type BindContext struct {
 	binder Binder
 
 	cteByName              map[string]*CTERef
-	maskedCTEs             map[string]any
+	maskedCTEs             map[string]emptyType
 	normalCTE              bool
 	initSelect             bool
 	recSelect              bool
