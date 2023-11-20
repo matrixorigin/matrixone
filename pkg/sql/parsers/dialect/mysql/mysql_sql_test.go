@@ -82,7 +82,7 @@ var (
 		output: "select _wstart(ts), _wend(ts), max(temperature), min(temperature) from sensor_data where ts > 2023-08-01 00:00:00.000 and ts < 2023-08-01 00:50:00.000 interval(ts, 10, minute) sliding(5, minute) fill(prev)",
 	}, {
 		input:  "select cluster_centers(a) from t1;",
-		output: "select cluster_centers(a, 1,vector_l2_ops) from t1",
+		output: "select cluster_centers(a, 1,vector_l2_ops,random) from t1",
 	}, {
 		input:  "select cluster_centers(a spherical_kmeans '5') from t1;",
 		output: "select cluster_centers(a, 5) from t1",
@@ -92,6 +92,12 @@ var (
 	}, {
 		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops') from t1;",
 		output: "select cluster_centers(a, 5,vector_cosine_ops) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops,kmeansplusplus') from t1;",
+		output: "select cluster_centers(a, 5,vector_cosine_ops,kmeansplusplus) from t1",
+	}, {
+		input:  "select cluster_centers(a spherical_kmeans '5,vector_cosine_ops,random') from t1;",
+		output: "select cluster_centers(a, 5,vector_cosine_ops,random) from t1",
 	}, {
 		input:  "alter table t1 alter reindex idx1 IVFFLAT lists = 5",
 		output: "alter table t1 alter reindex idx1 ivfflat lists = 5",

@@ -37,6 +37,7 @@ type InitType uint16
 
 const (
 	Random InitType = iota
+	KmeansPlusPlus
 )
 
 // DistanceFunction is a function that computes the distance between two vectors

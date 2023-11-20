@@ -209,7 +209,7 @@ func validateArgs(vectorList [][]float64, clusterCnt,
 	if distanceType > 2 {
 		return moerr.NewInternalErrorNoCtx("distance type is not supported")
 	}
-	if initType != 0 {
+	if initType > 1 {
 		return moerr.NewInternalErrorNoCtx("init type is not supported")
 	}
 

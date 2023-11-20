@@ -8414,7 +8414,7 @@ separator_opt:
 
 spherical_kmeans_opt:
     {
-        $$ = "1,vector_l2_ops"
+        $$ = "1,vector_l2_ops,random"
     }
 |   SPHERICAL_KMEANS STRING
     {

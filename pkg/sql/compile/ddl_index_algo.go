@@ -205,6 +205,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 		return err
 	}
 	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
+	kmeansInitType := "kmeansplusplus"
 
 	// 2. Sampling SQL Logic
 	var sampleCnt = totalCnt
@@ -249,7 +250,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 		"ROW_NUMBER() OVER(), "+
 		"cast(`__mo_index_unnest_cols`.`value` as VARCHAR) "+
 		"FROM "+
-		"(SELECT cluster_centers(`%s` spherical_kmeans '%d,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
+		"(SELECT cluster_centers(`%s` spherical_kmeans '%d,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
 		"CROSS JOIN "+
 		"UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;",
 		insertSQL,
@@ -261,6 +262,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 		indexColumnName,
 		centroidParamsLists,
 		centroidParamsDistFn,
+		kmeansInitType,
 		sampleSQL,
 	)
 	_, err = c.Exec(clusterCentersSQL)

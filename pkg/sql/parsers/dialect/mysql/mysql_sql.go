@@ -11800,7 +11800,7 @@ yydefault:
 //line mysql_sql.y:3039
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				{
+				&tree.VarAssignmentExpr{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -19439,7 +19439,7 @@ yydefault:
 		yyDollar = yyS[yypt-0 : yypt+1]
 //line mysql_sql.y:8415
 		{
-			yyVAL.str = "1,vector_l2_ops"
+			yyVAL.str = "1,vector_l2_ops,random"
 		}
 	case 1385:
 		yyDollar = yyS[yypt-2 : yypt+1]

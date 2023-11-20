@@ -82,8 +82,8 @@ insert into t5 values(3, decode('be1ac03e485d083ef6bc723f','hex'));
 
 insert into t5 values(4, "[0,2,3]");
 
-insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- be1... is float32[5]
-insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- be1... is float32[2]
+insert into t5 values(5, decode('05486c3f3ee2863e713d503dd58e8e3e7b88743f','hex')); -- this is float32[5]
+insert into t5 values(6, decode('9be2123fcf92de3e','hex')); -- this is float32[2]
 
 select * from t5;
 select * from t5 where t5.b > "[0,0,0]";
