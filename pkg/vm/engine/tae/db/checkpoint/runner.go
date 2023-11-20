@@ -630,6 +630,7 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 	return
 }
 
+// Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
 func (r *runner) tryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
 	success = r.tryAddNewIncrementalCheckpointEntry(entry)
 	if !success {
@@ -642,11 +643,6 @@ func (r *runner) tryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success
 		e := it.Item()
 		e.ckpLSN = 0
 		e.truncateLSN = 0
-	}
-	it2 := r.storage.entries.Iter()
-	for it2.Next() {
-		e := it2.Item()
-		logutil.Infof("tryAddNewBackupCheckpointEntry is %d", e.ckpLSN)
 	}
 	return
 }
