@@ -86,15 +86,13 @@ const (
 	T_array_float32 T = 224 // In SQL , it is vecf32
 	T_array_float64 T = 225 // In SQL , it is vecf64
 
-	T_ObjStats T = 226
 	//note: max value of uint8 is 255
 )
 
 const (
-	TxnTsSize       = 12
-	RowidSize       = 24
-	BlockidSize     = 20
-	ObjectStatsSize = 145
+	TxnTsSize   = 12
+	RowidSize   = 24
+	BlockidSize = 20
 )
 
 type Type struct {
@@ -384,7 +382,6 @@ var Types map[string]T = map[string]T{
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
 	"blockid":               T_Blockid,
-	"object stats":          T_ObjStats,
 
 	"array float32": T_array_float32,
 	"array float64": T_array_float64,
@@ -583,8 +580,6 @@ func (t T) ToType() Type {
 		typ.Size = RowidSize
 	case T_Blockid:
 		typ.Size = BlockidSize
-	case T_ObjStats:
-		typ.Size = ObjectStatsSize
 	case T_json, T_blob, T_text:
 		typ.Size = VarlenaSize
 	case T_char:
