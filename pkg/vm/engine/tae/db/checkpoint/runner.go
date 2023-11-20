@@ -632,6 +632,7 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 
 // Since there is no wal after recovery, the checkpoint lsn before backup must be set to 0.
 func (r *runner) tryAddNewBackupCheckpointEntry(entry *CheckpointEntry) (success bool) {
+	entry.entryType = ET_Incremental
 	success = r.tryAddNewIncrementalCheckpointEntry(entry)
 	if !success {
 		return
