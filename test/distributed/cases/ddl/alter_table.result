@@ -56,10 +56,10 @@ ALTER TABLE t1 ADD UNIQUE idx1 (col2, col3);
 insert into t1 values(7, '1981-05-01','green', 26);
 Duplicate entry ('\(\d{4}-\d{2}-\d{2},\w{5}\)'|'\d{5}\w\d{17}\w\d{2}') for key '__mo_index_idx_col'
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t1    0    idx1    1    col2    A    0    NULL    NULL                    YES    NULL
-t1    0    idx1    2    col3    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    0    idx1    1    col2    A    0    NULL    NULL                        YES    NULL
+t1    0    idx1    2    col3    A    0    NULL    NULL                        YES    NULL
 select * from t1;
 col1    col2    col3    col4
 1    1980-12-17    Abby    21
@@ -70,36 +70,36 @@ col1    col2    col3    col4
 6    1981-05-01    green    26
 alter table t1 alter index idx1 invisible;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t1    0    idx1    1    col2    A    0    NULL    NULL                    NO    NULL
-t1    0    idx1    2    col3    A    0    NULL    NULL                    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    0    idx1    1    col2    A    0    NULL    NULL                        NO    NULL
+t1    0    idx1    2    col3    A    0    NULL    NULL                        NO    NULL
 alter table t1 alter index idx1 visible;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t1    0    idx1    1    col2    A    0    NULL    NULL                    YES    NULL
-t1    0    idx1    2    col3    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    0    idx1    1    col2    A    0    NULL    NULL                        YES    NULL
+t1    0    idx1    2    col3    A    0    NULL    NULL                        YES    NULL
 ALTER TABLE t1 DROP INDEX idx1;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
 ALTER TABLE t1 ADD UNIQUE INDEX idx2 (col2, col3);
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t1    0    idx2    1    col2    A    0    NULL    NULL                    YES    NULL
-t1    0    idx2    2    col3    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    0    idx2    1    col2    A    0    NULL    NULL                        YES    NULL
+t1    0    idx2    2    col3    A    0    NULL    NULL                        YES    NULL
 alter table t1 alter index idx2 invisible;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t1    0    idx2    1    col2    A    0    NULL    NULL                    NO    NULL
-t1    0    idx2    2    col3    A    0    NULL    NULL                    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t1    0    idx2    1    col2    A    0    NULL    NULL                        NO    NULL
+t1    0    idx2    2    col3    A    0    NULL    NULL                        NO    NULL
 ALTER TABLE t1 DROP INDEX idx2;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t1    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t1    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
 drop table t1;
 drop table if exists t2;
 CREATE TABLE t2(
@@ -117,14 +117,14 @@ insert into t2 values(5, '1981-09-28','bcvdf', 25);
 insert into t2 values(6, '1981-05-01','green', 26);
 ALTER TABLE t2 ADD INDEX index1 (col2);
 show index from t2;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t2    1    index1    1    col2    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t2    1    index1    1    col2    A    0    NULL    NULL                        YES    NULL
 alter table t2 alter index index1 invisible;
 show index from t2;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t2    1    index1    1    col2    A    0    NULL    NULL                    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t2    1    index1    1    col2    A    0    NULL    NULL                        NO    NULL
 select * from t2;
 col1    col2    col3    col4
 1    1980-12-17    Abby    21
@@ -135,24 +135,24 @@ col1    col2    col3    col4
 6    1981-05-01    green    26
 ALTER TABLE t2 DROP INDEX index1;
 show index from t2;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
 ALTER TABLE t2 ADD INDEX index2 (col2,col3);
 show index from t2;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t2    1    index2    1    col2    A    0    NULL    NULL                    YES    NULL
-t2    1    index2    2    col3    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t2    1    index2    1    col2    A    0    NULL    NULL                        YES    NULL
+t2    1    index2    2    col3    A    0    NULL    NULL                        YES    NULL
 alter table t2 alter index index2 invisible;
 show index from t2;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t2    1    index2    1    col2    A    0    NULL    NULL                    NO    NULL
-t2    1    index2    2    col3    A    0    NULL    NULL                    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t2    1    index2    1    col2    A    0    NULL    NULL                        NO    NULL
+t2    1    index2    2    col3    A    0    NULL    NULL                        NO    NULL
 ALTER TABLE t2 DROP INDEX index2;
 show index from t2;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t2    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t2    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
 drop table t2;
 drop table if exists t3;
 CREATE TABLE t3(
@@ -170,16 +170,16 @@ insert into t3 values(5, '1981-09-28','bcvdf', 25);
 insert into t3 values(6, '1981-05-01','green', 26);
 ALTER TABLE t3 ADD INDEX index1 (col2);
 show index from t3;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
-t3    1    index1    1    col2    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                        YES    NULL
+t3    1    index1    1    col2    A    0    NULL    NULL                        YES    NULL
 alter table t3 alter index index1 invisible;
 show index from t3;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
-t3    1    index1    1    col2    A    0    NULL    NULL                    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                        YES    NULL
+t3    1    index1    1    col2    A    0    NULL    NULL                        NO    NULL
 select * from t3;
 col1    col2    col3    col4
 1    1980-12-17    Abby    21
@@ -190,35 +190,35 @@ col1    col2    col3    col4
 6    1981-05-01    green    26
 ALTER TABLE t3 DROP INDEX index1;
 show index from t3;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                        YES    NULL
 ALTER TABLE t3 ADD UNIQUE INDEX index2 (col2,col3);
 show index from t3;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
-t3    0    index2    1    col2    A    0    NULL    NULL                    YES    NULL
-t3    0    index2    2    col3    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                        YES    NULL
+t3    0    index2    1    col2    A    0    NULL    NULL                        YES    NULL
+t3    0    index2    2    col3    A    0    NULL    NULL                        YES    NULL
 alter table t3 alter index index2 invisible;
 show index from t3;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
-t3    0    index2    1    col2    A    0    NULL    NULL                    NO    NULL
-t3    0    index2    2    col3    A    0    NULL    NULL                    NO    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                        YES    NULL
+t3    0    index2    1    col2    A    0    NULL    NULL                        NO    NULL
+t3    0    index2    2    col3    A    0    NULL    NULL                        NO    NULL
 ALTER TABLE t3 DROP INDEX index2;
 show index from t3;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                        YES    NULL
 create unique index idx3 on t3(col2,col3);
 show index from t3;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t3    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t3    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
-t3    0    idx3    1    col2    A    0    NULL    NULL                    YES    NULL
-t3    0    idx3    2    col3    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t3    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t3    0    PRIMARY    2    col2    A    0    NULL    NULL                        YES    NULL
+t3    0    idx3    1    col2    A    0    NULL    NULL                        YES    NULL
+t3    0    idx3    2    col3    A    0    NULL    NULL                        YES    NULL
 drop table t3;
 drop table if exists t4;
 CREATE TABLE t4(
@@ -241,13 +241,13 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 alter table t4 add constraint idx_6dotkott2kjsp8vw4d0m25fb7 index zxxxxx (col3);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 65 near " index zxxxxx (col3);";
 show index from t4;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t4    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t4    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
 alter table t4 add index zxxxxx(col3);
 show index from t4;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t4    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t4    1    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t4    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t4    1    zxxxxx    1    col3    A    0    NULL    NULL                        YES    NULL
 drop table t4;
 drop table if exists t5;
 CREATE TABLE t5(
@@ -267,33 +267,33 @@ alter table t5 add constraint unique key (col3, col4);
 alter table t5 add constraint unique key wwwww (col3, col4);
 alter table t5 add constraint idx_6dotkott2kjsp8vw4d0m25fb7 unique key zxxxxx (col3);
 show index from t5;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t5    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t5    0    col3    1    col3    A    0    NULL    NULL                    YES    NULL
-t5    0    col3    2    col4    A    0    NULL    NULL                    YES    NULL
-t5    0    wwwww    1    col3    A    0    NULL    NULL                    YES    NULL
-t5    0    wwwww    2    col4    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t5    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t5    0    col3    1    col3    A    0    NULL    NULL                        YES    NULL
+t5    0    col3    2    col4    A    0    NULL    NULL                        YES    NULL
+t5    0    wwwww    1    col3    A    0    NULL    NULL                        YES    NULL
+t5    0    wwwww    2    col4    A    0    NULL    NULL                        YES    NULL
 t5    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
 alter table t5 add unique key zxxxxx(col3);
 duplicate key name 'zxxxxx'
 show index from t5;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t5    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t5    0    col3    1    col3    A    0    NULL    NULL                    YES    NULL
-t5    0    col3    2    col4    A    0    NULL    NULL                    YES    NULL
-t5    0    wwwww    1    col3    A    0    NULL    NULL                    YES    NULL
-t5    0    wwwww    2    col4    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t5    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t5    0    col3    1    col3    A    0    NULL    NULL                        YES    NULL
+t5    0    col3    2    col4    A    0    NULL    NULL                        YES    NULL
+t5    0    wwwww    1    col3    A    0    NULL    NULL                        YES    NULL
+t5    0    wwwww    2    col4    A    0    NULL    NULL                        YES    NULL
 t5    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
 alter table t5 add constraint idx_6dotkott2kjsp8v unique key (col3);
 alter table t5 add constraint idx_6dotkott2kjsp8v unique key (col4);
 duplicate key name 'idx_6dotkott2kjsp8v'
 show index from t5;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t5    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
-t5    0    col3    1    col3    A    0    NULL    NULL                    YES    NULL
-t5    0    col3    2    col4    A    0    NULL    NULL                    YES    NULL
-t5    0    wwwww    1    col3    A    0    NULL    NULL                    YES    NULL
-t5    0    wwwww    2    col4    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t5    0    PRIMARY    1    col1    A    0    NULL    NULL                        YES    NULL
+t5    0    col3    1    col3    A    0    NULL    NULL                        YES    NULL
+t5    0    col3    2    col4    A    0    NULL    NULL                        YES    NULL
+t5    0    wwwww    1    col3    A    0    NULL    NULL                        YES    NULL
+t5    0    wwwww    2    col4    A    0    NULL    NULL                        YES    NULL
 t5    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
 t5    0    idx_6dotkott2kjsp8v    1    col3    A    0    NULL    NULL                    YES    NULL
 drop table t5;
@@ -317,59 +317,59 @@ Table    Create Table
 t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` TINYINT DEFAULT NULL,\n`c` SMALLINT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` BIGINT DEFAULT NULL,\n`f` TINYINT UNSIGNED DEFAULT NULL,\n`g` SMALLINT UNSIGNED DEFAULT NULL,\n`h` INT UNSIGNED DEFAULT NULL,\n`i` BIGINT UNSIGNED DEFAULT NULL,\n`j` FLOAT DEFAULT NULL,\n`k` DOUBLE DEFAULT NULL,\n`l` VARCHAR(255) DEFAULT NULL,\n`m` DATE DEFAULT NULL,\n`n` DATETIME DEFAULT NULL,\n`o` TIMESTAMP DEFAULT NULL,\n`p` BOOL DEFAULT NULL,\n`q` DECIMAL(5,2) DEFAULT NULL,\n`r` TEXT DEFAULT NULL\n) COMMENT='comment_3'
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
-b    TINYINT(8)    YES        null
-c    SMALLINT(16)    YES        null
-d    INT(32)    YES        null
-e    BIGINT(64)    YES        null
-f    TINYINT UNSIGNED(8)    YES        null
-g    SMALLINT UNSIGNED(16)    YES        null
-h    INT UNSIGNED(32)    YES        null
-i    BIGINT UNSIGNED(64)    YES        null
-j    FLOAT(0)    YES        null
-k    DOUBLE(0)    YES        null
-l    VARCHAR(255)    YES        null
-m    DATE(0)    YES        null
-n    DATETIME(0)    YES        null
-o    TIMESTAMP(0)    YES        null
-p    BOOL(0)    YES        null
-q    DECIMAL64(5)    YES        null
-r    TEXT(0)    YES        null
+a    INT(32)    YES        null        
+b    TINYINT(8)    YES        null        
+c    SMALLINT(16)    YES        null        
+d    INT(32)    YES        null        
+e    BIGINT(64)    YES        null        
+f    TINYINT UNSIGNED(8)    YES        null        
+g    SMALLINT UNSIGNED(16)    YES        null        
+h    INT UNSIGNED(32)    YES        null        
+i    BIGINT UNSIGNED(64)    YES        null        
+j    FLOAT(0)    YES        null        
+k    DOUBLE(0)    YES        null        
+l    VARCHAR(255)    YES        null        
+m    DATE(0)    YES        null        
+n    DATETIME(0)    YES        null        
+o    TIMESTAMP(0)    YES        null        
+p    BOOL(0)    YES        null        
+q    DECIMAL64(5)    YES        null        
+r    TEXT(0)    YES        null        
 alter table t5 drop column b, drop column c, drop column d, drop column e, drop column f, drop column g, drop column h;
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
-i    BIGINT UNSIGNED(64)    YES        null
-j    FLOAT(0)    YES        null
-k    DOUBLE(0)    YES        null
-l    VARCHAR(255)    YES        null
-m    DATE(0)    YES        null
-n    DATETIME(0)    YES        null
-o    TIMESTAMP(0)    YES        null
-p    BOOL(0)    YES        null
-q    DECIMAL64(5)    YES        null
-r    TEXT(0)    YES        null
+a    INT(32)    YES        null        
+i    BIGINT UNSIGNED(64)    YES        null        
+j    FLOAT(0)    YES        null        
+k    DOUBLE(0)    YES        null        
+l    VARCHAR(255)    YES        null        
+m    DATE(0)    YES        null        
+n    DATETIME(0)    YES        null        
+o    TIMESTAMP(0)    YES        null        
+p    BOOL(0)    YES        null        
+q    DECIMAL64(5)    YES        null        
+r    TEXT(0)    YES        null        
 alter table t5 drop column i, drop column j, drop column k, drop column l, drop column m, drop column n, drop column o;
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
-p    BOOL(0)    YES        null
-q    DECIMAL64(5)    YES        null
-r    TEXT(0)    YES        null
+a    INT(32)    YES        null        
+p    BOOL(0)    YES        null        
+q    DECIMAL64(5)    YES        null        
+r    TEXT(0)    YES        null        
 alter table t5 drop column p, drop column q, drop column r;
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null
+a    INT(32)    YES        null        
 alter table t5 drop column a;
 A table must have at least 1 column
 alter table t5 add column b int first, add column c int after b, add column d int first, add column f int after b;
 show columns from t5;
 Field    Type    Null    Key    Default    Extra    Comment
-d    INT(32)    YES        null
-b    INT(32)    YES        null
-f    INT(32)    YES        null
-c    INT(32)    YES        null
-a    INT(32)    YES        null
+d    INT(32)    YES        null        
+b    INT(32)    YES        null        
+f    INT(32)    YES        null        
+c    INT(32)    YES        null        
+a    INT(32)    YES        null        
 drop table t5;
 create table t5(a int primary key, b int, c int unique key);
 alter table t5 drop column a;
