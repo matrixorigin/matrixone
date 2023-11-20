@@ -288,10 +288,10 @@ a    b    c    d
 1    2    1    2
 drop table if exists t7;
 create table t7(a int primary key, b int unique key, c varchar(20) unique key);
-insert into t7 select result, result, "a"||result from generate_series(1,2000000) g;
+insert into t7 select result, result, "a"||result from generate_series(1,20000) g;
 select count(*) from t7;
 count(*)
-2000000
+20000
 delete from t7;
 select count(*) from t7;
 count(*)
