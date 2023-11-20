@@ -596,9 +596,21 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	err := buildTableDefs(stmt, ctx, createTable)
-	if err != nil {
-		return nil, err
+	var err error
+	if stmt.IsDynamicTable {
+		tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+		if err != nil {
+			return nil, err
+		}
+
+		createTable.TableDef.Cols = tableDef.Cols
+		createTable.TableDef.ViewSql = tableDef.ViewSql
+		createTable.TableDef.Defs = tableDef.Defs
+	} else {
+		err := buildTableDefs(stmt, ctx, createTable)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// set option
