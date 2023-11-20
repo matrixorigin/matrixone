@@ -79,8 +79,13 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, err
 	}
 	var pkFilterExprs []*Expr
+
+	partitionPruneAble := false
 	if CNPrimaryCheck && len(pkPosInValues) > 0 {
 		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
+		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
+		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
+		partitionPruneAble, _ = remapPartitionExpr(builder, tableDef, pkPosInValues)
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
@@ -252,7 +257,10 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}
 	reduceSinkSinkScanNodes(query)
 	// perform partition pruning on the partitioned table scan in the insert statement
-	subPlanPartitionPrune(builder, query)
+	if partitionPruneAble {
+		subPlanPartitionPrune(builder, query)
+	}
+
 	ReCalcQueryStats(builder, query)
 	return &Plan{
 		Plan: &plan.Plan_Query{
@@ -465,4 +473,57 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			return []*Expr{orExpr}
 		}
 	}
+}
+
+// remapPartitionExpr Remap partition expression column references
+func remapPartitionExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues map[int]int) (bool, *Expr) {
+	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
+		return false, nil
+	}
+
+	if tableDef.Partition == nil {
+		return false, nil
+	} else {
+		res := remapPartExprColRef(tableDef.Partition.PartitionExpression, pkPosInValues, tableDef)
+		return res, nil
+	}
+}
+
+// remapPartExprColRef Remap partition expression column references
+func remapPartExprColRef(expr *Expr, colMap map[int]int, tableDef *TableDef) bool {
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		cPos := ne.Col.ColPos
+		if ids, ok := colMap[int(cPos)]; ok {
+			ne.Col.RelPos = 0
+			ne.Col.ColPos = int32(ids)
+			ne.Col.Name = tableDef.Cols[cPos].Name
+		} else {
+			return false
+		}
+
+	case *plan.Expr_F:
+		for _, arg := range ne.F.GetArgs() {
+			if res := remapPartExprColRef(arg, colMap, tableDef); !res {
+				return false
+			}
+		}
+
+	case *plan.Expr_W:
+		if res := remapPartExprColRef(ne.W.WindowFunc, colMap, tableDef); !res {
+			return false
+		}
+
+		for _, arg := range ne.W.PartitionBy {
+			if res := remapPartExprColRef(arg, colMap, tableDef); !res {
+				return false
+			}
+		}
+		for _, order := range ne.W.OrderBy {
+			if res := remapPartExprColRef(order.Expr, colMap, tableDef); !res {
+				return false
+			}
+		}
+	}
+	return true
 }
