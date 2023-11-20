@@ -73,6 +73,7 @@ type Argument struct {
 	Conditions [][]*plan.Expr
 
 	HashOnPK           bool
+	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	info     *vm.OperatorInfo
