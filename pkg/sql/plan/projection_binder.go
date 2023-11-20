@@ -76,6 +76,18 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
+	if colPos, ok := b.ctx.sampleByAst[astStr]; ok {
+		return &plan.Expr{
+			Typ: b.ctx.sampleFunc.columns[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: b.ctx.sampleTag,
+					ColPos: colPos,
+				},
+			},
+		}, nil
+	}
+
 	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
 		if astStr != TimeWindowEnd && astStr != TimeWindowStart {
 			b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)

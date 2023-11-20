@@ -68,6 +68,10 @@ func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.pk = idx
 }
 
+func (w *BlockWriter) SetAppendable() {
+	w.writer.SetAppendable()
+}
+
 // WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
 func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
 	block, err := w.writer.Write(batch)
@@ -100,7 +104,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		}
 		index.SetZMSum(zm, columnData.GetDownstreamVector())
 		// Update column meta zonemap
-		w.writer.UpdateBlockZM(int(block.GetID()), seqnums[i], zm)
+		w.writer.UpdateBlockZM(objectio.SchemaData, int(block.GetID()), seqnums[i], zm)
 		// update object zonemap
 		w.objMetaBuilder.UpdateZm(i, zm)
 
@@ -125,7 +129,22 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 }
 
 func (w *BlockWriter) WriteTombstoneBatch(batch *batch.Batch) (objectio.BlockObject, error) {
-	return w.writer.WriteTombstone(batch)
+	block, err := w.writer.WriteTombstone(batch)
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range batch.Vecs {
+		columnData := containers.ToTNVector(vec, common.DefaultAllocator)
+		// Build ZM
+		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
+		if err = index.BatchUpdateZM(zm, columnData.GetDownstreamVector()); err != nil {
+			return nil, err
+		}
+		index.SetZMSum(zm, columnData.GetDownstreamVector())
+		// Update column meta zonemap
+		w.writer.UpdateBlockZM(objectio.SchemaTombstone, 0, uint16(i), zm)
+	}
+	return block, nil
 }
 
 func (w *BlockWriter) WriteSubBatch(batch *batch.Batch, dataType objectio.DataMetaType) (objectio.BlockObject, int, error) {
