@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"hash/crc32"
 	"runtime/debug"
 	"sync"
@@ -711,6 +712,24 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						MultiAggs:      arg.MultiAggs,
 						PartialResults: arg.PartialResults,
 					},
+				})
+			}
+		case vm.Sample:
+			flg = true
+			arg := in.Arg.(*sample.Argument)
+			s.Instructions = s.Instructions[i:]
+			s.Instructions[0] = vm.Instruction{
+				Op:  vm.Merge,
+				Idx: s.Instructions[0].Idx,
+				Arg: &merge.Argument{},
+			}
+
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
+					Op:      vm.Sample,
+					Idx:     in.Idx,
+					IsFirst: in.IsFirst,
+					Arg:     arg.SimpleDup(),
 				})
 			}
 		case vm.Offset:
