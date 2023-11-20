@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"hash/crc32"
 	"sync/atomic"
 	"time"
@@ -783,6 +784,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond: t.Conditions[1],
 			Result:    t.Result,
 			HashOnPk:  t.HashOnPK,
+			IsShuffle: t.IsShuffle,
 		}
 	case *shuffle.Argument:
 		in.Shuffle = &pipeline.Shuffle{}
@@ -839,6 +841,9 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Aggs:         convertToPipelineAggregates(t.Aggs),
 			MultiAggs:    convertPipelineMultiAggs(t.MultiAggs),
 		}
+	case *sample.Argument:
+		t.ConvertToPipelineOperator(in)
+
 	case *join.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Join = &pipeline.Join{
@@ -852,6 +857,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
 		}
 	case *left.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -866,6 +872,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
 		}
 	case *right.Argument:
 		rels, poses := getRelColList(t.Result)
@@ -881,6 +888,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
 		}
 	case *rightsemi.Argument:
 		in.RightSemiJoin = &pipeline.RightSemiJoin{
@@ -893,6 +901,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
 		}
 	case *rightanti.Argument:
 		in.RightAntiJoin = &pipeline.RightAntiJoin{
@@ -905,6 +914,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
 		}
 	case *limit.Argument:
 		in.Limit = t.Limit
@@ -957,9 +967,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *product.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
-			RelList: relList,
-			ColList: colList,
-			Types:   convertToPlanTypes(t.Typs),
+			RelList:   relList,
+			ColList:   colList,
+			Types:     convertToPlanTypes(t.Typs),
+			IsShuffle: t.IsShuffle,
 		}
 	case *projection.Argument:
 		in.ProjectList = t.Es
@@ -976,6 +987,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			RightCond:              t.Conditions[1],
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 			HashOnPk:               t.HashOnPK,
+			IsShuffle:              t.IsShuffle,
 		}
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
@@ -1188,8 +1200,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Conditions: [][]*plan.Expr{
 				t.LeftCond, t.RightCond,
 			},
-			Result:   t.Result,
-			HashOnPK: t.HashOnPk,
+			Result:    t.Result,
+			HashOnPK:  t.HashOnPk,
+			IsShuffle: t.IsShuffle,
 		}
 	case vm.Shuffle:
 		t := opr.GetShuffle()
@@ -1252,6 +1265,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Aggs:         convertToAggregates(t.Aggs),
 			MultiAggs:    convertToMultiAggs(t.MultiAggs),
 		}
+	case vm.Sample:
+		v.Arg = sample.GenerateFromPipelineOperator(opr)
+
 	case vm.Join:
 		t := opr.GetJoin()
 		v.Arg = &join.Argument{
@@ -1263,6 +1279,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 			HashOnPK:           t.HashOnPk,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Left:
 		t := opr.GetLeftJoin()
@@ -1275,6 +1292,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 			HashOnPK:           t.HashOnPk,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Right:
 		t := opr.GetRightJoin()
@@ -1288,6 +1306,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 			HashOnPK:           t.HashOnPk,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.RightSemi:
 		t := opr.GetRightSemiJoin()
@@ -1300,6 +1319,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 			HashOnPK:           t.HashOnPk,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.RightAnti:
 		t := opr.GetRightAntiJoin()
@@ -1312,6 +1332,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 			HashOnPK:           t.HashOnPk,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Limit:
 		v.Arg = &limit.Argument{Limit: opr.Limit}
@@ -1364,8 +1385,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.Product:
 		t := opr.GetProduct()
 		v.Arg = &product.Argument{
-			Result: convertToResultPos(t.RelList, t.ColList),
-			Typs:   convertToTypes(t.Types),
+			Result:    convertToResultPos(t.RelList, t.ColList),
+			Typs:      convertToTypes(t.Types),
+			IsShuffle: t.IsShuffle,
 		}
 	case vm.Projection:
 		v.Arg = &projection.Argument{Es: opr.ProjectList}
@@ -1382,6 +1404,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			Conditions:         [][]*plan.Expr{t.LeftCond, t.RightCond},
 			RuntimeFilterSpecs: t.RuntimeFilterBuildList,
 			HashOnPK:           t.HashOnPk,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Single:
 		t := opr.GetSingleJoin()

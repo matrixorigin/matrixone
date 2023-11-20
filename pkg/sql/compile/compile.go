@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"math"
 	"net"
 	"runtime"
@@ -948,6 +949,17 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ss = c.compileMergeGroup(n, ss, ns)
 			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 		}
+	case plan.Node_SAMPLE:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+
+		ss = c.compileSample(n, ss)
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_WINDOW:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -2466,6 +2478,37 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		Op:  vm.MergeLimit,
 		Idx: c.anal.curr,
 		Arg: constructMergeLimit(n, c.proc),
+	}
+	return []*Scope{rs}
+}
+
+func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		if containBrokenNode(ss[i]) {
+			ss[i] = c.newMergeScope([]*Scope{ss[i]})
+		}
+		ss[i].appendInstruction(vm.Instruction{
+			Op:      vm.Sample,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     constructSample(n),
+		})
+	}
+	c.anal.isFirst = false
+
+	rs := c.newMergeScope(ss)
+	if len(ss) == 1 {
+		return []*Scope{rs}
+	}
+
+	// should sample again if sample by rows.
+	if n.SampleFunc.Rows != plan2.NotSampleByRows {
+		rs.appendInstruction(vm.Instruction{
+			Op:      vm.Sample,
+			Idx:     c.anal.curr,
+			IsFirst: c.anal.isFirst,
+			Arg:     sample.NewMergeSample(constructSample(n)),
+		})
 	}
 	return []*Scope{rs}
 }

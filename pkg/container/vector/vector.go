@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,7 +41,7 @@ type Vector struct {
 	typ types.Type
 
 	// data of fixed length element, in case of varlen, the Varlena
-	col  any
+	col  typedSlice
 	data []byte
 
 	// area for holding large strings.
@@ -58,6 +59,29 @@ type Vector struct {
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+}
+
+type typedSlice struct {
+	Ptr  unsafe.Pointer
+	Cap  int
+	Type reflect.Type
+}
+
+func (t *typedSlice) setFromVector(v *Vector, typ reflect.Type) {
+	sz := int(v.typ.TypeSize())
+	if cap(v.data) >= sz {
+		t.Ptr = unsafe.Pointer(&v.data[0])
+		t.Cap = cap(v.data) / sz
+		t.Type = typ
+	}
+}
+
+func toTypedSlice[T any](slice *typedSlice) []T {
+	var v T
+	if t := reflect.TypeOf(v); t != slice.Type {
+		panic(fmt.Sprintf("type mismatch: %v %v", t, slice.Type))
+	}
+	return unsafe.Slice((*T)(slice.Ptr), slice.Cap)
 }
 
 func (v *Vector) GetSorted() bool {
@@ -181,14 +205,14 @@ func GetFixedAt[T any](v *Vector, idx int) T {
 	if v.IsConst() {
 		idx = 0
 	}
-	return v.col.([]T)[idx]
+	return toTypedSlice[T](&v.col)[idx]
 }
 
 func (v *Vector) GetBytesAt(i int) []byte {
 	if v.IsConst() {
 		i = 0
 	}
-	bs := v.col.([]types.Varlena)
+	bs := toTypedSlice[types.Varlena](&v.col)
 	return bs[i].GetByteSlice(v.area)
 }
 
@@ -220,7 +244,7 @@ func (v *Vector) GetStringAt(i int) string {
 	if v.IsConst() {
 		i = 0
 	}
-	bs := v.col.([]types.Varlena)
+	bs := toTypedSlice[types.Varlena](&v.col)
 	return bs[i].GetString(v.area)
 }
 
@@ -229,7 +253,7 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	if v.IsConst() {
 		i = 0
 	}
-	bs := v.col.([]types.Varlena)
+	bs := toTypedSlice[types.Varlena](&v.col)
 	return types.GetArray[T](&bs[i], v.area)
 }
 
@@ -382,7 +406,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 		mp.Free(v.area)
 	}
 	v.class = FLAT
-	v.col = nil
+	v.col = typedSlice{}
 	v.data = nil
 	v.area = nil
 	v.capacity = 0
@@ -1455,7 +1479,7 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				v.area = area[:len(v.area)]
 			}
-			vs := v.col.([]types.Varlena)
+			vs := toTypedSlice[types.Varlena](&v.col)
 			var err error
 			for i := range ws {
 				if nulls.Contains(&w.nsp, uint64(i)) {
@@ -2060,7 +2084,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	}
 
 	if v.GetType().IsVarlen() {
-		err := BuildVarlenaFromValena(v, &v.col.([]types.Varlena)[oldLen], &w.col.([]types.Varlena)[sel], &w.area, mp)
+		err := BuildVarlenaFromValena(v, &toTypedSlice[types.Varlena](&v.col)[oldLen], &toTypedSlice[types.Varlena](&w.col)[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
@@ -2115,11 +2139,11 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	if v.GetType().IsVarlen() {
 		var err error
 		var va types.Varlena
-		err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[sel], &w.area, mp)
+		err = BuildVarlenaFromValena(v, &va, &toTypedSlice[types.Varlena](&w.col)[sel], &w.area, mp)
 		if err != nil {
 			return err
 		}
-		col := v.col.([]types.Varlena)
+		col := toTypedSlice[types.Varlena](&v.col)
 		for i := oldLen; i < v.length; i++ {
 			col[i] = va
 		}
@@ -2167,11 +2191,11 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[0], &w.area, mp)
+			err = BuildVarlenaFromValena(v, &va, &toTypedSlice[types.Varlena](&w.col)[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
-			col := v.col.([]types.Varlena)
+			col := toTypedSlice[types.Varlena](&v.col)
 			for i := oldLen; i < v.length; i++ {
 				col[i] = va
 			}
@@ -2187,8 +2211,8 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 
 	if v.GetType().IsVarlen() {
 		var err error
-		vCol := v.col.([]types.Varlena)
-		wCol := w.col.([]types.Varlena)
+		vCol := toTypedSlice[types.Varlena](&v.col)
+		wCol := toTypedSlice[types.Varlena](&w.col)
 		if !w.GetNulls().EmptyByFlag() {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
@@ -2280,11 +2304,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		} else if v.GetType().IsVarlen() {
 			var err error
 			var va types.Varlena
-			err = BuildVarlenaFromValena(v, &va, &w.col.([]types.Varlena)[0], &w.area, mp)
+			err = BuildVarlenaFromValena(v, &va, &toTypedSlice[types.Varlena](&w.col)[0], &w.area, mp)
 			if err != nil {
 				return err
 			}
-			col := v.col.([]types.Varlena)
+			col := toTypedSlice[types.Varlena](&v.col)
 			for i := oldLen; i < v.length; i++ {
 				col[i] = va
 			}
@@ -2300,8 +2324,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 
 	if v.GetType().IsVarlen() {
 		var err error
-		vCol := v.col.([]types.Varlena)
-		wCol := w.col.([]types.Varlena)
+		vCol := toTypedSlice[types.Varlena](&v.col)
+		wCol := toTypedSlice[types.Varlena](&w.col)
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
 				for i := 0; i < cnt; i++ {
@@ -2512,7 +2536,7 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 		}
 	}
 	vec.class = CONSTANT
-	col := vec.col.([]T)
+	col := toTypedSlice[T](&vec.col)
 	col[0] = val
 	vec.data = vec.data[:cap(vec.data)]
 	vec.SetLength(length)
@@ -2527,7 +2551,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 		}
 	}
 	vec.class = CONSTANT
-	col := vec.col.([]types.Varlena)
+	col := toTypedSlice[types.Varlena](&vec.col)
 	err = BuildVarlenaFromByteSlice(vec, &col[0], &val, mp)
 	if err != nil {
 		return err
@@ -2547,7 +2571,7 @@ func SetConstArray[T types.RealNumbers](vec *Vector, val []T, length int, mp *mp
 		}
 	}
 	vec.class = CONSTANT
-	col := vec.col.([]types.Varlena)
+	col := toTypedSlice[types.Varlena](&vec.col)
 	err = BuildVarlenaFromArray[T](vec, &col[0], &val, mp)
 	if err != nil {
 		return err
@@ -2734,7 +2758,7 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 	if isNull {
 		nulls.Add(&vec.nsp, uint64(length))
 	} else {
-		col := vec.col.([]T)
+		col := toTypedSlice[T](&vec.col)
 		col[length] = val
 	}
 	return nil
@@ -2780,7 +2804,7 @@ func appendMultiFixed[T any](vec *Vector, val T, isNull bool, cnt int, mp *mpool
 	if isNull {
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
-		col := vec.col.([]T)
+		col := toTypedSlice[T](&vec.col)
 		for i := 0; i < cnt; i++ {
 			col[length+i] = val
 		}
@@ -2799,7 +2823,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	if isNull {
 		nulls.AddRange(&vec.nsp, uint64(length), uint64(length+cnt))
 	} else {
-		col := vec.col.([]types.Varlena)
+		col := toTypedSlice[types.Varlena](&vec.col)
 		err = BuildVarlenaFromByteSlice(vec, &va, &val, mp)
 		if err != nil {
 			return err
@@ -2937,7 +2961,7 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 	}
 	v.data = data
 	v.setupColFromData()
-	ws := v.col.([]T)[:ns]
+	ws := toTypedSlice[T](&v.col)[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(&v.nsp, sels, false)
 	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
@@ -3060,8 +3084,8 @@ func (v *Vector) CloneWindowTo(w *Vector, start, end int, mp *mpool.MPool) error
 		}
 		w.length = end - start
 		if v.GetType().IsVarlen() {
-			vCol := v.col.([]types.Varlena)
-			wCol := w.col.([]types.Varlena)
+			vCol := toTypedSlice[types.Varlena](&v.col)
+			wCol := toTypedSlice[types.Varlena](&w.col)
 			for i := start; i < end; i++ {
 				if !nulls.Contains(&v.nsp, uint64(i)) {
 					bs := vCol[i].GetByteSlice(v.area)

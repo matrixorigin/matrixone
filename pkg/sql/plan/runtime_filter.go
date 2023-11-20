@@ -71,7 +71,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	leftChild := builder.qry.Nodes[node.Children[0]]
 
 	// TODO: build runtime filters deeper than 1 level
-	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Stats.Outcnt < MinProbeTableRows {
+	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Stats.Cost < MinProbeTableRows {
 		return
 	}
 
@@ -80,20 +80,20 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	leftTags := make(map[int32]any)
+	leftTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = nil
+		leftTags[tag] = emptyStruct
 	}
 
-	rightTags := make(map[int32]any)
+	rightTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = nil
+		rightTags[tag] = emptyStruct
 	}
 
 	var probeExprs, buildExprs []*plan.Expr
 
 	for _, expr := range node.OnList {
-		if equi := isEquiCond(expr, leftTags, rightTags); equi {
+		if isEquiCond(expr, leftTags, rightTags) {
 			args := expr.GetF().Args
 			if !CheckExprIsMonotonic(builder.GetContext(), args[0]) {
 				return
