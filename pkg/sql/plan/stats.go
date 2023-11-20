@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -775,7 +776,10 @@ func needStats(tableDef *TableDef) bool {
 	case "sys_async_task", "sys_cron_task":
 		return false
 	}
-	return !strings.HasPrefix(tableDef.Name, "mo_")
+	if strings.HasPrefix(tableDef.Name, "mo_") || (strings.HasPrefix(tableDef.Name, "__mo_") && !strings.HasPrefix(tableDef.Name, "__mo_index")) {
+		return false
+	}
+	return true
 }
 
 func DefaultHugeStats() *plan.Stats {

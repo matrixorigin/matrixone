@@ -289,14 +289,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_JOIN:
-		leftTags := make(map[int32]any)
+		leftTags := make(map[int32]emptyType)
 		for _, tag := range builder.enumerateTags(node.Children[0]) {
-			leftTags[tag] = nil
+			leftTags[tag] = emptyStruct
 		}
 
-		rightTags := make(map[int32]any)
+		rightTags := make(map[int32]emptyType)
 		for _, tag := range builder.enumerateTags(node.Children[1]) {
-			rightTags[tag] = nil
+			rightTags[tag] = emptyStruct
 		}
 
 		var markTag int32
@@ -688,7 +688,7 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 }
 
 /*
-func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
+func getJoinCondLeftCol(cond *Expr, leftTags map[int32]emptyType) *plan.Expr_Col {
 	fun, ok := cond.Expr.(*plan.Expr_F)
 	if !ok || fun.F.Func.ObjName != "=" {
 		return nil
@@ -870,14 +870,14 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 		return
 	}
 
-	leftTags := make(map[int32]any)
+	leftTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = nil
+		leftTags[tag] = emptyStruct
 	}
 
-	rightTags := make(map[int32]any)
+	rightTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = nil
+		rightTags[tag] = emptyStruct
 	}
 
 	exprs := make([]*plan.Expr, 0)
@@ -917,25 +917,31 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 
 }
 
-func (builder *QueryBuilder) useUniqueSecondaryIndices(nodeID int32) int32 {
+func (builder *QueryBuilder) autoUseIndices(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 
-	for i, childID := range node.Children {
-		node.Children[i] = builder.useUniqueSecondaryIndices(childID)
-	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		return builder.useIndicesForPointSelect(nodeID, node)
 
-	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
+	case plan.Node_JOIN:
+		return builder.useIndicesForJoin(nodeID, node)
+
+	default:
+		for i, childID := range node.Children {
+			node.Children[i] = builder.autoUseIndices(childID)
+		}
+
+		return nodeID
+	}
+}
+
+func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.Node) int32 {
+	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
 
-	colName2Idx := make(map[string]int)
-
-	for i, idxDef := range node.TableDef.Indexes {
-		if len(idxDef.Parts) == 1 {
-			colName2Idx[idxDef.Parts[0]] = i
-		}
-	}
-
+	col2filter := make(map[int32]int)
 	for i, expr := range node.FilterList {
 		fn, ok := expr.Expr.(*plan.Expr_F)
 		if !ok {
@@ -944,6 +950,12 @@ func (builder *QueryBuilder) useUniqueSecondaryIndices(nodeID int32) int32 {
 
 		if !IsEqualFunc(fn.F.Func.Obj) {
 			continue
+		}
+
+		if _, ok := fn.F.Args[0].Expr.(*plan.Expr_C); ok {
+			if _, ok := fn.F.Args[1].Expr.(*plan.Expr_Col); ok {
+				fn.F.Args[0], fn.F.Args[1] = fn.F.Args[1], fn.F.Args[0]
+			}
 		}
 
 		col, ok := fn.F.Args[0].Expr.(*plan.Expr_Col)
@@ -955,33 +967,86 @@ func (builder *QueryBuilder) useUniqueSecondaryIndices(nodeID int32) int32 {
 			continue
 		}
 
-		idx, ok := colName2Idx[col.Col.Name]
-		if !ok {
+		col2filter[col.Col.ColPos] = i
+	}
+
+	filterIdx := make([]int, 0, len(col2filter))
+	for _, idxDef := range node.TableDef.Indexes {
+		if !idxDef.Unique {
+			continue
+		}
+
+		filterIdx = filterIdx[:0]
+		for _, part := range idxDef.Parts {
+			colIdx := node.TableDef.Name2ColIndex[part]
+			idx, ok := col2filter[colIdx]
+			if !ok {
+				break
+			}
+
+			filterIdx = append(filterIdx, idx)
+		}
+
+		if len(filterIdx) != len(idxDef.Parts) {
 			continue
 		}
 
 		idxTag := builder.genNewTag()
-		rfTag := builder.genNewTag()
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
 
-		origCol := fn.F.Args[0]
-		idxCol := &plan.Expr{
-			Typ: DeepCopyType(origCol.Typ),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTag,
-					ColPos: 0,
+		builder.nameByColRef[[2]int32{idxTag, 0}] = idxTableDef.Name + "." + idxTableDef.Cols[0].Name
+		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
+
+		var idxFilter *plan.Expr
+		if len(idxDef.Parts) == 1 {
+			idx := filterIdx[0]
+
+			idxFilter = node.FilterList[idx]
+			col := idxFilter.Expr.(*plan.Expr_F).F.Args[0].Expr.(*plan.Expr_Col).Col
+			col.RelPos = idxTag
+			col.ColPos = 0
+
+			node.FilterList = append(node.FilterList[:idx], node.FilterList[idx+1:]...)
+		} else {
+			serialArgs := make([]*plan.Expr, len(filterIdx))
+			for i := range filterIdx {
+				serialArgs[i] = node.FilterList[filterIdx[i]].Expr.(*plan.Expr_F).F.Args[1]
+			}
+			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+				{
+					Typ: DeepCopyType(idxTableDef.Cols[0].Typ),
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: idxTag,
+							ColPos: 0,
+						},
+					},
 				},
-			},
-		}
-		fn.F.Args[0] = idxCol
+				rightArg,
+			})
 
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, node.TableDef.Indexes[idx].IndexTableName)
+			hitFilterSet := make(map[int]emptyType)
+			for i := range filterIdx {
+				hitFilterSet[filterIdx[i]] = emptyStruct
+			}
+
+			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-len(filterIdx))
+			for i, filter := range node.FilterList {
+				if _, ok := hitFilterSet[i]; !ok {
+					newFilterList = append(newFilterList, filter)
+				}
+			}
+
+			node.FilterList = newFilterList
+		}
+
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:        plan.Node_TABLE_SCAN,
 			ObjRef:          idxObjRef,
 			TableDef:        idxTableDef,
-			FilterList:      []*plan.Expr{expr},
-			BlockFilterList: []*plan.Expr{DeepCopyExpr(expr)},
+			FilterList:      []*plan.Expr{idxFilter},
+			BlockFilterList: []*plan.Expr{DeepCopyExpr(idxFilter)},
 			BindingTags:     []int32{idxTag},
 		}, builder.ctxByNode[nodeID])
 
@@ -996,16 +1061,8 @@ func (builder *QueryBuilder) useUniqueSecondaryIndices(nodeID int32) int32 {
 			},
 		}
 
-		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
-		node.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{
-			{
-				Tag:  rfTag,
-				Expr: pkExpr,
-			},
-		}
-
 		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			DeepCopyExpr(pkExpr),
+			pkExpr,
 			{
 				Typ: DeepCopyType(pkExpr.Typ),
 				Expr: &plan.Expr_Col{
@@ -1020,25 +1077,33 @@ func (builder *QueryBuilder) useUniqueSecondaryIndices(nodeID int32) int32 {
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
 			OnList:   []*plan.Expr{joinCond},
-			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
-				{
-					Tag: rfTag,
-					Expr: &plan.Expr{
-						Typ: DeepCopyType(pkExpr.Typ),
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: 0,
-								ColPos: 0,
-							},
-						},
-					},
-				},
-			},
 		}, builder.ctxByNode[nodeID])
 
+		ReCalcNodeStats(nodeID, builder, false, true)
 		nodeID = joinNodeID
+
 		break
 	}
+
+	return nodeID
+}
+
+func (builder *QueryBuilder) useIndicesForJoin(nodeID int32, node *plan.Node) int32 {
+	node.Children[1] = builder.autoUseIndices(node.Children[1])
+
+	leftChild := builder.qry.Nodes[node.Children[0]]
+	if leftChild.NodeType != plan.Node_TABLE_SCAN {
+		node.Children[0] = builder.autoUseIndices(node.Children[0])
+		return nodeID
+	}
+
+	newLeftChildID := builder.useIndicesForPointSelect(node.Children[0], leftChild)
+	if newLeftChildID != node.Children[0] {
+		node.Children[0] = newLeftChildID
+		return nodeID
+	}
+
+	// TODO
 
 	return nodeID
 }
