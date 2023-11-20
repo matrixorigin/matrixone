@@ -1578,6 +1578,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 			Terminated: n.ExternScan.Terminated,
 			EnclosedBy: n.ExternScan.EnclosedBy[0],
 		}
+		param.JsonData = n.ExternScan.JsonType
 	}
 	if param.ScanType == tree.S3 {
 		if err := plan2.InitS3Param(param); err != nil {

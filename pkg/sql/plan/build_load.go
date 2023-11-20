@@ -87,6 +87,11 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy}
 		terminated = stmt.Param.Tail.Fields.Terminated
 	}
+
+	if !loadFormatIsValid(stmt.Param) {
+		return nil, moerr.NewNYI(ctx.GetContext(), "load format '%s'", stmt.Param.Format)
+	}
+
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
 		Stats:       &plan.Stats{},
@@ -100,6 +105,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			IgnoredLines: uint64(stmt.Param.Tail.IgnoredLines),
 			EnclosedBy:   enclosedBy,
 			Terminated:   terminated,
+			JsonType:     stmt.Param.JsonData,
 		},
 	}
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
@@ -150,6 +156,14 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		},
 	}
 	return pn, nil
+}
+
+func loadFormatIsValid(param *tree.ExternParam) bool {
+	switch param.Format {
+	case tree.JSONLINE, tree.CSV:
+		return true
+	}
+	return false
 }
 
 func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {
