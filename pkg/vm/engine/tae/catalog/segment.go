@@ -45,8 +45,7 @@ type SegmentEntry struct {
 	//link.head and tail is nil when new a segmentEntry object.
 	link *common.GenericSortedDList[*BlockEntry]
 	*SegmentNode
-	segData    data.Segment
-	objectInfo *objectio.ObjectStats
+	segData data.Segment
 }
 
 type SegStat struct {
@@ -304,8 +303,16 @@ func (entry *SegmentEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (*objectio.
 		objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectNameWithObjectID(&entry.ID))
 		return stats, nil
 	}
-	if entry.objectInfo != nil && !entry.objectInfo.IsZero() {
-		return entry.objectInfo, nil
+
+	entry.LoopChain(func(n *MVCCNode[*ObjectMVCCNode]) bool {
+		if n.BaseNode.ObjectStats != nil && !n.BaseNode.ObjectStats.IsZero() {
+			stats = n.BaseNode.ObjectStats.Clone()
+			return false
+		}
+		return true
+	})
+	if !stats.IsZero() {
+		return stats, nil
 	}
 	metaLoc := node.BaseNode.MetaLoc
 
