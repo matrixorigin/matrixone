@@ -397,6 +397,10 @@ func (d *DiskCache) evict(ctx context.Context) {
 			return nil //ignore
 		}
 		if entry.IsDir() {
+			// try remove if empty. for cleaning old structure
+			if path != d.path {
+				os.Remove(path)
+			}
 			return nil
 		}
 		if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
@@ -474,16 +478,14 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	}
 	return filepath.Join(
 		d.path,
-		toOSPath(path),
-		fmt.Sprintf("%d-%d%s", entry.Offset, entry.Size, cacheFileSuffix),
+		fmt.Sprintf("%d-%d%s%s", entry.Offset, entry.Size, toOSPath(path), cacheFileSuffix),
 	)
 }
 
 func (d *DiskCache) pathForFile(path string) string {
 	return filepath.Join(
 		d.path,
-		toOSPath(path),
-		fmt.Sprintf("full%s", cacheFileSuffix),
+		fmt.Sprintf("full%s%s", toOSPath(path), cacheFileSuffix),
 	)
 }
 
@@ -494,11 +496,12 @@ func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, file := filepath.Split(path)
-	if file != fmt.Sprintf("full%s", cacheFileSuffix) {
+	if !strings.HasPrefix(path, "full") {
 		return "", ErrNotCacheFile
 	}
-	return fromOSPath(dir), nil
+	path = strings.TrimPrefix(path, "full")
+	path = strings.TrimSuffix(path, cacheFileSuffix)
+	return fromOSPath(path), nil
 }
 
 func (d *DiskCache) waitUpdateComplete(path string) {

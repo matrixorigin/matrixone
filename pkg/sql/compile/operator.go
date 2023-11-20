@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -108,6 +109,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions: t.Conditions,
 			Result:     t.Result,
 			HashOnPK:   t.HashOnPK,
+			IsShuffle:  t.IsShuffle,
 		}
 	case vm.Group:
 		t := sourceIns.Arg.(*group.Argument)
@@ -136,6 +138,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Left:
 		t := sourceIns.Arg.(*left.Argument)
@@ -148,6 +151,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Right:
 		t := sourceIns.Arg.(*right.Argument)
@@ -161,6 +165,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.RightSemi:
 		t := sourceIns.Arg.(*rightsemi.Argument)
@@ -173,6 +178,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.RightAnti:
 		t := sourceIns.Arg.(*rightanti.Argument)
@@ -185,6 +191,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Limit:
 		t := sourceIns.Arg.(*limit.Argument)
@@ -246,8 +253,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Product:
 		t := sourceIns.Arg.(*product.Argument)
 		res.Arg = &product.Argument{
-			Result: t.Result,
-			Typs:   t.Typs,
+			Result:    t.Result,
+			Typs:      t.Typs,
+			IsShuffle: t.IsShuffle,
 		}
 	case vm.Projection:
 		t := sourceIns.Arg.(*projection.Argument)
@@ -270,6 +278,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			Conditions:         t.Conditions,
 			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
 			HashOnPK:           t.HashOnPK,
+			IsShuffle:          t.IsShuffle,
 		}
 	case vm.Single:
 		t := sourceIns.Arg.(*single.Argument)
@@ -743,6 +752,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -763,6 +773,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -779,6 +790,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -798,6 +810,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -816,6 +829,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -834,6 +848,7 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 		Conditions:         constructJoinConditions(conds, proc),
 		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 		HashOnPK:           n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:          n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -877,6 +892,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 		Cond:       cond,
 		Conditions: constructJoinConditions(conds, proc),
 		HashOnPK:   n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK,
+		IsShuffle:  n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle,
 	}
 }
 
@@ -1767,7 +1783,7 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
+	if !ok || !plan2.IsEqualFunc(e.F.Func.GetObj()) {
 		panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
@@ -1782,7 +1798,7 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !plan2.SupportedJoinCondition(e.F.Func.GetObj()) {
+			if !plan2.IsEqualFunc(e.F.Func.GetObj()) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}
