@@ -145,6 +145,8 @@ func (km *ElkanClusterer) InitCentroids() {
 	switch km.initType {
 	case kmeans.Random:
 		initializer = NewRandomInitializer()
+	case kmeans.KmeansPlusPlus:
+		initializer = NewKMeansPlusPlusInitializer(km.distFn)
 	default:
 		initializer = NewRandomInitializer()
 	}
