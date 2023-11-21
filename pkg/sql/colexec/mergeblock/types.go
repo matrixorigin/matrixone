@@ -72,7 +72,7 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 		typs = append(typs, *src.Vecs[idx].GetType())
 	}
 
-	// src comes old CN which haven't object stats column
+	// src comes from old CN which haven't object stats column
 	if src.Attrs[len(src.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
 		attrs = append(attrs, catalog.ObjectMeta_ObjectStats)
 		typs = append(typs, types.T_binary.ToType())
@@ -101,7 +101,7 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	}
 }
 
-func splitObjectStats(arg *Argument, proc *process.Process, bat *batch.Batch, blkByte []byte) {
+func splitObjectStats(arg *Argument, proc *process.Process, bat *batch.Batch, blkByte []byte) error {
 	var statsBytes []byte
 
 	// bat comes from old CN, no object stats vec in it.
@@ -116,14 +116,14 @@ func splitObjectStats(arg *Argument, proc *process.Process, bat *batch.Batch, bl
 
 		fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 		if err != nil {
-			logutil.Error("get fs failed when split object stats")
-			return
+			logutil.Errorf("get fs failed when split object stats", err)
+			return err
 		}
 
 		var meta objectio.ObjectMeta
 		if meta, err = objectio.FastLoadObjectMeta(proc.Ctx, &loc, false, fs); err != nil {
-			logutil.Error("fast load object meta failed when split object stats")
-			return
+			logutil.Errorf("fast load object meta failed when split object stats", err)
+			return err
 		}
 		dataMeta := meta.MustDataMeta()
 
@@ -153,10 +153,11 @@ func splitObjectStats(arg *Argument, proc *process.Process, bat *batch.Batch, bl
 	for _, tarBat := range arg.container.mp {
 		vector.SetConstBytes(tarBat.Vecs[1], statsBytes, 1, proc.GetMPool())
 	}
+	return nil
 }
 
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
-	// meta loc and(maybe) object stats
+	// meta loc and object stats
 	arg.GetMetaLocBat(bat, proc)
 	tblIdx := vector.MustFixedCol[int16](bat.GetVector(0))
 	blockInfos := vector.MustBytesCol(bat.GetVector(1))
@@ -183,7 +184,9 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 
 	// exist s3 returned blk info, split it
 	if !onlyData {
-		splitObjectStats(arg, proc, bat, blockInfos[0])
+		if err := splitObjectStats(arg, proc, bat, blockInfos[0]); err != nil {
+			return err
+		}
 	}
 
 	for _, b := range arg.container.mp {
