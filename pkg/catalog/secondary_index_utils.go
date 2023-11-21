@@ -66,8 +66,20 @@ const (
 )
 
 const (
-	KmeansSamplePerCentroid = 50
+	KmeansSamplePerList = 50
 )
+
+// CalcSampleCount is used to calculate the sample count for Kmeans index.
+func CalcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
+	sampleCnt = totalCnt
+	if sampleCnt > lists*KmeansSamplePerList {
+		sampleCnt = lists * KmeansSamplePerList
+	}
+	if totalCnt > 10_000 && sampleCnt < 10_000 {
+		sampleCnt = 10000
+	}
+	return sampleCnt
+}
 
 /* 1. ToString Functions */
 

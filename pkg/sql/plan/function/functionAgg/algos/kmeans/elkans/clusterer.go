@@ -146,10 +146,10 @@ func (km *ElkanClusterer) InitCentroids() error {
 	case kmeans.Random:
 		initializer = NewRandomInitializer()
 	case kmeans.KmeansPlusPlus:
-		// NOTE: Do not use Kmeans++ for large datasets, it is very slow. Use it with sampling only.
-		// The sampling rule could be sampleCnt = 50 * k.
-		if km.vectorCnt > km.clusterCnt*catalog.KmeansSamplePerCentroid {
-			return moerr.NewInternalErrorNoCtx("kmeans++ is not supported for large scale clustering")
+		expectedVectorCnt := int(catalog.CalcSampleCount(int64(km.clusterCnt), int64(km.vectorCnt)))
+		if km.vectorCnt > expectedVectorCnt {
+			return moerr.NewInternalErrorNoCtx("kmeans++ is not supported for large scale clustering. "+
+				"Sample it to %d vectors and try again", expectedVectorCnt)
 		}
 		initializer = NewKMeansPlusPlusInitializer(km.distFn)
 	default:
