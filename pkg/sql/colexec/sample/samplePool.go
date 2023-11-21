@@ -587,7 +587,7 @@ func (sp *singlePool) addByPercent(proc *process.Process, column sampleColumn, b
 
 func (sp *singlePool) addRow(proc *process.Process, mp *mpool.MPool, column sampleColumn, bat *batch.Batch, row int) (err error) {
 	if column.isNull(row) {
-		return
+		return sp.data.appendInvalidRow(proc, mp, bat, row)
 	}
 
 	sp.seen++
@@ -737,7 +737,7 @@ func (p *multiPool) addByPercent(proc *process.Process, columns sampleColumnList
 
 func (p *multiPool) addRow(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int) (err error) {
 	if columns.isAllNull(row) {
-		return
+		return p.data.appendInvalidRow(proc, mp, bat, row)
 	}
 
 	if !p.full {
