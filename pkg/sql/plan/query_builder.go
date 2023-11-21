@@ -1487,6 +1487,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false)
 
 		builder.partitionPrune(rootID)
+
+		rootID = builder.autoUseIndices(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
 		determineHashOnPK(rootID, builder)
@@ -1496,7 +1498,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// new optimize rule should be put before
 
 		builder.pushdownRuntimeFilters(rootID)
-		rootID = builder.useUniqueSecondaryIndices(rootID)
 
 		builder.rewriteStarApproxCount(rootID)
 
@@ -1934,11 +1935,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, moerr.NewSyntaxError(builder.GetContext(), "WITH query name %q specified more than once", name)
 			}
 
-			var maskedCTEs map[string]any
+			var maskedCTEs map[string]emptyType
 			if len(maskedNames) > 0 {
-				maskedCTEs = make(map[string]any)
+				maskedCTEs = make(map[string]emptyType)
 				for _, mask := range maskedNames {
-					maskedCTEs[mask] = nil
+					maskedCTEs[mask] = emptyStruct
 				}
 			}
 
@@ -3426,11 +3427,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				}
 
 				viewName := viewStmt.Name.ObjectName
-				var maskedCTEs map[string]any
+				var maskedCTEs map[string]emptyType
 				if len(ctx.cteByName) > 0 {
-					maskedCTEs = make(map[string]any)
+					maskedCTEs = make(map[string]emptyType)
 					for name := range ctx.cteByName {
-						maskedCTEs[name] = nil
+						maskedCTEs[name] = emptyStruct
 					}
 				}
 				defaultDatabase := viewData.DefaultDatabase
@@ -3781,13 +3782,13 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 
 	default:
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
-			leftCols := make(map[string]any)
+			leftCols := make(map[string]emptyType)
 			for _, binding := range leftCtx.bindings {
 				for i, col := range binding.cols {
 					if binding.colIsHidden[i] {
 						continue
 					}
-					leftCols[col] = nil
+					leftCols[col] = emptyStruct
 				}
 			}
 
