@@ -54,6 +54,7 @@ type ShuffleRange struct {
 	Overlap   float64
 	Uniform   float64
 	Result    []float64
+	tableName string
 }
 
 func (t *shuffleHeap) Merge(s *shuffleHeap) *shuffleHeap {
@@ -96,8 +97,8 @@ func (t *shuffleHeap) Pop() (*shuffleHeap, *shuffleHeap) {
 	return t.left.Merge(t.right), t
 }
 
-func NewShuffleRange(isString bool) *ShuffleRange {
-	return &ShuffleRange{isStrType: isString}
+func NewShuffleRange(isString bool, tableName string) *ShuffleRange {
+	return &ShuffleRange{isStrType: isString, tableName: tableName}
 }
 func (s *ShuffleRange) UpdateString(zmmin []byte, zmmax []byte, rowCount uint32, nullCount uint32) {
 	if len(zmmin) > 8 {
@@ -382,7 +383,7 @@ func (s *ShuffleRange) Eval() {
 				s.Result[i] = s.Result[i] * 256
 			}
 			if i == len(s.Result)-1 {
-				logutil.Infof("!!  shuffle string %v", str)
+				logutil.Infof("!!  shuffle table %v string %v", s.tableName, str)
 			}
 		}
 	}

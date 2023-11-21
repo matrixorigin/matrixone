@@ -149,14 +149,14 @@ func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl
 				if info.ColumnNDVs[idx] > 100 {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
-						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
+						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false, tbl.tableName)
 						if info.ColumnZMs[idx].IsInited() {
 							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
 							maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
 							info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
 						}
 					case types.T_varchar, types.T_char, types.T_text:
-						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
+						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true, tbl.tableName)
 						if info.ColumnZMs[idx].IsInited() {
 							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
 						}
