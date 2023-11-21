@@ -805,6 +805,7 @@ message ExternScan {
     uint64 ignored_lines = 4;
     bytes  enclosed_by = 5;
     string terminated = 6;
+	string json_type = 7;
 }
 
 message LockTarget {
