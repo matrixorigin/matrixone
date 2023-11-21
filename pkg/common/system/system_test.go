@@ -18,18 +18,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCPU(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	st := stopper.NewStopper("test")
+	defer st.Stop()
+	Run(st)
 	mcpu := NumCPU()
 	time.Sleep(2 * time.Second)
-	acpu := AvailableCPU()
-	require.Equal(t, true, mcpu >= acpu)
+	acpu := CPUAvailable()
+	require.Equal(t, true, float64(mcpu) >= acpu)
 }
 
 func TestMemory(t *testing.T) {
-	totalMemory := TotalMemory()
-	availableMemory := AvailableMemory()
+	totalMemory := MemoryTotal()
+	availableMemory := MemoryAvailable()
 	require.Equal(t, true, totalMemory >= availableMemory)
 }

@@ -15,76 +15,234 @@
 package system
 
 import (
+	"context"
 	"math"
+	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
-	"github.com/mackerelio/go-osstat/cpu"
-	"github.com/mackerelio/go-osstat/memory"
+	"github.com/elastic/gosigar"
+	"github.com/elastic/gosigar/cgroup"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-// return the total number of cpu in the system
+var (
+	// pid is the process ID.
+	pid int
+	// cpuNum is the total number of CPU of this node.
+	cpuNum int
+	// memoryTotal is the total memory of this node.
+	memoryTotal uint64
+	// cpuUsage is the CPU statistics updated every second.
+	cpuUsage atomic.Uint64
+)
+
+// InContainer returns if the process is running in a container.
+func InContainer() bool {
+	return pid == 1
+}
+
+// NumCPU return the total number of CPU of this node.
 func NumCPU() int {
-	return numcpu
+	return cpuNum
 }
 
-// return the available number of cpu in the system
-func AvailableCPU() int {
+// CPUAvailable returns the available cpu of this node.
+func CPUAvailable() float64 {
 	usage := math.Float64frombits(cpuUsage.Load())
-	return int(math.Round((1 - usage) * float64(numcpu)))
+	return math.Round((1 - usage) * float64(cpuNum))
 }
 
-// return the total size of memory in the system
-func TotalMemory() int {
-	st, err := memory.Get()
+func getCGroupReader() (*cgroup.Reader, error) {
+	reader, err := cgroup.NewReader("", true)
 	if err != nil {
-		panic(err)
+		logutil.Errorf("failed to create cgroup reader: %v", err)
+		return nil, err
 	}
-	return int(st.Total)
+	return reader, nil
 }
 
-// return the available size of memory in the system
-func AvailableMemory() int {
-	st, err := memory.Get()
+func getCGroupStats() (*cgroup.Stats, error) {
+	reader, err := getCGroupReader()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return int(st.Free)
+	stats, err := reader.GetStatsForProcess(pid)
+	if err != nil || stats == nil {
+		logutil.Errorf("failed to get cgroup stats: %v", err)
+		return nil, err
+	}
+	return stats, nil
 }
 
-// return the total size of golang's memory in the system
-func GolangMemory() int {
+// MemoryTotal returns the total size of memory of this node.
+func MemoryTotal() uint64 {
+	return memoryTotal
+}
+
+// MemoryAvailable returns the available size of memory of this node.
+func MemoryAvailable() uint64 {
+	if InContainer() {
+		stats, err := getCGroupStats()
+		if err != nil {
+			return 0
+		}
+		return stats.Memory.Mem.Limit - stats.Memory.Mem.Usage
+	}
+	s := gosigar.ConcreteSigar{}
+	mem, err := s.GetMem()
+	if err != nil {
+		logutil.Errorf("failed to get memory stats: %v", err)
+	}
+	return mem.Free
+}
+
+func MemoryUsed() uint64 {
+	if InContainer() {
+		stats, err := getCGroupStats()
+		if err != nil {
+			return 0
+		}
+		return stats.Memory.Mem.Usage
+	}
+	s := gosigar.ConcreteSigar{}
+	mem, err := s.GetMem()
+	if err != nil {
+		logutil.Errorf("failed to get memory stats: %v", err)
+	}
+	return mem.Used
+}
+
+func MemoryMaxUsage() uint64 {
+	if InContainer() {
+		stats, err := getCGroupStats()
+		if err != nil {
+			return 0
+		}
+		return stats.Memory.Mem.MaxUsage
+	}
+	logutil.Warnf("process does not run in a container, cannot get max usage of memory")
+	return 0
+}
+
+func MemoryFailCount() uint64 {
+	if InContainer() {
+		stats, err := getCGroupStats()
+		if err != nil {
+			return 0
+		}
+		return stats.Memory.Mem.FailCount
+	}
+	logutil.Warnf("process does not run in a container, cannot get fail count of memory")
+	return 0
+}
+
+// MemoryGolang returns the total size of golang's memory.
+func MemoryGolang() int {
 	var ms runtime.MemStats
-
 	runtime.ReadMemStats(&ms)
 	return int(ms.Alloc)
 }
 
-// return the number of goroutine in the system
+// GoRoutines returns the number of goroutine.
 func GoRoutines() int {
 	return runtime.NumGoroutine()
 }
 
-func init() {
-	numcpu = runtime.NumCPU()
-	go func() {
-		var oldSt *cpu.Stats
-
+func runWithContainer(stopper *stopper.Stopper) {
+	if err := stopper.RunNamedTask("system runner", func(ctx context.Context) {
+		reader, err := getCGroupReader()
+		if err != nil {
+			return
+		}
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			st, err := cpu.Get()
-			if err != nil {
-				panic(err)
+		var prevStats *cgroup.Stats
+		for {
+			select {
+			case <-ticker.C:
+				stats, err := reader.GetStatsForProcess(pid)
+				if err != nil || stats == nil {
+					logutil.Errorf("failed to get cgroup stats: %v", err)
+					continue
+				}
+				if prevStats != nil {
+					work := stats.CPUAccounting.Stats.UserNanos + stats.CPUAccounting.Stats.SystemNanos -
+						(prevStats.CPUAccounting.Stats.UserNanos + prevStats.CPUAccounting.Stats.SystemNanos)
+					total := stats.CPUAccounting.TotalNanos - prevStats.CPUAccounting.TotalNanos
+					if total != 0 {
+						usage := float64(work) / float64(total)
+						cpuUsage.Store(math.Float64bits(usage))
+					}
+				}
+				prevStats = stats
+
+			case <-ctx.Done():
+				return
 			}
-			if oldSt != nil {
-				total := (st.User + st.Nice + st.System + st.Idle + st.Iowait + st.Irq) -
-					(oldSt.User + oldSt.Nice + oldSt.System + oldSt.Idle + oldSt.Iowait + oldSt.Irq)
-				work := (st.User + st.Nice + st.System) - (oldSt.User + oldSt.Nice + oldSt.System)
-				usage := float64(work) / float64(total)
-				cpuUsage.Store(math.Float64bits(usage))
-			}
-			oldSt = st
 		}
-	}()
+	}); err != nil {
+		logutil.Errorf("failed to start system runner: %v", err)
+	}
+}
+
+func runWithoutContainer(stopper *stopper.Stopper) {
+	if err := stopper.RunNamedTask("system runner", func(ctx context.Context) {
+		s := gosigar.ConcreteSigar{}
+		cpuC, stopC := s.CollectCpuStats(time.Second)
+		for {
+			select {
+			case cpu := <-cpuC:
+				work := cpu.User + cpu.Nice + cpu.Sys
+				total := cpu.Total()
+				if total != 0 {
+					usage := float64(work) / float64(total)
+					cpuUsage.Store(math.Float64bits(usage))
+				}
+
+			case <-ctx.Done():
+				stopC <- struct{}{}
+				return
+			}
+		}
+	}); err != nil {
+		logutil.Errorf("failed to start system runner: %v", err)
+	}
+}
+
+// Run starts a new goroutine go calculate the CPU usage.
+func Run(stopper *stopper.Stopper) {
+	if InContainer() {
+		runWithContainer(stopper)
+	} else {
+		runWithoutContainer(stopper)
+	}
+}
+
+func init() {
+	pid = os.Getpid()
+	if InContainer() {
+		stats, err := getCGroupStats()
+		if err != nil {
+			logutil.Errorf("failed to get cgroup stats: %v", err)
+		} else {
+			if stats.CPU.CFS.PeriodMicros != 0 {
+				cpuNum = int(stats.CPU.CFS.QuotaMicros / stats.CPU.CFS.PeriodMicros)
+			} else {
+				cpuNum = runtime.NumCPU()
+			}
+			memoryTotal = stats.Memory.Mem.Limit
+		}
+	} else {
+		cpuNum = runtime.NumCPU()
+		s := gosigar.ConcreteSigar{}
+		mem, err := s.GetMem()
+		if err != nil {
+			logutil.Errorf("failed to get memory stats: %v", err)
+		} else {
+			memoryTotal = mem.Total
+		}
+	}
 }

@@ -1443,8 +1443,6 @@ github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 h1:6E+4a0GO5zZEnZ
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0/go.mod h1:zJYVVT2jmtg6P3p1VtQj7WsuWi/y4VnjVBn7F8KPB3I=
 github.com/lyft/protoc-gen-star v0.6.0/go.mod h1:TGAoBVkt8w7MPG72TrKIu85MIdXwDuzJYeZuUPFPNwA=
 github.com/lyft/protoc-gen-star v0.6.1/go.mod h1:TGAoBVkt8w7MPG72TrKIu85MIdXwDuzJYeZuUPFPNwA=
-github.com/mackerelio/go-osstat v0.2.4 h1:qxGbdPkFo65PXOb/F/nhDKpF2nGmGaCFDLXoZjJTtUs=
-github.com/mackerelio/go-osstat v0.2.4/go.mod h1:Zy+qzGdZs3A9cuIqmgbJvwbmLQH9dJvtio5ZjJTbdlQ=
 github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/magiconair/properties v1.8.1/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/magiconair/properties v1.8.6 h1:5ibWZ6iY0NctNGWo87LalDlEZ6R41TqbbDamhfG/Qzo=
@@ -1459,6 +1457,8 @@ github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004 h1:Hwxz
 github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
 github.com/matrixorigin/goetty/v2 v2.0.0-20230811091418-ff72333eabdc h1:8TnqMJjZh1RAcb/V5pRV2z2PBdx5b0qV50itcuxOfG8=
 github.com/matrixorigin/goetty/v2 v2.0.0-20230811091418-ff72333eabdc/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
+github.com/matrixorigin/gosigar v0.14.3-0.20231121102214-89a79017cdcd h1:YuVxj5IXtF/sznOW1LDbW+TN8LDFpsOf9Fhn7Fzj0eM=
+github.com/matrixorigin/gosigar v0.14.3-0.20231121102214-89a79017cdcd/go.mod h1:iXRIGg2tLnu7LBdpqzyQfGDEidKCfWcCMS0WKyPWoMs=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:+SmZP2bG+YcO/ntzjCleCu6hFTJiue7Oj2tftpJKTlU=
 github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/matrixorigin/memberlist v0.5.1-0.20230322082342-95015c95ee76 h1:MpmqMPooJ0Ea7W4ldIGbQV4D3z+sEiCu6C6aTibiwiQ=
@@ -2184,6 +2184,7 @@ golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
 golang.org/x/sync v0.4.0 h1:zxkM55ReGkDlKSM+Fu41A+zmbZuaPVbGMzvvdUPznYQ=
 golang.org/x/sync v0.4.0/go.mod h1:FU7BRWz2tNW+3quACPkgCx/L+uEAv1htQ0V83Z9Rj+Y=
 golang.org/x/sys v0.0.0-20180807162357-acbc56fc7007/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
+golang.org/x/sys v0.0.0-20180810173357-98c5dad5d1a0/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20180823144017-11551d06cbcc/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20180830151530-49385e6e1522/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20180905080454-ebe1bf3edb33/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=

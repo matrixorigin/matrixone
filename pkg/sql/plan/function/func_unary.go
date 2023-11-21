@@ -26,12 +26,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/system"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -465,13 +462,19 @@ func MoMemory(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return opUnaryStrToFixedWithErrorCheck(ivecs, result, proc, length, func(v string) (int64, error) {
 		switch v {
 		case "go":
-			return int64(system.GolangMemory()), nil
+			return int64(system.MemoryGolang()), nil
 		case "total":
-			return int64(system.TotalMemory()), nil
+			return int64(system.MemoryTotal()), nil
+		case "used":
+			return int64(system.MemoryUsed()), nil
 		case "available":
-			return int64(system.AvailableMemory()), nil
+			return int64(system.MemoryAvailable()), nil
+		case "max-usage":
+			return int64(system.MemoryMaxUsage()), nil
+		case "fail-count":
+			return int64(system.MemoryFailCount()), nil
 		default:
-			return -1, moerr.NewInvalidInput(proc.Ctx, "no memory command name")
+			return -1, moerr.NewInvalidInput(proc.Ctx, "unsupported memory command: %s", v)
 		}
 	})
 }
@@ -490,7 +493,7 @@ func MoCPU(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		case "total":
 			return int64(system.NumCPU()), nil
 		case "available":
-			return int64(system.AvailableCPU()), nil
+			return int64(system.CPUAvailable()), nil
 		default:
 			return -1, moerr.NewInvalidInput(proc.Ctx, "no cpu command name")
 		}
