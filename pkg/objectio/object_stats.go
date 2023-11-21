@@ -137,6 +137,10 @@ func SetObjectStatsObjectName(stats *ObjectStats, name ObjectName) error {
 	return setHelper(stats, objectNameOffset, name)
 }
 
+func SetObjectStatsShortName(stats *ObjectStats, name *ObjectNameShort) error {
+	return setHelper(stats, objectNameOffset, name[:])
+}
+
 func SetObjectStatsExtent(stats *ObjectStats, extent Extent) error {
 	return setHelper(stats, extentOffset, extent)
 }

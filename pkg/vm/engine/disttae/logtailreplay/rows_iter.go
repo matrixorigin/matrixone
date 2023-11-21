@@ -29,7 +29,7 @@ type RowsIter interface {
 
 type rowsIter struct {
 	ts           types.TS
-	iter         *btree.IterG[RowEntry]
+	iter         btree.IterG[RowEntry]
 	firstCalled  bool
 	lastRowID    types.Rowid
 	checkBlockID bool
@@ -112,7 +112,7 @@ func (p *rowsIter) Close() error {
 type primaryKeyIter struct {
 	ts          types.TS
 	spec        PrimaryKeyMatchSpec
-	iter        *btree.IterG[*PrimaryIndexEntry]
+	iter        btree.IterG[*PrimaryIndexEntry]
 	firstCalled bool
 	rows        *btree.BTreeG[RowEntry]
 	curRow      RowEntry

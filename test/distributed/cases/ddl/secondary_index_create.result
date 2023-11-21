@@ -136,7 +136,7 @@ t1    0    PRIMARY    1    id    A    0    NULL    NULL                        Y
 t1    1    idx7    1    name    A    0    NULL    NULL    YES    btree                YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx7` USING `btree` (`name`)\n)
+t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx7` USING btree (`name`)\n)
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx7";
 name    type    column_name
 idx7    MULTIPLE    name
@@ -151,7 +151,7 @@ t1    0    PRIMARY    1    id    A    0    NULL    NULL                        Y
 t1    1    idx8    1    name    A    0    NULL    NULL    YES    ivfflat            {"lists":"10","similarity_function":"l2"}    YES    NULL
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx8` USING `ivfflat` (`name`) lists 10 similarity_function 'l2'\n)
+t1    CREATE TABLE `t1` (\n`id` INT NOT NULL,\n`name` VARCHAR(255) DEFAULT NULL,\n`age` INT DEFAULT NULL,\nPRIMARY KEY (`id`),\nKEY `idx8` USING ivfflat (`name`) lists 10 similarity_function 'l2'\n)
 select name, type, column_name from mo_catalog.mo_indexes where name="idx8"; -- TODO: this output will change.
 name    type    column_name
 idx8    MULTIPLE    name

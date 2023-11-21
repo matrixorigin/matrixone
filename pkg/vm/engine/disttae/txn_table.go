@@ -138,6 +138,10 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		return 0, err
 	}
 	onObjFn := func(obj logtailreplay.ObjectEntry) error {
+		if obj.Rows() != 0 {
+			rows += int64(obj.Rows())
+			return nil
+		}
 		var err error
 		location := obj.Location()
 		if objMeta, err = objectio.FastLoadObjectMeta(
@@ -869,10 +873,10 @@ func (tbl *txnTable) rangesOnePart(
 			if skipBlk {
 				continue
 			}
-			bid := *blkMeta.GetBlockID(obj.Loc.Name())
+			bid := *blkMeta.GetBlockID(obj.Location().Name())
 			metaLoc := blockio.EncodeLocation(
-				obj.Loc.Name(),
-				obj.Loc.Extent(),
+				obj.Location().Name(),
+				obj.Location().Extent(),
 				blkMeta.GetRows(),
 				blkMeta.GetID(),
 			)
@@ -882,7 +886,7 @@ func (tbl *txnTable) rangesOnePart(
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 				CommitTs:   obj.CommitTS,
-				SegmentID:  obj.SegmentID,
+				SegmentID:  *obj.ObjectShortName().Segmentid(),
 			}
 			if obj.HasDeltaLoc {
 				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
@@ -1077,11 +1081,11 @@ func (tbl *txnTable) tryFastRanges(
 					continue
 				}
 			}
-			bid := *blkMeta.GetBlockID(obj.Loc.Name())
+			bid := *blkMeta.GetBlockID(obj.Location().Name())
 			metaLoc := blockio.EncodeLocation(
-				obj.Loc.Name(),
+				obj.Location().Name(),
 				//blkMeta.GetExtent(),
-				obj.Loc.Extent(),
+				obj.Location().Extent(),
 				blkMeta.GetRows(),
 				blkMeta.GetID(),
 			)
@@ -1091,7 +1095,7 @@ func (tbl *txnTable) tryFastRanges(
 				Sorted:     obj.Sorted,
 				MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 				CommitTs:   obj.CommitTS,
-				SegmentID:  obj.SegmentID,
+				SegmentID:  *obj.ObjectShortName().Segmentid(),
 			}
 			if obj.HasDeltaLoc {
 				deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)
@@ -1925,10 +1929,10 @@ func (tbl *txnTable) updateDeleteInfo(
 				blkCnt := objDataMeta.BlockCount()
 				for i := 0; i < int(blkCnt); i++ {
 					blkMeta := objDataMeta.GetBlockMeta(uint32(i))
-					bid := *blkMeta.GetBlockID(obj.Loc.Name())
+					bid := *blkMeta.GetBlockID(obj.Location().Name())
 					metaLoc := blockio.EncodeLocation(
-						obj.Loc.Name(),
-						obj.Loc.Extent(),
+						obj.Location().Name(),
+						obj.Location().Extent(),
 						blkMeta.GetRows(),
 						blkMeta.GetID(),
 					)
@@ -1938,7 +1942,7 @@ func (tbl *txnTable) updateDeleteInfo(
 						Sorted:     obj.Sorted,
 						MetaLoc:    *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0])),
 						CommitTs:   obj.CommitTS,
-						SegmentID:  obj.SegmentID,
+						SegmentID:  *obj.ObjectShortName().Segmentid(),
 					}
 					if obj.HasDeltaLoc {
 						deltaLoc, commitTs, ok := state.GetBockDeltaLoc(blkInfo.BlockID)

@@ -65,6 +65,11 @@ func Test_ObjectStats(t *testing.T) {
 	loc := BuildLocation([]byte{0x3f}, []byte{0x7f}, 0, 0)
 	require.Nil(t, SetObjectStatsLocation(stats, loc))
 	require.True(t, bytes.Equal(stats.ObjectLocation(), loc))
+
+	x := BuildObjectBlockid(objName, 0)
+	s := ShortName(x)
+	SetObjectStatsShortName(stats, s)
+	require.True(t, bytes.Equal(stats.ObjectShortName()[:], s[:]))
 }
 
 func TestObjectStats_Clone(t *testing.T) {
