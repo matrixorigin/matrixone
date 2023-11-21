@@ -299,9 +299,9 @@ show create table index01;
 Table    Create Table
 index01    CREATE TABLE `index01` (\n`a` INT NOT NULL,\n`bnew` CHAR(10) DEFAULT NULL,\n`c` DATE DEFAULT NULL,\n`d` DECIMAL(7,2) DEFAULT NULL,\nUNIQUE KEY `a` (`a`,`bnew`)\n)
 show index from index01;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                    YES    NULL
-index01    0    a    2    bnew    A    0    NULL    NULL    YES                YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+index01    0    a    1    a    A    0    NULL    NULL                        YES    NULL
+index01    0    a    2    bnew    A    0    NULL    NULL    YES                    YES    NULL
 insert into index01 (a, b, c, d) values (5, 'bh', '1999-01-01', 3000);
 Unknown column 'b' in 'index01'
 insert into index01 (a, bnew, c, d) values (5, 'bh', '1999-01-01', 3000);
@@ -362,11 +362,11 @@ a    bnewnew    c    d
 5    gh    1999-12-31    20000.00
 3    database    1981-02-22    500.00
 show index from index02;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-index02    1    a    1    a    A    0    NULL    NULL                    YES    NULL
-index02    1    a    2    bnewnew    A    0    NULL    NULL    YES                YES    NULL
-index02    1    c    1    c    A    0    NULL    NULL    YES                YES    NULL
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+index02    1    a    1    a    A    0    NULL    NULL                        YES    NULL
+index02    1    a    2    bnewnew    A    0    NULL    NULL    YES                    YES    NULL
+index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    NULL
+index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 show columns from index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
