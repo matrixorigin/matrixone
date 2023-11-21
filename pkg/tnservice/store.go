@@ -429,7 +429,7 @@ func (s *store) initQueryService(inStandalone bool) {
 	}
 	var err error
 	s.queryService, err = queryservice.NewQueryService(s.cfg.UUID,
-		s.queryServiceListenAddr(), s.cfg.RPC, nil)
+		s.queryServiceListenAddr(), s.cfg.RPC)
 	if err != nil {
 		panic(err)
 	}

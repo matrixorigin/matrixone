@@ -25,17 +25,6 @@ import (
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func FillConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) Vector {
-	// TODO(aptend): use default value
-	vec := movec.NewConstNull(typ, length, m)
-	return ToTNVector(vec, m)
-}
-
-func FillCNConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) *movec.Vector {
-	// TODO(aptend): use default value
-	return movec.NewConstNull(typ, length, m)
-}
-
 // ### Shallow copy Functions
 
 func ToCNBatch(tnBat *Batch) *batch.Batch {
