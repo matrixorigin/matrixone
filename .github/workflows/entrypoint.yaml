@@ -29,7 +29,7 @@ jobs:
       - check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
     uses: matrixorigin/matrixone/.github/workflows/ci.yaml@main
-    with:
+    secrets:
       S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
       S3REGION: ${{ secrets.S3REGION }}
       S3APIKEY: ${{ secrets.S3APIKEY }}
@@ -63,7 +63,7 @@ jobs:
       - check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
     uses: matrixorigin/matrixone/.github/workflows/utils.yaml@main
-    with:
+    secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
       S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
       S3REGION: ${{ secrets.S3REGION }}
