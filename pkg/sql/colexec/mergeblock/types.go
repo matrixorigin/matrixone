@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var _ vm.Operator = new(Argument)
@@ -116,13 +117,13 @@ func splitObjectStats(arg *Argument, proc *process.Process, bat *batch.Batch, bl
 
 		fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 		if err != nil {
-			logutil.Errorf("get fs failed when split object stats", err)
+			logutil.Error("get fs failed when split object stats. ", zap.Error(err))
 			return err
 		}
 
 		var meta objectio.ObjectMeta
 		if meta, err = objectio.FastLoadObjectMeta(proc.Ctx, &loc, false, fs); err != nil {
-			logutil.Errorf("fast load object meta failed when split object stats", err)
+			logutil.Error("fast load object meta failed when split object stats. ", zap.Error(err))
 			return err
 		}
 		dataMeta := meta.MustDataMeta()
