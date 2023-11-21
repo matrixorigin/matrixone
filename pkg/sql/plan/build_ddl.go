@@ -601,6 +601,11 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		return nil, err
 	}
 
+	v, ok := getAutoIncrementOffsetFromVariables(ctx)
+	if ok {
+		createTable.TableDef.AutoIncrOffset = v
+	}
+
 	// set option
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
@@ -2556,4 +2561,20 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	}
 
 	return &fkData, nil
+}
+
+func getAutoIncrementOffsetFromVariables(ctx CompilerContext) (uint64, bool) {
+	v, err := ctx.ResolveVariable("auto_increment_offset", true, false)
+	if err == nil {
+		if offset, ok := v.(int64); ok && offset > 1 {
+			return uint64(offset - 1), true
+		}
+	}
+	v, err = ctx.ResolveVariable("auto_increment_offset", true, true)
+	if err == nil {
+		if offset, ok := v.(int64); ok && offset > 1 {
+			return uint64(offset - 1), true
+		}
+	}
+	return 0, false
 }
