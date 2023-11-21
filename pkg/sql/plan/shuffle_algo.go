@@ -30,20 +30,21 @@ type shuffleHeap struct {
 }
 
 type shuffleList struct {
-	next  *shuffleList
-	tree  *shuffleHeap
 	size  int
 	value float64
+	next  *shuffleList
+	tree  *shuffleHeap
 }
 
 type ShuffleRange struct {
-	tree    *shuffleHeap
-	Result  []float64
-	size    int
-	max     float64
-	min     float64
-	Overlap float64
-	Uniform float64
+	isStrType bool
+	size      int
+	tree      *shuffleHeap
+	max       float64
+	min       float64
+	Overlap   float64
+	Uniform   float64
+	Result    []float64
 }
 
 func (t *shuffleHeap) Merge(s *shuffleHeap) *shuffleHeap {
@@ -86,8 +87,11 @@ func (t *shuffleHeap) Pop() (*shuffleHeap, *shuffleHeap) {
 	return t.left.Merge(t.right), t
 }
 
-func NewShuffleRange() *ShuffleRange {
-	return &ShuffleRange{}
+func NewShuffleRange(isString bool) *ShuffleRange {
+	return &ShuffleRange{isStrType: isString}
+}
+func (s *ShuffleRange) UpdateString(zmmin []byte, zmmax []byte, rowCount uint32, nullCount uint32) {
+
 }
 
 func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nullCount uint32) {
