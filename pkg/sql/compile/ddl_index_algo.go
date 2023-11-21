@@ -210,12 +210,13 @@ func (s *Scope) handleIvfIndexCentroidsTable(c executor.TxnExecutor, indexDef *p
 	// 2. Sampling SQL Logic
 	var sampleCnt = catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select `%s` from `%s`.`%s` where `%s` is not null order by rand() limit %d)",
+	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows) as `%s` from `%s`.`%s`)",
+		indexColumnName,
+		sampleCnt,
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name,
-		indexColumnName,
-		sampleCnt)
+	)
 
 	// 3. Insert into centroids table
 	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
