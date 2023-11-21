@@ -1067,35 +1067,6 @@ func (data *CNCheckpointData) fillInMetaBatchWithLocation(location objectio.Loca
 	return
 }
 
-func (data *CNCheckpointData) ReadFromDataWithKey(
-	ctx context.Context,
-	location objectio.Location,
-	fs fileservice.FileService,
-	m *mpool.MPool,
-) (cnBatch *batch.Batch, err error) {
-	var bat *batch.Batch
-	var reader *blockio.BlockReader
-	schema := checkpointDataReferVersions[5][uint32(BLKMetaInsertIDX)]
-	reader, err = blockio.NewObjectReader(fs, location)
-	if err != nil {
-		return
-	}
-	bat, err = LoadCNSubBlkColumnsByMetaWithId(ctx, schema.types, schema.attrs, BLKMetaInsertIDX, BLKMetaInsertIDX, 5, reader, m)
-	if err != nil {
-		return
-	}
-	cnBatch = batch.NewWithSize(len(bat.Vecs))
-	cnBatch.Attrs = make([]string, len(bat.Attrs))
-	copy(cnBatch.Attrs, bat.Attrs)
-	for n := range cnBatch.Vecs {
-		cnBatch.Vecs[n] = vector.NewVec(*bat.Vecs[n].GetType())
-		if err = cnBatch.Vecs[n].UnionBatch(bat.Vecs[n], 0, bat.Vecs[n].Length(), nil, m); err != nil {
-			return
-		}
-	}
-	return
-}
-
 func (data *CNCheckpointData) ReadFromData(
 	ctx context.Context,
 	tableID uint64,
