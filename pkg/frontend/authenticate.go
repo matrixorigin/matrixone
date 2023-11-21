@@ -3406,6 +3406,10 @@ func isDbPublishing(ctx context.Context, dbName string, ses *Session) (ok bool, 
 		count   int64
 	)
 
+	if _, isSysDb := sysDatabases[dbName]; isSysDb {
+		return false, err
+	}
+
 	sql, err = getSqlForDbPubCount(ctx, dbName)
 	if err != nil {
 		return false, err
