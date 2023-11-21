@@ -292,7 +292,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `endswith`
 	{
 		functionId: ENDSWITH,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -301,7 +301,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return EndsWith
@@ -1327,7 +1327,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `startswith`
 	{
 		functionId: STARTSWITH,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -1336,7 +1336,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return StartsWith
