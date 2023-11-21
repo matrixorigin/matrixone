@@ -1,0 +1,59 @@
+name: MatrixOne ALL CI
+
+on:
+  pull_request_target:
+    types: [ opened, synchronize, reopened ]
+    branches: [ main,'[0-9]+.[0-9]+*' ]
+
+concurrency: 
+  group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  check-pr-valid:
+    runs-on: ubuntu-latest
+    name: CHECK PR VALID
+    outputs:
+      pr_valid: ${{ steps.check_pr_valid.outputs.pull_valid }}
+    steps:
+      - uses: guguducken/pulls-content-check@main
+        id: check_pr_valid
+        with:
+          github_token: ${{ secrets.TOKEN_ACTION }}
+          title_for_find_issue: "Which issue(s) this PR fixes:"
+          title_for_find_content: "What this PR does / why we need it:"
+
+  matrixone-ci:
+    name: Matrixone CI
+    needs: 
+      - check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    uses: matrixorigin/matrixone/.github/workflows/ci.yaml@main
+  
+  matrixone-upgrade-ci:
+    name: Matrixone Upgrade CI
+    needs: 
+      - check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    uses: matrixorigin/matrixone/.github/workflows/e2e-upgrade.yaml@main
+
+  matrixone-compose-ci:
+    name: Matrixone Compose CI
+    needs: 
+      - check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    uses: matrixorigin/matrixone/.github/workflows/e2e-compose.yaml@main
+
+  matrixone-standalone-ci:
+    name: Matrixone Standlone CI
+    needs: 
+      - check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    uses: matrixorigin/matrixone/.github/workflows/e2e-standalone.yaml@main
+
+  matrixone-utils-ci:
+    name: Matrixone Utils CI
+    needs: 
+      - check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
+    uses: matrixorigin/matrixone/.github/workflows/utils.yaml@main
