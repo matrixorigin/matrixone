@@ -3,10 +3,6 @@ name: MatrixOne Utils CI
 
 on:
   workflow_call:
-  
-concurrency: 
-  group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
-  cancel-in-progress: true
 
 jobs:
   check_organization_user:
