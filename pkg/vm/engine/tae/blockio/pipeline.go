@@ -145,7 +145,7 @@ func fetchReader(params PrefetchParams) (reader *objectio.ObjectReader) {
 // prefetch data job
 func prefetchJob(ctx context.Context, params PrefetchParams) *tasks.Job {
 	reader := fetchReader(params)
-	if params.bigScan {
+	if params.prefetchFile {
 		return getJob(
 			ctx,
 			makeName(reader.GetName()),

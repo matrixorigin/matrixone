@@ -341,10 +341,11 @@ func (r *blockReader) Read(
 
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+		prefetchFile := r.scanType == SMALL || r.scanType == LARGE
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, r.bigScan)
+			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
 		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, r.bigScan)
+			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]}, prefetchFile)
 		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]

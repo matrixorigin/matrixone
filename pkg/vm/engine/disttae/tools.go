@@ -1499,9 +1499,14 @@ func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfB
 			readerIndex = readerIndex % numOfReaders
 		}
 	}
-	bigScan := (numOfReaders * BIGSCAN_THRESHOLD) <= numOfBlocks
+	scanType := NORMAL
+	if numOfBlocks < SMALLSCAN_THRESHOLD {
+		scanType = SMALL
+	} else if (numOfReaders * LARGESCAN_THRESHOLD) <= numOfBlocks {
+		scanType = LARGE
+	}
 	for i := range rds {
-		rds[i].bigScan = bigScan
+		rds[i].scanType = scanType
 	}
 	return rds
 }

@@ -574,7 +574,7 @@ func evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts t
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
-func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo, bigScan bool) error {
+func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo, prefetchFile bool) error {
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
@@ -592,7 +592,7 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 				}
 			}
 		}
-		pref.bigScan = bigScan
+		pref.prefetchFile = prefetchFile
 		err = pipeline.Prefetch(pref)
 		if err != nil {
 			return err
