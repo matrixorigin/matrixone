@@ -65,8 +65,20 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
-	// If the target is a partition table
+	var typs []types.Type
 	attrs := src.Attrs[1:]
+
+	for idx := 1; idx < len(src.Vecs); idx++ {
+		typs = append(typs, *src.Vecs[idx].GetType())
+	}
+
+	// src comes old CN which haven't object stats column
+	if src.Attrs[len(src.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
+		attrs = append(attrs, catalog.ObjectMeta_ObjectStats)
+		typs = append(typs, types.T_binary.ToType())
+	}
+
+	// If the target is a partition table
 	if len(arg.PartitionSources) > 0 {
 		// 'i' aligns with partition number
 		for i := range arg.PartitionSources {
@@ -74,7 +86,7 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 			bat.Attrs = attrs
 			bat.Cnt = 1
 			for idx := 0; idx < len(attrs); idx++ {
-				bat.Vecs[idx] = proc.GetVector(types.New(src.Vecs[idx+1].GetType().Oid, 0, 0))
+				bat.Vecs[idx] = proc.GetVector(typs[idx])
 			}
 			arg.container.mp[i] = bat
 		}
@@ -83,7 +95,7 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 		bat.Attrs = attrs
 		bat.Cnt = 1
 		for idx := 0; idx < len(attrs); idx++ {
-			bat.Vecs[idx] = proc.GetVector(types.New(src.Vecs[idx+1].GetType().Oid, 0, 0))
+			bat.Vecs[idx] = proc.GetVector(typs[idx])
 		}
 		arg.container.mp[0] = bat
 	}

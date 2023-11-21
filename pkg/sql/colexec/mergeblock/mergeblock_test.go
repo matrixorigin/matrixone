@@ -16,6 +16,8 @@ package mergeblock
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
 	"testing"
 
@@ -171,4 +173,65 @@ func resetChildren(arg *Argument, bat *batch.Batch) {
 			Batchs: []*batch.Batch{bat},
 		})
 	}
+}
+
+func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
+	var attrs []string
+	if withStats {
+		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	} else {
+		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
+	}
+
+	blockInfoBat := batch.NewWithSize(len(attrs))
+	blockInfoBat.Attrs = attrs
+	blockInfoBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
+	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
+
+	if withStats {
+		blockInfoBat.Vecs[2] = vector.NewConstBytes(types.T_binary.ToType(),
+			objectio.ZeroObjectStats.Marshal(), 1, proc.GetMPool())
+	}
+
+	return blockInfoBat
+}
+
+func TestArgument_GetMetaLocBat(t *testing.T) {
+	arg := Argument{
+		Tbl: &mockRelation{},
+		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
+		affectedRows: 0,
+		info: &vm.OperatorInfo{
+			Idx:     0,
+			IsFirst: false,
+			IsLast:  false,
+		},
+	}
+
+	proc := testutil.NewProc()
+	proc.Ctx = context.TODO()
+
+	arg.Prepare(proc)
+
+	bat := mockBlockInfoBat(proc, true)
+	arg.GetMetaLocBat(bat, proc)
+
+	require.Equal(t, 2, len(arg.container.mp[0].Vecs))
+
+	arg.container.mp[0].Clean(proc.GetMPool())
+	bat.Clean(proc.GetMPool())
+
+	bat = mockBlockInfoBat(proc, false)
+	arg.GetMetaLocBat(bat, proc)
+
+	require.Equal(t, 2, len(arg.container.mp[0].Vecs))
+
+	arg.Free(proc, false, nil)
+	for k := range arg.container.mp {
+		arg.container.mp[k].Clean(proc.GetMPool())
+	}
+
+	proc.FreeVectors()
+	bat.Clean(proc.GetMPool())
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
