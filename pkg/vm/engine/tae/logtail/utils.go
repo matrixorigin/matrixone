@@ -1565,7 +1565,7 @@ func formatBatch(bat *containers.Batch) {
 	}
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Length() == 0 {
-			bat.Vecs[i] = containers.NewConstNullVector(*bat.Vecs[i].GetType(), length)
+			bat.Vecs[i] = containers.NewConstNullVector(*bat.Vecs[i].GetType(), length, common.DefaultAllocator)
 		}
 	}
 }
