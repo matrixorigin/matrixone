@@ -2,9 +2,7 @@
 name: MatrixOne Utils CI
 
 on:
-  pull_request_target:
-    types: [ opened, synchronize, reopened ]
-    branches: [ main,'[0-9]+.[0-9]+*' ]
+  workflow_call:
   
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
@@ -96,7 +94,6 @@ jobs:
           echo "apikey=${{ secrets.S3APIKEY }}" >> $GITHUB_ENV
           echo "apisecret=${{ secrets.S3APISECRET }}" >> $GITHUB_ENV
           echo "bucket=${{ secrets.S3BUCKET }}" >> $GITHUB_ENV
-
       - name: Get Changed Paths
         uses: guguducken/change-paths-action@v0.0.7
         id: ut-pr
