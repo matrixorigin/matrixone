@@ -1,17 +1,20 @@
 queue_rules:
-  - name: default
-    conditions: []
+  - name: main
+    merge_conditions: []
+    checks_timeout: 4h
+  - name: 1.0-dev
+    merge_conditions: []
     checks_timeout: 4h
 
 pull_request_rules:
-  - name: Automatic merge on approval
+  - name: Automatic queue on approval for main
     conditions:
-      - "#approved-reviews-by>=1"
       - "#changes-requested-reviews-by<=0"
-      - "-label=do-not-merge/wip"
+      - label!=do-not-merge/wip
+      - base=main
     actions:
       queue:
-        name: default
+        name: main
         method: squash
         commit_message_template: |
           {{ title }} (#{{ number }})
@@ -19,7 +22,26 @@ pull_request_rules:
           {{ body | get_section("## What this PR does / why we need it:") }}
 
           Approved by: @{{ approved_reviews_by | join(', @') }}
-          
+
+  - name: Automatic queue on approval for 1.0-dev
+    conditions:
+      - "#changes-requested-reviews-by<=0"
+      - label!=do-not-merge/wip
+      - base=1.0-dev
+    actions:
+      request_reviews:
+        users:
+          - sukki37
+      queue:
+        name: 1.0-dev
+        method: squash
+        commit_message_template: |
+          {{ title }} (#{{ number }})
+
+          {{ body | get_section("## What this PR does / why we need it:") }}
+
+          Approved by: @{{ approved_reviews_by | join(', @') }}
+
   - name: Auto update branch
     conditions:
       - created-at>=00:10 ago
