@@ -2771,7 +2771,7 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.SegmentEntry,
 		if node.IsAborted() {
 			continue
 		}
-		visitObject(collector.data.bats[ObjectInfoIDX], entry, node)
+		visitObject(collector.data.bats[ObjectInfoIDX], entry, node, false, types.TS{})
 		segNode := node
 		if segNode.HasDropCommitted() {
 			vector.AppendFixed(

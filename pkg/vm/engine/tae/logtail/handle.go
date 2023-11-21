@@ -507,16 +507,24 @@ func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
 		}
-		visitObject(b.objectMetaBatch, e, node)
+		visitObject(b.objectMetaBatch, e, node, false, types.TS{})
 	}
 	return nil
 }
 
-func visitObject(batch *containers.Batch, entry *catalog.SegmentEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) {
+func visitObject(batch *containers.Batch, entry *catalog.SegmentEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode], push bool, committs types.TS) {
 	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
-	batch.GetVectorByName(catalog.AttrCommitTs).Append(node.TxnMVCCNode.End, false)
+	if push {
+		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
+	} else {
+		batch.GetVectorByName(catalog.AttrCommitTs).Append(node.TxnMVCCNode.End, false)
+	}
 	node.BaseNode.AppendTuple(&entry.ID, batch)
-	node.TxnMVCCNode.AppendTuple(batch)
+	if push {
+		node.TxnMVCCNode.AppendTupleWithCommitTS(batch, committs)
+	} else {
+		node.TxnMVCCNode.AppendTuple(batch)
+	}
 	node.EntryMVCCNode.AppendTuple(batch)
 	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
