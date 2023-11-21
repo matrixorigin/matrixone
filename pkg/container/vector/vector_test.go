@@ -1825,8 +1825,33 @@ func BenchmarkToTypedSlice(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())
 	AppendAny(vec, int8(42), false, mp)
+	var slice []int8
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		toTypedSlice[int8](&vec.col)
+		ToSlice(vec, &slice)
+	}
+	if slice[0] != 42 {
+		b.Fatalf("got %v", slice)
+	}
+}
+
+func BenchmarkToFixedCol(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int8.ToType())
+	AppendAny(vec, int8(42), false, mp)
+	b.ResetTimer()
+	var slice []int8
+	for i := 0; i < b.N; i++ {
+		ToFixedCol[int8](vec, &slice)
+	}
+}
+
+func BenchmarkMustFixedCol(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int8.ToType())
+	AppendAny(vec, int8(42), false, mp)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		MustFixedCol[int8](vec)
 	}
 }
