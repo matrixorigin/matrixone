@@ -702,6 +702,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			Labels:             info.Labels,
 			QueryAddress:       info.QueryAddress,
 			ConfigData:         info.ConfigData,
+			Resource:           info.Resource,
 		}
 		cd.CNStores = append(cd.CNStores, n)
 	}
