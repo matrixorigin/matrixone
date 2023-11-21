@@ -16,7 +16,6 @@ package taestorage
 
 import (
 	"context"
-	"encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -24,60 +23,25 @@ import (
 )
 
 // Write implements storage.TxnTAEStorage
-
 func (s *taeStorage) Write(
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
 	op uint32,
 	payload []byte) (result []byte, err error) {
-
 	switch op {
-
 	case uint32(apipb.OpCode_OpPreCommit):
-
-		return handleWrite(
-			ctx, s,
-			txnMeta, payload,
-			s.taeHandler.HandlePreCommitWrite,
-		)
-
+		return handleWrite(ctx, txnMeta, payload, s.taeHandler.HandlePreCommitWrite)
 	default:
 		return nil, moerr.NewNotSupported(ctx, "unknown write op: %v", op)
-
 	}
-
 }
 
-func handleWrite[
-	Req any, PReq interface {
-		// anonymous constraint
-		encoding.BinaryUnmarshaler
-		// make Req convertible to its pointer type
-		*Req
-	},
-	Resp any, PResp interface {
-		// anonymous constraint
-		encoding.BinaryMarshaler
-		// make Resp convertible to its pointer type
-		*Resp
-	},
-](
+func handleWrite[PReq unmashaler[Req], PResp mashaler[Resp], Req, Resp any](
 	ctx context.Context,
-	s *taeStorage,
 	meta txn.TxnMeta,
 	payload []byte,
-	fn func(
-		ctx context.Context,
-		meta txn.TxnMeta,
-		preq PReq,
-		presp PResp,
-	) (
-		err error,
-	),
-) (
-	res []byte,
-	err error,
-) {
+	fn func(context.Context, txn.TxnMeta, PReq, PResp) error,
+) (res []byte, err error) {
 
 	var preq PReq = new(Req)
 	if err := preq.UnmarshalBinary(payload); err != nil {
