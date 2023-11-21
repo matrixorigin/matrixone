@@ -34,6 +34,35 @@ const (
 	defaultConnectorTaskRetryInterval = int64(time.Second * 10)
 )
 
+func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *tree.CreateTable) error {
+	ts := mce.routineMgr.getParameterUnit().TaskService
+	if ts == nil {
+		return moerr.NewInternalError(ctx, "no task service is found")
+	}
+	dbName := string(st.Table.Schema())
+	tableName := string(st.Table.Name())
+	_, tableDef := mce.ses.GetTxnCompileCtx().Resolve(dbName, tableName)
+	if tableDef == nil {
+		return moerr.NewNoSuchTable(ctx, dbName, tableName)
+	}
+	options := make(map[string]string)
+	//for _, opt := range st.Options {
+	//	options[string(opt.Key)] = opt.Val.String()
+	//}
+	if err := createConnector(
+		ctx,
+		mce.ses.GetTenantInfo().TenantID,
+		mce.ses.GetTenantName(),
+		mce.ses.GetUserName(),
+		ts,
+		dbName+"."+tableName,
+		options,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (mce *MysqlCmdExecutor) handleCreateConnector(ctx context.Context, st *tree.CreateConnector) error {
 	ts := mce.routineMgr.getParameterUnit().TaskService
 	if ts == nil {
@@ -158,7 +187,7 @@ func createConnector(
 }
 
 func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.DropConnector) error {
-	//todo: handle Create connector
+	//todo: handle Drop connector
 	return nil
 }
 
