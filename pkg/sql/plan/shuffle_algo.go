@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 )
 
@@ -380,6 +381,7 @@ func (s *ShuffleRange) Eval() {
 			for j := 8 - len(str); j > 0; j-- {
 				s.Result[i] = s.Result[i] * 256
 			}
+			logutil.Infof("!!  shuffle string %v", str)
 		}
 	}
 	for i := 1; i < len(s.Result); i++ {
