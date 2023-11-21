@@ -293,7 +293,7 @@ func (txn *Transaction) WriteFileLocked(
 		if len(bat.Attrs) == 2 && bat.Attrs[1] == catalog.ObjectMeta_ObjectStats {
 			// append the object stats.
 			vec := vector.NewConstBytes(types.T_binary.ToType(),
-				bat.GetVector(1).GetRawBytesAt(0), 1, txn.proc.Mp())
+				bat.GetVector(1).GetBytesAt(0), 1, txn.proc.Mp())
 			vecs = append(vecs, vec)
 			attrs = append(attrs, catalog.ObjectMeta_ObjectStats)
 

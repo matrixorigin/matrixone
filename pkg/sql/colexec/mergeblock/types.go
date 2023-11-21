@@ -18,6 +18,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -85,6 +89,60 @@ func (arg *Argument) GetMetaLocBat(src *batch.Batch, proc *process.Process) {
 	}
 }
 
+func splitObjectStats(arg *Argument, proc *process.Process, bat *batch.Batch, blkByte []byte) {
+	var statsBytes []byte
+
+	// bat comes from old CN, no object stats vec in it.
+	// to ensure all bats the TN received contain the object stats column, we should
+	// construct the object stats from block info here.
+	if bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
+		logutil.Info("found blk info bat comes from old CN.")
+		// 1. load object meta
+
+		blk := catalog.DecodeBlockInfo(blkByte)
+		loc := blk.MetaLocation()
+
+		fs, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
+		if err != nil {
+			logutil.Error("get fs failed when split object stats")
+			return
+		}
+
+		var meta objectio.ObjectMeta
+		if meta, err = objectio.FastLoadObjectMeta(proc.Ctx, &loc, false, fs); err != nil {
+			logutil.Error("fast load object meta failed when split object stats")
+			return
+		}
+		dataMeta := meta.MustDataMeta()
+
+		// 2. construct an object stats
+		stats := objectio.NewObjectStats()
+		objectio.SetObjectStatsObjectName(stats, loc.Name())
+		objectio.SetObjectStatsExtent(stats, loc.Extent())
+		objectio.SetObjectStatsBlkCnt(stats, dataMeta.BlockCount())
+
+		sortKeyIdx := dataMeta.BlockHeader().SortKey()
+		objectio.SetObjectStatsSortKeyZoneMap(stats, dataMeta.MustGetColumn(sortKeyIdx).ZoneMap())
+
+		totalRows := uint32(0)
+		for idx := 0; idx < bat.Vecs[0].Length(); idx++ {
+			totalRows += dataMeta.GetBlockMeta(uint32(idx)).GetRows()
+		}
+
+		objectio.SetObjectStatsRowCnt(stats, totalRows)
+		statsBytes = stats.Marshal()
+
+	} else { // bat contains object stats vec
+		// x ns/op
+		statsBytes = bat.Vecs[2].GetBytesAt(0)
+	}
+
+	// append object stats to the container, may exist multiple partitions (tbl id)
+	for _, tarBat := range arg.container.mp {
+		vector.SetConstBytes(tarBat.Vecs[1], statsBytes, 1, proc.GetMPool())
+	}
+}
+
 func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	// meta loc and(maybe) object stats
 	arg.GetMetaLocBat(bat, proc)
@@ -111,14 +169,9 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 		}
 	}
 
-	// append object stats
-	// if an old version cn send an old version batch which haven't the object_stats column(vec).
-	// just skip.
-	if len(bat.Attrs) == 3 && bat.Attrs[2] == catalog.ObjectMeta_ObjectStats &&
-		!onlyData {
-		for _, tarBat := range arg.container.mp {
-			vector.SetConstBytes(tarBat.Vecs[1], bat.Vecs[2].GetBytesAt(0), 1, proc.GetMPool())
-		}
+	// exist s3 returned blk info, split it
+	if !onlyData {
+		splitObjectStats(arg, proc, bat, blockInfos[0])
 	}
 
 	for _, b := range arg.container.mp {
