@@ -3577,7 +3577,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		// Start the dynamic table daemon task
 		if st, ok := cw.GetAst().(*tree.CreateTable); ok {
 			if st.IsDynamicTable {
-
 				if err = mce.handleCreateDynamicTable(requestCtx, st); err != nil {
 					return
 				}

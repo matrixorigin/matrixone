@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
@@ -46,6 +47,29 @@ func (mce *MysqlCmdExecutor) handleCreateDynamicTable(ctx context.Context, st *t
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
 	options := make(map[string]string)
+	ses := mce.GetSession()
+
+	//get query optimizer and execute Optimize
+	generatedPlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	if err != nil {
+		return err
+	}
+	query := generatedPlan.GetQuery()
+	if query != nil { // Checking if query is not nil
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_STREAM_SCAN {
+				//collect the stream tableDefs
+				streamTableDef := node.TableDef.Defs
+				for _, def := range streamTableDef {
+					if propertiesDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+						for _, property := range propertiesDef.Properties.Properties {
+							options[property.Key] = property.Value
+						}
+					}
+				}
+			}
+		}
+	}
 	//for _, opt := range st.Options {
 	//	options[string(opt.Key)] = opt.Val.String()
 	//}
